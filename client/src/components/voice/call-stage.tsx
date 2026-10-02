@@ -3,7 +3,6 @@ import {
   BellOff,
   ChevronDown,
   ChevronUp,
-  Crop,
   Eye,
   EyeOff,
   Hand,
@@ -22,8 +21,6 @@ import {
   Minimize2,
   MoreHorizontal,
   PhoneOff,
-  Pin,
-  Scan,
   ScreenShare,
   ScreenShareOff,
   Music,
@@ -69,6 +66,7 @@ import {
 } from "@/lib/screen-preview-pref";
 import {
   setJoinLeaveAutoMuteEnabled,
+  shouldSuppressJoinLeaveSound,
   useJoinLeaveAutoMuteEnabled,
 } from "@/lib/large-room-sounds";
 import {
@@ -128,8 +126,12 @@ import {
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
-import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
+import {
+  cameraTileMoreItems,
+  shareTileMoreItems,
+  stageMoreItems,
+} from "@/components/voice/call-menu-items";
 import { seatedInWatchPartyRoom, shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
@@ -654,6 +656,8 @@ export interface CallStageProps {
   /** Stop watching one peer's share, and undo that. */
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /**
    * Our own hand in the room's queue. Absent leaves the control off the bar
@@ -759,6 +763,8 @@ export function CallStage({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -826,6 +832,8 @@ export function CallStage({
       onSetScreenVolume={onSetScreenVolume}
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
+      onDismissCamera={onDismissCamera}
+      onWatchCamera={onWatchCamera}
       onRetryPeer={onRetryPeer}
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
@@ -876,6 +884,8 @@ function ActiveCall({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -938,6 +948,8 @@ function ActiveCall({
   /** Stop watching one peer's share, and undo that. */
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /**
    * Our own hand in the room's queue. Absent leaves the control off the bar
@@ -1122,6 +1134,19 @@ function ActiveCall({
    * move: our own share, a silent one, or a caller that did not wire the
    * setter. Keyed on userId so the setting survives a reconnect.
    */
+  /** Hiding a camera, or nothing for our own camera or an unwired caller. */
+  function cameraHideControl(person: StagePerson) {
+    if (person.isSelf || !onDismissCamera || !onWatchCamera) {
+      return undefined;
+    }
+    const active = voiceState.dismissedCameraPeerIds.includes(person.key);
+    return {
+      active,
+      onToggle: () =>
+        active ? onWatchCamera(person.key) : onDismissCamera(person.key),
+    };
+  }
+
   /** The decline control for a tile, or nothing when the caller did not wire it. */
   function shareDismissControl(tile: ScreenShareTile) {
     if (tile.isSelf || !onDismissShare || !onWatchShare) {
@@ -1983,6 +2008,7 @@ function ActiveCall({
                         : undefined
                     }
                     pinned={pinned}
+                    hidden={cameraHideControl(person)}
                   />
                 );
               })}
@@ -2741,17 +2767,6 @@ export function CallControls({
 
   const showMute = !collapsed || !pushToTalk;
 
-  const showCursorToggle =
-    canShare &&
-    !noVideo &&
-    Boolean(onStartScreenShare) &&
-    (!voiceState.isSharingScreen || cursorLiveControl);
-  const showWatchParty =
-    canWatchParty &&
-    !listenOnly &&
-    !noVideo &&
-    Boolean(onStartScreenShare) &&
-    !voiceState.isSharingScreen;
   const startWatchParty = () => {
     if (shareCappedOut || !onStartScreenShare) {
       return;
@@ -2773,61 +2788,52 @@ export function CallControls({
   // Mic, camera, share, hand, music and leave stay on the bar; the things a
   // person sets once (the cursor, the join and leave sounds), starts once (a
   // watch party) or reaches for rarely (fullscreen of the whole stage,
-  // folding the call away) live behind "Mais". The docked bar is untouched:
-  // its width rules already decide what fits there.
-  const stageMoreItems: ContextMenuItemDef[] = [];
-  if (!collapsed) {
-    if (showWatchParty) {
-      stageMoreItems.push({
-        id: "watch-party",
-        label: t("voice.control.watchParty"),
-        icon: MonitorPlay,
-        disabled: shareCappedOut,
-        onSelect: startWatchParty,
+  // folding the call away) live behind "Mais". The rows are built in
+  // `call-menu-items.ts`. The docked bar keeps its own tiles: its width rules
+  // already decide what fits there.
+  const offersWatchParty =
+    canWatchParty && !listenOnly && !noVideo && Boolean(onStartScreenShare);
+  const offersCursor = canShare && !noVideo && Boolean(onStartScreenShare);
+  const stageMenuItems = collapsed
+    ? []
+    : stageMoreItems(t, {
+        watchParty: offersWatchParty
+          ? {
+              disabledReason: voiceState.isSharingScreen
+                ? "sharing"
+                : shareCappedOut
+                  ? "cap"
+                  : null,
+              onStart: startWatchParty,
+            }
+          : undefined,
+        cursor: offersCursor
+          ? {
+              hidden: shareCursor === "hide",
+              liveChangeable: cursorLiveControl,
+              sharing: voiceState.isSharingScreen,
+              onToggle: () =>
+                setShareCursor(shareCursor === "hide" ? "show" : "hide"),
+            }
+          : undefined,
+        joinLeaveAutoMute: {
+          on: joinLeaveAutoMute,
+          onToggle: () => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute),
+        },
+        fullscreen: fullscreenAvailable
+          ? { active: isFullscreen, onToggle: onToggleFullscreen }
+          : undefined,
+        collapse: canExpand
+          ? { collapsed: userCollapsed, onToggle: onToggleCollapsed }
+          : undefined,
       });
-    }
-    if (showCursorToggle) {
-      stageMoreItems.push({
-        id: "share-cursor",
-        label:
-          shareCursor === "hide"
-            ? t("voice.control.showCursor")
-            : t("voice.control.hideCursor"),
-        icon: shareCursor === "hide" ? MousePointerBan : MousePointer2,
-        onSelect: () =>
-          setShareCursor(shareCursor === "hide" ? "show" : "hide"),
-      });
-    }
-    if (stageMoreItems.length > 0) {
-      stageMoreItems.push({ id: "share-separator", label: "", separator: true });
-    }
-    stageMoreItems.push({
-      id: "join-leave-sounds",
-      label: joinLeaveAutoMute
-        ? t("voice.control.enableJoinLeaveSounds")
-        : t("voice.control.disableJoinLeaveSounds"),
-      icon: joinLeaveAutoMute ? Bell : BellOff,
-      onSelect: () => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute),
-    });
-    if (fullscreenAvailable) {
-      stageMoreItems.push({
-        id: "stage-fullscreen",
-        label: isFullscreen
-          ? t("voice.share.exitFullscreen")
-          : t("voice.share.fullscreen"),
-        icon: isFullscreen ? Minimize2 : Maximize2,
-        onSelect: onToggleFullscreen,
-      });
-    }
-    if (canExpand) {
-      stageMoreItems.push({
-        id: "stage-collapse",
-        label: userCollapsed ? t("call.stage.expand") : t("call.stage.collapse"),
-        icon: userCollapsed ? ChevronDown : ChevronUp,
-        onSelect: onToggleCollapsed,
-      });
-    }
-  }
+  // The bell used to say on the bar itself that the room's cues were muted.
+  // In the menu it only says so when opened, so the menu's button carries a
+  // dot while the rule is actually silencing this room.
+  const joinLeaveMuted = shouldSuppressJoinLeaveSound(
+    roomParticipants.length,
+    joinLeaveAutoMute,
+  );
 
   // Raising a hand is the one control here that a listen-only seat needs MORE
   // than anyone else, so it is never hidden by `listenOnly` and never
@@ -3102,14 +3108,6 @@ export function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      {/* On the stage the hand sits after share, with the other things a
-          person does in the room; the docked bar keeps it beside mute. */}
-      {collapsed && (
-        <>
-          <CallControlGroup className={stageGroup}>{handControl}</CallControlGroup>
-          <CallControlDivider container={collapsed} className="my-1" />
-        </>
-      )}
       <CallControlGroup className={stageGroup}>
       {!noVideo && (
       <Tooltip
@@ -3196,7 +3194,7 @@ export function CallControls({
           implements the constraint at all, so what a `hide` actually buys is
           the line under the share saying this surface carries the pointer and
           a tab does not. `lib/screen-capture-cursor.ts` has the measurements. */}
-      {collapsed && showCursorToggle && (
+      {collapsed && offersCursor && (!voiceState.isSharingScreen || cursorLiveControl) && (
           <Tooltip
             label={
               shareCursor === "hide"
@@ -3341,7 +3339,7 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      {collapsed && showWatchParty && (
+      {collapsed && offersWatchParty && !voiceState.isSharingScreen && (
           <Tooltip
             label={t("voice.control.watchParty")}
             detail={t("voice.control.watchPartyHint")}
@@ -3365,8 +3363,13 @@ export function CallControls({
             </button>
           </Tooltip>
         )}
-      {!collapsed && handControl}
-      {!collapsed && <CallControlDivider container={false} className="my-1.5" />}
+      {/* The hand after share on both bars, then a hairline before what is
+          about the room rather than about you. */}
+      {handControl}
+      <CallControlDivider
+        container={collapsed}
+        className={collapsed ? "my-1" : "my-1.5"}
+      />
       <Tooltip
         label={musicDock.open ? t("music.close") : t("music.open")}
       >
@@ -3431,17 +3434,24 @@ export function CallControls({
         </Tooltip>
       )}
       {!collapsed && (
-        <Menu items={stageMoreItems} side="top" align="end">
+        <Menu items={stageMenuItems} side="top" align="end">
           <button
             type="button"
             data-testid="call-more"
+            data-join-leave-muted={joinLeaveMuted ? "true" : undefined}
             aria-label={t("call.controls.more")}
             className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
+              "relative flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
               size,
             )}
           >
             <MoreHorizontal className={iconSize} aria-hidden="true" />
+            {joinLeaveMuted ? (
+              <span
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink"
+              />
+            ) : null}
           </button>
         </Menu>
       )}
@@ -3553,6 +3563,7 @@ function TileOverlay({
   onToggleFullscreen,
   onPin,
   pinned = false,
+  onHideCamera,
   name,
   audio,
   fit,
@@ -3561,6 +3572,8 @@ function TileOverlay({
   onToggleFullscreen?: () => void;
   onPin?: () => void;
   pinned?: boolean;
+  /** Hide this person's camera on this screen; their tile stays and says so. */
+  onHideCamera?: () => void;
   name: string;
   /**
    * Only passed once this tile is actually showing a picture. A tile drawing
@@ -3580,24 +3593,12 @@ function TileOverlay({
   const menu = usePeerAudioMenu();
   const [moreOpen, setMoreOpen] = useState(false);
   const hasAudio = Boolean(audio?.voice || audio?.share);
-  const moreItems: ContextMenuItemDef[] = [];
-  if (fit) {
-    const whole = fit.fit === "contain";
-    moreItems.push({
-      id: "fit",
-      label: whole ? t("call.fit.fill") : t("call.fit.whole"),
-      icon: whole ? Crop : Scan,
-      onSelect: fit.toggle,
-    });
-  }
-  if (onPin) {
-    moreItems.push({
-      id: "pin",
-      label: pinned ? t("call.stage.unpin") : t("call.stage.pin", { name }),
-      icon: Pin,
-      onSelect: onPin,
-    });
-  }
+  const moreItems = cameraTileMoreItems(t, {
+    name,
+    fit,
+    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    hide: onHideCamera ? { onHide: onHideCamera } : undefined,
+  });
   if (!onToggleFullscreen && !hasAudio && moreItems.length === 0) {
     return null;
   }
@@ -3807,10 +3808,17 @@ export function CameraTile({
   onToggleFullscreen,
   onPin,
   pinned = false,
+  hidden,
 }: {
   person: StagePerson;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   youLabel: string;
+  /**
+   * This viewer hid the camera (`voiceState.dismissedCameraPeerIds`). The
+   * tile stays where it was and says so, with the way back on it, the same
+   * as a share somebody stopped watching.
+   */
+  hidden?: { active: boolean; onToggle: () => void };
   /** The pinned tile: the whole first row of the grid. */
   wideRow?: boolean;
   /** False for the lone tile, which is flush with the stage's own edges. */
@@ -3833,7 +3841,19 @@ export function CameraTile({
         person.connecting && "opacity-70",
       )}
     >
-      {person.stream ? (
+      {hidden?.active ? (
+        <div
+          data-camera-hidden=""
+          className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-2 p-4 text-center"
+        >
+          <p className="text-sm text-text-tertiary">
+            {t("call.camera.hidden", { name: person.name })}
+          </p>
+          <Button variant="secondary" size="sm" onClick={hidden.onToggle}>
+            {t("call.camera.show")}
+          </Button>
+        </div>
+      ) : person.stream ? (
         <StageVideo
           stream={person.stream}
           mirrored={person.isSelf}
@@ -3854,18 +3874,21 @@ export function CameraTile({
         </div>
       )}
       <TileClickTarget
-        enabled={clickToFullscreen}
+        enabled={clickToFullscreen && !hidden?.active}
         label={t("call.stage.fullscreenTile", { name: person.name })}
         onClick={onToggleFullscreen}
       />
       <TileOverlay
         isFullscreen={false}
-        onToggleFullscreen={onToggleFullscreen}
+        onToggleFullscreen={hidden?.active ? undefined : onToggleFullscreen}
         onPin={onPin}
         pinned={pinned}
+        onHideCamera={
+          hidden && !hidden.active && person.stream ? hidden.onToggle : undefined
+        }
         name={person.name}
         audio={person.failed ? undefined : personAudioTracks(person)}
-        fit={person.stream ? fit : undefined}
+        fit={person.stream && !hidden?.active ? fit : undefined}
       />
       <TileBadge
         name={person.isSelf ? youLabel : person.name}
@@ -4341,50 +4364,19 @@ export function ScreenTileFrame({
   const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
   const controlsSide = "bottom";
   const controlsAlign = useHls ? "start" : "end";
-  const wholePicture = fit.fit === "contain";
-  const moreItems: ContextMenuItemDef[] = [];
-  if (tile.isSelf) {
-    moreItems.push({
-      id: "self-preview",
-      label: hideSelfPreview
-        ? t("voice.share.showPreview")
-        : t("voice.share.hidePreview"),
-      icon: hideSelfPreview ? Eye : EyeOff,
-      onSelect: () => setHideScreenPreview(!hidePreviewPref),
-    });
-  }
-  if (!hideSelfPreview) {
-    moreItems.push({
-      id: "fit",
-      label: wholePicture ? t("call.fit.fill") : t("call.fit.whole"),
-      icon: wholePicture ? Crop : Scan,
-      onSelect: fit.toggle,
-    });
-  }
-  if (onPin) {
-    moreItems.push({
-      id: "pin",
-      label: pinned
-        ? t("call.stage.unpin")
-        : t("call.stage.pin", { name: tile.presenterName }),
-      icon: Pin,
-      onSelect: onPin,
-    });
-  }
-  // Only a peer's share can be declined. Declining our own would mean hiding
-  // the thing we are broadcasting, which is not a thing anyone wants and
-  // would read as having stopped.
-  if (dismissed && !tile.isSelf) {
-    moreItems.push(
-      { id: "dismiss-separator", label: "", separator: true },
-      {
-        id: "dismiss",
-        label: t("voice.share.dismiss", { name: tile.presenterName }),
-        icon: EyeOff,
-        onSelect: dismissed.onToggle,
-      },
-    );
-  }
+  const moreItems = shareTileMoreItems(t, {
+    name: tile.presenterName,
+    isSelf: tile.isSelf,
+    selfPreview: tile.isSelf
+      ? {
+          hidden: hideSelfPreview,
+          onToggle: () => setHideScreenPreview(!hidePreviewPref),
+        }
+      : undefined,
+    fit: hideSelfPreview ? undefined : fit,
+    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    dismiss: dismissed ? { onDismiss: dismissed.onToggle } : undefined,
+  });
 
   return (
     <div className={cn("group relative", className)}>

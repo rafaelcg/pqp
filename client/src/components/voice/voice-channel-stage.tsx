@@ -40,6 +40,8 @@ export function VoiceChannelStage({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -86,6 +88,8 @@ export function VoiceChannelStage({
   onSetScreenVolume?: (userId: string, volume: number) => void;
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /** Our own hand in this room's queue. */
   onToggleRaisedHand?: () => void;
@@ -139,6 +143,8 @@ export function VoiceChannelStage({
       onSetScreenVolume={onSetScreenVolume}
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
+      onDismissCamera={onDismissCamera}
+      onWatchCamera={onWatchCamera}
       onRetryPeer={onRetryPeer}
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}

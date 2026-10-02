@@ -10083,6 +10083,8 @@ function MainAppContent({
             }
             onDismissShare={(peerId) => voice.dismissShare(peerId)}
             onWatchShare={(peerId) => voice.watchShare(peerId)}
+            onDismissCamera={(peerId) => voice.dismissCamera(peerId)}
+            onWatchCamera={(peerId) => voice.watchCamera(peerId)}
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}

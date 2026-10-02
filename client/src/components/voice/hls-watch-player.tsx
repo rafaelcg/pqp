@@ -119,7 +119,7 @@ import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Menu } from "@/components/ui/menu";
-import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { watchPlayerMoreItems } from "@/components/voice/call-menu-items";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
@@ -3026,25 +3026,14 @@ export function HlsWatchPlayer({
   const iconBtn =
     "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
   // The bar's "⋯": fill and picture-in-picture, the two things a viewer sets
-  // once per film rather than reaches for during it.
-  const playerMoreItems: ContextMenuItemDef[] = [];
-  if (hasFrame) {
-    playerMoreItems.push({
-      id: "fit",
-      label: whole ? t("call.fit.fill") : t("call.fit.whole"),
-      icon: whole ? Crop : Scan,
-      onSelect: fit.toggle,
-    });
-  }
-  if (pipAvailable && hasFrame) {
-    playerMoreItems.push({
-      id: "pip",
-      label: t("voice.hls.pip"),
-      icon: PictureInPicture2,
-      checked: isPip,
-      onSelect: () => void togglePip(),
-    });
-  }
+  // once per film rather than reaches for during it (`call-menu-items.ts`).
+  const playerMoreItems = watchPlayerMoreItems(t, {
+    fit: hasFrame ? fit : undefined,
+    pip:
+      pipAvailable && hasFrame
+        ? { active: isPip, onToggle: () => void togglePip() }
+        : undefined,
+  });
 
   const cinema = layout === "cinema";
   const mini = layout === "mini";

@@ -521,6 +521,13 @@ export interface VoiceState {
    */
   dismissedSharePeerIds: string[];
   /**
+   * Cameras this viewer hid from their own stage, by peer id. The same deal
+   * as `dismissedSharePeerIds`: the tile stays and says so, nothing about the
+   * call changes for anybody else, and it lasts only as long as that camera
+   * is on.
+   */
+  dismissedCameraPeerIds: string[];
+  /**
    * Whose screen audio to play. Derived from the sharing set + focus, not
    * from whether the stage is on screen — navigating to a text channel must
    * not mute a live share.
@@ -1747,6 +1754,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    dismissedCameraPeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
@@ -3766,6 +3774,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.cameraPeerIds = participants
       .filter((participant) => participant.cameraStreamId)
       .map((participant) => participant.peerId);
+    // A hidden camera only stays hidden while it is on.
+    state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter((id) =>
+      state.cameraPeerIds.includes(id),
+    );
   }
 
   /**
@@ -4264,6 +4276,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
+      dismissedCameraPeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
       isSharingScreenAudio: false,
@@ -5367,6 +5380,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.screenSharePeerIds = [];
       state.liveStream = null;
       state.cameraPeerIds = [];
+      state.dismissedCameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
       // A queue belongs to a room. Walking into another one is not a place
@@ -6388,6 +6402,26 @@ export function createVoiceController(transport: RealtimeTransport) {
           (id) => !state.dismissedSharePeerIds.includes(id),
         ),
         state.focusedScreenPeerId,
+      );
+      emit();
+    },
+
+    /** Hide one person's camera on this screen only. */
+    dismissCamera(peerId: string) {
+      if (state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = [...state.dismissedCameraPeerIds, peerId];
+      emit();
+    },
+
+    /** Undo that. */
+    watchCamera(peerId: string) {
+      if (!state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter(
+        (id) => id !== peerId,
       );
       emit();
     },

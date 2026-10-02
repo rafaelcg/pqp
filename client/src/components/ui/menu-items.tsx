@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { useId, type ComponentType, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 
@@ -26,6 +26,8 @@ export interface MenuItemComponentProps {
   disabled?: boolean;
   onSelect?: (event: Event) => void;
   "aria-checked"?: boolean;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
   "data-menu-item"?: string;
   className?: string;
   children?: ReactNode;
@@ -47,6 +49,7 @@ export function MenuItemRows({
   // Menus that put an icon on any row reserve the column for every row, so
   // the labels still line up when only some items carry one.
   const reserveIcon = items.some((item) => !item.separator && !item.heading && item.icon);
+  const idPrefix = useId();
 
   return (
     <>
@@ -68,6 +71,8 @@ export function MenuItemRows({
             disabled={item.disabled}
             onSelect={() => item.onSelect?.()}
             aria-checked={item.checked}
+            aria-labelledby={item.detail ? `${idPrefix}-${item.id}-label` : undefined}
+            aria-describedby={item.detail ? `${idPrefix}-${item.id}-detail` : undefined}
             data-menu-item={item.id}
             className={cn(
               "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
@@ -84,7 +89,19 @@ export function MenuItemRows({
                 {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
               </span>
             )}
-            <span className="min-w-0 flex-1">{item.label}</span>
+            {item.detail ? (
+              <span className="flex min-w-0 max-w-64 flex-1 flex-col">
+                <span id={`${idPrefix}-${item.id}-label`}>{item.label}</span>
+                <span
+                  id={`${idPrefix}-${item.id}-detail`}
+                  className="whitespace-normal text-xs text-text-tertiary"
+                >
+                  {item.detail}
+                </span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1">{item.label}</span>
+            )}
             {item.checked ? (
               <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             ) : null}
