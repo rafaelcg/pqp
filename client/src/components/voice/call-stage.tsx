@@ -631,6 +631,14 @@ export interface CallStageProps {
   onShareWithoutSound?: () => void;
   /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
   onDismissError?: () => void;
+  /**
+   * The channel list beside the stage is open and lists this room, with each
+   * person, who is talking, who is muted and whose hand is up. The stage then
+   * stops repeating it: no row of people under the picture, no room name and
+   * head count over it. Only a server voice channel passes it, and only while
+   * the list is expanded on a wide screen; a DM call has no such list.
+   */
+  roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -737,6 +745,7 @@ export function CallStage({
   onStartScreenShare,
   onShareWithoutSound,
   onDismissError,
+  roomListOnScreen = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -803,6 +812,7 @@ export function CallStage({
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onDismissError={onDismissError}
+      roomListOnScreen={roomListOnScreen}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -852,6 +862,7 @@ function ActiveCall({
   onStartScreenShare,
   onShareWithoutSound,
   onDismissError,
+  roomListOnScreen = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -904,6 +915,14 @@ function ActiveCall({
   onShareWithoutSound?: () => void;
   /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
   onDismissError?: () => void;
+  /**
+   * The channel list beside the stage is open and lists this room, with each
+   * person, who is talking, who is muted and whose hand is up. The stage then
+   * stops repeating it: no row of people under the picture, no room name and
+   * head count over it. Only a server voice channel passes it, and only while
+   * the list is expanded on a wide screen; a DM call has no such list.
+   */
+  roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -1293,6 +1312,13 @@ function ActiveCall({
   useEffect(() => {
     onShapeChange?.(shape);
   }, [shape, onShapeChange]);
+  // Fullscreen covers the channel list, so the stage speaks for the room
+  // again there.
+  const roomInSidebar = roomListOnScreen && shape !== "fullscreen";
+  // The strip is also where a failed peer's retry lives, and the list has no
+  // such button, so a failure brings the strip back until it is fixed.
+  const stripInSidebar =
+    roomInSidebar && !listeners.some((person) => person.failed);
   useEffect(() => {
     // Leaving the call takes the stage with it, and a pane still holding a
     // height for a stage that is gone is a gap where the transcript should be.
@@ -1994,6 +2020,7 @@ function ActiveCall({
             is already showing these same faces, larger. */}
         {showStrip && !soloPerson && !soloTile && !soloMusic && (
           <>
+          {!stripInSidebar && (
           <ListenerStrip
             people={listeners.map((person) => ({
               key: person.key,
@@ -2020,6 +2047,7 @@ function ActiveCall({
                pressed, which is the worst of both. */
             className={STAGE_LAYER.menus}
           />
+          )}
           {/* The bar's own territory. The strip stops here so the hang-up
               button is never under a chip, and the chips are never under the
               bar's box. Grows with the home indicator, like the bar does, and
@@ -2172,9 +2200,11 @@ function ActiveCall({
         )}
       >
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-paper">
-            {title}
-          </p>
+          {!roomInSidebar && (
+            <p className="truncate text-sm font-semibold text-paper">
+              {title}
+            </p>
+          )}
           <p className="truncate text-xs text-paper-muted" role="status">
             {/* RingView already says Connecting/Calling at centre stage.
                 A video-call ring puts our own camera on the stage instead, so
@@ -2182,7 +2212,9 @@ function ActiveCall({
             {ringing && stage.tiles.length === 0
               ? null
               : (statusLine ??
-                t("call.panel.inCall", { count: remotes.length + 1 }))}
+                (roomInSidebar
+                  ? null
+                  : t("call.panel.inCall", { count: remotes.length + 1 })))}
             {!voiceState.canSpeak && (
               <span className="ml-2 text-warning">{t("voice.bar.listenOnly")}</span>
             )}
@@ -2269,11 +2301,13 @@ function ActiveCall({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <CallDuration
-            running={timerRunning}
-            startedAt={startedAt}
-            className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
-          />
+          {!roomInSidebar && (
+            <CallDuration
+              running={timerRunning}
+              startedAt={startedAt}
+              className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+            />
+          )}
           {/* The way back from the landscape takeover, and the way into it
               again. Only on a phone held sideways with a share on. */}
           {(immersive.canDismiss || immersive.dismissed) && (
@@ -2369,6 +2403,24 @@ function ActiveCall({
           isDesktopShell={isDesktopApp()}
         />
         {watchPartyChrome ? null : controls}
+        {/* With the room's name in the list, the clock is the one thing left
+            of the overlay's corner, and it reads as the call's state: at the
+            bar's left end, level with the pill. */}
+        {roomInSidebar && !watchPartyChrome && timerRunning && (
+          <p
+            data-testid="call-bar-duration"
+            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-text-tertiary @min-[48rem]:flex"
+          >
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />
+            {t("voice.bar.connected")}
+            <span aria-hidden="true">·</span>
+            <CallDuration
+              running={timerRunning}
+              startedAt={startedAt}
+              className="tabular-nums"
+            />
+          </p>
+        )}
       </div>
         </>
       )}

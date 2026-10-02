@@ -10023,6 +10023,8 @@ function MainAppContent({
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
             onDismissError={() => voice.dismissError()}
+            // The expanded channel list already lists this room's people.
+            roomListOnScreen={columnLayout && !sidebarIconsOnly}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
