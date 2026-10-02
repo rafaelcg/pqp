@@ -23,6 +23,7 @@ import {
   CALL_SPLIT_STEP_COARSE_PX,
   CALL_SPLIT_STEP_PX,
   clampSplit,
+  fitToPictureDelta,
   nudgeSplit,
   effectiveOrientation,
   resolveCollapsed,
@@ -497,8 +498,55 @@ export function CallSplit({
     applyPx(drag.startPx + moved, true);
   };
 
+  // Double-click (or Enter) snaps the stage to the picture: no black bands
+  // above and below, or at the sides. Measured on the largest picture with a
+  // size, then measured again after the layout settles, because with more
+  // than one tile the picture does not grow one for one with the stage.
+  const fitToPicture = () => {
+    if (!resizable) {
+      return;
+    }
+    let passes = 0;
+    const step = () => {
+      const pane = stagePaneRef.current;
+      const video = pane
+        ? Array.from(pane.querySelectorAll("video"))
+            .filter((element) => element.videoWidth > 0)
+            .map((element) => ({ element, box: element.getBoundingClientRect() }))
+            .sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)[0]
+        : undefined;
+      if (!video) {
+        return;
+      }
+      const delta = fitToPictureDelta({
+        boxWidth: video.box.width,
+        boxHeight: video.box.height,
+        videoWidth: video.element.videoWidth,
+        videoHeight: video.element.videoHeight,
+        sideBySide,
+      });
+      if (Math.abs(delta) < 2) {
+        return;
+      }
+      // From the stage's size as laid out now, not a running total: a pass
+      // the minimums clamped must not carry its overshoot into the next.
+      const box = pane!.getBoundingClientRect();
+      applyPx((sideBySide ? box.width : box.height) + delta, true);
+      passes += 1;
+      if (passes < 3) {
+        requestAnimationFrame(() => requestAnimationFrame(step));
+      }
+    };
+    step();
+  };
+
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!resizable) {
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      fitToPicture();
       return;
     }
     const step = event.shiftKey
@@ -629,6 +677,7 @@ export function CallSplit({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onKeyDown={onKeyDown}
+          onDoubleClick={fitToPicture}
         />
       ) : null}
       {/* Same reasoning for the transcript: unmounting it would lose the
@@ -677,6 +726,7 @@ function SplitDivider({
   onPointerUp,
   onPointerCancel,
   onKeyDown,
+  onDoubleClick,
 }: {
   sideBySide: boolean;
   dragging: boolean;
@@ -688,6 +738,7 @@ function SplitDivider({
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  onDoubleClick: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -738,6 +789,7 @@ function SplitDivider({
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
           onKeyDown={onKeyDown}
+          onDoubleClick={onDoubleClick}
         >
           <span
             aria-hidden="true"

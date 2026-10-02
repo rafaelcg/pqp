@@ -1480,7 +1480,7 @@
   "call.stage.fullscreenTile": "Ver a {name} en pantalla completa",
   "call.split.resize": "Ajustar llamada y chat",
   "chat.paneTitle": "Chat",
-  "call.split.hint": "Arrástralo, o usa las flechas.",
+  "call.split.hint": "Arrástralo, o usa las flechas. Doble clic para ajustar el video, sin franjas negras.",
   "call.split.value": "La llamada ocupa el {percent}% del espacio",
   "call.split.sideBySide": "Chat al lado de la llamada",
   "call.split.stack": "Chat debajo de la llamada",

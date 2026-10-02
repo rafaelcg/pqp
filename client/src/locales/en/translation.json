@@ -1471,7 +1471,7 @@
   "call.stage.fullscreenTile": "View {name} fullscreen",
   "call.split.resize": "Resize call and chat",
   "chat.paneTitle": "Chat",
-  "call.split.hint": "Drag it, or use the arrow keys.",
+  "call.split.hint": "Drag it, or use the arrow keys. Double-click to fit the video, with no black bars.",
   "call.split.value": "The call has {percent}% of the space",
   "call.split.sideBySide": "Chat beside the call",
   "call.split.stack": "Chat below the call",
