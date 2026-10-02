@@ -1453,6 +1453,8 @@
   "call.header.joinCount": "Join call · {count}",
   "call.stage.collapse": "Collapse call",
   "call.controls.more": "More",
+  "call.share.more": "More options for {name}'s screen",
+  "call.share.moreSelf": "More options for your screen",
   "call.stage.expand": "Expand call",
   "call.stage.duration": "Call duration",
   "call.stage.selfPreview": "Floating camera preview",

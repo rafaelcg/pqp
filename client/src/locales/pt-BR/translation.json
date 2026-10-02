@@ -1453,6 +1453,8 @@
   "call.header.joinCount": "Entrar na call · {count}",
   "call.stage.collapse": "Recolher a call",
   "call.controls.more": "Mais",
+  "call.share.more": "Mais opções da tela de {name}",
+  "call.share.moreSelf": "Mais opções da sua tela",
   "call.stage.expand": "Expandir a call",
   "call.stage.duration": "Duração da call",
   "call.stage.selfPreview": "Prévia flutuante da câmera",

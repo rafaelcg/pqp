@@ -3371,7 +3371,6 @@ export function CallControls({
             type="button"
             data-testid="call-more"
             aria-label={t("call.controls.more")}
-            title={t("call.controls.more")}
             className={cn(
               "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
               size,
@@ -4256,6 +4255,7 @@ export function ScreenTileFrame({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  const [moreOpen, setMoreOpen] = useState(false);
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
@@ -4293,6 +4293,52 @@ export function ScreenTileFrame({
   }
 
   const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
+  const controlsSide = useHls ? "bottom" : "top";
+  const controlsAlign = useHls ? "start" : "end";
+  const wholePicture = fit.fit === "contain";
+  const moreItems: ContextMenuItemDef[] = [];
+  if (tile.isSelf) {
+    moreItems.push({
+      id: "self-preview",
+      label: hideSelfPreview
+        ? t("voice.share.showPreview")
+        : t("voice.share.hidePreview"),
+      icon: hideSelfPreview ? Eye : EyeOff,
+      onSelect: () => setHideScreenPreview(!hidePreviewPref),
+    });
+  }
+  if (!hideSelfPreview) {
+    moreItems.push({
+      id: "fit",
+      label: wholePicture ? t("call.fit.fill") : t("call.fit.whole"),
+      icon: wholePicture ? Crop : Scan,
+      onSelect: fit.toggle,
+    });
+  }
+  if (onPin) {
+    moreItems.push({
+      id: "pin",
+      label: pinned
+        ? t("call.stage.unpin")
+        : t("call.stage.pin", { name: tile.presenterName }),
+      icon: Pin,
+      onSelect: onPin,
+    });
+  }
+  // Only a peer's share can be declined. Declining our own would mean hiding
+  // the thing we are broadcasting, which is not a thing anyone wants and
+  // would read as having stopped.
+  if (dismissed && !tile.isSelf) {
+    moreItems.push(
+      { id: "dismiss-separator", label: "", separator: true },
+      {
+        id: "dismiss",
+        label: t("voice.share.dismiss", { name: tile.presenterName }),
+        icon: EyeOff,
+        onSelect: dismissed.onToggle,
+      },
+    );
+  }
 
   return (
     <div className={cn("group relative", className)}>
@@ -4334,77 +4380,51 @@ export function ScreenTileFrame({
         label={label}
         onClick={onToggleFullscreen}
       />
-      {/* Top left, and out of the way until wanted: the stage's own title
-          overlay lives in this corner, and a tile that keeps three buttons
-          parked on top of it makes both unreadable. Same rule and the same
-          classes as a camera tile's `TileOverlay`; a touch device, which has
-          no hover to reveal anything, keeps them all the time. */}
+      {/* BOTTOM RIGHT, out of the way until wanted. The stage's title
+          overlay owns the top left, and the name owns the bottom left. What a
+          viewer reaches for on somebody's share (their sound and fullscreen)
+          stays one click away; the rest (fit, pin, not watching this one)
+          folds into "⋯". A watch party's player draws its own bar along the
+          bottom, so there the cluster keeps the top left it always had. A
+          touch device, which has no hover to reveal anything, keeps it all
+          the time. */}
       <div
         ref={menu.rootRef}
+        data-share-controls=""
+        // The fit control moved into "⋯"; the state it reports stays here.
+        data-tile-fit={fit.fit}
         className={cn(
-          "absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5",
+          "absolute flex max-w-[80%] items-center gap-1.5",
+          useHls ? "left-2 top-2" : "bottom-2 right-2",
           STAGE_LAYER.tileControls,
-          menu.open || hideSelfPreview
+          menu.open || moreOpen || hideSelfPreview
             ? "opacity-100"
             : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
         )}
       >
-        {/* Only a peer's share can be declined. Declining our own would mean
-            hiding the thing we are broadcasting, which is not a thing anyone
-            wants and would read as having stopped. */}
-        {dismissed && !tile.isSelf && (
-          <Tooltip
-            label={t("voice.share.dismiss", { name: tile.presenterName })}
-            side="bottom"
-            align="start"
-          >
-            <button
-              type="button"
-              data-share-dismiss
-              aria-label={t("voice.share.dismiss", { name: tile.presenterName })}
-              className="rounded-md bg-ink/70 p-1.5 text-paper-muted hover:bg-ink hover:text-paper"
-              onClick={dismissed.onToggle}
-            >
-              <EyeOff aria-hidden="true" className="h-4 w-4" />
-            </button>
-          </Tooltip>
-        )}
-        {tile.isSelf && (
-          <Tooltip
-            label={
-              hideSelfPreview
-                ? t("voice.share.showPreview")
-                : t("voice.share.hidePreview")
-            }
-            side="bottom"
-            align="start"
-          >
-            <button
-              type="button"
-              aria-pressed={hideSelfPreview}
-              aria-label={
-                hideSelfPreview
-                  ? t("voice.share.showPreview")
-                  : t("voice.share.hidePreview")
-              }
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-              onClick={() => setHideScreenPreview(!hidePreviewPref)}
-            >
-              {hideSelfPreview ? (
-                <Eye className="h-3.5 w-3.5" />
-              ) : (
-                <EyeOff className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </Tooltip>
+        {hasAudio && (
+          <div className="relative">
+            <PeerAudioMenuButton
+              name={tile.presenterName}
+              open={menu.open}
+              onToggle={menu.toggle}
+              muted={audio?.share?.volume === 0}
+            />
+            <PeerAudioMenu
+              name={tile.presenterName}
+              open={menu.open}
+              voice={audio?.voice}
+              share={audio?.share}
+              side={controlsSide}
+              align={controlsAlign}
+            />
+          </div>
         )}
         {!hideSelfPreview && onToggleFullscreen && (
-          /* `side="bottom"`: this sits on the top edge of the share, so a
-             bubble above it would be off the tile. */
-          <Tooltip label={label} side="bottom" align="start">
+          <Tooltip label={label} side={controlsSide} align={controlsAlign}>
             <button
               type="button"
-              // The control bar carries a fullscreen button too, so the label
+              // The camera tiles carry a fullscreen button too, so the label
               // alone cannot tell a test which one it pressed.
               data-testid="share-fullscreen"
               aria-pressed={isFullscreen}
@@ -4419,49 +4439,25 @@ export function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
-        {!hideSelfPreview && <TileFitButton fit={fit} kind="screen" />}
-        {onPin && (
-          <Tooltip
-            label={
-              pinned
-                ? t("call.stage.unpin")
-                : t("call.stage.pin", { name: tile.presenterName })
+        <Menu
+          items={moreItems}
+          side={controlsSide}
+          align={controlsAlign}
+          onOpenChange={setMoreOpen}
+        >
+          <button
+            type="button"
+            data-testid="share-more"
+            aria-label={
+              tile.isSelf
+                ? t("call.share.moreSelf")
+                : t("call.share.more", { name: tile.presenterName })
             }
-            side="bottom"
-            align="start"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
           >
-            <button
-              type="button"
-              data-testid="share-pin"
-              aria-pressed={pinned}
-              className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-                pinned && "text-signal",
-              )}
-              onClick={onPin}
-            >
-              <Pin className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        )}
-        {hasAudio && (
-          <div className="relative">
-            <PeerAudioMenuButton
-              name={tile.presenterName}
-              open={menu.open}
-              onToggle={menu.toggle}
-              muted={audio?.share?.volume === 0}
-            />
-            <PeerAudioMenu
-              name={tile.presenterName}
-              open={menu.open}
-              voice={audio?.voice}
-              share={audio?.share}
-              side="bottom"
-              align="start"
-            />
-          </div>
-        )}
+            <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Menu>
       </div>
       {/* The name goes where every other tile keeps its name: the bottom left,
           always visible, out of the title overlay's corner. It names the
