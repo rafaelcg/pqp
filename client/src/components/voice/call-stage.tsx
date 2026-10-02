@@ -216,7 +216,10 @@ import { isAutomatedBrowser } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
-import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
+import {
+  useVoiceNotice,
+  VoiceNoticeBar,
+} from "@/components/voice/voice-notice-bar";
 import {
   callStartKey,
   callStartedAt,
@@ -1315,6 +1318,7 @@ function ActiveCall({
   // Fullscreen covers the channel list, so the stage speaks for the room
   // again there.
   const roomInSidebar = roomListOnScreen && shape !== "fullscreen";
+  const notice = useVoiceNotice(voiceState.notice);
   // The strip is also where a failed peer's retry lives, and the list has no
   // such button, so a failure brings the strip back until it is fixed.
   const stripInSidebar =
@@ -1338,6 +1342,10 @@ function ActiveCall({
     shareFocused: screenStream !== null && chromeExpanded,
     fullscreen: fullscreen.isFullscreen,
   });
+  // Whatever names this call (the channel, the person in a DM) is the page
+  // header's first line. Only where the header is out of sight, fullscreen
+  // and a phone's landscape takeover, does the stage say it again.
+  const titleOnStage = shape === "fullscreen" || immersive.immersive;
   // Overlay chrome vs composer dock. Music-only is a picture with the
   // dock kept; fullscreen still takes the overlay so hang-up is reachable
   // with the composer gone.
@@ -2179,7 +2187,9 @@ function ActiveCall({
           )}
         </div>
       )}
-      {!voiceState.error && <VoiceNoticeBar notice={voiceState.notice} />}
+      {!voiceState.error && (
+        <VoiceNoticeBar notice={notice.shown} onClose={notice.hide} />
+      )}
 
       {dockComposer ? (
         composerDock
@@ -2192,7 +2202,7 @@ function ActiveCall({
           STAGE_LAYER.chrome,
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
-          (voiceState.error || voiceState.notice) && "mt-7",
+          (voiceState.error || notice.shown) && "mt-7",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,
           // the count and the uptime, and "watch-party · 1 na chamada" over
@@ -2203,7 +2213,7 @@ function ActiveCall({
         )}
       >
         <div className="min-w-0">
-          {!roomInSidebar && (
+          {titleOnStage && (
             <p className="truncate text-sm font-semibold text-paper">
               {title}
             </p>
