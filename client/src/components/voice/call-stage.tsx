@@ -189,7 +189,7 @@ import { videoFitClass } from "@/lib/video-fit";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import {
   PeerAudioMenu,
-  PeerAudioMenuButton,
+  PictureVolume,
   usePeerAudioMenu,
   type PeerAudioTrack,
 } from "@/components/voice/peer-audio-menu";
@@ -3570,18 +3570,17 @@ function TileOverlay({
   insets?: VideoInsets;
 }) {
   const { t } = useTranslation();
-  const menu = usePeerAudioMenu();
   const [moreOpen, setMoreOpen] = useState(false);
-  const hasAudio = Boolean(audio?.voice || audio?.share);
+  // A camera is somebody talking: the slider is their voice.
+  const pictureSound = audio?.voice ?? audio?.share;
   const moreItems = cameraTileMoreItems(t, {
     name,
     fit,
     pin: onPin ? { pinned, onToggle: onPin } : undefined,
     hide: onHideCamera ? { onHide: onHideCamera } : undefined,
   });
-  const revealed =
-    menu.open || moreOpen
-      ? "opacity-100"
+  const revealed = moreOpen
+    ? "opacity-100"
       : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
   // The same row as a share's (`ScreenTileFrame`) and the watch party's
   // player: the name and the sound on the left, "⋯" and fullscreen on the
@@ -3603,26 +3602,13 @@ function TileOverlay({
     >
       <div className="flex min-w-0 items-center gap-1.5">
         {badge}
-        {hasAudio && (
-          <div
-            ref={menu.rootRef}
-            className={cn("pointer-events-auto relative", revealed)}
-          >
-            <PeerAudioMenuButton
-              name={name}
-              open={menu.open}
-              onToggle={menu.toggle}
-              muted={audio?.voice?.volume === 0}
-            />
-            <PeerAudioMenu
-              name={name}
-              open={menu.open}
-              voice={audio?.voice}
-              share={audio?.share}
-              side="top"
-              align="start"
-            />
-          </div>
+        {pictureSound && (
+          <PictureVolume
+            name={name}
+            track={pictureSound}
+            kind={audio?.voice ? "voice" : "share"}
+            className={cn("pointer-events-auto", revealed)}
+          />
         )}
       </div>
       <div
@@ -4335,14 +4321,15 @@ export function ScreenTileFrame({
   coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
-  const menu = usePeerAudioMenu();
   const [moreOpen, setMoreOpen] = useState(false);
   const fit = useVideoFit("screen");
   const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
   const insets = useVideoInsets(boxRef, [tile.stream, tile.hlsUrl, fit.fit, hideSelfPreview]);
-  const hasAudio = Boolean(audio?.voice || audio?.share);
+  // A share is what the viewer is watching: the slider is its sound, or the
+  // presenter's voice when the share carries none.
+  const pictureSound = audio?.share ?? audio?.voice;
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
     : tile.isSelf
@@ -4393,7 +4380,7 @@ export function ScreenTileFrame({
   });
 
   const revealed =
-    menu.open || moreOpen || hideSelfPreview
+    moreOpen || hideSelfPreview
       ? "opacity-100"
       : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
   const moreButton = (
@@ -4520,26 +4507,13 @@ export function ScreenTileFrame({
         >
           <div className="flex min-w-0 items-center gap-1.5">
             {nameChip}
-            {hasAudio && (
-              <div
-                ref={menu.rootRef}
-                className={cn("pointer-events-auto relative", revealed)}
-              >
-                <PeerAudioMenuButton
-                  name={tile.presenterName}
-                  open={menu.open}
-                  onToggle={menu.toggle}
-                  muted={audio?.share?.volume === 0}
-                />
-                <PeerAudioMenu
-                  name={tile.presenterName}
-                  open={menu.open}
-                  voice={audio?.voice}
-                  share={audio?.share}
-                  side="top"
-                  align="start"
-                />
-              </div>
+            {pictureSound && (
+              <PictureVolume
+                name={tile.presenterName}
+                track={pictureSound}
+                kind={audio?.share ? "share" : "voice"}
+                className={cn("pointer-events-auto", revealed)}
+              />
             )}
           </div>
           <div

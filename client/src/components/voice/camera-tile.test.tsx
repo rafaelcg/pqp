@@ -109,7 +109,7 @@ describe("CameraTile", () => {
   /**
    * A tile that draws a person and offers no way to turn them down is the bug
    * a 510-member community's moderator reported: the control was there, under
-   * a hover, and he never found it. The button is what makes it findable, so
+   * a hover, and he never found it. The slider on the picture is what makes it findable, so
    * losing it is a regression a test has to catch.
    */
   it("offers this person's sound from the tile itself", () => {
@@ -119,8 +119,8 @@ describe("CameraTile", () => {
         youLabel="(you)"
       />,
     );
-    expect(html).toContain('data-testid="peer-audio-open"');
-    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+    expect(html).toContain('data-picture-volume="voice"');
+    expect(html).toContain('type="range"');
   });
 
   it("has no volume button on our own tile, which has no knob behind it", () => {
@@ -130,7 +130,7 @@ describe("CameraTile", () => {
         youLabel="(you)"
       />,
     );
-    expect(html).not.toContain('data-testid="peer-audio-open"');
+    expect(html).not.toContain('data-testid="picture-volume"');
   });
 
   it("keeps Retry on the picture rather than behind the menu", () => {
