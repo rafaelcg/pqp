@@ -4786,7 +4786,19 @@ function MainAppContent({
                   fetched,
                   listTicket,
                 );
-                if (listIsCurrent) {
+                // The open channel missing from this list is not proof it is
+                // gone, so the list is not written (it would drop that row
+                // from the sidebar) and the `channels-update` path decides,
+                // with its own second list a second later.
+                const vanished =
+                  listIsCurrent &&
+                  !channelLoadsRef.current.has(message.serverId) &&
+                  vanishedChannelDecision(
+                    list,
+                    selectedChannelIdRef.current,
+                    null,
+                  ).action === "confirm";
+                if (listIsCurrent && !vanished) {
                   channelListTickets.wrote(listTicket);
                   setChannels(list);
                 }
@@ -4809,28 +4821,17 @@ function MainAppContent({
                     ),
                   );
                 }
-                // The open channel missing from this list goes through the
-                // same confirm-then-leave as a `channels-update`, so there is
-                // one fallback path and it moves the URL with the selection.
-                if (
-                  listIsCurrent &&
-                  !channelLoadsRef.current.has(message.serverId) &&
-                  vanishedChannelDecision(
-                    list,
-                    selectedChannelIdRef.current,
-                    null,
-                  ).action === "confirm"
-                ) {
+                // One fallback path, which moves the URL with the selection:
+                // a fresh `channels-update` refetch, which confirms on its own
+                // timer before anybody is sent elsewhere.
+                if (vanished) {
                   console.warn("[pqp] channel.vanished", {
                     serverId: message.serverId,
                     channelId: selectedChannelIdRef.current,
-                    step: "confirming",
+                    step: "suspected",
                     via: "permissions-update",
                   });
-                  refreshChannelListRef.current(
-                    message.serverId,
-                    selectedChannelIdRef.current,
-                  );
+                  refreshChannelListRef.current(message.serverId);
                 }
               })
               .catch(() => {
