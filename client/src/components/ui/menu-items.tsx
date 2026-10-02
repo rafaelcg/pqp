@@ -107,7 +107,7 @@ export function MenuItemRows({
                 </span>
               </span>
             ) : (
-              <span className="min-w-0 flex-1">{item.label}</span>
+              <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
             )}
             {item.checked ? (
               <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
