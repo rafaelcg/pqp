@@ -55,4 +55,14 @@ describe("the per-session choice", () => {
     writeShowOriginal("p1", false);
     expect(readShowOriginal("p1")).toBe(false);
   });
+
+  it("forgets the oldest choices past the cap, in memory as in storage", () => {
+    for (let i = 0; i < 205; i += 1) {
+      writeShowOriginal(`cap-${i}`, true);
+    }
+    expect(readShowOriginal("cap-0")).toBe(false);
+    expect(readShowOriginal("cap-4")).toBe(false);
+    expect(readShowOriginal("cap-5")).toBe(true);
+    expect(readShowOriginal("cap-204")).toBe(true);
+  });
 });

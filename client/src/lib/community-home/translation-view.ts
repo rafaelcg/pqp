@@ -36,7 +36,13 @@ export function writeShowOriginal(postId: string, on: boolean): void {
   const next = readStored().filter((id) => id !== postId);
   if (on) {
     next.push(postId);
+    memory.delete(postId);
     memory.add(postId);
+    // The same cap as the stored list, oldest forgotten first.
+    for (const old of memory) {
+      if (memory.size <= MAX_REMEMBERED) break;
+      memory.delete(old);
+    }
   } else {
     memory.delete(postId);
   }

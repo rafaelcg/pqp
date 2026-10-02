@@ -710,6 +710,68 @@ describeDb("Baú translation", () => {
       });
       expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("failed");
       expect(await rows(post.id)).toEqual([]);
+      // The provider answered, so it billed: the reservation stays and the
+      // characters count as sent. Retrying cannot free the same budget again.
+      const spent = await getPool().query<{ chars: string }>(`SELECT chars FROM community_home_translation_usage`);
+      expect(Number(spent.rows[0]!.chars)).toBe(PT_TITLE.length + PT_BODY.length);
+      expect((await tr.communityHomeTranslationMetrics()).charsSent).toBe(PT_TITLE.length + PT_BODY.length);
+    });
+
+    it("a billed provider failure keeps its budget; an unbilled one gives it back", async () => {
+      const post = await publishQuiet();
+      const sent = PT_TITLE.length + PT_BODY.length;
+      const billedError = Object.assign(new Error("openrouter-chat HTTP 500 after a billed call"), {
+        costUsd: 0.0004,
+        costIncomplete: false,
+      });
+      tr.setCommunityHomeTranslatorForTests({
+        id: "billed",
+        translate: async () => {
+          throw billedError;
+        },
+      });
+      expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("failed");
+      const usage = async () =>
+        Number((await getPool().query<{ chars: string }>(`SELECT chars FROM community_home_translation_usage`)).rows[0]?.chars ?? 0);
+      expect(await usage()).toBe(sent);
+      expect((await tr.communityHomeTranslationMetrics()).costUsd).toBeCloseTo(0.0004, 6);
+      await getPool().query(`UPDATE community_home_translation_jobs SET retry_at = NOW() - INTERVAL '1 second'`);
+      tr.setCommunityHomeTranslatorForTests({
+        id: "unbilled",
+        translate: async () => {
+          throw new Error("fetch failed");
+        },
+      });
+      expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("failed");
+      // Only the first attempt's reservation is still held.
+      expect(await usage()).toBe(sent);
+    });
+
+    it("an edit starts fresh: it is not held back by the old version's backoff", async () => {
+      const post = await publishQuiet();
+      fake.state.fail = new Error("openrouter-chat HTTP 503: down");
+      expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("failed");
+      expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("skipped:claimed");
+      fake.state.fail = null;
+      await getPool().query(`UPDATE community_home_posts SET body = $2 WHERE id = $1`, [
+        post.id,
+        "Texto novo do post, escrito depois da falha, com você lendo no seu idioma de sempre.",
+      ]);
+      expect(await tr.translateCommunityHomePost(post.id, "en")).toBe("done");
+    });
+
+    it("the queue holds a (post, language) once, however often it is asked", async () => {
+      const post = await publishQuiet();
+      let release!: () => void;
+      fake.state.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const asks = [1, 2, 3, 4].map(() => tr.scheduleCommunityHomeTranslation(post.id, serverId));
+      await vi.waitFor(() => expect(fake.calls.length).toBeGreaterThan(0));
+      release();
+      await Promise.all(asks);
+      expect(fake.calls.filter((c) => c.to === "en")).toHaveLength(1);
+      expect(fake.calls.filter((c) => c.to === "es")).toHaveLength(1);
     });
   });
 
@@ -760,6 +822,23 @@ describeDb("Baú translation", () => {
       fake.calls.length = 0;
       expect(await tr.sweepCommunityHomeTranslations()).toEqual({ attempted: 0 });
       expect(fake.calls).toHaveLength(0);
+    });
+
+    it("after a scan that found nothing, an idle deployment does not rescan every post each minute", async () => {
+      const post = await bareInstanceWithPost();
+      process.env.COMMUNITY_HOME_TRANSLATION = "true";
+      expect((await tr.sweepCommunityHomeTranslations()).attempted).toBe(3);
+      expect(await tr.sweepCommunityHomeTranslations()).toEqual({ attempted: 0 });
+      await getPool().query(`UPDATE community_home_posts SET body = $2 WHERE id = $1`, [
+        post.id,
+        "Texto mudado por baixo dos panos, que o resgate de dez minutos ainda vai pegar depois.",
+      ]);
+      // Inside the idle window the scan is skipped...
+      expect(await tr.sweepCommunityHomeTranslations()).toEqual({ attempted: 0 });
+      // ...and a change in the switches (here, a different set of servers) ends it at once.
+      const other = await createChatServer("Fora", owner.id);
+      await flags.setServerFlagOverride("community_home_translation", other.server.id, false, { kind: "dashboard" });
+      expect((await tr.sweepCommunityHomeTranslations()).attempted).toBe(3);
     });
 
     it("a post edited with nothing translating it (a crash, a missed call) is caught by the sweep", async () => {

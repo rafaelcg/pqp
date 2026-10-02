@@ -256,6 +256,9 @@ export function resetCommunityHomeTranslationForTests(): void {
   translatorOverride = null;
   cachedTranslator = null;
   lastSweepState = "";
+  idleUntil = 0;
+  idleSignature = "";
+  queued.clear();
 }
 
 // ---------------------------------------------------------------- hash + text
@@ -333,8 +336,11 @@ export async function claimTranslationJob(
             retry_at = NULL
       WHERE (j.claimed_at IS NULL
              OR j.claimed_at < NOW() - make_interval(secs => $5))
-        AND (j.retry_at IS NULL OR j.retry_at <= NOW())
-        AND (j.source_hash <> EXCLUDED.source_hash OR j.attempts < $6)
+        -- The backoff and the give-up belong to ONE version of the post: an
+        -- edit is a new version and starts fresh, whatever the old one owes.
+        AND (j.source_hash <> EXCLUDED.source_hash
+             OR ((j.retry_at IS NULL OR j.retry_at <= NOW())
+                 AND j.attempts < $6))
      RETURNING attempts`,
     [
       postId,
@@ -641,16 +647,35 @@ async function translateOnce(
       result.texts.length !== texts.length ||
       result.texts.some((t, i) => !t.trim() && texts[i]!.trim())
     ) {
-      throw new Error("the model returned an empty or misaligned answer");
+      // The provider answered, so it billed: this is a billed failure.
+      throw Object.assign(
+        new Error("the model returned an empty or misaligned answer"),
+        { costUsd: result.costUsd ?? 0, billed: true },
+      );
     }
     translated = result.texts;
     stats.costUsd += result.costUsd ?? 0;
   } catch (error) {
-    await refundTranslationBudget(reserved.day, sentChars);
-    // A failure after a billed call (`TranslateError`) still cost money.
-    const billed = (error as { costUsd?: unknown }).costUsd;
-    if (typeof billed === "number") {
-      stats.costUsd += billed;
+    // A failure after a billed call (`TranslateError`, or an answer we
+    // rejected) still cost money: it keeps its reservation and is counted as
+    // sent, so repeated billed failures cannot free the same budget again. Only
+    // a failure known not to have reached the provider gives it back.
+    const detail = error as {
+      costUsd?: unknown;
+      costIncomplete?: unknown;
+      billed?: unknown;
+    };
+    const wasBilled =
+      detail.billed === true ||
+      detail.costIncomplete === true ||
+      (typeof detail.costUsd === "number" && detail.costUsd > 0);
+    if (typeof detail.costUsd === "number") {
+      stats.costUsd += detail.costUsd;
+    }
+    if (wasBilled) {
+      stats.charsSent += sentChars;
+    } else {
+      await refundTranslationBudget(reserved.day, sentChars);
     }
     const message = error instanceof Error ? error.message : String(error);
     const retryInSeconds = BACKOFF_BASE_SECONDS * 3 ** (claim.attempts - 1);
@@ -729,6 +754,30 @@ async function translateOnce(
 let running = 0;
 const waiting: Array<() => void> = [];
 
+/** What may wait for a slot. Past it the work is dropped and the sweep finds it again. */
+const MAX_QUEUED = 50;
+const queued = new Set<string>();
+
+/**
+ * Run one (post, language) through the slots, once: a pair already waiting or
+ * running in this process is not queued again (the minute sweep would
+ * otherwise re-add the same unclaimed candidates every tick while a slow
+ * provider holds the slots), and the queue is bounded.
+ */
+function runQueued(
+  postId: string,
+  lang: CommunityHomeTranslationLang,
+): Promise<unknown> {
+  const key = `${postId}:${lang}`;
+  if (queued.has(key) || waiting.length >= MAX_QUEUED) {
+    return Promise.resolve();
+  }
+  queued.add(key);
+  return withSlot(() => translateCommunityHomePost(postId, lang)).finally(() =>
+    queued.delete(key),
+  );
+}
+
 async function withSlot<T>(run: () => Promise<T>): Promise<T> {
   if (running >= CONCURRENCY) {
     await new Promise<void>((resolve) => waiting.push(resolve));
@@ -775,9 +824,7 @@ function scheduleUnsafe(postId: string, serverId: string): Promise<void> {
     return Promise.resolve();
   }
   return Promise.all(
-    COMMUNITY_HOME_TRANSLATION_LANGS.map((lang) =>
-      withSlot(() => translateCommunityHomePost(postId, lang)),
-    ),
+    COMMUNITY_HOME_TRANSLATION_LANGS.map((lang) => runQueued(postId, lang)),
   ).then(
     () => undefined,
     () => undefined,
@@ -785,6 +832,15 @@ function scheduleUnsafe(postId: string, serverId: string): Promise<void> {
 }
 
 let lastSweepState = "";
+/**
+ * After a scan that found nothing missing, the next full scan waits this long
+ * (unless the switches changed): the query walks every published post, and an
+ * idle deployment should not pay for that once a minute. A publish or an edit
+ * does not wait for it, it translates by itself; this is only the safety net.
+ */
+const IDLE_RESCAN_MS = 10 * 60_000;
+let idleUntil = 0;
+let idleSignature = "";
 
 function sweepState(state: string, fields: Record<string, unknown> = {}): void {
   // Only on a change, so an idle deployment is not one log line a minute.
@@ -841,6 +897,10 @@ export async function sweepCommunityHomeTranslations(
   // Global on: every server except the ones overridden off. Global off: only
   // the ones overridden on. Done in SQL so servers that will never qualify
   // cannot fill the batch and starve the ones that do.
+  const signature = `${globalOn}|${serverIds.sort().join(",")}|${communityHomeTranslationModel()}`;
+  if (signature === idleSignature && Date.now() < idleUntil) {
+    return { attempted: 0 };
+  }
   const scope = globalOn
     ? "p.server_id <> ALL($4::uuid[])"
     : "p.server_id = ANY($4::uuid[])";
@@ -886,18 +946,17 @@ export async function sweepCommunityHomeTranslations(
   );
   if (rows.length === 0) {
     sweepState("idle", { reason: "nothing_missing" });
+    idleSignature = signature;
+    idleUntil = Date.now() + IDLE_RESCAN_MS;
     return { attempted: 0 };
   }
+  idleUntil = 0;
   lastSweepState = "working";
   logEvent("communityHome.translation.sweep", {
     state: "working",
     candidates: rows.length,
   });
-  await Promise.all(
-    rows.map((r) =>
-      withSlot(() => translateCommunityHomePost(r.post_id, r.lang)),
-    ),
-  );
+  await Promise.all(rows.map((r) => runQueued(r.post_id, r.lang)));
   return { attempted: rows.length };
 }
 

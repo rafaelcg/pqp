@@ -329,8 +329,12 @@ only because the key is sent to it).
   atomically in `community_home_translation_usage` so it means the deployment
   and not one process, quick retries on 429 and 5xx with the provider's
   `Retry-After`, then a job-level backoff (2, 6, 18 minutes) and a quiet give
-  up after four tries for that version of the post. A failed attempt gives its
-  budget back.
+  up after four tries for that version of the post (an edit is a new version
+  and starts fresh). A failure known not to have reached the provider gives its
+  budget back; one after a billed call keeps it. Work waiting for one of the two
+  slots is deduplicated per post and language and capped, and after a scan that
+  found nothing missing the sweep rescans only every 10 minutes (or at once when
+  the flag's servers change); a publish or an edit never waits for it.
 
 **What is never translated.** Comments (a follow-up), the author's name,
 the cover, media, anything in a draft or scheduled post (it is translated when
