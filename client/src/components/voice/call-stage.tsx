@@ -4345,7 +4345,7 @@ export function ScreenTileFrame({
   }
 
   const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
-  const controlsSide = useHls ? "bottom" : "top";
+  const controlsSide = "bottom";
   const controlsAlign = useHls ? "start" : "end";
   const wholePicture = fit.fit === "contain";
   const moreItems: ContextMenuItemDef[] = [];
@@ -4432,14 +4432,17 @@ export function ScreenTileFrame({
         label={label}
         onClick={onToggleFullscreen}
       />
-      {/* BOTTOM RIGHT, out of the way until wanted. The stage's title
-          overlay owns the top left, and the name owns the bottom left. What a
-          viewer reaches for on somebody's share (their sound and fullscreen)
-          stays one click away; the rest (fit, pin, not watching this one)
-          folds into "⋯". A watch party's player draws its own bar along the
-          bottom, so there the cluster keeps the top left it always had. A
-          touch device, which has no hover to reveal anything, keeps it all
-          the time. */}
+      {/* TOP RIGHT, under the overlay's first row, out of the way until
+          wanted. The stage's title overlay owns the top left and its clock
+          the very top right; the name owns the bottom left. NOT the bottom
+          right: the control bar's box keeps the pointer across its whole
+          band (`use-idle-chrome.ts`), so anything on a share's bottom edge is
+          drawn and cannot be pressed whenever no row of people holds the
+          share above it. What a viewer reaches for on somebody's share (their
+          sound and fullscreen) stays one click away; the rest (fit, pin, not
+          watching this one) folds into "⋯". A watch party's player keeps the
+          top left it always had. A touch device, which has no hover to reveal
+          anything, keeps it all the time. */}
       <div
         ref={menu.rootRef}
         data-share-controls=""
@@ -4447,7 +4450,7 @@ export function ScreenTileFrame({
         data-tile-fit={fit.fit}
         className={cn(
           "absolute flex max-w-[80%] items-center gap-1.5",
-          useHls ? "left-2 top-2" : "bottom-2 right-2",
+          useHls ? "left-2 top-2" : "right-2 top-10",
           STAGE_LAYER.tileControls,
           menu.open || moreOpen || hideSelfPreview
             ? "opacity-100"

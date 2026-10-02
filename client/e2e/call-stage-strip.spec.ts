@@ -218,6 +218,11 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
   const sockets: ListenerSocket[] = [];
   try {
+    // The strip stands down while the expanded channel list already lists
+    // the room (`roomListOnScreen`), so fold the list to its icons first.
+    await page.addInitScript(() => {
+      localStorage.setItem("pqp:channel-sidebar", "icons");
+    });
     await openApp(page);
     await page.getByRole("button", { name: /lobby/i }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
@@ -315,7 +320,12 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
     // The same panel from the sidebar seat, which is where the moderator
     // actually clicked: that row has advertised itself as a button since it
-    // was written and did nothing when pressed.
+    // was written and did nothing when pressed. Expanding the list to reach
+    // it also stands the strip down, because the list now lists the room.
+    await page
+      .getByRole("button", { name: "Expand the channel list" })
+      .click();
+    await expect(strip(page)).toHaveCount(0);
     await page
       .getByRole("button", { name: `${chipName}, in voice` })
       .click();
@@ -327,6 +337,10 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     ).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("peer-audio-menu")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Collapse the channel list" })
+      .click();
+    await expect(strip(page)).toBeVisible();
 
     // Hiding the strip leaves the share the whole stage, and is remembered.
     await page.getByRole("button", { name: "Hide participants" }).click();
