@@ -5,8 +5,13 @@ import {
   CAMERA_PIP_STAGE_CLASS,
   CAMERA_SIDE_CAMERA_CLASS,
   CAMERA_SIDE_FILM_CLASS,
+  CAMERA_SHOW_CHIP_MS,
   CAMERA_STAGE_CLASS,
   cameraLayoutOffered,
+  cameraShowChipClass,
+  hideCameraPref,
+  showCameraPref,
+  withCameraLayout,
   cameraPipBoxes,
   cameraPipCornerClass,
   cameraPipFrameClass,
@@ -272,5 +277,72 @@ describe("remembering it", () => {
   it("survives a stored value that is not JSON", () => {
     store.set("pqp:watch-camera-pip", "{not json");
     expect(readCameraPipPref()).toEqual(DEFAULT_CAMERA_PIP);
+  });
+});
+
+describe("hide and show in one tap (2026-10-03)", () => {
+  it("hides from any visible layout and remembers which one to bring back", () => {
+    for (const layout of ["pip", "side", "camera"] as const) {
+      const hidden = hideCameraPref({ corner: "top-left", layout });
+      expect(hidden).toEqual({ corner: "top-left", layout: "stream", restore: layout });
+      expect(showCameraPref(hidden)).toEqual({
+        corner: "top-left",
+        layout,
+        restore: layout,
+      });
+    }
+  });
+
+  it("brings back the default when nothing was remembered", () => {
+    expect(showCameraPref({ corner: "bottom-right", layout: "stream" }).layout).toBe("pip");
+  });
+
+  it("is a no-op in the state it would move to", () => {
+    const shown: CameraPipPref = { corner: "bottom-right", layout: "side" };
+    expect(showCameraPref(shown)).toBe(shown);
+    const hidden: CameraPipPref = { corner: "bottom-right", layout: "stream", restore: "side" };
+    expect(hideCameraPref(hidden)).toBe(hidden);
+  });
+
+  it("a menu pick of 'Ocultar câmera' remembers the layout too, any other pick is plain", () => {
+    expect(withCameraLayout({ corner: "top-right", layout: "side" }, "stream")).toEqual({
+      corner: "top-right",
+      layout: "stream",
+      restore: "side",
+    });
+    expect(withCameraLayout({ corner: "top-right", layout: "pip" }, "camera")).toEqual({
+      corner: "top-right",
+      layout: "camera",
+    });
+  });
+
+  it("reads the remembered layout back, and ignores one it does not know", () => {
+    expect(parseCameraPipPref({ corner: "top-left", layout: "stream", restore: "side" })).toEqual({
+      corner: "top-left",
+      layout: "stream",
+      restore: "side",
+    });
+    // "stream" is never a layout to restore to: that is the hidden state.
+    expect(parseCameraPipPref({ corner: "top-left", layout: "stream", restore: "stream" })).toEqual({
+      corner: "top-left",
+      layout: "stream",
+    });
+    expect(parseCameraPipPref({ corner: "top-left", layout: "pip", restore: 7 })).toEqual({
+      corner: "top-left",
+      layout: "pip",
+    });
+  });
+
+  it("puts the chip in the corner the camera had", () => {
+    for (const corner of CAMERA_PIP_CORNERS) {
+      const chip = cameraShowChipClass(corner);
+      const frame = cameraPipFrameClass(corner);
+      // Same placement utilities, none of the camera's size.
+      for (const token of chip.split(" ").filter((t) => t !== "absolute")) {
+        expect(frame.split(" ")).toContain(token);
+      }
+      expect(chip).not.toContain("aspect-video");
+    }
+    expect(CAMERA_SHOW_CHIP_MS).toBeGreaterThanOrEqual(4_000);
   });
 });

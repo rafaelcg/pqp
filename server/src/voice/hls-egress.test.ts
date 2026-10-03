@@ -171,6 +171,7 @@ describe("live HLS egress", () => {
       cameraHeight: 480,
       llSegmentCadenceDecay: false,
       fastStart: false,
+      cameraSync: true,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -612,6 +613,7 @@ describe("live HLS egress", () => {
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
         fastStart: false,
+        cameraSync: true,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -625,6 +627,7 @@ describe("live HLS egress", () => {
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
         fastStart: false,
+        cameraSync: true,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -637,6 +640,7 @@ describe("live HLS egress", () => {
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
         fastStart: false,
+        cameraSync: true,
       });
     });
 
@@ -685,6 +689,19 @@ describe("live HLS egress", () => {
       delete process.env.LIVE_HLS_LL;
       delete process.env.LIVE_HLS_LL_ALLOWLIST;
       delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    });
+
+    it("cameraSync follows WATCH_CAMERA_SYNC, ON by default, off only when said, and is answered per server", async () => {
+      enableHls();
+      expect(liveHlsConfig().cameraSync).toBe(true);
+      expect((await liveHlsConfigForServer(SERVER)).cameraSync).toBe(true);
+      process.env.WATCH_CAMERA_SYNC = "off";
+      try {
+        expect(liveHlsConfig().cameraSync).toBe(false);
+        expect((await liveHlsConfigForServer(SERVER)).cameraSync).toBe(false);
+      } finally {
+        delete process.env.WATCH_CAMERA_SYNC;
+      }
     });
 
     it("fastStart follows PARTY_FAST_START, off by default, and is answered per server", async () => {

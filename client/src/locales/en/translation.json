@@ -1236,6 +1236,7 @@
   "voice.hls.cameraLayout.side": "Side by side",
   "voice.hls.cameraLayout.stream": "Hide camera",
   "voice.hls.cameraLayout.camera": "Hide stream",
+  "voice.hls.cameraShow": "Show camera",
   "voice.hls.startup.connecting": "Connecting to the stream…",
   "voice.hls.startup.media": "Loading the first seconds of the picture…",
   "voice.hls.startup.slow": "Still loading, {seconds}s so far. Your connection may be slow.",

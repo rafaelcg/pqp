@@ -1339,7 +1339,8 @@
     community_home_translation: "Liga ou desliga a tradução automática dos posts do Baú (só vale com o Baú ligado e a chave OPENROUTER_API_KEY na API). Desligado, todo mundo lê o original; as traduções já feitas ficam guardadas.",
     desktop_share_audio_native: "Vale no próximo compartilhamento, só no app desktop do Windows que já tem o suporte: o som vem por processo, sem a chamada, Windows 10 incluso.",
     share_high_motion_guard: "Vale no próximo compartilhamento: se o encoder não dá conta (jogo em taxa alta), baixa um degrau de resolução e depois a taxa de quadros; no app desktop do Windows sobe a prioridade dos processos enquanto compartilha. Nunca mexe em watch party.",
-    share_game_capture_hint: "Vale no próximo compartilhamento, só no app desktop do Windows que já pergunta ao Windows se um jogo está em tela cheia exclusiva: quem compartilha vê um aviso com o conserto quando a imagem chega preta, trava ou cai sozinha. Não muda a captura."
+    share_game_capture_hint: "Vale no próximo compartilhamento, só no app desktop do Windows que já pergunta ao Windows se um jogo está em tela cheia exclusiva: quem compartilha vê um aviso com o conserto quando a imagem chega preta, trava ou cai sozinha. Não muda a captura.",
+    watch_camera_sync: "Desligado, a câmera de quem apresenta volta a tocar solta no player de quem assiste, como antes (numa watch party de baixa latência, uns 13 s atrás do filme). Abas abertas mudam no próximo refresh da config."
   };
   function flagName(f) { return String(f.description || f.key).replace(/\s*\([^)]*\)\s*$/, "").replace(/\.$/, ""); }
   function onOff(v) { return v ? "ligado" : "desligado"; }

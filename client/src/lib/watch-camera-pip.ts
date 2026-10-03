@@ -58,7 +58,21 @@ export interface CameraPipPref {
   corner: CameraPipCorner;
   /** Which of the four. Remembered like the corner: a whole-party choice. */
   layout: CameraLayout;
+  /**
+   * The layout "Mostrar câmera" brings back, set when the camera is hidden
+   * from one of the other three. Absent means the default.
+   */
+  restore?: VisibleCameraLayout;
 }
+
+/** The three layouts that show the camera. */
+export type VisibleCameraLayout = Exclude<CameraLayout, "stream">;
+
+const VISIBLE_CAMERA_LAYOUTS: readonly VisibleCameraLayout[] = [
+  "pip",
+  "side",
+  "camera",
+];
 
 /**
  * Bottom right, film on the stage.
@@ -87,7 +101,7 @@ export function parseCameraPipPref(raw: unknown): CameraPipPref {
     return DEFAULT_CAMERA_PIP;
   }
   const value = raw as Partial<Record<keyof CameraPipPref, unknown>>;
-  return {
+  const pref: CameraPipPref = {
     corner: CAMERA_PIP_CORNERS.includes(value.corner as CameraPipCorner)
       ? (value.corner as CameraPipCorner)
       : DEFAULT_CAMERA_PIP.corner,
@@ -95,6 +109,57 @@ export function parseCameraPipPref(raw: unknown): CameraPipPref {
       ? (value.layout as CameraLayout)
       : DEFAULT_CAMERA_PIP.layout,
   };
+  if (VISIBLE_CAMERA_LAYOUTS.includes(value.restore as VisibleCameraLayout)) {
+    pref.restore = value.restore as VisibleCameraLayout;
+  }
+  return pref;
+}
+
+/**
+ * "Ocultar câmera" in one tap (2026-10-03): the `stream` layout, remembering
+ * which of the other three to bring back. Rafael could not find the hide
+ * option during a live party, so it is a button on the camera itself now as
+ * well as a choice in the layout menu; both land here.
+ */
+export function hideCameraPref(pref: CameraPipPref): CameraPipPref {
+  if (pref.layout === "stream") {
+    return pref;
+  }
+  return { ...pref, layout: "stream", restore: pref.layout };
+}
+
+/** "Mostrar câmera": whatever was showing before it was hidden, else the default. */
+export function showCameraPref(pref: CameraPipPref): CameraPipPref {
+  if (pref.layout !== "stream") {
+    return pref;
+  }
+  return { ...pref, layout: pref.restore ?? DEFAULT_CAMERA_PIP.layout };
+}
+
+/**
+ * Any layout change, through one door: a pick from the menu that hides the
+ * camera remembers what to restore exactly as the button does.
+ */
+export function withCameraLayout(
+  pref: CameraPipPref,
+  layout: CameraLayout,
+): CameraPipPref {
+  return layout === "stream"
+    ? hideCameraPref(pref)
+    : { ...pref, layout };
+}
+
+/**
+ * How long the "Mostrar câmera" chip stays where the camera was, after it is
+ * hidden or when a camera arrives while it is hidden. Long enough to read and
+ * reach, short enough not to become a second webcam. The layout menu is the
+ * way back after that.
+ */
+export const CAMERA_SHOW_CHIP_MS = 6_000;
+
+/** Where the chip sits: the corner the camera had, without the camera's size. */
+export function cameraShowChipClass(corner: CameraPipCorner): string {
+  return `absolute ${CORNER_CLASS[corner]}`;
 }
 
 /**

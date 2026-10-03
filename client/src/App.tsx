@@ -545,6 +545,7 @@ import {
   setPartyFastStart,
   shouldPreloadHlsEngine,
 } from "@/lib/party-fast-start";
+import { cameraSyncFromConfig, setWatchCameraSync } from "@/lib/camera-sync";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -2468,6 +2469,12 @@ function MainAppContent({
   useEffect(() => {
     setPartyFastStart(partyFastStartOn);
   }, [partyFastStartOn]);
+  // `watch_camera_sync` (runtime flag, per server, on by default): the same
+  // door. Absent (an older API, or no answer yet) is the default, on.
+  const watchCameraSyncOn = cameraSyncFromConfig(liveHlsConfig);
+  useEffect(() => {
+    setWatchCameraSync(watchCameraSyncOn);
+  }, [watchCameraSyncOn]);
   // The player chunk is fetched only for somebody on, or entering, a watch
   // party channel (never for the rest of an enabled server's chat).
   const openChannelType =

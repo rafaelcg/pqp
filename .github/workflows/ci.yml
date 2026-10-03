@@ -368,6 +368,17 @@ jobs:
         if: matrix.suite == 'core' && matrix.shard == 1
         run: pnpm --filter @pqp/client e2e:stale-bundle
 
+      # The presenter's camera held to the film, measured off the pictures
+      # (client/playwright.camera-sync.config.ts): the real watch player on a
+      # synthetic live film and camera, no API and no database. Real Google
+      # Chrome, which the runner image ships (Playwright's Chromium has no
+      # H.264), and ffmpeg to make the media. The quick run, about 3 minutes.
+      - name: E2E camera sync (real Chrome, synthetic live HLS)
+        if: matrix.suite == 'media' && matrix.shard == 1
+        run: |
+          command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+          pnpm --filter @pqp/client e2e:camera-sync
+
       - name: Upload E2E artifacts
         if: failure()
         uses: actions/upload-artifact@v4
