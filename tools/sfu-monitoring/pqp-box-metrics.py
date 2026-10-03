@@ -4,17 +4,17 @@
 Two things Prometheus cannot see on its own, written as node_exporter
 textfile metrics and picked up by Grafana Alloy every scrape:
 
-1. **Monthly egress, across reboots.** The plan includes 5 TB of transfer a
-   month. `/proc/net/dev` counters reset on every reboot, so anything derived
+1. **Monthly egress, across reboots.** The plan includes a fixed amount of
+   transfer a month (see ALLOWANCE_BYTES below). `/proc/net/dev` counters reset on every reboot, so anything derived
    from them undercounts after a restart -- exactly when a busy month is most
    likely to have had one. vnstat keeps its own SQLite database in
    /var/lib/vnstat and survives reboots, so it is the source here.
 
    Both a calendar month-to-date and a rolling 30 day total are exported. The
-   alert uses the rolling one: Vultr's allowance resets on the instance's
-   billing date, which is not necessarily the 1st, and a rolling 30 day window
-   is always >= the true billing-period usage. It warns early rather than late,
-   which is the right way round for a soft overage of about a cent per GB.
+   egress alerts use the calendar month (`pqp_sfu_egress_month_tx_bytes`),
+   because Vultr bills overage per calendar month; the rolling total is the
+   dashboard's "how close to a month of traffic" number and carried the
+   previous month's busy days into the alert, which made it fire early.
 
 2. **Docker container state.** Nothing else notices when the livekit or caddy
    container exits or is restarted by its `unless-stopped` policy.
