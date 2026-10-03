@@ -18,8 +18,17 @@ interface FakeFrame {
   close(): void;
 }
 
-function rig(confirmAnswer: boolean | null) {
+function rig(
+  confirmAnswer: boolean | null,
+  options: {
+    /** Does the capture answer a refresh (a live capturer does, even for a still picture)? */
+    refresh?: boolean;
+    /** Hand back the shell's answer by hand, to land it late. */
+    deferConfirm?: boolean;
+  } = {},
+) {
   let clock = 0;
+  const pendingConfirms: Array<(answer: boolean | null) => void> = [];
   let tick: (() => void) | null = null;
   const waiting: Array<(r: { done: boolean; value?: FakeFrame }) => void> = [];
   const queued: FakeFrame[] = [];
@@ -47,13 +56,19 @@ function rig(confirmAnswer: boolean | null) {
       for (const w of waiting.splice(0)) w({ done: true });
     },
   };
-  const confirm = vi.fn(async () => confirmAnswer);
+  const confirm = vi.fn(() =>
+    options.deferConfirm
+      ? new Promise<boolean | null>((resolve) => pendingConfirms.push(resolve))
+      : Promise.resolve(confirmAnswer),
+  );
+  const probe = vi.fn(async () => options.refresh ?? false);
   const onDead = vi.fn();
   const watch = startSharePictureWatch({
     track,
     onDead,
     confirm,
     deps: {
+      probe,
       openReader: () => {
         opened += 1;
         return {
@@ -94,15 +109,36 @@ function rig(confirmAnswer: boolean | null) {
       clock += 2_000;
     }
     tick?.();
-    // Let a confirmation settle.
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    // Let a probe and a confirmation settle.
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+  /** Let microtasks run (a probe and a confirmation are a few hops each). */
+  const flush = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+  /** Land the oldest deferred shell answer. */
+  const answer = async (value: boolean | null) => {
+    pendingConfirms.shift()?.(value);
+    await flush();
+  };
+  /** The share's track ends: the clone's stream says done. */
+  const endStream = async () => {
+    for (const w of waiting.splice(0)) w({ done: true });
+    await flush();
   };
   return {
     watch,
     step,
+    flush,
+    answer,
+    endStream,
     confirm,
+    probe,
     onDead,
     listeners,
+    get pendingConfirms() {
+      return pendingConfirms.length;
+    },
     get ticking() {
       return tick !== null;
     },
@@ -129,12 +165,87 @@ describe("startSharePictureWatch", () => {
     expect(r.stoppedReaders).toBeGreaterThan(0);
   });
 
-  it("reports a frozen game (frames stop) as stalled when confirmed", async () => {
-    const r = rig(true);
+  it("reports a frozen game (frames stop, a refresh gets nothing back) as stalled when confirmed", async () => {
+    const r = rig(true, { refresh: false });
     await r.step(bright(1));
     await r.step(bright(2));
     for (let i = 0; i < 6; i += 1) await r.step(null);
+    expect(r.probe).toHaveBeenCalled();
     expect(r.onDead).toHaveBeenCalledWith("stalled");
+    expect(r.watch.status().refreshAnswered).toBe(false);
+  });
+
+  it("never reports a STILL game in exclusive fullscreen: the capture answers a refresh", async () => {
+    // Farol, PR 946: zero-hertz capture stops delivering for a paused frame
+    // or a static menu, and the shell says yes to fullscreen all the same.
+    // The refresh probe is the independent proof that the capture is alive.
+    const r = rig(true, { refresh: true });
+    await r.step(bright(1));
+    for (let i = 0; i < 25; i += 1) await r.step(null);
+    expect(r.watch.status().suspected).toBe("quiet");
+    expect(r.probe).toHaveBeenCalled();
+    expect(r.watch.status().refreshAnswered).toBe(true);
+    // The shell is not even asked: the capture proved itself alive first.
+    expect(r.confirm).not.toHaveBeenCalled();
+    expect(r.onDead).not.toHaveBeenCalled();
+  });
+
+  it("does not probe a BLACK capture: the pixels are the proof", async () => {
+    const r = rig(true, { refresh: true });
+    for (let i = 0; i < 6; i += 1) await r.step(black());
+    expect(r.probe).not.toHaveBeenCalled();
+    expect(r.onDead).toHaveBeenCalledWith("black");
+  });
+
+  it("a stream that ends is the ended path, never a stalled verdict", async () => {
+    // Farol, PR 946: the reader saying `done` used to leave the interval
+    // running with a frame count that could only sit still.
+    const r = rig(true, { refresh: false });
+    await r.step(bright(1));
+    await r.endStream();
+    expect(r.ticking).toBe(false);
+    expect(r.watch.status().running).toBe(false);
+    for (let i = 0; i < 10; i += 1) await r.step(null);
+    expect(r.onDead).not.toHaveBeenCalled();
+  });
+
+  it("a late yes from the shell after a mute reports nothing", async () => {
+    // Farol, PR 946: a confirmation in flight outlived its window.
+    const r = rig(true, { deferConfirm: true });
+    for (let i = 0; i < 6; i += 1) await r.step(black());
+    expect(r.pendingConfirms).toBe(1);
+    r.listeners.get("mute")?.();
+    await r.answer(true);
+    expect(r.onDead).not.toHaveBeenCalled();
+    expect(r.watch.status().suspected).toBeNull();
+  });
+
+  it("a late yes after a re-arm reports nothing from the old window", async () => {
+    const r = rig(true, { deferConfirm: true });
+    for (let i = 0; i < 6; i += 1) await r.step(black());
+    r.watch.rearm();
+    await r.answer(true);
+    expect(r.onDead).not.toHaveBeenCalled();
+    // The new window starts from nothing and has to earn its own verdict.
+    await r.step(bright(1));
+    expect(r.watch.status().suspected).toBeNull();
+  });
+
+  it("a late yes after the picture came back reports nothing", async () => {
+    const r = rig(true, { deferConfirm: true });
+    for (let i = 0; i < 6; i += 1) await r.step(black());
+    await r.step(bright(1));
+    await r.answer(true);
+    expect(r.onDead).not.toHaveBeenCalled();
+  });
+
+  it("a late yes after the minute ran out reports nothing", async () => {
+    const r = rig(true, { deferConfirm: true });
+    for (let i = 0; i < 25; i += 1) await r.step(bright(i));
+    for (let i = 0; i < 6; i += 1) await r.step(black());
+    expect(r.ticking).toBe(false);
+    await r.answer(true);
+    expect(r.onDead).not.toHaveBeenCalled();
   });
 
   it("never reports a still slide: no frames under zero-hertz, and no exclusive-fullscreen app", async () => {

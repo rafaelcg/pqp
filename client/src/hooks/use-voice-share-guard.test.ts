@@ -131,6 +131,11 @@ const shellCalls: boolean[] = [];
 let clones = 0;
 let fullscreenAsks = 0;
 let exclusiveFullscreen: boolean | null = true;
+/** Whether the capture answers a refresh probe (a live capturer of a still picture does). */
+let refreshAnswers = false;
+/** Hold the shell's fullscreen answers until a test lets them land. */
+let holdFullscreenAnswers = false;
+const heldFullscreenAnswers: Array<() => void> = [];
 /** Interval callbacks the controller (and the guard) registered, by handle. */
 const intervals = new Map<number, () => void>();
 let nextHandle = 1;
@@ -221,13 +226,29 @@ function installBrowserStubs() {
   // A frame reader that never hands over a frame: the capture of a game the
   // compositor no longer sees (or of a still slide, which is why the shell's
   // answer decides).
+  // The first processor is the watch's own reader. Every later one is a
+  // refresh probe (a new sink): it gets a frame back when the capture is alive
+  // (`refreshAnswers`), and its stream ends empty when it is not.
+  let processors = 0;
   g.MediaStreamTrackProcessor = class {
-    readable = {
-      getReader: () => ({
-        read: () => new Promise(() => {}),
-        cancel: () => {},
-      }),
-    };
+    readable: { getReader: () => { read: () => Promise<unknown>; cancel: () => void } };
+    constructor() {
+      processors += 1;
+      const isProbe = processors > 1;
+      this.readable = {
+        getReader: () => ({
+          read: () =>
+            !isProbe
+              ? new Promise(() => {})
+              : Promise.resolve(
+                  refreshAnswers
+                    ? { done: false, value: { close: () => {} } }
+                    : { done: true },
+                ),
+          cancel: () => {},
+        }),
+      };
+    }
   };
   g.AudioContext = class {
     createMediaStreamSource() {
@@ -254,9 +275,13 @@ function installBrowserStubs() {
         shellCalls.push(live);
         return { live, boost: "raised", processes: 3 };
       },
-      fullscreenAppState: async () => {
+      fullscreenAppState: () => {
         fullscreenAsks += 1;
-        return { state: "d3d-fullscreen", raw: 3, exclusiveFullscreen };
+        const answer = { state: "d3d-fullscreen", raw: 3, exclusiveFullscreen };
+        if (holdFullscreenAnswers) {
+          return new Promise((resolve) => heldFullscreenAnswers.push(() => resolve(answer)));
+        }
+        return Promise.resolve(answer);
       },
     },
     addEventListener: () => {},
@@ -328,6 +353,9 @@ beforeEach(() => {
   clones = 0;
   fullscreenAsks = 0;
   exclusiveFullscreen = true;
+  refreshAnswers = false;
+  holdFullscreenAnswers = false;
+  heldFullscreenAnswers.length = 0;
   intervals.clear();
   encoderBehind = false;
   framesEncoded = 0;
@@ -535,6 +563,55 @@ describe("share_game_capture_hint", () => {
     second.onended();
     await settle();
     expect(voice.getState().shareCaptureHint).toBeNull();
+  });
+
+  it("on: a late answer about an ended share does not raise a card after the call is left", async () => {
+    // Farol, PR 946: the shell's answer outlived the share and the call.
+    holdFullscreenAnswers = true;
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    const track = voice.getState().localScreenStream!.getVideoTracks()[0] as unknown as {
+      onended: () => void;
+    };
+    clock += 5_000;
+    track.onended();
+    await settle();
+    expect(heldFullscreenAnswers).toHaveLength(1);
+    voice.leave();
+    heldFullscreenAnswers.shift()!();
+    await settle();
+    expect(voice.getState().shareCaptureHint).toBeNull();
+  });
+
+  it("on: a late answer about an ended share does not raise a card over a newer share", async () => {
+    holdFullscreenAnswers = true;
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    const track = voice.getState().localScreenStream!.getVideoTracks()[0] as unknown as {
+      onended: () => void;
+    };
+    clock += 5_000;
+    track.onended();
+    await settle();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    await voice.stopScreenShare();
+    heldFullscreenAnswers.shift()!();
+    await settle();
+    expect(voice.getState().shareCaptureHint).toBeNull();
+  });
+
+  it("on: a still game in exclusive fullscreen (the capture answers a refresh) raises nothing", async () => {
+    refreshAnswers = true;
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    await runIntervals(60);
+    expect(fullscreenAsks).toBe(0);
+    expect(voice.getState().shareCaptureHint).toBeNull();
+    await voice.stopScreenShare();
   });
 
   it("on: the same silence with no exclusive-fullscreen app (a still slide) raises nothing", async () => {

@@ -652,8 +652,12 @@
           }
           // `ended` fires when the SOURCE ends (Chromium gave up on the
           // capturer), never for this page's own stop().
+          // Bound to THIS run: a late `ended` from an earlier capture must not
+          // stop or relabel the measurement that replaced it.
+          const owner = run;
           track.addEventListener("ended", () => {
-            if (run && !run.stopped) run.endedBySourceMs = Math.round(performance.now() - run.startedAt);
+            if (run !== owner || owner.stopped) return;
+            owner.endedBySourceMs = Math.round(performance.now() - owner.startedAt);
             stop();
           });
           // A timeout that re-arms after each sample, not an interval: a slow
@@ -765,16 +769,18 @@
         // Only inside the pqp desktop app (it answers; Chrome has no such
         // bridge): does Windows say a Direct3D app holds the display in
         // exclusive fullscreen? Asked in the background, read on the next row.
-        if (window.pqpDesktop && typeof window.pqpDesktop.fullscreenAppState === "function" && !run.askingFullscreen) {
-          run.askingFullscreen = true;
+        // The answer lands on the run that asked, never on a later one.
+        const asker = run;
+        if (window.pqpDesktop && typeof window.pqpDesktop.fullscreenAppState === "function" && !asker.askingFullscreen) {
+          asker.askingFullscreen = true;
           window.pqpDesktop
             .fullscreenAppState()
             .then((answer) => {
-              run.exclusiveFullscreen = answer ? answer.state : null;
+              asker.exclusiveFullscreen = answer ? answer.state : null;
             })
             .catch(() => {})
             .finally(() => {
-              run.askingFullscreen = false;
+              asker.askingFullscreen = false;
             });
         }
         if (prev && dt > 0) {

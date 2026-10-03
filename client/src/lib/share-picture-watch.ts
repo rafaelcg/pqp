@@ -14,11 +14,13 @@ import {
  *
  * NOTHING IS REPORTED ON PIXELS ALONE. A verdict is only passed on once
  * `confirm()` (the desktop shell's `SHQueryUserNotificationState`) says a
- * Direct3D app holds the display in exclusive fullscreen right now. That is
- * what keeps a still slide (no frames under zero-hertz capture) and a film's
- * black hold out: neither is an exclusive-fullscreen Direct3D app. Unconfirmed,
- * the watch keeps looking until its window closes, and asks again at most
- * every `confirmEveryMs`.
+ * Direct3D app holds the display in exclusive fullscreen right now, which
+ * keeps a slide and a film's black hold out. A QUIET verdict (no frames) also
+ * needs a failed refresh probe first, because a healthy capture of a STILL
+ * game in fullscreen (a paused frame, a static menu) delivers no frames
+ * either, and the fullscreen answer cannot tell that apart from a dead one.
+ * Unconfirmed, the watch keeps looking until its window closes, and checks
+ * again at most every `confirmEveryMs`.
  *
  * COST, which is the reason for every shape below:
  *   - Only the first `windowMs` (a minute) of a share, and a minute again after
@@ -56,6 +58,12 @@ export interface SharePictureWatchDeps {
   openReader(track: MediaStreamTrack): { reader: FrameReader; stop(): void } | null;
   /** The frame's luma grid, or null when it cannot be read. */
   gridOf(frame: unknown): LumaGrid | null;
+  /**
+   * Does the capture answer a refresh? True when a frame arrives on a fresh
+   * sink within `ms` (or when it cannot be asked: no proof of death is not a
+   * death), false when nothing arrives.
+   */
+  probe(track: MediaStreamTrack, ms: number): Promise<boolean>;
   now(): number;
   setInterval(fn: () => void, ms: number): unknown;
   clearInterval(handle: unknown): void;
@@ -65,8 +73,10 @@ export interface SharePictureWatchOptions {
   track: MediaStreamTrack;
   onDead(kind: DeadPictureKind): void;
   confirm: ConfirmExclusiveFullscreen;
-  /** How often an unconfirmed verdict may ask the shell again. */
+  /** How often an unconfirmed verdict may be checked again. */
   confirmEveryMs?: number;
+  /** How long a refresh probe waits for a frame. */
+  probeMs?: number;
   windowMs?: number;
   intervalMs?: number;
   thresholds?: PictureThresholds;
@@ -85,6 +95,8 @@ export interface SharePictureWatch {
     samples: number;
     /** The last verdict the pixels gave, confirmed or not. */
     suspected: "black" | "quiet" | null;
+    /** Whether the last refresh probe got a frame back; null before one ran. */
+    refreshAnswered: boolean | null;
     /** The shell's last answer, null before it was asked or when it could not tell. */
     exclusiveFullscreen: boolean | null;
   };
@@ -92,6 +104,40 @@ export interface SharePictureWatch {
 
 const GRID_WIDTH = 32;
 const GRID_HEIGHT = 18;
+/** A refresh frame is one capture away; three seconds covers a starved capturer too. */
+const PROBE_MS = 3_000;
+
+/**
+ * Open a fresh reader on a new clone (a new sink, so Chromium requests a
+ * refresh frame) and wait up to `ms` for one frame.
+ */
+async function defaultProbe(
+  track: MediaStreamTrack,
+  ms: number,
+  openReader: SharePictureWatchDeps["openReader"],
+): Promise<boolean> {
+  const session = openReader(track);
+  if (!session) {
+    return true;
+  }
+  const wait: { timer?: ReturnType<typeof setTimeout> } = {};
+  try {
+    const frame = session.reader.read().then(
+      (result) => {
+        result.value?.close();
+        return !result.done && Boolean(result.value);
+      },
+      () => false,
+    );
+    const timeout = new Promise<boolean>((resolve) => {
+      wait.timer = setTimeout(() => resolve(false), ms);
+    });
+    return await Promise.race([frame, timeout]);
+  } finally {
+    clearTimeout(wait.timer);
+    session.stop();
+  }
+}
 
 function defaultOpenReader(
   track: MediaStreamTrack,
@@ -161,6 +207,7 @@ export function startSharePictureWatch(
   const deps: SharePictureWatchDeps = {
     openReader: defaultOpenReader,
     gridOf: defaultGridOf,
+    probe: (track, ms) => defaultProbe(track, ms, deps.openReader),
     // The same clock the rest of the share code reads (the guard, the
     // controller); a minute-long window does not care about its resolution.
     now: () => Date.now(),
@@ -172,11 +219,13 @@ export function startSharePictureWatch(
   const intervalMs = options.intervalMs ?? 2_000;
   const thresholds = options.thresholds ?? DEFAULT_PICTURE_THRESHOLDS;
   const confirmEveryMs = options.confirmEveryMs ?? 6_000;
+  const probeMs = options.probeMs ?? PROBE_MS;
   const { track } = options;
   let suspected: "black" | "quiet" | null = null;
   let exclusiveFullscreen: boolean | null = null;
-  let lastConfirmAt = Number.NEGATIVE_INFINITY;
-  let confirming = false;
+  let refreshAnswered: boolean | null = null;
+  let lastCheckAt = Number.NEGATIVE_INFINITY;
+  let checking = false;
 
   let stopped = false;
   let reported: DeadPictureKind | null = null;
@@ -187,8 +236,18 @@ export function startSharePictureWatch(
   let windowStartedAt = 0;
   let timer: unknown = null;
   let open: { reader: FrameReader; stop(): void } | null = null;
+  /**
+   * Which window of evidence is current. Bumped whenever a window opens or
+   * closes, so a check that was started on one window (the probe and the
+   * shell question are both asynchronous) can never report on another: a
+   * mute, an unmute, a re-arm, the minute running out or the reader ending
+   * all make its answer stale.
+   */
+  let generation = 0;
 
   const closeWindow = () => {
+    generation += 1;
+    suspected = null;
     if (timer !== null) {
       deps.clearInterval(timer);
       timer = null;
@@ -197,22 +256,29 @@ export function startSharePictureWatch(
     open = null;
   };
 
-  const pump = async (session: { reader: FrameReader }) => {
+  // `session` is compared by identity: a reader object may be reused by an
+  // engine (or a test), the session that opened it never is.
+  const pump = async (session: { reader: FrameReader; stop(): void }) => {
     for (;;) {
       let result: Awaited<ReturnType<FrameReader["read"]>>;
       try {
         result = await session.reader.read();
       } catch {
+        result = { done: true };
+      }
+      if (open !== session) {
+        result.value?.close();
         return;
       }
       if (result.done || !result.value) {
+        // The clone's stream ended (the share's track ended, or the engine
+        // gave up on it). That is the controller's "ended" path, never
+        // evidence of a stall: close the window so the frame count cannot
+        // sit still into a QUIET verdict.
+        closeWindow();
         return;
       }
       const frame = result.value;
-      if (open?.reader !== session.reader) {
-        frame.close();
-        return;
-      }
       frames += 1;
       const now = deps.now();
       // At most one readback per half interval, so a 60 fps capture costs
@@ -225,8 +291,42 @@ export function startSharePictureWatch(
     }
   };
 
+  /**
+   * One check of a suspicion, against the window it was raised in.
+   *
+   * QUIET first needs independent proof that the capture is dead, because a
+   * healthy capture of anything still (a slide, or a paused game in
+   * fullscreen) delivers no frames either. The proof is a refresh: a new sink
+   * on the track makes Chromium ask the source for a frame
+   * (`MediaStreamVideoTrack::AddSink` calls `RequestRefreshFrame`), and a
+   * live capturer answers it even when nothing changed. No frame within
+   * `probeMs` is a capture that cannot produce one. BLACK carries its own
+   * proof in the pixels. Either way the shell then has to say a Direct3D app
+   * holds the display in exclusive fullscreen, and the window, the verdict
+   * and the share all have to be the same ones when the answers come back.
+   */
+  const check = async (verdict: "black" | "quiet", gen: number) => {
+    const current = () => !stopped && !reported && gen === generation && suspected === verdict;
+    if (verdict === "quiet") {
+      const answered = await deps.probe(track, probeMs).catch(() => true);
+      refreshAnswered = answered;
+      if (answered || !current()) {
+        return;
+      }
+    }
+    const answer = await options.confirm().catch(() => null);
+    exclusiveFullscreen = answer;
+    if (answer !== true || !current()) {
+      return;
+    }
+    const kind: DeadPictureKind = verdict === "black" ? "black" : "stalled";
+    reported = kind;
+    closeWindow();
+    options.onDead(kind);
+  };
+
   const tick = () => {
-    if (stopped || reported) {
+    if (stopped || reported || track.readyState === "ended") {
       closeWindow();
       return;
     }
@@ -240,25 +340,12 @@ export function startSharePictureWatch(
     }
     const verdict = judgePicture(samples, thresholds);
     suspected = verdict === "ok" ? null : verdict;
-    if (verdict !== "ok" && !confirming && now - lastConfirmAt >= confirmEveryMs) {
-      lastConfirmAt = now;
-      confirming = true;
-      const kind: DeadPictureKind = verdict === "black" ? "black" : "stalled";
-      void options
-        .confirm()
-        .catch(() => null)
-        .then((answer) => {
-          confirming = false;
-          exclusiveFullscreen = answer;
-          // Re-checked after the wait: the share may have ended or the
-          // picture may have come back meanwhile.
-          if (answer !== true || stopped || reported || suspected === null) {
-            return;
-          }
-          reported = kind;
-          closeWindow();
-          options.onDead(kind);
-        });
+    if (verdict !== "ok" && !checking && now - lastCheckAt >= confirmEveryMs) {
+      lastCheckAt = now;
+      checking = true;
+      void check(verdict, generation).finally(() => {
+        checking = false;
+      });
     }
     if (now - windowStartedAt >= windowMs) {
       closeWindow();
@@ -313,6 +400,7 @@ export function startSharePictureWatch(
         frames,
         samples: samples.length,
         suspected,
+        refreshAnswered,
         exclusiveFullscreen,
       };
     },

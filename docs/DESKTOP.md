@@ -408,7 +408,17 @@ a capture mode, and nothing about the capture changes.
    scene with one light, a fade shorter than the window, a still slide, a game
    in motion, a black capture with the pointer on it, a frozen game.
 3. **Nothing is shown on pixels alone.** A still slide is quiet too (zero
-   hertz). The page then asks the shell (`fullscreenAppState()`,
+   hertz), and so is a healthy capture of a STILL game in fullscreen (a paused
+   frame, a static menu). So quiet first needs a failed **refresh probe**: a
+   new sink on the track makes Chromium ask the source for a frame
+   (`MediaStreamVideoTrack::AddSink` calls `RequestRefreshFrame`, VERIFIED in
+   [media_stream_video_track.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/third_party/blink/renderer/modules/mediastream/media_stream_video_track.cc)),
+   and a refresh frame is delivered even when nothing changed (the
+   zero-hertz rule skips only non-refresh frames, same
+   `desktop_capture_device.cc`). A frame within 3 s is a live capture and
+   nothing is said. Every check is tied to the window it was raised in: a
+   mute, an unmute, a re-arm, the minute running out or the reader ending
+   discards an answer still on its way. The page then asks the shell (`fullscreenAppState()`,
    `electron/lib/fullscreen-state.js`) whether Windows reports
    `QUNS_RUNNING_D3D_FULL_SCREEN`
    ([Learn](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ne-shellapi-query_user_notification_state)),
@@ -428,7 +438,11 @@ a capture mode, and nothing about the capture changes.
 
 Known gaps, said plainly: a capture that keeps delivering a STALE picture of
 the desktop behind the game cannot be told from a still slide and is not
-reported. A Vulkan game in exclusive mode may not be reported by Windows as
+reported. The same goes for a WGC session that answers a refresh by handing
+back its last frame (the research pass read that WebRTC's WGC session re-emits
+the previous frame when its pool is empty): the refresh probe then says
+"alive" and a frozen share is not reported, which is the price of never
+calling a paused game dead. Black and a capture that ends are not affected. A Vulkan game in exclusive mode may not be reported by Windows as
 Direct3D. Discord's misclassification note means a "Fullscreen" game that
 captures fine may still report yes, which is why pixels are required too.
 

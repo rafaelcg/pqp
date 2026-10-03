@@ -3166,6 +3166,12 @@ export function createVoiceController(transport: RealtimeTransport) {
   let shareStartedAt = 0;
   /** `share_game_capture_hint` was on for the running share. */
   let shareGameCaptureHintOn = false;
+  /**
+   * Bumped whenever the call this controller is in ends or changes, so a
+   * late answer about a share in an earlier call cannot raise a card in this
+   * one (`maybeHintEarlyCaptureEnd`).
+   */
+  let shareHintCallGeneration = 0;
 
   /**
    * Put a running share under `share_high_motion_guard` (when the flag is on
@@ -3897,10 +3903,21 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     const afterMs = Date.now() - shareStartedAt;
     const surface = video.getSettings?.().displaySurface ?? null;
+    // What this answer is about: THIS share, in THIS call. The shell's
+    // answer is asynchronous, and by the time it lands the person may have
+    // shared again, hung up, or moved to another call; then it is about
+    // nothing anybody is looking at and must not raise a card.
+    const startedAt = shareStartedAt;
+    const callGeneration = shareHintCallGeneration;
     void confirmExclusiveFullscreen().then((exclusive) => {
       console.warn("[pqp] share capture ended by itself", { afterMs, surface, exclusive });
-      // A share started meanwhile answers this one.
-      if (exclusive !== true || state.isSharingScreen) {
+      if (
+        exclusive !== true ||
+        state.isSharingScreen ||
+        shareStartedAt !== startedAt ||
+        shareHintCallGeneration !== callGeneration ||
+        state.status !== "connected"
+      ) {
         return;
       }
       state.shareCaptureHint = { kind: "ended", at: Date.now() };
@@ -4266,6 +4283,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   function leaveCall() {
     const wasInLobby =
       state.status === "connected" || state.status === "joining";
+    // Any answer still on its way about a share in this call is now stale.
+    shareHintCallGeneration += 1;
     stopAllSoundLoops();
     if (wasInLobby) {
       playCue("voiceLeave");

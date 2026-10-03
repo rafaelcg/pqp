@@ -54,6 +54,8 @@ export interface SharePictureStatus {
   frames: number;
   samples: number;
   suspected: "black" | "quiet" | null;
+  /** Whether the last refresh probe got a frame back (a live capture); null before one ran. */
+  refreshAnswered?: boolean | null;
   exclusiveFullscreen: boolean | null;
 }
 
@@ -242,7 +244,13 @@ export function formatShareHealth(report: ShareHealthReport | null): string {
     lines.push(
       `  picture        ${report.picture.reported ?? (report.picture.suspected ? `suspected ${report.picture.suspected}` : "ok")}, ${
         report.picture.frames
-      } frames seen, ${report.picture.running ? "watching" : "not watching"}, exclusive fullscreen ${
+      } frames seen, ${report.picture.running ? "watching" : "not watching"}, refresh ${
+        report.picture.refreshAnswered === undefined || report.picture.refreshAnswered === null
+          ? "not probed"
+          : report.picture.refreshAnswered
+            ? "answered"
+            : "unanswered"
+      }, exclusive fullscreen ${
         report.picture.exclusiveFullscreen === null ? "not asked" : report.picture.exclusiveFullscreen ? "yes" : "no"
       }`,
     );

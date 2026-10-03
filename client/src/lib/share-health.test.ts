@@ -250,7 +250,9 @@ describe("collectShareHealth", () => {
     expect(report?.trackSettings.displaySurface).toBe("monitor");
     const text = formatShareHealth(report);
     expect(text).toContain("1920x1080 @ 60.0, monitor");
-    expect(text).toContain("picture        suspected quiet, 0 frames seen, watching, exclusive fullscreen no");
+    expect(text).toContain(
+      "picture        suspected quiet, 0 frames seen, watching, refresh not probed, exclusive fullscreen no",
+    );
     expect(text).toContain("capturer       screen wgc, window wgc (Windows build 26100)");
   });
 
