@@ -361,11 +361,16 @@ function createLinuxShareAudio({
     return probed;
   }
 
+  /**
+   * Unload what is ours, then look again: resolves with how many of our
+   * modules are STILL loaded, so a caller never treats "tried" as "gone".
+   */
   async function unloadLeftovers() {
     const modules = parseModules(await run(["list", "short", "modules"]));
     for (const index of leftoverModules(modules)) {
       await run(["unload-module", String(index)]).catch(() => {});
     }
+    return leftoverModules(parseModules(await run(["list", "short", "modules"]))).length;
   }
 
   async function snapshot() {
@@ -442,10 +447,28 @@ function createLinuxShareAudio({
       return;
     }
     session.debounce = setTimer(() => {
-      if (session) {
-        session.debounce = null;
+      const current = session;
+      if (!current) {
+        return;
       }
-      void serial(reconcileNow).catch((err) => log("reconcile failed", err?.message ?? err));
+      current.debounce = null;
+      // At most one pass running and one more wanted. A sound server that is
+      // slow to answer must not make every tick and event queue a pass of its
+      // own (each one is five `pactl` processes once it finally runs).
+      if (current.reconciling) {
+        current.rerun = true;
+        return;
+      }
+      current.reconciling = true;
+      void serial(reconcileNow)
+        .catch((err) => log("reconcile failed", err?.message ?? err))
+        .finally(() => {
+          current.reconciling = false;
+          if (current.rerun && session === current) {
+            current.rerun = false;
+            scheduleReconcile();
+          }
+        });
     }, EVENT_DEBOUNCE_MS);
   }
 
@@ -493,6 +516,8 @@ function createLinuxShareAudio({
       lastReadAt: null,
       subscriber: null,
       debounce: null,
+      reconciling: false,
+      rerun: false,
       tick: null,
     };
     try {
@@ -554,9 +579,14 @@ function createLinuxShareAudio({
         await run(["unload-module", String(index)]).catch(() => {});
       }
     }
-    await unloadLeftovers().catch(() => {});
-    onActive(false);
-    log("stopped");
+    // The marker goes only when nothing of ours is left; a failed unload (or
+    // a sound server that stopped answering) keeps it, so the next launch
+    // looks again.
+    const remaining = await unloadLeftovers().catch(() => -1);
+    if (remaining === 0) {
+      onActive(false);
+    }
+    log("stopped", remaining === 0 ? undefined : { remaining });
   }
 
   return {
@@ -583,7 +613,8 @@ function createLinuxShareAudio({
     /**
      * For startup, and only when a marker says a session was live and never
      * ended cleanly: clear what a crashed session left behind. Never run
-     * speculatively, because it reads the user's sound server.
+     * speculatively, because it reads the user's sound server. Resolves with
+     * how many of our modules are still loaded afterwards.
      */
     cleanup: () => serial(unloadLeftovers),
     isActive: () => session !== null,

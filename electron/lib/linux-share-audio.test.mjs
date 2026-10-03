@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 
@@ -471,5 +472,84 @@ describe("the arm that gates the bus", () => {
     shareAudio.consumeArm();
     assert.deepEqual(calls, []);
     assert.equal(shareAudio.isActive(), false);
+  });
+});
+
+describe("when the sound server is slow or refuses", () => {
+  it("keeps the crash marker when an unload fails, drops it when nothing is left", async () => {
+    const server = fakeServer();
+    const seen = [];
+    const realRun = server.run;
+    let refuse = true;
+    const { shareAudio } = harness(
+      {
+        ...server,
+        run: (args) =>
+          refuse && args[0] === "unload-module" ? Promise.reject(new Error("busy")) : realRun(args),
+      },
+      { onActive: (active) => seen.push(active) },
+    );
+    await shareAudio.start();
+    await shareAudio.stop();
+    assert.deepEqual(seen, [true], "modules were left, so the marker stays");
+
+    refuse = false;
+    assert.equal(await shareAudio.cleanup(), 0);
+    assert.equal(server.state.modules.length, 0);
+  });
+
+  it("queues at most one pass behind a slow one, however many events arrive", async () => {
+    const server = fakeServer();
+    const timers = [];
+    let snapshots = 0;
+    let gate = null;
+    const realRun = server.run;
+    const child = { stdout: new EventEmitter(), kill() {}, on() {} };
+    const shareAudio = createLinuxShareAudio({
+      run: async (args) => {
+        if (args[0] === "list" && args[1] === "sink-inputs") {
+          snapshots += 1;
+          if (gate) {
+            await gate;
+          }
+        }
+        return realRun(args);
+      },
+      subscribe: () => child,
+      ownPids: () => new Set(["500"]),
+      now: () => 0,
+      setTimer: (fn) => timers.push(fn),
+      clearTimer: () => {},
+      setTick: () => 0,
+      clearTick: () => {},
+    });
+    await shareAudio.start();
+    const startSnapshots = snapshots;
+
+    let release;
+    gate = new Promise((resolve) => (release = resolve));
+    const fire = () => timers.splice(0).forEach((fn) => fn());
+    const burst = () => {
+      for (let i = 0; i < 20; i += 1) {
+        child.stdout.emit("data", "Event 'change' on sink-input #3");
+      }
+    };
+    burst();
+    fire(); // first pass starts and hangs on the gate
+    for (let round = 0; round < 5; round += 1) {
+      burst();
+      fire();
+    }
+    release();
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      fire();
+    }
+    gate = null;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // One running, one follow-up, not six.
+    assert.ok(snapshots - startSnapshots <= 2, `ran ${snapshots - startSnapshots} passes`);
+    assert.ok(snapshots - startSnapshots >= 1);
   });
 });

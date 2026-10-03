@@ -25,16 +25,22 @@
 import { fetchShareConfig, type ShareConfig } from "./api";
 import { desktopShareCapabilities, getDesktop, isDesktopApp } from "./desktop";
 
-/** How long an answer is trusted. A flag flip reaches the next share. */
+/**
+ * How long "this machine has a sound server" is trusted. Only that: the
+ * runtime flag is read again for every share, because it is also the kill
+ * switch, and an operator turning it off must not keep offering sound for a
+ * minute after.
+ */
 export const LINUX_SHARE_AUDIO_TTL_MS = 60_000;
 
 interface Readiness {
   flag: boolean;
   available: boolean;
-  at: number;
 }
 
 let readiness: Readiness | null = null;
+/** The shell's last answer about the sound server, and when it gave it. */
+let availability: { available: boolean; at: number } | null = null;
 let inflight: Promise<boolean> | null = null;
 
 /** This shell can build the bus at all. Says nothing about the flag. */
@@ -70,32 +76,32 @@ const liveDeps: EnsureDeps = {
 
 /**
  * Warm the answer. Never throws; every failure is "no", which is the share
- * everybody on Linux has today.
+ * everybody on Linux has today. The flag is fetched on every call (calls that
+ * overlap share one request); only the sound-server answer is cached.
  */
 export async function ensureLinuxShellShareAudio(
   deps: EnsureDeps = liveDeps,
 ): Promise<boolean> {
   if (!deps.shellCan()) {
     readiness = null;
+    availability = null;
     return false;
-  }
-  if (readiness && deps.now() - readiness.at < LINUX_SHARE_AUDIO_TTL_MS) {
-    return linuxShellShareAudioReady();
   }
   if (!inflight) {
     inflight = (async () => {
       const config = await deps.fetchConfig().catch(() => null);
       const flag = config?.linuxDesktopSystemAudio === true;
-      // The shell is only asked (it runs `pactl info`) once the flag is on:
-      // with it off, nothing here reaches the user's sound server.
-      const status = flag
-        ? await Promise.resolve(deps.status()).catch(() => undefined)
-        : undefined;
-      readiness = {
-        flag,
-        available: status?.available === true,
-        at: deps.now(),
-      };
+      if (!flag) {
+        // Off: not ready now, and the shell is not asked anything (it runs
+        // `pactl info`), so nothing here reaches the user's sound server.
+        readiness = { flag: false, available: false };
+        return false;
+      }
+      if (!availability || deps.now() - availability.at >= LINUX_SHARE_AUDIO_TTL_MS) {
+        const status = await Promise.resolve(deps.status()).catch(() => undefined);
+        availability = { available: status?.available === true, at: deps.now() };
+      }
+      readiness = { flag: true, available: availability.available };
       return linuxShellShareAudioReady();
     })().finally(() => {
       inflight = null;
@@ -106,6 +112,7 @@ export async function ensureLinuxShellShareAudio(
 
 export function resetLinuxShellShareAudioForTests(): void {
   readiness = null;
+  availability = null;
   inflight = null;
 }
 
@@ -179,6 +186,9 @@ const liveAttachDeps: AttachDeps = {
   getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
 };
 
+/** The longest a share waits for the shell's capture to open. */
+export const ATTACH_TIMEOUT_MS = 4_000;
+
 export type AttachResult = "attached" | "skipped" | "unavailable";
 
 /**
@@ -195,11 +205,17 @@ export type AttachResult = "attached" | "skipped" | "unavailable";
 export async function attachLinuxShellShareAudio(
   stream: StreamLike,
   deps: AttachDeps = liveAttachDeps,
+  timeoutMs: number = ATTACH_TIMEOUT_MS,
 ): Promise<AttachResult> {
   if (stream.getAudioTracks().length > 0) {
     return "skipped";
   }
-  try {
+  // Sound is the extra, so waiting on it is bounded: a device open that never
+  // answers (a stalled sound server, a permission flow) must not hold up a
+  // picture that is already captured. A track that arrives after the deadline
+  // is stopped, never added to a share that has moved on.
+  let abandoned = false;
+  const work = (async (): Promise<AttachResult> => {
     const claim = await deps.claim();
     if (!claim?.active || !claim.label) {
       return "unavailable";
@@ -216,12 +232,26 @@ export async function attachLinuxShellShareAudio(
     if (!track) {
       return "unavailable";
     }
+    if (abandoned) {
+      media.getAudioTracks().forEach((late) => late.stop());
+      return "unavailable";
+    }
     stream.addTrack(track);
     stream.getVideoTracks()[0]?.addEventListener?.("ended", () => track.stop(), {
       once: true,
     });
     return "attached";
-  } catch {
-    return "unavailable";
+  })().catch((): AttachResult => "unavailable");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<AttachResult>((resolve) => {
+    timer = setTimeout(() => {
+      abandoned = true;
+      resolve("unavailable");
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -134,16 +134,32 @@ describe("ensureLinuxShellShareAudio", () => {
     expect(screenCaptureOptions(true, env).audio).not.toBe(false);
   });
 
-  it("trusts an answer for a minute, then asks again", async () => {
+  it("reads the flag on every share, so turning it off takes effect at once", async () => {
     setShell(linuxShell());
-    const first = deps(true, 0);
-    await ensureLinuxShellShareAudio(first);
-    const soon = deps(false, LINUX_SHARE_AUDIO_TTL_MS - 1);
-    expect(await ensureLinuxShellShareAudio(soon)).toBe(true);
-    expect(soon.fetches).toBe(0);
-    const later = deps(false, LINUX_SHARE_AUDIO_TTL_MS);
-    expect(await ensureLinuxShellShareAudio(later)).toBe(false);
+    expect(await ensureLinuxShellShareAudio(deps(true, 0))).toBe(true);
+    const off = deps(false, 1);
+    expect(await ensureLinuxShellShareAudio(off)).toBe(false);
+    expect(off.fetches).toBe(1);
     expect(linuxShellShareAudioReady()).toBe(false);
+    // And back on, with the sound-server answer still trusted.
+    expect(await ensureLinuxShellShareAudio(deps(true, 2))).toBe(true);
+  });
+
+  it("trusts the sound-server answer for a minute, then asks the shell again", async () => {
+    let asked = 0;
+    setShell(
+      linuxShell({
+        linuxShareAudioStatus: async () => {
+          asked += 1;
+          return { available: true, server: "pipewire" };
+        },
+      }),
+    );
+    await ensureLinuxShellShareAudio(deps(true, 0));
+    await ensureLinuxShellShareAudio(deps(true, LINUX_SHARE_AUDIO_TTL_MS - 1));
+    expect(asked).toBe(1);
+    await ensureLinuxShellShareAudio(deps(true, LINUX_SHARE_AUDIO_TTL_MS));
+    expect(asked).toBe(2);
   });
 });
 
@@ -246,6 +262,40 @@ describe("attachLinuxShellShareAudio", () => {
         "unavailable",
       );
       expect(stream.getAudioTracks()).toEqual([]);
+    }
+  });
+});
+
+describe("attachLinuxShellShareAudio deadline", () => {
+  it("goes out silent when the device open hangs, and stops a track that lands late", async () => {
+    vi.useFakeTimers();
+    try {
+      const stop = vi.fn();
+      let land: (media: { getAudioTracks(): { stop(): void }[] }) => void = () => {};
+      const stream = {
+        getAudioTracks: () => [] as { stop(): void }[],
+        getVideoTracks: () => [] as { stop(): void }[],
+        addTrack: vi.fn(),
+      };
+      const pending = attachLinuxShellShareAudio(
+        stream,
+        {
+          claim: async () => ({ active: true, label: "pqp-share-audio" }),
+          enumerate: async () => [
+            { kind: "audioinput", label: "pqp-share-audio", deviceId: "bus" },
+          ],
+          getUserMedia: () => new Promise((resolve) => (land = resolve)),
+        },
+        1000,
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toBe("unavailable");
+      land({ getAudioTracks: () => [{ stop }] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stop).toHaveBeenCalled();
+      expect(stream.addTrack).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

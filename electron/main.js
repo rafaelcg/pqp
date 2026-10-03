@@ -1155,6 +1155,8 @@ const linuxShareAudio =
       })
     : null;
 
+let linuxShareAudioStartSeq = 0;
+
 /** How long a share may wait on the sound server before going out silent. */
 const LINUX_SHARE_AUDIO_START_TIMEOUT_MS = 3000;
 
@@ -1163,14 +1165,30 @@ async function startLinuxShareAudio() {
     return { ok: false, reason: "not-linux" };
   }
   let timer = null;
+  const requested = ++linuxShareAudioStartSeq;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(
       () => resolve({ ok: false, reason: "timeout" }),
       LINUX_SHARE_AUDIO_START_TIMEOUT_MS,
     );
   });
+  const starting = linuxShareAudio.start();
   try {
-    return await Promise.race([linuxShareAudio.start(), timeout]);
+    const outcome = await Promise.race([starting, timeout]);
+    if (outcome.reason === "timeout") {
+      // This share is going out silent, so a bus that finishes loading later
+      // would reroute other apps for nobody. Take it down when it lands,
+      // unless a newer share asked for one in the meantime.
+      starting
+        .then((late) => {
+          if (late?.ok && requested === linuxShareAudioStartSeq) {
+            return linuxShareAudio.stop();
+          }
+          return undefined;
+        })
+        .catch(() => {});
+    }
+    return outcome;
   } catch (err) {
     console.warn("[pqp] linux share audio failed to start:", err?.message ?? err);
     return { ok: false, reason: "error" };
@@ -2446,7 +2464,13 @@ if (probingShareAudio) {
     if (linuxShareAudio && fs.existsSync(linuxShareAudioMarkerPath())) {
       linuxShareAudio
         .cleanup()
-        .then(() => setLinuxShareAudioMarker(false))
+        .then((remaining) => {
+          // Kept while anything of ours is still loaded: the next launch
+          // looks again instead of forgetting it.
+          if (remaining === 0) {
+            setLinuxShareAudioMarker(false);
+          }
+        })
         .catch(() => {});
     }
     const allowedOrigin = configureSessionSecurity(appUrl);
@@ -2514,6 +2538,7 @@ if (probingShareAudio) {
     // Synchronously, because nothing async runs after this event. Every app
     // sitting on the share bus falls back to the default output when it goes.
     const busModules = linuxShareAudio?.activeModules().reverse() ?? [];
+    let unloadFailed = false;
     for (const index of busModules) {
       try {
         execFileSync("pactl", ["unload-module", String(index)], {
@@ -2521,10 +2546,11 @@ if (probingShareAudio) {
           timeout: 1000,
         });
       } catch {
-        // Next launch's cleanup takes what this could not (the marker stays).
+        // Next launch's cleanup takes what this could not: the marker stays.
+        unloadFailed = true;
       }
     }
-    if (busModules.length > 0) {
+    if (busModules.length > 0 && !unloadFailed) {
       setLinuxShareAudioMarker(false);
     }
     if (tray && !tray.isDestroyed()) {
