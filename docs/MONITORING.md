@@ -1257,8 +1257,8 @@ contact point `rafael-email`.
 
 | Rule | Fires when | For |
 |---|---|---|
-| egress past 60% of the monthly allowance | 3.6 TB out in the last 30 days | 15m |
-| egress past 80% of the monthly allowance | 4.8 TB out in the last 30 days | 15m |
+| egress past 60% of the monthly allowance | this calendar month's outbound bytes, per box, over 60% of `pqp_sfu_egress_allowance_bytes` | 15m |
+| egress past 80% of the monthly allowance | the same, over 80% | 15m |
 | CPU above 85% | averaged across the 4 vCPU, so this is a load the box cannot serve | 10m |
 | less than 10% memory available | LiveKit gets OOM-killed rather than degrading | 10m |
 | root filesystem above 85% | usually journald or docker images | 15m |
@@ -1270,14 +1270,29 @@ contact point `rafael-email`.
 | a watched systemd unit has failed | `livekit-docker`, `turn-cert-sync`, `pqp-box-metrics`, `alloy`, `vnstat`, `docker`. Only those six are scraped; the default is every unit on the box, which is a few hundred series for nothing | 5m |
 | the TURN cert sync has not run in 48h | `turn-cert-sync.timer` copies the Caddy-renewed certificate into LiveKit's TURN listener daily. If it stops, TURN serves the old one until it expires and cross-NAT voice breaks with no other warning | 30m |
 
-The egress rules read `pqp_sfu_egress_30d_tx_bytes`, a **rolling 30 day**
-total, not the calendar month. Vultr's allowance resets on the instance's
-billing date, which is not necessarily the 1st, and nothing on the box knows
-that date. A rolling 30 day window is always at least as large as the true
-billing-period usage, so it warns early rather than late, which is the right
-way round when the penalty is a cent per GB and not a cutoff. The calendar
-month-to-date is exported too (`pqp_sfu_egress_month_tx_bytes`) and is on the
-dashboard next to it.
+The egress rules read `pqp_sfu_egress_month_tx_bytes / pqp_sfu_egress_allowance_bytes * 100`,
+the **calendar month to date**, per box (one alert instance per `box` label).
+Vultr bills overage per calendar month, so that is the window an overage is
+measured in. Until 2026-10-03 they read the rolling 30 day total
+(`pqp_sfu_egress_30d_tx_bytes`), which carries September's busy days into
+October: on 2026-10-03 the 60% rule was firing at about 69% while the calendar
+month stood at about 8%. The rolling figure is still exported and is still what
+the dashboard's "Allowance used" panel shows; it is the better number for "how
+close is this box to a month of traffic", the wrong one for "am I about to be
+billed".
+
+Vultr may pool transfer across the account, which is unverified, so the rules
+stay per box and conservative: an alert means that one box alone has used that
+share of its own plan allowance, and an overage is a cost, not an outage. The
+rule definitions live in Grafana only (provisioned through the API, no JSON in
+the repo), so this section is their record. The pre-change rules are saved
+outside the repo as `~/.config/pqp/ops/grafana-egress-rules-backup-2026-10-03.json`.
+
+Only boxes running `pqp-box-metrics` are covered. Today that is `sfu-pqp` and
+`sfu-hls`. Both report the exporter's default allowance (6 TB), which is the
+`vhp-4c-8gb-amd` plan's and may not be right for the second box: set
+`PQP_EGRESS_ALLOWANCE_BYTES` per box (the Miami and London boxes are 5,120 GB
+plans) by running the installer on each box with its own value.
 
 Inbound is measured (`..._rx_bytes`) but not alerted on: Vultr bills the
 outbound direction.
@@ -1306,7 +1321,7 @@ Or, for a one-off without a deploy, set `PQP_EGRESS_ALLOWANCE_BYTES` in
 next install, so prefer step 1.
 
 If the billing date turns out to matter, `MonthRotate` in `/etc/vnstat.conf`
-moves vnstat's month boundary; the rolling window ignores it either way.
+moves vnstat's month boundary, which the calendar-month alert follows; the rolling window ignores it.
 
 ### Installing or updating it
 
@@ -1337,7 +1352,8 @@ anything set in `job_name`; LiveKit's is `livekit`.
 
 | What | Query |
 |---|---|
-| Allowance used | `pqp_sfu_egress_30d_tx_bytes / pqp_sfu_egress_allowance_bytes * 100` |
+| Allowance used, calendar month (what alerts) | `pqp_sfu_egress_month_tx_bytes / pqp_sfu_egress_allowance_bytes * 100` |
+| Allowance used, rolling 30 days (dashboard panel) | `pqp_sfu_egress_30d_tx_bytes / pqp_sfu_egress_allowance_bytes * 100` |
 | Egress right now | `rate(node_network_transmit_bytes_total{device="enp1s0"}[5m]) * 8` |
 | CPU busy | `100 - (avg(rate(node_cpu_seconds_total{instance="sfu-pqp",mode="idle"}[5m])) * 100)` |
 | People in voice, per the SFU | `livekit_participant_total` |
