@@ -499,7 +499,7 @@ const SEAT_IDLE_ALARM_MS = 60 * 60_000;
  * idle, because kicking somebody out of a live conversation is the
  * complaint under every Discord AFK thread.
  *
- * `VOICE_IDLE_ALONE_MINUTES` sets the limit (default 10); `0` turns the
+ * `VOICE_IDLE_ALONE_MINUTES` sets the limit (default 90); `0` turns the
  * hangup off, which is what a self-host with no bandwidth bill may want.
  * Anything the person does on purpose while alone (mute, share, camera,
  * hand, reaction, or the warning's own button) starts the clock over.
@@ -507,7 +507,7 @@ const SEAT_IDLE_ALARM_MS = 60 * 60_000;
  */
 function idleAloneLimitMs(): number {
   const raw = Number(process.env.VOICE_IDLE_ALONE_MINUTES);
-  const minutes = Number.isFinite(raw) && raw >= 0 ? raw : 10;
+  const minutes = Number.isFinite(raw) && raw >= 0 ? raw : 90;
   return minutes * 60_000;
 }
 
