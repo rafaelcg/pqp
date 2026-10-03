@@ -362,6 +362,35 @@ export async function readVoiceRoomPin(
   return row ? { transport: row.transport, region: row.sfu_region ?? null } : null;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where each of these rooms is pinned, one read. A room with no row is absent
+ * from the map (nobody is in it, as far as the registry knows); a row with a
+ * NULL region is present with `null`, which every reader takes to mean the
+ * home region. Used by SFU moderation to ask only the box a room lives on
+ * (`voice/admin.ts`); a failure rejects and the caller falls back to asking
+ * every box. Ids that are not UUIDs cannot be rows and are skipped, so a
+ * malformed room name never turns the whole lookup into a cast error.
+ */
+export async function readVoiceRoomRegions(
+  channelIds: readonly string[],
+): Promise<Map<string, string | null>> {
+  const ids = channelIds.filter((id) => UUID_PATTERN.test(id));
+  const pins = new Map<string, string | null>();
+  if (ids.length === 0) {
+    return pins;
+  }
+  const result = await getPool().query<{ channel_id: string; sfu_region: string | null }>(
+    `SELECT channel_id, sfu_region FROM voice_rooms WHERE channel_id = ANY($1::uuid[])`,
+    [ids],
+  );
+  for (const row of result.rows) {
+    pins.set(row.channel_id, row.sfu_region ?? null);
+  }
+  return pins;
+}
+
 /**
  * Move a pinned room from one transport to another, atomically and exactly
  * once.

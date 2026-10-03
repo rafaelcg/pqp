@@ -190,6 +190,14 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
   },
+  sfu_region_scoped_calls: {
+    description:
+      "Moderação do SFU pergunta só à região da sala, com limite de tempo e disjuntor por região (desligado: pergunta a todas e espera 5 s).",
+    env: "SFU_REGION_SCOPED_CALLS",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   voice_mesh_resume_requires_cap: {
     description:
       "Só segurar assento mesh por 90 s para quem declarou mesh-resume.",
