@@ -230,10 +230,13 @@ let lookupLoggedAt = 0;
 
 /**
  * The registry read, bounded: it runs on the moderator's request path and the
- * main pool's own query timeout is 15 s. Past `REGION_LOOKUP_BUDGET_MS` the
- * room counts as unknown, which asks every box, never fewer.
+ * main pool's own query timeout is 15 s. Postgres itself cancels the statement
+ * after its own 500 ms (`REGION_READ_TIMEOUT_MS` in the registry, so a read behind a lock does not hold a pooled
+ * connection); this client-side race is only the backstop for a reply that
+ * never comes. Either way the rooms count as unknown, which asks every box,
+ * never fewer.
  */
-const REGION_LOOKUP_BUDGET_MS = 500;
+const REGION_LOOKUP_BUDGET_MS = 1_000;
 
 async function boundedRegionRead(
   rooms: readonly string[],
@@ -272,6 +275,13 @@ async function knownRegionIds(
   rooms: readonly string[],
   regions: readonly SfuRegion[],
   hint: readonly string[] = [],
+  /**
+   * False for a routine repeat of a sweep whose spec carries a hint: it routes
+   * on the hint and this process's pin and leaves the registry to the wide
+   * repeat (every half minute), which asks every box regardless. That keeps
+   * ~180 reads per active room per window off the pool.
+   */
+  readRegistry = true,
 ): Promise<Set<string> | null> {
   if (rooms.length === 0) {
     return null;
@@ -285,7 +295,7 @@ async function knownRegionIds(
   // on, and a room that has since been re-pinned elsewhere can still hold
   // somebody on the old box with a token minted before the eviction.
   let rows = new Map<string, string | null>();
-  if (isVoiceRegistryEnabled()) {
+  if (readRegistry && isVoiceRegistryEnabled()) {
     try {
       rows = await boundedRegionRead(rooms);
     } catch (error) {
@@ -294,6 +304,11 @@ async function knownRegionIds(
         lookupLoggedAt = now;
         logEvent("voice.sfuRegionLookupFailed", { error: describeError(error) });
       }
+      // The registry is the cluster's view and this process's pin or a hint
+      // may be the stale half of a split (api-a pinned Miami, the row says
+      // Sao Paulo), so a read that did not answer leaves nothing trustworthy:
+      // unknown, which asks every box.
+      return null;
     }
   }
   const known = new Set<string>();
@@ -364,7 +379,7 @@ async function targetsFor(
   }
   const known =
     regionScopingEnabled() && rooms !== null
-      ? await knownRegionIds(rooms, regions, hint)
+      ? await knownRegionIds(rooms, regions, hint, !(hint.length > 0 && !wide))
       : null;
   const fallback: RegionCallMode = repeats ? "speculative" : "oneshot";
   return regions

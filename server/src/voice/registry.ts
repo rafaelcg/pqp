@@ -362,6 +362,9 @@ export async function readVoiceRoomPin(
   return row ? { transport: row.transport, region: row.sfu_region ?? null } : null;
 }
 
+/** How long Postgres may spend on `readVoiceRoomRegions` before it cancels it. */
+export const REGION_READ_TIMEOUT_MS = 500;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -381,11 +384,18 @@ export async function readVoiceRoomRegions(
   if (ids.length === 0) {
     return pins;
   }
-  const result = await getPool().query<{ channel_id: string; sfu_region: string | null }>(
-    `SELECT channel_id, sfu_region FROM voice_rooms WHERE channel_id = ANY($1::uuid[])`,
-    [ids],
-  );
-  for (const row of result.rows) {
+  // The bound is enforced BY POSTGRES, in the same implicit transaction as the
+  // read (one simple-protocol message, so `SET LOCAL` covers the SELECT): a
+  // read stuck behind a lock is cancelled and releases its pooled connection,
+  // instead of a client-side timer that gives up while the statement keeps the
+  // connection for the pool's 15 s. The ids are UUID-checked above, so they go
+  // in as literals (a multi-statement message cannot take parameters).
+  const list = ids.map((id) => `'${id}'`).join(",");
+  const results = (await getPool().query(
+    `SET LOCAL statement_timeout = ${REGION_READ_TIMEOUT_MS};
+     SELECT channel_id, sfu_region FROM voice_rooms WHERE channel_id = ANY(ARRAY[${list}]::uuid[])`,
+  )) as unknown as { rows: { channel_id: string; sfu_region: string | null }[] }[];
+  for (const row of results[results.length - 1]!.rows) {
     pins.set(row.channel_id, row.sfu_region ?? null);
   }
   return pins;

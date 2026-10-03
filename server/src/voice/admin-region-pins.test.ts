@@ -69,6 +69,7 @@ const { participantMetadataFor } = await import("./backends.js");
 type AdminModule = typeof import("./admin.js");
 type DbModule = typeof import("../db.js");
 type RegistryModule = typeof import("./registry.js");
+type RegionsModule = typeof import("./regions.js");
 
 const HOME = "wss://sfu.example.test";
 const MIA = "wss://sfu-mia.example.test";
@@ -77,6 +78,7 @@ const LHR = "wss://sfu-lhr.example.test";
 let db: DbModule;
 let admin: AdminModule;
 let registry: RegistryModule;
+let regionsModule: RegionsModule;
 
 async function insertRoom(channelId: string, region: string | null): Promise<void> {
   await db
@@ -103,6 +105,7 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     await db.initDb();
     admin = (await import("./admin.js")) as AdminModule;
     registry = (await import("./registry.js")) as RegistryModule;
+    regionsModule = (await import("./regions.js")) as RegionsModule;
   });
 
   afterAll(async () => {
@@ -117,11 +120,13 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
   beforeEach(async () => {
     lk.boxes.clear();
     admin.resetSfuAdminClient();
+    regionsModule.resetRoomRegions();
     await db.getPool().query(`DELETE FROM voice_rooms`);
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -164,7 +169,14 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     expect(asked(LHR)).toBe(0);
   });
 
-  it("stamps the region into the re-sweep row, and a re-sweep follows the room to where it is re-pinned", async () => {
+  it("stamps the region into the re-sweep row; routine repeats read nothing, and the wide repeat follows the room to where it is re-pinned", async () => {
+    // Only the clock is faked (the database keeps its real timers): second 12 of a
+    // half minute is outside the wide window, second 32 is inside it.
+    // The clock stays within a minute of the real one: the row's expiry is read back by
+    // Postgres's own NOW().
+    const halfMinute = Math.floor(Date.now() / 30_000) * 30_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(halfMinute + 12_000));
     const room = randomUUID();
     await db.getPool().query(`DELETE FROM voice_resweeps`);
 
@@ -182,15 +194,25 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 1, 1]);
 
     // The room is re-pinned to Miami while the window is still open, and somebody holding a
-    // pre-eviction token for that box is in it. The repeat asks the hinted box AND the new pin.
+    // pre-eviction token for that box is in it.
     await insertRoom(room, "mia");
     lk.boxes.get(MIA)!.listParticipants = () =>
       Promise.resolve([{ identity: "peer-mal", metadata: undefined }]);
+
+    // A routine repeat routes on the hint and reads no registry: Miami is not asked.
+    vi.setSystemTime(new Date(halfMinute + 17_000));
     await db.getPool().query(`UPDATE voice_resweeps SET claimed_until = 'epoch'`);
     await admin.tickSfuResweeps();
     await admin.settleSfuEvictions();
+    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([2, 1, 1]);
+    expect(lk.boxes.get(MIA)!.removed).toEqual([]);
 
-    expect(asked(HOME)).toBe(2);
+    // The wide repeat asks every box, and reads the registry for what is pinned where.
+    vi.setSystemTime(new Date(halfMinute + 32_000));
+    await db.getPool().query(`UPDATE voice_resweeps SET claimed_until = 'epoch'`);
+    await admin.tickSfuResweeps();
+    await admin.settleSfuEvictions();
+    expect(asked(HOME)).toBe(3);
     expect(asked(MIA)).toBe(2);
     expect(lk.boxes.get(MIA)!.removed).toEqual(["peer-mal"]);
     admin.stopSfuResweeps();
@@ -221,9 +243,12 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     await db.getPool().query(`DELETE FROM voice_resweeps`);
   });
 
-  it("falls back to every box when the registry cannot answer within half a second", async () => {
+  it("falls back to every box when the registry cannot answer within half a second, even with a local pin", async () => {
     const room = randomUUID();
     await insertRoom(room, "mia");
+    // This process's own pin disagrees with the row (the `registryPinFailed` split) and must
+    // not be trusted on its own once the registry did not answer.
+    regionsModule.pinRoomRegion(room, "sao");
     // Another session holds the table: the read waits behind it.
     const holder = await db.getPool().connect();
     try {
@@ -231,7 +256,8 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
       await holder.query("LOCK TABLE voice_rooms IN ACCESS EXCLUSIVE MODE");
       const startedAt = Date.now();
       await admin.setSfuUserMuted(room, "user-1", true, new Map());
-      expect(Date.now() - startedAt).toBeLessThan(5000);
+      // Postgres cancels the read at its own 500 ms bound; it does not sit out the pool's 15 s.
+      expect(Date.now() - startedAt).toBeLessThan(3000);
       expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 1, 1]);
     } finally {
       await holder.query("ROLLBACK").catch(() => {});
