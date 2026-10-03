@@ -8,11 +8,13 @@ import { ApiError, deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { Field } from "@/components/settings/ui";
+import { SignOutButton } from "@/components/layout/sign-out-button";
 
 /* ----------------------------------------------------------------- profile */
 
 /**
- * Name, handle and avatar — the only part of settings that waits for Save.
+ * Name, handle and avatar: the only part of settings that waits for a save.
+ * The drafts live in the shell, which owns the unsaved changes bar.
  *
  * The avatar control is `AvatarPicker` rather than anything local, because
  * onboarding renders the same one; a second picker is how the two lists of
@@ -22,6 +24,7 @@ export function ProfileSection({
   user,
   displayName,
   onDisplayName,
+  displayNameError = null,
   username,
   onUsername,
   handle,
@@ -33,6 +36,8 @@ export function ProfileSection({
   user: User | null;
   displayName: string;
   onDisplayName: (next: string) => void;
+  /** A save was refused because the name is blank. The bar says it too. */
+  displayNameError?: string | null;
   username: string;
   onUsername: (next: string) => void;
   handle: string;
@@ -172,10 +177,14 @@ export function ProfileSection({
             uploading: t("settings.profile.avatar.uploading"),
           }}
           // The claim already wrote it, so the app's copy of the account is
-          // updated here rather than waiting for Save — otherwise the sidebar
-          // keeps the old picture until the dialog closes, and Cancel would
-          // look like it undid an upload it cannot.
-          onUploaded={onUserUpdated}
+          // updated here rather than waiting for a save, or the sidebar keeps
+          // the old picture until the dialog closes. The draft follows too:
+          // left behind, it would read as an unsaved edit, and a later save
+          // would put the old picture back.
+          onUploaded={(updated) => {
+            onAvatarUrl(updated.avatarUrl ?? "");
+            onUserUpdated(updated);
+          }}
         />
       </div>
 
@@ -186,8 +195,14 @@ export function ProfileSection({
         <Input
           value={displayName}
           maxLength={DISPLAY_NAME_MAX_LENGTH}
+          aria-invalid={displayNameError ? true : undefined}
           onChange={(e) => onDisplayName(e.target.value)}
         />
+        {displayNameError ? (
+          <span role="alert" className="mt-1 block text-xs text-danger">
+            {displayNameError}
+          </span>
+        ) : null}
       </label>
 
       <label className="block">
@@ -206,10 +221,12 @@ export function ProfileSection({
         </span>
       </label>
 
-      {/* Said once, here, because this section is the only one where Save means
-          anything — everywhere else a control has already taken effect by the
-          time the user looks away from it. */}
-      <p className="text-xs text-paper-muted">{t("settings.profile.saveNote")}</p>
+      {/* Sign out lives in the rail footer from `sm` up. On a phone the rail
+          is a tab strip with no footer, so it closes this section instead.
+          The Perfil tab redesign turns this into its "Sessão" group. */}
+      <div className="sm:hidden">
+        <SignOutButton />
+      </div>
     </div>
   );
 }

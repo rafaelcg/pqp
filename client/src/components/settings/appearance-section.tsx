@@ -17,6 +17,7 @@ import type { ThemePreference } from "@/lib/theme";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 import { SettingBlock, segmentClass } from "@/components/settings/ui";
+import { useSettingsShell } from "@/components/settings/kit";
 
 const APPEARANCE_OPTIONS: {
   value: AppearancePreference;
@@ -383,9 +384,12 @@ const LOCALE_LABELS: Record<Locale, MessageKey> = {
  */
 function LanguagePicker() {
   const { t, locale } = useTranslation();
+  // Switching reloads the page, which would throw away staged profile edits
+  // without a word. Locked until they are saved or discarded.
+  const { profileDirty } = useSettingsShell();
 
   async function choose(next: Locale) {
-    if (next === locale) {
+    if (next === locale || profileDirty) {
       return;
     }
     setLocalePreference(next);
@@ -415,7 +419,11 @@ function LanguagePicker() {
   return (
     <SettingBlock
       label={t("settings.appearance.language")}
-      hint={t("settings.appearance.languageHint")}
+      hint={
+        profileDirty
+          ? t("settings.unsaved.languageLocked")
+          : t("settings.appearance.languageHint")
+      }
     >
       <div
         role="radiogroup"
@@ -430,8 +438,9 @@ function LanguagePicker() {
               type="button"
               role="radio"
               aria-checked={selected}
+              disabled={profileDirty}
               onClick={() => void choose(option)}
-              className={segmentClass(selected)}
+              className={segmentClass(selected, profileDirty)}
             >
               {t(LOCALE_LABELS[option])}
             </button>

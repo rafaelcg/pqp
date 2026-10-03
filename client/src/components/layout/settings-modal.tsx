@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import { type BlockedUser, type User } from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
-import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import { SectionRail } from "@/components/ui/section-rail";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -11,6 +11,7 @@ import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type M
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
 import { updateMe } from "@/lib/api";
+import { isApplePlatform } from "@/lib/composer-formatting";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { HelpSection } from "@/components/layout/help-section";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -26,10 +27,18 @@ import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your
 import { ProfileSection } from "@/components/settings/profile-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import {
+  buildProfilePatch,
+  isProfileDirty,
+  pendingHandleChange,
+  profileDraftsFrom,
+  type ProfileDrafts,
+} from "@/components/settings/profile-patch";
+import {
   SettingsBuildLine,
   SettingsPaneHeader,
   SettingsSectionContext,
   SettingsShellContext,
+  UnsavedChangesBar,
   type SettingsSectionId,
   type SettingsShellValue,
 } from "@/components/settings/kit";
@@ -186,6 +195,13 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
+const EMPTY_DRAFTS: ProfileDrafts = {
+  displayName: "",
+  username: "",
+  handle: "",
+  avatarUrl: "",
+};
+
 /**
  * The rail's footer on `sm` and up: who you are signed in as, the way out, and
  * which build this is. The name is the saved account, never the draft, so an
@@ -231,16 +247,27 @@ export function SettingsModal({
   feedbackVoice = null,
 }: SettingsModalProps) {
   const { t } = useTranslation();
-  const [displayName, setDisplayName] = useState("");
-  const [username, setUsername] = useState("");
-  const [handle, setHandle] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
+  // The profile is the only staged state in Settings (spec section C). The
+  // four drafts are seeded once per open and never again from `user` while
+  // the dialog is up: an avatar upload, a banner or a DM privacy change all
+  // hand a new `user` down mid-edit, and reseeding then silently threw away a
+  // half-typed display name.
+  const [drafts, setDrafts] = useState<ProfileDrafts>(EMPTY_DRAFTS);
+  const seededRef = useRef(false);
   const [draftLocal, setDraftLocal] = useState(localSettings);
   // Mirrors `draftLocal` so `patchLocal` can compose off the latest values
   // without doing its work inside a render-phase state updater.
   const draftRef = useRef(draftLocal);
-  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // "Salvo" in the bar for a moment after a save, then the bar goes.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  // A close was refused while the profile was dirty.
+  const [closeBlocked, setCloseBlocked] = useState(false);
+  const [focusSaveNonce, setFocusSaveNonce] = useState(0);
+  // The 30-day handle lock asks before a save claims or changes the link.
+  const [handleConfirm, setHandleConfirm] = useState<"claim" | "change" | null>(null);
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
   const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
@@ -350,14 +377,39 @@ export function SettingsModal({
     settingsRef.current = localSettings;
   }, [localSettings]);
 
+  // Seeded on the open transition only, or the first moment an account is
+  // there to seed from. Reset on close so the next open starts clean.
   useEffect(() => {
-    if (open && user) {
-      setDisplayName(user.displayName);
-      setUsername(user.username ?? "");
-      setHandle(user.handle ?? "");
-      setAvatarUrl(user.avatarUrl ?? "");
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (user && !seededRef.current) {
+      seededRef.current = true;
+      setDrafts(profileDraftsFrom(user));
+      setSaveError(null);
+      setNameError(null);
+      setCloseBlocked(false);
+      setSavedFlash(false);
     }
   }, [open, user]);
+
+  const profileDirty = isProfileDirty(user, drafts);
+
+  // Back to clean by any route (Descartar, a save, retyping the old value):
+  // nothing is blocking a close any more.
+  useEffect(() => {
+    if (!profileDirty) {
+      setCloseBlocked(false);
+      setSaveError(null);
+    }
+  }, [profileDirty]);
+
+  useEffect(() => {
+    if (!savedFlash) return;
+    const timer = window.setTimeout(() => setSavedFlash(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [savedFlash]);
 
   // Seeded from a ref so live audio edits, which flow back in as a new
   // `localSettings` prop, do not restart the draft mid-session.
@@ -365,7 +417,6 @@ export function SettingsModal({
     if (open) {
       setDraftLocal(settingsRef.current);
       draftRef.current = settingsRef.current;
-      setError(null);
     }
   }, [open]);
 
@@ -442,53 +493,129 @@ export function SettingsModal({
     const next = { ...draftRef.current, ...partial };
     draftRef.current = next;
     setDraftLocal(next);
-    onAudioSettingsLive?.(next);
+    if (onAudioSettingsLive) {
+      onAudioSettingsLive(next);
+    } else {
+      // Nothing upstream is listening live (a test mounts the dialog bare),
+      // so persist here. Save used to do this; there is no Save now.
+      onLocalSave(next);
+      saveLocalSettings(next);
+    }
     // These already apply and persist locally as they are edited rather than on
     // Save, so the account copy follows the same moment. Device-only changes
     // queue nothing, and a slider drag coalesces into one request.
     queuePreferenceSync(preferencesFromLocal(partial));
   }
 
-  async function handleSave() {
-    // Checked before anything is saved. A blank name used to be dropped from
-    // the request, so the dialog closed as if it had worked and kept the old
-    // name. Device settings are not written either: a Save that fails should
-    // leave nothing half applied.
-    if (user && displayName.trim() === "") {
-      setSection("profile");
-      setError(t("settings.profile.displayNameRequired"));
+  function setDraft<K extends keyof ProfileDrafts>(key: K, value: ProfileDrafts[K]) {
+    setDrafts((current) => ({ ...current, [key]: value }));
+    if (key === "displayName" && value.trim() !== "") {
+      setNameError(null);
+    }
+  }
+
+  function discardProfile() {
+    if (user) {
+      setDrafts(profileDraftsFrom(user));
+    }
+    setSaveError(null);
+    setNameError(null);
+    setCloseBlocked(false);
+  }
+
+  /**
+   * "Salvar alterações", Cmd/Ctrl+S and the handle confirm all end here. It
+   * saves the profile and nothing else (`LocalSettings` persisted as it was
+   * edited), and it does not close the dialog.
+   */
+  async function commitProfile() {
+    if (!user) {
       return;
     }
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     try {
-      onLocalSave(draftLocal);
-      saveLocalSettings(draftLocal);
-      if (user) {
-        const updated = await updateMe({
-          // Only when it changed. An account whose name predates the limit
-          // would otherwise fail every save of an unrelated field.
-          displayName:
-            displayName.trim() !== user.displayName
-              ? displayName.trim()
-              : undefined,
-          username: username.trim() || undefined,
-          avatarUrl: avatarUrl.trim() || null,
-          // Omitted rather than sent empty when the field is blank. An absent
-          // key means "leave it alone"; there is deliberately no way to
-          // RELEASE a handle from this form, because releasing one hands
-          // somebody else a URL that is already in a hundred screenshots.
-          ...(handle ? { handle } : {}),
-        });
-        onUserUpdated(updated);
-      }
-      onClose();
+      const updated = await updateMe(buildProfilePatch(user, drafts));
+      onUserUpdated(updated);
+      // The one reseed while open: the server may have normalised what was
+      // sent (a regenerated tag number), and the bar must read clean.
+      setDrafts(profileDraftsFrom(updated));
+      setSavedFlash(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
     } finally {
       setSaving(false);
     }
   }
+
+  function saveProfile() {
+    if (!user || saving || !profileDirty) {
+      return;
+    }
+    // Checked before anything is sent. A blank name used to be dropped from
+    // the request, so the save looked like it worked and kept the old name.
+    if (drafts.displayName.trim() === "") {
+      const message = t("settings.profile.displayNameRequired");
+      setSection("profile");
+      setSaveError(message);
+      setNameError(message);
+      return;
+    }
+    const handleChange = pendingHandleChange(user, drafts);
+    if (handleChange) {
+      setHandleConfirm(handleChange);
+      return;
+    }
+    void commitProfile();
+  }
+
+  /**
+   * Escape, the X and the backdrop all come here. With staged profile edits
+   * the dialog does not close: it goes to Perfil, the bar says to save or
+   * discard, and focus lands on Salvar alterações. Every attempt does the same.
+   */
+  function requestClose() {
+    if (profileDirty) {
+      setSection("profile");
+      setCloseBlocked(true);
+      setFocusSaveNonce((n) => n + 1);
+      return;
+    }
+    onClose();
+  }
+
+  useEffect(() => {
+    if (focusSaveNonce === 0) return;
+    const timer = window.setTimeout(() => {
+      document.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusSaveNonce]);
+
+  // Cmd+S on Apple platforms, Ctrl+S elsewhere: the same path as the button,
+  // handle confirm included. Swallowed while Settings is the top dialog even
+  // with nothing staged, so the browser's "save page" never opens over it.
+  // Read through a ref so the listener is not re-added on every keystroke.
+  const saveProfileRef = useRef(saveProfile);
+  saveProfileRef.current = saveProfile;
+  useEffect(() => {
+    if (!settingsOpen || handleConfirm) {
+      return;
+    }
+    const apple = isApplePlatform();
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      const chord = apple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (!chord || event.altKey || event.shiftKey || event.key.toLowerCase() !== "s") {
+        return;
+      }
+      event.preventDefault();
+      saveProfileRef.current();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [settingsOpen, handleConfirm]);
+
+  const barVisible = profileDirty || savedFlash;
 
   // The pane is the only scroller. A section always opens at its top: the
   // pane used to keep the previous section's offset, so Voz opened 136px down
@@ -545,8 +672,8 @@ export function SettingsModal({
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
 
   const shell = useMemo<SettingsShellValue>(
-    () => ({ profileDirty: false, openSection, headerActionsSlot }),
-    [openSection, headerActionsSlot],
+    () => ({ profileDirty, openSection, headerActionsSlot }),
+    [profileDirty, openSection, headerActionsSlot],
   );
 
   const railItems = visibleSections.map((entry) => ({
@@ -570,17 +697,7 @@ export function SettingsModal({
         fill
         // 56px: the band only names the dialog, the pane title names the page.
         headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
-        onClose={onClose}
-        footer={
-          <>
-            <Button variant="ghost" onClick={onClose}>
-              {t("settings.cancel")}
-            </Button>
-            <Button onClick={() => void handleSave()} disabled={saving}>
-              {saving ? t("settings.saving") : t("settings.save")}
-            </Button>
-          </>
-        }
+        onClose={requestClose}
       >
         <SettingsShellContext.Provider value={shell}>
           <div className="flex h-full min-h-0 flex-col sm:flex-row">
@@ -604,11 +721,19 @@ export function SettingsModal({
                 role="tabpanel"
                 aria-labelledby={`${tabIdPrefix}-${active.id}`}
                 tabIndex={0}
-                className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none"
+                className={cn(
+                  "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none",
+                  // The footer used to carry the home-indicator inset. With the
+                  // bar up the bar carries it, and the scroller otherwise.
+                  // With the bar up, a focused field scrolls clear of it.
+                  barVisible ? "scroll-pb-24" : "safe-pb",
+                )}
               >
                 <div
                   className={cn(
-                    "@container mx-auto w-full px-4 py-5 sm:px-8 sm:py-8",
+                    "@container mx-auto w-full px-4 pt-5 sm:px-8 sm:pt-8",
+                    // Room for the last group to scroll clear of the bar.
+                    barVisible ? "pb-24" : "pb-5 sm:pb-8",
                     active.wide ? "max-w-none" : "max-w-[40rem]",
                   )}
                 >
@@ -623,14 +748,15 @@ export function SettingsModal({
                       {section === "profile" && (
                         <ProfileSection
                           user={user}
-                          displayName={displayName}
-                          onDisplayName={setDisplayName}
-                          username={username}
-                          onUsername={setUsername}
-                          handle={handle}
-                          onHandle={setHandle}
-                          avatarUrl={avatarUrl}
-                          onAvatarUrl={setAvatarUrl}
+                          displayName={drafts.displayName}
+                          onDisplayName={(next) => setDraft("displayName", next)}
+                          displayNameError={nameError}
+                          username={drafts.username}
+                          onUsername={(next) => setDraft("username", next)}
+                          handle={drafts.handle}
+                          onHandle={(next) => setDraft("handle", next)}
+                          avatarUrl={drafts.avatarUrl}
+                          onAvatarUrl={(next) => setDraft("avatarUrl", next)}
                           onUserUpdated={onUserUpdated}
                         />
                       )}
@@ -707,20 +833,46 @@ export function SettingsModal({
                             {t("common.loading")}
                           </p>
                         ))}
-
-                      {error && (
-                        <p className="mt-4 text-sm text-danger" role="alert">
-                          {error}
-                        </p>
-                      )}
                     </div>
                   </SettingsSectionContext.Provider>
                 </div>
               </div>
+
+              <UnsavedChangesBar
+                visible={barVisible}
+                saving={saving}
+                saved={savedFlash && !profileDirty}
+                blocked={closeBlocked}
+                error={saveError}
+                onDiscard={discardProfile}
+                onSave={saveProfile}
+              />
             </div>
           </div>
         </SettingsShellContext.Provider>
       </Dialog>
+
+      <ConfirmDialog
+        open={settingsOpen && handleConfirm !== null}
+        title={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claimTitle"
+            : "settings.unsaved.handle.changeTitle",
+          { handle: drafts.handle.trim() },
+        )}
+        description={t("settings.unsaved.handle.body")}
+        confirmLabel={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claim"
+            : "settings.unsaved.handle.change",
+        )}
+        cancelLabel={t("settings.unsaved.handle.keep")}
+        destructive={false}
+        onConfirm={() => void commitProfile()}
+        // Runs after `onConfirm` too, so it only closes; Manter keeps the drafts
+        // and the bar exactly as they were.
+        onClose={() => setHandleConfirm(null)}
+      />
 
       <DeleteAccountDialog
         open={open && confirmingDelete}
