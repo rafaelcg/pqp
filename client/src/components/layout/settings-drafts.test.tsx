@@ -121,6 +121,15 @@ describe("Settings profile drafts", () => {
     expect(bar()).not.toBeNull();
   });
 
+  it("marks Perfil in the rail while an edit is staged", () => {
+    mount(makeUser());
+    const dot = () =>
+      document.querySelector("#settings-tab-profile [data-rail-dirty]");
+    expect(dot()).toBeNull();
+    type(displayNameInput(), "Rafael");
+    expect(dot()).not.toBeNull();
+  });
+
   it("puts the account's value back on Descartar", () => {
     mount(makeUser());
     type(displayNameInput(), "Rafael");

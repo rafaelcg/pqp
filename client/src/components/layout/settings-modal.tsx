@@ -670,6 +670,9 @@ export function SettingsModal({
     label: t(entry.label),
     icon: entry.icon,
     group: entry.group,
+    // The dot that says Perfil has edits the bar is waiting on, so the
+    // unsaved state is visible from any tab, not only from the bar.
+    dirty: entry.id === "profile" && profileDirty,
   }));
   const groupLabels = {
     account: t(GROUP_LABELS.account),

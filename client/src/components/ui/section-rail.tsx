@@ -199,6 +199,7 @@ export function SectionRail<Id extends string>({
               <span className="min-w-0">{section.label}</span>
               {section.dirty ? (
                 <span
+                  data-rail-dirty
                   className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
                   aria-hidden
                 />
