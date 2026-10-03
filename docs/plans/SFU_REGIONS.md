@@ -247,7 +247,8 @@ What changed (`voice/sfu-control-plane.ts`, `voice/admin.ts`):
    Known means: this process's pin, the `voice_rooms.sfu_region` row (so the
    other instance's rooms count), or a `regions` hint stamped into the re-sweep
    when the eviction started (the registry row is gone by the second tick,
-   because the eviction itself empties the room). A region id the deployment no
+   because the eviction itself empties the room; once stamped, the hint is the
+   answer and the repeats read nothing). A region id the deployment no
    longer runs reads as home. No pin and no hint, or `rooms === null` ("wherever
    they are"): every box, as before, because "no pin" must mean ask more boxes,
    never fewer.
@@ -255,14 +256,17 @@ What changed (`voice/sfu-control-plane.ts`, `voice/admin.ts`):
    done when São Paulo answers; a slow box delays only its own share. An
    awaited call (a server mute) returns when the slowest box it asked is done,
    which for a known room is the one box.
-3. **A budget** for speculative reads on a remote box: four times that box's
-   measured p99 (over its last 200 answers, floor 1.5 s, ceiling the SDK's 5 s),
-   3 s until it has 30 answers. Never for a write, never for a call to the box
-   a room is known to be on, never for the home box.
+3. **A budget** for the repeats of a sweep on a remote box whose room is not
+   known: four times that box's measured p99 (over its last 200 answers, floor
+   1.5 s, ceiling the SDK's 5 s), 3 s until it has 30 answers. Never for a
+   write, a call to the box a room is known to be on, the home box, or a call
+   nothing will repeat (a moderator's mute or grant, the first pass of an
+   eviction), which keep the SDK's full 5 s: cutting those short would be a
+   change that is not applied.
 4. **A circuit per region**, per process: three consecutive failures skip
-   speculative *reads* of that region for 30 s, then one probe. The skip is
-   reported once as `voice.sfuRegionPartial` (answered / skipped / failed), and
-   a pinned call is never skipped. It is per process because what it measures is
+   those repeats (*reads* only) of that region for 30 s, then one probe. The
+   skip is reported once as `voice.sfuRegionPartial` (answered / skipped /
+   failed). A pinned call, a write and a one-shot are never skipped. It is per process because what it measures is
    this process's path to the box; the sibling has its own, and every sweep is
    repeated within seconds, so the other instance or the next pass covers it.
 5. **It says why.** `voice.sfuRegionCallFailed` now carries `stage` (the call),
@@ -303,8 +307,9 @@ São Paulo room; the flag-off case is the "before"), `admin-region-pins.test.ts`
 - **No automatic failover** from a dead region (roll back step 3).
 - **A box that hangs no longer slows moderation of other boxes' rooms** (fixed
   2026-10-03, see "The control plane"). A room whose box is unknown is still
-  asked everywhere, so a hanging box can still delay *that* call, by its
-  budget (about 3 s, never the SDK's 5 s) and only until its circuit opens.
+  asked everywhere, so a hanging box can still delay *that* one call (a
+  moderator's mute) by the SDK's 5 s. The repeats of a sweep are budgeted and
+  fenced, which is where the volume was.
 - **The public status page** counts a region that is down as a component that
   is down, which the page's overall state reflects.
 - **The promotion budget** (`VOICE_PROMOTION_MAX_SFU_MBPS`) prices every room

@@ -180,9 +180,11 @@ describe("SFU control plane", () => {
         runRegionCall({ region: "mia", home: false, call: "removeParticipant", caller: "t", mode: "speculative", run: slow }),
         runRegionCall({ region: "mia", home: false, call: "listParticipants", caller: "t", mode: "pinned", run: slow }),
         runRegionCall({ region: "sao", home: true, call: "listParticipants", caller: "t", mode: "speculative", run: slow }),
+        // Nothing will repeat a one-shot (a moderator's mute): never cut short.
+        runRegionCall({ region: "mia", home: false, call: "listParticipants", caller: "t", mode: "oneshot", run: slow }),
       ];
       await vi.advanceTimersByTimeAsync(4500);
-      await expect(Promise.all(calls)).resolves.toEqual(["late", "late", "late"]);
+      await expect(Promise.all(calls)).resolves.toEqual(["late", "late", "late", "late"]);
     });
   });
 
@@ -223,6 +225,10 @@ describe("SFU control plane", () => {
       const write = vi.fn().mockResolvedValue(undefined);
       await runRegionCall({ region: "mia", home: false, call: "removeParticipant", caller: "t", mode: "speculative", run: write });
       expect(write).toHaveBeenCalledTimes(1);
+      // And a read nothing will repeat: skipping it would be a change that is never applied.
+      const oneshot = vi.fn().mockResolvedValue([]);
+      await runRegionCall({ region: "mia", home: false, call: "listParticipants", caller: "t", mode: "oneshot", run: oneshot });
+      expect(oneshot).toHaveBeenCalledTimes(1);
     });
 
     it("lets exactly one probe through after the cooldown, and closes on its success", async () => {

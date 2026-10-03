@@ -25,14 +25,17 @@ import { logEvent } from "../lib/log.js";
  * 1. MEASURES every call (count, failures by class, a window of successful
  *    durations for p50/p95/p99), so the next incident has numbers.
  * 2. BOUNDS speculative reads. When a room's region is unknown and a remote
- *    box is asked "just in case", it gets a budget of a few times its own
- *    measured p99 (never more than the SDK's 5 s), not the SDK's full window.
+ *    box is asked "just in case" by a re-sweep, it gets a budget of a few
+ *    times its own measured p99 (never more than the SDK's 5 s), not the SDK's
+ *    full window. A call nothing will repeat (a moderator's mute, the first
+ *    pass of an eviction) is `oneshot` and keeps the full window.
  * 3. FENCES a sick region with a small circuit: after
- *    `CIRCUIT_FAILURES` consecutive failures a SPECULATIVE call to it is
+ *    `CIRCUIT_FAILURES` consecutive failures a SPECULATIVE read of it is
  *    skipped for `CIRCUIT_COOLDOWN_MS`, then one probe is let through. A call
  *    for a room KNOWN to live there is never skipped: that box is the only
  *    place the participant can be, so refusing to ask it would turn a slow ban
- *    into no ban. The home box is never skipped either.
+ *    into no ban. Writes, one-shots and the home box are never skipped
+ *    either.
  * 4. SAYS WHY. `voice.sfuRegionCallFailed` carries the call, the caller, the
  *    duration against the budget, the error class and the idle time since the
  *    region's last call (a cold connection is visible as a large `idleMs`),
@@ -83,8 +86,19 @@ const LOG_INTERVAL_MS = 10_000;
 export type RegionCallMode =
   /** The room is known to live on this region (pin, hint), or it is the single box. */
   | "pinned"
-  /** The room's region is unknown, so this box is asked in case. */
-  | "speculative";
+  /**
+   * The room's region is unknown, so this box is asked in case, by a caller
+   * that asks again within seconds (a re-sweep). The only mode that is
+   * budgeted and skippable by the circuit.
+   */
+  | "speculative"
+  /**
+   * The room's region is unknown and nothing will ask again: a moderator's
+   * mute or grant, the first pass of an eviction. Every box is asked, with the
+   * SDK's full timeout and never skipped, because a skip here would be a
+   * change that is simply not applied.
+   */
+  | "oneshot";
 
 export type SfuErrorClass =
   | "timeout"

@@ -260,22 +260,24 @@ describe("SFU moderation scoped to a room's region", () => {
   });
 
   describe("a room whose region is not known", () => {
-    it("asks every box in parallel and does not wait past a remote box's budget", async () => {
+    it("asks every box in parallel, lands the home mute at once, and a moderator's mute waits for the SDK window and no less", async () => {
       boxes.get(HOME)!.listParticipants.mockResolvedValue([audioParticipant("peer-1", "user-1")]);
       boxes.get(MIA)!.listParticipants.mockImplementation(() => timeoutAfter(5000));
       boxes.get(LHR)!.listParticipants.mockImplementation(() => timeoutAfter(5000));
 
-      const startedAt = Date.now();
       const pending = setSfuUserMuted("room-unknown", "user-1", true, new Map());
-      await vi.advanceTimersByTimeAsync(BUDGET_PRIOR_MS);
-      await expect(pending).resolves.toBe(true);
-
-      // Before: the full SDK window (5 s). Now: the budget (3 s), and the home mute landed at once.
-      expect(Date.now() - startedAt).toBe(BUDGET_PRIOR_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      // The home mute landed before either remote box answered.
       expect(boxes.get(HOME)!.mutePublishedTrack).toHaveBeenCalledTimes(1);
+
+      // A one-shot has no budget: cutting it short would be a mute not applied.
+      await vi.advanceTimersByTimeAsync(BUDGET_PRIOR_MS);
+      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5000 - BUDGET_PRIOR_MS);
+      await expect(pending).resolves.toBe(true);
       const failures = logLines().filter((line) => line.includes("voice.sfuRegionCallFailed"));
       expect(failures.length).toBe(2);
-      expect(failures.every((line) => line.includes("errorClass=budget") && line.includes("caller=mute"))).toBe(true);
+      expect(failures.every((line) => line.includes("errorClass=timeout") && line.includes("mode=oneshot"))).toBe(true);
     });
 
     it("lets the home box's removal land at once while a remote box is still being waited on", async () => {
@@ -283,55 +285,89 @@ describe("SFU moderation scoped to a room's region", () => {
       boxes.get(HOME)!.listParticipants.mockResolvedValue([
         { identity: "peer-1", metadata: participantMetadataFor("user-1") },
       ]);
-      boxes.get(MIA)!.listRooms.mockImplementation(() => new Promise(() => {}));
-      boxes.get(LHR)!.listRooms.mockImplementation(() => new Promise(() => {}));
+      boxes.get(MIA)!.listRooms.mockImplementation(() => timeoutAfter(5000));
+      boxes.get(LHR)!.listRooms.mockImplementation(() => timeoutAfter(5000));
 
       const pending = evictSfuUser("user-1", null, new Map());
       await vi.advanceTimersByTimeAsync(0);
 
       expect(boxes.get(HOME)!.removeParticipant).toHaveBeenCalledTimes(1);
       expect(boxes.get(MIA)!.listRooms).toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(BUDGET_PRIOR_MS);
+      await vi.advanceTimersByTimeAsync(5000);
       await pending;
-      await settleSfuEvictions();
     });
 
-    it("stops asking a region that keeps failing, says so, and asks again after the cooldown", async () => {
-      boxes.get(MIA)!.listParticipants.mockImplementation(() => timeoutAfter(100));
-      boxes.get(LHR)!.listParticipants.mockRejectedValue(notFound());
-
-      for (let i = 0; i < CIRCUIT_FAILURES; i++) {
-        const pending = setSfuUserMuted(`room-${i}`, "user-1", true, new Map());
-        await vi.advanceTimersByTimeAsync(100);
-        await pending;
+    describe("the repeats of a sweep (the volume the 872 timeouts came from)", () => {
+      /** Start an eviction of an unknown room whose Miami box always times out after `ms`. */
+      async function sickMiami(ms: number) {
+        boxes.get(MIA)!.listParticipants.mockImplementation(() => timeoutAfter(ms));
+        boxes.get(LHR)!.listParticipants.mockRejectedValue(notFound());
+        void evictSfuRoom("room-unknown");
+        await vi.advanceTimersByTimeAsync(0);
       }
-      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES);
-      expect(sfuControlPlaneReport(["mia"]).mia!.circuitOpen).toBe(true);
 
-      // Past the one-line-per-ten-seconds window, still inside the cooldown.
-      await vi.advanceTimersByTimeAsync(10_000);
-      await setSfuUserMuted("room-next", "user-1", true, new Map());
-      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES);
-      expect(boxes.get(HOME)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES + 1);
-      expect(logLines().some((line) => line.includes("voice.sfuRegionPartial") && line.includes("skipped=mia"))).toBe(true);
-      expect(sfuControlPlaneReport(["mia"]).mia!.skippedByCircuit).toBe(1);
+      it("cuts a repeat off at the budget, well before the SDK's timeout", async () => {
+        await sickMiami(5000);
+        // The first pass (a one-shot) times out at 5 s; the repeat that starts then is budgeted.
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(sfuControlPlaneReport(["mia"]).mia!.failuresByClass).toEqual({ timeout: 1 });
+        await vi.advanceTimersByTimeAsync(BUDGET_PRIOR_MS);
+        expect(sfuControlPlaneReport(["mia"]).mia!.failuresByClass).toEqual({
+          timeout: 1,
+          budget: 1,
+        });
+        expect(BUDGET_PRIOR_MS).toBeLessThan(5000);
+        // One line per region per ten seconds: the first says what it was, the budget one is counted.
+        const lines = logLines().filter((line) => line.includes("voice.sfuRegionCallFailed"));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("caller=sweep-room");
+        expect(lines[0]).toContain("mode=oneshot");
+        expect(lines[0]).toContain("errorClass=timeout");
+      });
 
-      await vi.advanceTimersByTimeAsync(CIRCUIT_COOLDOWN_MS);
-      boxes.get(MIA)!.listParticipants.mockRejectedValue(notFound());
-      await setSfuUserMuted("room-after", "user-1", true, new Map());
-      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES + 1);
-      expect(sfuControlPlaneReport(["mia"]).mia!.circuitOpen).toBe(false);
-    });
+      it("stops asking a region that keeps failing, says so, and asks again after the cooldown", async () => {
+        await sickMiami(100);
+        // First pass at t=0, repeats at 5 s and 10 s: three consecutive failures.
+        await vi.advanceTimersByTimeAsync(10_100);
+        expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES);
+        expect(sfuControlPlaneReport(["mia"]).mia!.circuitOpen).toBe(true);
 
-    it("does not let a skipped region turn a mute that landed into a failure", async () => {
-      boxes.get(HOME)!.listParticipants.mockResolvedValue([audioParticipant("peer-1", "user-1")]);
-      boxes.get(MIA)!.listParticipants.mockImplementation(() => timeoutAfter(100));
-      for (let i = 0; i < CIRCUIT_FAILURES; i++) {
-        const pending = setSfuUserMuted(`room-${i}`, "user-1", true, new Map());
-        await vi.advanceTimersByTimeAsync(100);
-        await pending;
-      }
-      await expect(setSfuUserMuted("room-x", "user-1", true, new Map())).resolves.toBe(true);
+        // The next repeats are skipped: Miami is not called, Sao Paulo and London are.
+        // (15 s, so the one-line-per-ten-seconds window has passed for the report.)
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(CIRCUIT_FAILURES);
+        expect(boxes.get(HOME)!.listParticipants.mock.calls.length).toBeGreaterThan(CIRCUIT_FAILURES);
+        expect(logLines().some((line) => line.includes("voice.sfuRegionPartial") && line.includes("skipped=mia"))).toBe(true);
+        expect(logLines().some((line) => line.includes("voice.sfuRegionCircuit") && line.includes("state=open"))).toBe(true);
+        expect(sfuControlPlaneReport(["mia"]).mia!.skippedByCircuit).toBeGreaterThan(0);
+
+        // After the cooldown one probe goes out, and a healthy answer closes the circuit.
+        boxes.get(MIA)!.listParticipants.mockRejectedValue(notFound());
+        await vi.advanceTimersByTimeAsync(CIRCUIT_COOLDOWN_MS);
+        expect(boxes.get(MIA)!.listParticipants.mock.calls.length).toBeGreaterThan(CIRCUIT_FAILURES);
+        expect(sfuControlPlaneReport(["mia"]).mia!.circuitOpen).toBe(false);
+      });
+
+      it("does not skip the first pass of an eviction, or a moderator's mute, for a region whose circuit is open", async () => {
+        await sickMiami(100);
+        await vi.advanceTimersByTimeAsync(10_100);
+        expect(sfuControlPlaneReport(["mia"]).mia!.circuitOpen).toBe(true);
+        const before = boxes.get(MIA)!.listParticipants.mock.calls.length;
+
+        // The person is on Miami, in a room nobody has a pin for.
+        boxes.get(MIA)!.listParticipants.mockResolvedValue([audioParticipant("peer-1", "user-1")]);
+        await expect(setSfuUserMuted("room-other", "user-1", true, new Map())).resolves.toBe(true);
+        expect(boxes.get(MIA)!.mutePublishedTrack).toHaveBeenCalledTimes(1);
+
+        boxes.get(MIA)!.listParticipants.mockResolvedValue([
+          { identity: "peer-2", metadata: participantMetadataFor("user-2") },
+        ]);
+        void evictSfuRoom("room-another");
+        await vi.advanceTimersByTimeAsync(0);
+        await settleSfuEvictions();
+        expect(boxes.get(MIA)!.removeParticipant).toHaveBeenCalledTimes(1);
+        expect(boxes.get(MIA)!.listParticipants.mock.calls.length).toBeGreaterThanOrEqual(before + 2);
+      });
     });
   });
 

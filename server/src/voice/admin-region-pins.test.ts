@@ -146,6 +146,34 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     expect(asked(LHR)).toBe(0);
   });
 
+  it("stamps the region into the re-sweep row, and a re-sweep then trusts it instead of reading the registry", async () => {
+    const room = randomUUID();
+    await db.getPool().query(`DELETE FROM voice_resweeps`);
+
+    // The caller read the pin before the last peer left; the registry has no row any more.
+    await admin.evictSfuRoom(room, "sao");
+    await admin.settleSfuEvictions();
+
+    const stored = await db
+      .getPool()
+      .query<{ scope: { regions?: string[] } }>(`SELECT scope FROM voice_resweeps WHERE key = $1`, [
+        `room:${room}`,
+      ]);
+    expect(stored.rows[0]!.scope.regions).toEqual(["sao"]);
+    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 0, 0]);
+
+    // The room is re-pinned to Miami while the window is still open. The pre-eviction
+    // tokens point at the box the room was on, so the repeat still asks only that one.
+    await insertRoom(room, "mia");
+    await db.getPool().query(`UPDATE voice_resweeps SET claimed_until = 'epoch'`);
+    await admin.tickSfuResweeps();
+    await admin.settleSfuEvictions();
+
+    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([2, 0, 0]);
+    admin.stopSfuResweeps();
+    await db.getPool().query(`DELETE FROM voice_resweeps`);
+  });
+
   it("asks every box about a room with no row, and about a name that cannot be one", async () => {
     await admin.setSfuUserMuted(randomUUID(), "user-1", true, new Map());
     expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 1, 1]);

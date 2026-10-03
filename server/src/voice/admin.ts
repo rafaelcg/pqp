@@ -243,9 +243,26 @@ async function knownRegionIds(
   rooms: readonly string[],
   regions: readonly SfuRegion[],
   hint: readonly string[] = [],
+  /**
+   * True when stamping a hint, which unions every source. False at sweep
+   * time, where a stamped hint is the answer and nothing is read: the hint
+   * names the box the pre-eviction tokens point at, which is what a re-sweep
+   * is for, and a room that has since been re-pinned elsewhere holds only
+   * people with fresh tokens. It also keeps a re-sweep from costing a
+   * registry query every few seconds for fifteen minutes.
+   */
+  unionSources = false,
 ): Promise<Set<string> | null> {
   if (rooms.length === 0) {
     return null;
+  }
+  const home = regions[0]!.id;
+  // A region id this deployment no longer runs means home, the same rule as
+  // `resolveSfuRegion`: a room pinned to a box an operator removed has
+  // nowhere else to be.
+  const configured = (id: string) => (regions.some((region) => region.id === id) ? id : home);
+  if (!unionSources && hint.length > 0) {
+    return new Set(hint.map(configured));
   }
   let rows = new Map<string, string | null>();
   if (isVoiceRegistryEnabled()) {
@@ -259,11 +276,6 @@ async function knownRegionIds(
       }
     }
   }
-  const home = regions[0]!.id;
-  // A region id this deployment no longer runs means home, the same rule as
-  // `resolveSfuRegion`: a room pinned to a box an operator removed has
-  // nowhere else to be.
-  const configured = (id: string) => (regions.some((region) => region.id === id) ? id : home);
   const known = new Set<string>();
   for (const room of rooms) {
     const ids = new Set<string>();
@@ -311,6 +323,8 @@ async function targetsFor(
   caller: string,
   rooms: readonly string[] | null,
   hint: readonly string[] = [],
+  /** False for a caller nothing will repeat: it then never gets a budget or a skip. */
+  repeats = true,
 ): Promise<RegionTarget[]> {
   const regions = sfuRegions();
   if (!regions) {
@@ -323,7 +337,7 @@ async function targetsFor(
     regionScopingEnabled() && rooms !== null
       ? await knownRegionIds(rooms, regions, hint)
       : null;
-  const mode: RegionCallMode = known ? "pinned" : "speculative";
+  const mode: RegionCallMode = known ? "pinned" : repeats ? "speculative" : "oneshot";
   return regions
     .filter((region) => known === null || known.has(region.id))
     .map((region) => ({
@@ -590,14 +604,17 @@ function specFrom(
 }
 
 /** The boxes one pass of `spec` is sent to. */
-function sweepTargets(spec: ResweepSpec): Promise<RegionTarget[]> {
+function sweepTargets(spec: ResweepSpec, pass: SweepPass): Promise<RegionTarget[]> {
+  // The first pass is the eviction itself and nothing has repeated it yet, so
+  // it is never skipped or cut short; only the repeats are speculative.
+  const repeats = pass === "resweep";
   switch (spec.kind) {
     case "room":
-      return targetsFor("sweep-room", [spec.room], spec.regions);
+      return targetsFor("sweep-room", [spec.room], spec.regions, repeats);
     case "private":
-      return targetsFor("sweep-private", [spec.room], spec.regions);
+      return targetsFor("sweep-private", [spec.room], spec.regions, repeats);
     case "user":
-      return targetsFor("sweep-user", spec.rooms);
+      return targetsFor("sweep-user", spec.rooms, [], repeats);
   }
 }
 
@@ -615,14 +632,27 @@ async function runSweep(
   pass: SweepPass,
   evictedAt: number,
 ): Promise<void> {
-  const targets = await sweepTargets(spec);
+  let targets: RegionTarget[];
+  try {
+    targets = await sweepTargets(spec, pass);
+  } catch (error) {
+    // Resolving the boxes cannot fail in practice (the registry lookup
+    // already falls back to "ask every box"), but a pass that rejects would
+    // reject the claim tick that ran it.
+    logEvent("voice.sfuEvictFailed", {
+      room: spec.kind === "user" ? undefined : spec.room,
+      stage: "route",
+      error: describeError(error),
+    });
+    return;
+  }
   const outcomes = await Promise.all(
     targets.map(async (target) => ({
       id: target.id,
       outcome: await runSweepOn(target, spec, pass, evictedAt),
     })),
   );
-  if (targets[0]?.mode === "speculative") {
+  if (targets[0] && targets[0].mode !== "pinned") {
     noteCoverage(
       `sweep-${spec.kind}`,
       spec.kind === "user" ? "listRooms" : "listParticipants",
@@ -702,7 +732,12 @@ async function sweepUserRooms(
       ),
     ),
   );
-  return outcomes.includes("failed") ? "failed" : "ok";
+  // A listing that answered followed by participant reads the circuit skipped
+  // is not full coverage of this box, and must not be reported as such.
+  if (outcomes.includes("failed")) {
+    return "failed";
+  }
+  return outcomes.includes("skipped") ? "skipped" : "ok";
 }
 
 /**
@@ -988,6 +1023,7 @@ async function stampRegions(
     [spec.room],
     regions,
     hint ? [hint] : [],
+    true,
   );
   return known ? { ...spec, regions: [...known] } : spec;
 }
@@ -1163,7 +1199,7 @@ export async function setSfuUserMuted(
   muted: boolean,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const targets = await targetsFor("mute", [room]);
+  const targets = await targetsFor("mute", [room], [], false);
   if (targets.length === 0) {
     return false;
   }
@@ -1173,7 +1209,7 @@ export async function setSfuUserMuted(
   const results = await Promise.all(
     targets.map((target) => muteOn(target, room, userId, muted, knownIdentities)),
   );
-  if (targets[0]!.mode === "speculative") {
+  if (targets[0]!.mode !== "pinned") {
     noteCoverage(
       "mute",
       "listParticipants",
@@ -1285,7 +1321,7 @@ export async function setSfuUserCanPublish(
   grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean },
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const targets = await targetsFor("publish-grant", [room]);
+  const targets = await targetsFor("publish-grant", [room], [], false);
   if (targets.length === 0) {
     return false;
   }
@@ -1294,7 +1330,7 @@ export async function setSfuUserCanPublish(
       publishGrantOn(target, room, userId, grant, knownIdentities),
     ),
   );
-  if (targets[0]!.mode === "speculative") {
+  if (targets[0]!.mode !== "pinned") {
     noteCoverage(
       "publish-grant",
       "listParticipants",
