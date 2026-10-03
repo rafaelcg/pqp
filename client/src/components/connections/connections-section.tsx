@@ -297,17 +297,14 @@ function ProviderRow({
   );
 
   const control = linked ? (
-    <div className="flex w-full flex-col gap-1.5 @lg:w-auto">
-      <label
-        htmlFor={selectId}
-        className="text-xs text-text-tertiary @lg:sr-only"
-      >
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={selectId} className="text-xs text-text-tertiary">
         {t("settings.connections.visibility.label")}
       </label>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <SettingsSelect
           id={selectId}
-          className="min-w-0 flex-1 @lg:w-56 @lg:flex-none"
+          className="min-w-48 flex-1 @lg:max-w-72"
           value={linked.visibility}
           disabled={disabled}
           onChange={(event) =>
@@ -347,10 +344,10 @@ function ProviderRow({
   );
 
   return (
-    <div className="flex items-start gap-3 pl-4 @lg:items-center">
+    <div className="flex items-start gap-3 pl-4">
       <ConnectionGlyph
         provider={provider}
-        className="mt-3 h-9 w-9 rounded-[var(--radius-card)] p-2 @lg:mt-0"
+        className="mt-3 h-9 w-9 rounded-[var(--radius-card)] p-2"
       />
       <div className="min-w-0 flex-1 [&>[data-settings-row]]:pl-0">
         <SettingsRow
@@ -362,6 +359,9 @@ function ProviderRow({
               : t("settings.connections.notLinked")
           }
           control={control}
+          // A select row sits under its label (kit grammar). The public
+          // option plus Desconectar do not fit beside a label at 40rem.
+          stacked={linked !== null}
           status={status}
         />
       </div>
