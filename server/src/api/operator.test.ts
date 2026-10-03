@@ -807,6 +807,29 @@ describeDb("the operator's two levers", () => {
       expect(await newcomer("")).not.toBe(true);
     });
 
+    it("watch_party_server_audience is off by default and turns on for the overridden server only", async () => {
+      const { isEnabled } = await import("../lib/flags.js");
+      const other = "00000000-0000-4000-8000-000000000008";
+      expect(isEnabled("watch_party_server_audience", { serverId })).toBe(false);
+      const on = await asMachine("PUT", "/api/admin/flag-overrides", {
+        key: "watch_party_server_audience",
+        serverId,
+        enabled: true,
+      });
+      expect(on.status).toBe(200);
+      expect(isEnabled("watch_party_server_audience", { serverId })).toBe(true);
+      expect(isEnabled("watch_party_server_audience", { serverId: other })).toBe(false);
+      expect(isEnabled("watch_party_server_audience")).toBe(false);
+      // And back to the default with null: the live off switch.
+      const back = await asMachine("PUT", "/api/admin/flag-overrides", {
+        key: "watch_party_server_audience",
+        serverId,
+        enabled: null,
+      });
+      expect(back.status).toBe(200);
+      expect(isEnabled("watch_party_server_audience", { serverId })).toBe(false);
+    });
+
     it("refuses an unknown key, a flag with no overrides, and a server that does not exist", async () => {
       expect(
         (await asMachine("PUT", "/api/admin/flags", { key: "made_up", enabled: true })).status,

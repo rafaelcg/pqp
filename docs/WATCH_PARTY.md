@@ -3528,8 +3528,22 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   instant 90 s in the past (by then both processes have written it) and
   counts viewers whose first-to-last-seen span covers it within 45 s (one
   heartbeat plus its timer). Fifty people who leave and fifty who arrive a
-  minute later read as a peak of 50, not 100. The operator's "watching now"
-  is looser on purpose: seen in the last 120 s.
+  minute later read as a peak of 50, not 100.
+- **Watching now is a different number, and one number** (2026-10-04). The
+  stored rows are flushed once a minute, so they are up to a flush behind and
+  cannot answer "who is here this second". On 2026-10-03, in one live party,
+  the app said 49, the operator dashboard said 96 and the rows said 73 within
+  45 s and 97 within two minutes: three definitions, and the 73 was itself low
+  by the flush lag. Each API process now also rewrites ONE row of its own
+  every 10 s (`hls_session_presence`: the accounts it saw within the 45 s
+  heartbeat tolerance, one upsert per process per broadcast, never per poll),
+  and `presentHlsViewers` unions the fresh rows by account, so two machines
+  never add and neither is a flush behind. A row older than 25 s is ignored,
+  which is what takes a dead machine's viewers out. That is `liveViewers` on
+  the dashboard (it was "seen in the last 120 s" over the stale rows) and, with
+  the flag below, the in-app number. It reads a few seconds old, not a minute.
+  A rolling deploy dips it for about one heartbeat (30 to 40 s), because the
+  new process starts with an empty map, and then it recovers.
 - **An outage delays the count, it does not lose it.** A sighting no flush
   has stored is kept in memory until one does.
 - **Privacy.** User ids stay in `hls_session_viewers`, are pruned 24 h after
@@ -3538,6 +3552,29 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   únicas"), `liveHls.viewers` on `GET /api/admin/metrics` (per live broadcast:
   now, peak, unique, plus this process's sightings and flush health), and a
   line under "transmissões" on the operator dashboard.
+- **In the app: `watch_party_server_audience`** (per server, default off, a
+  runtime flag: `docs/FEATURE_FLAGS.md`). The live card, the stage footer, the
+  activity feed and the "busy" threshold all read `live.watching` plus the
+  roster, and `watching` is a count of THIS process's sockets that sent
+  `watch-live`: half the audience with two machines, nobody on a phone or an
+  older tab that never sends it, and a person with three tabs three times. With
+  the flag on, `channel-live` and `GET /api/channels/:id/live` also carry
+  `viewers`, the distinct accounts on the playlist (above) minus whoever holds
+  a seat (the roster is the client's own addend; `voice_peers` answers for the
+  other machine's seats), floored at the local socket count so turning it on
+  never shows fewer people than turning it off. It is one optional integer in a
+  frame that already goes to everybody who may view the channel every 30 s, read
+  once per broadcast per fan-out from a 5 s shared cache, so the frame does not
+  grow with the audience and a 500-person arrival wave is a handful of queries,
+  not 500. The socket-auth catch-up and the 50 minute token renewal answer from
+  the last read and never wait on the database. A client that does not know the
+  field (every app already installed, a tab not yet reloaded) ignores it and
+  shows `watching`, exactly as before; the web client reads
+  `watchersWithoutSeat` (`@pqp/shared`). The number is absent, never zero, when
+  it cannot be read. `liveHls.audienceViewers` on the metrics says it is
+  running (`withViewers` climbs, `unavailable` belongs at zero), and
+  `liveHls.viewers.here.presenceWrites` that the rows are landing. Native iOS
+  and Android still show `watching` and are the follow-up.
 - **Not counted:** native apps playing an LL session straight from the edge
   Worker (they do not send the heartbeat yet), and broadcasts from before
   this shipped.

@@ -145,6 +145,7 @@ type RegistryModule = typeof import("../voice/registry.js");
 type DbModule = typeof import("../db.js");
 type EventsModule = typeof import("./watch-party-events.js");
 type TokenModule = typeof import("../voice/hls-viewer-token.js");
+type ViewerCountsModule = typeof import("../voice/hls-viewer-counts.js");
 
 interface Instance {
   bus: BusModule;
@@ -154,6 +155,8 @@ interface Instance {
   db: DbModule;
   events: EventsModule;
   token: TokenModule;
+  /** This graph's own heartbeat counter: each machine only sees its own beats. */
+  viewerCounts: ViewerCountsModule;
   /** This graph's own `rooms` map. Empty on the machine not transcoding. */
   egress: Map<string, LiveHlsStream>;
   /**
@@ -308,6 +311,9 @@ async function bootInstance(connected = true): Promise<Instance> {
   const registry = (await import("../voice/registry.js")) as RegistryModule;
   const events = (await import("./watch-party-events.js")) as EventsModule;
   const token = (await import("../voice/hls-viewer-token.js")) as TokenModule;
+  const viewerCounts = (await import(
+    "../voice/hls-viewer-counts.js"
+  )) as ViewerCountsModule;
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
@@ -319,6 +325,7 @@ async function bootInstance(connected = true): Promise<Instance> {
     db,
     events,
     token,
+    viewerCounts,
     egress,
     ll,
     changeListeners,
@@ -965,6 +972,143 @@ describeDb("watch party stream and state across two instances", () => {
    * `ended`, `hlsAudience.setStream(null)` (which is what stops the keyframe
    * and the token re-mint), and `publishChannelLive` on the bus — was skipped.
    */
+  describe("the audience count (watch_party_server_audience)", () => {
+    /** A real `channels` row, because `hls_session_presence` has a foreign key. */
+    async function plantChannel(): Promise<string> {
+      vi.resetModules();
+      const db = (await import("../db.js")) as DbModule;
+      pools.push(db);
+      const { upsertUser } = await import("../services/users.js");
+      const { createServer, createChannel } = await import("../services/servers.js");
+      const host = await upsertUser({
+        clerkId: `clerk_${randomUUID()}`,
+        displayName: "Host",
+        avatarUrl: null,
+      });
+      const { server } = await createServer("Cinema", host.id);
+      const channel = await createChannel(server.id, "sala", "watch_party");
+      return channel.id;
+    }
+
+    const person = (n: number) =>
+      `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+    let channelUnderTest = "";
+
+    async function watchLive(instance: Instance, rec: Recorder & { userId: string }) {
+      await instance.voice.handleVoiceMessage(
+        { socket: rec.socket, user: asUser(rec.userId) },
+        { type: "watch-live", channelId: channelUnderTest, watching: true },
+      );
+    }
+
+    afterEach(() => {
+      delete process.env.WATCH_PARTY_SERVER_AUDIENCE;
+    });
+
+    /**
+     * The 2026-10-03 shape. HTTP is balanced per request, so the heartbeats
+     * land on both machines: 1-60 on A, 41-100 on B, 41-60 on both. A saw 60
+     * accounts and B saw 60, summing says 120, the audience is 100, and the
+     * sockets that sent `watch-live` are three on A and one on B (what the app
+     * used to show, a different number on each machine).
+     */
+    async function party() {
+      channelUnderTest = await plantChannel();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const host = await join(a, randomUUID(), channelUnderTest);
+      await setSharing(a, host, true);
+      const startedAt = a.egress.get(channelUnderTest)!.startedAt;
+      for (let n = 1; n <= 60; n += 1) {
+        a.viewerCounts.hlsViewerCounter.note(channelUnderTest, startedAt, person(n), "presence");
+      }
+      for (let n = 41; n <= 100; n += 1) {
+        b.viewerCounts.hlsViewerCounter.note(channelUnderTest, startedAt, person(n), "presence");
+      }
+      await a.viewerCounts.hlsViewerCounter.publishPresence();
+      await b.viewerCounts.hlsViewerCounter.publishPresence();
+      // The relayed stream already made each machine read the (then empty)
+      // count once, and a read is shared for a few seconds: start clean.
+      a.viewerCounts.resetHlsPresentCacheForTests();
+      b.viewerCounts.resetHlsPresentCacheForTests();
+      return { a, b, host, startedAt };
+    }
+
+    it("both machines tell their sockets the same number, whatever each one counted itself", async () => {
+      process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+      const { a, b } = await party();
+      const onA = [watcher(a), watcher(a), watcher(a)];
+      const onB = [watcher(b)];
+      for (const rec of onA) {
+        await watchLive(a, rec);
+      }
+      await watchLive(b, onB[0]!);
+
+      const fromA = frames(onA[2]!, "channel-live").at(-1)!;
+      const fromB = frames(onB[0]!, "channel-live").at(-1)!;
+      expect(fromA.watching).toBe(3);
+      expect(fromB.watching).toBe(1);
+      expect(fromA.viewers).toBe(100);
+      expect(fromB.viewers).toBe(100);
+      expect((await a.voice.getChannelLiveState(channelUnderTest)).viewers).toBe(100);
+      expect((await b.voice.getChannelLiveState(channelUnderTest)).viewers).toBe(100);
+      // A number in the frame, never a list: the ids stay in the table.
+      expect(JSON.stringify(fromA)).not.toContain(person(1));
+    });
+
+    it("a person who also holds a seat is the roster's to count, from either machine", async () => {
+      process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+      const { a, b } = await party();
+      // Account 7 sits in the call on A while their phone still plays the
+      // stream: seated on A, on the playlist through either machine.
+      await join(a, person(7), channelUnderTest);
+      await a.registry.settleVoiceRegistryWrites();
+      a.viewerCounts.resetHlsPresentCacheForTests();
+      b.viewerCounts.resetHlsPresentCacheForTests();
+      const onB = watcher(b);
+      await watchLive(b, onB);
+      expect(frames(onB, "channel-live").at(-1)!.viewers).toBe(99);
+      const onA = watcher(a);
+      await watchLive(a, onA);
+      expect(frames(onA, "channel-live").at(-1)!.viewers).toBe(99);
+    });
+
+    it("flag off: no viewers field anywhere, and the count is never read", async () => {
+      const { a, b } = await party();
+      const reads = vi.spyOn(b.db.getPool(), "query");
+      const onA = watcher(a);
+      const onB = watcher(b);
+      await watchLive(a, onA);
+      await watchLive(b, onB);
+      for (const frame of [
+        ...frames(onA, "channel-live"),
+        ...frames(onB, "channel-live"),
+      ]) {
+        expect("viewers" in frame).toBe(false);
+        expect(typeof frame.watching).toBe("number");
+      }
+      expect("viewers" in (await a.voice.getChannelLiveState(channelUnderTest))).toBe(false);
+      expect(
+        reads.mock.calls.filter((call) => /FROM hls_session_presence/.test(String(call[0]))),
+      ).toHaveLength(0);
+    });
+
+    it("an unreadable count leaves the frame as it was rather than saying zero", async () => {
+      process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+      const { b } = await party();
+      const spy = vi
+        .spyOn(b.db.getPool(), "query")
+        .mockRejectedValue(new Error("pool exhausted") as never);
+      const onB = watcher(b);
+      await watchLive(b, onB);
+      spy.mockRestore();
+      const frame = frames(onB, "channel-live").at(-1)!;
+      expect("viewers" in frame).toBe(false);
+      expect(frame.watching).toBe(1);
+    });
+  });
+
   describe("a low-latency session ending", () => {
     /** A real `channels` row, because `hls_sessions.channel_id` has a foreign key. */
     async function plantChannel(): Promise<string> {

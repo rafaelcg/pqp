@@ -247,6 +247,15 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config?serverId= (newcomerExperience)",
   },
+  watch_party_server_audience: {
+    description:
+      "Contagem da festa feita pelo servidor: quem está assistindo agora, sem repetir conta, igual ao painel.",
+    env: "WATCH_PARTY_SERVER_AUDIENCE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "channel-live and GET /api/channels/:id/live (viewers)",
+  },
   community_home_vip: {
     description: "Posts VIP do Baú (só vale com o Baú ligado).",
     env: "COMMUNITY_HOME_VIP_ENABLED",
