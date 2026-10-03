@@ -271,6 +271,9 @@ export function ProfileSection({
                       {t("settings.profile.publicHandle.view")}
                     </a>
                   </Button>
+                  <span role="status" className="sr-only">
+                    {copiedLink ? t("settings.profile.publicHandle.copied") : ""}
+                  </span>
                 </div>
               ) : null}
             </div>
@@ -322,6 +325,9 @@ export function ProfileSection({
                       <Copy aria-hidden className="h-3.5 w-3.5" />
                     )}
                   </Button>
+                  <span role="status" className="sr-only">
+                    {copiedTag ? t("settings.profile.tag.copied") : ""}
+                  </span>
                 </div>
               ) : null}
             </div>
