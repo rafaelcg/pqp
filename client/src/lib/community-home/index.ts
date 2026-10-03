@@ -50,6 +50,10 @@ export {
   markCommunityHomeSettingsSeen,
 } from "./new-badges";
 export {
+  shouldShowCommunityHomeSettingsNew,
+  shouldShowCommunityHomeSettingsRow,
+} from "./settings-row";
+export {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeEmbedUrl,
   createPickSequence,

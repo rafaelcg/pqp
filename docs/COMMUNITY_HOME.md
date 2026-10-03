@@ -20,12 +20,18 @@ A third switch, `community_home_translation`, is a **runtime flag** (per
 server, default off) and is described in "Translation" below.
 
 **Plus one per-server switch.** With the instance flag on, each server still
-starts with Baú off. An owner turns it on in Server settings (the Baú section,
-`PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
-The row, the landing and the feed need both on a private hall. A community
-always lands on Overview (identity), even with Baú still off; the feed stays
-empty until staff turn it on, and only if the instance flag is on. Flipping the
-switch bumps `servers.community_home_version` in the same UPDATE and sends a
+starts with Baú off. An owner turns it on in **Server settings**, the same
+panel as name, icon and roles (`PATCH /api/servers/:id/home/config`, column
+`servers.community_home_enabled`). That panel is the discovery surface: a
+NEW sticker sits on the toggle while the bit is still false. Do **not** put
+the toggle in channel settings, the `/c/<slug>` community listing editor, or
+user settings. When the instance flag/latch is off
+(`isCommunityHomeEnabled` false), the settings row is omitted entirely (fail
+closed). Flag/latch on + `MANAGE_SERVER`: show the toggle. The row, the
+landing and the feed need both on a private hall. A community always lands
+on Overview (identity), even with Baú still off; the feed stays empty until
+staff turn it on, and only if the instance flag is on. Flipping the switch
+bumps `servers.community_home_version` in the same UPDATE and sends a
 `community-home-update` frame to every member with `enabled` and `version`. The
 web client writes the value onto its copy of the server only when the version
 is higher than the one it holds, so an open app follows the owner with no
@@ -36,7 +42,10 @@ socket was down is caught on reconnect: the client re-reads
 `GET /api/servers/:id/home/config` (`{ enabled, version }`) for the server on
 screen, and for any other server when it is next opened. Until the row is
 opened once on a server it carries a small "New" chip (`localStorage`, per
-server, `client/src/lib/community-home/new-badges.ts`).
+server, `client/src/lib/community-home/new-badges.ts`). The toggle in Server
+settings has its own sticker (`pqp:community-home-settings-seen`) that stays
+while the server bit is off: opening the panel does not clear it, flipping the
+switch does.
 
 Do **not** reuse `COMMUNITIES_ENABLED`. That one changes the instance's legal
 category (STF, Art. 19, see `docs/CONTENT_SAFETY.md`); this one only adds a
