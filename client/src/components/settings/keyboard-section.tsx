@@ -1,13 +1,21 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Map as MapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
+import {
+  SettingsGroup,
+  SettingsHeaderActions,
+  SettingsLinkRow,
+  SettingsNotice,
+  SettingsRow,
+  useSettingsShell,
+} from "@/components/settings/kit";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { findBindingConflict, resolveShortcutBindings, SHORTCUT_GROUPS, type BindableId, type ShortcutAction } from "@/lib/keyboard-shortcuts";
-import { defaultPttBinding, supportsKeyBinding, type KeyBinding, type PttBinding } from "@/components/voice/push-to-talk";
+import { defaultPttBinding, formatBinding, supportsKeyBinding, type KeyBinding } from "@/components/voice/push-to-talk";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
-import { PttBindingField } from "@/components/voice/key-binding-field";
-import { isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { LocalSettings } from "@/components/settings/local-settings";
 
@@ -20,6 +28,11 @@ export function bindableMap(
   };
 }
 
+/** `toggleMute` becomes `toggle-mute`: the row id, stable because the action names are. */
+function rowId(action: ShortcutAction): string {
+  return action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
 export function KeyboardSection({
   draftLocal,
   patchLocal,
@@ -30,7 +43,8 @@ export function KeyboardSection({
   onShowOverlay: () => void;
 }) {
   const { t } = useTranslation();
-  const isDesktop = isDesktopApp();
+  const { openSection } = useSettingsShell();
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const canBindKey = useMemo(() => supportsKeyBinding(), []);
   const bindings = useMemo(
     () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
@@ -54,86 +68,94 @@ export function KeyboardSection({
     };
   }
 
-  /** Same conflict rule as `takenBy`, widened for a `PttBinding` that might be a mouse button, which can never collide with a keyboard-only app shortcut. */
-  function pttTakenBy(binding: PttBinding) {
-    if (binding.device === "mouse") {
-      return null;
-    }
-    return takenBy("pushToTalk")(binding);
+  function resetAll() {
+    patchLocal({
+      shortcuts: {},
+      pushToTalkKey: defaultPttBinding(),
+      pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
+    });
   }
 
   return (
-    <div className="space-y-5">
-      <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
-      <div className="grid grid-cols-2 gap-2">
+    <div className="space-y-6">
+      <SettingsHeaderActions>
         <Button
           type="button"
           variant="secondary"
-          className="w-full whitespace-normal"
+          size="sm"
           onClick={onShowOverlay}
         >
+          <MapIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t("settings.keyboard.showMap")}
         </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full whitespace-normal"
-          onClick={() =>
-            patchLocal({
-              shortcuts: {},
-              pushToTalkKey: defaultPttBinding(),
-              pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
-            })
-          }
-        >
-          {t("settings.keyboard.reset")}
-        </Button>
-      </div>
+      </SettingsHeaderActions>
+
       {canBindKey ? (
-        <div className="space-y-6">
-          {SHORTCUT_GROUPS.map((group) => (
-            <section key={group.id}>
-              <h4 className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
-                {t(GROUP_LABEL[group.id])}
-              </h4>
-              <ul className="divide-y divide-ink-4/70">
-                {group.actions.map((action) => (
-                  <li key={action} className="py-3">
-                    <KeyBindingField
-                      label={t(ACTION_LABEL[action])}
-                      binding={bindings[action]}
-                      takenBy={takenBy(action)}
-                      onChange={(binding) => remap(action, binding)}
-                    />
-                  </li>
-                ))}
-                {group.id === "voice" && (
-                  <li className="py-3">
-                    <PttBindingField
-                      label={t(
-                        isDesktop
-                          ? "settings.voice.pttKeyOrMouse"
-                          : ACTION_LABEL.pushToTalk,
-                      )}
-                      binding={draftLocal.pushToTalkKey}
-                      allowMouse={isDesktop}
-                      takenBy={pttTakenBy}
-                      onChange={(binding) =>
-                        patchLocal({ pushToTalkKey: binding })
-                      }
-                    />
-                  </li>
-                )}
-              </ul>
-            </section>
-          ))}
-        </div>
+        SHORTCUT_GROUPS.map((group) => (
+          <SettingsGroup key={group.id} title={t(GROUP_LABEL[group.id])}>
+            {group.actions.map((action) => (
+              <SettingsRow
+                key={action}
+                id={rowId(action)}
+                label={t(ACTION_LABEL[action])}
+                control={
+                  <KeyBindingField
+                    label={t(ACTION_LABEL[action])}
+                    binding={bindings[action]}
+                    takenBy={takenBy(action)}
+                    onChange={(binding) => remap(action, binding)}
+                  />
+                }
+              />
+            ))}
+            {group.id === "voice" && (
+              // Push-to-talk is set in Voz e vídeo only (spec J3); this row
+              // shows the key and jumps there.
+              <SettingsLinkRow
+                id="push-to-talk"
+                label={t(ACTION_LABEL.pushToTalk)}
+                description={t("settings.keyboard.pttLink", {
+                  binding: formatBinding(draftLocal.pushToTalkKey),
+                })}
+                onClick={() => openSection("voice", "ptt")}
+              />
+            )}
+          </SettingsGroup>
+        ))
       ) : (
-        <p className="text-xs text-paper-muted">
+        <SettingsNotice tone="info">
           {t("settings.voice.pttNoKeyboard")}
-        </p>
+        </SettingsNotice>
       )}
-      <p className="text-xs text-paper-muted">{t("settings.keyboard.pttNote")}</p>
+
+      <SettingsGroup title={t("settings.keyboard.group.defaults.title")}>
+        <SettingsRow
+          id="reset-all"
+          label={t("settings.keyboard.resetAll.label")}
+          description={t("settings.keyboard.resetAll.description")}
+          control={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setConfirmingReset(true)}
+            >
+              {t("settings.keyboard.reset")}
+            </Button>
+          }
+        />
+      </SettingsGroup>
+
+      <ConfirmDialog
+        open={confirmingReset}
+        title={t("settings.keyboard.resetConfirm.title")}
+        description={t("settings.keyboard.resetAll.description")}
+        confirmLabel={t("settings.keyboard.resetConfirm.confirm")}
+        cancelLabel={t("settings.keyboard.resetConfirm.cancel")}
+        destructive={false}
+        onConfirm={resetAll}
+        onClose={() => setConfirmingReset(false)}
+      />
     </div>
   );
 }
