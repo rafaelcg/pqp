@@ -7,6 +7,11 @@ interface ConfirmDialogProps {
   title: string;
   description?: string;
   confirmLabel: string;
+  /**
+   * What the cancel button says. Defaults to "Cancel"; a confirm that keeps
+   * something says what stays ("Manter conta") rather than a generic verb.
+   */
+  cancelLabel?: string;
   onConfirm: () => void;
   onClose: () => void;
   /** Default true. Send confirms are a warning, not a delete. */
@@ -24,6 +29,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel,
   onConfirm,
   onClose,
   destructive = true,
@@ -47,7 +53,7 @@ export function ConfirmDialog({
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
             onClick={onClose}
           >
-            {t("common.cancel")}
+            {cancelLabel ?? t("common.cancel")}
           </Button>
           <Button
             type="button"
