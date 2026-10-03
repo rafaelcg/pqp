@@ -144,6 +144,11 @@ interface DialogProps {
    * the body animates. Omitted, the header never animates.
    */
   headerKey?: string;
+  /**
+   * Classes for the title band, merged over its default padding. Settings uses
+   * it for a 56px band; every other dialog leaves it alone.
+   */
+  headerClassName?: string;
 }
 
 /**
@@ -165,6 +170,7 @@ export function Dialog({
   dismissible = true,
   entrance = true,
   headerKey,
+  headerClassName,
 }: DialogProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -357,7 +363,12 @@ export function Dialog({
             width,
           )}
         >
-          <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div
+            className={cn(
+              "flex items-start justify-between gap-3 border-b border-border px-5 py-4",
+              headerClassName,
+            )}
+          >
             <div
               key={headerKey}
               className={cn("min-w-0", headerKey !== undefined && "animate-step-in")}

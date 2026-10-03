@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import { type BlockedUser, type User } from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { SectionRail } from "@/components/ui/section-rail";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type MediaDeviceOption } from "@/lib/audio-devices";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -23,6 +25,14 @@ import { PrivacySection } from "@/components/settings/privacy-section";
 import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
 import { ProfileSection } from "@/components/settings/profile-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
+import {
+  SettingsBuildLine,
+  SettingsPaneHeader,
+  SettingsSectionContext,
+  SettingsShellContext,
+  type SettingsSectionId,
+  type SettingsShellValue,
+} from "@/components/settings/kit";
 
 export * from "@/components/settings/local-settings";
 export { displayMicLevel, sliderToVadThreshold } from "@/components/settings/voice-section";
@@ -54,40 +64,41 @@ interface SettingsModalProps {
 /* ------------------------------------------------------------------ layout */
 
 /**
- * The sections, in nav order.
+ * The sections, in nav order, in three named groups and a divider.
  *
  * This list is the whole information architecture: settings used to be one
  * column that mixed a display name, a microphone gain slider and the button
  * that deletes your account, and finding anything meant scrolling past
- * everything. The grouping below is what the old column already implied —
- * nothing moved between meanings, it was only given a name and a door.
+ * everything. The groups say what a section is about: your account (who you
+ * are, who can reach you, what we hold about you), the app on this device, and
+ * how to reach us.
  *
  * "Your data" is its own section rather than the tail of Profile on purpose:
  * export and deletion are rights the privacy policy promises, and a promise
  * that is only reachable by scrolling to the bottom of the longest page in the
  * app is one nobody finds. As a named door it is more visible than it was.
  */
-type SectionId =
-  | "profile"
-  | "connections"
-  | "voice"
-  | "keyboard"
-  | "notifications"
-  | "appearance"
-  | "privacy"
-  | "data"
-  | "feedback"
-  | "help"
-  | "moderation";
+type SectionId = SettingsSectionId;
 
 /** For callers that open the dialog at a particular section (the user menu). */
-export type SettingsSectionId = SectionId;
+export type { SettingsSectionId };
+
+type SectionGroup = "account" | "app" | "support" | "moderation";
+
+const GROUP_LABELS: Record<Exclude<SectionGroup, "moderation">, MessageKey> = {
+  account: "settings.nav.group.account",
+  app: "settings.nav.group.app",
+  support: "settings.nav.group.support",
+};
 
 interface SectionDef {
   id: SectionId;
   label: MessageKey;
   description: MessageKey;
   icon: LucideIcon;
+  group: SectionGroup;
+  /** Drop the 40rem reading width: Moderação's report list wants the room. */
+  wide?: boolean;
 }
 
 const SECTIONS: SectionDef[] = [
@@ -96,185 +107,110 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.profile",
     description: "settings.profile.description",
     icon: UserRound,
+    group: "account",
   },
   {
     id: "connections",
     label: "settings.section.connections",
     description: "settings.connections.description",
     icon: Gamepad2,
-  },
-  {
-    id: "voice",
-    label: "settings.section.voice",
-    description: "settings.voice.description",
-    icon: Mic,
-  },
-  {
-    id: "keyboard",
-    label: "settings.section.keyboard",
-    description: "settings.keyboard.description",
-    icon: Keyboard,
-  },
-  {
-    id: "notifications",
-    label: "settings.section.notifications",
-    description: "settings.notifications.description",
-    icon: Bell,
-  },
-  {
-    id: "appearance",
-    label: "settings.section.appearance",
-    description: "settings.appearance.description",
-    icon: Palette,
+    group: "account",
   },
   {
     id: "privacy",
     label: "settings.section.privacy",
     description: "settings.privacy.description",
     icon: ShieldCheck,
+    group: "account",
   },
   {
     id: "data",
     label: "settings.section.data",
     description: "settings.data.description",
     icon: Database,
+    group: "account",
+  },
+  {
+    id: "voice",
+    label: "settings.section.voice",
+    description: "settings.voice.description",
+    icon: Mic,
+    group: "app",
+  },
+  {
+    id: "notifications",
+    label: "settings.section.notifications",
+    description: "settings.notifications.description",
+    icon: Bell,
+    group: "app",
+  },
+  {
+    id: "appearance",
+    label: "settings.section.appearance",
+    description: "settings.appearance.description",
+    icon: Palette,
+    group: "app",
+  },
+  {
+    id: "keyboard",
+    label: "settings.section.keyboard",
+    description: "settings.keyboard.description",
+    icon: Keyboard,
+    group: "app",
   },
   {
     id: "feedback",
     label: "settings.section.feedback",
     description: "settings.feedback.description",
     icon: Bug,
+    group: "support",
   },
   {
     id: "help",
     label: "settings.section.help",
     description: "help.description",
     icon: CircleHelp,
+    group: "support",
   },
   // Hidden from the rail unless `canModerateInstance` resolves true — see
   // `visibleSections` where `SettingsModal` filters this out for everyone
-  // else. Kept last so the tab order for every existing account never shifts.
+  // else. Kept last, after a divider, so the tab order for every existing
+  // account never shifts and End still lands on Ajuda e contato for them.
   {
     id: "moderation",
     label: "settings.section.moderation",
     description: "settings.moderation.description",
     icon: Siren,
+    group: "moderation",
+    wide: true,
   },
 ];
 
 /**
- * The section rail — a vertical list beside the content on a desktop, a
- * horizontally scrolling strip above it on a phone.
- *
- * It is a real tablist: arrow keys move between sections and only the selected
- * tab is in the tab order, so a keyboard user crosses the rail with two
- * keystrokes rather than one per section. Both axes are accepted because the same control
- * is vertical at one width and horizontal at another, and a user should not
- * have to know which one the CSS picked.
+ * The rail's footer on `sm` and up: who you are signed in as, the way out, and
+ * which build this is. The name is the saved account, never the draft, so an
+ * unsaved rename does not look applied. Sign out renders nothing under the dev
+ * auth bypass (see `SignOutButton`), and the card shows without it.
  */
-function SectionRail({
-  sections,
-  active,
-  onSelect,
-  idFor,
-  panelId,
-}: {
-  sections: SectionDef[];
-  active: SectionId;
-  onSelect: (id: SectionId) => void;
-  idFor: (id: SectionId) => string;
-  panelId: string;
-}) {
-  const { t } = useTranslation();
-  const railRef = useRef<HTMLDivElement>(null);
-
-  function move(to: number) {
-    const index = (to + sections.length) % sections.length;
-    const next = sections[index]!;
-    onSelect(next.id);
-    const tabs =
-      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[index]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = sections.findIndex((section) => section.id === active);
-    switch (event.key) {
-      case "ArrowRight":
-      case "ArrowDown":
-        event.preventDefault();
-        move(current + 1);
-        break;
-      case "ArrowLeft":
-      case "ArrowUp":
-        event.preventDefault();
-        move(current - 1);
-        break;
-      case "Home":
-        event.preventDefault();
-        move(0);
-        break;
-      case "End":
-        event.preventDefault();
-        move(sections.length - 1);
-        break;
-      default:
-        break;
-    }
-  }
-
+function RailFooter({ user }: { user: User | null }) {
   return (
-    <div
-      ref={railRef}
-      role="tablist"
-      aria-label={t("settings.nav.label")}
-      onKeyDown={handleKeyDown}
-      className={cn(
-        // The phone strip scrolls sideways *inside the panel*. That is the only
-        // place sideways scrolling is allowed to exist here — the page itself
-        // must never move, which is what the 390px layout test measures.
-        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
-        "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
-      )}
-    >
-      {sections.map((section) => {
-        const selected = section.id === active;
-        const Icon = section.icon;
-        return (
-          <button
-            key={section.id}
-            id={idFor(section.id)}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            aria-controls={panelId}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onSelect(section.id)}
-            className={cn(
-              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
-              selected
-                ? "bg-signal/12 font-medium text-paper"
-                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {t(section.label)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Heading for the pane on the right, so a section always says what it is. */
-function SectionHeader({ section }: { section: SectionDef }) {
-  const { t } = useTranslation();
-  return (
-    <div className="mb-5">
-      <h3 className="font-display text-lg font-bold text-paper">
-        {t(section.label)}
-      </h3>
-      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
+    <div className="flex flex-col gap-2">
+      {user ? (
+        <div className="flex items-center gap-2 pl-2">
+          <UserAvatar
+            name={user.displayName}
+            avatarUrl={user.avatarUrl}
+            rounded="full"
+            className="h-6 w-6"
+            fallbackClassName="bg-accent text-[10px] font-bold text-on-accent"
+          />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
+            {user.displayName}
+          </span>
+          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs" />
+        </div>
+      ) : null}
+      <SettingsBuildLine className="self-start" />
     </div>
   );
 }
@@ -554,21 +490,89 @@ export function SettingsModal({
     }
   }
 
+  // The pane is the only scroller. A section always opens at its top: the
+  // pane used to keep the previous section's offset, so Voz opened 136px down
+  // because Perfil had been scrolled 100px.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollerRef.current) {
+      scrollerRef.current.scrollTop = 0;
+    }
+  }, [section]);
+
+  // `openSection(section, rowId)`: switch, then find the row once the tab has
+  // rendered it, bring it to the middle of the pane and flash it once. Tabs
+  // that load their rows asynchronously get a second until the row shows.
+  const [pendingRow, setPendingRow] = useState<{ id: string; nonce: number } | null>(null);
+  const openSection = useCallback((next: SectionId, rowId?: string) => {
+    setSection(next);
+    setPendingRow(rowId ? { id: rowId, nonce: Date.now() } : null);
+  }, []);
+  useEffect(() => {
+    if (!pendingRow) {
+      return;
+    }
+    const FLASH = ["bg-accent-soft", "transition-colors", "duration-[var(--duration-base)]"];
+    let attempts = 0;
+    let retry: number | undefined;
+    let clear: number | undefined;
+    let flashed: HTMLElement | null = null;
+    const find = () => {
+      const row = scrollerRef.current?.querySelector<HTMLElement>(
+        `[data-settings-row="${CSS.escape(pendingRow.id)}"]`,
+      );
+      if (!row) {
+        if (++attempts < 20) {
+          retry = window.setTimeout(find, 50);
+        }
+        return;
+      }
+      row.scrollIntoView?.({ block: "center" });
+      row.classList.add(...FLASH);
+      flashed = row;
+      clear = window.setTimeout(() => row.classList.remove(...FLASH), 1000);
+    };
+    find();
+    return () => {
+      window.clearTimeout(retry);
+      window.clearTimeout(clear);
+      flashed?.classList.remove(...FLASH);
+    };
+  }, [pendingRow]);
+
+  // Where a tab's `SettingsHeaderActions` land. State, not a ref, so the
+  // context updates once the header has mounted.
+  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
+
+  const shell = useMemo<SettingsShellValue>(
+    () => ({ profileDirty: false, openSection, headerActionsSlot }),
+    [openSection, headerActionsSlot],
+  );
+
+  const railItems = visibleSections.map((entry) => ({
+    id: entry.id,
+    label: t(entry.label),
+    icon: entry.icon,
+    group: entry.group,
+  }));
+  const groupLabels = {
+    account: t(GROUP_LABELS.account),
+    app: t(GROUP_LABELS.app),
+    support: t(GROUP_LABELS.support),
+  };
+
   return (
     <>
       <Dialog
         open={settingsOpen}
-        eyebrow={t("settings.eyebrow")}
         title={t("settings.title")}
         size="xl"
         fill
+        // 56px: the band only names the dialog, the pane title names the page.
+        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
         onClose={onClose}
         footer={
           <>
-            {/* `mr-auto` pushes it away from Cancel and Save. Sign out is not a
-                third way to finish editing settings, and sitting next to the
-                two buttons that are would make it look like one. */}
-            <SignOutButton className="mr-auto" />
             <Button variant="ghost" onClick={onClose}>
               {t("settings.cancel")}
             </Button>
@@ -578,119 +582,144 @@ export function SettingsModal({
           </>
         }
       >
-        <div className="flex h-full min-h-0 flex-col sm:flex-row">
-          <SectionRail
-            sections={visibleSections}
-            active={section}
-            onSelect={setSection}
-            idFor={(id) => `${tabIdPrefix}-${id}`}
-            panelId={panelId}
-          />
+        <SettingsShellContext.Provider value={shell}>
+          <div className="flex h-full min-h-0 flex-col sm:flex-row">
+            <SectionRail
+              sections={railItems}
+              active={active.id}
+              onSelect={setSection}
+              idFor={(id) => `${tabIdPrefix}-${id}`}
+              panelId={panelId}
+              label={t("settings.nav.label")}
+              groupLabels={groupLabels}
+              footer={<RailFooter user={user} />}
+              className="h-14 sm:h-auto sm:w-60"
+              fadeEnd
+            />
 
-          <div
-            id={panelId}
-            role="tabpanel"
-            aria-labelledby={`${tabIdPrefix}-${section}`}
-            tabIndex={0}
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] px-5 py-5 focus-visible:outline-none"
-          >
-            <SectionHeader section={active} />
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1">
+              <div
+                ref={scrollerRef}
+                id={panelId}
+                role="tabpanel"
+                aria-labelledby={`${tabIdPrefix}-${active.id}`}
+                tabIndex={0}
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none"
+              >
+                <div
+                  className={cn(
+                    "@container mx-auto w-full px-4 py-5 sm:px-8 sm:py-8",
+                    active.wide ? "max-w-none" : "max-w-[40rem]",
+                  )}
+                >
+                  <SettingsPaneHeader
+                    title={t(active.label)}
+                    description={t(active.description)}
+                    actionsRef={setHeaderActionsSlot}
+                  />
 
-            {section === "profile" && (
-              <ProfileSection
-                user={user}
-                displayName={displayName}
-                onDisplayName={setDisplayName}
-                username={username}
-                onUsername={setUsername}
-                handle={handle}
-                onHandle={setHandle}
-                avatarUrl={avatarUrl}
-                onAvatarUrl={setAvatarUrl}
-                onUserUpdated={onUserUpdated}
-              />
-            )}
+                  <SettingsSectionContext.Provider value={active.id}>
+                    <div className="space-y-6">
+                      {section === "profile" && (
+                        <ProfileSection
+                          user={user}
+                          displayName={displayName}
+                          onDisplayName={setDisplayName}
+                          username={username}
+                          onUsername={setUsername}
+                          handle={handle}
+                          onHandle={setHandle}
+                          avatarUrl={avatarUrl}
+                          onAvatarUrl={setAvatarUrl}
+                          onUserUpdated={onUserUpdated}
+                        />
+                      )}
 
-            {section === "connections" && <ConnectionsSection />}
+                      {section === "connections" && <ConnectionsSection />}
 
-            {section === "voice" && (
-              <VoiceSection
-                draftLocal={draftLocal}
-                patchLocal={patchLocal}
-                inputs={inputs}
-                outputs={outputs}
-                cameras={cameras}
-                onRevealCameras={() => {
-                  void revealCameras();
-                }}
-                devicesError={devicesError}
-                voiceAnalyser={voiceAnalyser}
-                metering={voiceVisible}
-                showVoiceCleanBadge={showVoiceCleanBadge}
-              />
-            )}
+                      {section === "voice" && (
+                        <VoiceSection
+                          draftLocal={draftLocal}
+                          patchLocal={patchLocal}
+                          inputs={inputs}
+                          outputs={outputs}
+                          cameras={cameras}
+                          onRevealCameras={() => {
+                            void revealCameras();
+                          }}
+                          devicesError={devicesError}
+                          voiceAnalyser={voiceAnalyser}
+                          metering={voiceVisible}
+                          showVoiceCleanBadge={showVoiceCleanBadge}
+                        />
+                      )}
 
-            {section === "keyboard" && (
-              <KeyboardSection
-                draftLocal={draftLocal}
-                patchLocal={patchLocal}
-                onShowOverlay={() => onShowShortcutOverlay?.()}
-              />
-            )}
+                      {section === "keyboard" && (
+                        <KeyboardSection
+                          draftLocal={draftLocal}
+                          patchLocal={patchLocal}
+                          onShowOverlay={() => onShowShortcutOverlay?.()}
+                        />
+                      )}
 
-            {section === "notifications" && <NotificationsSection />}
+                      {section === "notifications" && <NotificationsSection />}
 
-            {section === "appearance" && (
-              <AppearanceSection
-                showLinkEmbeds={draftLocal.showLinkEmbeds}
-                onShowLinkEmbeds={(showLinkEmbeds) =>
-                  patchLocal({ showLinkEmbeds })
-                }
-              />
-            )}
+                      {section === "appearance" && (
+                        <AppearanceSection
+                          showLinkEmbeds={draftLocal.showLinkEmbeds}
+                          onShowLinkEmbeds={(showLinkEmbeds) =>
+                            patchLocal({ showLinkEmbeds })
+                          }
+                        />
+                      )}
 
-            {section === "privacy" && (
-              <PrivacySection
-                user={user}
-                blockedUsers={blockedUsers}
-                onUserUpdated={onUserUpdated}
-                onUnblockUser={onUnblockUser}
-              />
-            )}
+                      {section === "privacy" && (
+                        <PrivacySection
+                          user={user}
+                          blockedUsers={blockedUsers}
+                          onUserUpdated={onUserUpdated}
+                          onUnblockUser={onUnblockUser}
+                        />
+                      )}
 
-            {section === "data" && (
-              <YourDataSection
-                user={user}
-                onRequestDelete={() => setConfirmingDelete(true)}
-              />
-            )}
+                      {section === "data" && (
+                        <YourDataSection
+                          user={user}
+                          onRequestDelete={() => setConfirmingDelete(true)}
+                        />
+                      )}
 
-            {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+                      {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
 
-            {section === "help" && (
-              <HelpSection onOpenFeedback={() => setSection("feedback")} />
-            )}
+                      {section === "help" && (
+                        <HelpSection onOpenFeedback={() => openSection("feedback")} />
+                      )}
 
-            {section === "moderation" &&
-              (canModerateInstance ? (
-                <AllReportsSection />
-              ) : (
-                // Only reachable for the one render before the effect above
-                // bounces off this section — a deep link can land here before
-                // React has run its effects. The nav entry itself never
-                // exists for an account the flag says no to.
-                <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-                  {t("common.loading")}
-                </p>
-              ))}
+                      {section === "moderation" &&
+                        (canModerateInstance ? (
+                          <AllReportsSection />
+                        ) : (
+                          // Only reachable for the one render before the effect above
+                          // bounces off this section — a deep link can land here before
+                          // React has run its effects. The nav entry itself never
+                          // exists for an account the flag says no to.
+                          <p role="status" aria-live="polite" className="text-sm text-text-tertiary">
+                            {t("common.loading")}
+                          </p>
+                        ))}
 
-            {error && (
-              <p className="mt-4 text-sm text-danger" role="alert">
-                {error}
-              </p>
-            )}
+                      {error && (
+                        <p className="mt-4 text-sm text-danger" role="alert">
+                          {error}
+                        </p>
+                      )}
+                    </div>
+                  </SettingsSectionContext.Provider>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </SettingsShellContext.Provider>
       </Dialog>
 
       <DeleteAccountDialog
