@@ -1,16 +1,40 @@
-import { useState } from "react";
+import { useRef } from "react";
+import { UserX } from "lucide-react";
 import { type BlockedUser, type DmPrivacy, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { RadioGroup, type RadioOption } from "@/components/ui/radio-group";
+import {
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsInlineStatus,
+  SettingsRow,
+  useInlineSave,
+} from "@/components/settings/kit";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { updateMe } from "@/lib/api";
-import { Field, chipClass, messageOf } from "@/components/settings/ui";
 
 /* ----------------------------------------------------------------- privacy */
 
-const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: MessageKey }[] = [
-  { value: "everyone", label: "settings.privacy.dm.everyone" },
-  { value: "server_members", label: "settings.privacy.dm.serverMembers" },
-  { value: "nobody", label: "settings.privacy.dm.nobody" },
+const DM_PRIVACY_OPTIONS: {
+  value: DmPrivacy;
+  label: MessageKey;
+  description: MessageKey;
+}[] = [
+  {
+    value: "everyone",
+    label: "settings.privacy.dm.everyone",
+    description: "settings.privacy.dm.everyoneHint",
+  },
+  {
+    value: "server_members",
+    label: "settings.privacy.dm.serverMembers",
+    description: "settings.privacy.dm.serverMembersHint",
+  },
+  {
+    value: "nobody",
+    label: "settings.privacy.dm.nobody",
+    description: "settings.privacy.dm.nobodyHint",
+  },
 ];
 
 /**
@@ -18,11 +42,14 @@ const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: MessageKey }[] = [
  *
  * Both apply the moment they are clicked rather than on Save, unlike the
  * profile fields in their own section. A privacy control that silently did
- * nothing because the dialog was dismissed with Cancel is the one failure this
- * section cannot have: the user believes they are closed off and they are not.
+ * nothing because the dialog was dismissed is the one failure this section
+ * cannot have: the user believes they are closed off and they are not.
  *
  * The rule is enforced on the server on every attempt to open a conversation.
- * Nothing here is the enforcement — this is the switch, not the lock.
+ * Nothing here is the enforcement: this is the switch, not the lock. The
+ * option descriptions follow `assertReachable` in `server/src/services/dms.ts`,
+ * where an accepted friendship also passes `server_members` and `nobody` holds
+ * against friends too.
  */
 export function PrivacySection({
   user,
@@ -36,82 +63,72 @@ export function PrivacySection({
   onUnblockUser: (userId: string) => void;
 }) {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const save = useInlineSave();
+  // One write at a time, as before. A ref rather than the save state, so a
+  // second click in the same tick is refused too, and the radios stay enabled
+  // (and focused) while the first one is in flight.
+  const busy = useRef(false);
   const current = user?.dmPrivacy ?? "server_members";
 
+  const options: RadioOption<DmPrivacy>[] = DM_PRIVACY_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.label),
+    description: t(option.description),
+  }));
+
   async function choose(value: DmPrivacy) {
-    if (!user || busy || value === current) {
+    if (!user || busy.current || value === current) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    busy.current = true;
     try {
-      onUserUpdated(await updateMe({ dmPrivacy: value }));
-    } catch (err) {
-      setError(messageOf(err, t("settings.privacy.saveFailed")));
+      await save.run(async () => {
+        onUserUpdated(await updateMe({ dmPrivacy: value }));
+      }, t("settings.privacy.saveFailed"));
     } finally {
-      setBusy(false);
+      busy.current = false;
     }
   }
 
   return (
     <div className="space-y-6">
-      <Field
-        label={t("settings.privacy.dmLabel")}
-        hint={t("settings.privacy.dmHint")}
+      <SettingsGroup
+        title={t("settings.privacy.group.dm.title")}
+        description={t("settings.privacy.dmHint")}
       >
-        <div
-          role="radiogroup"
-          aria-label={t("settings.privacy.dmLabel")}
-          className="flex flex-wrap gap-1.5"
-        >
-          {DM_PRIVACY_OPTIONS.map((option) => {
-            const selected = option.value === current;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                disabled={busy || !user}
-                onClick={() => void choose(option.value)}
-                className={chipClass(selected)}
-              >
-                {t(option.label)}
-              </button>
-            );
-          })}
-        </div>
-        {error && (
-          <p role="alert" className="mt-1.5 text-xs text-danger">
-            {error}
-          </p>
+        <RadioGroup
+          variant="list"
+          label={t("settings.privacy.dmLabel")}
+          value={current}
+          options={options}
+          disabled={!user}
+          onValueChange={(value) => void choose(value)}
+        />
+        {save.state.kind === "idle" ? null : (
+          <div className="px-4 pb-3">
+            <SettingsInlineStatus state={save.state} />
+          </div>
         )}
-      </Field>
+      </SettingsGroup>
 
-      <Field label={t("settings.privacy.blocked")}>
+      <SettingsGroup
+        title={t("settings.privacy.blocked")}
+        description={t("settings.privacy.blockedHint")}
+      >
         {blockedUsers.length === 0 ? (
-          <p className="text-xs text-paper-muted">
-            {t("settings.privacy.blockedEmpty")}
-          </p>
+          <SettingsEmpty icon={UserX} title={t("settings.privacy.blockedEmpty")} />
         ) : (
-          <ul className="space-y-1">
-            {blockedUsers.map((blocked) => (
-              <li
-                key={blocked.id}
-                className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2/60"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-paper">
-                    {blocked.displayName}
-                  </p>
-                  {blocked.tag && (
-                    <p className="truncate font-mono text-[11px] text-paper-muted">
-                      {blocked.tag}
-                    </p>
-                  )}
-                </div>
+          blockedUsers.map((blocked) => (
+            <SettingsRow
+              key={blocked.id}
+              id={`blocked-${blocked.id}`}
+              label={blocked.displayName}
+              description={
+                blocked.tag ? (
+                  <span className="font-mono">{blocked.tag}</span>
+                ) : undefined
+              }
+              control={
                 <Button
                   size="sm"
                   variant="secondary"
@@ -119,11 +136,11 @@ export function PrivacySection({
                 >
                   {t("settings.privacy.unblock")}
                 </Button>
-              </li>
-            ))}
-          </ul>
+              }
+            />
+          ))
         )}
-      </Field>
+      </SettingsGroup>
     </div>
   );
 }
