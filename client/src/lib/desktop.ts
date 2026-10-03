@@ -65,6 +65,21 @@ export interface PqpDesktop {
    * versions. For `pqpShareHealth()`.
    */
   shareHealth?(): Promise<DesktopShareHealth>;
+  /**
+   * Linux share audio: can this machine build the "everything but pqp" bus?
+   * `available: false` off Linux and where `pactl` is missing.
+   */
+  linuxShareAudioStatus?(): Promise<{ available: boolean; server: string | null }>;
+  /**
+   * Right before the `getDisplayMedia` of a share the person said yes to
+   * sound for: lets the shell build the bus for the next display request only.
+   */
+  linuxShareAudioArm?(): Promise<boolean>;
+  /**
+   * After `getDisplayMedia` resolved: is this share's bus up, and which
+   * `enumerateDevices` label is its capture source?
+   */
+  linuxShareAudioClaim?(): Promise<{ active: boolean; label: string | null }>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -219,6 +234,13 @@ export interface DesktopShareCapabilities {
    * before it; off unless the runtime flag says so.
    */
   nativeShareAudio?: boolean;
+  /**
+   * Linux: this shell can build a capture source carrying every app's sound
+   * except its own (`electron/lib/linux-share-audio.js`). The sound does NOT
+   * arrive on the display stream; the page opens the source by name. Absent
+   * in every shell before it, and off unless the runtime flag says so.
+   */
+  linuxShareAudio?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }

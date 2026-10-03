@@ -703,6 +703,11 @@ export interface ShareConfig {
    * API: off.
    */
   shareHighMotionGuard?: boolean;
+  /**
+   * The Linux desktop app may carry the computer's sound, minus the call
+   * (`lib/linux-shell-share-audio.ts`). Absent on an older API: off.
+   */
+  linuxDesktopSystemAudio?: boolean;
 }
 
 /** `serverId` is the server the call is in; a DM call asks without one. */

@@ -22,10 +22,17 @@ import { useTranslation } from "@/lib/i18n";
  */
 export function ShareAudioPrompt({
   open,
+  linux = false,
   onConfirm,
   onClose,
 }: {
   open: boolean;
+  /**
+   * The Linux desktop app. Same question, asked here for a different reason:
+   * on Wayland the portal picks the surface and the shell's picker never
+   * opens, so the page is the only place a person can say yes to sound.
+   */
+  linux?: boolean;
   onConfirm: (shareAudio: boolean) => void;
   onClose: () => void;
 }) {
@@ -89,7 +96,11 @@ export function ShareAudioPrompt({
               checked={shareAudio}
               onCheckedChange={setShareAudio}
               label={t("voice.control.shareSound")}
-              description={t("voice.share.audioPromptHint")}
+              description={t(
+                linux
+                  ? "voice.control.shareSoundDetailLinux"
+                  : "voice.share.audioPromptHint",
+              )}
               className="px-0 py-0"
             />
             {/* What the viewers get instead, in words, only while it is off:

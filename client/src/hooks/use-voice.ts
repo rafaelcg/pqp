@@ -56,6 +56,11 @@ import {
   releaseNativeShareAudioFor,
 } from "@/lib/native-share-audio";
 import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
+import {
+  armLinuxShellShareAudio,
+  attachLinuxShellShareAudio,
+  ensureLinuxShellShareAudio,
+} from "@/lib/linux-shell-share-audio";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -5976,7 +5981,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       // store rather than passed down four components (it is remembered per
       // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
       // the intent still wins, so a caller can override it for one share.
-      await ensureOsCanExcludeCallAudio();
+      await Promise.all([
+        ensureOsCanExcludeCallAudio(),
+        ensureLinuxShellShareAudio(),
+      ]);
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const captureIntent = { ...intent, hideCursor };
       let captureEnv = liveScreenCaptureEnvironment(intent);
@@ -6004,6 +6012,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // that is a request which can fail on its own; in the shell it is only
       // ever true where the platform can answer it.
       const askedForAudio = options.audio !== false;
+      // LINUX DESKTOP: the shell builds its bus only for a request the page
+      // armed it for (flag on, the person said yes), never because a request
+      // happens to carry audio. Nothing is armed for a stream the caller
+      // already opened.
+      if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
+        await armLinuxShellShareAudio();
+      }
 
       let stream: MediaStream;
       // A stream the caller already opened (the watch party preview) is
@@ -6111,6 +6126,15 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (!attach.attached && attach.reason !== "none" && !state.notice) {
           state.notice = translateMessage("voice.notice.nativeShareAudioFailed");
         }
+      }
+      // LINUX DESKTOP: the sound was never on the display stream. The shell
+      // built its "everything but pqp" bus while the picker resolved (only
+      // because this request asked for audio, which the page only does once
+      // the person said yes and the runtime flag is on); open it and put its
+      // track where every other share keeps its sound. Silent on any failure,
+      // exactly like a share without the box ticked.
+      if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
+        await attachLinuxShellShareAudio(stream);
       }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries

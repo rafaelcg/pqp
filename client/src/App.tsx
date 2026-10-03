@@ -567,6 +567,7 @@ import {
 } from "@/lib/screen-capture-audio";
 import { ensureNativeShareAudio, prefetchNativeShareAudio } from "@/lib/native-share-audio";
 import { ensureShareGuardFlag, prefetchShareGuardFlag } from "@/lib/share-guard-flag";
+import { ensureLinuxShellShareAudio } from "@/lib/linux-shell-share-audio";
 import {
   hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
@@ -2255,6 +2256,8 @@ function MainAppContent({
    */
   const [shareAudioPrompt, setShareAudioPrompt] = useState<{
     intent?: ScreenCaptureIntent;
+    /** Asked on the Linux desktop app, where the fine print differs. */
+    linux?: boolean;
   } | null>(null);
   /**
    * The cursor preference, in the opposite arrangement, and deliberately.
@@ -2574,6 +2577,7 @@ function MainAppContent({
             ensureOsCanExcludeCallAudio(),
             ensureNativeShareAudio(voiceServerIdRef.current),
             ensureShareGuardFlag(voiceServerIdRef.current),
+            ensureLinuxShellShareAudio(),
           ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
@@ -2593,7 +2597,10 @@ function MainAppContent({
           // question has to be asked there as it is for any other share.
           const tabSteer = steersAtBrowserTab(env, shareIntent);
           if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
-            setShareAudioPrompt({ intent: shareIntent });
+            setShareAudioPrompt({
+              intent: shareIntent,
+              linux: env.shellLinuxShareAudio === true,
+            });
             return;
           }
           const audio = tabSteer
@@ -11421,6 +11428,7 @@ function MainAppContent({
 
       <ShareAudioPrompt
         open={shareAudioPrompt !== null}
+        linux={shareAudioPrompt?.linux === true}
         onConfirm={(shareAudio) => {
           const intent = shareAudioPrompt?.intent;
           setShareAudioPrompt(null);

@@ -98,6 +98,16 @@ const SHARE_CAPABILITIES = Object.freeze({
    * `nativeShareAudioStatus()`; whether it is ON is the runtime flag's.
    */
   nativeShareAudio: process.platform === "win32",
+  /**
+   * This binary can build the Linux "everything but pqp" bus
+   * (`lib/linux-share-audio.js`) and hand its source to the page by name.
+   * A SEPARATE field, never `systemAudio: "loopback"`: every client already
+   * deployed reads that one as "ask for audio and it arrives on the display
+   * stream", and on Linux it would not (it arrives on a second capture only
+   * the new client opens). Whether it is ON is the runtime flag's business,
+   * and whether this machine has `pactl` is `linuxShareAudioStatus()`'s.
+   */
+  linuxShareAudio: process.platform === "linux",
   version: shellVersion(),
 });
 
@@ -294,6 +304,34 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return () => {
       ipcRenderer.removeListener("pqp:native-share-audio-ended", handler);
     };
+  },
+
+  /**
+   * Linux share audio: can this machine build the bus at all (`pactl` on
+   * PATH, a PulseAudio or PipeWire server answering)? Resolves
+   * `{ available, server }`, and `available: false` off Linux.
+   */
+  linuxShareAudioStatus() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-status");
+  },
+
+  /**
+   * Right before a `getDisplayMedia` the page has asked the person about (flag
+   * on, "share this computer's audio?" answered yes): the shell may build the
+   * bus for the NEXT display request only. Without it a request that happens to
+   * carry `audioRequested` builds nothing. Resolves `true` when armed.
+   */
+  linuxShareAudioArm() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-arm");
+  },
+
+  /**
+   * After `getDisplayMedia` resolved: is this share's bus up, and under which
+   * device label will `enumerateDevices` list its capture source?
+   * Resolves `{ active, label }`.
+   */
+  linuxShareAudioClaim() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-claim");
   },
 
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */

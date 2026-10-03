@@ -139,6 +139,13 @@ nothing. `pqpShareHealth()` in the console works either way. Design, evidence
 and the test steps: `docs/DESKTOP.md` §"A share next to a game at a very high
 frame rate".
 
+Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
+(`linux_desktop_system_audio`, default off), the computer's sound on a screen
+share from the Linux desktop app, served to the client by
+`GET /api/share/config`. It only does anything in a desktop build whose
+preload publishes `capabilities.linuxShareAudio`; see
+`electron/lib/linux-share-audio.js`.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

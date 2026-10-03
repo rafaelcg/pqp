@@ -81,6 +81,33 @@ describe("the share capabilities the preload publishes", () => {
     assert.ok(!/["']loopbackWithMute["']/.test(main));
   });
 
+  it("keeps Linux share audio off `systemAudio`, where old clients would read it", () => {
+    // Every deployed client reads `systemAudio: "loopback"` as "ask for audio
+    // and it arrives on the display stream". On Linux the sound arrives on a
+    // second capture that only a flag-aware client opens, so promising
+    // loopback there would switch the feature on past its runtime flag, for
+    // clients that cannot use it.
+    assert.match(preload, /linuxShareAudio:\s*process\.platform === "linux"/);
+    assert.match(preload, /systemAudio:\s*\n\s*process\.platform === "win32"/);
+  });
+
+  it("never answers a Linux share with Chromium's loopback", () => {
+    // Loopback on Linux is the default output's monitor: the call included.
+    // The Linux branch in main starts the bus and still returns
+    // `captureResponse`, which stays video-only off Windows.
+    assert.match(main, /linuxAudioArmed && audioRequested/);
+    assert.match(main, /startLinuxShareAudio\(\)/);
+  });
+
+  it("builds the Linux bus only for a request the page armed, and touches nothing at launch", () => {
+    // The page arms right before a share it asked the person about (flag on,
+    // answered yes). The shell consumes that arm once per display request, and
+    // the launch-time cleanup runs only behind a marker a live session wrote.
+    assert.match(main, /platform === "linux" && linuxShareAudio\?\.consumeArm\(\) === true/);
+    assert.match(main, /if \(linuxShareAudio && fs\.existsSync\(linuxShareAudioMarkerPath\(\)\)\)/);
+    assert.ok(!/linuxShareAudio\?\.cleanup\(\)/.test(main));
+  });
+
   it("is declared on the client's side of the bridge too", () => {
     // `desktop-contract.test.mjs` checks the other direction (everything the
     // client may call, the shell exposes). This checks that the shape the
@@ -90,11 +117,12 @@ describe("the share capabilities the preload publishes", () => {
       "systemAudio",
       "restrictOwnAudio",
       "pickerOffersAudio",
+      "linuxShareAudio",
       "version",
     ]) {
       assert.match(
         clientContract,
-        new RegExp(`\\n\\s+${field}:`),
+        new RegExp(`\\n\\s+${field}\\??:`),
         `DesktopShareCapabilities is missing ${field}`,
       );
     }
