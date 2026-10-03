@@ -8,6 +8,7 @@ import {
   COMMUNITY_HOME_SETTINGS_SEEN_KEY,
   isCommunityHomeSettingsNew,
 } from "@/lib/community-home";
+import { updateServerCommunityHomeConfig } from "@/lib/api";
 import { CommunityHomeSettingsSection } from "./community-home-settings-section";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -109,6 +110,29 @@ describe("CommunityHomeSettingsSection discovery", () => {
     });
     expect(host.querySelector("[data-community-home-settings-new]")).toBeNull();
     expect(localStorage.getItem(COMMUNITY_HOME_SETTINGS_SEEN_KEY)).toBe("1");
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("keeps NEW when the request fails", async () => {
+    vi.mocked(updateServerCommunityHomeConfig).mockRejectedValueOnce(
+      new Error("boom"),
+    );
+    const { host, root } = mount(
+      <CommunityHomeSettingsSection
+        serverId="11111111-1111-4111-8111-111111111111"
+        enabled={false}
+        onUpdated={() => {}}
+      />,
+    );
+    await act(async () => {
+      (host.querySelector('[role="switch"]') as HTMLButtonElement).click();
+    });
+    expect(
+      host.querySelector("[data-community-home-settings-new]"),
+    ).not.toBeNull();
+    expect(localStorage.getItem(COMMUNITY_HOME_SETTINGS_SEEN_KEY)).toBeNull();
     act(() => {
       root.unmount();
     });

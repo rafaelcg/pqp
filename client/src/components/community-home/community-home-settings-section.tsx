@@ -40,13 +40,14 @@ export function CommunityHomeSettingsSection({
   async function update(next: boolean) {
     setSaving(true);
     setError(null);
-    // Acting on the control clears discovery; opening the panel alone must not.
-    setSettingsNew(false);
-    markCommunityHomeSettingsSeen();
     try {
       const result = await updateServerCommunityHomeConfig(serverId, {
         enabled: next,
       });
+      // A successful flip clears discovery; opening the panel alone, or a
+      // failed request, must not.
+      setSettingsNew(false);
+      markCommunityHomeSettingsSeen();
       setChecked(result.enabled);
       if (result.enabled) {
         markCommunityHomeRowNew(serverId);
