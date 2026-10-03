@@ -12,16 +12,20 @@ import { openApp } from "./fixtures";
  * the way every other dialog in the app closes.
  */
 
-/** Every section, in nav order. The list IS the assertion. */
+/**
+ * Every section, in nav order: Account (Profile, Connections, Privacy, Your
+ * data), App (Voice & Video, Notifications, Appearance & Language, Keyboard),
+ * Support (Feedback, Help and contact). The list IS the assertion.
+ */
 const SECTIONS = [
   "Profile",
   "Connections",
-  "Voice & Video",
-  "Keyboard",
-  "Notifications",
-  "Appearance & Language",
   "Privacy",
   "Your data",
+  "Voice & Video",
+  "Notifications",
+  "Appearance & Language",
+  "Keyboard",
   "Feedback",
   "Help and contact",
 ] as const;
@@ -47,9 +51,18 @@ test.describe("settings sections", () => {
         page.getByRole("tab", { name, exact: true }),
       ).toHaveAttribute("aria-selected", "true");
       // The pane says what it is, so a section is never a blank right-hand
-      // side that leaves you wondering whether the click registered.
-      await expect(panel.getByRole("heading", { name })).toBeVisible();
+      // side that leaves you wondering whether the click registered. Level 3
+      // is the pane title; a group title inside the tab is an h4.
+      await expect(
+        panel.getByRole("heading", { name, level: 3 }),
+      ).toBeVisible();
     }
+  });
+
+  test("the rail lists the sections in this order", async ({ page }) => {
+    await openApp(page);
+    await openSettings(page);
+    await expect(page.getByRole("tab")).toHaveText([...SECTIONS]);
   });
 
   test("arrow keys walk the section rail", async ({ page }) => {
@@ -78,9 +91,9 @@ test.describe("settings sections", () => {
     await expect(compactPeers(page)).not.toBeChecked();
     await compactPeers(page).check();
 
-    // Closed with Cancel on purpose: everything outside Profile applies as it
+    // Closed with the X on purpose: everything outside Profile applies as it
     // is changed, so dismissing must not quietly roll it back.
-    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Close dialog" }).click();
     await expect(page.getByRole("dialog")).toBeHidden();
 
     await openSettings(page);
