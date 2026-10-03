@@ -4,6 +4,13 @@
 A Brazilian dev community asked for a place where support questions, feature
 requests, guides and bug reports do not scroll away and can be found later.
 
+**First feedback from the requester (2026-10-04).** Tags and pinning matter
+most, so both are P1 must-haves (§10.2). Sorting is nice but secondary: P1
+ships the two orders only (recent activity, newest), anything richer is P2. His
+main use case is **RSS news posted into a forum through webhooks**, so the
+webhook-to-post path is P1b (§7), with its own tests, and §8 says how feeds
+reach pqp.
+
 **One-paragraph model.** A forum is a new channel type, `forum`, that holds no
 messages of its own. Each post is a **thread channel** (`type = 'thread'`)
 whose `parent_id` is the forum and whose `thread_root_message_id` is NULL. A
@@ -87,7 +94,10 @@ CREATE TABLE IF NOT EXISTS forum_posts (
   locked_at TIMESTAMPTZ,
   resolved_at TIMESTAMPTZ,
   -- Idempotent create: a retried POST with the same nonce returns the post.
-  client_nonce TEXT
+  client_nonce TEXT,
+  -- Webhook dedupe (§7.4): the caller's Idempotency-Key, or a hash of the
+  -- normalised title and first link. NULL for posts made by people.
+  dedupe_key TEXT
 );
 
 -- The two list orders. Keyset on (sort key, channel_id) so two posts in the
@@ -110,6 +120,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_posts_nonce
 -- The shell sweep (§1.5).
 CREATE INDEX IF NOT EXISTS idx_forum_posts_shells
   ON forum_posts (created_at) WHERE published_at IS NULL;
+-- Webhook dedupe lookup inside the window (§7.4). Not UNIQUE: the rule is
+-- "no repeat within N hours", and a unique index would make it "never".
+CREATE INDEX IF NOT EXISTS idx_forum_posts_dedupe
+  ON forum_posts (forum_id, dedupe_key, created_at DESC)
+  WHERE dedupe_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS forum_tags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -133,6 +148,21 @@ CREATE TABLE IF NOT EXISTS forum_post_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_forum_post_tags_tag
   ON forum_post_tags (tag_id, post_id);
+
+-- A webhook that targets a forum (§7). A side table, not columns on
+-- `webhooks`, for the same pitfall 22 reason as everything above. No row
+-- means the defaults: every non-moderated tag allowed, no default tags,
+-- a 72 h dedupe window.
+CREATE TABLE IF NOT EXISTS webhook_forum_settings (
+  webhook_id UUID PRIMARY KEY REFERENCES webhooks(id) ON DELETE CASCADE,
+  -- The tags this feed may apply. NULL = every non-moderated tag of the
+  -- forum; a moderated tag is applied only when it is listed here.
+  allowed_tag_ids UUID[],
+  -- Applied when the payload names no tag that resolves ("Notícias").
+  default_tag_ids UUID[] NOT NULL DEFAULT '{}',
+  dedupe_window_hours INTEGER NOT NULL DEFAULT 72
+    CHECK (dedupe_window_hours BETWEEN 0 AND 720)
+);
 ```
 
 Caps live in `packages/shared/src/forums.ts` and are enforced by the routes, not
@@ -179,6 +209,7 @@ process). The second is per viewer and never cached.
 SELECT p.channel_id, c.name AS title, p.author_id, p.created_at,
        p.last_activity_at, p.pinned_at, p.locked_at, p.resolved_at,
        left(regexp_replace(om.body, '\s+', ' ', 'g'), 200) AS preview,
+       om.webhook_username, om.webhook_avatar_url,  -- a feed's per-item name
        (SELECT count(*) FROM message_attachments a
          WHERE a.message_id = om.id)::int AS attachment_count,
        (SELECT count(*) FROM messages m
@@ -260,7 +291,7 @@ RETURNING forum_id;
 `{ title, body, tagIds?, attachmentIds?, nonce }`:
 
 1. Access and gates: `requireChannelAccess(forumId)`, `type === 'forum'`, flag
-   on for the server (§8), `SEND_MESSAGES` on the forum through
+   on for the server (§10), `SEND_MESSAGES` on the forum through
    `requirePermission(serverId, userId, bit, forumId)` (overwrites apply),
    `ATTACH_FILES` when `attachmentIds` is non-empty, the timeout check
    (`findTimeoutForChannel`, the same one the WS chokepoint runs), moderated
@@ -309,7 +340,8 @@ when that exists) deletes shells older than 10 minutes through
 | `server/src/services/users.ts` | `listUnread`: exclude posts, add forum rows (§4.2). |
 | `server/src/services/retention.ts` | `sweepMessageRetention` exempts opening messages (`id IN (SELECT opening_message_id FROM forum_posts ...)`), the way it already exempts pins: a post whose question was swept is a title with orphaned answers. |
 | `server/src/services/servers.ts`, `server/src/services/outgoing-webhooks.ts`, the incoming webhook create route | A forum cannot be a webhook target, an AutoMod alert channel, or a purge target. Each already checks `type === 'text'`; confirm, do not assume. |
-| `server/src/lib/flags.ts`, `flags.test.ts`, `tools/admin-dashboard/site/novo.js` | The flag (§8). |
+| `server/src/api/index.ts` (`handleWebhookExecute`), `server/src/services/webhooks.ts` (`executeWebhook`), `packages/shared/src/webhooks.ts` (`executeWebhookSchema`) | P1: refuse an execute into a forum with Discord's error (§7.1), instead of today's invisible insert. P1b: the webhook-to-post path (§7). |
+| `server/src/lib/flags.ts`, `flags.test.ts`, `tools/admin-dashboard/site/novo.js` | The flag (§10). |
 | `server/src/jobs.ts` | The shell sweep. |
 
 ---
@@ -332,6 +364,7 @@ access today).
 | Pin, lock, rename / retag / resolve anyone's post, delete a post | staff | `MANAGE_MESSAGES` on the forum (or `MANAGE_CHANNELS`) |
 | Create, edit, reorder, delete tags; set the guidelines (topic) and slow mode | channel managers | `MANAGE_CHANNELS` on the forum, the bit that owns every other channel setting |
 | Create a forum channel | channel managers | `MANAGE_CHANNELS` on the server, as for any channel |
+| Create, list, delete a webhook on a forum, and edit its tag allowlist, default tags and dedupe window | channel managers | `MANAGE_CHANNELS`, the bit the webhook routes already check (§7.6) |
 
 - **Deleting a whole post is staff only.** The author deletes their opening
   message the ordinary way (the post stays, the preview reads "A mensagem
@@ -394,7 +427,7 @@ Pagination is infinite scroll on the keyset cursor, 25 per page.
 
 **Empty states.** No posts: "Ninguém postou aqui ainda." with "Criar o
 primeiro post". Filter with no match: "Nenhum post com esses filtros." with
-"Limpar filtros". Flag off for this server (§8): the list stays readable and
+"Limpar filtros". Flag off for this server (§10): the list stays readable and
 the button is replaced by "Novos posts estão pausados neste fórum."
 
 ### 3.3 The post
@@ -435,7 +468,7 @@ position.
 
 | Route | Who |
 |---|---|
-| `GET /api/forum/config?serverId=` → `{ enabled }` | member (the flag, §8) |
+| `GET /api/forum/config?serverId=` → `{ enabled }` | member (the flag, §10) |
 | `GET /api/channels/:forumId/posts?sort=&tag=&status=&mine=&q=&cursor=&limit=` → `{ pinned, posts, nextCursor }` | can see the forum |
 | `GET /api/forum-posts/:postId` → summary | can see the forum (deep links) |
 | `POST /api/channels/:forumId/posts` | §1.5 |
@@ -599,7 +632,7 @@ mention pill live (an older client strips the unknown key and loses nothing).
   server's, for posts and chat threads alike.
 - **Push links:** the server-channel push path is
   `/app/server/<sid>/channel/<channelId>`, which for a post is the post id. The
-  web client cannot open that today (see §7.2), and P1 fixes the route.
+  web client cannot open that today (see §9.2), and P1 fixes the route.
 
 ---
 
@@ -657,6 +690,9 @@ Check `[channelId, parentId]`.
   is refused by the same `findTimeoutForChannel`), and staff delete. No
   account-age gate in v1; if one is needed it belongs to AutoMod for every
   channel, not to forums.
+- **Webhooks** are a pipe with their own budget, dedupe and tag allowlist
+  (§7.4, §7.5, §7.3), not people: none of the three bullets above applies to
+  them.
 
 ---
 
@@ -701,9 +737,192 @@ same PR.
 
 ---
 
-## 7. Search and linking
+## 7. Webhooks into a forum (P1b)
 
-### 7.1 Search
+### 7.1 What happens today
+
+Incoming webhooks (`POST /api/webhooks/:id/:token`, `handleWebhookExecute` in
+`server/src/api/index.ts`) are created by `POST /api/channels/:channelId/webhooks`,
+which only asks `requireServerChannel`: any server channel, of any type, can
+hold one. Execution is its own raw `INSERT INTO messages` in `executeWebhook`
+(`server/src/services/webhooks.ts`) into `webhooks.channel_id`, then a
+`message-broadcast` to that channel's viewers. It never goes through
+`postChannelMessage`: no AutoMod, no slow mode, no mention recording, no
+`channel-activity`. So the day a forum exists, a webhook created on it would
+**succeed and write a message straight into the forum row, which no surface
+ever shows**. And `executeWebhookSchema` (`packages/shared/src/webhooks.ts`)
+is a non-strict `z.object`, so Discord's `thread_name` and `applied_tags` are
+accepted and silently stripped today.
+
+**P1 closes that hole** before any forum exists in production: an execute
+whose webhook channel is a `forum` answers 400 with Discord's own error, so a
+tool that already handles Discord forums recognises it:
+
+```json
+{ "error": "Webhooks posted to a forum channel must have a thread_name or thread_id",
+  "message": "Webhooks posted to a forum channel must have a thread_name or thread_id",
+  "code": 220001 }
+```
+
+(`error` is our `sendError` shape in `server/src/lib/http.ts`; `message` and
+`code` are Discord's, added on this one response.) P1b then makes the same
+request create a post.
+
+### 7.2 Design: one execution, one post
+
+The execute route, when `webhooks.channel_id` is a forum and the flag is on for
+the server, builds a post instead of a message. `executeWebhookSchema` grows
+two optional Discord fields; the route reads two optional query parameters
+(the regex already matches `pathname`, so a query string reaches it today and
+is ignored).
+
+| Input | Meaning in a forum |
+|---|---|
+| `thread_name` (string, 1 to 100 after trim) | The post title. Discord requires it for forums; we prefer it. |
+| no `thread_name` | Fallback, in order: `embeds[0].title`, then the first non-empty line of `content` (markdown heading marks and a bare URL stripped, cut to 100 at a code point). RSS tools that do not know about forums usually send the item title as the embed title, so this catches them. |
+| nothing derivable (embed-only payload with no title and no content) | 400, the 220001 error above. That is the "normal message posted to a forum" case: the error names `thread_name`, which is the field the tool's docs will mention. |
+| `applied_tags` (array of strings, max 5 used) | Each entry matched first as a tag **id** of this forum, then as a tag **name** (case- and accent-insensitive). Unknown entries are **ignored, never created** (§7.3). |
+| `content` | The opening message body, as today (2,000 max). |
+| `embeds` | Stored as today in `messages.webhook_embeds` and rendered by the existing webhook embed card. |
+| `username`, `avatar_url` | Per-message display override, as today (`webhook_username` / `webhook_avatar_url`). The list row shows the same name and picture as the opening message: the list query reads those two columns from `om` when they are set, then the pseudo user's. |
+| `?thread_id=<postId>` | Discord's "post into an existing thread": a reply in that post. 404 unless it is a published post of **this** webhook's forum; refused like a person when the post is locked. |
+| `?wait=` | Ignored, as today: we always answer 200 with the message. A forum execute adds `post` (the summary) beside `message`. |
+
+**Author.** `forum_posts.author_id` is the webhook's pseudo user (`users.is_webhook`),
+so "Meus posts" never matches anyone, the post menu treats it as somebody
+else's post (staff can pin, lock, retag, delete; nobody can "edit own"), and
+reports on it go to the server queue like any message.
+
+**Path.** The same steps as §1.5 minus the person-only gates: flag, title,
+tags (§7.3), dedupe (§7.4), rate limit (§7.5), the shell transaction, then the
+opening message through `executeWebhook` (not `postChannelMessage`: a webhook
+stays a pipe, which is the rule `handleWebhookExecute`'s own comment states),
+then publish, `forum-post-upsert` and the forum's `channel-activity`, exactly as
+a person's post (§4.1). A new feed item lights the forum's unread dot; it pings
+nobody, because the webhook path records no mentions today and this keeps it
+that way.
+
+**AutoMod and slow mode** do not apply, consistent with webhooks today: the URL
+was configured by someone holding `MANAGE_CHANNELS`, a flood is a webhook to
+revoke, and §7.5 is its budget.
+
+### 7.3 Tags: match, never create
+
+A feed's vocabulary is unbounded (RSS `<category>` values, every blog's own
+taxonomy) and every tag is a filter chip every reader sees, capped at 20 per
+forum. So **a webhook never creates a tag**. It may apply only tags in its
+allowlist (`webhook_forum_settings.allowed_tag_ids`; NULL means every
+non-moderated tag of the forum, and a moderated tag such as "Oficial" needs to
+be listed explicitly). Entries that do not resolve, or resolve to a tag outside
+the allowlist, are dropped and returned in the response as `ignored_tags`, so
+whoever set up the tool can see why a chip is missing. When nothing resolves,
+`default_tag_ids` applies (a news feed gets "Notícias" without the tool
+knowing tag ids). Discord tag snowflakes copied from an old Discord setup never
+match an id here, which is why names match too.
+
+### 7.4 Dedupe: an RSS tool that re-sends does not double-post
+
+RSS tools keep their own "already sent" list and lose it on a reinstall, a
+restart with a fresh volume, or a feed URL change, and then re-send the last N
+items. Discord has no idempotency, so they rely on that list alone.
+
+- **Key.** The `Idempotency-Key` request header when present (n8n, Zapier,
+  Make and a hand-written script can all set a header, usually to the item's
+  GUID or link). Otherwise
+  `sha256(lower(unaccent(title)) || '\n' || canonical first link)`, where the
+  first link is `embeds[0].url`, else the first URL in `content`, with the
+  fragment and `utm_*` parameters removed. With no link at all, the title plus
+  the first 500 characters of `content`.
+- **Window.** `webhook_forum_settings.dedupe_window_hours`, default 72 h, 0
+  turns it off. Long enough for a restart re-send, short enough that a monthly
+  "Patch notes" post with the same title and link pattern still posts.
+- **Check.** Inside the shell transaction, under
+  `pg_advisory_xact_lock(hashtext(forum_id || dedupe_key))` so two containers
+  receiving the same item at once cannot both insert, look up
+  `idx_forum_posts_dedupe` for a post newer than the window. A hit answers 200
+  with that post and message and the header `X-Pqp-Deduplicated: 1`; nothing is
+  written and nobody is notified.
+- **Scope.** Per forum, not per webhook, so two feeds that carry the same
+  story (a site and its aggregator) post it once.
+
+### 7.5 Rate limits
+
+- The existing `webhookExecuteLimiter` (burst 20, 1 per second, per webhook,
+  per process) stays the first gate.
+- Posts add a **cluster-wide** bucket through `sharedRateLimit`
+  (`server/src/lib/cluster-rate-limit.ts`): 10 posts burst, 1 per minute
+  refill, per webhook, so `api-a` and `api-b` together allow 60 posts an hour,
+  not twice that. Replies with `?thread_id=` stay on the per-process limiter
+  only.
+- A refusal is 429 with `Retry-After` and, on this route, Discord's
+  `retry_after` (seconds) in the body, which RSS tools built for Discord read
+  to back off. A dedupe hit costs no post budget.
+- Flag off for the server: 403 "Forum channels are off on this server", and
+  nothing is written. The forum stays readable (§10.1).
+
+### 7.6 Permissions and settings UI
+
+- Creating, listing and deleting a webhook on a forum is the existing routes
+  and the existing check, `MANAGE_CHANNELS` (server-wide today:
+  `requirePermission` is called without a channel id; passing the channel id so
+  per-channel overwrites apply is a one-line change worth making for every
+  webhook in the same PR). `docs/BOT_SEND.md` says MANAGE_WEBHOOKS; the code
+  checks MANAGE_CHANNELS, and the doc is fixed alongside.
+- On a forum, `client/src/components/layout/webhooks-section.tsx` gains three
+  controls per webhook: allowed tags (Menu with `CheckRow` rows), default tags,
+  and the dedupe window (Desligado / 24 h / 72 h / 7 dias). One new route,
+  `PUT /api/webhooks/:webhookId/forum-settings`, same permission, audit
+  `webhook.forum_settings`. The section also shows the copyable URL with the
+  API origin, plus a pt-BR line: "Cole essa URL na sua ferramenta de RSS como
+  se fosse um webhook do Discord. Cada item vira um post."
+- A character account (`docs/BOT_SEND.md`) is a person, not a pipe: it creates
+  posts through the people's route `POST /api/channels/:forumId/posts` with
+  every gate in §1.5, and its `POST /api/channels/:id/messages` into a forum id
+  is refused like any message into a forum. Replying to a post id works already.
+
+---
+
+## 8. Feeds and RSS
+
+**pqp does not fetch RSS, and v1 will not.** A fetcher is a scheduler, outbound
+requests to arbitrary URLs (an SSRF surface), feed parsing and a retry policy,
+for two people to run. Every RSS-to-Discord tool already does that job, and
+pqp's webhook speaks Discord's wire format, so the setup is: create a webhook on
+the forum, paste its URL (`https://api.pqp.gg/api/webhooks/<id>/<token>` on the
+hosted instance) into the tool where it asks for a Discord webhook URL.
+
+Works with anything that POSTs Discord's JSON: self-hosted MonitoRSS, n8n (RSS
+trigger plus an HTTP Request node), Zapier or Make (RSS trigger plus a webhook
+or HTTP action), Pipedream, a cron script. **Caveat:** a "Discord" action that
+validates the URL's host as `discord.com` will refuse a pqp URL; use the
+tool's generic HTTP or webhook action with the same JSON.
+
+**Discord webhook fields, by support:**
+
+| Field | Today (any channel) | Forum path |
+|---|---|---|
+| `content` (2,000) | supported | opening message body; title fallback |
+| `username`, `avatar_url` | supported | as today, also shown on the list row |
+| `embeds` (10): `title`, `description`, `url`, `color`, `fields`, `footer.text`, `timestamp` | supported (`webhookEmbedSchema`) | as today; `embeds[0].title` is a title fallback, `embeds[0].url` feeds the dedupe key |
+| embed `image`, `thumbnail`, `author`, `provider`, `video` | accepted, ignored | same. Most RSS items carry an image; rendering `image.url` / `thumbnail.url` through the existing embed-image proxy is a P2 item worth doing for news feeds |
+| `thread_name` | accepted, stripped | **needed**: the post title |
+| `applied_tags` | accepted, stripped | **needed**: tags by id or name, allowlisted |
+| `?thread_id=` | ignored | reply into an existing post |
+| `?wait=` | ignored (always 200 with the message) | same, plus `post` |
+| `Idempotency-Key` header | ignored | dedupe key (pqp extension, harmless to Discord tools) |
+| `tts`, `flags`, `allowed_mentions`, `components`, `poll`, `attachments` | accepted in JSON and ignored | same |
+| multipart/form-data (files) | refused, 400 "Invalid webhook payload" (the body is read as JSON) | same. No files from webhooks in v1 |
+| `PATCH` / `DELETE /webhooks/:id/:token/messages/:mid` (edit or delete a sent item) | not implemented | not implemented; a tool that edits its posts after the fact will see 404 and still post |
+
+The response body is pqp's (`{ message }`, plus `post` in a forum), not
+Discord's message object. Tools that only POST are unaffected; a tool that reads
+the returned message id to edit it later is in the last row above.
+
+---
+
+## 9. Search and linking
+
+### 9.1 Search
 
 - **Title search in the forum (P1):** `q` on the list route,
   `unaccent(lower(c.name)) LIKE '%' || unaccent(lower($q)) || '%'`
@@ -714,11 +933,11 @@ same PR.
 - **Full text inside posts:** already works. `searchMessages`
   (`server/src/services/search.ts`) uses `channelVisibleSql`, so posts are
   searched with their forum's visibility and results carry the post id. The
-  results need §7.2 to open.
+  results need §9.2 to open.
 - **Not in v1:** search scoped to one forum's bodies (a `channelIds` filter on
   `searchMessages` is a small P2 if asked), ranking, "similar posts" by body.
 
-### 7.2 Deep links
+### 9.2 Deep links
 
 `client/src/lib/app-route.ts` knows `/app/server/<sid>/channel/<cid>` and
 `/message/<mid>`. Add `/app/server/<sid>/channel/<forumId>/post/<postId>` and
@@ -731,7 +950,7 @@ the thread lookup) and open the parent with the post or panel on top. "Copiar
 link" in the post menu copies the `/post/` form. Electron's `pqp://` mapping
 needs nothing.
 
-### 7.3 Open Graph and SEO: none in v1
+### 9.3 Open Graph and SEO: none in v1
 
 - `/app/*` is `noindex` at the edge (`client/functions/_middleware.ts`) and
   every post is members-only.
@@ -746,9 +965,9 @@ needs nothing.
 
 ---
 
-## 8. Flag, phasing, effort, tests, rollout
+## 10. Flag, phasing, effort, tests, rollout
 
-### 8.1 The flag
+### 10.1 The flag
 
 ```ts
 // server/src/lib/flags.ts, FEATURE_FLAGS
@@ -781,23 +1000,25 @@ actions keep working, so nothing anyone wrote is stranded; the client hides
 "Fórum" in the create dialog and shows the paused line. It never hides or
 deletes data.
 
-### 8.2 Phases
+### 10.2 Phases
 
 Each phase ships alone, merged and deployed by itself.
 
 | Phase | Scope | Days | Restarts API |
 |---|---|---|---|
-| **P1** | Schema, `forums.ts` (shared and server), routes, flag, send-path guards and bump, `listUnread` exclusion, `deleteChannel` key read, retention exemption, shell sweep, two WS frames. Web: create dialog option, list, post in the thread panel, composer with tags and attachments, filters, title search, Novo/unread, route fix, the hint, `Badge` primitive, i18n in three languages | **8** (server + shared 3, web 3.5, tests and QA 1.5) | yes, and it changes `schema.sql` (merge outside a party) |
-| **P2** | Mention counts per post and on the forum (`parentChannelId`), author reply push (if yes to Q1), parent notification level fallback, AutoMod parent exemption, report snapshot with title and "excluir o post inteiro", "Posts parecidos" if it slipped, forum-scoped body search if asked | **4** | yes |
+| **P1** | **Must-haves: tags** (forum tag editor with the four starter chips, tags in the composer, chips on rows, filter by tag, moderated tags) **and pinning** (pin / unpin, max 3, pinned on top of page 1). Sorting **minimal**: recent activity and newest, nothing else. Schema, `forums.ts` (shared and server), routes, flag, send-path guards and bump, `listUnread` exclusion, `deleteChannel` key read, retention exemption, shell sweep, two WS frames, and the webhook execute refusal on forums (§7.1). Web: create dialog option, list, post in the thread panel, composer with tags and attachments, open / resolved / mine filters, title search, Novo/unread, lock and resolve, route fix, the hint, `Badge` primitive, i18n in three languages | **8** (server + shared 3, web 3.5, tests and QA 1.5) | yes, and it changes `schema.sql` (merge outside a party) |
+| **P1b** | Webhooks into a forum (§7): `thread_name` and fallbacks, `applied_tags` by id or name with the allowlist and default tags, dedupe, the cluster post bucket, `?thread_id=`, the forum settings in the webhooks section, `docs/BOT_SEND.md` fix. Ships right after P1, before the flag goes on for the requester (his main use case) | **2** (server 1, settings UI 0.5, tests 0.5) | yes (shared + server) |
+| **P2** | Richer sorting (most replies, unanswered first, a per-forum default sort), mention counts per post and on the forum (`parentChannelId`), author reply push (if yes to Q1), parent notification level fallback, AutoMod parent exemption, report snapshot with title and "excluir o post inteiro", "Posts parecidos" if it slipped, forum-scoped body search if asked, embed `image` / `thumbnail` for feed posts | **4** | yes |
 | **P3** | Discord import keeps forums and tags (§6), preview UI, `DISCORD_IMPORT.md` | **1** | yes (shared + server) |
 | **P4** | iOS: forum row, list, post (reuses the thread chat in `ios/pqp/Sources/Chat/ThreadViews.swift`), composer with tags. Android: the same, plus a thread chat screen it does not have at all | **iOS 3, Android 5** | no |
 
-About 21 engineering days in total. "Agent-assisted reality": the code in P1
-is a day or two of agent typing; the days are the review, the two-user QA on
-web and phone widths, and the cluster test, which is where the bugs in this
-repo's pitfall list were actually found.
+About 23 engineering days in total, 10 of them before the requester can use it
+(P1 plus P1b). "Agent-assisted reality": the code in P1 is a day or two of
+agent typing; the days are the review, the two-user QA on web and phone widths,
+and the cluster test, which is where the bugs in this repo's pitfall list were
+actually found.
 
-### 8.3 Tests per phase
+### 10.3 Tests per phase
 
 **P1, server** (vitest on a real Postgres, `TEST_DATABASE_URL`):
 
@@ -845,6 +1066,48 @@ swaps bob's composer for the closed line, delete closes bob's open panel, the
 `/post/` deep link opens the post, and the phone viewport (390 px) flow from
 list to post and back. `i18n:check` and `bench:tokens` green.
 
+**P1, webhook refusal.** A webhook on a forum: execute answers 400 with
+`code: 220001`, and no row appears in `messages` for the forum id.
+
+**P1b, webhooks** (vitest on a real Postgres, against the real
+`handleWebhookExecute` over HTTP, the way the webhook tests in
+`server/src/api/api.test.ts` already call it). Payload fixtures live in a new
+`server/src/api/fixtures/webhook-forum/` folder, one JSON file per real tool
+shape, each written from that tool's documented or captured output rather than
+from our own schema, because the point is the shapes we did not design:
+
+| Fixture | Shape | Expect |
+|---|---|---|
+| `monitorss-forum.json` | `thread_name`, `content` with the link, one embed with `title`, `url`, `description`, `timestamp`, `color`, `footer`, `image`, `applied_tags` of Discord snowflakes | post titled from `thread_name`; snowflakes in `ignored_tags`; `image` ignored; default tags applied |
+| `monitorss-text-channel.json` | same feed configured for a text channel: no `thread_name`, embed with `title` | post titled from the embed title |
+| `n8n-http-request.json` | `content` only, first line is the headline, then the link; `username`, `avatar_url` | title from the first line, URL stripped from it; list row shows the override name and picture |
+| `n8n-with-tags.json` | `thread_name`, `applied_tags` by name in mixed case and accents ("noticias", "LANÇAMENTO") | both tags resolve by name |
+| `zapier-webhook.json` | `content` and `embeds` with extra unknown fields (`tts`, `allowed_mentions`, `components`) | accepted, extras ignored |
+| `embed-without-title.json` | one embed with only `description`, no `content` | 400, `code: 220001`, message names `thread_name` |
+| `moderated-tag.json` | `applied_tags` naming a moderated tag | ignored unless the webhook's allowlist names it |
+| `thread-id-reply.json` | `?thread_id=` of a post in this forum, then of a locked post, then of another forum's post | reply lands; locked refused; other forum 404 |
+
+Plus: the same item twice gives one post and `X-Pqp-Deduplicated: 1` on the
+second; same title with a different link gives two posts; `utm_source` and a
+`#fragment` do not defeat the key; `Idempotency-Key` wins over the hash; after
+the window (clock moved in the test) a repeat posts; window 0 never dedupes;
+two concurrent identical executes on two pool connections give one post (the
+advisory lock); the cluster bucket returns 429 with `Retry-After` and
+`retry_after` after 10 posts across two module graphs (the
+`server/src/ws/cluster.test.ts` shape, and `sharedRateLimit` is Postgres so
+the count is real); a dedupe hit does not spend the bucket; flag off answers
+403 and writes nothing; a forum viewer on the other instance receives
+`forum-post-upsert` for a webhook post (production flags on:
+`CLUSTER_BUS=postgres`, `READ_CACHE` on); `webhook_forum_settings` is deleted
+with its webhook.
+
+**P1b, real tools on staging.** Before the flag goes on for the requester:
+point a self-hosted MonitoRSS and an n8n RSS workflow at a webhook on a staging
+forum (`pqp-api-staging`), each fed by a public feed that publishes daily, for
+48 hours; then restart both tools with their state wiped. Pass: one post per
+item, zero duplicates after the wipe, tags as configured, no 4xx in the API log
+other than intended 429s.
+
 **P2:** mention roll-up to the forum live and after reload; author push sent
 once per window and not when the author is online, muted or DND
 (`shouldPush` unit tests); a mention in a post of a muted forum does not push;
@@ -858,7 +1121,7 @@ custom emoji reported); `createServerFromImport` writes `forum_tags`.
 composer against a staging server with the override on; and what an **old**
 build does with a forum (below).
 
-### 8.4 Old clients
+### 10.4 Old clients
 
 | Client | Sees a forum as |
 |---|---|
@@ -869,7 +1132,7 @@ build does with a forum (below).
 Turning the flag on for a server therefore costs its phone users nothing worse
 than a missing channel until P4, and that is the reason P4 can wait.
 
-### 8.5 Migration and rollback
+### 10.5 Migration and rollback
 
 - **Migration:** additive DDL only (§1.2), no backfill, no data move.
 - **Feature rollback:** the flag, from the dashboard, per server or global, no
@@ -885,33 +1148,38 @@ than a missing channel until P4, and that is the reason P4 can wait.
 
 ---
 
-## 9. Risks, and what is not in v1
+## 11. Risks, and what is not in v1
 
-### 9.1 Risks
+### 11.1 Risks
 
 | Risk | Mitigation |
 |---|---|
 | Posts are channels, so per-server queries that walk every channel grow with posts (`listUnread` is the one that matters) | Exclude posts from `listUnread` in P1 (§4.2) and test it at 500 posts. Audit `getChannelAudience`, export and metrics queries for the same shape in the P1 PR. |
 | Deleting a big forum fires one query per post | One `ANY($1)` read in `deleteChannel` (§1.6). |
 | The deploy that carries the schema runs the whole file once | `BOOT_SCHEMA_MODE=changed` plus `lock_timeout` already bound it; merge outside a party. |
-| iOS and old web bundles show a dead row for a forum inside a category | iOS: one-line filter in the next TestFlight build. Web: the bundle self-updates (§8.4). |
+| iOS and old web bundles show a dead row for a forum inside a category | iOS: one-line filter in the next TestFlight build. Web: the bundle self-updates (§10.4). |
 | Drive-by spam in community servers | Cluster-wide post bucket, forum slow mode, AutoMod on title and body, timeouts (§5.4). |
 | Retention sweeps leave title-only posts | Opening messages are exempt (§1.6). |
 | A reader on the sibling container sees a 2 s old first page | The live frames correct it; the cache is per process by design. |
 | A support forum where askers never hear back | Author reply push in P2 (open question 1). |
+| A leaked webhook URL floods a forum | The cluster post bucket (60 an hour per webhook), dedupe, revoke by deleting the webhook (its posts stay, staff delete them). |
+| Dedupe swallows a legitimate repeat ("Patch notes" with the same link) | The hash includes the link, the window is 72 h and editable per webhook (0 turns it off), and a hit is visible as `X-Pqp-Deduplicated`. |
+| An RSS tool's Discord action rejects a non-discord.com URL | Documented in §8: use the tool's generic HTTP action with the same JSON. |
 
-### 9.2 Not in v1
+### 11.2 Not in v1
 
 Gallery or media layout, custom-emoji tags, default reaction, required tag,
 per-post slow mode, an explicit follow button, moving or merging posts, votes
 and ranking, accepted answer beyond "resolvido", post templates, scheduled
 posts, thumbnails in the list, per-post visibility, public or indexed post
-pages, AI summaries or duplicate detection, posting into a forum from a
-webhook or a character account, forum channels in DMs.
+pages, AI summaries or duplicate detection by content, forum channels in DMs. For
+webhooks: pqp fetching RSS itself, files from a webhook (multipart), editing or
+deleting a webhook's post through Discord's message endpoints, and webhooks
+creating tags.
 
 ---
 
-## 10. Open questions for Rafael
+## 12. Open questions for Rafael
 
 Each has a recommended answer; "sim pra tudo" is a valid reply.
 
@@ -930,6 +1198,7 @@ Each has a recommended answer; "sim pra tudo" is a valid reply.
    yes**, keep flattening until the flag is global, because an import makes a
    new server that no per-server override can name yet.
 5. **Ship web first and leave phones for P4?** **Recommended: yes**, turn the
-   flag on for the requesting community and the QG after P1, with the iOS
+   flag on for the requesting community and the QG after P1 and P1b (his feed
+   is the reason he asked), with the iOS
    one-line filter in the next TestFlight; go global after P2 once the cluster
    counters and two weeks of real posts look sane.
