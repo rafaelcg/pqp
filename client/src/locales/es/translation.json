@@ -1996,7 +1996,7 @@
   "settings.data.description": "Llévate todo contigo, o cierra la cuenta para siempre.",
   "settings.data.export": "Descargar",
   "settings.data.exporting": "Preparando…",
-  "settings.data.exportBody": "Perfil, configuración, mensajes que escribiste, comunidades y bloqueos. Los mensajes de otras personas no vienen.",
+  "settings.data.exportBody": "Perfil, configuración, mensajes que escribiste, comunidades y bloqueos. Los mensajes de otras personas no se incluyen.",
   "settings.data.exportFailed": "No se pudo armar tu copia. Inténtalo de nuevo.",
   "settings.data.delete": "Eliminar…",
   "settings.data.deleteHint": "Es permanente. No se puede deshacer.",
