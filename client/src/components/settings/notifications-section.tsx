@@ -1,12 +1,24 @@
+import { Volume2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  SettingsGroup,
+  SettingsInlineStatus,
+  SettingsLinkRow,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSwitchRow,
+  type InlineSaveState,
+} from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
+import { RadioGroup } from "@/components/ui/radio-group";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useNotificationSettings, useNotificationState } from "@/hooks/use-notifications";
 import { desktopContext } from "@/lib/desktop";
+import { DOWNLOAD_PAGE_PATH } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel } from "@/lib/notifications";
 import { getIncomingRing, getSoundState, playCue, setIncomingRing, setSoundCueEnabled, setSoundEnabled, subscribeSounds, type IncomingRingId, type SoundCue } from "@/lib/sounds";
 import { disablePush, enablePush, getCurrentPushSubscription, getPushAvailability, getPushConfig, setPushDmDetails, type PushAvailability } from "@/lib/push";
-import { Field, SwitchRow, chipClass } from "@/components/settings/ui";
 
 /* ----------------------------------------------------------- notifications */
 
@@ -16,15 +28,15 @@ const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
   { value: "none", label: "settings.notifications.level.none" },
 ];
 
-const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
-  // First: the one sound a DM makes, which until now had no switch at all —
+const SOUND_CUE_OPTIONS: { cue: SoundCue; id: string; label: MessageKey }[] = [
+  // First: the one sound a DM makes, which until now had no switch at all:
   // the catalogue key already existed and was unreachable.
-  { cue: "message", label: "settings.notifications.sounds.message" },
-  { cue: "mention", label: "settings.notifications.sounds.mention" },
-  { cue: "voiceJoin", label: "settings.notifications.sounds.voiceJoin" },
-  { cue: "voiceLeave", label: "settings.notifications.sounds.voiceLeave" },
-  { cue: "incomingCall", label: "settings.notifications.sounds.incomingCall" },
-  { cue: "outgoingCall", label: "settings.notifications.sounds.outgoingCall" },
+  { cue: "message", id: "sound-message", label: "settings.notifications.sounds.message" },
+  { cue: "mention", id: "sound-mention", label: "settings.notifications.sounds.mention" },
+  { cue: "voiceJoin", id: "sound-voice-join", label: "settings.notifications.sounds.voiceJoin" },
+  { cue: "voiceLeave", id: "sound-voice-leave", label: "settings.notifications.sounds.voiceLeave" },
+  { cue: "incomingCall", id: "sound-incoming-call", label: "settings.notifications.sounds.incomingCall" },
+  { cue: "outgoingCall", id: "sound-outgoing-call", label: "settings.notifications.sounds.outgoingCall" },
 ];
 
 const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
@@ -36,183 +48,111 @@ const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
 ];
 
 /**
- * The account-wide notification default, plus the opt-in itself.
+ * What reaches you, where, and with which sound.
  *
- * Permission is requested from the button and nowhere else. Browsers penalise
- * pages that ask on load, a refusal cannot be taken back from script, and there
- * is no second prompt to fall back on — so the ask has to be worth spending.
+ * Permission is requested from the system switch and nowhere else. Browsers
+ * penalise pages that ask on load, a refusal cannot be taken back from script,
+ * and there is no second prompt to fall back on, so the ask has to be worth
+ * spending. Push subscribes from its own switch for the same reason.
  */
 export function NotificationsSection() {
   const { t } = useTranslation();
   const { state, permission, enable, disable, setDefaultLevel } =
     useNotificationSettings();
-  const sounds = useSyncExternalStore(
-    subscribeSounds,
-    getSoundState,
-    getSoundState,
-  );
-  const incomingRing = useSyncExternalStore(
-    subscribeSounds,
-    getIncomingRing,
-    getIncomingRing,
-  );
+  const push = usePushDevice();
   const active = state.desktop && permission === "granted";
 
   return (
     <div className="space-y-6">
-      <div>
-        {permission === "unsupported" ? (
-          <p className="text-xs text-paper-muted">
-            {t("settings.notifications.unsupported", desktopContext())}
-          </p>
-        ) : permission === "denied" ? (
-          <p className="text-xs text-warning" role="status">
-            {t("settings.notifications.denied", desktopContext())}
-          </p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant={active ? "secondary" : "default"}
-              size="sm"
-              onClick={() => (active ? disable() : void enable())}
-            >
-              {active
-                ? t("settings.notifications.turnOff")
-                : t("settings.notifications.enable")}
-            </Button>
-            <span className="text-xs text-paper-muted">
-              {active
-                ? t("settings.notifications.on")
-                : t("settings.notifications.willAsk", desktopContext())}
-            </span>
-          </div>
-        )}
-      </div>
+      <SettingsGroup title={t("settings.notifications.group.device.title")}>
+        <SettingsSwitchRow
+          id="system-notifications"
+          label={t("settings.notifications.system.label")}
+          description={t("settings.notifications.system.where", desktopContext())}
+          checked={active}
+          disabled={permission === "unsupported" || permission === "denied"}
+          onCheckedChange={(next) => (next ? void enable() : disable())}
+          status={
+            permission === "unsupported" ? (
+              <SettingsNotice tone="info">
+                {t("settings.notifications.unsupported", desktopContext())}
+              </SettingsNotice>
+            ) : permission === "denied" ? (
+              <SettingsNotice tone="warning">
+                {t("settings.notifications.denied", desktopContext())}
+              </SettingsNotice>
+            ) : null
+          }
+        />
+        <PushRow push={push} />
+        {push.availability === "needs-install" ? (
+          <SettingsLinkRow
+            id="push-install"
+            label={t("settings.push.howToInstall")}
+            href={DOWNLOAD_PAGE_PATH}
+            external
+          />
+        ) : null}
+      </SettingsGroup>
 
-      <Field
-        label={t("settings.notifications.levelLabel")}
-        hint={t("settings.notifications.levelHint")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("settings.notifications.levelLabel")}
-          className="flex flex-wrap gap-1.5"
-        >
-          {LEVEL_OPTIONS.map((option) => {
-            const selected = option.value === state.default;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setDefaultLevel(option.value)}
-                className={chipClass(selected)}
-              >
-                {t(option.label)}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      <DirectMessagesSection />
-
-      <Field
-        label={t("settings.notifications.soundsLabel")}
-        hint={t("settings.notifications.soundsHint")}
-      >
-        <div className="space-y-2">
-          <label className="flex cursor-pointer items-start gap-3">
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={sounds.enabled}
-              onChange={(e) => setSoundEnabled(e.target.checked)}
+      <SettingsGroup title={t("settings.notifications.group.communities.title")}>
+        <SettingsRow
+          id="default-level"
+          label={t("settings.notifications.levelLabel")}
+          description={t("settings.notifications.levelHint")}
+          control={
+            <RadioGroup
+              variant="segmented"
+              label={t("settings.notifications.levelLabel")}
+              value={state.default}
+              onValueChange={setDefaultLevel}
+              options={LEVEL_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
             />
-            <span className="text-sm">{t("settings.notifications.sounds.enabled")}</span>
-          </label>
-          {SOUND_CUE_OPTIONS.map((option) => (
-            <div key={option.cue} className="space-y-1.5">
-              <label className="flex cursor-pointer items-center gap-3 pl-7">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-[var(--color-signal)]"
-                  checked={sounds[option.cue]}
-                  disabled={!sounds.enabled}
-                  onChange={(e) =>
-                    setSoundCueEnabled(option.cue, e.target.checked)
-                  }
-                />
-                <span className="min-w-0 flex-1 text-sm">{t(option.label)}</span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={!sounds.enabled || !sounds[option.cue]}
-                  onClick={() => playCue(option.cue)}
-                >
-                  {t("settings.notifications.sounds.preview")}
-                </Button>
-              </label>
-              {option.cue === "incomingCall" ? (
-                <div className="space-y-1.5 pl-14">
-                  <p className="text-xs text-paper-muted">
-                    {t("settings.notifications.sounds.ringHint")}
-                  </p>
-                  <div
-                    role="radiogroup"
-                    aria-label={t("settings.notifications.sounds.ringHint")}
-                    className="flex flex-wrap gap-1.5"
-                  >
-                    {INCOMING_RING_OPTIONS.map((ring) => {
-                      const selected = ring.id === incomingRing;
-                      return (
-                        <button
-                          key={ring.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          disabled={!sounds.enabled || !sounds.incomingCall}
-                          onClick={() => {
-                            setIncomingRing(ring.id);
-                            playCue("incomingCall");
-                          }}
-                          className={chipClass(selected)}
-                        >
-                          {t(ring.label)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </Field>
+          }
+        />
+      </SettingsGroup>
 
-      <PushNotificationsSection />
+      <DirectMessagesGroup pushOn={push.subscribed} />
+
+      <SoundsGroup />
     </div>
   );
 }
 
+/* --------------------------------------------------------------------- push */
+
+interface PushDevice {
+  availability: PushAvailability | null;
+  /** Null while the server's push config is loading. */
+  serverEnabled: boolean | null;
+  loadFailed: boolean;
+  subscribed: boolean;
+  busy: boolean;
+  error: string | null;
+  toggle: () => Promise<void>;
+}
+
 /**
- * Web Push — notifications that reach this device with the app fully closed.
+ * Web Push on this device: notifications that arrive with the app fully
+ * closed.
  *
- * Subscribing happens behind the button and nowhere else: it needs the
+ * Subscribing happens behind the switch and nowhere else: it needs the
  * browser's notification permission, and both Chrome's heuristics and iOS
  * outright require the request to originate from a user gesture. Nothing here
- * runs on app start.
+ * subscribes on mount; mount only reads the server config and whether this
+ * browser already holds a subscription.
  *
  * On iOS the API only exists inside an installed home-screen app, so a plain
- * Safari tab gets the install instruction instead of a button that cannot
- * work.
+ * Safari tab gets the install pointer instead of a switch that cannot work.
  */
-function PushNotificationsSection() {
+function usePushDevice(): PushDevice {
   const { t } = useTranslation();
   const [availability, setAvailability] = useState<PushAvailability | null>(null);
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -236,7 +176,11 @@ function PushNotificationsSection() {
         setServerEnabled(config.enabled);
         setSubscribed(subscription !== null);
       } catch {
-        // The section renders nothing rather than a broken toggle.
+        // A disabled switch and a line saying so, rather than a toggle that
+        // cannot know what it would be turning on.
+        if (!cancelled) {
+          setLoadFailed(true);
+        }
       }
     })();
     return () => {
@@ -268,66 +212,72 @@ function PushNotificationsSection() {
     }
   };
 
-  if (availability === null) {
-    return null;
+  return { availability, serverEnabled, loadFailed, subscribed, busy, error, toggle };
+}
+
+function PushRow({ push }: { push: PushDevice }) {
+  const { t } = useTranslation();
+  const { availability, serverEnabled, loadFailed, subscribed, busy, error } = push;
+
+  const ready =
+    availability === "available" && serverEnabled === true && !loadFailed;
+
+  let notice = null;
+  if (availability === "unsupported") {
+    notice = (
+      <SettingsNotice tone="info">
+        {t("settings.push.unsupported", desktopContext())}
+      </SettingsNotice>
+    );
+  } else if (availability === "available" && serverEnabled === false) {
+    notice = (
+      <SettingsNotice tone="info">{t("settings.push.notConfigured")}</SettingsNotice>
+    );
   }
 
+  const status: InlineSaveState | null = busy
+    ? { kind: "saving" }
+    : error
+      ? { kind: "error", message: error }
+      : loadFailed
+        ? { kind: "error", message: t("settings.push.loadFailed") }
+        : null;
+
   return (
-    <Field label={t("settings.push.title")}>
-      {availability === "needs-install" ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.needsInstall")}
-        </p>
-      ) : availability === "unsupported" ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.unsupported", desktopContext())}
-        </p>
-      ) : serverEnabled === false ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.notConfigured")}
-        </p>
-      ) : serverEnabled === null ? null : (
-        <>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant={subscribed ? "secondary" : "default"}
-              size="sm"
-              disabled={busy}
-              onClick={() => void toggle()}
-            >
-              {subscribed
-                ? t("settings.push.turnOff")
-                : t("settings.push.enable")}
-            </Button>
-            <span className="text-xs text-paper-muted">
-              {subscribed ? t("settings.push.on") : t("settings.push.off")}
-            </span>
-          </div>
-          {error ? (
-            <p className="mt-1.5 text-xs text-warning" role="status">
-              {error}
-            </p>
-          ) : null}
-        </>
-      )}
-    </Field>
+    <SettingsSwitchRow
+      id="push"
+      label={t("settings.push.title")}
+      description={
+        availability === "needs-install"
+          ? t("settings.push.needsInstall")
+          : t("settings.push.description")
+      }
+      checked={ready && subscribed}
+      disabled={!ready || busy}
+      onCheckedChange={() => void push.toggle()}
+      status={
+        notice ?? (status ? <SettingsInlineStatus state={status} /> : null)
+      }
+    />
   );
 }
 
+/* ---------------------------------------------------------- direct messages */
+
 /**
  * The three DM privacy choices, adjacent: the corner toast, its message
- * preview, and whether a phone notification may name the sender. Previously
- * `dmDetails` lived inside `PushNotificationsSection`, shown only once a
- * device had subscribed — but it is a stored account preference, not a fact
- * about this browser's subscription, so it belongs here with its siblings
- * and stays visible whether or not push is on for this device.
+ * preview, and whether a phone notification may name the sender. `dmDetails`
+ * is a stored account preference, not a fact about this browser's
+ * subscription, so it is read whatever this device's push state is; it is
+ * only switchable once push is on here, because its effect is invisible
+ * until then.
  */
-function DirectMessagesSection() {
+function DirectMessagesGroup({ pushOn }: { pushOn: boolean }) {
   const { t } = useTranslation();
   const state = useNotificationState();
   const [dmDetails, setDmDetails] = useState(false);
   // Set the moment a person touches the switch, so the initial config fetch
-  // — which can resolve after that click — knows not to stomp a choice
+  // (which can resolve after that click) knows not to stomp a choice
   // already in flight with whatever the server answered a moment earlier.
   const touchedRef = useRef(false);
 
@@ -340,7 +290,7 @@ function DirectMessagesSection() {
         }
       })
       .catch(() => {
-        // No push configured on this server — the switch still renders (it
+        // No push configured on this server: the switch still renders (it
         // is a preference independent of push), just starts at its default.
       });
     return () => {
@@ -358,31 +308,118 @@ function DirectMessagesSection() {
   };
 
   return (
-    <Field label={t("settings.notifications.dm.label")}>
-      <div className="space-y-3">
-        <SwitchRow
-          label={t("settings.notifications.dm.arrivalToast")}
-          hint={t("settings.notifications.dm.arrivalToastHint")}
-          checked={state.arrivalToast}
-          onChange={setArrivalToastEnabled}
-        />
-        <SwitchRow
-          label={t("settings.notifications.dm.previewInApp")}
-          hint={t("settings.notifications.dm.previewInAppHint")}
-          checked={state.previewInApp}
-          disabled={!state.arrivalToast}
-          onChange={setPreviewInAppEnabled}
-        />
-        <SwitchRow
-          label={t("settings.push.dmDetails")}
-          hint={t("settings.push.dmDetailsHint")}
-          checked={dmDetails}
-          onChange={toggleDmDetails}
-        />
-      </div>
-      <p className="mt-3 text-xs text-paper-muted">
-        {t("settings.notifications.dndHint")}
-      </p>
-    </Field>
+    <SettingsGroup title={t("settings.notifications.dm.label")}>
+      <SettingsSwitchRow
+        id="dm-arrival-toast"
+        label={t("settings.notifications.dm.arrivalToast")}
+        description={t("settings.notifications.dm.arrivalToastHint")}
+        checked={state.arrivalToast}
+        onCheckedChange={setArrivalToastEnabled}
+      />
+      <SettingsSwitchRow
+        id="dm-preview"
+        label={t("settings.notifications.dm.previewInApp")}
+        description={t("settings.notifications.dm.previewInAppHint")}
+        checked={state.previewInApp}
+        disabled={!state.arrivalToast}
+        onCheckedChange={setPreviewInAppEnabled}
+      />
+      <SettingsSwitchRow
+        id="dm-push-details"
+        label={t("settings.push.dmDetails")}
+        description={
+          pushOn
+            ? t("settings.push.dmDetailsHint")
+            : t("settings.push.dmDetailsNeedsPush")
+        }
+        checked={dmDetails}
+        disabled={!pushOn}
+        onCheckedChange={toggleDmDetails}
+      />
+    </SettingsGroup>
+  );
+}
+
+/* ------------------------------------------------------------------- sounds */
+
+function SoundsGroup() {
+  const { t } = useTranslation();
+  const sounds = useSyncExternalStore(
+    subscribeSounds,
+    getSoundState,
+    getSoundState,
+  );
+  const incomingRing = useSyncExternalStore(
+    subscribeSounds,
+    getIncomingRing,
+    getIncomingRing,
+  );
+  const ringDisabled = !sounds.enabled || !sounds.incomingCall;
+
+  return (
+    <SettingsGroup
+      title={t("settings.notifications.soundsLabel")}
+      description={t("settings.notifications.soundsHint")}
+    >
+      <SettingsSwitchRow
+        id="sounds"
+        label={t("settings.notifications.sounds.enabled")}
+        checked={sounds.enabled}
+        onCheckedChange={setSoundEnabled}
+      />
+      {SOUND_CUE_OPTIONS.map((option) => {
+        const label = t(option.label);
+        return (
+          <SettingsSwitchRow
+            key={option.cue}
+            id={option.id}
+            label={label}
+            checked={sounds[option.cue]}
+            disabled={!sounds.enabled}
+            onCheckedChange={(next) => setSoundCueEnabled(option.cue, next)}
+            trailing={
+              <Tooltip
+                label={t("settings.notifications.sounds.preview")}
+                name={t("settings.notifications.sounds.previewCue", { cue: label })}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  disabled={!sounds.enabled || !sounds[option.cue]}
+                  onClick={() => playCue(option.cue)}
+                >
+                  <Volume2 aria-hidden className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            }
+          />
+        );
+      })}
+      <SettingsRow
+        id="incoming-ring"
+        label={t("settings.notifications.sounds.ringLabel")}
+        description={t("settings.notifications.sounds.ringHint")}
+        disabled={ringDisabled}
+        stacked
+        control={
+          <RadioGroup
+            variant="chips"
+            label={t("settings.notifications.sounds.ringLabel")}
+            value={incomingRing}
+            disabled={ringDisabled}
+            onValueChange={(next) => {
+              setIncomingRing(next);
+              playCue("incomingCall");
+            }}
+            options={INCOMING_RING_OPTIONS.map((ring) => ({
+              value: ring.id,
+              label: t(ring.label),
+            }))}
+          />
+        }
+      />
+    </SettingsGroup>
   );
 }
