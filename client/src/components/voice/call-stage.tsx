@@ -1,33 +1,23 @@
 import {
-  Bell,
-  BellOff,
-  ChevronDown,
-  ChevronUp,
-  Crop,
-  Eye,
-  EyeOff,
   Hand,
   Info,
   LayoutGrid,
   Loader2,
   Maximize2,
-  MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
   Mic,
   MicOff,
-  MousePointer2,
-  MousePointerBan,
   ShieldBan,
   Minimize2,
+  MoreHorizontal,
   PhoneOff,
-  Pin,
-  Scan,
   ScreenShare,
   ScreenShareOff,
   Music,
   Video,
   VideoOff,
+  X,
 } from "lucide-react";
 import {
   useCallback,
@@ -67,6 +57,7 @@ import {
 } from "@/lib/screen-preview-pref";
 import {
   setJoinLeaveAutoMuteEnabled,
+  shouldSuppressJoinLeaveSound,
   useJoinLeaveAutoMuteEnabled,
 } from "@/lib/large-room-sounds";
 import {
@@ -126,6 +117,13 @@ import {
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
+import { useVideoInsets, type VideoInsets } from "@/hooks/use-video-insets";
+import { Menu } from "@/components/ui/menu";
+import {
+  cameraTileMoreItems,
+  shareTileMoreItems,
+  stageMoreItems,
+} from "@/components/voice/call-menu-items";
 import { seatedInWatchPartyRoom, shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
@@ -191,7 +189,7 @@ import { videoFitClass } from "@/lib/video-fit";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import {
   PeerAudioMenu,
-  PeerAudioMenuButton,
+  PictureVolume,
   usePeerAudioMenu,
   type PeerAudioTrack,
 } from "@/components/voice/peer-audio-menu";
@@ -212,7 +210,10 @@ import { isAutomatedBrowser } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
-import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
+import {
+  useVoiceNotice,
+  VoiceNoticeBar,
+} from "@/components/voice/voice-notice-bar";
 import {
   callStartKey,
   callStartedAt,
@@ -294,11 +295,16 @@ export function personAudioTracks(person: StagePerson): {
   return voice || share ? { voice, share } : undefined;
 }
 
+/**
+ * The bottom corners clear the bar's band (`--call-bar-h`) and the picture's
+ * own control row above it (about 3rem), or the preview would sit on the
+ * sound, ⋯ and fullscreen of the share it floats over.
+ */
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
-  bl: "bottom-3 left-3",
-  br: "bottom-3 right-3",
+  bl: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] left-3",
+  br: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] right-3",
 };
 
 /**
@@ -309,8 +315,8 @@ const PIP_CORNER_CLASS: Record<PipCorner, string> = {
 const PIP_CORNER_CLASS_WITH_STRIP: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
-  bl: "bottom-[calc(7rem+var(--call-row-extra,0px))] left-3",
-  br: "bottom-[calc(7rem+var(--call-row-extra,0px))] right-3",
+  bl: "bottom-[calc(var(--call-bar-h,4.5rem)+6rem)] left-3",
+  br: "bottom-[calc(var(--call-bar-h,4.5rem)+6rem)] right-3",
 };
 
 /**
@@ -322,8 +328,8 @@ const PIP_CORNER_CLASS_WITH_STRIP: Record<PipCorner, string> = {
 const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
-  bl: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] left-3",
-  br: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] right-3",
+  bl: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] left-3",
+  br: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] right-3",
 };
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
@@ -625,6 +631,21 @@ export interface CallStageProps {
    * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
+  /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
+  onDismissError?: () => void;
+  /**
+   * The channel list beside the stage is open and lists this room, with each
+   * person, who is talking, who is muted and whose hand is up. The stage then
+   * stops repeating it: no row of people under the picture, no room name and
+   * head count over it. Only a server voice channel passes it, and only while
+   * the list is expanded on a wide screen; a DM call has no such list.
+   */
+  roomListOnScreen?: boolean;
+  /**
+   * The chat pane, and the composer the call\'s controls dock into, is put
+   * away. The controls then float over the stage instead.
+   */
+  composerHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -637,6 +658,8 @@ export interface CallStageProps {
   /** Stop watching one peer's share, and undo that. */
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /**
    * Our own hand in the room's queue. Absent leaves the control off the bar
@@ -730,6 +753,9 @@ export function CallStage({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
+  roomListOnScreen = false,
+  composerHidden = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -740,6 +766,8 @@ export function CallStage({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -795,6 +823,9 @@ export function CallStage({
       onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
+      onDismissError={onDismissError}
+      roomListOnScreen={roomListOnScreen}
+      composerHidden={composerHidden}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -805,6 +836,8 @@ export function CallStage({
       onSetScreenVolume={onSetScreenVolume}
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
+      onDismissCamera={onDismissCamera}
+      onWatchCamera={onWatchCamera}
       onRetryPeer={onRetryPeer}
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
@@ -843,6 +876,9 @@ function ActiveCall({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
+  roomListOnScreen = false,
+  composerHidden = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -853,6 +889,8 @@ function ActiveCall({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -893,6 +931,21 @@ function ActiveCall({
    * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
+  /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
+  onDismissError?: () => void;
+  /**
+   * The channel list beside the stage is open and lists this room, with each
+   * person, who is talking, who is muted and whose hand is up. The stage then
+   * stops repeating it: no row of people under the picture, no room name and
+   * head count over it. Only a server voice channel passes it, and only while
+   * the list is expanded on a wide screen; a DM call has no such list.
+   */
+  roomListOnScreen?: boolean;
+  /**
+   * The chat pane, and the composer the call\'s controls dock into, is put
+   * away. The controls then float over the stage instead.
+   */
+  composerHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -905,6 +958,8 @@ function ActiveCall({
   /** Stop watching one peer's share, and undo that. */
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /**
    * Our own hand in the room's queue. Absent leaves the control off the bar
@@ -1089,6 +1144,19 @@ function ActiveCall({
    * move: our own share, a silent one, or a caller that did not wire the
    * setter. Keyed on userId so the setting survives a reconnect.
    */
+  /** Hiding a camera, or nothing for our own camera or an unwired caller. */
+  function cameraHideControl(person: StagePerson) {
+    if (person.isSelf || !onDismissCamera || !onWatchCamera) {
+      return undefined;
+    }
+    const active = voiceState.dismissedCameraPeerIds.includes(person.key);
+    return {
+      active,
+      onToggle: () =>
+        active ? onWatchCamera(person.key) : onDismissCamera(person.key),
+    };
+  }
+
   /** The decline control for a tile, or nothing when the caller did not wire it. */
   function shareDismissControl(tile: ScreenShareTile) {
     if (tile.isSelf || !onDismissShare || !onWatchShare) {
@@ -1282,6 +1350,50 @@ function ActiveCall({
   useEffect(() => {
     onShapeChange?.(shape);
   }, [shape, onShapeChange]);
+  // Fullscreen covers the channel list, so the stage speaks for the room
+  // again there.
+  const roomInSidebar = roomListOnScreen && shape !== "fullscreen";
+  const notice = useVoiceNotice(voiceState.notice);
+  const [bannerColumn, setBannerColumn] = useState<HTMLDivElement | null>(null);
+  const [barEl, setBarEl] = useState<HTMLDivElement | null>(null);
+  const [barPx, setBarPx] = useState(0);
+  useEffect(() => {
+    if (!barEl) {
+      setBarPx(0);
+      return;
+    }
+    const read = () => setBarPx(Math.round(barEl.getBoundingClientRect().height));
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(barEl);
+    return () => observer.disconnect();
+  }, [barEl]);
+  const [bannersPx, setBannersPx] = useState(0);
+  useEffect(() => {
+    if (!bannerColumn) {
+      setBannersPx(0);
+      return;
+    }
+    const read = () =>
+      setBannersPx(Math.round(bannerColumn.getBoundingClientRect().height));
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(bannerColumn);
+    return () => observer.disconnect();
+  }, [bannerColumn]);
+  // The strip is also where a failed peer's retry lives, and the list has no
+  // such button, so a failure brings the strip back until it is fixed.
+  const stripInSidebar =
+    roomInSidebar && !listeners.some((person) => person.failed);
+  // A strip holding nobody but ourselves (a 1:1 call where the other person
+  // is the picture) names one person, us, who is already in the bar.
+  const stripOnlySelf = listeners.every((person) => person.isSelf);
   useEffect(() => {
     // Leaving the call takes the stage with it, and a pane still holding a
     // height for a stage that is gone is a gap where the transcript should be.
@@ -1292,20 +1404,42 @@ function ActiveCall({
       watchFullscreen.exit();
     }
   }, [showCinema, watchFullscreen]);
-  // Phone held sideways with a share on: the shell's columns step aside.
-  // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
+  // Phone held sideways with a picture on: the shell's columns step aside.
+  // Any picture, not only a share: with the call's controls in the composer,
+  // a camera left the full desktop layout on a 390px tall screen and pushed
+  // the composer below it. Everything but the flag lives in the hook
+  // (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
-    shareFocused: screenStream !== null && chromeExpanded,
+    shareFocused: (screenStream !== null || anyVideo) && chromeExpanded,
     fullscreen: fullscreen.isFullscreen,
   });
-  // Overlay chrome vs composer dock. Music-only is a picture with the
-  // dock kept; fullscreen still takes the overlay so hang-up is reachable
-  // with the composer gone.
+  // Whatever names this call (the channel, the person in a DM) is the page
+  // header's first line. Only where the header is out of sight, fullscreen,
+  // does the stage say it again. Not a phone's landscape takeover: that one
+  // folds the side columns away and leaves the header where it was.
+  const titleOnStage = shape === "fullscreen";
+  // THE CALL'S CONTROLS LIVE IN THE COMPOSER, whatever the stage shows. A
+  // share or a camera used to swap them for a bar drawn over the picture,
+  // so the strip a person had been using vanished the moment somebody
+  // shared, and the picture lost a band of its height to that bar. Now the
+  // strip stays and only the pictures change above it. The floating bar is
+  // for where the composer is out of sight: fullscreen, and a page with no
+  // composer to dock into. A watch party's own bar keeps its controls.
+  const composerOutOfSight =
+    fullscreen.isFullscreen ||
+    watchFullscreen.active ||
+    // A phone held sideways folds the chat away for the picture.
+    immersive.immersive ||
+    composerHidden;
   const dockControls =
-    !chromeExpanded &&
-    !fullscreen.isFullscreen &&
-    !watchFullscreen.active;
+    !composerOutOfSight && !(chromeExpanded && watchPartyChrome);
   const dockComposer = dockControls && dockPublish !== null;
+  // The control bar is drawn over the stage. Outside fullscreen the stage
+  // keeps a band for it (a page with no composer); in fullscreen the bar
+  // fades over the picture and each picture's row lifts above it instead.
+  // Not under the party's own chrome, where the bar has no buttons.
+  const barOverlay = !dockComposer && !watchPartyChrome;
+  const barFloats = composerOutOfSight;
   const soloMusic = fullscreen.soloPeerId === MUSIC_STAGE_TILE_ID;
   const soloTile =
     fullscreen.soloPeerId === null ||
@@ -1347,7 +1481,10 @@ function ActiveCall({
     isCameraOn: voiceState.isCameraOn,
     isSharingScreen: voiceState.isSharingScreen,
     hasIncomingVideo: receivingVideo(voiceState),
-    collapsed: collapsed || dockComposer,
+    // The composer's strip carries the quality button whenever a picture is
+    // on the stage, so it is not "collapsed" for this menu then: treating it
+    // as collapsed closed the menu the moment it was asked to open.
+    collapsed: (collapsed || dockComposer) && !(dockComposer && chromeExpanded),
   });
   // Cleared rather than merely ignored: a menu that was open when the camera
   // went off must not spring back open by itself when the camera returns.
@@ -1523,7 +1660,10 @@ function ActiveCall({
       const peopleLine = collapsedPeopleLine({
         connected: voiceState.status === "connected",
         callingOut,
-        statusLine,
+        // While the ring view fills the stage it says Calling in large type;
+        // the strip under it names the people instead of saying it again.
+        statusLine:
+          dockComposer && ringing && stage.tiles.length === 0 ? null : statusLine,
         peopleLabel: collapsedPeopleLabel(
           people.map((person) => person.displayName),
           (count) => t("call.panel.inCall", { count }),
@@ -1532,20 +1672,24 @@ function ActiveCall({
       return (
         <div className="flex h-9 min-w-0 items-center gap-2">
           <OccupantFaces faces={people} />
+          {/* The names give way, the clock does not: on a phone the clock
+              was the part cut to "0:...". */}
           <p
-            className="min-w-0 flex-1 truncate text-sm leading-none text-text"
+            className="flex min-w-0 flex-1 items-center text-sm leading-none text-text"
             role="status"
           >
-            {peopleLine}
-            {declinedNames.map((name) => (
-              <span key={name} className="ml-2 text-warning">
-                {t("call.panel.declined", { name })}
-              </span>
-            ))}
+            <span className="min-w-0 truncate">
+              {peopleLine}
+              {declinedNames.map((name) => (
+                <span key={name} className="ml-2 text-warning">
+                  {t("call.panel.declined", { name })}
+                </span>
+              ))}
+            </span>
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
-              className="ml-2 tabular-nums text-text-tertiary"
+              className="ml-2 shrink-0 tabular-nums text-text-tertiary"
             />
           </p>
           <RaisedHandQueue
@@ -1584,11 +1728,43 @@ function ActiveCall({
     };
   }, []);
 
+  // The bar's notices: drawn above the floating bar, or, when the controls
+  // are docked in the composer, at the bottom of the stage they talk about.
+  const barNotices = (
+    <>
+      <MicFallbackNotice
+        micFallback={voiceState.micFallback}
+        visible={!chrome.hidden}
+        onDismiss={onDismissMicFallbackNotice}
+      />
+      <CapacityNotice
+        voiceChannelId={voiceState.voiceChannelId}
+        transport={voiceState.roomTransport}
+        roseFrom={voiceState.capacityRoseFrom}
+        visible={!chrome.hidden}
+      />
+      <CinemaHint visible={screenStream !== null} />
+      {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
+          share button, before the picker opens, since that is where the
+          question actually gets asked. Gone once the share is already
+          running, since by then the picker has already been answered. */}
+      <LinuxShareAudioHint
+        visible={
+          !chrome.hidden &&
+          Boolean(onStartScreenShare) &&
+          !voiceState.isSharingScreen
+        }
+        isDesktopShell={isDesktopApp()}
+      />
+    </>
+  );
+
   const controls = (
     <CallControls
       voiceState={voiceState}
       rowRef={controlRowRef}
       collapsed={collapsed || dockComposer}
+      videoOnStage={dockComposer && chromeExpanded}
       leading={collapsedLeading}
       canExpand={hasVideo}
       userCollapsed={userCollapsed}
@@ -1745,7 +1921,14 @@ function ActiveCall({
       onKeyDownCapture={chrome.wake}
       onFocusCapture={chrome.wake}
       // Read by the strip's reserve and the self-preview's bottom corners.
-      style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
+      style={
+        {
+          "--call-row-extra": `${controlRowExtraPx}px`,
+          "--stage-banners": `${bannersPx}px`,
+          "--call-bar-h": barOverlay ? `${barPx || 72}px` : "0px",
+          "--tile-row-lift": barOverlay && barFloats ? `${barPx || 72}px` : "0px",
+        } as CSSProperties
+      }
     >
       {/* --- the stage's content -------------------------------------------
           One rule, whatever the transport carried it: a picture is a tile and
@@ -1754,11 +1937,90 @@ function ActiveCall({
           `<video>` elements is exactly the number of pictures on screen, which
           is what the SFU's delivery rule reads (`remote-video-delivery.ts`).
       */}
-      {showMeshWarning && (
-        <p className={cn("absolute inset-x-0 top-0 bg-warning/10 px-3 py-1 text-center text-xs text-warning", STAGE_LAYER.badges)}>
-          {t("voice.meshWarning")}
-        </p>
+      {/* THE BANNERS ARE ONE COLUMN. The room-nearly-full warning, the red
+          error strip and the notice each used to pin itself to the top on its
+          own, so two at once drew on top of each other and the warning, on
+          the higher layer, took the strip's close button. Stacked here they
+          cannot overlap, and the column's measured height (`--stage-banners`
+          on the stage) is what the title overlay and every tile's control row
+          step down by, however many lines the strip wraps to. */}
+      <div
+        ref={setBannerColumn}
+        data-stage-banners=""
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 flex flex-col",
+          STAGE_LAYER.badges,
+        )}
+      >
+        {showMeshWarning && (
+          <p className="bg-warning-soft px-3 py-1 text-center text-xs text-on-warning-soft">
+            {t("voice.meshWarning")}
+          </p>
+        )}
+      {voiceState.error && (
+        <div
+          role="alert"
+          data-voice-error
+          // Solid, not a wash: it sits over video, and red text on 15% red
+          // over a bright picture could not be read.
+          className="pointer-events-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger-soft px-3 py-1 text-center text-xs text-on-danger-soft"
+        >
+          <span>{voiceState.error}</span>
+          {/* Every microphone error is fixed by picking another microphone,
+              so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "connection" && (
+            <button
+              type="button"
+              data-voice-error-check
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={() => requestConnectionCheck()}
+            >
+              {t("connection.check")}
+            </button>
+          )}
+          {/* Sound is the only part of a capture that can fail on its own and
+              take the picture with it. One click puts the share back, minus
+              the thing that broke it, and it has to be a click: the picker
+              already spent this attempt's user activation. */}
+          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
+            <button
+              type="button"
+              data-voice-error-share-silent
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={onShareWithoutSound}
+            >
+              {t("voice.control.shareWithoutSound")}
+            </button>
+          )}
+          {voiceState.errorKind === "mic" && (
+            <button
+              type="button"
+              data-voice-error-settings
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={() => requestSettingsSection("voice")}
+            >
+              {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+          {onDismissError && (
+            <button
+              type="button"
+              data-voice-error-dismiss
+              aria-label={t("common.close")}
+              title={t("common.close")}
+              // 32px: a target a thumb can hit.
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-on-danger-soft hover:bg-danger/20"
+              onClick={onDismissError}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        </div>
       )}
+      {!voiceState.error && (
+        <VoiceNoticeBar notice={notice.shown} onClose={notice.hide} stacked />
+      )}
+      </div>
       <div className="flex h-full w-full flex-col">
         <div className="relative min-h-0 flex-1">
           {soloPerson ? (
@@ -1792,9 +2054,7 @@ function ActiveCall({
               tile={soloTile}
               videoRef={primaryVideoRef}
               isFullscreen
-              /* The header overlay already names a lone presenter; a second
-                 label on the picture is the same sentence twice. */
-              showName={screenTiles.length > 1}
+              showName
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
               audio={shareAudioControl(soloTile)}
               dismissed={shareDismissControl(soloTile)}
@@ -1889,7 +2149,7 @@ function ActiveCall({
                         tile={screenTile}
                         videoRef={videoRef}
                         isFullscreen={false}
-                        showName={staged.tiles.length > 1}
+                        showName
                         clickToFullscreen={clickFullscreens}
                         onToggleFullscreen={() => {
                           // Keep the header's "X is presenting" line pointing
@@ -1935,6 +2195,7 @@ function ActiveCall({
                         : undefined
                     }
                     pinned={pinned}
+                    hidden={cameraHideControl(person)}
                   />
                 );
               })}
@@ -1983,6 +2244,7 @@ function ActiveCall({
             is already showing these same faces, larger. */}
         {showStrip && !soloPerson && !soloTile && !soloMusic && (
           <>
+          {!stripInSidebar && !stripOnlySelf && (
           <ListenerStrip
             people={listeners.map((person) => ({
               key: person.key,
@@ -2009,16 +2271,22 @@ function ActiveCall({
                pressed, which is the worst of both. */
             className={STAGE_LAYER.menus}
           />
-          {/* The bar's own territory. The strip stops here so the hang-up
-              button is never under a chip, and the chips are never under the
-              bar's box. Grows with the home indicator, like the bar does, and
-              with every line the control row folds onto past its first. */}
+          )}
+          </>
+        )}
+        {/* THE BAR'S OWN TERRITORY, whatever the stage is showing. The
+            pictures, the strip and the room view all stop above it, so every
+            picture's control row (at its bottom edge, like a player's) is
+            never under the bar's box, which keeps the pointer across its
+            whole width. Measured, not guessed (`--call-bar-h`): it grows with
+            the home indicator and with every line the control row folds
+            onto. The same in fullscreen, so nothing moves on the way in. */}
+        {barOverlay && !barFloats && (
           <div
             aria-hidden="true"
             data-testid="call-stage-bar-reserve"
-            className="h-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] shrink-0"
+            className="h-[var(--call-bar-h,4.5rem)] shrink-0"
           />
-          </>
         )}
       </div>
 
@@ -2080,56 +2348,21 @@ function ActiveCall({
       )}
 
       {/* --- overlays -------------------------------------------------------- */}
-      {voiceState.error && (
+
+      {dockComposer && composerDock}
+      {dockComposer && (
         <div
-          role="alert"
-          data-voice-error
-          className={cn("absolute inset-x-0 top-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger", STAGE_LAYER.state)}
+          data-stage-notices=""
+          className={cn(
+            "absolute inset-x-0 bottom-12 flex flex-col items-center gap-2 px-3 [&>*]:pointer-events-auto",
+            STAGE_LAYER.menus,
+          )}
+          style={{ pointerEvents: "none" }}
         >
-          <span>{voiceState.error}</span>
-          {/* Every microphone error is fixed by picking another microphone,
-              so the banner carries the door to where that happens. */}
-          {voiceState.errorKind === "connection" && (
-            <button
-              type="button"
-              data-voice-error-check
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={() => requestConnectionCheck()}
-            >
-              {t("connection.check")}
-            </button>
-          )}
-          {/* Sound is the only part of a capture that can fail on its own and
-              take the picture with it. One click puts the share back, minus
-              the thing that broke it, and it has to be a click: the picker
-              already spent this attempt's user activation. */}
-          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
-            <button
-              type="button"
-              data-voice-error-share-silent
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={onShareWithoutSound}
-            >
-              {t("voice.control.shareWithoutSound")}
-            </button>
-          )}
-          {voiceState.errorKind === "mic" && (
-            <button
-              type="button"
-              data-voice-error-settings
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={() => requestSettingsSection("voice")}
-            >
-              {t("voice.error.openVoiceSettings")}
-            </button>
-          )}
+          {barNotices}
         </div>
       )}
-      {!voiceState.error && <VoiceNoticeBar notice={voiceState.notice} />}
-
-      {dockComposer ? (
-        composerDock
-      ) : (
+      {(
         <>
       <div
         data-call-chrome="overlay"
@@ -2138,7 +2371,7 @@ function ActiveCall({
           STAGE_LAYER.chrome,
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
-          (voiceState.error || voiceState.notice) && "mt-7",
+          "mt-[var(--stage-banners,0px)]",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,
           // the count and the uptime, and "watch-party · 1 na chamada" over
@@ -2149,21 +2382,27 @@ function ActiveCall({
         )}
       >
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-paper">
-            {title}
-          </p>
+          {titleOnStage && (
+            <p className="truncate text-sm font-semibold text-paper">
+              {title}
+            </p>
+          )}
           <p className="truncate text-xs text-paper-muted" role="status">
             {/* RingView already says Connecting/Calling at centre stage.
                 A video-call ring puts our own camera on the stage instead, so
                 the overlay still has to carry that line. */}
-            {ringing && stage.tiles.length === 0
+            {/* The composer's strip under the stage already says who is in
+                the call, Calling or Connecting, and who declined. */}
+            {(ringing && stage.tiles.length === 0) || dockComposer
               ? null
               : (statusLine ??
-                t("call.panel.inCall", { count: remotes.length + 1 }))}
+                (roomInSidebar
+                  ? null
+                  : t("call.panel.inCall", { count: remotes.length + 1 })))}
             {!voiceState.canSpeak && (
               <span className="ml-2 text-warning">{t("voice.bar.listenOnly")}</span>
             )}
-            {declinedNames.map((name) => (
+            {!dockComposer && declinedNames.map((name) => (
               <span key={name} className="ml-2 text-warning">
                 {t("call.panel.declined", { name })}
               </span>
@@ -2246,11 +2485,15 @@ function ActiveCall({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <CallDuration
-            running={timerRunning}
-            startedAt={startedAt}
-            className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
-          />
+          {/* The composer's strip already shows the clock when it carries
+              the call's controls. */}
+          {!roomInSidebar && !dockComposer && (
+            <CallDuration
+              running={timerRunning}
+              startedAt={startedAt}
+              className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+            />
+          )}
           {/* The way back from the landscape takeover, and the way into it
               again. Only on a phone held sideways with a share on. */}
           {(immersive.canDismiss || immersive.dismissed) && (
@@ -2276,7 +2519,9 @@ function ActiveCall({
         </div>
       </div>
 
+      {!dockComposer && (
       <div
+        ref={setBarEl}
         data-call-chrome="bar"
         data-testid="call-controls-bar"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
@@ -2303,7 +2548,7 @@ function ActiveCall({
           // phone is the screen minus the server rail and on a tablet or a
           // narrow desktop pane is less than the window says. See the pill
           // in `CallControls`.
-          "@container absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
+          "@container absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-2",
           chromeClass,
         )}
         onPointerEnter={(event) => {
@@ -2321,32 +2566,43 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
-        <MicFallbackNotice
-          micFallback={voiceState.micFallback}
-          visible={!chrome.hidden}
-          onDismiss={onDismissMicFallbackNotice}
-        />
-        <CapacityNotice
-          voiceChannelId={voiceState.voiceChannelId}
-          transport={voiceState.roomTransport}
-          roseFrom={voiceState.capacityRoseFrom}
-          visible={!chrome.hidden}
-        />
-        <CinemaHint visible={screenStream !== null} />
-        {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
-            share button, before the picker opens, since that is where the
-            question actually gets asked. Gone once the share is already
-            running, since by then the picker has already been answered. */}
-        <LinuxShareAudioHint
-          visible={
-            !chrome.hidden &&
-            Boolean(onStartScreenShare) &&
-            !voiceState.isSharingScreen
-          }
-          isDesktopShell={isDesktopApp()}
-        />
+        {/* The bar's notices float just above its box, over the picture,
+            rather than in it: the box is the band the stage reserves, and a
+            notice coming and going must not move every picture. */}
+        <div
+          data-call-bar-notices=""
+          className="absolute inset-x-0 bottom-full flex flex-col items-center gap-2 pb-2 [&>*]:pointer-events-auto"
+          style={{ pointerEvents: "none" }}
+        >
+          {barNotices}
+        </div>
         {watchPartyChrome ? null : controls}
+        {/* With the room's name in the list, the clock is the one thing left
+            of the overlay's corner, and it reads as the call's state: at the
+            bar's left end, level with the pill. */}
+        {roomInSidebar && !watchPartyChrome && timerRunning && (
+          <p
+            data-testid="call-bar-duration"
+            // The time alone from 32rem of bar, where it still clears the
+            // pill; the words beside it from 48rem.
+            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-text-tertiary @min-[32rem]:flex"
+          >
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />
+            <span className="hidden @min-[48rem]:inline">
+              {t("voice.bar.connected")}
+            </span>
+            <span aria-hidden="true" className="hidden @min-[48rem]:inline">
+              ·
+            </span>
+            <CallDuration
+              running={timerRunning}
+              startedAt={startedAt}
+              className="tabular-nums"
+            />
+          </p>
+        )}
       </div>
+      )}
         </>
       )}
     </div>
@@ -2516,6 +2772,7 @@ export function CallControls({
   onLowerHand,
   leading = null,
   rowRef,
+  videoOnStage = false,
 }: {
   voiceState: VoiceState;
   collapsed: boolean;
@@ -2562,6 +2819,11 @@ export function CallControls({
   /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /**
+   * The stage above is showing pictures while this bar sits in the composer:
+   * the quality control has something to govern, so it stays.
+   */
+  videoOnStage?: boolean;
 }) {
   const { t } = useTranslation();
   // Probed once per mount — whether the browser has getDisplayMedia never
@@ -2576,7 +2838,6 @@ export function CallControls({
   // still useful mid-share where the engine can change a live track, which is
   // nowhere today: see `lib/screen-capture-cursor.ts`.
   const shareCursor = useShareCursor();
-  const hidePreviewPref = useHideScreenPreview();
   const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
@@ -2626,12 +2887,22 @@ export function CallControls({
   );
   const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
-  const size = collapsed ? "h-9 w-9" : "h-10 w-10";
+  // The strip's tiles shrink a step on a narrow strip (a phone), so the
+  // whole set holds one row there instead of leaving hang-up on a line of
+  // its own.
+  const size = collapsed
+    ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
+    : "h-10 w-10";
   const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
   // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
   // wrapping row one by one. The bell's group keeps its own rule (hidden
-  // below `sm`), which a `contents` here would override.
-  const stageGroup = collapsed ? undefined : "@max-[40rem]:contents";
+  // below `sm`), which a `contents` here would override. The docked strip
+  // does the same under 35rem, where it is a column: with a picture on the
+  // stage it carries the whole set, and a cluster that moved as one left
+  // mute alone on a line and pushed hang-up off a phone's screen.
+  const stageGroup = collapsed
+    ? "@max-[35rem]:contents"
+    : "@max-[40rem]:contents";
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from
@@ -2652,6 +2923,98 @@ export function CallControls({
     : t("voice.hand.raise");
 
   const showMute = !collapsed || !pushToTalk;
+
+  const startWatchParty = () => {
+    if (shareCappedOut || !onStartScreenShare) {
+      return;
+    }
+    // Paint the hint in this click, before getDisplayMedia opens the picker
+    // and the rest of the page stops updating. Clear once the picker settles:
+    // cancel, error, or a live share.
+    flushSync(() => {
+      setShareHint(t("voice.control.watchPartyHint"));
+    });
+    void Promise.resolve(
+      onStartScreenShare({ preferBrowserTab: true }),
+    ).finally(() => {
+      setShareHint(null);
+    });
+  };
+
+  // THE STAGE BAR KEEPS WHAT A CALL USES EVERY MINUTE AND FOLDS THE REST.
+  // Mic, camera, share, hand, music and leave stay on the bar; the things a
+  // person sets once (the cursor, the join and leave sounds), starts once (a
+  // watch party) or reaches for rarely (fullscreen of the whole stage,
+  // folding the call away) live behind "Mais". The rows are built in
+  // `call-menu-items.ts`. The docked bar keeps its own tiles: its width rules
+  // already decide what fits there.
+  const offersWatchParty =
+    canWatchParty && !listenOnly && !noVideo && Boolean(onStartScreenShare);
+  const offersCursor = canShare && !noVideo && Boolean(onStartScreenShare);
+  const stageMenuItems = stageMoreItems(t, {
+        watchParty: offersWatchParty
+          ? {
+              disabledReason: voiceState.isSharingScreen
+                ? "sharing"
+                : shareCappedOut
+                  ? "cap"
+                  : null,
+              onStart: startWatchParty,
+            }
+          : undefined,
+        cursor: offersCursor
+          ? {
+              hidden: shareCursor === "hide",
+              liveChangeable: cursorLiveControl,
+              sharing: voiceState.isSharingScreen,
+              onToggle: () =>
+                setShareCursor(shareCursor === "hide" ? "show" : "hide"),
+            }
+          : undefined,
+        joinLeaveAutoMute: {
+          on: joinLeaveAutoMute,
+          onToggle: () => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute),
+        },
+        fullscreen: fullscreenAvailable
+          ? { active: isFullscreen, onToggle: onToggleFullscreen }
+          : undefined,
+        collapse: canExpand
+          ? { collapsed: userCollapsed, onToggle: onToggleCollapsed }
+          : undefined,
+      });
+  // The bell used to say on the bar itself that the room's cues were muted.
+  // In the menu it only says so when opened, so the menu's button carries a
+  // dot while the rule is actually silencing this room.
+  const joinLeaveMuted = shouldSuppressJoinLeaveSound(
+    roomParticipants.length,
+    joinLeaveAutoMute,
+  );
+
+  // Raising a hand is the one control here that a listen-only seat needs MORE
+  // than anyone else, so it is never hidden by `listenOnly` and never
+  // disabled: lowering your own hand has to work whatever else the room has
+  // decided about you. It also survives the collapsed bar, because unlike
+  // mute it has no second home on the user panel.
+  const handControl = onToggleRaisedHand ? (
+    <Tooltip label={handLabel}>
+      <button
+        type="button"
+        aria-pressed={handRaised}
+        aria-label={handLabel}
+        data-raise-hand={handRaised ? "up" : "down"}
+        className={cn(
+          "flex items-center justify-center rounded-full",
+          size,
+          handRaised
+            ? "bg-signal/20 text-signal"
+            : "bg-ink-3 text-paper hover:bg-ink-4",
+        )}
+        onClick={onToggleRaisedHand}
+      >
+        <Hand className={iconSize} />
+      </button>
+    </Tooltip>
+  ) : null;
 
   return (
     <div
@@ -2698,7 +3061,7 @@ export function CallControls({
             />
           </div>
         )}
-        {bringFriendsHintEnabled && voiceState.isSharingScreen && !collapsed && (
+        {bringFriendsHintEnabled && voiceState.isSharingScreen && (!collapsed || videoOnStage) && (
           <div className="mb-1">
             <BringFriendsHint enabled />
           </div>
@@ -2722,7 +3085,7 @@ export function CallControls({
           no room for a list: the hands are still on every person's row in the
           sidebar, and the raise button below survives the squeeze because
           unlike mute it has nowhere else to live. */}
-      {!collapsed && (
+      {(!collapsed || videoOnStage) && (
         <RaisedHandQueue
           participants={roomParticipants}
           selfUserId={voiceState.self?.userId ?? null}
@@ -2823,7 +3186,7 @@ export function CallControls({
       className={cn(
         "flex items-center gap-1",
         collapsed
-          ? "w-full flex-wrap justify-end @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
+          ? "w-full flex-wrap justify-end @max-[24rem]:gap-px @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
           : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
       )}
     >
@@ -2901,37 +3264,6 @@ export function CallControls({
         </span>
       )}
       <CallControlGroup className={stageGroup}>
-      {/* Raising a hand is the one control here that a listen-only seat needs
-          MORE than anyone else, so it is never hidden by `listenOnly` and
-          never disabled: lowering your own hand has to work whatever else the
-          room has decided about you. It also survives the collapsed bar,
-          because unlike mute it has no second home on the user panel. */}
-      {onToggleRaisedHand && (
-        <Tooltip label={handLabel}>
-          <button
-            type="button"
-            aria-pressed={handRaised}
-            aria-label={handLabel}
-            data-raise-hand={handRaised ? "up" : "down"}
-            className={cn(
-              "flex items-center justify-center rounded-full",
-              size,
-              handRaised
-                ? "bg-signal/20 text-signal"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
-            )}
-            onClick={onToggleRaisedHand}
-          >
-            <Hand className={iconSize} />
-          </button>
-        </Tooltip>
-      )}
-      </CallControlGroup>
-      <CallControlDivider
-        container={collapsed}
-        className={collapsed ? "my-1" : "my-1.5"}
-      />
-      <CallControlGroup className={stageGroup}>
       {!noVideo && (
       <Tooltip
         label={
@@ -2986,7 +3318,7 @@ export function CallControls({
         isCameraOn: voiceState.isCameraOn,
         isSharingScreen: voiceState.isSharingScreen,
         hasIncomingVideo: receivingVideo(voiceState),
-        collapsed,
+        collapsed: collapsed && !videoOnStage,
       }) && (
         <VideoQualityMenu
           value={videoQuality}
@@ -3017,56 +3349,6 @@ export function CallControls({
           implements the constraint at all, so what a `hide` actually buys is
           the line under the share saying this surface carries the pointer and
           a tab does not. `lib/screen-capture-cursor.ts` has the measurements. */}
-      {canShare &&
-        !noVideo &&
-        onStartScreenShare &&
-        (!voiceState.isSharingScreen || cursorLiveControl) && (
-          <Tooltip
-            label={
-              shareCursor === "hide"
-                ? t("voice.control.showCursor")
-                : t("voice.control.hideCursor")
-            }
-            detail={
-              cursorLiveControl
-                ? undefined
-                : t("voice.control.hideCursorDetail")
-            }
-          >
-            {/* KEEP THE LABEL SHORT AND FREE OF COMMON VERBS. A tooltip label
-                becomes the control's accessible name, and Playwright's
-                `getByRole("button", { name })` matches a name by SUBSTRING, so
-                an English label reading "Leave your mouse out of what you
-                share" made every `name: "Leave"` in the suite ambiguous and
-                took the hang-up button down with it. */}
-            <button
-              type="button"
-              data-testid="share-cursor-toggle"
-              aria-pressed={shareCursor === "hide"}
-              className={cn(
-                "items-center justify-center rounded-full",
-                // Under 22rem the slim bar keeps the tiles a phone can use
-                // (22rem is what the full set of tiles needs). A phone has no
-                // getDisplayMedia, so this one is already gone there; the
-                // rule only bites a squeezed desktop pane.
-                collapsed ? "hidden @min-[22rem]:flex" : "flex",
-                size,
-                shareCursor === "hide"
-                  ? "bg-signal/20 text-signal"
-                  : "bg-ink-3 text-paper hover:bg-ink-4",
-              )}
-              onClick={() =>
-                setShareCursor(shareCursor === "hide" ? "show" : "hide")
-              }
-            >
-              {shareCursor === "hide" ? (
-                <MousePointerBan className={iconSize} />
-              ) : (
-                <MousePointer2 className={iconSize} />
-              )}
-            </button>
-          </Tooltip>
-        )}
       {!canShare && !noVideo && onStartScreenShare && (
         <Tooltip
           label={t("voice.control.shareUnavailable")}
@@ -3139,75 +3421,13 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare && !noVideo && voiceState.isSharingScreen && (
-        <Tooltip
-          label={
-            hidePreviewPref
-              ? t("voice.share.showPreview")
-              : t("voice.share.hidePreview")
-          }
-        >
-          <button
-            type="button"
-            data-testid="hide-screen-preview"
-            aria-pressed={hidePreviewPref}
-            className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-              size,
-            )}
-            onClick={() => setHideScreenPreview(!hidePreviewPref)}
-          >
-            {hidePreviewPref ? (
-              <Eye className={iconSize} />
-            ) : (
-              <EyeOff className={iconSize} />
-            )}
-          </button>
-        </Tooltip>
-      )}
-      {canWatchParty &&
-        !listenOnly &&
-        !noVideo &&
-        onStartScreenShare &&
-        !voiceState.isSharingScreen && (
-          <Tooltip
-            label={t("voice.control.watchParty")}
-            detail={t("voice.control.watchPartyHint")}
-          >
-            <button
-              type="button"
-              aria-label={t("voice.control.watchParty")}
-              aria-disabled={shareCappedOut || undefined}
-              className={cn(
-                "items-center justify-center rounded-full",
-                // Same rule as the cursor toggle: a watch party starts from
-                // a Chrome tab, which no phone can share.
-                collapsed ? "hidden @min-[22rem]:flex" : "flex",
-                size,
-                shareCappedOut && "opacity-40",
-                "bg-ink-3 text-paper hover:bg-ink-4",
-              )}
-              onClick={() => {
-                if (shareCappedOut) {
-                  return;
-                }
-                // Paint the hint in this click, before getDisplayMedia opens
-                // the picker and the rest of the page stops updating. Clear
-                // once the picker settles: cancel, error, or a live share.
-                flushSync(() => {
-                  setShareHint(t("voice.control.watchPartyHint"));
-                });
-                void Promise.resolve(
-                  onStartScreenShare({ preferBrowserTab: true }),
-                ).finally(() => {
-                  setShareHint(null);
-                });
-              }}
-            >
-              <MonitorPlay className={iconSize} />
-            </button>
-          </Tooltip>
-        )}
+      {/* The hand after share on both bars, then a hairline before what is
+          about the room rather than about you. */}
+      {handControl}
+      <CallControlDivider
+        container={collapsed}
+        className={collapsed ? "my-1" : "my-1.5"}
+      />
       <Tooltip
         label={musicDock.open ? t("music.close") : t("music.open")}
       >
@@ -3246,98 +3466,32 @@ export function CallControls({
           ) : null}
         </button>
       </Tooltip>
-      {/* The grid / focus toggle used to sit here. It has no question left to
-          answer: publishers are always a grid and everyone else is always a
-          chip, so the only remaining "make this one big" is fullscreen, which
-          every tile carries and a click on the picture reaches. */}
-      {!collapsed && fullscreenAvailable && (
-        <Tooltip
-          label={
-            isFullscreen
-              ? t("voice.share.exitFullscreen")
-              : t("voice.share.fullscreen")
-          }
-        >
+      {/* The grid / focus toggle used to sit here, and then a fullscreen
+          tile. Every share carries its own fullscreen and a click on the
+          picture reaches it; fullscreen of the whole stage (a camera grid
+          with no share) is in "Mais". */}
+      {(
+        <Menu items={stageMenuItems} side="top" align="end">
           <button
             type="button"
-            data-testid="stage-fullscreen"
-            aria-pressed={isFullscreen}
+            data-testid="call-more"
+            data-join-leave-muted={joinLeaveMuted ? "true" : undefined}
+            aria-label={t("call.controls.more")}
             className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+              "relative flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
               size,
             )}
-            onClick={onToggleFullscreen}
           >
-            {isFullscreen ? (
-              <Minimize2 className={iconSize} />
-            ) : (
-              <Maximize2 className={iconSize} />
-            )}
+            <MoreHorizontal className={iconSize} aria-hidden="true" />
+            {joinLeaveMuted ? (
+              <span
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink"
+              />
+            ) : null}
           </button>
-        </Tooltip>
+        </Menu>
       )}
-      {canExpand && (
-        <Tooltip
-          label={userCollapsed ? t("call.stage.expand") : t("call.stage.collapse")}
-        >
-          <button
-            type="button"
-            aria-expanded={!userCollapsed}
-            className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-              size,
-            )}
-            onClick={onToggleCollapsed}
-          >
-            {userCollapsed ? (
-              <ChevronDown className={iconSize} />
-            ) : (
-              <ChevronUp className={iconSize} />
-            )}
-          </button>
-        </Tooltip>
-      )}
-      </CallControlGroup>
-      <CallControlDivider
-        container={collapsed}
-        className={collapsed ? "my-1" : "my-1.5"}
-      />
-      {/* The group hides with its only tile, or its gap would still be
-          spent on a row where six tiles fill the width to the pixel. */}
-      <CallControlGroup className={collapsed ? "hidden @min-[22rem]:flex" : "hidden sm:flex"}>
-      {/* C2, docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md: a room past
-          `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
-          (`lib/large-room-sounds.ts`); this is the visible way back to the
-          cues for whoever wants them anyway. Always shown, not only in a
-          large room, so the setting is findable before the room gets loud.
-          Hidden below `sm` so a phone still reaches hang-up; on the slim bar
-          the rule is the bar's own width, under 22rem, like the cursor and
-          watch party tiles. */}
-      <Tooltip
-        label={
-          joinLeaveAutoMute
-            ? t("voice.control.enableJoinLeaveSounds")
-            : t("voice.control.disableJoinLeaveSounds")
-        }
-        detail={t("voice.control.joinLeaveAutoMuteHint")}
-      >
-        <button
-          type="button"
-          data-testid="join-leave-auto-mute-toggle"
-          aria-pressed={joinLeaveAutoMute}
-          className={cn(
-            "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-            size,
-          )}
-          onClick={() => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute)}
-        >
-          {joinLeaveAutoMute ? (
-            <Bell className={iconSize} />
-          ) : (
-            <BellOff className={iconSize} />
-          )}
-        </button>
-      </Tooltip>
       </CallControlGroup>
       <CallControlDivider
         container={collapsed}
@@ -3396,60 +3550,24 @@ function cameraLabel(
  * the alternative is a grid where seven faces are cropped and one is not. The
  * two kinds keep separate answers; see `lib/video-fit.ts` for why.
  */
-function TileFitButton({
-  fit,
-  kind,
-}: {
-  fit: VideoFitControls;
-  kind: "camera" | "screen";
-}) {
-  const { t } = useTranslation();
-  const whole = fit.fit === "contain";
-  return (
-    <Tooltip
-      label={whole ? t("call.fit.fill") : t("call.fit.whole")}
-      detail={
-        kind === "screen" ? t("call.fit.hintScreen") : t("call.fit.hintCamera")
-      }
-      side="bottom"
-      align="start"
-    >
-      <button
-        type="button"
-        data-testid="tile-fit"
-        data-tile-fit={fit.fit}
-        aria-pressed={whole}
-        // No `aria-label` here: `Tooltip` puts the accessible name on the
-        // trigger, and a second one on the child is how the two drift apart.
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-          whole && "text-signal",
-        )}
-        onClick={fit.toggle}
-      >
-        {whole ? (
-          <Crop className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : (
-          <Scan className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-      </button>
-    </Tooltip>
-  );
-}
-
 function TileOverlay({
   isFullscreen = false,
   onToggleFullscreen,
   onPin,
   pinned = false,
+  onHideCamera,
   name,
   audio,
   fit,
+  badge,
+  insets,
 }: {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onPin?: () => void;
   pinned?: boolean;
+  /** Hide this person's camera on this screen; their tile stays and says so. */
+  onHideCamera?: () => void;
   name: string;
   /**
    * Only passed once this tile is actually showing a picture. A tile drawing
@@ -3458,95 +3576,110 @@ function TileOverlay({
    */
   fit?: VideoFitControls;
   /**
-   * This person's sound. A round button beside fullscreen and pin, opening the
-   * one panel that carries their voice and their share. A button rather than a
-   * slider parked on the picture, because that slider was revealed by hover,
-   * and on a phone hover is no control at all.
+   * This person's sound. A round button in the row, opening the one panel
+   * that carries their voice and their share. A button rather than a slider
+   * parked on the picture, because that slider was revealed by hover, and on
+   * a phone hover is no control at all.
    */
   audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
+  /** The name label, always visible, at the start of the row. */
+  badge?: ReactNode;
+  /** Where the picture is drawn inside the tile (`useVideoInsets`). */
+  insets?: VideoInsets;
 }) {
   const { t } = useTranslation();
-  const menu = usePeerAudioMenu();
-  const hasAudio = Boolean(audio?.voice || audio?.share);
-  if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
-    return null;
-  }
+  const [moreOpen, setMoreOpen] = useState(false);
+  // A camera is somebody talking: the slider is their voice.
+  const pictureSound = audio?.voice ?? audio?.share;
+  const moreItems = cameraTileMoreItems(t, {
+    name,
+    fit,
+    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    hide: onHideCamera ? { onHide: onHideCamera } : undefined,
+  });
+  const revealed = moreOpen
+    ? "opacity-100"
+      : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+  // The same row as a share's (`ScreenTileFrame`) and the watch party's
+  // player: the name and the sound on the left, "⋯" and fullscreen on the
+  // right, fullscreen last, along the bottom of the picture.
   return (
     <div
-      ref={menu.rootRef}
+      data-tile-controls=""
+      // The fit control lives in "⋯"; the state it reports stays readable.
+      data-tile-fit={fit?.fit}
       className={cn(
-        "absolute left-2 top-2 flex items-center gap-1",
+        // `@container/picture`: the volume slider steps aside on a narrow
+        // picture so the name keeps its room (`PictureVolume`).
+        "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
         STAGE_LAYER.tileControls,
-        // An open panel keeps its own chrome visible; otherwise the row
-        // follows the tile's hover, and stays put on a touch screen.
-        menu.open
-          ? "opacity-100"
-          : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
       )}
+      style={{
+        left: (insets?.left ?? 0) + 8,
+        right: (insets?.right ?? 0) + 8,
+        bottom: `calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px))`,
+      }}
     >
-      {onToggleFullscreen && (
-        <Tooltip
-          label={
-            isFullscreen
-              ? t("voice.share.exitFullscreen")
-              : t("call.stage.fullscreenTile", { name })
-          }
-          side="bottom"
-          align="start"
-        >
-          <button
-            type="button"
-            data-testid="camera-fullscreen"
-            aria-pressed={isFullscreen}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-            onClick={onToggleFullscreen}
-          >
-            {isFullscreen ? (
-              <Minimize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Maximize2 className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </Tooltip>
-      )}
-      {fit && <TileFitButton fit={fit} kind="camera" />}
-      {onPin && (
-        <Tooltip
-          label={pinned ? t("call.stage.unpin") : t("call.stage.pin", { name })}
-          side="bottom"
-          align="start"
-        >
-          <button
-            type="button"
-            aria-pressed={pinned}
-            className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-              pinned && "text-signal",
-            )}
-            onClick={onPin}
-          >
-            <Pin className="h-3.5 w-3.5" />
-          </button>
-        </Tooltip>
-      )}
-      {hasAudio && (
-        <div className="relative">
-          <PeerAudioMenuButton
+      <div className="flex min-w-0 items-center gap-1.5">
+        {badge}
+        {pictureSound && (
+          <PictureVolume
             name={name}
-            open={menu.open}
-            onToggle={menu.toggle}
-            muted={audio?.voice?.volume === 0}
+            track={pictureSound}
+            kind={audio?.voice ? "voice" : "share"}
+            className={cn("pointer-events-auto", revealed)}
           />
-          <PeerAudioMenu
-            name={name}
-            open={menu.open}
-            voice={audio?.voice}
-            share={audio?.share}
-            side="bottom"
-            align="start"
-          />
-        </div>
-      )}
+        )}
+      </div>
+      <div
+        className={cn(
+          "pointer-events-auto flex shrink-0 items-center gap-1",
+          revealed,
+        )}
+      >
+        {moreItems.length > 0 && (
+          <Menu
+            items={moreItems}
+            side="top"
+            align="end"
+            onOpenChange={setMoreOpen}
+          >
+            <button
+              type="button"
+              data-testid="tile-more"
+              aria-label={t("call.tile.more", { name })}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </Menu>
+        )}
+        {onToggleFullscreen && (
+          <Tooltip
+            label={
+              isFullscreen
+                ? t("voice.share.exitFullscreen")
+                : t("call.stage.fullscreenTile", { name })
+            }
+            side="top"
+            align="end"
+          >
+            <button
+              type="button"
+              data-testid="camera-fullscreen"
+              aria-pressed={isFullscreen}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              onClick={onToggleFullscreen}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
+        )}
+      </div>
     </div>
   );
 }
@@ -3596,8 +3729,11 @@ function PrimaryTile({
 }) {
   const { t } = useTranslation();
   const fit = useVideoFit("camera");
+  const boxRef = useRef<HTMLDivElement>(null);
+  const insets = useVideoInsets(boxRef, [person.stream, fit.fit]);
   return (
     <div
+      ref={boxRef}
       data-call-tile={person.name}
       className={cn(
         "group relative h-full w-full bg-ink-2",
@@ -3632,14 +3768,18 @@ function PrimaryTile({
         name={person.name}
         audio={person.failed ? undefined : personAudioTracks(person)}
         fit={person.stream ? fit : undefined}
-      />
-      <TileBadge
-        name={person.name}
-        muted={person.muted}
-        serverMuted={person.serverMuted}
-        connecting={person.connecting}
-        connectingLabel={t("voice.tile.connecting")}
-        prominent
+        insets={insets}
+        badge={
+          <TileBadge
+            name={person.name}
+            muted={person.muted}
+            serverMuted={person.serverMuted}
+            connecting={person.connecting}
+            connectingLabel={t("voice.tile.connecting")}
+            prominent
+            inline
+          />
+        }
       />
       {!person.isSelf && (
         <VoiceQualityMeter
@@ -3648,7 +3788,7 @@ function PrimaryTile({
         />
       )}
       {person.failed && person.onRetry && (
-        <TileRetry onRetry={person.onRetry} className="bottom-8 left-2" />
+        <TileRetry onRetry={person.onRetry} className="bottom-12 left-2" />
       )}
     </div>
   );
@@ -3674,10 +3814,17 @@ export function CameraTile({
   onToggleFullscreen,
   onPin,
   pinned = false,
+  hidden,
 }: {
   person: StagePerson;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   youLabel: string;
+  /**
+   * This viewer hid the camera (`voiceState.dismissedCameraPeerIds`). The
+   * tile stays where it was and says so, with the way back on it, the same
+   * as a share somebody stopped watching.
+   */
+  hidden?: { active: boolean; onToggle: () => void };
   /** The pinned tile: the whole first row of the grid. */
   wideRow?: boolean;
   /** False for the lone tile, which is flush with the stage's own edges. */
@@ -3689,8 +3836,11 @@ export function CameraTile({
 }) {
   const { t } = useTranslation();
   const fit = useVideoFit("camera");
+  const boxRef = useRef<HTMLLIElement>(null);
+  const insets = useVideoInsets(boxRef, [person.stream, fit.fit, hidden?.active]);
   return (
     <li
+      ref={boxRef}
       data-call-tile={person.name}
       className={cn(
         "group relative min-h-0 overflow-hidden bg-ink-2",
@@ -3700,7 +3850,19 @@ export function CameraTile({
         person.connecting && "opacity-70",
       )}
     >
-      {person.stream ? (
+      {hidden?.active ? (
+        <div
+          data-camera-hidden=""
+          className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-2 p-4 text-center"
+        >
+          <p className="text-sm text-text-tertiary">
+            {t("call.camera.hidden", { name: person.name })}
+          </p>
+          <Button variant="secondary" size="sm" onClick={hidden.onToggle}>
+            {t("call.camera.show")}
+          </Button>
+        </div>
+      ) : person.stream ? (
         <StageVideo
           stream={person.stream}
           mirrored={person.isSelf}
@@ -3721,26 +3883,33 @@ export function CameraTile({
         </div>
       )}
       <TileClickTarget
-        enabled={clickToFullscreen}
+        enabled={clickToFullscreen && !hidden?.active}
         label={t("call.stage.fullscreenTile", { name: person.name })}
         onClick={onToggleFullscreen}
       />
       <TileOverlay
         isFullscreen={false}
-        onToggleFullscreen={onToggleFullscreen}
+        onToggleFullscreen={hidden?.active ? undefined : onToggleFullscreen}
         onPin={onPin}
         pinned={pinned}
+        onHideCamera={
+          hidden && !hidden.active && person.stream ? hidden.onToggle : undefined
+        }
         name={person.name}
         audio={person.failed ? undefined : personAudioTracks(person)}
-        fit={person.stream ? fit : undefined}
-      />
-      <TileBadge
-        name={person.isSelf ? youLabel : person.name}
-        muted={person.muted}
-        serverMuted={person.serverMuted}
-        connecting={person.connecting}
-        connectingLabel={t("voice.tile.connecting")}
-        prominent
+        fit={person.stream && !hidden?.active ? fit : undefined}
+        insets={insets}
+        badge={
+          <TileBadge
+            name={person.isSelf ? youLabel : person.name}
+            muted={person.muted}
+            serverMuted={person.serverMuted}
+            connecting={person.connecting}
+            connectingLabel={t("voice.tile.connecting")}
+            prominent
+            inline
+          />
+        }
       />
       {!person.isSelf && (
         <VoiceQualityMeter
@@ -3750,7 +3919,7 @@ export function CameraTile({
         />
       )}
       {person.failed && person.onRetry && (
-        <TileRetry onRetry={person.onRetry} className="bottom-8 left-2" />
+        <TileRetry onRetry={person.onRetry} className="bottom-12 left-2" />
       )}
     </li>
   );
@@ -3978,9 +4147,12 @@ function TileBadge({
   connecting = false,
   connectingLabel,
   prominent = false,
+  inline = false,
 }: {
   name: string;
   muted: boolean;
+  /** Drawn as the first item of a tile's control row, not pinned to a corner. */
+  inline?: boolean;
   /** Muted by a moderator: a different glyph from a self-mute, on purpose. */
   serverMuted?: boolean;
   connecting?: boolean;
@@ -3991,8 +4163,10 @@ function TileBadge({
   return (
     <span
       className={cn(
-        "absolute bottom-0 left-0 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 text-paper",
-        STAGE_LAYER.labels,
+        "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
+        inline
+          ? "min-w-[4.5rem] rounded-md"
+          : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
     >
@@ -4167,11 +4341,15 @@ export function ScreenTileFrame({
   coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
-  const menu = usePeerAudioMenu();
+  const [moreOpen, setMoreOpen] = useState(false);
   const fit = useVideoFit("screen");
+  const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
-  const hasAudio = Boolean(audio?.voice || audio?.share);
+  const insets = useVideoInsets(boxRef, [tile.stream, tile.hlsUrl, fit.fit, hideSelfPreview]);
+  // A share is what the viewer is watching: the slider is its sound, or the
+  // presenter's voice when the share carries none.
+  const pictureSound = audio?.share ?? audio?.voice;
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
     : tile.isSelf
@@ -4205,9 +4383,70 @@ export function ScreenTileFrame({
   }
 
   const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
+  const moreItems = shareTileMoreItems(t, {
+    name: tile.presenterName,
+    isSelf: tile.isSelf,
+    selfPreview: tile.isSelf
+      ? {
+          hidden: hideSelfPreview,
+          onToggle: () => setHideScreenPreview(!hidePreviewPref),
+        }
+      : undefined,
+    // An HLS player carries its own fill switch beside its quality and
+    // volume, so the tile's "⋯" does not offer a second one.
+    fit: hideSelfPreview || useHls ? undefined : fit,
+    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    dismiss: dismissed ? { onDismiss: dismissed.onToggle } : undefined,
+  });
+
+  const revealed =
+    moreOpen || hideSelfPreview
+      ? "opacity-100"
+      : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+  const moreButton = (
+    <Menu items={moreItems} side="top" align="end" onOpenChange={setMoreOpen}>
+      <button
+        type="button"
+        data-testid="share-more"
+        aria-label={
+          tile.isSelf
+            ? t("call.share.moreSelf")
+            : t("call.share.more", { name: tile.presenterName })
+        }
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    </Menu>
+  );
+  const fullscreenButton =
+    !hideSelfPreview && onToggleFullscreen ? (
+      <Tooltip label={label} side="top" align="end">
+        <button
+          type="button"
+          // The camera tiles carry a fullscreen button too, so the label
+          // alone cannot tell a test which one it pressed.
+          data-testid="share-fullscreen"
+          aria-pressed={isFullscreen}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+          onClick={onToggleFullscreen}
+        >
+          {isFullscreen ? (
+            <Minimize2 className="h-3.5 w-3.5" />
+          ) : (
+            <Maximize2 className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </Tooltip>
+    ) : null;
+  const nameChip = showName ? (
+    <span className="min-w-[4.5rem] truncate rounded-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
+      {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
+    </span>
+  ) : null;
 
   return (
-    <div className={cn("group relative", className)}>
+    <div ref={boxRef} className={cn("group relative", className)}>
       {hideSelfPreview ? (
         <div
           data-self-preview-hidden=""
@@ -4229,6 +4468,12 @@ export function ScreenTileFrame({
           mediaTitle={mediaTitle ?? tile.presenterName}
           communityName={communityName}
           coverUrl={coverUrl}
+          bottomActions={
+            <span className={cn("flex items-center gap-1", revealed)}>
+              {moreButton}
+              {fullscreenButton}
+            </span>
+          }
         />
       ) : (
         <StageVideo
@@ -4246,144 +4491,61 @@ export function ScreenTileFrame({
         label={label}
         onClick={onToggleFullscreen}
       />
-      {/* Top left, and out of the way until wanted: the stage's own title
-          overlay lives in this corner, and a tile that keeps three buttons
-          parked on top of it makes both unreadable. Same rule and the same
-          classes as a camera tile's `TileOverlay`; a touch device, which has
-          no hover to reveal anything, keeps them all the time. */}
-      <div
-        ref={menu.rootRef}
-        className={cn(
-          "absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5",
-          STAGE_LAYER.tileControls,
-          menu.open || hideSelfPreview
-            ? "opacity-100"
-            : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
-        )}
-      >
-        {/* Only a peer's share can be declined. Declining our own would mean
-            hiding the thing we are broadcasting, which is not a thing anyone
-            wants and would read as having stopped. */}
-        {dismissed && !tile.isSelf && (
-          <Tooltip
-            label={t("voice.share.dismiss", { name: tile.presenterName })}
-            side="bottom"
-            align="start"
+      {/* ONE ROW ALONG THE BOTTOM OF THE PICTURE, like a video player's:
+          the name and this person's sound on the left, "⋯" and fullscreen
+          on the right, fullscreen last, the same row as a camera tile and
+          the watch party's player. On the picture itself, not the tile: a
+          letterboxed share puts it at the bottom of what is drawn
+          (`useVideoInsets`), not in a black band. The stage keeps the call
+          bar's band below every picture (`--call-bar-h`), so this row is
+          never under the bar's box. The buttons follow the tile's hover; a
+          touch device, which has no hover, keeps them. A share that arrives
+          as HLS hands "⋯" and fullscreen to its player's own row instead. */}
+      {useHls ? (
+        nameChip && (
+          <span
+            className={cn(
+              "pointer-events-none absolute bottom-2 left-2 flex max-w-[50%]",
+              STAGE_LAYER.labels,
+            )}
           >
-            <button
-              type="button"
-              data-share-dismiss
-              aria-label={t("voice.share.dismiss", { name: tile.presenterName })}
-              className="rounded-md bg-ink/70 p-1.5 text-paper-muted hover:bg-ink hover:text-paper"
-              onClick={dismissed.onToggle}
-            >
-              <EyeOff aria-hidden="true" className="h-4 w-4" />
-            </button>
-          </Tooltip>
-        )}
-        {tile.isSelf && (
-          <Tooltip
-            label={
-              hideSelfPreview
-                ? t("voice.share.showPreview")
-                : t("voice.share.hidePreview")
-            }
-            side="bottom"
-            align="start"
-          >
-            <button
-              type="button"
-              aria-pressed={hideSelfPreview}
-              aria-label={
-                hideSelfPreview
-                  ? t("voice.share.showPreview")
-                  : t("voice.share.hidePreview")
-              }
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-              onClick={() => setHideScreenPreview(!hidePreviewPref)}
-            >
-              {hideSelfPreview ? (
-                <Eye className="h-3.5 w-3.5" />
-              ) : (
-                <EyeOff className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </Tooltip>
-        )}
-        {!hideSelfPreview && onToggleFullscreen && (
-          /* `side="bottom"`: this sits on the top edge of the share, so a
-             bubble above it would be off the tile. */
-          <Tooltip label={label} side="bottom" align="start">
-            <button
-              type="button"
-              // The control bar carries a fullscreen button too, so the label
-              // alone cannot tell a test which one it pressed.
-              data-testid="share-fullscreen"
-              aria-pressed={isFullscreen}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-              onClick={onToggleFullscreen}
-            >
-              {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5" />
-              ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </Tooltip>
-        )}
-        {!hideSelfPreview && <TileFitButton fit={fit} kind="screen" />}
-        {onPin && (
-          <Tooltip
-            label={
-              pinned
-                ? t("call.stage.unpin")
-                : t("call.stage.pin", { name: tile.presenterName })
-            }
-            side="bottom"
-            align="start"
-          >
-            <button
-              type="button"
-              data-testid="share-pin"
-              aria-pressed={pinned}
-              className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-                pinned && "text-signal",
-              )}
-              onClick={onPin}
-            >
-              <Pin className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        )}
-        {hasAudio && (
-          <div className="relative">
-            <PeerAudioMenuButton
-              name={tile.presenterName}
-              open={menu.open}
-              onToggle={menu.toggle}
-              muted={audio?.share?.volume === 0}
-            />
-            <PeerAudioMenu
-              name={tile.presenterName}
-              open={menu.open}
-              voice={audio?.voice}
-              share={audio?.share}
-              side="bottom"
-              align="start"
-            />
+            {nameChip}
+          </span>
+        )
+      ) : (
+        <div
+          data-share-row=""
+          className={cn(
+            "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
+            STAGE_LAYER.tileControls,
+          )}
+          style={{
+            left: insets.left + 8,
+            right: insets.right + 8,
+            bottom: `calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px))`,
+          }}
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            {nameChip}
+            {pictureSound && (
+              <PictureVolume
+                name={tile.presenterName}
+                track={pictureSound}
+                kind={audio?.share ? "share" : "voice"}
+                className={cn("pointer-events-auto", revealed)}
+              />
+            )}
           </div>
-        )}
-      </div>
-      {/* The name goes where every other tile keeps its name: the bottom left,
-          always visible, out of the title overlay's corner. It names the
-          picture rather than the act ("Sua tela"), because "X is presenting"
-          is the overlay's sentence and saying it twice is how the two ended up
-          stacked on each other. */}
-      {showName && (
-        <span className={cn("pointer-events-none absolute bottom-0 left-0 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper", STAGE_LAYER.labels)}>
-          {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
-        </span>
+          <div
+            data-share-controls=""
+            // The fit control is in "⋯"; the state it reports stays here.
+            data-tile-fit={fit.fit}
+            className={cn("pointer-events-auto flex shrink-0 items-center gap-1.5", revealed)}
+          >
+            {moreButton}
+            {fullscreenButton}
+          </div>
+        </div>
       )}
     </div>
   );

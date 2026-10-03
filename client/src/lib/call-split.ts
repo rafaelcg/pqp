@@ -502,3 +502,31 @@ export function strongestStageShape(
   }
   return best;
 }
+
+/**
+ * How far to move the divider so the picture fills its box with no black
+ * bands: the box's size along the split, minus the size the picture wants
+ * at the box's other dimension. Positive grows the stage.
+ *
+ * Measured on the picture's own box rather than the stage, because the stage
+ * also holds banners and a row of people that do not scale with it. With one
+ * picture the box moves one for one with the divider; with a grid it does
+ * not, which is why the caller measures again and repeats.
+ */
+export function fitToPictureDelta(input: {
+  boxWidth: number;
+  boxHeight: number;
+  videoWidth: number;
+  videoHeight: number;
+  sideBySide: boolean;
+}): number {
+  const { boxWidth, boxHeight, videoWidth, videoHeight, sideBySide } = input;
+  if (!boxWidth || !boxHeight || !videoWidth || !videoHeight) {
+    return 0;
+  }
+  return Math.round(
+    sideBySide
+      ? (boxHeight * videoWidth) / videoHeight - boxWidth
+      : (boxWidth * videoHeight) / videoWidth - boxHeight,
+  );
+}

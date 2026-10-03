@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -22,6 +23,7 @@ import {
   CALL_SPLIT_STEP_COARSE_PX,
   CALL_SPLIT_STEP_PX,
   clampSplit,
+  fitToPictureDelta,
   nudgeSplit,
   effectiveOrientation,
   resolveCollapsed,
@@ -149,11 +151,18 @@ export interface CallSplitChatHeader {
     active: string;
     onSelect: (id: string) => void;
   };
+  /**
+   * The channel's own tools (pins, settings, the member list), when the page
+   * header that normally carries them has stood down for the call stage.
+   */
+  actions?: ReactNode;
 }
 
 export interface CallSplitState {
   active: boolean;
   canSideBySide: boolean;
+  /** The chat pane is put away, and its header with it. */
+  chatHidden: boolean;
 }
 
 export interface PaneSize {
@@ -190,6 +199,62 @@ function usePaneSize(ref: RefObject<HTMLDivElement | null>): PaneSize {
   return size;
 }
 
+/**
+ * The least height the chat pane can be given without cutting its composer
+ * off: its header and the composer at its current size. No transcript is
+ * reserved on top: a panel the person just opened may cover the messages for
+ * as long as it is open, but it may not push the composer off the window.
+ *
+ * Not a constant, because the composer is not one size. With a picture on
+ * the stage it carries the call's whole row of controls, and opening the
+ * music queue puts a panel above it. A fixed floor sized for an empty
+ * composer let a tall stage push both under the bottom of the window.
+ */
+function useChatPaneNeed(
+  ref: RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+): number {
+  const [need, setNeed] = useState(0);
+  useEffect(() => {
+    const pane = ref.current;
+    if (!enabled || !pane) {
+      setNeed(0);
+      return;
+    }
+    const watched = new Set<Element>();
+    let resize: ResizeObserver | null = null;
+    const read = () => {
+      const header = pane.querySelector<HTMLElement>('[data-testid="call-split-chat-header"]');
+      const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
+      for (const element of [header, composer]) {
+        if (element && resize && !watched.has(element)) {
+          resize.observe(element);
+          watched.add(element);
+        }
+      }
+      const next = composer
+        ? Math.ceil((header?.offsetHeight ?? 0) + composer.offsetHeight)
+        : 0;
+      setNeed((previous) => (previous === next ? previous : next));
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      resize = new ResizeObserver(read);
+    }
+    // The composer mounts after the pane, and a channel switch replaces it.
+    const mutation =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(read);
+    mutation?.observe(pane, { childList: true, subtree: true });
+    read();
+    return () => {
+      resize?.disconnect();
+      mutation?.disconnect();
+    };
+  }, [ref, enabled]);
+  return need;
+}
+
 export function CallSplit({
   shape,
   kind = "call",
@@ -204,6 +269,7 @@ export function CallSplit({
 }: CallSplitProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const stagePaneRef = useRef<HTMLDivElement>(null);
+  const chatPaneRef = useRef<HTMLDivElement>(null);
   const measured = usePaneSize(paneRef);
   // The stage's own size, measured, for the case where nobody has dragged yet
   // and it is still sizing itself. That number is what the divider reports and
@@ -238,7 +304,15 @@ export function CallSplit({
       : preference.side
     : preference.stacked;
   const container = sideBySide ? width : height;
-  const bounds = splitBounds(orientation, kind);
+  const chatNeed = useChatPaneNeed(chatPaneRef, !sideBySide);
+  // Stacked, the chat's floor is whatever its composer needs right now, so a
+  // panel opening above the composer takes its room from the stage.
+  const bounds = useMemo(() => {
+    const fixed = splitBounds(orientation, kind);
+    return sideBySide
+      ? fixed
+      : { ...fixed, minChat: Math.max(fixed.minChat, chatNeed) };
+  }, [orientation, kind, sideBySide, chatNeed]);
 
   // Two different questions, and conflating them is how a default gets
   // rewritten by accident.
@@ -281,10 +355,42 @@ export function CallSplit({
   // off the screen, which is the whole thing this is for. There the stage
   // simply takes under half and there is no divider to offer.
   const phoneShort = phoneNarrow && !resizable && container > 0;
-  const sized = (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+  const sizedByChoice =
+    (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+  // A stage still on its own height rule that leaves the composer too little
+  // room. Held at the height it had when that happened, and released only once
+  // that height fits again, rather than re-measured: once the pane sizes it,
+  // the stage's measured height is the pane's answer, not its own.
+  const [squeezedFrom, setSqueezedFrom] = useState<number | null>(null);
+  const canSqueeze =
+    !sizedByChoice && resizable && !sideBySide && chatNeed > 0;
+  useEffect(() => {
+    if (!canSqueeze) {
+      setSqueezedFrom(null);
+      return;
+    }
+    if (squeezedFrom === null) {
+      if (
+        naturalStage.height > 0 &&
+        naturalStage.height + CALL_SPLIT_DIVIDER_PX + chatNeed > container
+      ) {
+        setSqueezedFrom(naturalStage.height);
+      }
+    } else if (squeezedFrom + CALL_SPLIT_DIVIDER_PX + chatNeed <= container) {
+      setSqueezedFrom(null);
+    }
+  }, [canSqueeze, chatNeed, container, naturalStage.height, squeezedFrom]);
+  const squeezed = canSqueeze && squeezedFrom !== null;
+  const sized = sizedByChoice || squeezed;
   const stagePx = !sized
     ? null
-    : phoneShort
+    : squeezed
+      ? clampSplit({
+          fraction: splitFraction(squeezedFrom ?? 0, container),
+          container,
+          ...bounds,
+        })
+      : phoneShort
       ? phoneShortStageHeight(container)
       : phoneFloor
         ? clampSplit({
@@ -315,9 +421,10 @@ export function CallSplit({
   // rule inside a pane it has entirely to itself, and the person who asked
   // for the call to fill the pane gets a band of empty pane under it.
   const fills = sized || collapsed === "chat";
+  const chatHidden = collapsed === "chat";
   useEffect(() => {
-    onSplitStateChange?.({ active: fills, canSideBySide });
-  }, [fills, canSideBySide, onSplitStateChange]);
+    onSplitStateChange?.({ active: fills, canSideBySide, chatHidden });
+  }, [fills, canSideBySide, chatHidden, onSplitStateChange]);
 
   const setCollapsed = useCallback(
     (next: CallSplitCollapsed) => {
@@ -391,8 +498,55 @@ export function CallSplit({
     applyPx(drag.startPx + moved, true);
   };
 
+  // Double-click (or Enter) snaps the stage to the picture: no black bands
+  // above and below, or at the sides. Measured on the largest picture with a
+  // size, then measured again after the layout settles, because with more
+  // than one tile the picture does not grow one for one with the stage.
+  const fitToPicture = () => {
+    if (!resizable) {
+      return;
+    }
+    let passes = 0;
+    const step = () => {
+      const pane = stagePaneRef.current;
+      const video = pane
+        ? Array.from(pane.querySelectorAll("video"))
+            .filter((element) => element.videoWidth > 0)
+            .map((element) => ({ element, box: element.getBoundingClientRect() }))
+            .sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)[0]
+        : undefined;
+      if (!video) {
+        return;
+      }
+      const delta = fitToPictureDelta({
+        boxWidth: video.box.width,
+        boxHeight: video.box.height,
+        videoWidth: video.element.videoWidth,
+        videoHeight: video.element.videoHeight,
+        sideBySide,
+      });
+      if (Math.abs(delta) < 2) {
+        return;
+      }
+      // From the stage's size as laid out now, not a running total: a pass
+      // the minimums clamped must not carry its overshoot into the next.
+      const box = pane!.getBoundingClientRect();
+      applyPx((sideBySide ? box.width : box.height) + delta, true);
+      passes += 1;
+      if (passes < 3) {
+        requestAnimationFrame(() => requestAnimationFrame(step));
+      }
+    };
+    step();
+  };
+
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!resizable) {
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      fitToPicture();
       return;
     }
     const step = event.shiftKey
@@ -523,11 +677,13 @@ export function CallSplit({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onKeyDown={onKeyDown}
+          onDoubleClick={fitToPicture}
         />
       ) : null}
       {/* Same reasoning for the transcript: unmounting it would lose the
           scroll position and re-fetch the page on every restore. */}
       <div
+        ref={chatPaneRef}
         data-call-split-chat=""
         hidden={collapsed === "chat"}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -570,6 +726,7 @@ function SplitDivider({
   onPointerUp,
   onPointerCancel,
   onKeyDown,
+  onDoubleClick,
 }: {
   sideBySide: boolean;
   dragging: boolean;
@@ -581,6 +738,7 @@ function SplitDivider({
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  onDoubleClick: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -631,6 +789,7 @@ function SplitDivider({
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
           onKeyDown={onKeyDown}
+          onDoubleClick={onDoubleClick}
         >
           <span
             aria-hidden="true"
@@ -715,6 +874,14 @@ function ChatPaneHeader({
           </span>
         )}
       </span>
+      {header.actions && (
+        <span
+          data-call-split-chat-actions=""
+          className="flex shrink-0 items-center gap-0.5"
+        >
+          {header.actions}
+        </span>
+      )}
       {header.orientation?.canToggle && !videoHidden && (
         <Tooltip
           label={

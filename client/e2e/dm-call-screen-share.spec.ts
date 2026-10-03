@@ -243,7 +243,7 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
  * The overflow half of the rule needs a room too big for a DM, and lives in
  * `call-stage-strip.spec.ts`.
  */
-test("a share and a camera are tiles, the listener is a chip, and the row hides", async ({
+test("a share and a camera are tiles, and a 1:1 call draws no row of only yourself", async ({
   page,
   browser,
 }) => {
@@ -272,12 +272,6 @@ test("a share and a camera are tiles, the listener is a chip, and the row hides"
       callee.page.getByText(`${pair.callerName} is presenting`),
     ).toBeVisible({ timeout: 20_000 });
 
-    // The callee answered a video call without turning their own camera on,
-    // which is the ordinary case and the one this test is about: they are
-    // publishing nothing, so they belong in the row, not on the stage.
-    const strip = callee.page.getByTestId("listener-strip");
-    await expect(strip).toBeVisible({ timeout: 20_000 });
-
     // The caller is publishing two things, and both are on the stage, playing
     // — not merely present. A tile that renders no frames is the bug that
     // `remote-video-delivery.ts` causes when nothing binds a <video>.
@@ -293,74 +287,32 @@ test("a share and a camera are tiles, the listener is a chip, and the row hides"
       )
       .toBe(true);
 
-    // The person publishing nothing is the only chip, and a chip is not a
-    // video tile: no <video> in the row at all.
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
+    // The callee answered without turning their own camera on, so they are
+    // the only person publishing nothing. A row holding nobody but yourself
+    // says nothing the bar does not, so a 1:1 call draws none. (The row, its
+    // overflow and hiding it from the keyboard are pinned with real
+    // listeners in `call-stage-strip.spec.ts`.)
+    await expect(callee.page.getByTestId("listener-strip")).toHaveCount(0);
     await expect(
-      strip.locator(`[data-call-listener="${pair.calleeName}"]`),
-    ).toBeVisible();
-    await expect(
-      strip.locator(`[data-call-listener="${pair.callerName}"]`),
+      callee.page.locator(`[data-call-listener="${pair.calleeName}"]`),
     ).toHaveCount(0);
-    await expect(strip.locator("video")).toHaveCount(0);
-
-    // The row sits above the control bar rather than under it: the hang-up
-    // button and the chips are both pressable, which is exactly what a
-    // full-width bar with pointer events would otherwise take away.
-    const chipBox = await strip
-      .locator(`[data-call-listener="${pair.calleeName}"]`)
-      .boundingBox();
-    const leaveBox = await callee.page
-      .getByRole("button", { name: "Leave", exact: true })
-      .boundingBox();
-    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(leaveBox!.y + 1);
 
     await callee.page.screenshot({
-      path: "test-results/listener-strip-open.png",
+      path: "test-results/listener-strip-solo.png",
     });
-
-    // Hide, from the keyboard: no chips, the share still on the stage, and
-    // focus kept on the (now "show") button.
-    await callee.page
-      .getByRole("button", { name: "Hide participants" })
-      .focus();
-    await callee.page.keyboard.press("Enter");
-    await expect(strip).toHaveAttribute("data-open", "false");
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(0);
-    await expect(screenVideo(callee.page)).toBeVisible();
-    await expect(
-      callee.page.getByRole("button", { name: "Show participants" }),
-    ).toBeFocused();
-    expect(
-      await callee.page.evaluate(() =>
-        localStorage.getItem("pqp:participant-rail"),
-      ),
-    ).toBe("false");
-    await callee.page.screenshot({
-      path: "test-results/listener-strip-hidden.png",
-    });
-
-    // (That the choice survives a NEW share is pinned in
-    // `call-stage-strip.spec.ts`, which can restart a share without a second
-    // browser and without a second media handshake.)
-
-    // Show again.
-    await callee.page
-      .getByRole("button", { name: "Show participants" })
-      .click();
-    await expect(strip).toHaveAttribute("data-open", "true");
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
   } finally {
     await callee.context.close();
   }
 });
 
 /**
- * Video-player chrome. With a share on stage the controls bar and the title
- * overlay leave after a few idle seconds and come back on a pointer move;
- * resting on the bar or focusing a control inside it holds them. The rules
- * are unit-tested with fake timers in `use-idle-chrome.test.ts`; this pins
- * that the stage actually wires them to real pointer and focus events.
+ * Video-player chrome. With a share on stage the call's controls stay in the
+ * composer's strip; in fullscreen, where the composer is out of sight, they
+ * float over the picture with the title overlay, leave after a few idle
+ * seconds and come back on a pointer move; resting on the bar or focusing a
+ * control inside it holds them. The rules are unit-tested with fake timers in
+ * `use-idle-chrome.test.ts`; this pins that the stage actually wires them to
+ * real pointer and focus events.
  */
 test("the call chrome hides over an idle share and returns on movement, hover or focus", async ({
   page,
@@ -392,6 +344,24 @@ test("the call chrome hides over an idle share and returns on movement, hover or
     const stage = callee.page.getByTestId("call-stage");
     const bar = callee.page.getByTestId("call-controls-bar");
     const overlay = callee.page.locator('[data-call-chrome="overlay"]');
+
+    // Outside fullscreen nothing floats over the share: hang-up is in the
+    // composer's strip, where it was before anybody shared.
+    await expect(bar).toHaveCount(0);
+    await expect(
+      callee.page
+        .getByTestId("call-stage-collapsed")
+        .getByRole("button", { name: "Leave", exact: true }),
+    ).toBeVisible();
+
+    // Fullscreen takes the composer away, so the controls float.
+    const firstBox = (await stage.boundingBox())!;
+    await callee.page.mouse.move(
+      firstBox.x + firstBox.width / 2,
+      firstBox.y + firstBox.height / 2,
+    );
+    await callee.page.getByTestId("share-fullscreen").first().click();
+    await expect(bar).toBeVisible({ timeout: 10_000 });
     const stageBox = (await stage.boundingBox())!;
     const centre = {
       x: stageBox.x + stageBox.width / 2,
@@ -429,11 +399,10 @@ test("the call chrome hides over an idle share and returns on movement, hover or
     await callee.page.waitForTimeout(4_500);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
 
-    // Pointer parked off the stage: it hides again. Keyboard focus landing on
-    // the hang-up button reveals it, so a keyboard user is never hanging up
-    // blind.
+    // Pointer resting on the picture: it hides again. Keyboard focus landing
+    // on the hang-up button reveals it, so a keyboard user is never hanging
+    // up blind.
     await callee.page.mouse.move(centre.x, centre.y);
-    await callee.page.mouse.move(2, 2);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "true", {
       timeout: 6_000,
     });

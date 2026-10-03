@@ -34,6 +34,12 @@ export interface ContextMenuItemDef {
   icon?: LucideIcon;
   /** Tick on the right. Used for exclusive choices like notification level. */
   checked?: boolean;
+  /**
+   * A second, smaller line under the label: what the choice reaches, or why
+   * a row is disabled. Described by, never part of, the row's name, so a
+   * test or a screen reader still finds the row by its label alone.
+   */
+  detail?: string;
 }
 
 /**

@@ -68,7 +68,7 @@ export function Menu({
           // Named so a test can address the open menu without matching
           // translated labels.
           data-server-menu=""
-          className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
+          className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[var(--radix-dropdown-menu-content-available-width)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
           // No `onCloseAutoFocus` override, unlike `ContextMenu`'s: THIS
           // trigger is a single, real, focusable control (a right-click has
           // no such thing), so Radix's default — return focus to it on close

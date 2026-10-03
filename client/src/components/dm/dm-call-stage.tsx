@@ -35,6 +35,10 @@ export function DmCallStage({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
+  onSetPeerVolume,
+  onSetScreenVolume,
+  composerHidden,
   onStopScreenShare,
   onFocusScreenShare,
   onToggleRaisedHand,
@@ -62,6 +66,12 @@ export function DmCallStage({
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
+  onDismissError?: () => void;
+  /** Turn one person's voice, or their share's sound, up or down here. */
+  onSetPeerVolume?: (userId: string, volume: number) => void;
+  onSetScreenVolume?: (userId: string, volume: number) => void;
+  /** See `CallStage`\'s prop of the same name. */
+  composerHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   /**
@@ -140,6 +150,10 @@ export function DmCallStage({
       onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
+      onDismissError={onDismissError}
+      onSetPeerVolume={onSetPeerVolume}
+      onSetScreenVolume={onSetScreenVolume}
+      composerHidden={composerHidden}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       onToggleRaisedHand={onToggleRaisedHand}

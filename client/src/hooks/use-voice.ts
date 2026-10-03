@@ -323,11 +323,14 @@ export interface VoiceState {
   isTransmitting: boolean;
   error: string | null;
   /**
-   * Set when `error` is about the microphone: the stage then offers a way
-   * into voice settings next to the message, since picking another device
-   * is the fix for every one of those.
+   * What `error` is about, when the stage can do something with that.
+   * `mic`: the stage offers a way into voice settings next to the message,
+   * since picking another device is the fix for every one of those.
+   * `share`: a screen share that did not start. The next share that does
+   * start clears it, because the strip would otherwise sit over a working
+   * share saying it failed.
    */
-  errorKind: "mic" | "connection" | null;
+  errorKind: "mic" | "connection" | "share" | null;
   /**
    * Good news worth a line: the saved microphone could not start and the
    * call went ahead on another one. Says which, so nobody wonders why the
@@ -517,6 +520,13 @@ export interface VoiceState {
    * saving gets wired in.
    */
   dismissedSharePeerIds: string[];
+  /**
+   * Cameras this viewer hid from their own stage, by peer id. The same deal
+   * as `dismissedSharePeerIds`: the tile stays and says so, nothing about the
+   * call changes for anybody else, and it lasts only as long as that camera
+   * is on.
+   */
+  dismissedCameraPeerIds: string[];
   /**
    * Whose screen audio to play. Derived from the sharing set + focus, not
    * from whether the stage is on screen — navigating to a text channel must
@@ -1744,6 +1754,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    dismissedCameraPeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
@@ -1985,6 +1996,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.handRaisedAt = null;
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
+    state.errorKind = null;
     emit();
   }
 
@@ -2181,6 +2193,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     } catch (err) {
       if (attempt >= 5) {
         state.error = err instanceof Error ? err.message : String(err);
+        state.errorKind = null;
         emit();
         return;
       }
@@ -2683,6 +2696,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.error = err instanceof Error ? err.message : failureMessage;
+      state.errorKind = null;
       if (screenMix && state.isSharingMic && pipeline) {
         screenMix.setMic(micForScreenMix());
       }
@@ -3760,6 +3774,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.cameraPeerIds = participants
       .filter((participant) => participant.cameraStreamId)
       .map((participant) => participant.peerId);
+    // A hidden camera only stays hidden while it is on.
+    state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter((id) =>
+      state.cameraPeerIds.includes(id),
+    );
   }
 
   /**
@@ -3989,6 +4007,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         },
         onError: (msg) => {
           state.error = msg;
+          state.errorKind = null;
           emit();
         },
         // A republished share is a new sid on the SFU. Re-declaring it lets
@@ -4257,6 +4276,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
+      dismissedCameraPeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
       isSharingScreenAudio: false,
@@ -4523,6 +4543,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = "share";
         emit();
         break;
       case "camera-denied":
@@ -4534,6 +4555,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshCameraLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = null;
         emit();
         break;
       case "voice-room-full": {
@@ -4542,6 +4564,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.error = translateMessage("voice.error.channelFull", {
           limit,
         });
+        state.errorKind = null;
         emit();
         break;
       }
@@ -5357,6 +5380,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.screenSharePeerIds = [];
       state.liveStream = null;
       state.cameraPeerIds = [];
+      state.dismissedCameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
       // A queue belongs to a room. Walking into another one is not a place
@@ -5954,6 +5978,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = "share";
         emit();
         return;
       }
@@ -5963,13 +5988,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // programmatic call, not a user tapping a button we should not have shown.
       if (!supportsScreenShare()) {
         state.error = screenShareUnsupportedMessage();
+        state.errorKind = "share";
         emit();
         return;
       }
 
       // A share that succeeds supersedes the last one that failed, and the
       // offer to retry without sound has to go with it.
-      const retryingAfterAudioFailure = state.screenShareAudioFailed;
       state.screenShareAudioFailed = false;
 
       // The standing "leave my mouse out of it" preference, read from its own
@@ -6029,6 +6054,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           (err.name === "TypeError" || err.name === "NotSupportedError");
         if (!shapeRefused) {
           state.error = screenShareErrorMessage(err);
+          state.errorKind = "share";
           // Everything audio can do to a capture, it does to the whole capture:
           // the video was fine and the person still got nothing. Offer the same
           // share without sound rather than leaving them to work out that the
@@ -6047,6 +6073,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         } catch {
           state.error = screenShareErrorMessage(err);
+          state.errorKind = "share";
           discardPrimedNativeShareAudio();
           emit();
           return;
@@ -6057,6 +6084,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        state.errorKind = "share";
         discardPrimedNativeShareAudio();
         emit();
         return;
@@ -6202,10 +6230,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       watchScreenCapture(stream);
       screenCaptureStream = stream;
       // The red strip is ours and it is now answering a question that has been
-      // resolved. Only the share failure is cleared: an unrelated error is not
-      // this attempt's to dismiss.
-      if (retryingAfterAudioFailure) {
+      // resolved. Only a share failure is cleared: an unrelated error is not
+      // this attempt's to dismiss. Cancelling the picker and then sharing is
+      // the common way here, and it used to leave "bloqueado ou cancelado"
+      // over the share that was running.
+      if (state.errorKind === "share") {
         state.error = null;
+        state.errorKind = null;
       }
       state.isSharingScreen = true;
       state.localScreenStream = stream;
@@ -6274,6 +6305,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void publishMicArchiveIfRecording();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
+        state.errorKind = "share";
         await stopScreenShareInternal();
         emit();
       }
@@ -6374,6 +6406,26 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
+    /** Hide one person's camera on this screen only. */
+    dismissCamera(peerId: string) {
+      if (state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = [...state.dismissedCameraPeerIds, peerId];
+      emit();
+    },
+
+    /** Undo that. */
+    watchCamera(peerId: string) {
+      if (!state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter(
+        (id) => id !== peerId,
+      );
+      emit();
+    },
+
     /** Undo that. */
     watchShare(peerId: string) {
       if (!state.dismissedSharePeerIds.includes(peerId)) {
@@ -6470,6 +6522,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshCameraLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = null;
         emit();
         return;
       }
@@ -6503,6 +6556,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           t.stop();
         }
         state.error = translateMessage("voice.error.cameraFailed");
+        state.errorKind = null;
         emit();
         return;
       }
@@ -6634,6 +6688,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           t.stop();
         }
         state.error = translateMessage("voice.error.cameraFailed");
+        state.errorKind = null;
         emit();
         return;
       }
@@ -6790,6 +6845,21 @@ export function createVoiceController(transport: RealtimeTransport) {
      * saved device changing, or a new substitute) still gets its own notice.
      * `leaveCall` forgets the closed key, so a new call can show it again.
      */
+    /**
+     * The close (x) on the stage's red strip. Every error there is a
+     * statement about something that already happened, and the person has
+     * read it; nothing else clears it before they leave the room.
+     */
+    dismissError() {
+      if (!state.error) {
+        return;
+      }
+      state.error = null;
+      state.errorKind = null;
+      state.screenShareAudioFailed = false;
+      emit();
+    },
+
     dismissMicFallbackNotice() {
       if (!state.micFallback) {
         return;

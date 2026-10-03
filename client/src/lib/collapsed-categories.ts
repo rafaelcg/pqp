@@ -1,4 +1,13 @@
+import { useEffect, useState } from "react";
+
 const STORAGE_KEY = "pqp:collapsed-categories";
+
+/**
+ * Who else needs to know. The channel list owns the toggle, but the call
+ * stage reads it too: a voice room inside a collapsed category is not on
+ * screen, so the stage has to name the room itself again.
+ */
+const listeners = new Set<(ids: Set<string>) => void>();
 
 /**
  * Which category headers are collapsed, by channel id — global across
@@ -43,5 +52,21 @@ export function toggleCollapsedCategory(categoryId: string): Set<string> {
     current.add(categoryId);
   }
   persist(current);
+  for (const listener of listeners) {
+    listener(new Set(current));
+  }
   return current;
+}
+
+/** The collapsed set, kept current as the channel list toggles it. */
+export function useCollapsedCategories(): Set<string> {
+  const [ids, setIds] = useState<Set<string>>(() => loadCollapsedCategories());
+  useEffect(() => {
+    listeners.add(setIds);
+    setIds(loadCollapsedCategories());
+    return () => {
+      listeners.delete(setIds);
+    };
+  }, []);
+  return ids;
 }
