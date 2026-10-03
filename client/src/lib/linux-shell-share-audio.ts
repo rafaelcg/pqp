@@ -15,7 +15,7 @@
  *   3. this machine has a sound server `pactl` can reach
  *      (`linuxShareAudioStatus()`, only asked once 1 and 2 hold).
  * Any one missing and the Linux shell behaves exactly as before: a share with
- * no sound, and the #860 hint saying so.
+ * no sound, and the hint from PR 860 saying so.
  *
  * The answer is warmed before a share (`ensureLinuxShellShareAudio`, awaited
  * beside `ensureOsCanExcludeCallAudio`) and read synchronously afterwards,
@@ -220,8 +220,12 @@ export async function attachLinuxShellShareAudio(
     if (!claim?.active || !claim.label) {
       return "unavailable";
     }
+    if (abandoned) {
+      return "unavailable";
+    }
     const device = pickShareAudioInput(await deps.enumerate(), claim.label);
-    if (!device) {
+    // A share that has moved on never gets a new media request opened for it.
+    if (!device || abandoned) {
       return "unavailable";
     }
     const media = await deps.getUserMedia({
