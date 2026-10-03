@@ -566,7 +566,11 @@ import {
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
 import { ensureNativeShareAudio, prefetchNativeShareAudio } from "@/lib/native-share-audio";
-import { ensureShareGuardFlag, prefetchShareGuardFlag } from "@/lib/share-guard-flag";
+import {
+  ensureShareGameCaptureHintFlag,
+  ensureShareGuardFlag,
+  prefetchShareGuardFlag,
+} from "@/lib/share-guard-flag";
 import { ensureLinuxShellShareAudio } from "@/lib/linux-shell-share-audio";
 import {
   hlsCaptureMaxFrameRate,
@@ -2573,12 +2577,14 @@ function MainAppContent({
           // The call's server, not the one on screen: the per-server switch
           // for native Windows share audio follows where the share goes. A DM
           // call has none and gets the global answer.
-          const [, nativeShareAudio, shareHighMotionGuard] = await Promise.all([
-            ensureOsCanExcludeCallAudio(),
-            ensureNativeShareAudio(voiceServerIdRef.current),
-            ensureShareGuardFlag(voiceServerIdRef.current),
-            ensureLinuxShellShareAudio(),
-          ]);
+          const [, nativeShareAudio, shareHighMotionGuard, , shareGameCaptureHint] =
+            await Promise.all([
+              ensureOsCanExcludeCallAudio(),
+              ensureNativeShareAudio(voiceServerIdRef.current),
+              ensureShareGuardFlag(voiceServerIdRef.current),
+              ensureLinuxShellShareAudio(),
+              ensureShareGameCaptureHintFlag(voiceServerIdRef.current),
+            ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
           }
@@ -2589,6 +2595,7 @@ function MainAppContent({
             ...intent,
             nativeShareAudio,
             shareHighMotionGuard,
+            shareGameCaptureHint,
           };
           const env = liveScreenCaptureEnvironment(shareIntent);
           // "Wants a tab" is only true where tabs exist. In the desktop shell a

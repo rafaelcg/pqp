@@ -210,6 +210,50 @@ describe("collectShareHealth", () => {
     expect(text).toContain("software");
   });
 
+  it("says which capturer runs, the surface, and what the picture watch saw", async () => {
+    vi.stubGlobal("window", {
+      pqpDesktop: {
+        isElectron: true,
+        platform: "win32",
+        shareHealth: async () => ({
+          platform: "win32",
+          versions: { electron: "44.0.0", chrome: "152.0.7977.130" },
+          gpu: {
+            videoEncode: "enabled",
+            videoDecode: "enabled",
+            gpuCompositing: "enabled",
+            hardwareVideoEncode: true,
+            status: null,
+          },
+          priority: { live: false, boost: "idle", processes: 0 },
+          capture: { build: 26100, screen: "wgc", window: "wgc" },
+        }),
+      },
+    });
+    setShareHealthSource(
+      source({
+        track: () =>
+          ({
+            getSettings: () => ({ frameRate: 60, width: 1920, height: 1080, displaySurface: "monitor" }),
+          }) as MediaStreamTrack,
+        picture: () => ({
+          running: true,
+          reported: null,
+          frames: 0,
+          samples: 6,
+          suspected: "quiet",
+          exclusiveFullscreen: false,
+        }),
+      }),
+    );
+    const report = await collectShareHealth(0);
+    expect(report?.trackSettings.displaySurface).toBe("monitor");
+    const text = formatShareHealth(report);
+    expect(text).toContain("1920x1080 @ 60.0, monitor");
+    expect(text).toContain("picture        suspected quiet, 0 frames seen, watching, exclusive fullscreen no");
+    expect(text).toContain("capturer       screen wgc, window wgc (Windows build 26100)");
+  });
+
   it("does not fail when the shell cannot answer", async () => {
     vi.stubGlobal("window", {
       pqpDesktop: {

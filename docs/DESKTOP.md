@@ -300,6 +300,158 @@ desktop app, share the game window with CS2 uncapped, run `pqpShareHealth()`
 during the stutter and read it with the paragraph above; then
 `pqpShareHealth.force(1)`, `force(2)`, `force(3)` and watch the viewer at each.
 
+### Sharing a game: Fullscreen vs Fullscreen Windowed (`share_game_capture_hint`)
+
+Field report, 2026-10: sharing Counter-Strike 2 from the Windows app works with
+the game in **Fullscreen Windowed** and not in plain **Fullscreen**. The
+symptom is not pinned yet (black, frozen, or a share that ends). Below,
+VERIFIED means read in the cited source (Chromium 152, which Electron 44
+ships); UNVERIFIED means inference or a user report. Nothing here was run on
+Windows.
+
+**How Chromium captures on Windows (Electron 44 = Chromium 152.0.7977.130,
+[electron DEPS](https://github.com/electron/electron/blob/44-x-y/DEPS)).**
+
+- A **screen** source is Windows Graphics Capture (WGC) from **Windows 11 24H2
+  (build 26100)** on, and DXGI desktop duplication with GDI behind it before
+  that. VERIFIED: `IsWgcEnabledForScreenCapture()` is
+  `base::win::GetVersion() >= base::win::Version::WIN11_24H2`, then
+  `set_allow_wgc_screen_capturer(true)`
+  ([desktop_capture_device.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/content/browser/media/capture/desktop_capture_device.cc));
+  `kDirectXCapturer` is enabled by default, "DirectX as main capture API and
+  GDI as fallback"
+  ([desktop_capture.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/content/public/browser/desktop_capture.cc)).
+- A **window** source is WGC on every Windows: `set_allow_wgc_window_capturer(true)`
+  unconditionally (same file). VERIFIED.
+- **No switch changes this.** The old `AllowWgcScreenCapturer` /
+  `AllowWgcWindowCapturer` features are gone from Chromium 152; only
+  `WebRtcWgcRequireBorder` and `WebRtcAllowWgcUsingTexture` remain, both off
+  ([webrtc_features.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/media/webrtc/webrtc_features.cc)).
+  VERIFIED. Turning `DirectXCapturer` off only forces GDI, which is worse.
+  Electron offers no Windows capture-method option (`useSystemPicker` is
+  macOS only). VERIFIED in
+  [session.md](https://github.com/electron/electron/blob/44-x-y/docs/api/session.md).
+- A still picture produces **no frames**: the capturer runs in "zero hertz"
+  mode and does not deliver a frame whose content did not change
+  (`zero_hertz_is_active`, same file). VERIFIED. So "no frames" alone is never
+  proof of a dead share.
+- Only a **permanent** capturer error ends the track; a temporary one keeps the
+  track live with no new frames ("Continue capturing frames in the temporary
+  error case", same file). VERIFIED. WebRTC's WGC capturer reports permanent
+  when no frame ever arrived (research pass,
+  [wgc_capturer_win.cc](https://webrtc.googlesource.com/src/+/6f37672d358475cd17544121a12494da454d85fb/modules/desktop_capture/win/wgc_capturer_win.cc)).
+  VERIFIED by the research pass, not re-read here.
+
+**What a game in exclusive fullscreen does to that.**
+
+- Microsoft: DXGI duplication's `AcquireNextFrame` returns
+  `DXGI_ERROR_ACCESS_LOST` on a mode change or a "switch from DWM on, DWM off,
+  or other full-screen application"
+  ([Learn](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-acquirenextframe)).
+  VERIFIED. WebRTC treats that as temporary and fills the frame from GDI
+  (research pass, `fallback_desktop_capturer_wrapper.cc`). That a GDI copy of
+  an exclusive-fullscreen Direct3D surface is black is folklore with no
+  Microsoft source: UNVERIFIED.
+- Discord: WGC "does not work for full screen exclusive (FSE) games"; they
+  detect FSE with `SHQueryUserNotificationState`, fall back to their injected
+  hook (which we will never do), and recommend "Borderless". They add that a
+  game in "Full Screen" may be misclassified as FSE
+  ([Discord support, updated 2026-10-03](https://support.discord.com/hc/en-us/articles/9410427556375)).
+  VERIFIED (read through the help-center API). This is the closest primary
+  source on WGC and FSE; Microsoft's own WGC docs say nothing about it.
+- Fullscreen Optimizations (FSO) run "full screen exclusive games ... in a
+  highly optimized borderless windowed format", and the compatibility checkbox
+  **"Disable fullscreen optimizations" restores true exclusive fullscreen**
+  ([DirectX blog](https://devblogs.microsoft.com/directx/demystifying-full-screen-optimizations/)).
+  VERIFIED. So that checkbox makes capture worse, never better. Windows 11's
+  "Optimizations for windowed games" only covers windowed and borderless
+  DX10/11 games
+  ([support](https://support.microsoft.com/en-us/windows/hardware/display-graphics/optimizations-for-windowed-games-in-windows-11)).
+  VERIFIED.
+- What CS2's "Fullscreen" is on a current Windows build (true exclusive, or
+  FSO-promoted flip), on D3D11 and on Vulkan: **no Valve source found.**
+  UNVERIFIED. "Fullscreen Windowed" is a borderless window, which every
+  capturer sees (a user report says `fullscreen 0` + `nowindowborder 1`).
+  `SHQueryUserNotificationState` names Direct3D; whether a Vulkan game in
+  exclusive mode reports it is UNVERIFIED.
+- Electron issue [#21063](https://github.com/electron/electron/issues/21063)
+  is the same symptom ("black screen with mouse on Fullscreen games ...
+  windowed mode instantly fixes the issue"), closed without a root cause.
+- Others: OBS offers DXGI or WGC for display capture and BitBlt or WGC for
+  window capture, and "capture any fullscreen application" is its Game Capture,
+  a hook. NVIDIA's NvFBC is deprecated on Windows 10 and later. Parsec and
+  Steam Remote Play were not checked.
+
+**So: why "Fullscreen Windowed" works and "Fullscreen" may not.** A borderless
+window is composed by DWM like any window, and every Windows capture path reads
+what DWM composes. Exclusive fullscreen hands the output to the game. Below
+24H2 a screen share hits DXGI's documented `ACCESS_LOST` and limps on GDI (black
+or stale, track still live); from 24H2, and for any window share, it is WGC,
+which Discord says does not work for FSE (frozen, or a track that ends).
+**Sharing the game's window instead of the screen does not help**: a window is
+WGC everywhere. **There is no safe code-side fix** in Electron 44: no flag
+selects a capturer that sees an exclusive-fullscreen game, and the only thing
+that does (a hook into the game) is off the table under VAC. So the flag is not
+a capture mode, and nothing about the capture changes.
+
+**What the flag does instead (detect and tell).** Off by default, per server,
+`GET /api/share/config` (`docs/FEATURE_FLAGS.md`).
+
+1. The Windows app's share is sampled for its first minute
+   (`client/src/lib/share-picture-watch.ts`): a clone of the track through
+   `MediaStreamTrackProcessor`, every frame closed at once, one frame every 2 s
+   drawn into a 32x18 canvas. Again for a minute after an unmute. Nothing kept,
+   nothing sent.
+2. `share-picture-check.ts` calls it **black** (mean luma <= 4 and the 98th
+   percentile <= 12, unmoving, for 8 s) or **quiet** (no frame for 8 s).
+   Thresholds are pinned with synthetic frames: a dark film scene, a near-black
+   scene with one light, a fade shorter than the window, a still slide, a game
+   in motion, a black capture with the pointer on it, a frozen game.
+3. **Nothing is shown on pixels alone.** A still slide is quiet too (zero
+   hertz). The page then asks the shell (`fullscreenAppState()`,
+   `electron/lib/fullscreen-state.js`) whether Windows reports
+   `QUNS_RUNNING_D3D_FULL_SCREEN`
+   ([Learn](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ne-shellapi-query_user_notification_state)),
+   at most every 6 s. Only a yes raises the card: black, frozen ("stalled"),
+   or, for a capture whose track ends by itself in its first minute, "ended".
+   The shell asks through one PowerShell `Add-Type` P/Invoke and never touches
+   a game process; any failure is "cannot tell", and that never shows anything.
+4. The card (`ShareGameCaptureNotice`, in the call bar like the mic fallback
+   card) says what viewers get, that the game is in exclusive fullscreen, and
+   the fix: CS2, Settings, Video, Display Mode, Fullscreen Windowed; other
+   games, borderless or windowed fullscreen. "Entendi" closes it; "Não mostrar
+   de novo" silences it for good (the hint store), and a silenced presenter is
+   not even sampled.
+5. `pqpShareHealth()` gains the surface (`monitor` / `window`), a `picture`
+   line (what the watch suspects, and the shell's answer), and a `capturer`
+   line (WGC or DXGI+GDI for a screen on this Windows build).
+
+Known gaps, said plainly: a capture that keeps delivering a STALE picture of
+the desktop behind the game cannot be told from a still slide and is not
+reported. A Vulkan game in exclusive mode may not be reported by Windows as
+Direct3D. Discord's misclassification note means a "Fullscreen" game that
+captures fine may still report yes, which is why pixels are required too.
+
+**Test matrix for Rafael's PC** (`share-diagnostic.html` in Chrome, then the
+desktop app with `pqpShareHealth()`; flag on for one server from the dashboard,
+controles, interruptores, `share_game_capture_hint`). First note the Windows
+build (`winver`): 26100 or later means a screen share is WGC.
+
+| CS2 mode | Source | Flag | Expected if the analysis is right | What it means otherwise |
+|---|---|---|---|---|
+| Fullscreen Windowed | screen | off | picture `moving`, share fine | baseline broken: not this problem |
+| Fullscreen Windowed | window | off | `moving`, fine | same |
+| Fullscreen | screen | off | `black` (build < 26100) or `no frames` / ended (26100+) | `moving` means CS2's Fullscreen is FSO-promoted here and the report is something else (look at `captured` fps and the high-motion section) |
+| Fullscreen | window | off | `no frames` or the capture ends | `moving`: window capture survives, tell us, the card's advice would then change |
+| Fullscreen | screen | on | as above, plus the card within about 10 s; `pqpShareHealth()` says `exclusive fullscreen yes` | no card with `exclusive fullscreen no`: Windows does not report CS2 as D3D exclusive (try `-vulkan` off / on) |
+| Fullscreen | window | on | card (stalled or ended) | same |
+| Fullscreen Windowed | screen | on | no card ever, `exclusive fullscreen` not asked or `no` | a card here is a false positive: send the `pqpShareHealth()` output |
+| a still slide or paused video | screen | on | no card | same |
+
+Also worth one run each: the game's compatibility tab with "Disable fullscreen
+optimizations" ticked (expected worse), and alt-tab in Fullscreen (Discord's
+test: a game that minimizes on alt-tab is in exclusive fullscreen).
+
 ---
 
 ## 2. Build locally

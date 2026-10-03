@@ -186,6 +186,13 @@ export interface ScreenCaptureIntent {
    * was. Never true for a watch party, whatever the flag says.
    */
   shareHighMotionGuard?: boolean;
+  /**
+   * `share_game_capture_hint` for THIS share's server, decided before the
+   * picker the same way. True lets the Windows desktop app watch the share's
+   * first minute for a dead picture (`lib/share-game-capture-hint.ts`);
+   * absent or false samples nothing.
+   */
+  shareGameCaptureHint?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */

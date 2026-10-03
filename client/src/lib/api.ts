@@ -708,6 +708,12 @@ export interface ShareConfig {
    * (`lib/linux-shell-share-audio.ts`). Absent on an older API: off.
    */
   linuxDesktopSystemAudio?: boolean;
+  /**
+   * The Windows desktop app watches the presenter's share for a dead picture
+   * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
+   * Absent on an older API: off.
+   */
+  shareGameCaptureHint?: boolean;
 }
 
 /** `serverId` is the server the call is in; a DM call asks without one. */

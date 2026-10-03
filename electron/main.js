@@ -83,6 +83,8 @@ const {
 } = require("./lib/tray-state");
 const { createShareAudioController } = require("./lib/win-share-audio-session");
 const { createSharePriority } = require("./lib/share-priority");
+const { createFullscreenState } = require("./lib/fullscreen-state");
+const { screenCapturerFor } = require("./lib/capture-backend");
 const { summariseGpuStatus, formatGpuStatusLine } = require("./lib/gpu-status");
 const {
   PROBE_TONE_PAGE,
@@ -174,6 +176,16 @@ const sharePriority = createSharePriority({
     ABOVE_NORMAL: os.constants.priority.PRIORITY_ABOVE_NORMAL,
   },
   log: (line) => console.log(line),
+});
+
+/**
+ * `share_game_capture_hint`, the shell's half: one question to Windows about
+ * the session, asked only by the page and only when its share already looks
+ * dead. See `lib/fullscreen-state.js`.
+ */
+const fullscreenState = createFullscreenState({
+  platform: process.platform,
+  execFile,
 });
 
 /** Chromium's GPU feature status, read on demand (and once at startup, below). */
@@ -2407,7 +2419,21 @@ if (probingShareAudio) {
       },
       gpu: gpuStatusSummary(),
       priority: sharePriority.status(),
+      capture: screenCapturerFor(process.platform, os.release()),
     };
+  });
+
+  /**
+   * `share_game_capture_hint`: is a Direct3D app holding the display in
+   * exclusive fullscreen right now (`SHQueryUserNotificationState`)? Asked by
+   * the page only when it already suspects a dead share. Never touches the
+   * game: see `lib/fullscreen-state.js`. App window only.
+   */
+  ipcMain.handle("pqp:fullscreen-app-state", async (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { state: "unsupported", raw: null, exclusiveFullscreen: null };
+    }
+    return fullscreenState.query();
   });
 
   ipcMain.on("pqp:voice-state", (_event, payload) => {

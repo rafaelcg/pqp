@@ -127,6 +127,10 @@ class FakePeerConnection {
 
 const applied: MediaTrackConstraints[] = [];
 const shellCalls: boolean[] = [];
+/** Track clones the dead-picture watch opened, and the shell's fullscreen answers asked for. */
+let clones = 0;
+let fullscreenAsks = 0;
+let exclusiveFullscreen: boolean | null = true;
 /** Interval callbacks the controller (and the guard) registered, by handle. */
 const intervals = new Map<number, () => void>();
 let nextHandle = 1;
@@ -149,10 +153,19 @@ function screenTrack(reportedFps: number) {
     enabled: true,
     readyState: "live",
     contentHint: "",
+    muted: false,
     onended: null as null | (() => void),
     stop() {
       (this as { readyState: string }).readyState = "ended";
     },
+    // For the dead-picture watch (`share_game_capture_hint`): a clone feeds
+    // the frame reader, and mute / unmute re-arm it.
+    clone() {
+      clones += 1;
+      return { stop: () => {} };
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
     getSettings: () => ({ ...settings }),
     getConstraints: () => constraints,
     applyConstraints: async (next: MediaTrackConstraints) => {
@@ -205,6 +218,17 @@ function installBrowserStubs() {
       getDisplayMedia: async () => mediaStream("screen-stream", [screenTrack(reportedFps)]),
     },
   });
+  // A frame reader that never hands over a frame: the capture of a game the
+  // compositor no longer sees (or of a still slide, which is why the shell's
+  // answer decides).
+  g.MediaStreamTrackProcessor = class {
+    readable = {
+      getReader: () => ({
+        read: () => new Promise(() => {}),
+        cancel: () => {},
+      }),
+    };
+  };
   g.AudioContext = class {
     createMediaStreamSource() {
       return { connect: () => {} };
@@ -230,9 +254,14 @@ function installBrowserStubs() {
         shellCalls.push(live);
         return { live, boost: "raised", processes: 3 };
       },
+      fullscreenAppState: async () => {
+        fullscreenAsks += 1;
+        return { state: "d3d-fullscreen", raw: 3, exclusiveFullscreen };
+      },
     },
     addEventListener: () => {},
     removeEventListener: () => {},
+    location: { hostname: "localhost" },
   });
 }
 
@@ -296,6 +325,9 @@ beforeEach(() => {
   senders.length = 0;
   applied.length = 0;
   shellCalls.length = 0;
+  clones = 0;
+  fullscreenAsks = 0;
+  exclusiveFullscreen = true;
   intervals.clear();
   encoderBehind = false;
   framesEncoded = 0;
@@ -442,6 +474,77 @@ describe("share_high_motion_guard on", () => {
     await runIntervals(60);
     expect(applied).toHaveLength(0);
     expect(shellCalls).toEqual([]);
+    await voice.stopScreenShare();
+  });
+});
+
+/**
+ * `share_game_capture_hint`, wired: the same controller, a capture whose frame
+ * reader never hands over a frame, and a shell that answers the fullscreen
+ * question. Off must be today's share exactly: no clone, no question.
+ */
+describe("share_game_capture_hint", () => {
+  it("off (the default): samples nothing and asks the shell nothing", async () => {
+    const voice = await inCall();
+    await voice.startScreenShare();
+    await settle();
+    await runIntervals(60);
+    expect(clones).toBe(0);
+    expect(fullscreenAsks).toBe(0);
+    expect(voice.getState().shareCaptureHint).toBeNull();
+    await voice.stopScreenShare();
+  });
+
+  it("on: a share with no frames while the shell confirms exclusive fullscreen raises the card", async () => {
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    expect(clones).toBe(1);
+    await runIntervals(12);
+    expect(fullscreenAsks).toBeGreaterThan(0);
+    expect(voice.getState().shareCaptureHint).toMatchObject({ kind: "stalled" });
+    // The next share answers it.
+    await voice.stopScreenShare();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    expect(voice.getState().shareCaptureHint).toBeNull();
+    await voice.stopScreenShare();
+  });
+
+  it("on: a capture that ends by itself in its first minute raises the card only if confirmed", async () => {
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    const track = voice.getState().localScreenStream!.getVideoTracks()[0] as unknown as {
+      onended: () => void;
+    };
+    clock += 5_000;
+    track.onended();
+    await settle();
+    expect(voice.getState().isSharingScreen).toBe(false);
+    expect(voice.getState().shareCaptureHint).toMatchObject({ kind: "ended" });
+
+    // The same end with no exclusive-fullscreen app (the window was closed).
+    exclusiveFullscreen = false;
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    const second = voice.getState().localScreenStream!.getVideoTracks()[0] as unknown as {
+      onended: () => void;
+    };
+    clock += 5_000;
+    second.onended();
+    await settle();
+    expect(voice.getState().shareCaptureHint).toBeNull();
+  });
+
+  it("on: the same silence with no exclusive-fullscreen app (a still slide) raises nothing", async () => {
+    exclusiveFullscreen = false;
+    const voice = await inCall();
+    await voice.startScreenShare(false, { shareGameCaptureHint: true });
+    await settle();
+    await runIntervals(60);
+    expect(fullscreenAsks).toBeGreaterThan(0);
+    expect(voice.getState().shareCaptureHint).toBeNull();
     await voice.stopScreenShare();
   });
 });
