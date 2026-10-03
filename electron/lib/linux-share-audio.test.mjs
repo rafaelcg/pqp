@@ -9,6 +9,7 @@ const {
   SHARE_SOURCE_LABEL,
   IDLE_BEFORE_FIRST_READ_MS,
   IDLE_AFTER_READ_MS,
+  ARM_TTL_MS,
   parseInfo,
   parseModules,
   parseStreams,
@@ -276,10 +277,11 @@ function fakeServer({ defaultSink = "hw", pactl = true } = {}) {
   return { state, run, addApp, where, sinkByName };
 }
 
-function harness(server, { pids = ["500"] } = {}) {
+function harness(server, { pids = ["500"], onActive } = {}) {
   let clock = 0;
   const shareAudio = createLinuxShareAudio({
     run: server.run,
+    ...(onActive ? { onActive } : {}),
     ownPids: () => new Set(pids),
     now: () => clock,
     setTimer: () => 0,
@@ -411,6 +413,63 @@ describe("createLinuxShareAudio", () => {
 
     assert.deepEqual(await shareAudio.start(), { ok: false, reason: "load-failed" });
     assert.deepEqual(server.state.modules, []);
+    assert.equal(shareAudio.isActive(), false);
+  });
+
+  it("tells the shell when a session is live and when it is gone, for the crash marker", async () => {
+    const server = fakeServer();
+    const seen = [];
+    const { shareAudio } = harness(server, { onActive: (active) => seen.push(active) });
+
+    await shareAudio.start();
+    assert.deepEqual(seen, [true]);
+    await shareAudio.stop();
+    assert.deepEqual(seen, [true, false]);
+  });
+
+  it("never reports a session for a machine without pactl", async () => {
+    const server = fakeServer({ pactl: false });
+    const seen = [];
+    const { shareAudio } = harness(server, { onActive: (active) => seen.push(active) });
+
+    await shareAudio.start();
+    assert.deepEqual(seen, []);
+  });
+});
+
+describe("the arm that gates the bus", () => {
+  it("is not armed until the page says so", () => {
+    const { shareAudio } = harness(fakeServer());
+    assert.equal(shareAudio.consumeArm(), false);
+  });
+
+  it("is good for one request only", () => {
+    const { shareAudio } = harness(fakeServer());
+    shareAudio.arm();
+    assert.equal(shareAudio.consumeArm(), true);
+    assert.equal(shareAudio.consumeArm(), false);
+  });
+
+  it("expires, so a stale arm cannot switch on a later request", () => {
+    const { shareAudio, advance } = harness(fakeServer());
+    shareAudio.arm();
+    advance(ARM_TTL_MS + 1);
+    assert.equal(shareAudio.consumeArm(), false);
+  });
+
+  it("arming alone loads nothing and never reads the sound server", async () => {
+    const server = fakeServer();
+    const calls = [];
+    const { shareAudio } = harness({
+      ...server,
+      run: (args) => {
+        calls.push(args);
+        return server.run(args);
+      },
+    });
+    shareAudio.arm();
+    shareAudio.consumeArm();
+    assert.deepEqual(calls, []);
     assert.equal(shareAudio.isActive(), false);
   });
 });

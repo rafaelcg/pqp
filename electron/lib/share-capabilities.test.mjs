@@ -95,8 +95,17 @@ describe("the share capabilities the preload publishes", () => {
     // Loopback on Linux is the default output's monitor: the call included.
     // The Linux branch in main starts the bus and still returns
     // `captureResponse`, which stays video-only off Windows.
-    assert.match(main, /platform === "linux" && audioRequested/);
+    assert.match(main, /linuxAudioArmed && audioRequested/);
     assert.match(main, /startLinuxShareAudio\(\)/);
+  });
+
+  it("builds the Linux bus only for a request the page armed, and touches nothing at launch", () => {
+    // The page arms right before a share it asked the person about (flag on,
+    // answered yes). The shell consumes that arm once per display request, and
+    // the launch-time cleanup runs only behind a marker a live session wrote.
+    assert.match(main, /platform === "linux" && linuxShareAudio\?\.consumeArm\(\) === true/);
+    assert.match(main, /if \(linuxShareAudio && fs\.existsSync\(linuxShareAudioMarkerPath\(\)\)\)/);
+    assert.ok(!/linuxShareAudio\?\.cleanup\(\)/.test(main));
   });
 
   it("is declared on the client's side of the bridge too", () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LINUX_SHARE_AUDIO_TTL_MS,
+  armLinuxShellShareAudio,
   attachLinuxShellShareAudio,
   ensureLinuxShellShareAudio,
   linuxShellShareAudioReady,
@@ -35,6 +36,7 @@ function linuxShell(overrides: Record<string, unknown> = {}) {
       version: "0.1.10",
     },
     linuxShareAudioStatus: async () => ({ available: true, server: "pipewire" }),
+    linuxShareAudioArm: async () => true,
     linuxShareAudioClaim: async () => ({ active: true, label: "pqp-share-audio" }),
     ...overrides,
   };
@@ -245,5 +247,21 @@ describe("attachLinuxShellShareAudio", () => {
       );
       expect(stream.getAudioTracks()).toEqual([]);
     }
+  });
+});
+
+describe("armLinuxShellShareAudio", () => {
+  it("is true when the shell says it armed", async () => {
+    expect(await armLinuxShellShareAudio(async () => true)).toBe(true);
+  });
+
+  it("is false for an older shell, a refusal or a throw, and never throws", async () => {
+    expect(await armLinuxShellShareAudio(() => undefined)).toBe(false);
+    expect(await armLinuxShellShareAudio(async () => false)).toBe(false);
+    expect(
+      await armLinuxShellShareAudio(async () => {
+        throw new Error("ipc closed");
+      }),
+    ).toBe(false);
   });
 });

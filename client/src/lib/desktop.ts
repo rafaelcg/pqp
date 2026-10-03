@@ -71,6 +71,11 @@ export interface PqpDesktop {
    */
   linuxShareAudioStatus?(): Promise<{ available: boolean; server: string | null }>;
   /**
+   * Right before the `getDisplayMedia` of a share the person said yes to
+   * sound for: lets the shell build the bus for the next display request only.
+   */
+  linuxShareAudioArm?(): Promise<boolean>;
+  /**
    * After `getDisplayMedia` resolved: is this share's bus up, and which
    * `enumerateDevices` label is its capture source?
    */

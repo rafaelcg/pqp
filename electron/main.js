@@ -1102,9 +1102,34 @@ function showSourcePicker(labeled, offersNativeAudio) {
  * share itself.
  */
 const PACTL_ENV = { ...process.env, LC_ALL: "C" };
+
+/**
+ * A file that exists only while a share bus may be loaded. It is the one thing
+ * that lets the next launch look for a crashed session's leftovers: with no
+ * marker, startup never talks to the user's sound server at all, which is what
+ * every Linux install without this feature (or with its flag off) must see.
+ */
+function linuxShareAudioMarkerPath() {
+  return path.join(app.getPath("userData"), "linux-share-audio-active");
+}
+
+function setLinuxShareAudioMarker(active) {
+  try {
+    if (active) {
+      fs.writeFileSync(linuxShareAudioMarkerPath(), String(Date.now()));
+    } else {
+      fs.rmSync(linuxShareAudioMarkerPath(), { force: true });
+    }
+  } catch {
+    // A marker that cannot be written costs a crash its startup cleanup; the
+    // next share's own start clears leftovers anyway.
+  }
+}
+
 const linuxShareAudio =
   process.platform === "linux"
     ? createLinuxShareAudio({
+        onActive: setLinuxShareAudioMarker,
         run: (args) =>
           new Promise((resolve, reject) => {
             execFile("pactl", args, { env: PACTL_ENV, timeout: 5000 }, (err, stdout) =>
@@ -1173,6 +1198,10 @@ async function chooseDisplaySource(audioRequested) {
   // Read first and exactly once per request: an arm is good for the next
   // share only, including one that ends at the permission dialog below.
   const nativeAudio = platform === "win32" && shareAudioController?.consumeArm() === true;
+  // Same rule on Linux: the page arms right before a share it has asked the
+  // person about, with the runtime flag on. A request that merely carries
+  // `audioRequested` (a console probe, a stale page) never builds the bus.
+  const linuxAudioArmed = platform === "linux" && linuxShareAudio?.consumeArm() === true;
   // Whatever the last share left running belongs to a share that is over.
   shareAudioController?.stop();
 
@@ -1237,12 +1266,13 @@ async function chooseDisplaySource(audioRequested) {
   }
   // LINUX: the consent is the page's own "share this computer's audio?"
   // prompt, because on Wayland the portal pre-picks the surface and this
-  // picker never opens. The page only asks for audio here when the runtime
-  // flag is on AND the person said yes, so `audioRequested` is that answer.
+  // picker never opens. The page only arms and asks for audio here when the
+  // runtime flag is on AND the person said yes, so `audioRequested` is that
+  // answer and the arm is the proof the page asked.
   // The sound never rides on this callback (Chromium's loopback would carry
   // the call, see `captureResponse`); the renderer opens the source this
   // builds, by name, once `getDisplayMedia` has resolved.
-  if (platform === "linux" && audioRequested) {
+  if (linuxAudioArmed && audioRequested) {
     const started = await startLinuxShareAudio();
     if (!started.ok) {
       console.warn("[pqp] linux share audio unavailable:", started.reason);
@@ -2130,6 +2160,14 @@ if (probingShareAudio) {
     };
   });
 
+  ipcMain.handle("pqp:linux-share-audio-arm", (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
+    linuxShareAudio.arm();
+    return true;
+  });
+
   ipcMain.handle("pqp:linux-share-audio-claim", (event) => {
     if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
       return { active: false, label: null };
@@ -2402,8 +2440,15 @@ if (probingShareAudio) {
 
     console.log(`[pqp] Loading ${appUrl}`);
     // A share bus left by a crash (or a kill) is harmless but visible in the
-    // desktop's sound settings. Clear it before anybody can share again.
-    linuxShareAudio?.cleanup().catch(() => {});
+    // desktop's sound settings. Clear it before anybody can share again, but
+    // only when the marker says a session was live and never ended: otherwise
+    // this launch does not touch the sound server at all.
+    if (linuxShareAudio && fs.existsSync(linuxShareAudioMarkerPath())) {
+      linuxShareAudio
+        .cleanup()
+        .then(() => setLinuxShareAudioMarker(false))
+        .catch(() => {});
+    }
     const allowedOrigin = configureSessionSecurity(appUrl);
     // A shell that has just been updated must not load the site out of the
     // service worker and HTTP cache the PREVIOUS shell left in this profile: a
@@ -2468,15 +2513,19 @@ if (probingShareAudio) {
     shareAudioController?.dispose();
     // Synchronously, because nothing async runs after this event. Every app
     // sitting on the share bus falls back to the default output when it goes.
-    for (const index of linuxShareAudio?.activeModules().reverse() ?? []) {
+    const busModules = linuxShareAudio?.activeModules().reverse() ?? [];
+    for (const index of busModules) {
       try {
         execFileSync("pactl", ["unload-module", String(index)], {
           env: PACTL_ENV,
           timeout: 1000,
         });
       } catch {
-        // Next launch's cleanup takes what this could not.
+        // Next launch's cleanup takes what this could not (the marker stays).
       }
+    }
+    if (busModules.length > 0) {
+      setLinuxShareAudioMarker(false);
     }
     if (tray && !tray.isDestroyed()) {
       tray.destroy();

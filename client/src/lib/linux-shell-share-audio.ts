@@ -109,6 +109,24 @@ export function resetLinuxShellShareAudioForTests(): void {
   inflight = null;
 }
 
+/**
+ * Right before `getDisplayMedia`, for a share the person said yes to sound
+ * for with the flag on: tell the shell it may build the bus for the next
+ * display request. The shell builds nothing without it, so a request that
+ * merely carries `audioRequested` (a console probe, a page from before this)
+ * can never touch the sound server. Never throws; a refused arm is a share
+ * with no sound.
+ */
+export async function armLinuxShellShareAudio(
+  arm: () => Promise<boolean> | undefined = () => getDesktop()?.linuxShareAudioArm?.(),
+): Promise<boolean> {
+  try {
+    return (await arm()) === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The shell's capture source among the machine's inputs, by its label. */
 export function pickShareAudioInput<T extends { kind: string; label: string }>(
   devices: readonly T[],

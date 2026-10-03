@@ -316,6 +316,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   },
 
   /**
+   * Right before a `getDisplayMedia` the page has asked the person about (flag
+   * on, "share this computer's audio?" answered yes): the shell may build the
+   * bus for the NEXT display request only. Without it a request that happens to
+   * carry `audioRequested` builds nothing. Resolves `true` when armed.
+   */
+  linuxShareAudioArm() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-arm");
+  },
+
+  /**
    * After `getDisplayMedia` resolved: is this share's bus up, and under which
    * device label will `enumerateDevices` list its capture source?
    * Resolves `{ active, label }`.

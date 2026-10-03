@@ -68,6 +68,13 @@ const LOOPBACK_LATENCY_MS = 30;
 const IDLE_BEFORE_FIRST_READ_MS = 20_000;
 /** After the capture was read and then closed: the share ended. */
 const IDLE_AFTER_READ_MS = 4_000;
+/**
+ * How long the page's "arm" is good for. The page arms right before it calls
+ * `getDisplayMedia`, and the picker may be up for a while, so this is generous;
+ * it only has to be finite so that a stale arm can never switch a LATER
+ * request from some other caller into building the bus.
+ */
+const ARM_TTL_MS = 120_000;
 const TICK_MS = 2_000;
 const EVENT_DEBOUNCE_MS = 120;
 
@@ -313,6 +320,9 @@ function createLinuxShareAudio({
   subscribe = () => null,
   ownPids,
   log = () => {},
+  // Told when a session begins loading modules and when its last one is gone,
+  // so the shell can leave a marker for the next launch (see `cleanup`).
+  onActive = () => {},
   now = () => Date.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -321,6 +331,7 @@ function createLinuxShareAudio({
 }) {
   let probed = null;
   let session = null;
+  let armedAt = null;
   let chain = Promise.resolve();
 
   /** One pactl conversation at a time: a reconcile must not race a stop. */
@@ -473,6 +484,7 @@ function createLinuxShareAudio({
     if (!output || output === SHARE_SINK) {
       return { ok: false, reason: "no-output" };
     }
+    onActive(true);
     session = {
       output,
       modules: [],
@@ -543,16 +555,36 @@ function createLinuxShareAudio({
       }
     }
     await unloadLeftovers().catch(() => {});
+    onActive(false);
     log("stopped");
   }
 
   return {
     probe,
+    /**
+     * The page says: the next display-media request is a share it has asked
+     * the person about, with the runtime flag on. Nothing else may start the
+     * bus, whatever a request's `audioRequested` says (a console probe, a
+     * stale page, a third-party frame that got through).
+     */
+    arm: () => {
+      armedAt = now();
+    },
+    /** Read once per request, like the Windows arm: good for ONE share. */
+    consumeArm: () => {
+      const armed = armedAt !== null && now() - armedAt <= ARM_TTL_MS;
+      armedAt = null;
+      return armed;
+    },
     start: () => serial(startNow),
     stop: () => serial(stopNow),
     /** One pass of the watcher, on demand (tests, and a renderer that knows). */
     reconcile: () => serial(reconcileNow),
-    /** For startup: clear what a crashed session left behind. */
+    /**
+     * For startup, and only when a marker says a session was live and never
+     * ended cleanly: clear what a crashed session left behind. Never run
+     * speculatively, because it reads the user's sound server.
+     */
     cleanup: () => serial(unloadLeftovers),
     isActive: () => session !== null,
     /** Module ids to unload synchronously on quit. */
@@ -567,6 +599,7 @@ module.exports = {
   SHARE_SINK_LABEL,
   IDLE_BEFORE_FIRST_READ_MS,
   IDLE_AFTER_READ_MS,
+  ARM_TTL_MS,
   parseInfo,
   parseShort,
   parseNamed,
