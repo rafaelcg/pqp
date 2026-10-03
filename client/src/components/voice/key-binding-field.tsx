@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { Keyboard, Mouse } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useId, useRef, useState } from "react";
+import { CircleX } from "lucide-react";
+import {
+  SETTINGS_INSET_FOCUS,
+  SETTINGS_TRANSITION,
+  SettingsKeyCombo,
+} from "@/components/settings/kit";
 import {
   captureBinding,
   captureModifier,
@@ -13,6 +17,7 @@ import {
   type PttBinding,
 } from "@/components/voice/push-to-talk";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 interface KeyBindingFieldProps {
   binding: KeyBinding;
@@ -124,32 +129,89 @@ export function KeyBindingField({
   }, [binding]);
 
   return (
-    <div className="space-y-1.5">
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {label}
-      </span>
-      <Button
+    <BindingControl
+      label={label}
+      binding={binding}
+      capturing={capturing}
+      prompt={t("keyBinding.press")}
+      refused={refused}
+      onToggle={() => {
+        setRefused(null);
+        setCapturing((prev) => !prev);
+      }}
+      onBlur={() => setCapturing(false)}
+    />
+  );
+}
+
+/**
+ * What both fields draw: the binding as keycaps in one well, which is itself
+ * the button that arms capture, and the refusal under it.
+ *
+ * The label is for a screen reader only. The settings row the field sits in
+ * shows the visible one, so the field stays compact enough to sit beside it.
+ */
+function BindingControl({
+  label,
+  binding,
+  capturing,
+  prompt,
+  refused,
+  onToggle,
+  onBlur,
+}: {
+  label: string;
+  binding: KeyBinding;
+  capturing: boolean;
+  prompt: string;
+  refused: string | null;
+  onToggle: () => void;
+  onBlur: () => void;
+}) {
+  const refusedId = useId();
+  const combo = formatBinding(binding);
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1.5 @lg:items-end">
+      <button
         type="button"
-        variant="secondary"
-        className="h-auto min-h-9 w-full justify-start whitespace-normal font-mono"
-        aria-live="polite"
         // The pressed state is what tells a screen reader the field is armed
-        // and swallowing keys, which is otherwise invisible.
+        // and swallowing keys, which is otherwise invisible. The shortcut
+        // hook also reads it to stand down while a key is being bound.
         data-key-binding-field=""
         aria-pressed={capturing}
-        onClick={() => {
-          setRefused(null);
-          setCapturing((prev) => !prev);
-        }}
+        aria-live="polite"
+        aria-describedby={refused ? refusedId : undefined}
+        onClick={onToggle}
         // Clicking away ends capture rather than leaving the window silently
         // eating every keystroke.
-        onBlur={() => setCapturing(false)}
+        onBlur={onBlur}
+        className={cn(
+          "inline-flex min-h-9 max-w-full items-center rounded-[var(--radius-control)] border bg-surface-0 text-left",
+          SETTINGS_TRANSITION,
+          SETTINGS_INSET_FOCUS,
+          capturing
+            ? "border-accent ring-2 ring-focus-ring"
+            : refused
+              ? "border-danger"
+              : "border-border hover:border-border-strong",
+        )}
       >
-        <Keyboard className="h-4 w-4 shrink-0" aria-hidden="true" />
-        {capturing ? t("keyBinding.press") : formatBinding(binding)}
-      </Button>
+        <span className="sr-only">{`${label}: `}</span>
+        {capturing ? (
+          <span className="px-2.5 py-1.5 text-xs text-pretty text-text-secondary">
+            {prompt}
+          </span>
+        ) : (
+          <SettingsKeyCombo keys={combo.split(" + ")} label={combo} />
+        )}
+      </button>
       {refused && (
-        <p role="status" className="text-xs text-warning">
+        <p
+          id={refusedId}
+          role="alert"
+          className="flex items-start gap-1.5 text-xs text-pretty text-danger @lg:text-right"
+        >
+          <CircleX className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {refused}
         </p>
       )}
@@ -285,36 +347,18 @@ export function PttBindingField({
     setRefused(null);
   }, [binding]);
 
-  const Icon = binding.device === "mouse" ? Mouse : Keyboard;
-
   return (
-    <div className="space-y-1.5">
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {label}
-      </span>
-      <Button
-        type="button"
-        variant="secondary"
-        className="h-auto min-h-9 w-full justify-start whitespace-normal font-mono"
-        aria-live="polite"
-        data-key-binding-field=""
-        aria-pressed={capturing}
-        onClick={() => {
-          setRefused(null);
-          setCapturing((prev) => !prev);
-        }}
-        onBlur={() => setCapturing(false)}
-      >
-        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-        {capturing
-          ? t(allowMouse ? "keyBinding.pressOrClick" : "keyBinding.press")
-          : formatBinding(binding)}
-      </Button>
-      {refused && (
-        <p role="status" className="text-xs text-warning">
-          {refused}
-        </p>
-      )}
-    </div>
+    <BindingControl
+      label={label}
+      binding={binding}
+      capturing={capturing}
+      prompt={t(allowMouse ? "keyBinding.pressOrClick" : "keyBinding.press")}
+      refused={refused}
+      onToggle={() => {
+        setRefused(null);
+        setCapturing((prev) => !prev);
+      }}
+      onBlur={() => setCapturing(false)}
+    />
   );
 }
