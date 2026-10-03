@@ -209,10 +209,10 @@ function BindingControl({
         <p
           id={refusedId}
           role="alert"
-          className="flex items-start gap-1.5 text-xs text-pretty text-danger @lg:text-right"
+          className="flex max-w-80 items-start gap-1.5 text-xs text-pretty text-danger"
         >
           <CircleX className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          {refused}
+          <span className="min-w-0">{refused}</span>
         </p>
       )}
     </div>
