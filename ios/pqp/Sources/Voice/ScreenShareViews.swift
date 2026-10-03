@@ -150,7 +150,7 @@ struct ScreenShareControlButton: View {
 /// Letterboxed, never cropped: a shared screen's aspect ratio is not ours to
 /// choose, and cropping a slide to fill a phone hides the half with the point on
 /// it. Tap for fullscreen, which is the only way a laptop screen is readable on a
-/// phone.
+/// phone, and which follows the phone into landscape.
 struct ScreenShareStage: View {
     let track: VideoFeed?
     let presenterName: String?
@@ -220,22 +220,41 @@ struct ScreenShareStage: View {
     }
 }
 
-/// A shared screen, filling the display.
+/// A shared screen, filling the display, in whichever way the phone is held.
 ///
-/// The app is portrait-only, so this letterboxes rather than rotating: forcing a
-/// landscape orientation for one screen leaves the rest of the app to recover
-/// from it, and a wide screen shrunk to fit is still the whole picture.
+/// THE PHONE TURNS IT, NOT A BUTTON. A laptop screen is 16:9 and a phone held
+/// upright shows it about 400 points wide, which is the whole reason this cover
+/// exists, and the same picture is more than twice that size on its side. The
+/// app is locked to portrait everywhere else (`WatchOrientation`), so this view
+/// holds the landscape unlock for exactly as long as it is on screen and hands
+/// it back when it goes. Until this did, a viewer in a voice room could tap the
+/// share to fullscreen and then only ever see it on an upright phone.
+///
+/// ONE SURFACE, WHICHEVER WAY IT IS HELD. Nothing here branches on the
+/// orientation: turning the phone gives the same `VideoSurface` a new frame,
+/// so the renderer stays attached to the track and the picture neither
+/// restarts nor flashes black.
+///
+/// Letterboxed, never cropped, in both orientations: a shared screen's aspect
+/// ratio is not ours to choose, so a 16:9 desktop and a portrait phone share
+/// each fit whole.
 struct ScreenShareFullscreenView: View {
     @Environment(\.dismiss) private var dismiss
     let track: VideoFeed?
     let presenterName: String?
+    /// This presentation's claim on `WatchOrientation`, minted once.
+    @State private var stageID = UUID()
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
+            // Vertical edges only: on its side the notch and the island are
+            // on the left and right, and a picture drawn under them loses the
+            // strip of the shared screen that sits there. Upright there is no
+            // horizontal inset, so this is the full-bleed it always was.
             VideoSurface(track: track, contentMode: .scaleAspectFit)
-                .ignoresSafeArea()
+                .ignoresSafeArea(.container, edges: .vertical)
 
             VStack {
                 HStack(alignment: .top) {
@@ -266,6 +285,8 @@ struct ScreenShareFullscreenView: View {
             }
         }
         .statusBarHidden()
+        .onAppear { WatchOrientation.enterScreenShare(stageID) }
+        .onDisappear { WatchOrientation.leaveScreenShare(stageID) }
     }
 }
 
