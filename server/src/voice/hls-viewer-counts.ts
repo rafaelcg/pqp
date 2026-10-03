@@ -953,7 +953,12 @@ export interface LiveHlsViewerSession {
  * were on the playlist within the heartbeat tolerance, at most
  * `HLS_PRESENCE_MAX_AGE_MS` ago. It used to be every account seen in the last
  * two minutes in rows that were themselves a flush behind, which read 97 for a
- * party the app said had 49 watching. Peak and unique are still the rows'.
+ * party the app said had 49 watching. It leaves out accounts that hold a seat in
+ * the channel's voice room (the roster counts them, and the dashboard lists
+ * `inCall` beside it), exactly as the app's count does, so the two add up the
+ * same way. The seats come from `voice_peers`, which only has rows with
+ * `VOICE_REGISTRY=postgres` (production); without it this reads every account
+ * on the playlist. Peak and unique are still the rows'.
  * For `GET /api/admin/metrics`. Names and the channel id, never a user id.
  */
 export async function liveHlsViewerSessions(
@@ -978,7 +983,13 @@ export async function liveHlsViewerSessions(
                CROSS JOIN LATERAL unnest(p.user_ids) AS u(user_id)
               WHERE p.channel_id = st.channel_id
                 AND p.started_at_ms = st.started_at_ms
-                AND p.sampled_at >= NOW() - ($2 || ' milliseconds')::interval) AS live,
+                AND p.sampled_at >= NOW() - ($2 || ' milliseconds')::interval
+                AND NOT EXISTS (
+                  SELECT 1 FROM voice_peers vp
+                   WHERE vp.channel_id = st.channel_id
+                     AND vp.user_id = u.user_id
+                     AND vp.orphaned_at IS NULL
+                )) AS live,
             st.peak_viewers,
             st.unique_viewers
        FROM hls_session_viewer_stats st

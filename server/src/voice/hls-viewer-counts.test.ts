@@ -754,6 +754,16 @@ describeDb("watch party viewer counts", () => {
       const [row] = await liveHlsViewerSessions();
       expect(row!.liveViewers).toBe(25);
       expect(await presentHlsViewers(channelId, STARTED_AT)).toBe(25);
+
+      // Two of the 25 also hold a seat in the call (the roster counts them, the
+      // dashboard lists them as `inCall`): both surfaces leave them out, so the
+      // operator's number is the app's number.
+      await seat(userId(41));
+      await seat(userId(42));
+      resetHlsPresentCacheForTests();
+      const [seated] = await liveHlsViewerSessions();
+      expect(seated!.liveViewers).toBe(23);
+      expect(await presentHlsViewers(channelId, STARTED_AT)).toBe(23);
       const loose = await getPool().query<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM hls_session_viewers
           WHERE last_seen_at >= NOW() - interval '120 seconds'`,

@@ -82,6 +82,8 @@ const presence = vi.hoisted(() => ({
   reads: 0,
   peeks: 0,
   excluded: [] as string[][],
+  /** The next read throws, once. */
+  throwNext: false,
 }));
 
 vi.mock("../voice/hls-viewer-counts.js", () => ({
@@ -92,6 +94,10 @@ vi.mock("../voice/hls-viewer-counts.js", () => ({
   ) => {
     presence.reads += 1;
     presence.excluded.push([...(options?.excludeUserIds ?? [])]);
+    if (presence.throwNext) {
+      presence.throwNext = false;
+      throw new Error("pool exhausted");
+    }
     return presence.present;
   },
   peekPresentHlsViewers: () => {
@@ -940,6 +946,7 @@ describe("the server's audience count in channel-live (watch_party_server_audien
     presence.reads = 0;
     presence.peeks = 0;
     presence.excluded = [];
+    presence.throwNext = false;
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
     process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -1027,7 +1034,9 @@ describe("the server's audience count in channel-live (watch_party_server_audien
     }
   });
 
-  it("never reports fewer than this machine's own watch-live sockets", async () => {
+  it("says the shared count and nothing local: this machine's own sockets never move it", async () => {
+    // Three sockets here, one account on the playlist: a machine that mixed its
+    // own socket count in would say 3 while its sibling said 1.
     process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
     presence.present = 1;
     const sockets = ["ana", "bia", "caio"].map(viewer);
@@ -1037,8 +1046,23 @@ describe("the server's audience count in channel-live (watch_party_server_audien
     }
     expect(lastFrame(sockets[2]!, "channel-live")).toMatchObject({
       watching: 3,
-      viewers: 3,
+      viewers: 1,
     });
+  });
+
+  it("a failing server lookup never costs the frame its delivery", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 5;
+    const ana = viewer("ana");
+    await goLive();
+    presence.reads = 0;
+    // The count helper itself throws: the frame still goes, without the field.
+    presence.throwNext = true;
+    await watchLive(ana, "ana", true);
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(reply.type).toBe("channel-live");
+    expect("viewers" in reply).toBe(false);
+    expect(reply.watching).toBe(1);
   });
 
   it("asks the count to leave out the seats this machine holds", async () => {

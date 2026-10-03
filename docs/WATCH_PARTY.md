@@ -3541,7 +3541,11 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   never add and neither is a flush behind. A row older than 25 s is ignored,
   which is what takes a dead machine's viewers out. That is `liveViewers` on
   the dashboard (it was "seen in the last 120 s" over the stale rows) and, with
-  the flag below, the in-app number. It reads a few seconds old, not a minute.
+  the flag below, the in-app number, both leaving out accounts that hold a seat
+  in the call (the roster counts those, the dashboard lists them as `inCall`;
+  `voice_peers` answers for both machines, so with `VOICE_REGISTRY` off the
+  dashboard reads every account on the playlist). It reads a few seconds old,
+  not a minute.
   A rolling deploy dips it for about one heartbeat (30 to 40 s), because the
   new process starts with an empty map, and then it recovers.
 - **An outage delays the count, it does not lose it.** A sighting no flush
@@ -3561,8 +3565,10 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   the flag on, `channel-live` and `GET /api/channels/:id/live` also carry
   `viewers`, the distinct accounts on the playlist (above) minus whoever holds
   a seat (the roster is the client's own addend; `voice_peers` answers for the
-  other machine's seats), floored at the local socket count so turning it on
-  never shows fewer people than turning it off. It is one optional integer in a
+  other machine's seats). Nothing local is mixed in, so every machine says the
+  same number; the price is that a viewer the heartbeat has not noted yet (a
+  few seconds) and a native player that sends `watch-live` but no heartbeat are
+  not in it, which is also true of the dashboard. It is one optional integer in a
   frame that already goes to everybody who may view the channel every 30 s, read
   once per broadcast per fan-out from a 5 s shared cache, so the frame does not
   grow with the audience and a 500-person arrival wave is a handful of queries,
