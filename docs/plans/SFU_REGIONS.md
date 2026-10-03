@@ -245,10 +245,22 @@ What changed (`voice/sfu-control-plane.ts`, `voice/admin.ts`):
 
 1. **Routing.** A call about a room goes to the box that room is pinned to.
    Known means: this process's pin, the `voice_rooms.sfu_region` row (so the
-   other instance's rooms count), or a `regions` hint stamped into the re-sweep
-   when the eviction started (the registry row is gone by the second tick,
-   because the eviction itself empties the room; once stamped, the hint is the
-   answer and the repeats read nothing). A region id the deployment no
+   other instance's rooms count, read with a 500 ms bound that falls back to
+   every box), and a `regions` hint stamped into the re-sweep when the
+   eviction started, all unioned (the registry row is gone by the second tick,
+   because the eviction itself empties the room). A pin says where the room is
+   NOW, not where somebody holding a token minted before the eviction still is:
+   a participant whose WebSocket dropped keeps their LiveKit connection after
+   the room's pin and row go, and the room can be reopened on another box. So
+   the **first pass of every eviction asks every box** (known boxes as pinned,
+   the rest as one-shots), and a repeat does the same in a five-second window
+   of every thirty seconds, under the budget and circuit. The other repeats
+   (the volume behind the 872 timeouts) stay on the known boxes. The worst case
+   for a person on a box the room is not pinned to is the first pass if that box
+   answered it; otherwise the next wide repeat, which is at most about 30 s
+   later, and up to about a minute if that box's circuit was open (30 s
+   cooldown); a token replayed onto an old box later in the window is caught by
+   the next wide repeat (about 30 s). A region id the deployment no
    longer runs reads as home. No pin and no hint, or `rooms === null` ("wherever
    they are"): every box, as before, because "no pin" must mean ask more boxes,
    never fewer.

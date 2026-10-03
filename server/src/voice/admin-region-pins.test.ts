@@ -17,8 +17,15 @@ if (DATABASE_URL) {
   process.env.DATABASE_URL = DATABASE_URL;
 }
 
+interface FakeBox {
+  listParticipants: (room: string) => Promise<unknown>;
+  listRooms: () => Promise<unknown>;
+  removed: string[];
+  calls: number;
+}
+
 const lk = vi.hoisted(() => ({
-  boxes: new Map<string, { listParticipants: (room: string) => Promise<unknown>; calls: number }>(),
+  boxes: new Map<string, FakeBox>(),
 }));
 
 vi.mock("livekit-server-sdk", async (importOriginal) => {
@@ -32,6 +39,8 @@ vi.mock("livekit-server-sdk", async (importOriginal) => {
         if (!lk.boxes.has(host)) {
           lk.boxes.set(host, {
             calls: 0,
+            removed: [],
+            listRooms: () => Promise.resolve([]),
             listParticipants: () =>
               Promise.reject(
                 Object.assign(new Error("requested room does not exist"), { status: 404 }),
@@ -44,9 +53,18 @@ vi.mock("livekit-server-sdk", async (importOriginal) => {
         box.calls += 1;
         return box.listParticipants(room);
       }
+      listRooms() {
+        return lk.boxes.get(this.host)!.listRooms();
+      }
+      removeParticipant(_room: string, identity: string) {
+        lk.boxes.get(this.host)!.removed.push(identity);
+        return Promise.resolve();
+      }
     },
   };
 });
+
+const { participantMetadataFor } = await import("./backends.js");
 
 type AdminModule = typeof import("./admin.js");
 type DbModule = typeof import("../db.js");
@@ -146,7 +164,7 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
     expect(asked(LHR)).toBe(0);
   });
 
-  it("stamps the region into the re-sweep row, and a re-sweep then trusts it instead of reading the registry", async () => {
+  it("stamps the region into the re-sweep row, and a re-sweep follows the room to where it is re-pinned", async () => {
     const room = randomUUID();
     await db.getPool().query(`DELETE FROM voice_resweeps`);
 
@@ -160,18 +178,65 @@ describeDb("SFU moderation reads a room's region from the registry", () => {
         `room:${room}`,
       ]);
     expect(stored.rows[0]!.scope.regions).toEqual(["sao"]);
-    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 0, 0]);
+    // The first pass looks at every box: the pin says where the room is, not where a ghost is.
+    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 1, 1]);
 
-    // The room is re-pinned to Miami while the window is still open. The pre-eviction
-    // tokens point at the box the room was on, so the repeat still asks only that one.
+    // The room is re-pinned to Miami while the window is still open, and somebody holding a
+    // pre-eviction token for that box is in it. The repeat asks the hinted box AND the new pin.
     await insertRoom(room, "mia");
+    lk.boxes.get(MIA)!.listParticipants = () =>
+      Promise.resolve([{ identity: "peer-mal", metadata: undefined }]);
     await db.getPool().query(`UPDATE voice_resweeps SET claimed_until = 'epoch'`);
     await admin.tickSfuResweeps();
     await admin.settleSfuEvictions();
 
-    expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([2, 0, 0]);
+    expect(asked(HOME)).toBe(2);
+    expect(asked(MIA)).toBe(2);
+    expect(lk.boxes.get(MIA)!.removed).toEqual(["peer-mal"]);
     admin.stopSfuResweeps();
     await db.getPool().query(`DELETE FROM voice_resweeps`);
+  });
+
+  /**
+   * `registryPinFailed`: api-a pinned a room to Miami in its own map while the
+   * row says Sao Paulo (or the other way round). Whichever instance serves the
+   * kick, the first pass looks at every box, so the participant is found.
+   */
+  it("finds a participant on Miami from an instance whose map and row both say Sao Paulo", async () => {
+    const room = randomUUID();
+    await insertRoom(room, null);
+    lk.boxes.set(MIA, {
+      calls: 0,
+      removed: [],
+      listRooms: () => Promise.resolve([{ name: room }]),
+      listParticipants: () =>
+        Promise.resolve([{ identity: "peer-mal", metadata: participantMetadataFor("mallory") }]),
+    });
+
+    await admin.evictSfuUser("mallory", [room], new Map());
+    await admin.settleSfuEvictions();
+
+    expect(lk.boxes.get(MIA)!.removed).toEqual(["peer-mal"]);
+    admin.stopSfuResweeps();
+    await db.getPool().query(`DELETE FROM voice_resweeps`);
+  });
+
+  it("falls back to every box when the registry cannot answer within half a second", async () => {
+    const room = randomUUID();
+    await insertRoom(room, "mia");
+    // Another session holds the table: the read waits behind it.
+    const holder = await db.getPool().connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE voice_rooms IN ACCESS EXCLUSIVE MODE");
+      const startedAt = Date.now();
+      await admin.setSfuUserMuted(room, "user-1", true, new Map());
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect([asked(HOME), asked(MIA), asked(LHR)]).toEqual([1, 1, 1]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      holder.release();
+    }
   });
 
   it("asks every box about a room with no row, and about a name that cannot be one", async () => {

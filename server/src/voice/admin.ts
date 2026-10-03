@@ -229,6 +229,35 @@ const LOOKUP_LOG_INTERVAL_MS = 10_000;
 let lookupLoggedAt = 0;
 
 /**
+ * The registry read, bounded: it runs on the moderator's request path and the
+ * main pool's own query timeout is 15 s. Past `REGION_LOOKUP_BUDGET_MS` the
+ * room counts as unknown, which asks every box, never fewer.
+ */
+const REGION_LOOKUP_BUDGET_MS = 500;
+
+async function boundedRegionRead(
+  rooms: readonly string[],
+): Promise<Map<string, string | null>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readVoiceRoomRegions(rooms),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`region lookup over ${REGION_LOOKUP_BUDGET_MS} ms`)),
+          REGION_LOOKUP_BUDGET_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
  * Which regions these rooms are known to live on: the room's pin in this
  * process, the registry row (so the other instance's rooms count), and any
  * `hint` the caller captured earlier. Null means at least one room is unknown,
@@ -243,15 +272,6 @@ async function knownRegionIds(
   rooms: readonly string[],
   regions: readonly SfuRegion[],
   hint: readonly string[] = [],
-  /**
-   * True when stamping a hint, which unions every source. False at sweep
-   * time, where a stamped hint is the answer and nothing is read: the hint
-   * names the box the pre-eviction tokens point at, which is what a re-sweep
-   * is for, and a room that has since been re-pinned elsewhere holds only
-   * people with fresh tokens. It also keeps a re-sweep from costing a
-   * registry query every few seconds for fifteen minutes.
-   */
-  unionSources = false,
 ): Promise<Set<string> | null> {
   if (rooms.length === 0) {
     return null;
@@ -261,13 +281,13 @@ async function knownRegionIds(
   // `resolveSfuRegion`: a room pinned to a box an operator removed has
   // nowhere else to be.
   const configured = (id: string) => (regions.some((region) => region.id === id) ? id : home);
-  if (!unionSources && hint.length > 0) {
-    return new Set(hint.map(configured));
-  }
+  // Every source is unioned, the hint included: a hint is a box the room WAS
+  // on, and a room that has since been re-pinned elsewhere can still hold
+  // somebody on the old box with a token minted before the eviction.
   let rows = new Map<string, string | null>();
   if (isVoiceRegistryEnabled()) {
     try {
-      rows = await readVoiceRoomRegions(rooms);
+      rows = await boundedRegionRead(rooms);
     } catch (error) {
       const now = Date.now();
       if (now - lookupLoggedAt >= LOOKUP_LOG_INTERVAL_MS) {
@@ -302,8 +322,9 @@ async function knownRegionIds(
  *
  * Single-region mode: the home box, exactly as before regions existed.
  *
- * With `LIVEKIT_REGIONS`, a room whose region is KNOWN goes to that box alone.
- * Before this, every call asked every box and waited for the slowest, so the
+ * With `LIVEKIT_REGIONS`, a room whose region is KNOWN goes to that box alone,
+ * except when `wide` (the first pass of an eviction, and one repeat in a
+ * half minute), which also looks at the other boxes. Before this, every call asked every box and waited for the slowest, so the
  * two remote boxes (14 of 754 rooms between them) decided how long moderation
  * took for the rooms in Sao Paulo, and a heavy tail on the long-haul path
  * produced ~870 timeouts in eleven days (`sfu-control-plane.ts`).
@@ -325,6 +346,14 @@ async function targetsFor(
   hint: readonly string[] = [],
   /** False for a caller nothing will repeat: it then never gets a budget or a skip. */
   repeats = true,
+  /**
+   * Ask the boxes the room is NOT known to be on as well, as the fallback
+   * mode. A known pin says where the room is now, not where somebody with a
+   * pre-eviction token still is (a ghost on the old box after the room was
+   * re-pinned), so an eviction looks everywhere once, and its repeats look
+   * everywhere every `WIDE_SWEEP_PERIOD_S`.
+   */
+  wide = false,
 ): Promise<RegionTarget[]> {
   const regions = sfuRegions();
   if (!regions) {
@@ -337,15 +366,18 @@ async function targetsFor(
     regionScopingEnabled() && rooms !== null
       ? await knownRegionIds(rooms, regions, hint)
       : null;
-  const mode: RegionCallMode = known ? "pinned" : repeats ? "speculative" : "oneshot";
+  const fallback: RegionCallMode = repeats ? "speculative" : "oneshot";
   return regions
-    .filter((region) => known === null || known.has(region.id))
-    .map((region) => ({
-      id: region.id,
-      client: regionalService(region, caller, mode),
-      regional: true,
-      mode,
-    }));
+    .filter((region) => known === null || wide || known.has(region.id))
+    .map((region) => {
+      const mode: RegionCallMode = known?.has(region.id) ? "pinned" : fallback;
+      return {
+        id: region.id,
+        client: regionalService(region, caller, mode),
+        regional: true,
+        mode,
+      };
+    });
 }
 
 /** How one box fared in a call that went to several. */
@@ -603,18 +635,32 @@ function specFrom(
   return parsed.data;
 }
 
+/**
+ * Seconds between the repeats that also look at the boxes a room is not
+ * known to be on. Stateless on purpose (a five-second window out of every
+ * thirty, so about one claimed tick lands in it): a repeat that is every
+ * sixth by count would need a counter per row shared by both instances.
+ */
+const WIDE_SWEEP_PERIOD_S = 30;
+const WIDE_SWEEP_WINDOW_S = 5;
+
+function widePassNow(): boolean {
+  return Math.floor(Date.now() / 1000) % WIDE_SWEEP_PERIOD_S < WIDE_SWEEP_WINDOW_S;
+}
+
 /** The boxes one pass of `spec` is sent to. */
 function sweepTargets(spec: ResweepSpec, pass: SweepPass): Promise<RegionTarget[]> {
   // The first pass is the eviction itself and nothing has repeated it yet, so
   // it is never skipped or cut short; only the repeats are speculative.
   const repeats = pass === "resweep";
+  const wide = pass === "first" || widePassNow();
   switch (spec.kind) {
     case "room":
-      return targetsFor("sweep-room", [spec.room], spec.regions, repeats);
+      return targetsFor("sweep-room", [spec.room], spec.regions, repeats, wide);
     case "private":
-      return targetsFor("sweep-private", [spec.room], spec.regions, repeats);
+      return targetsFor("sweep-private", [spec.room], spec.regions, repeats, wide);
     case "user":
-      return targetsFor("sweep-user", spec.rooms, [], repeats);
+      return targetsFor("sweep-user", spec.rooms, [], repeats, wide);
   }
 }
 
@@ -652,7 +698,7 @@ async function runSweep(
       outcome: await runSweepOn(target, spec, pass, evictedAt),
     })),
   );
-  if (targets[0] && targets[0].mode !== "pinned") {
+  if (targets.some((target) => target.mode !== "pinned")) {
     noteCoverage(
       `sweep-${spec.kind}`,
       spec.kind === "user" ? "listRooms" : "listParticipants",
@@ -1023,7 +1069,6 @@ async function stampRegions(
     [spec.room],
     regions,
     hint ? [hint] : [],
-    true,
   );
   return known ? { ...spec, regions: [...known] } : spec;
 }

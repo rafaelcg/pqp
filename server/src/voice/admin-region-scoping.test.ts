@@ -116,6 +116,9 @@ function logLines(): string[] {
 describe("SFU moderation scoped to a room's region", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Second 6 of a half minute: outside the window in which a repeat also
+    // looks at the boxes a room is not known to be on (`widePassNow`).
+    vi.setSystemTime(new Date("2026-10-03T12:00:06Z"));
     boxes.clear();
     boxes.set(HOME, box());
     boxes.set(MIA, box());
@@ -168,52 +171,87 @@ describe("SFU moderation scoped to a room's region", () => {
       expect(logLines().filter((line) => line.includes("voice.sfuRegionCallFailed"))).toEqual([]);
     });
 
-    it("does not run its repeated sweeps against the remote boxes either", async () => {
+    /**
+     * A known pin says where the room is NOW, not where somebody holding a
+     * pre-eviction token still is (a ghost on the box the room used to be on),
+     * so an eviction looks at every box once, and its repeats only look at
+     * the other boxes in a five-second window every half minute. These are
+     * the volume the 872 timeouts came from, which is why the repeats stay
+     * scoped.
+     */
+    it("looks at every box on the first pass, and its repeats stay on Sao Paulo outside the wide window", async () => {
       pinRoomRegion("room-sao", "sao");
       boxes.get(HOME)!.listParticipants.mockResolvedValue([
         { identity: "peer-1", metadata: participantMetadataFor("user-1") },
       ]);
 
       await evictSfuRoom("room-sao");
+      expect([HOME, MIA, LHR].map((host) => boxes.get(host)!.listParticipants.mock.calls.length)).toEqual([1, 1, 1]);
+
+      // :06 to :26: repeats at :11, :16, :21, :26.
       await vi.advanceTimersByTimeAsync(5000 * 4);
       await settleSfuEvictions();
+      expect(boxes.get(HOME)!.listParticipants.mock.calls.length).toBe(5);
+      expect(boxes.get(MIA)!.listParticipants.mock.calls.length).toBe(1);
+      expect(boxes.get(LHR)!.listParticipants.mock.calls.length).toBe(1);
 
-      // First pass plus the flag-off timer's repeats.
-      expect(boxes.get(HOME)!.listParticipants.mock.calls.length).toBeGreaterThanOrEqual(5);
-      expect(boxes.get(MIA)!.listParticipants).not.toHaveBeenCalled();
-      expect(boxes.get(LHR)!.listParticipants).not.toHaveBeenCalled();
+      // The repeat that lands in :30 to :35 looks everywhere again.
+      await vi.advanceTimersByTimeAsync(5000 + 1000);
+      await settleSfuEvictions();
+      expect(boxes.get(MIA)!.listParticipants.mock.calls.length).toBe(2);
+      expect(boxes.get(LHR)!.listParticipants.mock.calls.length).toBe(2);
     });
 
-    it("goes to the hinted box when the pin is already gone", async () => {
+    it("asks the hinted box on every pass and every box on the first, when the pin is already gone", async () => {
       // The caller read the pin before the last peer left; by now the map has forgotten it.
       boxes.get(HOME)!.listParticipants.mockResolvedValue([]);
 
       await evictSfuRoom("room-gone", "sao");
+      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(5000 * 3);
       await settleSfuEvictions();
 
-      expect(boxes.get(HOME)!.listParticipants).toHaveBeenCalled();
-      expect(boxes.get(MIA)!.listParticipants).not.toHaveBeenCalled();
-      expect(boxes.get(LHR)!.listParticipants).not.toHaveBeenCalled();
+      expect(boxes.get(HOME)!.listParticipants.mock.calls.length).toBe(4);
+      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(1);
+      expect(boxes.get(LHR)!.listParticipants).toHaveBeenCalledTimes(1);
     });
 
-    it("carries the hint through a channel-private sweep", async () => {
+    it("carries the hint through a channel-private sweep, and looks everywhere on its first pass", async () => {
       await evictSfuUsersExcept("room-gone", new Set(["user-ok"]), new Map(), "sao");
       await settleSfuEvictions();
-      expect(boxes.get(HOME)!.listParticipants).toHaveBeenCalled();
-      expect(boxes.get(MIA)!.listParticipants).not.toHaveBeenCalled();
+      expect(boxes.get(HOME)!.listParticipants).toHaveBeenCalledTimes(1);
+      expect(boxes.get(MIA)!.listParticipants).toHaveBeenCalledTimes(1);
     });
 
-    it("lists only the boxes a user's rooms are on", async () => {
+    it("lists a user's rooms on every box on the first pass, and on Sao Paulo alone in the repeats", async () => {
       pinRoomRegion("room-a", "sao");
       pinRoomRegion("room-b", "sao");
 
-      await evictSfuUser("user-1", ["room-a", "room-b"], new Map());
-      await settleSfuEvictions();
-
+      void evictSfuUser("user-1", ["room-a", "room-b"], new Map());
+      await vi.advanceTimersByTimeAsync(0);
       expect(boxes.get(HOME)!.listRooms).toHaveBeenCalledWith(["room-a", "room-b"]);
-      expect(boxes.get(MIA)!.listRooms).not.toHaveBeenCalled();
-      expect(boxes.get(LHR)!.listRooms).not.toHaveBeenCalled();
+      expect(boxes.get(MIA)!.listRooms).toHaveBeenCalledTimes(1);
+      expect(boxes.get(LHR)!.listRooms).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5000 * 4);
+      await settleSfuEvictions();
+      expect(boxes.get(HOME)!.listRooms.mock.calls.length).toBe(5);
+      expect(boxes.get(MIA)!.listRooms).toHaveBeenCalledTimes(1);
+      expect(boxes.get(LHR)!.listRooms).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let a remote box hold up the first pass's work on Sao Paulo", async () => {
+      pinRoomRegion("room-sao", "sao");
+      boxes.get(HOME)!.listParticipants.mockResolvedValue([
+        { identity: "peer-1", metadata: participantMetadataFor("user-1") },
+      ]);
+      boxes.get(MIA)!.listParticipants.mockImplementation(() => timeoutAfter(5000));
+
+      const pending = evictSfuRoom("room-sao");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(boxes.get(HOME)!.removeParticipant).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await pending;
     });
   });
 
