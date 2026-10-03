@@ -33,6 +33,7 @@ import {
   profileDraftsFrom,
   type ProfileDrafts,
 } from "@/components/settings/profile-patch";
+import { flashSettingsRow } from "@/components/settings/kit/flash-row";
 import {
   SettingsBuildLine,
   SettingsPaneHeader,
@@ -639,31 +640,19 @@ export function SettingsModal({
     if (!pendingRow) {
       return;
     }
-    const FLASH = ["bg-accent-soft", "transition-colors", "duration-[var(--duration-base)]"];
     let attempts = 0;
     let retry: number | undefined;
-    let clear: number | undefined;
-    let flashed: HTMLElement | null = null;
+    let stop: (() => void) | null = null;
     const find = () => {
-      const row = scrollerRef.current?.querySelector<HTMLElement>(
-        `[data-settings-row="${CSS.escape(pendingRow.id)}"]`,
-      );
-      if (!row) {
-        if (++attempts < 20) {
-          retry = window.setTimeout(find, 50);
-        }
-        return;
+      stop = flashSettingsRow(scrollerRef.current, pendingRow.id);
+      if (!stop && ++attempts < 20) {
+        retry = window.setTimeout(find, 50);
       }
-      row.scrollIntoView?.({ block: "center" });
-      row.classList.add(...FLASH);
-      flashed = row;
-      clear = window.setTimeout(() => row.classList.remove(...FLASH), 1000);
     };
     find();
     return () => {
       window.clearTimeout(retry);
-      window.clearTimeout(clear);
-      flashed?.classList.remove(...FLASH);
+      stop?.();
     };
   }, [pendingRow]);
 
