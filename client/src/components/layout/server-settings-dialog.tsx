@@ -28,6 +28,7 @@ import { CommunitySettingsSection } from "@/components/communities/community-set
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
+import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -899,9 +900,16 @@ export function ServerSettingsDialog({
                 <ServerIdentitySection server={server} onUpdated={onRenamed} />
               )}
 
+              {/* Baú opt-in: Server settings only (name / icon / roles panel).
+                  Fail closed when the instance flag/latch is off. NEW sticker
+                  lives on this control while the per-server bit is false.
+                  Not channel settings, not the /c/slug listing editor, not
+                  user settings. See settings-placement.test.ts. */}
               {serverId &&
-                canManageServer &&
-                communityHomeFeatureOn && (
+                shouldShowCommunityHomeSettingsRow({
+                  featureOn: communityHomeFeatureOn,
+                  canManageServer,
+                }) && (
                   <CommunityHomeSettingsSection
                     serverId={serverId}
                     enabled={server.communityHomeEnabled}
