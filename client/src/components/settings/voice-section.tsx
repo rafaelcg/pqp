@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -6,13 +7,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { Keyboard, Mic, Wifi } from "lucide-react";
+import { Keyboard, Mic, Square, Volume2, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
   SettingsChoiceGrid,
   SettingsGroup,
   SettingsHeaderActions,
+  SettingsInlineStatus,
   SettingsLinkRow,
   SettingsNotice,
   SettingsRow,
@@ -33,8 +35,23 @@ import { getPttReleaseStuck, subscribePttReleaseStuck } from "@/components/voice
 import { pttHintMessageKey, usePttNativeSupport } from "@/lib/ptt-native-support";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import { parseVadThreshold } from "@/lib/voice-audio";
-import { supportsAudioOutputSelection, type MediaDeviceOption } from "@/lib/audio-devices";
-import { NOISE_SUPPRESSION_MODES, parseNoiseSuppressionMode, type NoiseSuppressionMode } from "../../lib/noise-suppression";
+import {
+  applyAudioOutputDevice,
+  buildAudioConstraints,
+  supportsAudioOutputSelection,
+  type MediaDeviceOption,
+  type MicProcessing,
+} from "@/lib/audio-devices";
+import {
+  ADVANCED_SAMPLE_RATE,
+  advancedNoiseSuppressionSupported,
+  connectMicChain,
+  createRnnoiseNode,
+  loadRnnoiseBinary,
+  NOISE_SUPPRESSION_MODES,
+  parseNoiseSuppressionMode,
+  type NoiseSuppressionMode,
+} from "../../lib/noise-suppression";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
@@ -88,6 +105,239 @@ export function sliderToVadThreshold(percent: number, volume: number): number {
   const scale =
     MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume);
   return parseVadThreshold(percent / 100 / scale);
+}
+
+/* ---------------------------------------------------------- mic loopback */
+
+/** How long "Ouvir meu mic" plays the microphone back before it stops itself. */
+export const MIC_TEST_MS = 5000;
+
+export interface MicLoopbackOptions {
+  deviceId: string;
+  processing: MicProcessing;
+  /** 0 to 2, the same gain the call applies. */
+  inputVolume: number;
+  outputDeviceId: string;
+  /** 0 to 1. */
+  outputVolume: number;
+  durationMs?: number;
+  /** Called once, however it ended: the timer, `stop()`, or a failure. */
+  onEnd: () => void;
+}
+
+/** The browser surface the loopback touches, so a test can hand it fakes. */
+export interface MicLoopbackDeps {
+  getUserMedia: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+  /** `advanced` asks for the 48 kHz context RNNoise needs. */
+  createContext: (advanced: boolean) => AudioContext;
+  advancedSupported: () => boolean;
+  /** RNNoise for this context; throws when the worklet or wasm refuses. */
+  createSuppressor: (
+    context: AudioContext,
+  ) => Promise<AudioNode & { destroy(): void }>;
+  createAudio: () => HTMLAudioElement;
+  setSink: (element: HTMLMediaElement, deviceId: string) => Promise<void>;
+  setTimer: (run: () => void, ms: number) => unknown;
+  clearTimer: (handle: unknown) => void;
+}
+
+const browserLoopbackDeps: MicLoopbackDeps = {
+  getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+  createContext: (advanced) =>
+    advanced
+      ? new AudioContext({ sampleRate: ADVANCED_SAMPLE_RATE })
+      : new AudioContext(),
+  advancedSupported: advancedNoiseSuppressionSupported,
+  createSuppressor: async (context) =>
+    createRnnoiseNode(context, await loadRnnoiseBinary()),
+  createAudio: () => new Audio(),
+  setSink: applyAudioOutputDevice,
+  setTimer: (run, ms) => window.setTimeout(run, ms),
+  clearTimer: (handle) => window.clearTimeout(handle as number),
+};
+
+export interface MicLoopback {
+  stop: () => void;
+  /** Settles once the loop is playing; rejects when the mic could not open. */
+  ready: Promise<void>;
+}
+
+/**
+ * Plays the microphone back through the chosen output, processed the way the
+ * call processes it: the same capture constraints, Voz limpa when it is on,
+ * and the input volume. Client-only; nothing leaves the machine.
+ *
+ * It stops by itself after `durationMs`, and `stop()` may be called at any
+ * point, including while the permission prompt is still open: the tracks that
+ * arrive afterwards are released on arrival.
+ */
+export function startMicLoopback(
+  options: MicLoopbackOptions,
+  deps: MicLoopbackDeps = browserLoopbackDeps,
+): MicLoopback {
+  let stopped = false;
+  let timer: unknown = null;
+  let stream: MediaStream | null = null;
+  let context: AudioContext | null = null;
+  let suppressor: (AudioNode & { destroy(): void }) | null = null;
+  let audio: HTMLAudioElement | null = null;
+
+  const release = () => {
+    if (timer !== null) {
+      deps.clearTimer(timer);
+      timer = null;
+    }
+    if (audio) {
+      audio.pause();
+      audio.srcObject = null;
+      audio = null;
+    }
+    try {
+      suppressor?.destroy();
+    } catch {
+      // Already gone with its context.
+    }
+    suppressor = null;
+    for (const track of stream?.getTracks() ?? []) {
+      track.stop();
+    }
+    stream = null;
+    if (context) {
+      void context.close().catch(() => {});
+      context = null;
+    }
+  };
+
+  const stop = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    release();
+    options.onEnd();
+  };
+
+  async function run() {
+    const wantsAdvanced = options.processing.noiseSuppression === "advanced";
+    let advanced = wantsAdvanced && deps.advancedSupported();
+    const processing: MicProcessing =
+      wantsAdvanced && !advanced
+        ? { ...options.processing, noiseSuppression: "browser" }
+        : options.processing;
+
+    const opened = await deps.getUserMedia({
+      audio: buildAudioConstraints(options.deviceId || undefined, processing),
+      video: false,
+    });
+    if (stopped) {
+      for (const track of opened.getTracks()) {
+        track.stop();
+      }
+      return;
+    }
+    stream = opened;
+
+    const fallBackToBrowserSuppression = () => {
+      advanced = false;
+      for (const track of opened.getAudioTracks()) {
+        void track.applyConstraints({ noiseSuppression: true }).catch(() => {});
+      }
+    };
+
+    try {
+      context = deps.createContext(advanced);
+    } catch (err) {
+      if (!advanced) {
+        throw err;
+      }
+      fallBackToBrowserSuppression();
+      context = deps.createContext(false);
+    }
+
+    if (advanced) {
+      try {
+        suppressor = await deps.createSuppressor(context);
+      } catch {
+        suppressor = null;
+        fallBackToBrowserSuppression();
+      }
+      if (stopped) {
+        release();
+        return;
+      }
+    }
+
+    const source = context.createMediaStreamSource(opened);
+    const gain = context.createGain();
+    gain.gain.value = Math.min(2, Math.max(0, options.inputVolume));
+    const destination = context.createMediaStreamDestination();
+    connectMicChain({ source, suppressor, gain });
+    gain.connect(destination);
+
+    const element = deps.createAudio();
+    audio = element;
+    element.srcObject = destination.stream;
+    element.volume = Math.min(1, Math.max(0, options.outputVolume));
+    await deps.setSink(element, options.outputDeviceId);
+    if (stopped) {
+      release();
+      return;
+    }
+    timer = deps.setTimer(stop, options.durationMs ?? MIC_TEST_MS);
+    await element.play();
+  }
+
+  const ready = run().catch((err: unknown) => {
+    stop();
+    throw err;
+  });
+
+  return { stop, ready };
+}
+
+/**
+ * The "Ouvir meu mic" state. `active` is whether Voz is on screen: the button
+ * cannot open the microphone while it is not, and a running test stops the
+ * moment it stops being visible.
+ */
+function useMicTest(active: boolean) {
+  const [playing, setPlaying] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const handle = useRef<MicLoopback | null>(null);
+
+  const stop = useCallback(() => {
+    handle.current?.stop();
+    handle.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!active) {
+      stop();
+    }
+  }, [active, stop]);
+
+  useEffect(() => stop, [stop]);
+
+  const start = (options: Omit<MicLoopbackOptions, "onEnd">) => {
+    if (!active || handle.current) {
+      return;
+    }
+    setFailed(false);
+    setPlaying(true);
+    const loop = startMicLoopback({
+      ...options,
+      onEnd: () => {
+        if (handle.current === loop) {
+          handle.current = null;
+        }
+        setPlaying(false);
+      },
+    });
+    handle.current = loop;
+    loop.ready.catch(() => setFailed(true));
+  };
+
+  return { playing, failed, start, stop };
 }
 
 /* --------------------------------------------------------------- meter */
@@ -531,6 +781,7 @@ export function VoiceSection({
     liveAnalyser: voiceAnalyser,
     active: metering,
   });
+  const micTest = useMicTest(metering);
   const voiceActivity = draftLocal.inputMode === "voice-activity";
   // The live pipeline's analyser only exists while this person is in voice.
   const inCall = voiceAnalyser !== null;
@@ -576,22 +827,63 @@ export function VoiceSection({
           label={t("settings.voice.inputDevice")}
           htmlFor={devicesError ? undefined : inputId}
           stacked
+          status={
+            micTest.failed ? (
+              <SettingsInlineStatus
+                state={{ kind: "error", message: t("settings.voice.micTestFailed") }}
+              />
+            ) : undefined
+          }
           control={
             devicesError ? (
               <SettingsNotice tone="warning">{devicesError}</SettingsNotice>
             ) : (
-              <SettingsSelect
-                id={inputId}
-                value={draftLocal.inputDeviceId}
-                onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-              >
-                <option value="">{t("settings.voice.systemDefault")}</option>
-                {inputs.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </SettingsSelect>
+              <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
+                <SettingsSelect
+                  id={inputId}
+                  className="min-w-0 @lg:flex-1"
+                  value={draftLocal.inputDeviceId}
+                  onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
+                >
+                  <option value="">{t("settings.voice.systemDefault")}</option>
+                  {inputs.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </SettingsSelect>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="self-start @lg:self-auto"
+                  disabled={!metering}
+                  onClick={() =>
+                    micTest.playing
+                      ? micTest.stop()
+                      : micTest.start({
+                          deviceId: draftLocal.inputDeviceId,
+                          processing: draftLocal.micProcessing,
+                          inputVolume: draftLocal.inputVolume,
+                          outputDeviceId: canSelectOutput
+                            ? draftLocal.outputDeviceId
+                            : "",
+                          outputVolume: draftLocal.outputVolume,
+                        })
+                  }
+                >
+                  {micTest.playing ? (
+                    <Square className="h-3.5 w-3.5" aria-hidden />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                  {t(
+                    micTest.playing
+                      ? "settings.voice.micTestStop"
+                      : "settings.voice.micTest",
+                  )}
+                </Button>
+              </div>
             )
           }
         />
