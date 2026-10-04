@@ -501,6 +501,8 @@ export function SettingsModal({
     draftRef.current = next;
     setDraftLocal(next);
     if (onAudioSettingsLive) {
+      // App's handler applies AND persists (`setLocalSettings` plus
+      // `saveLocalSettings`), so this branch saves too.
       onAudioSettingsLive(next);
     } else {
       // Nothing upstream is listening live (a test mounts the dialog bare),
@@ -512,6 +514,15 @@ export function SettingsModal({
     // Save, so the account copy follows the same moment. Device-only changes
     // queue nothing, and a slider drag coalesces into one request.
     queuePreferenceSync(preferencesFromLocal(partial));
+  }
+
+  function sameDrafts(a: ProfileDrafts, b: ProfileDrafts): boolean {
+    return (
+      a.displayName === b.displayName &&
+      a.username === b.username &&
+      a.handle === b.handle &&
+      a.avatarUrl === b.avatarUrl
+    );
   }
 
   function setDraft<K extends keyof ProfileDrafts>(key: K, value: ProfileDrafts[K]) {
@@ -546,13 +557,18 @@ export function SettingsModal({
     setSaving(true);
     setSaveError(null);
     setHandleError(null);
-    const patch = buildProfilePatch(user, drafts);
+    const submitted = drafts;
+    const patch = buildProfilePatch(user, submitted);
     try {
       const updated = await updateMe(patch);
       onUserUpdated(updated);
       // The one reseed while open: the server may have normalised what was
-      // sent (a regenerated tag number), and the bar must read clean.
-      setDrafts(profileDraftsFrom(updated));
+      // sent (a regenerated tag number), and the bar must read clean. Only
+      // when nothing was typed while the request was out: an edit made during
+      // the save is newer than this response and stays staged.
+      setDrafts((current) =>
+        sameDrafts(current, submitted) ? profileDraftsFrom(updated) : current,
+      );
       setSavedFlash(true);
     } catch (err) {
       if (isHandleTakenError(err, patch)) {

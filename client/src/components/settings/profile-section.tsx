@@ -418,12 +418,17 @@ function ProfilePreviewCard({
 let bannerConfigPromise: Promise<UserBannerConfig> | null = null;
 
 function bannerUploadConfig(): Promise<UserBannerConfig> {
-  bannerConfigPromise ??= fetchUserBannerConfig().catch(() => ({
-    enabled: false,
-    maxBytes: MAX_USER_BANNER_BYTES,
-    width: USER_BANNER_WIDTH,
-    height: USER_BANNER_HEIGHT,
-  }));
+  bannerConfigPromise ??= fetchUserBannerConfig().catch(() => {
+    // A failed read is not the server's answer: forget it, so the next open
+    // of Settings asks again instead of hiding uploads for the whole tab.
+    bannerConfigPromise = null;
+    return {
+      enabled: false,
+      maxBytes: MAX_USER_BANNER_BYTES,
+      width: USER_BANNER_WIDTH,
+      height: USER_BANNER_HEIGHT,
+    };
+  });
   return bannerConfigPromise;
 }
 

@@ -640,7 +640,12 @@ function LanguageGroup() {
       { locale: next === "es" ? "en" : next },
       { immediate: true },
     );
-    await getDesktop()?.setLocale?.(next);
+    try {
+      await getDesktop()?.setLocale?.(next);
+    } catch {
+      // The desktop menus keep their old language until the next launch;
+      // the page itself must still switch, so the reload below goes ahead.
+    }
     try {
       const url = new URL(window.location.href);
       url.searchParams.delete("lang");
