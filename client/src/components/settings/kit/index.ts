@@ -65,4 +65,5 @@ export {
   INLINE_SAVED_MS,
   useInlineSave,
   type InlineSaveState,
+  type UseInlineSaveOptions,
 } from "@/components/settings/kit/use-inline-save";
