@@ -41,6 +41,22 @@ export interface ShareHealthSource {
     enforced: boolean;
     after: number | null;
   } | null;
+  /**
+   * The dead-picture watch (`share-picture-watch.ts`), when it runs for this
+   * share: the Windows desktop app, first minute, hint not silenced.
+   */
+  picture?: () => SharePictureStatus | null;
+}
+
+export interface SharePictureStatus {
+  running: boolean;
+  reported: "black" | "stalled" | null;
+  frames: number;
+  samples: number;
+  suspected: "black" | "quiet" | null;
+  /** Whether the last refresh probe got a frame back (a live capture); null before one ran. */
+  refreshAnswered?: boolean | null;
+  exclusiveFullscreen: boolean | null;
 }
 
 let source: ShareHealthSource | null = null;
@@ -68,7 +84,15 @@ export interface ShareHealthReport {
   height: number | null;
   kbps: number | null;
   targetKbps: number | null;
-  trackSettings: { frameRate: number | null; width: number | null; height: number | null };
+  trackSettings: {
+    frameRate: number | null;
+    width: number | null;
+    height: number | null;
+    /** `monitor` (a screen) or `window`; null when the engine does not say. */
+    displaySurface: string | null;
+  };
+  /** What the dead-picture watch saw; null when it did not run for this share. */
+  picture: SharePictureStatus | null;
   captureCheck: ReturnType<ShareHealthSource["captureCheck"]>;
   guard: { enabled: boolean } & Partial<ShareGuardSnapshot>;
   shell: DesktopShareHealth | null;
@@ -127,9 +151,11 @@ function trackSettings(track: MediaStreamTrack | null) {
       frameRate: typeof settings.frameRate === "number" ? settings.frameRate : null,
       width: typeof settings.width === "number" ? settings.width : null,
       height: typeof settings.height === "number" ? settings.height : null,
+      displaySurface:
+        typeof settings.displaySurface === "string" ? settings.displaySurface : null,
     };
   } catch {
-    return { frameRate: null, width: null, height: null };
+    return { frameRate: null, width: null, height: null, displaySurface: null };
   }
 }
 
@@ -176,6 +202,7 @@ export async function collectShareHealth(
     kbps: sample?.kbps ?? null,
     targetKbps: sample?.targetKbps ?? null,
     trackSettings: settings,
+    picture: src.picture?.() ?? null,
     captureCheck: src.captureCheck(),
     guard: handle
       ? { enabled: true, ...handle.snapshot() }
@@ -209,8 +236,25 @@ export function formatShareHealth(report: ShareHealthReport | null): string {
     `  encode         ${fixed(report.encodeMs, 1)} ms/frame`,
     `  bitrate        ${fixed(report.kbps)} kbps (target ${fixed(report.targetKbps)})`,
     `  limited by     ${report.limitedBy ?? "?"}`,
-    `  track          ${fixed(report.trackSettings.width)}x${fixed(report.trackSettings.height)} @ ${fixed(report.trackSettings.frameRate, 1)}`,
+    `  track          ${fixed(report.trackSettings.width)}x${fixed(report.trackSettings.height)} @ ${fixed(report.trackSettings.frameRate, 1)}${
+      report.trackSettings.displaySurface ? `, ${report.trackSettings.displaySurface}` : ""
+    }`,
   ];
+  if (report.picture) {
+    lines.push(
+      `  picture        ${report.picture.reported ?? (report.picture.suspected ? `suspected ${report.picture.suspected}` : "ok")}, ${
+        report.picture.frames
+      } frames seen, ${report.picture.running ? "watching" : "not watching"}, refresh ${
+        report.picture.refreshAnswered === undefined || report.picture.refreshAnswered === null
+          ? "not probed"
+          : report.picture.refreshAnswered
+            ? "answered"
+            : "unanswered"
+      }, exclusive fullscreen ${
+        report.picture.exclusiveFullscreen === null ? "not asked" : report.picture.exclusiveFullscreen ? "yes" : "no"
+      }`,
+    );
+  }
   if (report.captureCheck) {
     lines.push(
       `  capture rate   asked ${report.captureCheck.requested}, reported ${fixed(report.captureCheck.reported, 1)}${
@@ -233,6 +277,13 @@ export function formatShareHealth(report: ShareHealthReport | null): string {
       `  gpu            video_encode ${report.shell.gpu.videoEncode ?? "?"}, video_decode ${report.shell.gpu.videoDecode ?? "?"}, compositing ${report.shell.gpu.gpuCompositing ?? "?"}`,
       `  priority       ${report.shell.priority.boost}, ${report.shell.priority.processes} processes`,
     );
+    if (report.shell.capture) {
+      lines.push(
+        `  capturer       screen ${report.shell.capture.screen ?? "?"}, window ${report.shell.capture.window ?? "?"} (Windows build ${
+          report.shell.capture.build ?? "?"
+        })`,
+      );
+    }
   }
   return lines.join("\n");
 }

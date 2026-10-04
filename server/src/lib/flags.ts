@@ -288,6 +288,16 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareHighMotionGuard)",
   },
+  share_game_capture_hint: {
+    description:
+      "Aviso de jogo em tela cheia exclusiva: no app desktop do Windows, se o compartilhamento chega preto, sem quadros ou cai sozinho enquanto o Windows diz que um jogo ocupa a tela, quem compartilha vê como trocar pra tela cheia em janela.",
+    env: "SHARE_GAME_CAPTURE_HINT",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Read by `GET /api/share/config` with the call's server, like the guard.
+    perServer: true,
+    clientVia: "GET /api/share/config (shareGameCaptureHint)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",

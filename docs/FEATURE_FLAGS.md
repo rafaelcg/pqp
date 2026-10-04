@@ -143,6 +143,21 @@ nothing. `pqpShareHealth()` in the console works either way. Design, evidence
 and the test steps: `docs/DESKTOP.md` §"A share next to a game at a very high
 frame rate".
 
+Also born as a flag: `SHARE_GAME_CAPTURE_HINT` (`share_game_capture_hint`,
+default off, **per server**), served by the same `GET /api/share/config?serverId=`
+as `shareGameCaptureHint`. On the Windows desktop app, the presenter's client
+samples its own share for the first minute (a 32x18 luma grid every 2 s, nothing
+kept or sent) and, when the picture is black, no frame arrives for 8 s, or the
+capture ends by itself, asks the shell whether Windows sees a Direct3D app in
+exclusive fullscreen (`SHQueryUserNotificationState`). Only a yes shows the
+presenter one card with the fix (the game's "Fullscreen Windowed" or borderless
+mode) and a "não mostrar de novo". It changes nothing about the capture: there is
+no safe code-side fix in Electron 44 (see the doc). Off, the client samples
+nothing and asks the shell nothing. Needs a desktop build that publishes
+`capabilities.fullscreenAppState`; an older shell answers "cannot tell" and the
+card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
+Windowed".
+
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 (`linux_desktop_system_audio`, default off), the computer's sound on a screen
 share from the Linux desktop app, served to the client by

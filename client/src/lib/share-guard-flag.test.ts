@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fetchShareConfig = vi.fn();
 vi.mock("./api", () => ({ fetchShareConfig: (id?: string | null) => fetchShareConfig(id) }));
 
-const { ensureShareGuardFlag, prefetchShareGuardFlag, resetShareGuardFlagForTests } =
-  await import("./share-guard-flag");
+const {
+  ensureShareGameCaptureHintFlag,
+  ensureShareGuardFlag,
+  prefetchShareGuardFlag,
+  resetShareGuardFlagForTests,
+} = await import("./share-guard-flag");
 
 beforeEach(() => {
   fetchShareConfig.mockReset();
@@ -76,5 +80,22 @@ describe("prefetchShareGuardFlag", () => {
     fetchShareConfig.mockReset();
     expect(await ensureShareGuardFlag("s1")).toBe(true);
     expect(fetchShareConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe("ensureShareGameCaptureHintFlag (share_game_capture_hint)", () => {
+  it("is off when the API does not know the flag, and off when unanswered", async () => {
+    fetchShareConfig.mockResolvedValue({ shareHighMotionGuard: true });
+    expect(await ensureShareGameCaptureHintFlag("s1")).toBe(false);
+    fetchShareConfig.mockRejectedValue(new Error("offline"));
+    resetShareGuardFlagForTests();
+    expect(await ensureShareGameCaptureHintFlag("s2")).toBe(false);
+  });
+
+  it("rides on the same answer as the guard: one request per server", async () => {
+    fetchShareConfig.mockResolvedValue({ shareHighMotionGuard: false, shareGameCaptureHint: true });
+    expect(await ensureShareGuardFlag("s1")).toBe(false);
+    expect(await ensureShareGameCaptureHintFlag("s1")).toBe(true);
+    expect(fetchShareConfig).toHaveBeenCalledTimes(1);
   });
 });

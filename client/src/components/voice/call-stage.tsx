@@ -89,6 +89,7 @@ import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
+import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
   insertMusicStageTile,
@@ -2325,6 +2326,10 @@ function ActiveCall({
           micFallback={voiceState.micFallback}
           visible={!chrome.hidden}
           onDismiss={onDismissMicFallbackNotice}
+        />
+        <ShareGameCaptureNotice
+          hint={voiceState.shareCaptureHint}
+          visible={!chrome.hidden}
         />
         <CapacityNotice
           voiceChannelId={voiceState.voiceChannelId}

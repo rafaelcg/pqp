@@ -108,6 +108,13 @@ const SHARE_CAPABILITIES = Object.freeze({
    * and whether this machine has `pactl` is `linuxShareAudioStatus()`'s.
    */
   linuxShareAudio: process.platform === "linux",
+  /**
+   * This binary can answer `fullscreenAppState()`: whether Windows says a
+   * Direct3D app holds the display in exclusive fullscreen
+   * (`SHQueryUserNotificationState`, `lib/fullscreen-state.js`). The page's
+   * dead-share card (`share_game_capture_hint`) never shows without it.
+   */
+  fullscreenAppState: process.platform === "win32",
   version: shellVersion(),
 });
 
@@ -220,6 +227,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    */
   shareHealth() {
     return ipcRenderer.invoke("pqp:share-health");
+  },
+
+  /**
+   * `share_game_capture_hint`: is a Direct3D app in exclusive fullscreen right
+   * now, by Windows' own account? Resolves
+   * `{ state, raw, exclusiveFullscreen }`; `exclusiveFullscreen` is null when
+   * the shell cannot tell. Asked by the page only when a share looks dead.
+   */
+  fullscreenAppState() {
+    return ipcRenderer.invoke("pqp:fullscreen-app-state");
   },
 
   /**

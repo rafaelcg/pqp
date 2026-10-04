@@ -6,14 +6,24 @@ describe("shareConfigForServer", () => {
   afterEach(() => {
     delete process.env.DESKTOP_SHARE_AUDIO_NATIVE;
     delete process.env.SHARE_HIGH_MOTION_GUARD;
+    delete process.env.SHARE_GAME_CAPTURE_HINT;
     resetFeatureFlagsForTests();
   });
 
-  it("keeps native desktop share audio and the high-motion guard off by default", () => {
+  it("keeps native desktop share audio, the high-motion guard and the game capture hint off by default", () => {
     expect(shareConfigForServer(null)).toEqual({
       desktopShareAudioNative: false,
       shareHighMotionGuard: false,
+      shareGameCaptureHint: false,
     });
+  });
+
+  it("reads the game capture hint from its own variable, exact word only", () => {
+    process.env.SHARE_GAME_CAPTURE_HINT = "true";
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(true);
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
+    process.env.SHARE_GAME_CAPTURE_HINT = "1";
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(false);
   });
 
   it("follows the environment default, exact word only", () => {
