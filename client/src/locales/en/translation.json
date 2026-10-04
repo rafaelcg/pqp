@@ -1856,6 +1856,8 @@
   "settings.voice.musicAutoJoinHint": "Off: when someone puts music on, you choose whether to listen.",
   "settings.voice.musicDuck": "Lower the music when someone is talking",
   "settings.voice.musicDuckHint": "When someone is speaking in the call, this app turns the track down.",
+  "settings.voice.autoHideControls": "Hide controls automatically",
+  "settings.voice.autoHideControlsHint": "While one stream fills the screen, the call controls fade after a few seconds. Move the mouse, press a key or tap to bring them back.",
   "settings.notifications.description": "What reaches you, and where. Per-community and per-channel settings win over these.",
   "settings.notifications.unsupported": "This browser cannot show desktop notifications.",
   "settings.notifications.denied": "Blocked for this site. Allow notifications in your browser's site settings to turn them back on, the page cannot ask again.",

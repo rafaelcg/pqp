@@ -30,7 +30,9 @@ import {
   VideoOff,
 } from "lucide-react";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -173,6 +175,13 @@ import {
 } from "@/hooks/use-idle-chrome";
 import { createPortal } from "react-dom";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import {
+  isKeyboardFocus,
+  stageChromeAttentionKey,
+  stageChromeHold,
+  stageChromeMayHide,
+} from "@/components/voice/stage-chrome";
+import { useAutoHideStageControls } from "@/lib/stage-controls-pref";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
@@ -326,6 +335,47 @@ const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
   bl: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] left-3",
   br: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] right-3",
 };
+
+/**
+ * What fades a tile's own corner controls (fit, volume, shrink to grid, ...)
+ * with the rest of the stage's overlay. They already reveal on hover, which is
+ * no help to somebody who parked the pointer on the picture: it IS hovering,
+ * so they sat on the film for as long as the pointer did. The stage carries
+ * `data-chrome-hidden`; while it is "true" these go too, unless keyboard focus
+ * is inside them (a Tab reveals everything first, and has to keep what it
+ * reached). Resting the pointer on one pins the stage through
+ * `tileControlsHovered`.
+ */
+const TILE_CONTROLS_FADE =
+  "transition-opacity duration-200 motion-reduce:transition-none [[data-chrome-hidden=true]_&:not(:has(:focus-visible))]:!opacity-0";
+
+/**
+ * A tile's own panel (audio, fit) is open. The stage cannot see it, because the
+ * panel belongs to the tile, and a panel left open while the pointer wandered
+ * off would otherwise be faded out from under the person using it.
+ */
+const TileMenuHoldContext = createContext<((open: boolean) => void) | null>(
+  null,
+);
+
+function useReportTileMenu(open: boolean): void {
+  const report = useContext(TileMenuHoldContext);
+  useEffect(() => {
+    if (!open || !report) {
+      return;
+    }
+    report(true);
+    return () => report(false);
+  }, [open, report]);
+}
+
+/** Whether a pointer event's element is inside a tile's own corner controls. */
+function isInsideTileControls(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('[data-call-chrome="tile"]') !== null
+  );
+}
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
 interface WebkitFullscreenVideo extends HTMLVideoElement {
@@ -1358,28 +1408,117 @@ function ActiveCall({
     }
   }, [qualityMenuRequested, qualityMenuOpen]);
   // --- video-player chrome -------------------------------------------------
-  // With a share or a camera on stage the bar and the title overlay fade
-  // after a few idle seconds and come back on any pointer move, key or touch;
-  // a tap on the picture toggles them on a phone. Nothing hides while a menu
-  // from the bar is open, the pointer rests on the bar, focus is inside it
-  // (a keyboard user is on the way to hang up) or push-to-talk is held. An
-  // audio-only call has nothing under the bar and keeps it put; so does a
-  // collapsed stage. Rules and timing: `client/src/hooks/use-idle-chrome.ts`.
+  // With a stream on the stage (one picture alone, or a share in the grid) the
+  // bar, the title overlay, the way back to the grid and each tile's corner
+  // controls fade after a few idle seconds and come back on any pointer move,
+  // key or touch; a tap on the picture toggles them on a phone. A grid of
+  // cameras, an audio-only call, a collapsed stage and a presenter's own
+  // picture keep the controls put, and so does anything in
+  // `stageChromeHold` (a menu, the pointer on a control, keyboard focus on
+  // one, a call that is not connected). Timing: `hooks/use-idle-chrome.ts`;
+  // the rules: `stage-chrome.ts`.
   const reducedMotion = usePrefersReducedMotion();
+  const autoHideSetting = useAutoHideStageControls();
   const [barHovered, setBarHovered] = useState(false);
+  const [tileControlsHovered, setTileControlsHovered] = useState(false);
+  const [tileFocused, setTileFocused] = useState(false);
+  const [tileMenusOpen, setTileMenusOpen] = useState(0);
+  const reportTileMenu = useCallback((open: boolean) => {
+    setTileMenusOpen((count) => Math.max(0, count + (open ? 1 : -1)));
+  }, []);
   const [barFocused, setBarFocused] = useState(false);
+  const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const pushToTalkHeld =
     inputMode === "push-to-talk" &&
     voiceState.isTransmitting &&
     !voiceState.isMuted;
-  const chrome = useIdleChrome(
-    anyVideo && chromeExpanded,
-    qualityMenuOpen || barHovered || barFocused || pushToTalkHeld,
-  );
+  // A stream owns the stage: one picture alone (focused, or the only one), or
+  // a screen share anywhere on it. A grid of cameras with no share is people,
+  // and people keep their controls.
+  const streamOnStage =
+    soloPerson !== null ||
+    soloTile !== null ||
+    soloMusic ||
+    staged.tiles.length === 1 ||
+    staged.tiles.some((tile) => tile.kind === "screen");
+  const ownPictureOnly = soloPerson
+    ? soloPerson.isSelf
+    : soloTile
+      ? soloTile.isSelf
+      : focusedIsLocal ||
+        (!soloMusic &&
+          !musicOnStage &&
+          staged.tiles.length === 1 &&
+          stage.tiles[0]?.isSelf === true);
+  const chromeMayHide = stageChromeMayHide({
+    autoHideSetting,
+    expanded: chromeExpanded && anyVideo,
+    streamOnStage,
+    ownPictureOnly,
+  });
+  const chromeHold = stageChromeHold({
+    menuOpen: qualityMenuOpen || tileMenusOpen > 0,
+    sharePickerOpen,
+    pointerOverControls: barHovered || tileControlsHovered,
+    keyboardFocusInControls: barFocused || tileFocused,
+    pushToTalkHeld,
+    connected: voiceState.status === "connected",
+    error: Boolean(voiceState.error),
+    notice: Boolean(voiceState.notice),
+    peerFailed: remotes.some((person) => person.failed),
+  });
+  const chrome = useIdleChrome(chromeMayHide, chromeHold !== null);
+  const wakeChrome = chrome.wake;
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
     reducedMotion,
   });
+  // Something a person has to notice happened (muted by a moderator, somebody
+  // arrived, a hand went up, a hotkey mute): show the controls for one idle
+  // period rather than letting it change nothing anywhere on screen.
+  const attentionKey = stageChromeAttentionKey({
+    isMuted: voiceState.isMuted,
+    isDeafened: voiceState.isDeafened,
+    serverMuted: voiceState.self?.serverMuted === true,
+    canSpeak: voiceState.canSpeak,
+    peerCount: voiceState.remotePeers.length,
+    handsUp: (voiceState.voiceChannelId
+      ? (voiceState.occupancy[voiceState.voiceChannelId] ?? [])
+      : []
+    ).filter((person) => person.handRaisedAt != null).length,
+  });
+  const attentionSeen = useRef(attentionKey);
+  useEffect(() => {
+    if (attentionSeen.current !== attentionKey) {
+      attentionSeen.current = attentionKey;
+      wakeChrome();
+    }
+  }, [attentionKey, wakeChrome]);
+  // In real fullscreen focus can sit on the body, outside the stage's own key
+  // handler, so a key press there would reveal nothing.
+  useEffect(() => {
+    if (!fullscreen.isFullscreen || !chromeMayHide) {
+      return;
+    }
+    window.addEventListener("keydown", wakeChrome);
+    return () => window.removeEventListener("keydown", wakeChrome);
+  }, [fullscreen.isFullscreen, chromeMayHide, wakeChrome]);
+  // The screen picker is the browser's, and it takes the pointer with it: a
+  // bar that hid while it was up would still be gone on the way back.
+  const startScreenShareWithPicker = useMemo(
+    () =>
+      onStartScreenShare
+        ? async (intent?: { preferBrowserTab?: boolean }) => {
+            setSharePickerOpen(true);
+            try {
+              await onStartScreenShare(intent);
+            } finally {
+              setSharePickerOpen(false);
+            }
+          }
+        : undefined,
+    [onStartScreenShare],
+  );
   // A touch tap is a down and an up that did not travel. Anything that moved
   // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
@@ -1405,7 +1544,7 @@ function ActiveCall({
     }
     chrome.wake();
   };
-  const swallowPressWhileHidden = (event: SyntheticEvent<HTMLDivElement>) => {
+  const swallowPressWhileHidden = (event: SyntheticEvent) => {
     if (!chrome.isHidden()) {
       return;
     }
@@ -1606,7 +1745,7 @@ function ActiveCall({
       onQualityMenuOpenChange={setQualityMenuRequested}
       watchingHls={watchingHls}
       hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 20}
-      onStartScreenShare={onStartScreenShare}
+      onStartScreenShare={startScreenShareWithPicker}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!userCollapsed)}
       onLeave={onLeave}
@@ -1711,12 +1850,18 @@ function ActiveCall({
   }
 
   return (
+    <TileMenuHoldContext.Provider value={reportTileMenu}>
     <div
       ref={stageRef}
       data-testid="call-stage"
       data-music-picture={musicPictureOnly ? "" : undefined}
+      data-chrome-hidden={chrome.hidden ? "true" : "false"}
       className={cn(
         "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
+        // The pointer goes with the controls, as in every player. `!` and the
+        // descendant selector because the tiles set their own cursors, and the
+        // pointer has to be gone over the picture whoever owns that element.
+        chrome.hidden && "cursor-none [&_*]:!cursor-none",
         fullscreen.isFullscreen
           ? fullscreen.mode === "element"
             ? "h-full max-h-none"
@@ -1738,13 +1883,44 @@ function ActiveCall({
           chrome.wake();
         }
       }}
+      onPointerOver={(event) => {
+        if (
+          event.pointerType !== "touch" &&
+          isInsideTileControls(event.target)
+        ) {
+          setTileControlsHovered(true);
+        }
+      }}
+      onPointerOut={(event) => {
+        if (
+          isInsideTileControls(event.target) &&
+          !isInsideTileControls(event.relatedTarget)
+        ) {
+          setTileControlsHovered(false);
+        }
+      }}
       onPointerDown={onStagePointerDown}
       onPointerUp={onStagePointerUp}
       onPointerCancel={() => {
         touchDownRef.current = null;
       }}
       onKeyDownCapture={chrome.wake}
-      onFocusCapture={chrome.wake}
+      onFocusCapture={(event) => {
+        chrome.wake();
+        // Keyboard focus on a tile's own control holds the stage like focus on
+        // the bar does; a mouse press on one does not.
+        if (isInsideTileControls(event.target)) {
+          setTileFocused(isKeyboardFocus(event.target));
+        }
+      }}
+      onBlurCapture={(event) => {
+        if (
+          isInsideTileControls(event.target) &&
+          !isInsideTileControls(event.relatedTarget)
+        ) {
+          setTileFocused(false);
+        }
+      }}
       // Read by the strip's reserve and the self-preview's bottom corners.
       style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
     >
@@ -1963,10 +2139,27 @@ function ActiveCall({
             <button
               type="button"
               data-testid="stage-show-all-streams"
+              data-call-chrome="back"
+              data-chrome-hidden={chrome.hidden ? "true" : "false"}
               className={cn(
                 "absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
                 STAGE_LAYER.badges,
+                // Fades with the rest of the overlay (it is the same group:
+                // a stream alone on the stage with a pill across its top is
+                // the bar problem again). Still pressable while faded, and a
+                // press then only brings it back, like the bar.
+                chromeClass,
               )}
+              onPointerEnter={(event) => {
+                if (event.pointerType !== "touch") {
+                  setBarHovered(true);
+                }
+              }}
+              onPointerLeave={() => setBarHovered(false)}
+              onFocus={(event) => setBarFocused(isKeyboardFocus(event.target))}
+              onBlur={() => setBarFocused(false)}
+              onPointerDownCapture={swallowPressWhileHidden}
+              onClickCapture={swallowPressWhileHidden}
               onClick={() => {
                 if (fullscreen.soloPeerId !== null) {
                   fullscreen.toggleScreen(fullscreen.soloPeerId);
@@ -2148,6 +2341,18 @@ function ActiveCall({
           // overlay also holds is never wanted here.
           watchPartyChrome && focusedIsLocal && "hidden",
         )}
+        // The overlay itself passes the pointer through; its few buttons take
+        // it back, and resting on one holds the whole group like the bar.
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") {
+            setBarHovered(true);
+          }
+        }}
+        onPointerLeave={() => setBarHovered(false)}
+        onFocusCapture={(event) =>
+          setBarFocused(isKeyboardFocus(event.target))
+        }
+        onBlurCapture={onBarBlur}
       >
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-paper">
@@ -2319,7 +2524,11 @@ function ActiveCall({
         // happens to be.
         onPointerDownCapture={swallowPressWhileHidden}
         onClickCapture={swallowPressWhileHidden}
-        onFocusCapture={() => setBarFocused(true)}
+        // KEYBOARD focus holds the bar, a mouse click does not. A button
+        // keeps focus after a click for as long as nothing else takes it, so
+        // holding the bar for plain focus meant one press of mute left it up
+        // for the rest of the stream (`isKeyboardFocus`).
+        onFocusCapture={(event) => setBarFocused(isKeyboardFocus(event.target))}
         onBlurCapture={onBarBlur}
       >
         <MicFallbackNotice
@@ -2355,6 +2564,7 @@ function ActiveCall({
         </>
       )}
     </div>
+    </TileMenuHoldContext.Provider>
   );
 }
 
@@ -3472,6 +3682,7 @@ function TileOverlay({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  useReportTileMenu(menu.open);
   const hasAudio = Boolean(audio?.voice || audio?.share);
   if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
     return null;
@@ -3479,6 +3690,7 @@ function TileOverlay({
   return (
     <div
       ref={menu.rootRef}
+      data-call-chrome="tile"
       className={cn(
         "absolute left-2 top-2 flex items-center gap-1",
         STAGE_LAYER.tileControls,
@@ -3486,7 +3698,10 @@ function TileOverlay({
         // follows the tile's hover, and stays put on a touch screen.
         menu.open
           ? "opacity-100"
-          : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+          : cn(
+              "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+              TILE_CONTROLS_FADE,
+            ),
       )}
     >
       {onToggleFullscreen && (
@@ -4173,6 +4388,7 @@ export function ScreenTileFrame({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  useReportTileMenu(menu.open);
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
@@ -4258,12 +4474,16 @@ export function ScreenTileFrame({
           no hover to reveal anything, keeps them all the time. */}
       <div
         ref={menu.rootRef}
+        data-call-chrome="tile"
         className={cn(
           "absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5",
           STAGE_LAYER.tileControls,
           menu.open || hideSelfPreview
             ? "opacity-100"
-            : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+            : cn(
+                "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+                TILE_CONTROLS_FADE,
+              ),
         )}
       >
         {/* Only a peer's share can be declined. Declining our own would mean

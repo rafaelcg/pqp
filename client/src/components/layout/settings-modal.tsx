@@ -124,6 +124,10 @@ import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
 import {
+  setAutoHideStageControls,
+  useAutoHideStageControls,
+} from "@/lib/stage-controls-pref";
+import {
   isVoiceCleanSettingsSeen,
   markVoiceCleanSettingsSeen,
   shouldShowVoiceCleanSettingsBadge,
@@ -1230,6 +1234,7 @@ function VoiceSection({
   const { t } = useTranslation();
   const musicAutoJoin = useMusicAutoJoin();
   const musicDucking = useMusicDucking();
+  const autoHideControls = useAutoHideStageControls();
   const canSelectOutput = supportsAudioOutputSelection();
   const checkConnection = () => requestConnectionCheck();
   const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
@@ -1601,6 +1606,13 @@ function VoiceSection({
         onCheckedChange={setMusicDucking}
         label={t("settings.voice.musicDuck")}
         description={t("settings.voice.musicDuckHint")}
+        className="px-0"
+      />
+      <Switch
+        checked={autoHideControls}
+        onCheckedChange={setAutoHideStageControls}
+        label={t("settings.voice.autoHideControls")}
+        description={t("settings.voice.autoHideControlsHint")}
         className="px-0"
       />
     </div>

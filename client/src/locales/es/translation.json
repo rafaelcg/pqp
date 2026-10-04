@@ -1866,6 +1866,8 @@
   "settings.voice.musicAutoJoinHint": "Desactivado: cuando alguien pone música, tú eliges si quieres escuchar.",
   "settings.voice.musicDuck": "Bajar la música cuando alguien habla",
   "settings.voice.musicDuckHint": "Cuando alguien está hablando en la llamada, esta app le baja el volumen a la canción.",
+  "settings.voice.autoHideControls": "Ocultar controles automáticamente",
+  "settings.voice.autoHideControlsHint": "Mientras una transmisión ocupa la pantalla, los controles de la llamada se esconden a los pocos segundos. Mueve el mouse, pulsa una tecla o toca la pantalla para que vuelvan.",
   "settings.notifications.description": "Qué te llega, y dónde. Los ajustes por comunidad y por canal mandan sobre estos.",
   "settings.notifications.unsupported": "Este navegador no puede mostrar notificaciones de escritorio.",
   "settings.notifications.denied": "Bloqueadas para este sitio. Permite las notificaciones en la configuración del sitio de tu navegador para volver a activarlas, la página no puede volver a preguntar.",
