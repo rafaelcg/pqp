@@ -230,8 +230,9 @@ test("the checklist's buttons open the things they name", async ({ page }) => {
     page.getByRole("combobox", { name: "Add a friend by handle" }),
   ).toBeVisible();
 
-  // Settings keeps the URL field the wizard dropped.
+  // Settings keeps the URL field the wizard dropped, folded behind "Use a link".
   await page.getByRole("button", { name: "Pick an avatar" }).click();
+  await page.getByRole("button", { name: "Use a link" }).click();
   await expect(page.getByPlaceholder("https://… image URL")).toBeVisible({
     timeout: 10_000,
   });
