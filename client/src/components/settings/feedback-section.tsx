@@ -207,12 +207,18 @@ export function FeedbackSection({
 
   useEffect(() => {
     mounted.current = true;
-    if (unseen?.owner === userId) unseen = null;
     const current = inflight;
     if (current && current.owner === userId) {
       void current.promise.then((outcome) => {
         if (mounted.current) settle(outcome);
       });
+    } else if (initial.pending && unseen?.owner === userId) {
+      // Mounted as "Enviando…" and the send ended before this effect ran:
+      // its outcome is waiting here, and nothing else would apply it.
+      settle(unseen.outcome);
+    } else if (unseen?.owner === userId) {
+      // Already shown by the initial state.
+      unseen = null;
     }
     return () => {
       mounted.current = false;

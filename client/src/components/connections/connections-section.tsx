@@ -415,9 +415,11 @@ function ProviderRow({
     void visibility.run(async () => {
       try {
         const { connection } = await updateConnectionVisibility(provider, next);
-        // Every success is applied, not only the newest: the writes run in
-        // order, so if a later one fails the row still shows what the server
-        // holds rather than the value from before both.
+        // Every success is applied, not only the newest. `useInlineSave`
+        // runs one write at a time (the next request is not sent until this
+        // one settled), so responses arrive in the order the server applied
+        // them, and if a later write fails the row still shows what the
+        // server holds rather than the value from before both.
         onChanged(provider, connection);
       } finally {
         if (save === latestSave.current) setPending(null);
