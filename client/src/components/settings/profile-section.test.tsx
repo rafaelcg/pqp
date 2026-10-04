@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { User } from "@pqp/shared";
 
 /**
@@ -15,6 +15,7 @@ vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchPublicProfile: vi.fn(),
   fetchAvatarConfig: vi.fn(() => Promise.resolve({ enabled: false })),
   fetchUserBannerConfig: vi.fn(() =>
     Promise.resolve({ enabled: false, maxBytes: 1, width: 1500, height: 500 }),
@@ -24,7 +25,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 const { ProfileSection } = await import("./profile-section");
 const { SettingsShellContext } = await import("@/components/settings/kit");
 const { TooltipProvider } = await import("@/components/ui/tooltip");
-const { ApiError } = await import("@/lib/api");
+const { ApiError, fetchPublicProfile } = await import("@/lib/api");
 const { localizedUploadFailure } = await import("@/components/user/avatar-picker");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -58,7 +59,10 @@ const USER = {
 
 async function mount(
   user: User | null,
-  { handleError = null }: { handleError?: string | null } = {},
+  {
+    handleError = null,
+    handle = user?.handle ?? "",
+  }: { handleError?: string | null; handle?: string } = {},
 ) {
   host = document.createElement("div");
   document.body.append(host);
@@ -80,7 +84,7 @@ async function mount(
             onDisplayName={() => {}}
             username={user?.username ?? ""}
             onUsername={() => {}}
-            handle={user?.handle ?? ""}
+            handle={handle}
             onHandle={() => {}}
             avatarUrl=""
             onAvatarUrl={() => {}}
@@ -159,6 +163,93 @@ describe("Perfil", () => {
     expect(description).toBe(
       row("public-link").querySelector("p")?.textContent,
     );
+  });
+});
+
+describe("Perfil: the public link while it is typed", () => {
+  const check = vi.mocked(fetchPublicProfile);
+  const status = () =>
+    row("public-link").querySelector<HTMLElement>("[data-handle-availability]")!;
+  /** Lets the 350 ms debounce run and the answer land. */
+  async function settle() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    check.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says the rule under the field and stays silent for the link you already own", async () => {
+    await mount(USER);
+    expect(row("public-link").textContent).toContain("3 to 20 letters, numbers, _ . or -");
+    expect(describedBy(linkField())).toContain("3 to 20 letters");
+    await settle();
+    expect(check).not.toHaveBeenCalled();
+    expect(status().textContent).toBe("");
+  });
+
+  it("says Verificando, then Disponível when the public page does not exist", async () => {
+    check.mockResolvedValue(null);
+    await mount(USER, { handle: "novo_nome" });
+    expect(status().textContent).toBe("Checking…");
+    expect(check).not.toHaveBeenCalled();
+    await settle();
+    expect(check).toHaveBeenCalledWith("novo_nome", expect.anything());
+    expect(status().textContent).toBe("Available");
+    expect(status().getAttribute("role")).toBe("status");
+    expect(linkField().getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("says the link has an owner when the public page exists", async () => {
+    check.mockResolvedValue({} as never);
+    await mount(USER, { handle: "alguem" });
+    await settle();
+    expect(status().textContent).toBe("That link is already someone's");
+    expect(linkField().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("never calls a reserved link free, and does not ask the server", async () => {
+    await mount(USER, { handle: "admin" });
+    await settle();
+    expect(check).not.toHaveBeenCalled();
+    expect(status().textContent).toBe("That one is reserved.");
+  });
+
+  it("stays silent when the check fails: a 429 or a dropped network is not free", async () => {
+    check.mockRejectedValue(new ApiError(429, "slow down"));
+    await mount(USER, { handle: "novo_nome" });
+    await settle();
+    expect(status().textContent).toBe("");
+  });
+
+  it("stays silent for a link too short to be one, and while the rename is locked", async () => {
+    await mount(USER, { handle: "ab" });
+    await settle();
+    expect(check).not.toHaveBeenCalled();
+    expect(status().textContent).toBe("");
+
+    act(() => root?.unmount());
+    host?.remove();
+    await mount({ ...USER, handleChangedAt: new Date().toISOString() } as User, {
+      handle: "outro_nome",
+    });
+    await settle();
+    expect(check).not.toHaveBeenCalled();
+    expect(row("public-link").querySelector("[data-handle-availability]")).toBeNull();
+  });
+
+  it("lets the save's own refusal speak instead of repeating it", async () => {
+    check.mockResolvedValue({} as never);
+    await mount(USER, { handle: "alguem", handleError: "Esse link já tem dono. Tenta outro." });
+    await settle();
+    expect(status().textContent).toBe("");
+    expect(row("public-link").querySelectorAll('[role="alert"]')).toHaveLength(1);
   });
 });
 

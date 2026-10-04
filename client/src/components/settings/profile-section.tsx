@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { ExternalLink, Upload } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Check, CircleX, ExternalLink, Loader2, Upload } from "lucide-react";
 import {
   canRenameHandle,
   DISPLAY_NAME_MAX_LENGTH,
@@ -13,6 +13,7 @@ import {
   USER_BANNER_HEIGHT,
   USER_BANNER_MIME_ALLOWLIST,
   USER_BANNER_WIDTH,
+  validateHandle,
   type User,
   type UserBannerConfig,
 } from "@pqp/shared";
@@ -36,7 +37,11 @@ import {
   localizedUploadFailure,
 } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
+import {
+  deleteUserBanner,
+  fetchPublicProfile,
+  fetchUserBannerConfig,
+} from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -44,6 +49,125 @@ import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+
+/* ------------------------------------------------------------ availability */
+
+/** Long enough that typing a name is one request, short enough to feel live. */
+const HANDLE_CHECK_DEBOUNCE_MS = 350;
+
+export type HandleAvailability =
+  | "idle"
+  | "checking"
+  | "free"
+  | "taken"
+  | "reserved"
+  | "blocked";
+
+/**
+ * Whether the link being typed is free, asked of the same public profile read
+ * the claim page uses (a 404 is "free"). Debounced and aborted, so the answer
+ * on screen is always for what is in the box.
+ *
+ * Silent where it cannot tell: the link you already own, a link that is too
+ * short or malformed (the rule line under the field says so), a rename that
+ * is locked, and any failure of the read itself (a 429 from typing fast, the
+ * API being down). None of those is "free", and none of them is worth a red
+ * line either: the save still checks.
+ */
+export function useHandleAvailability(
+  handle: string,
+  ownedHandle: string | null,
+  enabled: boolean,
+): HandleAvailability {
+  const [availability, setAvailability] = useState<HandleAvailability>("idle");
+  useEffect(() => {
+    const candidate = handle.trim();
+    if (!enabled || !candidate || candidate === (ownedHandle ?? "")) {
+      setAvailability("idle");
+      return;
+    }
+    const rejection = validateHandle(candidate);
+    if (rejection === "reserved" || rejection === "blocked") {
+      // The public read 404s these too, which would say "free".
+      setAvailability(rejection);
+      return;
+    }
+    if (rejection) {
+      setAvailability("idle");
+      return;
+    }
+    setAvailability("checking");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetchPublicProfile(candidate, { signal: controller.signal })
+        .then((profile) => setAvailability(profile ? "taken" : "free"))
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setAvailability("idle");
+          }
+        });
+    }, HANDLE_CHECK_DEBOUNCE_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [handle, ownedHandle, enabled]);
+  return availability;
+}
+
+/**
+ * One line under the link field, in one live region that stays mounted, so a
+ * screen reader hears each new answer instead of a region that appears with it.
+ */
+function HandleAvailabilityLine({ availability }: { availability: HandleAvailability }) {
+  const { t } = useTranslation();
+  let text: string | null = null;
+  let icon: ReactNode = null;
+  let tone = "text-text-tertiary";
+  switch (availability) {
+    case "checking":
+      text = t("settings.profile.publicHandle.checking");
+      icon = <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />;
+      break;
+    case "free":
+      text = t("settings.profile.publicHandle.free");
+      icon = <Check aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-success";
+      break;
+    case "taken":
+      text = t("settings.profile.publicHandle.taken");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    case "reserved":
+      text = t("claim.reserved");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    case "blocked":
+      text = t("claim.blocked");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    default:
+      break;
+  }
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-handle-availability={availability}
+      className={cn("flex items-center gap-1.5 text-xs", tone)}
+    >
+      {text ? (
+        <>
+          {icon}
+          {text}
+        </>
+      ) : null}
+    </span>
+  );
+}
 
 /* ----------------------------------------------------------------- profile */
 
@@ -90,6 +214,7 @@ export function ProfileSection({
   const handleId = useId();
   const handleDescriptionId = useId();
   const handleErrorId = useId();
+  const handleRuleId = useId();
   const usernameId = useId();
   const storage = useStorageConfig();
   // The last save lost the link to somebody else. The shell recognised the
@@ -102,6 +227,11 @@ export function ProfileSection({
     : handleRenameAvailableAt(user?.handleChangedAt, user?.handle);
 
   const ownedHandle = user?.handle ?? null;
+  const availability = useHandleAvailability(
+    handle,
+    ownedHandle,
+    renameAvailableAt === null,
+  );
   const tag = user?.tag ?? null;
   // The preview follows the drafts, so it changes while somebody types. The
   // number after the # is the saved one: a renamed username keeps it unless
@@ -240,15 +370,32 @@ export function ProfileSection({
                   spellCheck={false}
                   disabled={renameAvailableAt !== null}
                   placeholder={t("settings.profile.publicHandle.placeholder")}
-                  aria-invalid={handleError ? true : undefined}
-                  aria-describedby={
-                    handleError
-                      ? `${handleDescriptionId} ${handleErrorId}`
-                      : handleDescriptionId
+                  aria-invalid={
+                    handleError || availability === "taken" ? true : undefined
                   }
+                  aria-describedby={[
+                    handleDescriptionId,
+                    renameAvailableAt === null ? handleRuleId : null,
+                    handleError ? handleErrorId : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   onChange={(event) => onHandle(normalizeHandle(event.target.value))}
                   className="font-mono"
                 />
+                {renameAvailableAt === null ? (
+                  // The rule is always there; the answer sits beside it. The
+                  // answer steps aside for the save's own refusal, which says
+                  // the same thing about the same link.
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span id={handleRuleId} className="text-xs text-text-tertiary">
+                      {t("settings.profile.publicHandle.rule")}
+                    </span>
+                    <HandleAvailabilityLine
+                      availability={handleError ? "idle" : availability}
+                    />
+                  </div>
+                ) : null}
                 {handleError ? (
                   <div id={handleErrorId}>
                     <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
