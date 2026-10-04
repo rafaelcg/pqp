@@ -32,10 +32,12 @@ export function FileDropOverlay({
       data-file-drop-overlay={tone}
       className={cn(
         "pointer-events-none absolute inset-0 z-30 flex animate-fade-in items-center justify-center border-2 border-dashed text-center",
-        size === "pane" ? "m-2 rounded-lg" : "rounded-md px-2",
+        size === "pane"
+          ? "m-2 rounded-[var(--radius-card)]"
+          : "rounded-[var(--radius-control)] px-2",
         tone === "accept"
-          ? "border-signal bg-ink/85"
-          : "border-ink-4 bg-ink/90",
+          ? "border-accent bg-surface-0/85"
+          : "border-border-strong bg-surface-0/90",
         className,
       )}
     >
@@ -43,7 +45,7 @@ export function FileDropOverlay({
         className={cn(
           "font-display font-bold",
           size === "pane" ? "px-4 text-lg" : "text-xs",
-          tone === "accept" ? "text-signal" : "text-paper-muted",
+          tone === "accept" ? "text-accent" : "text-text-secondary",
         )}
       >
         {label}

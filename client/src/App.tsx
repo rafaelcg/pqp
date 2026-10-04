@@ -1950,8 +1950,6 @@ function MainAppContent({
   >(null);
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
   const [droppedItems, setDroppedItems] = useState<DroppedItems | null>(null);
-  /** `null` until the config probe answers; unknown is not the same as off. */
-  const isAttachmentsEnabled = useAttachmentsEnabled();
   const [localSettings, setLocalSettings] = useState<LocalSettings>(
     defaultLocalSettings,
   );
@@ -2994,6 +2992,13 @@ function MainAppContent({
   useEffect(() => {
     setAuthTokenProvider(resolveToken);
   }, [resolveToken]);
+
+  // `null` until the config probe answers; unknown is not the same as off.
+  // DECLARED AFTER the token provider effect above on purpose: effects run in
+  // declaration order, and the probe's request goes out from its effect, so
+  // above that line it left with no Authorization header, answered 401, and
+  // put a console error on every boot (`theme-tokens.spec.ts` counts them).
+  const isAttachmentsEnabled = useAttachmentsEnabled();
 
   useEffect(() => {
     setLocalSettings(loadLocalSettings());
