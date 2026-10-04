@@ -155,3 +155,160 @@ describe("useRovingRadio through RadioGroup", () => {
     expect(radios()[0]!.getAttribute("aria-checked")).toBe("true");
   });
 });
+
+describe("manual activation", () => {
+  function ManualHarness({ onChange }: { onChange: (value: string) => void }) {
+    const [value, setValue] = useState("light");
+    return (
+      <RadioGroup
+        label="Idioma"
+        activation="manual"
+        value={value}
+        options={OPTIONS}
+        onValueChange={(next) => {
+          onChange(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+
+  it("moves focus with the arrows without selecting", () => {
+    const onChange = vi.fn();
+    mount(<ManualHarness onChange={onChange} />);
+    radios()[0]!.focus();
+
+    press("ArrowRight");
+    expect(document.activeElement).toBe(radios()[1]);
+    press("ArrowRight");
+    expect(document.activeElement).toBe(radios()[2]);
+    press("Home");
+    expect(document.activeElement).toBe(radios()[0]);
+    press("End");
+    expect(document.activeElement).toBe(radios()[2]);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(checkedLabel()).toBe("Claro");
+  });
+
+  it("selects the focused option with Enter or Space, once", () => {
+    const onChange = vi.fn();
+    mount(<ManualHarness onChange={onChange} />);
+    radios()[0]!.focus();
+
+    press("ArrowRight");
+    press("Enter");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith("dark");
+    expect(checkedLabel()).toBe("Escuro");
+
+    press("ArrowRight");
+    press(" ");
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(checkedLabel()).toBe("Sistema");
+
+    // Enter on the option that is already checked changes nothing.
+    press("Enter");
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps selecting on the arrows in the default mode", () => {
+    const onChange = vi.fn();
+    mount(<Harness initial="light" options={OPTIONS} onChange={onChange} />);
+    radios()[0]!.focus();
+    press("ArrowRight");
+    expect(onChange).toHaveBeenCalledWith("dark");
+    // Enter is the button's own business in auto mode, not the group's.
+    press("Enter");
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("list status", () => {
+  const LIST: RadioOption<string>[] = [
+    { value: "all", label: "Todo mundo", description: "Qualquer conta." },
+    { value: "none", label: "Ninguém", description: "Só amigos." },
+  ];
+
+  function StatusHarness() {
+    const [value, setValue] = useState("all");
+    const [saving, setSaving] = useState(false);
+    return (
+      <RadioGroup
+        label="Quem pode te mandar DM"
+        variant="list"
+        value={value}
+        options={LIST}
+        status={saving ? <p data-testid="status">Salvando…</p> : null}
+        onValueChange={(next) => {
+          setValue(next);
+          setSaving(true);
+        }}
+      />
+    );
+  }
+
+  it("draws the status under the checked option only", () => {
+    mount(<StatusHarness />);
+    expect(document.querySelector('[data-testid="status"]')).toBeNull();
+
+    act(() => radios()[1]!.click());
+    const status = document.querySelector('[data-testid="status"]');
+    expect(status).not.toBeNull();
+    // A sibling of the radio, never inside it: the radio's name stays its label.
+    expect(radios()[1]!.contains(status)).toBe(false);
+    expect(radios()[1]!.parentElement!.contains(status)).toBe(true);
+    expect(radios()[0]!.parentElement!.contains(status)).toBe(false);
+  });
+
+  it("keeps focus on the radio when the status appears", () => {
+    mount(<StatusHarness />);
+    const before = radios()[0]!;
+    before.focus();
+    press("ArrowDown");
+    const target = radios()[1]!;
+    expect(document.activeElement).toBe(target);
+    expect(document.querySelector('[data-testid="status"]')).not.toBeNull();
+    // Same node, not a remounted copy.
+    expect(radios()[1]).toBe(target);
+    expect(document.activeElement).toBe(target);
+  });
+});
+
+describe("segmented fit", () => {
+  it("truncates equal cells by default and never in content mode", () => {
+    mount(
+      <RadioGroup
+        label="Nível"
+        value="all"
+        onValueChange={() => undefined}
+        options={[
+          { value: "all", label: "Tudo" },
+          { value: "mentions", label: "Só @menções" },
+        ]}
+      />,
+    );
+    const group = document.querySelector('[role="radiogroup"]')!;
+    expect(group.className).toContain("auto-cols-fr");
+    expect(radios()[1]!.querySelector(".truncate")).not.toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount(
+      <RadioGroup
+        label="Nível"
+        fit="content"
+        value="all"
+        onValueChange={() => undefined}
+        options={[
+          { value: "all", label: "Tudo" },
+          { value: "mentions", label: "Só @menções" },
+        ]}
+      />,
+    );
+    const contentGroup = document.querySelector('[role="radiogroup"]')!;
+    expect(contentGroup.className).not.toContain("auto-cols-fr");
+    expect(contentGroup.className).toContain("flex-wrap");
+    expect(radios()[1]!.querySelector(".truncate")).toBeNull();
+  });
+});

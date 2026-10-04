@@ -1,5 +1,5 @@
 import type { User } from "@pqp/shared";
-import type { updateMe } from "@/lib/api";
+import { ApiError, type updateMe } from "@/lib/api";
 
 /**
  * The four profile values that wait for "Salvar alterações". Everything else
@@ -79,4 +79,23 @@ export function buildProfilePatch(user: User, drafts: ProfileDrafts): ProfilePat
     avatarUrl: drafts.avatarUrl.trim() || null,
     ...(drafts.handle ? { handle: drafts.handle } : {}),
   };
+}
+
+/**
+ * Whether a failed profile save lost the public link to somebody else.
+ *
+ * `PATCH /api/me` claims the handle first and answers 409 when the word is
+ * taken. A username whose numbers ran out is a 409 too, so the status alone
+ * is not enough: the patch must carry a handle and the server's sentence must
+ * be about the handle. The server's English sentence is never shown for this
+ * case; the shell says "Esse link já tem dono" in the reader's language.
+ */
+export function isHandleTakenError(error: unknown, patch: ProfilePatch): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    typeof patch.handle === "string" &&
+    /\bhandle\b/i.test(error.message) &&
+    !/\busername\b/i.test(error.message)
+  );
 }

@@ -2,11 +2,16 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import {
   INLINE_SAVED_MS,
+  inlineErrorMessage,
   useInlineSave,
   type InlineSaveState,
+  type UseInlineSaveOptions,
 } from "@/components/settings/kit/use-inline-save";
+import { ApiError } from "@/lib/api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -15,8 +20,10 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let current: ReturnType<typeof useInlineSave> | null = null;
 
+let probeOptions: UseInlineSaveOptions | undefined;
+
 function Probe() {
-  current = useInlineSave();
+  current = useInlineSave(probeOptions);
   return null;
 }
 
@@ -48,6 +55,7 @@ afterEach(() => {
   root = null;
   host = null;
   current = null;
+  probeOptions = undefined;
   vi.useRealTimers();
 });
 
@@ -122,5 +130,87 @@ describe("useInlineSave", () => {
     });
     act(() => vi.advanceTimersByTime(INLINE_SAVED_MS * 2));
     expect(state()).toEqual({ kind: "saving" });
+  });
+});
+
+describe("useInlineSave options", () => {
+  it("relabels the saving line and skips the saved step", async () => {
+    probeOptions = { savingLabel: "Preparando…", showSaved: false };
+    act(() => root!.render(<Probe />));
+    const write = deferred();
+    let pending!: Promise<void>;
+    act(() => {
+      pending = current!.run(() => write.promise, "Falhou");
+    });
+    expect(state()).toEqual({ kind: "saving", label: "Preparando…" });
+
+    await act(async () => {
+      write.resolve();
+      await pending;
+    });
+    expect(state()).toEqual({ kind: "idle" });
+  });
+
+  it("still reports an error in the no-saved mode", async () => {
+    probeOptions = { showSaved: false };
+    act(() => root!.render(<Probe />));
+    await act(async () => {
+      await current!.run(() => Promise.reject(new Error("Sem espaço")), "Falhou");
+    });
+    expect(state()).toEqual({ kind: "error", message: "Sem espaço" });
+  });
+});
+
+describe("inlineErrorMessage", () => {
+  it("shows a server's own 4xx sentence", () => {
+    expect(
+      inlineErrorMessage(new ApiError(409, "That handle is already taken"), "Falhou"),
+    ).toBe("That handle is already taken");
+  });
+
+  it("uses the fallback for a 5xx, a network failure and a bare 4xx", () => {
+    expect(inlineErrorMessage(new ApiError(503, "database_unavailable"), "Falhou")).toBe(
+      "Falhou",
+    );
+    expect(
+      inlineErrorMessage(new ApiError(0, "Network error reaching API."), "Falhou"),
+    ).toBe("Falhou");
+    expect(inlineErrorMessage(new ApiError(400, "Request failed"), "Falhou")).toBe(
+      "Falhou",
+    );
+  });
+
+  it("keeps a plain Error's message and falls back for anything else", () => {
+    expect(inlineErrorMessage(new Error("Arquivo grande demais"), "Falhou")).toBe(
+      "Arquivo grande demais",
+    );
+    expect(inlineErrorMessage("boom", "Falhou")).toBe("Falhou");
+  });
+});
+
+describe("SettingsInlineStatus", () => {
+  it("says the custom saving label, from the prop or the state", () => {
+    expect(
+      renderToStaticMarkup(
+        <SettingsInlineStatus state={{ kind: "saving", label: "Enviando…" }} />,
+      ),
+    ).toContain("Enviando…");
+    expect(
+      renderToStaticMarkup(
+        <SettingsInlineStatus
+          state={{ kind: "saving", label: "Enviando…" }}
+          savingLabel="Preparando…"
+        />,
+      ),
+    ).toContain("Preparando…");
+  });
+
+  it("draws an icon beside an error, as an alert", () => {
+    const html = renderToStaticMarkup(
+      <SettingsInlineStatus state={{ kind: "error", message: "Não deu." }} />,
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("lucide-circle-x");
+    expect(html).toContain("Não deu.");
   });
 });

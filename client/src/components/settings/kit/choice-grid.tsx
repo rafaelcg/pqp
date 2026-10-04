@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { useRovingRadio } from "@/components/ui/radio-group";
 import {
   SETTINGS_FOCUS,
@@ -12,6 +12,12 @@ export interface SettingsChoice<T extends string> {
   label: string;
   /** A short qualifier ("Só escuro"), on its own line under the name. */
   badge?: string;
+  /**
+   * One line under the name saying what this choice does, so each card can be
+   * read before choosing (Voz's input modes). The radio's description, not
+   * part of its name.
+   */
+  description?: string;
   /** The miniature. Decorative: the label is the radio's name. */
   preview: ReactNode;
   disabled?: boolean;
@@ -44,6 +50,7 @@ export function SettingsChoiceGrid<T extends string>({
   options,
   columns = 3,
 }: SettingsChoiceGridProps<T>) {
+  const baseId = useId();
   const { onKeyDown, tabIndexFor } = useRovingRadio(
     options.map((option) => option.value),
     value,
@@ -58,14 +65,28 @@ export function SettingsChoiceGrid<T extends string>({
       onKeyDown={onKeyDown}
       className={cn("grid grid-cols-2 gap-3", COLUMNS[columns])}
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         const checked = option.value === value;
+        const labelId = `${baseId}-${index}-label`;
+        const badgeId = `${baseId}-${index}-badge`;
+        const descriptionId = `${baseId}-${index}-description`;
         return (
           <button
             key={option.value}
             type="button"
             role="radio"
             aria-checked={checked}
+            // Only with a description: then the name is the label (and badge)
+            // and the line is the description. Without one, the name stays
+            // what the content says, as before.
+            aria-labelledby={
+              option.description
+                ? option.badge
+                  ? `${labelId} ${badgeId}`
+                  : labelId
+                : undefined
+            }
+            aria-describedby={option.description ? descriptionId : undefined}
             disabled={option.disabled}
             tabIndex={tabIndexFor(option.value)}
             onClick={() => {
@@ -85,9 +106,22 @@ export function SettingsChoiceGrid<T extends string>({
               {option.preview}
             </span>
             <span className="flex min-w-0 flex-col items-start gap-1 px-1 pb-1">
-              <span className="truncate text-sm text-text">{option.label}</span>
+              <span id={labelId} className="truncate text-sm text-text">
+                {option.label}
+              </span>
+              {option.description ? (
+                <span
+                  id={descriptionId}
+                  className="text-xs text-pretty text-text-tertiary"
+                >
+                  {option.description}
+                </span>
+              ) : null}
               {option.badge ? (
-                <span className="rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary">
+                <span
+                  id={badgeId}
+                  className="rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary"
+                >
                   {option.badge}
                 </span>
               ) : null}
