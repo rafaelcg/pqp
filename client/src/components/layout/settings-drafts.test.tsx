@@ -20,6 +20,9 @@ import type { User } from "@pqp/shared";
 vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
 
 const { SettingsModal, defaultLocalSettings } = await import("./settings-modal");
+// The app mounts one `TooltipProvider` at its root; Settings tabs may use
+// `Tooltip`, which throws without one.
+const { TooltipProvider } = await import("@/components/ui/tooltip");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -49,17 +52,19 @@ function makeUser(overrides: Partial<User> = {}): User {
 function render(user: User, onClose = () => {}) {
   act(() => {
     root!.render(
-      <SettingsModal
-        open
-        user={user}
-        localSettings={defaultLocalSettings}
-        blockedUsers={[]}
-        onClose={onClose}
-        onLocalSave={() => {}}
-        onUserUpdated={() => {}}
-        onUnblockUser={() => {}}
-        requestedSection="profile"
-      />,
+      <TooltipProvider>
+        <SettingsModal
+          open
+          user={user}
+          localSettings={defaultLocalSettings}
+          blockedUsers={[]}
+          onClose={onClose}
+          onLocalSave={() => {}}
+          onUserUpdated={() => {}}
+          onUnblockUser={() => {}}
+          requestedSection="profile"
+        />
+      </TooltipProvider>,
     );
   });
 }
