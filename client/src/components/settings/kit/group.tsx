@@ -2,6 +2,12 @@ import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 interface SettingsGroupProps {
+  /**
+   * Optional. Rendered as `data-settings-row`, so `openSection(section, id)`
+   * can land on a whole group when no single row fits (Voz's input mode
+   * answers "ptt" while voice activity is selected). Not registered.
+   */
+  id?: string;
   title?: string;
   description?: string;
   /** One ghost or secondary `sm` button, or a link, on the title line. */
@@ -26,6 +32,7 @@ interface SettingsGroupProps {
  * first or last row.
  */
 export function SettingsGroup({
+  id,
   title,
   description,
   action,
@@ -36,6 +43,7 @@ export function SettingsGroup({
   const titleId = useId();
   return (
     <section
+      data-settings-row={id}
       aria-labelledby={title ? titleId : undefined}
       className={className}
     >

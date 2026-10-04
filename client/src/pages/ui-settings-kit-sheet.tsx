@@ -1,12 +1,17 @@
-import { Ban } from "lucide-react";
+import { Ban, Bug } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup } from "@/components/ui/radio-group";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import { UserAvatar } from "@/components/user/user-avatar";
 import {
+  SettingsActionRow,
+  SettingsBadge,
   SettingsBuildLine,
   SettingsChoiceGrid,
+  SettingsCopyButton,
   SettingsEmpty,
   SettingsGroup,
   SettingsInlineStatus,
@@ -15,8 +20,10 @@ import {
   SettingsNotice,
   SettingsPaneHeader,
   SettingsPreview,
+  SettingsResult,
   SettingsRow,
   SettingsSelect,
+  SettingsSkeletonRows,
   SettingsSliderRow,
   SettingsSwitchRow,
   UnsavedChangesBar,
@@ -38,6 +45,9 @@ export function SettingsKitSheet() {
   const inputId = useId();
   const selectId = useId();
   const textareaId = useId();
+  const prefixId = useId();
+  const wideId = useId();
+  const actionNoteId = useId();
   const [sounds, setSounds] = useState(true);
   const [volume, setVolume] = useState(100);
   const [brightness, setBrightness] = useState("dark");
@@ -45,7 +55,26 @@ export function SettingsKitSheet() {
   const [chip, setChip] = useState("serverMembers");
   const [dm, setDm] = useState("serverMembers");
   const [look, setLook] = useState("signal");
+  const [level, setLevel] = useState("mentions");
+  const [manual, setManual] = useState("light");
+  const [mode, setMode] = useState("vad");
+  const [hue, setHue] = useState(125);
   const save = useInlineSave();
+  const listSave = useInlineSave();
+  const prepare = useInlineSave({
+    savingLabel: t("qaUi.kit.row.statusPreparing"),
+    showSaved: false,
+  });
+  const levelOptions = (["all", "mentions", "nothing"] as const).map((value) => ({
+    value,
+    label: t(`qaUi.kit.option.${value}`),
+  }));
+  const modeOptions = (["vad", "ptt"] as const).map((value) => ({
+    value,
+    label: t(`qaUi.kit.option.${value}`),
+    description: t(`qaUi.kit.option.${value}Description`),
+    preview: <Miniature />,
+  }));
 
   const themeOptions = (["light", "dark", "system"] as const).map((value) => ({
     value,
@@ -104,6 +133,79 @@ export function SettingsKitSheet() {
                 stacked
                 control={<Input id={inputId} defaultValue="Dev User" />}
               />
+              <SettingsRow
+                id="blocked-sample"
+                label={t("qaUi.kit.row.leading")}
+                description={t("qaUi.kit.row.leadingDescription")}
+                searchable={false}
+                keepInline
+                leading={
+                  <UserAvatar
+                    name="Fulano"
+                    avatarUrl={null}
+                    rounded="full"
+                    className="h-8 w-8"
+                    fallbackClassName="bg-surface-3 text-xs text-text"
+                  />
+                }
+                control={
+                  <Button variant="secondary" size="sm">
+                    {t("qaUi.kit.row.leadingAction")}
+                  </Button>
+                }
+              />
+              <SettingsRow
+                id="public-link"
+                label={t("qaUi.kit.row.prefix")}
+                htmlFor={prefixId}
+                stacked
+                control={
+                  <Input id={prefixId} prefix="pqp.gg/@" defaultValue="rafa" className="font-mono" />
+                }
+              />
+              <SettingsRow
+                id="email"
+                label={t("qaUi.kit.row.copy")}
+                description="contato@pqp.gg"
+                control={
+                  <SettingsCopyButton
+                    text="contato@pqp.gg"
+                    label={t("qaUi.kit.row.copyLabel")}
+                  />
+                }
+              />
+              <SettingsRow
+                id="visibility"
+                label={t("qaUi.kit.row.wide")}
+                description={t("qaUi.kit.row.wideDescription")}
+                htmlFor={wideId}
+                wideControl
+                control={
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SettingsSelect id={wideId} defaultValue="public" className="w-auto">
+                      <option value="public">{t("qaUi.kit.row.selectDefault")}</option>
+                    </SettingsSelect>
+                    <Button variant="secondary" size="sm">
+                      {t("qaUi.kit.row.wideAction")}
+                    </Button>
+                  </div>
+                }
+              />
+              <SettingsRow
+                id="accent"
+                label={t("qaUi.kit.row.hue")}
+                stacked
+                control={
+                  <Slider
+                    variant="hue"
+                    min={0}
+                    max={360}
+                    value={hue}
+                    onValueChange={setHue}
+                    aria-label={t("qaUi.kit.row.hue")}
+                  />
+                }
+              />
               <SettingsSwitchRow
                 id="sounds"
                 label={t("qaUi.kit.row.switch")}
@@ -132,7 +234,7 @@ export function SettingsKitSheet() {
                 id="input-device"
                 label={t("qaUi.kit.row.select")}
                 htmlFor={selectId}
-                badge={<KitBadge>{t("qaUi.kit.badge")}</KitBadge>}
+                badge={<SettingsBadge>{t("qaUi.kit.badge")}</SettingsBadge>}
                 control={
                   <SettingsSelect id={selectId} defaultValue="default">
                     <option value="default">{t("qaUi.kit.row.selectDefault")}</option>
@@ -178,6 +280,26 @@ export function SettingsKitSheet() {
                 }
               />
               <SettingsRow
+                id="export"
+                label={t("qaUi.kit.row.statusPrepare")}
+                status={<SettingsInlineStatus state={prepare.state} />}
+                control={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={prepare.state.kind === "saving"}
+                    onClick={() =>
+                      void prepare.run(
+                        () => new Promise((resolve) => window.setTimeout(resolve, 1200)),
+                        t("settings.saveFailed"),
+                      )
+                    }
+                  >
+                    {t("qaUi.kit.row.statusPrepare")}
+                  </Button>
+                }
+              />
+              <SettingsRow
                 id="description"
                 label={t("qaUi.kit.row.textarea")}
                 htmlFor={textareaId}
@@ -196,6 +318,12 @@ export function SettingsKitSheet() {
                 onClick={() => undefined}
               />
               <SettingsLinkRow
+                id="ptt-key"
+                label={t("qaUi.kit.row.linkInternal")}
+                value={<SettingsKeyCombo keys={["`"]} label="`" />}
+                onClick={() => undefined}
+              />
+              <SettingsLinkRow
                 id="terms"
                 label={t("qaUi.kit.row.linkExternal")}
                 href="/termos"
@@ -204,6 +332,15 @@ export function SettingsKitSheet() {
               <SettingsNotice tone="info" inGroup>
                 {t("qaUi.kit.notice.info")}
               </SettingsNotice>
+              <SettingsActionRow
+                id="send"
+                note={t("qaUi.kit.action.note")}
+                noteId={actionNoteId}
+              >
+                <Button size="sm" aria-describedby={actionNoteId}>
+                  {t("qaUi.kit.action.button")}
+                </Button>
+              </SettingsActionRow>
             </SettingsGroup>
 
             <SettingsGroup title={t("qaUi.kit.group.choices")}>
@@ -236,6 +373,33 @@ export function SettingsKitSheet() {
                 }
               />
               <SettingsRow
+                id="segmented-content"
+                label={t("qaUi.kit.segmentedContent")}
+                control={
+                  <RadioGroup
+                    label={t("qaUi.kit.segmentedContent")}
+                    fit="content"
+                    value={level}
+                    onValueChange={setLevel}
+                    options={levelOptions}
+                  />
+                }
+              />
+              <SettingsRow
+                id="manual"
+                label={t("qaUi.kit.manual")}
+                description={t("qaUi.kit.manualDescription")}
+                control={
+                  <RadioGroup
+                    label={t("qaUi.kit.manual")}
+                    activation="manual"
+                    value={manual}
+                    onValueChange={setManual}
+                    options={themeOptions}
+                  />
+                }
+              />
+              <SettingsRow
                 id="chips"
                 label={t("qaUi.kit.chips")}
                 stacked
@@ -259,8 +423,15 @@ export function SettingsKitSheet() {
                 label={t("settings.privacy.dmLabel")}
                 variant="list"
                 value={dm}
-                onValueChange={setDm}
+                onValueChange={(next) => {
+                  setDm(next);
+                  void listSave.run(
+                    () => new Promise((resolve) => window.setTimeout(resolve, 800)),
+                    t("settings.saveFailed"),
+                  );
+                }}
                 options={dmOptions}
+                status={<SettingsInlineStatus state={listSave.state} />}
               />
             </SettingsGroup>
 
@@ -271,6 +442,16 @@ export function SettingsKitSheet() {
                 onValueChange={setLook}
                 options={lookOptions}
                 columns={4}
+              />
+            </SettingsGroup>
+
+            <SettingsGroup title={t("qaUi.kit.group.choiceDescriptions")} surface="plain">
+              <SettingsChoiceGrid
+                label={t("qaUi.kit.group.choiceDescriptions")}
+                value={mode}
+                onValueChange={setMode}
+                options={modeOptions}
+                columns={2}
               />
             </SettingsGroup>
 
@@ -336,6 +517,25 @@ export function SettingsKitSheet() {
               </SettingsNotice>
               <SettingsNotice tone="danger">{t("qaUi.kit.notice.danger")}</SettingsNotice>
               <SettingsNotice tone="success">{t("qaUi.kit.notice.success")}</SettingsNotice>
+              <SettingsNotice tone="info" icon={Bug} role="note">
+                {t("qaUi.kit.notice.icon")}
+              </SettingsNotice>
+            </SettingsGroup>
+
+            <SettingsGroup title={t("qaUi.kit.group.skeleton")}>
+              <SettingsSkeletonRows label={t("qaUi.kit.skeleton.label")} count={2} leading="tile" />
+            </SettingsGroup>
+
+            <SettingsGroup title={t("qaUi.kit.group.result")}>
+              <SettingsResult
+                tone="success"
+                title={t("qaUi.kit.result.title")}
+                action={
+                  <Button variant="secondary" size="sm">
+                    {t("qaUi.kit.result.action")}
+                  </Button>
+                }
+              />
             </SettingsGroup>
 
             <SettingsGroup title={t("qaUi.kit.group.empty")}>
@@ -361,6 +561,14 @@ export function SettingsKitSheet() {
 
             <SettingsGroup title={t("qaUi.kit.group.build")} surface="plain">
               <SettingsBuildLine />
+            </SettingsGroup>
+
+            <SettingsGroup>
+              <SettingsRow
+                id="version"
+                label={t("qaUi.kit.row.buildRow")}
+                control={<SettingsBuildLine variant="row" />}
+              />
             </SettingsGroup>
           </div>
         </div>
@@ -415,14 +623,6 @@ function Miniature() {
         <span className="h-1.5 w-14 rounded-full bg-surface-3" />
         <span className="mt-auto h-2 w-6 rounded-full bg-accent" />
       </span>
-    </span>
-  );
-}
-
-function KitBadge({ children }: { children: ReactNode }) {
-  return (
-    <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-on-accent-soft">
-      {children}
     </span>
   );
 }
