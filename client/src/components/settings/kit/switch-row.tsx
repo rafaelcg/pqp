@@ -15,6 +15,8 @@ export interface SettingsSwitchRowProps {
   status?: ReactNode;
   /** A secondary action beside the switch, for example an icon-only "Ouvir". */
   trailing?: ReactNode;
+  /** `false` keeps the row out of the settings registry (see `SettingsRow`). */
+  searchable?: boolean;
 }
 
 /**
@@ -22,6 +24,10 @@ export interface SettingsSwitchRowProps {
  * target and the role is `switch`. With `trailing` the row becomes a flex line
  * and the extra button sits beside the switch, never inside it: a button inside
  * a button is invalid HTML and two click targets in one.
+ *
+ * Disabled dims the whole row, label and description with the track, the way
+ * a disabled `SettingsRow` dims its text. The status sits tight under the
+ * description: the row gives up its bottom padding to it.
  */
 export function SettingsSwitchRow({
   id,
@@ -32,8 +38,9 @@ export function SettingsSwitchRow({
   disabled,
   status,
   trailing,
+  searchable,
 }: SettingsSwitchRowProps) {
-  useSettingsRow(id, label);
+  useSettingsRow(id, label, searchable);
   return (
     <div data-settings-row={id}>
       <div className="flex items-center">
@@ -43,8 +50,10 @@ export function SettingsSwitchRow({
           disabled={disabled}
           label={label}
           description={description}
+          dimRowWhenDisabled
           className={cn(
             "flex-1 rounded-none px-4 py-3",
+            status && "pb-0",
             description ? "min-h-12" : "min-h-11",
             SETTINGS_INSET_FOCUS,
           )}
