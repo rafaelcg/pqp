@@ -674,6 +674,19 @@ function BannerRow({
     }, t("settings.profile.banner.removeFailed"));
   }
 
+  // This server takes no images at all (or no banner). There is nothing to
+  // do in a row, so there is no row: one quiet line says what does work. It
+  // is just there when the tab opens, so it is a note and not a live region.
+  if (storage && !storage.banner) {
+    return (
+      <SettingsNotice tone="info" inGroup role="note">
+        {storage.avatar
+          ? t("settings.profile.banner.unconfigured")
+          : t("settings.profile.media.unconfigured")}
+      </SettingsNotice>
+    );
+  }
+
   return (
     <FileDropZone
       mode={enabled && !busy ? "accept" : "off"}
@@ -750,13 +763,6 @@ function BannerRow({
         ) : undefined
       }
     >
-      {storage && !storage.banner ? (
-        <SettingsNotice tone="info">
-          {storage.avatar
-            ? t("settings.profile.banner.unconfigured")
-            : t("settings.profile.media.unconfigured")}
-        </SettingsNotice>
-      ) : null}
     </SettingsRow>
     </FileDropZone>
   );

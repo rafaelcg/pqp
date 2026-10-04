@@ -253,6 +253,18 @@ describe("Perfil: the public link while it is typed", () => {
   });
 });
 
+describe("Perfil: Capa when uploads are off", () => {
+  it("is one quiet line that says what works, with no Capa row and no live region", async () => {
+    await mount(USER);
+    expect(row("banner")).toBeNull();
+    const note = Array.from(host!.querySelectorAll('[role="note"]')).find((el) =>
+      /turned off/.test(el.textContent ?? ""),
+    );
+    expect(note?.textContent).toContain("use a link or one of the ready-made ones");
+    expect(host!.textContent).not.toMatch(/unavailable/i);
+  });
+});
+
 describe("localizedUploadFailure", () => {
   it("replaces the upload helpers' English sentences and keeps an API error", () => {
     const local = localizedUploadFailure(
