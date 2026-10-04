@@ -605,7 +605,11 @@ export async function exportMyData(): Promise<Blob> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(response.status, body.error ?? "Export failed");
+    throw new ApiError(
+      response.status,
+      body.error ?? "Export failed",
+      parseRetryAfterMs(response.headers.get("Retry-After")),
+    );
   }
   return response.blob();
 }
