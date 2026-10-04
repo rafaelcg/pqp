@@ -19,7 +19,18 @@ import type { User } from "@pqp/shared";
 // Sign out renders nothing under the bypass rather than reaching for Clerk.
 vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
 
+// Only the profile save is replaced; everything else in the module is real.
+const updateMe = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  updateMe,
+}));
+
 const { SettingsModal, defaultLocalSettings } = await import("./settings-modal");
+// The app mounts one `TooltipProvider` at its root; Settings tabs may use
+// `Tooltip`, which throws without one.
+const { TooltipProvider } = await import("@/components/ui/tooltip");
+const { ApiError } = await import("@/lib/api");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -49,17 +60,19 @@ function makeUser(overrides: Partial<User> = {}): User {
 function render(user: User, onClose = () => {}) {
   act(() => {
     root!.render(
-      <SettingsModal
-        open
-        user={user}
-        localSettings={defaultLocalSettings}
-        blockedUsers={[]}
-        onClose={onClose}
-        onLocalSave={() => {}}
-        onUserUpdated={() => {}}
-        onUnblockUser={() => {}}
-        requestedSection="profile"
-      />,
+      <TooltipProvider>
+        <SettingsModal
+          open
+          user={user}
+          localSettings={defaultLocalSettings}
+          blockedUsers={[]}
+          onClose={onClose}
+          onLocalSave={() => {}}
+          onUserUpdated={() => {}}
+          onUnblockUser={() => {}}
+          requestedSection="profile"
+        />
+      </TooltipProvider>,
     );
   });
 }
@@ -167,5 +180,20 @@ describe("Settings profile drafts", () => {
   it("does not read a missing handle as an edit", () => {
     mount(makeUser({ handle: null, avatarUrl: null }));
     expect(bar()).toBeNull();
+  });
+
+  it("says a taken link in the reader's language, never the server's sentence", async () => {
+    updateMe.mockRejectedValueOnce(new ApiError(409, "That handle is already taken"));
+    mount(makeUser({ handle: "rafa" }));
+    type(displayNameInput(), "Rafael");
+    const save = bar()!.querySelector<HTMLButtonElement>("[data-unsaved-save]")!;
+    await act(async () => {
+      save.click();
+      await Promise.resolve();
+    });
+    expect(updateMe).toHaveBeenCalledTimes(1);
+    const alert = bar()!.querySelector('[role="alert"]');
+    expect(alert?.textContent).toMatch(/Esse link já tem dono|already someone's/);
+    expect(bar()!.textContent).not.toContain("That handle is already taken");
   });
 });

@@ -27,16 +27,22 @@ import { MEDIA_SPEC } from "./e2e/media-spec";
  */
 /** Shared with `e2e/watch-party-waitlist.spec.ts`; not a secret. */
 export const E2E_ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
+const CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 5273);
+const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
 /**
  * Where `e2e/community-home-translation.spec.ts` serves a fake
  * OpenRouter-compatible chat endpoint, so the real translation pipeline runs
  * with no network and no real key.
+ *
+ * Defaults to the server port plus 98 (3199 beside the default 3101), so a
+ * second checkout that moves `E2E_SERVER_PORT` moves the stub with it and two
+ * parallel runs never bind the same port. Written back into the environment
+ * so the spec, which runs in a worker, reads the same number.
  */
 export const E2E_TRANSLATION_STUB_PORT = Number(
-  process.env.E2E_TRANSLATION_STUB_PORT ?? 3199,
+  process.env.E2E_TRANSLATION_STUB_PORT ?? SERVER_PORT + 98,
 );
-const CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 5273);
-const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
+process.env.E2E_TRANSLATION_STUB_PORT = String(E2E_TRANSLATION_STUB_PORT);
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql://pqp:pqp@localhost:5432/pqp_test";
