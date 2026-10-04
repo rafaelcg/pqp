@@ -1,24 +1,60 @@
-import { useEffect, useRef, useState } from "react";
-import { canRenameHandle, DISPLAY_NAME_MAX_LENGTH, HANDLE_MAX_LENGTH, handleRenameAvailableAt, MAX_USER_BANNER_BYTES, normalizeHandle, publicProfileDisplayUrl, publicProfilePath, USER_BANNER_HEIGHT, USER_BANNER_MIME_ALLOWLIST, USER_BANNER_WIDTH, type User, type UserBannerConfig } from "@pqp/shared";
+import { useEffect, useId, useRef, useState } from "react";
+import { ExternalLink, Upload } from "lucide-react";
+import {
+  canRenameHandle,
+  DISPLAY_NAME_MAX_LENGTH,
+  formatUserTag,
+  HANDLE_MAX_LENGTH,
+  handleRenameAvailableAt,
+  MAX_USER_BANNER_BYTES,
+  normalizeHandle,
+  publicProfileDisplayUrl,
+  publicProfilePath,
+  USER_BANNER_HEIGHT,
+  USER_BANNER_MIME_ALLOWLIST,
+  USER_BANNER_WIDTH,
+  type User,
+  type UserBannerConfig,
+} from "@pqp/shared";
+import {
+  SettingsCopyButton,
+  SettingsGroup,
+  SettingsInlineStatus,
+  SettingsNotice,
+  SettingsPreview,
+  SettingsRow,
+  useInlineSave,
+  useSettingsShell,
+} from "@/components/settings/kit";
+import { SignOutButton } from "@/components/layout/sign-out-button";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AvatarPicker } from "@/components/user/avatar-picker";
-import { useTranslation } from "@/lib/i18n";
-import { intlLocale } from "@/lib/locale";
-import { ApiError, deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
+import {
+  AvatarPicker,
+  avatarUploadEnabled,
+  localizedUploadFailure,
+} from "@/components/user/avatar-picker";
+import { UserAvatar } from "@/components/user/user-avatar";
+import { deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
-import { Field } from "@/components/settings/ui";
-import { SignOutButton } from "@/components/layout/sign-out-button";
+import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { useTranslation } from "@/lib/i18n";
+import { intlLocale } from "@/lib/locale";
+import { cn } from "@/lib/utils";
 
 /* ----------------------------------------------------------------- profile */
 
 /**
- * Name, handle and avatar: the only part of settings that waits for a save.
- * The drafts live in the shell, which owns the unsaved changes bar.
+ * Perfil: how you appear and how people find you.
  *
- * The avatar control is `AvatarPicker` rather than anything local, because
- * onboarding renders the same one; a second picker is how the two lists of
- * presets start to differ.
+ * Name, username, public link and avatar are the only staged values in
+ * Settings. Their drafts live in the shell, which owns the unsaved bar, the
+ * handle confirm and the close guard; this tab only edits them. Uploads (avatar
+ * and banner) apply the moment they finish and report in their own row.
+ *
+ * The avatar control is `AvatarPicker` rather than anything local, because the
+ * preset list it draws is the one onboarding imports.
  */
 export function ProfileSection({
   user,
@@ -47,204 +83,337 @@ export function ProfileSection({
   onUserUpdated: (user: User) => void;
 }) {
   const { t, locale } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const nameId = useId();
+  const nameErrorId = useId();
+  const handleId = useId();
+  const handleDescriptionId = useId();
+  const handleErrorId = useId();
+  const usernameId = useId();
+  const storage = useStorageConfig();
+  // The last save lost the link to somebody else. The shell recognised the
+  // 409, said it in the reader's language and clears it when the link changes.
+  const { profileHandleError: handleError } = useSettingsShell();
 
   // Null while the account has never claimed one, or once the window is over.
   const renameAvailableAt = canRenameHandle(user?.handleChangedAt, user?.handle)
     ? null
     : handleRenameAvailableAt(user?.handleChangedAt, user?.handle);
 
-  const publicUrl = user?.handle ? publicProfileDisplayUrl(user.handle) : null;
-
-  function copyPublicUrl() {
-    if (!publicUrl) return;
-    void navigator.clipboard
-      ?.writeText(`https://${publicUrl}`)
-      .then(() => setCopied(true))
-      .catch(() => {
-        // No clipboard (plain http, an embedded webview). The link is right
-        // there in plain text, which is the fallback.
-      });
-  }
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+  const ownedHandle = user?.handle ?? null;
+  const tag = user?.tag ?? null;
+  // The preview follows the drafts, so it changes while somebody types. The
+  // number after the # is the saved one: a renamed username keeps it unless
+  // the name is taken, and only the save can say.
+  const previewName = displayName.trim() || user?.displayName || "";
+  const previewId = handle.trim()
+    ? `@${handle.trim()}`
+    : formatUserTag(username.trim() || user?.username, user?.discriminator) ??
+      tag ??
+      "";
+  // The group title already names the drawing, so the summary says what is in
+  // it: the name and the link or tag, as the public page would show them.
+  const previewSummary = previewName
+    ? previewId
+      ? t("settings.profile.preview.summary", { name: previewName, identifier: previewId })
+      : t("settings.profile.preview.summaryName", { name: previewName })
+    : undefined;
 
   return (
-    <div className="space-y-5">
-      {user?.tag && (
-        <Field label={t("settings.profile.handle")}>
-          <p className="rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
-            {user.tag}
-          </p>
-        </Field>
+    <div className="space-y-6">
+      <SettingsGroup title={t("settings.profile.preview")} surface="plain">
+        <SettingsPreview summary={previewSummary}>
+          <ProfilePreviewCard
+            bannerUrl={resolveUploadedImageUrl(user?.bannerUrl ?? null)}
+            name={previewName}
+            avatarUrl={avatarUrl}
+            identifier={previewId}
+            isHandle={handle.trim() !== ""}
+          />
+        </SettingsPreview>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.profile.group.identity")}>
+        <SettingsRow
+          id="display-name"
+          label={t("settings.profile.displayName")}
+          htmlFor={nameId}
+          stacked
+          control={
+            <>
+              <Input
+                id={nameId}
+                value={displayName}
+                maxLength={DISPLAY_NAME_MAX_LENGTH}
+                aria-invalid={displayNameError ? true : undefined}
+                aria-describedby={displayNameError ? nameErrorId : undefined}
+                className={cn(displayNameError && "border-danger")}
+                onChange={(event) => onDisplayName(event.target.value)}
+              />
+              {displayNameError ? (
+                <div id={nameErrorId}>
+                  <SettingsInlineStatus
+                    state={{ kind: "error", message: displayNameError }}
+                  />
+                </div>
+              ) : null}
+            </>
+          }
+        />
+
+        <SettingsRow
+          id="avatar"
+          label={t("settings.profile.avatar")}
+          stacked
+          control={
+            <AvatarPicker
+              value={avatarUrl}
+              onChange={onAvatarUrl}
+              fallbackName={previewName}
+              labels={{
+                urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
+                urlLabel: t("settings.profile.avatar.urlLabel"),
+                presets: t("settings.profile.avatar.presets"),
+                preset: (number) =>
+                  t("settings.profile.avatar.presetItem", { number }),
+                remove: t("settings.profile.avatar.clear"),
+                useLink: t("settings.profile.avatar.useLink"),
+                upload: t("settings.profile.avatar.upload"),
+                uploading: t("settings.profile.uploading"),
+                uploadFailed: t("settings.profile.avatar.failed"),
+              }}
+              // The claim already wrote it, so the app's copy of the account
+              // is updated here rather than waiting for a save, or the sidebar
+              // keeps the old picture. The draft follows too: left behind, it
+              // would read as an unsaved edit, and a later save would put the
+              // old picture back.
+              onUploaded={(updated) => {
+                onAvatarUrl(updated.avatarUrl ?? "");
+                onUserUpdated(updated);
+              }}
+            />
+          }
+        />
+
+        <BannerRow
+          user={user}
+          storage={storage}
+          onUserUpdated={onUserUpdated}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.profile.group.discovery")}>
+        <SettingsRow
+          id="public-link"
+          label={t("settings.profile.publicHandle")}
+          htmlFor={handleId}
+          description={
+            // Its id describes the field too, so the cooldown date is read
+            // with it rather than only with the row.
+            <span id={handleDescriptionId}>
+              {renameAvailableAt
+                ? t("settings.profile.publicHandle.cooldown", {
+                    date: renameAvailableAt.toLocaleDateString(intlLocale(locale), {
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                    }),
+                  })
+                : t("settings.profile.publicHandle.hint")}
+            </span>
+          }
+          stacked
+          control={
+            <div className="space-y-3">
+              {/* One field with the address in front, so what you type reads
+                  as the link it becomes. The prefix is text, never part of the
+                  value. */}
+              <div>
+                <Input
+                  id={handleId}
+                  prefix="pqp.gg/@"
+                  value={handle}
+                  maxLength={HANDLE_MAX_LENGTH}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  disabled={renameAvailableAt !== null}
+                  placeholder={t("settings.profile.publicHandle.placeholder")}
+                  aria-invalid={handleError ? true : undefined}
+                  aria-describedby={
+                    handleError
+                      ? `${handleDescriptionId} ${handleErrorId}`
+                      : handleDescriptionId
+                  }
+                  onChange={(event) => onHandle(normalizeHandle(event.target.value))}
+                  className="font-mono"
+                />
+                {handleError ? (
+                  <div id={handleErrorId}>
+                    <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
+                  </div>
+                ) : null}
+              </div>
+
+              {/* What you own, as opposed to what you are typing: the actions
+                  act on the saved link, never on a draft. */}
+              {ownedHandle ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <SettingsCopyButton
+                    showLabel
+                    text={`https://${publicProfileDisplayUrl(ownedHandle)}`}
+                    label={t("settings.profile.publicHandle.copy")}
+                    copiedLabel={t("settings.profile.publicHandle.copied")}
+                  />
+                  <Button asChild variant="ghost" size="sm">
+                    <a
+                      href={publicProfilePath(ownedHandle)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <ExternalLink aria-hidden className="h-3.5 w-3.5" />
+                      {t("settings.profile.publicHandle.view")}
+                    </a>
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          }
+        />
+
+        <SettingsRow
+          id="username"
+          label={t("settings.profile.username")}
+          htmlFor={usernameId}
+          description={t("settings.profile.usernameHint")}
+          stacked
+          control={
+            <div className="space-y-2">
+              <Input
+                id={usernameId}
+                value={username}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                onChange={(event) =>
+                  onUsername(
+                    event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
+                  )
+                }
+                placeholder={t("settings.profile.usernamePlaceholder")}
+              />
+              {/* The tag is how somebody adds you inside the app. It is the
+                  saved one, not the draft: the number is the server's. */}
+              {tag ? (
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-tertiary">
+                  <span>{t("settings.profile.handle")}</span>
+                  <span className="min-w-0 break-all font-mono text-text">{tag}</span>
+                  {/* 40px on a phone, where it is a thumb target beside small
+                      text; the kit's 32px from `sm` up. */}
+                  <SettingsCopyButton
+                    text={tag}
+                    label={t("settings.profile.tag.copy")}
+                    copiedLabel={t("settings.profile.tag.copied")}
+                    className="max-sm:h-[var(--control-lg)] max-sm:w-[var(--control-lg)]"
+                  />
+                </div>
+              ) : null}
+            </div>
+          }
+        />
+      </SettingsGroup>
+
+      {/* Sign out sits in the rail footer from `sm` up. On a phone the rail is
+          a tab strip with no footer, so it closes this tab instead. Under the
+          dev bypass there is no session to end and the button renders
+          nothing, so neither does the group. */}
+      {isDevAuthBypassEnabled() ? null : (
+        <SettingsGroup
+          title={t("settings.profile.group.session")}
+          className="sm:hidden"
+        >
+          <SettingsRow
+            id="sign-out"
+            label={t("settings.profile.session.row")}
+            control={<SignOutButton />}
+          />
+        </SettingsGroup>
       )}
+    </div>
+  );
+}
 
-      {/*
-        The public link, immediately under the tag it is constantly confused
-        with. Two name fields in one form is a design smell, so the two are put
-        side by side and each says what it is for: `name#1234` is how somebody
-        adds you inside the app, `pqp.gg/@name` is a page you can hand to
-        somebody who has never heard of pqp.
+/* ----------------------------------------------------------------- preview */
 
-        The claimed link is rendered as TEXT WITH A COPY BUTTON rather than as
-        the input's value, because the two are different objects: the input is a
-        thing you are editing and can abandon with Cancel, and the link is a
-        thing you own and want on your clipboard. Collapsing them would mean the
-        copy button copies a draft.
-      */}
-      <Field
-        label={t("settings.profile.publicHandle")}
-        hint={t("settings.profile.publicHandle.hint")}
-      >
-        <div className="flex items-stretch gap-0 rounded-md border border-ink-4 bg-ink focus-within:ring-2 focus-within:ring-signal/50">
-          <span className="flex select-none items-center pl-3 font-mono text-sm text-paper-muted">
-            pqp.gg/@
-          </span>
-          <input
-            value={handle}
-            maxLength={HANDLE_MAX_LENGTH}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            disabled={renameAvailableAt !== null}
-            placeholder={t("settings.profile.publicHandle.placeholder")}
-            onChange={(event) => onHandle(normalizeHandle(event.target.value))}
-            className="min-w-0 flex-1 bg-transparent px-1 py-2 font-mono text-sm text-paper outline-none placeholder:text-paper-muted/60 disabled:opacity-60"
+/**
+ * The top of `pqp.gg/@you`, drawn from the drafts: banner, avatar overlapping
+ * it, name and the link or tag. On a narrow pane the info line sits under the
+ * avatar; from `@lg` it sits beside it, the way the public page lays it out.
+ */
+function ProfilePreviewCard({
+  bannerUrl,
+  name,
+  avatarUrl,
+  identifier,
+  isHandle,
+}: {
+  bannerUrl: string | null;
+  name: string;
+  avatarUrl: string;
+  identifier: string;
+  isHandle: boolean;
+}) {
+  return (
+    <div>
+      <div className="h-24 w-full overflow-hidden">
+        {bannerUrl ? (
+          <img
+            src={bannerUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            decoding="async"
+          />
+        ) : (
+          // Only the empty state. A real banner always wins.
+          <div className="h-full w-full bg-gradient-to-br from-accent-soft to-surface-2" />
+        )}
+      </div>
+      <div className="flex flex-col gap-2 px-4 pb-4 @lg:flex-row @lg:items-end @lg:gap-3.5 @lg:px-5">
+        <div className="-mt-8 w-fit shrink-0 rounded-full border-4 border-surface-0 @lg:-mt-9">
+          <UserAvatar
+            name={name}
+            avatarUrl={avatarUrl || null}
+            rounded="full"
+            className="h-16 w-16 @lg:h-[4.5rem] @lg:w-[4.5rem]"
+            fallbackClassName="bg-accent text-2xl text-on-accent"
           />
         </div>
-
-        {renameAvailableAt && (
-          <p className="mt-1.5 text-xs text-warning">
-            {t("settings.profile.publicHandle.cooldown", {
-              date: renameAvailableAt.toLocaleDateString(
-                intlLocale(locale),
-                { day: "numeric", month: "long", year: "numeric" },
-              ),
-            })}
-          </p>
-        )}
-
-        {publicUrl && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="rounded bg-ink-3 px-2 py-1 font-mono text-xs text-signal">
-              {publicUrl}
-            </code>
-            <button
-              type="button"
-              onClick={copyPublicUrl}
-              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
+        <div className="min-w-0 @lg:pb-1">
+          <p className="truncate font-display text-xl font-bold text-text">{name}</p>
+          {identifier ? (
+            <p
+              className={cn(
+                "break-all font-mono",
+                isHandle
+                  ? "text-sm font-semibold text-accent"
+                  : "text-xs text-text-tertiary",
+              )}
             >
-              {copied
-                ? t("settings.profile.publicHandle.copied")
-                : t("settings.profile.publicHandle.copy")}
-            </button>
-            <a
-              href={publicProfilePath(user!.handle!)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
-            >
-              {t("settings.profile.publicHandle.view")}
-            </a>
-          </div>
-        )}
-      </Field>
-
-      {/* Above the avatar, matching the page it feeds: on `pqp.gg/@you` the
-          banner is the first thing anybody sees and the avatar overlaps it.
-          A settings form whose order contradicts the thing it edits is a form
-          people scroll past looking for the control they can already picture. */}
-      <BannerField user={user} onUserUpdated={onUserUpdated} />
-
-      <div>
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.avatar")}
-        </span>
-        <AvatarPicker
-          value={avatarUrl}
-          onChange={onAvatarUrl}
-          fallbackName={displayName}
-          labels={{
-            urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
-            urlLabel: t("settings.profile.avatar.urlLabel"),
-            presetLabel: t("settings.profile.avatar.preset"),
-            clear: t("settings.profile.avatar.clear"),
-            upload: t("settings.profile.avatar.upload"),
-            uploading: t("settings.profile.avatar.uploading"),
-          }}
-          // The claim already wrote it, so the app's copy of the account is
-          // updated here rather than waiting for a save, or the sidebar keeps
-          // the old picture until the dialog closes. The draft follows too:
-          // left behind, it would read as an unsaved edit, and a later save
-          // would put the old picture back.
-          onUploaded={(updated) => {
-            onAvatarUrl(updated.avatarUrl ?? "");
-            onUserUpdated(updated);
-          }}
-        />
-      </div>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.displayName")}
-        </span>
-        <Input
-          value={displayName}
-          maxLength={DISPLAY_NAME_MAX_LENGTH}
-          aria-invalid={displayNameError ? true : undefined}
-          onChange={(e) => onDisplayName(e.target.value)}
-        />
-        {displayNameError ? (
-          <span role="alert" className="mt-1 block text-xs text-danger">
-            {displayNameError}
-          </span>
-        ) : null}
-      </label>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.username")}
-        </span>
-        <Input
-          value={username}
-          onChange={(e) =>
-            onUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-          }
-          placeholder={t("settings.profile.usernamePlaceholder")}
-        />
-        <span className="mt-1 block text-xs text-paper-muted">
-          {t("settings.profile.usernameHint")}
-        </span>
-      </label>
-
-      {/* Sign out lives in the rail footer from `sm` up. On a phone the rail
-          is a tab strip with no footer, so it closes this section instead.
-          The Perfil tab redesign turns this into its "Sessão" group. */}
-      <div className="sm:hidden">
-        <SignOutButton />
+              {identifier}
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );
 }
 
+/* ----------------------------------------------------------------- storage */
+
 /**
- * The profile banner, uploaded and claimed the moment it is picked.
- *
- * NOT A DRAFT, unlike the three fields under it, and the asymmetry is the same
- * one `ServerIdentitySection` lives with: the bytes are already in the bucket
- * and the row already points at them, so there is nothing a later Save could
- * apply and nothing Cancel could take back. The control therefore reports what
- * HAPPENED rather than what is pending, and hands the updated account upward so
- * the preview here changes while the dialog is still open.
- *
- * The config is memoised for the life of the tab, exactly as the avatar picker
- * and the server identity section memoise theirs: storage is either configured
- * on this deployment or it is not, and re-asking every time the dialog opens is
- * a round trip somebody spends looking at a blank slot.
+ * Whether this deployment can take an avatar and a banner upload. Both are
+ * memoised for the life of the tab: storage is either configured or it is not,
+ * and re-asking every time the dialog opens is a round trip spent looking at a
+ * blank slot. Null until both have answered.
  */
 let bannerConfigPromise: Promise<UserBannerConfig> | null = null;
 
@@ -258,130 +427,128 @@ function bannerUploadConfig(): Promise<UserBannerConfig> {
   return bannerConfigPromise;
 }
 
-function BannerField({
-  user,
-  onUserUpdated,
-}: {
-  user: User | null;
-  onUserUpdated: (user: User) => void;
-}) {
-  const { t } = useTranslation();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [busy, setBusy] = useState<"upload" | "remove" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+interface StorageConfig {
+  avatar: boolean;
+  banner: boolean;
+}
 
+function useStorageConfig(): StorageConfig | null {
+  const [config, setConfig] = useState<StorageConfig | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void bannerUploadConfig().then((config) => {
-      if (!cancelled) {
-        setEnabled(config.enabled);
-      }
-    });
+    void Promise.all([avatarUploadEnabled(), bannerUploadConfig()]).then(
+      ([avatar, banner]) => {
+        if (!cancelled) {
+          setConfig({ avatar: avatar.enabled, banner: banner.enabled });
+        }
+      },
+    );
     return () => {
       cancelled = true;
     };
   }, []);
+  return config;
+}
 
-  const bannerUrl = resolveUploadedImageUrl(user?.bannerUrl ?? null);
+/* ------------------------------------------------------------------ banner */
 
-  async function handleFile(file: File) {
-    setBusy("upload");
-    setError(null);
-    try {
-      onUserUpdated(await uploadUserBanner(file));
-    } catch (failure) {
-      setError(
-        failure instanceof ApiError || failure instanceof Error
-          ? failure.message
-          : t("settings.profile.banner.failed"),
-      );
-    } finally {
-      setBusy(null);
-    }
+/**
+ * The profile banner, uploaded and claimed the moment it is picked.
+ *
+ * NOT A DRAFT, unlike the name, link and avatar: the bytes are already in the
+ * bucket and the row already points at them, so there is nothing a later save
+ * could apply and nothing Descartar could take back. The row reports what
+ * happened, and hands the updated account upward so the preview changes while
+ * the dialog is still open.
+ */
+function BannerRow({
+  user,
+  storage,
+  onUserUpdated,
+}: {
+  user: User | null;
+  storage: StorageConfig | null;
+  onUserUpdated: (user: User) => void;
+}) {
+  const { t } = useTranslation();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const write = useInlineSave();
+  // One status line for both writes: "Enviando…" for an upload, the kit's
+  // "Salvando…" for a removal.
+  const [action, setAction] = useState<"upload" | "remove">("upload");
+  const busy = write.state.kind === "saving";
+  const hasBanner = Boolean(user?.bannerUrl);
+  const enabled = storage?.banner ?? false;
+
+  function handleFile(file: File) {
+    const failed = t("settings.profile.banner.failed");
+    setAction("upload");
+    void write.run(async () => {
+      try {
+        onUserUpdated(await uploadUserBanner(file));
+      } catch (error) {
+        throw localizedUploadFailure(error, failed);
+      }
+    }, failed);
   }
 
-  async function handleRemove() {
-    setBusy("remove");
-    setError(null);
-    try {
+  function handleRemove() {
+    setAction("remove");
+    void write.run(async () => {
       const res = await deleteUserBanner();
       onUserUpdated(res.user);
-    } catch (failure) {
-      setError(
-        failure instanceof ApiError || failure instanceof Error
-          ? failure.message
-          : t("settings.profile.banner.removeFailed"),
-      );
-    } finally {
-      setBusy(null);
-    }
+    }, t("settings.profile.banner.removeFailed"));
   }
 
   return (
-    <div className="space-y-2" data-profile-banner>
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {t("settings.profile.banner")}
-      </span>
-
-      {/* The preview is a 3:1 strip rather than a thumbnail, because that is
-          the crop the upload will apply — a square preview would show a photo
-          that is not the photo the page ends up with. */}
-      <div className="aspect-[3/1] w-full overflow-hidden rounded-lg border border-ink-4 bg-ink">
-        {bannerUrl ? (
-          <img
-            src={bannerUrl}
-            alt=""
-            className="h-full w-full object-cover"
-            decoding="async"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-paper-muted">
-            {t("settings.profile.banner.empty")}
-          </div>
-        )}
-      </div>
-
-      {!enabled ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.profile.banner.unconfigured")}
-        </p>
-      ) : (
-        <>
-          <p className="text-xs text-paper-muted">
-            {t("settings.profile.banner.hint", {
+    <SettingsRow
+      id="banner"
+      data-profile-banner=""
+      label={t("settings.profile.banner")}
+      description={
+        enabled
+          ? t("settings.profile.banner.hint", {
               width: USER_BANNER_WIDTH,
               height: USER_BANNER_HEIGHT,
-            })}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
+            })
+          : t("settings.profile.banner.description")
+      }
+      status={
+        <SettingsInlineStatus
+          state={write.state}
+          savingLabel={action === "upload" ? t("settings.profile.uploading") : undefined}
+        />
+      }
+      control={
+        enabled ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
               type="button"
-              disabled={busy !== null}
-              className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper hover:border-signal/50 disabled:opacity-60"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
               onClick={() => fileRef.current?.click()}
             >
-              {busy === "upload"
-                ? t("settings.profile.banner.uploading")
-                : bannerUrl
-                  ? t("settings.profile.banner.replace")
-                  : t("settings.profile.banner.upload")}
-            </button>
-            {bannerUrl && (
-              <button
+              <Upload aria-hidden className="h-3.5 w-3.5" />
+              {hasBanner
+                ? t("settings.profile.banner.replace")
+                : t("settings.profile.banner.upload")}
+            </Button>
+            {hasBanner ? (
+              <Button
                 type="button"
-                disabled={busy !== null}
-                className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper-muted hover:border-danger/50 hover:text-danger disabled:opacity-60"
-                onClick={() => void handleRemove()}
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={handleRemove}
               >
-                {busy === "remove"
-                  ? t("settings.profile.banner.removing")
-                  : t("settings.profile.banner.remove")}
-              </button>
-            )}
+                {t("settings.profile.banner.remove")}
+              </Button>
+            ) : null}
             <input
               ref={fileRef}
               type="file"
+              tabIndex={-1}
               aria-label={t("settings.profile.banner")}
               // A hint to the picker, never a check: the real gate is that
               // `createImageBitmap` refuses to decode anything that is not an
@@ -395,19 +562,21 @@ function BannerField({
                 // after a failure still fires a change event.
                 event.target.value = "";
                 if (file) {
-                  void handleFile(file);
+                  handleFile(file);
                 }
               }}
             />
           </div>
-        </>
-      )}
-
-      {error && (
-        <p role="alert" className="text-xs text-danger">
-          {error}
-        </p>
-      )}
-    </div>
+        ) : undefined
+      }
+    >
+      {storage && !storage.banner ? (
+        <SettingsNotice tone="info">
+          {storage.avatar
+            ? t("settings.profile.banner.unconfigured")
+            : t("settings.profile.media.unconfigured")}
+        </SettingsNotice>
+      ) : null}
+    </SettingsRow>
   );
 }
