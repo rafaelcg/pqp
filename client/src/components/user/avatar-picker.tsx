@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link2, Upload } from "lucide-react";
 import { AVATAR_MIME_ALLOWLIST, type User } from "@pqp/shared";
 import {
@@ -77,14 +77,22 @@ interface AvatarPickerProps {
    * new user object has no business starting one.
    */
   onUploaded?: (user: User) => void;
+  /**
+   * Enter in the link field. The caller decides what that means (Perfil saves).
+   */
+  onSubmit?: () => void;
   /** Labels, so the caller's language owns the copy rather than this file. */
   labels: {
     urlPlaceholder: string;
     urlLabel: string;
     /** Accessible name of the preset set. */
     presets: string;
-    /** Accessible name of one preset, 1-based. */
-    preset: (number: number) => string;
+    /** Accessible name of one preset, from its short name ("quadrado azul"). */
+    preset: (name: string) => string;
+    /** Short name of one preset, 1-based, as the drawing looks. */
+    presetName: (number: number) => string;
+    /** The line under the set once one is chosen, from that short name. */
+    presetSelected: (name: string) => string;
     remove: string;
     useLink: string;
     upload: string;
@@ -105,6 +113,7 @@ export function AvatarPicker({
   onChange,
   fallbackName,
   onUploaded,
+  onSubmit,
   labels,
 }: AvatarPickerProps) {
   const { t } = useTranslation();
@@ -113,6 +122,7 @@ export function AvatarPicker({
   const [canUpload, setCanUpload] = useState(false);
   // The pasted link is the rare path, so it starts folded away.
   const [linkOpen, setLinkOpen] = useState(false);
+  const presetRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const upload = useInlineSave({ savingLabel: labels.uploading });
   const uploading = upload.state.kind === "saving";
   // A dropped folder is refused on the spot, before any upload starts.
@@ -157,6 +167,46 @@ export function AvatarPicker({
     }
   }
 
+  // The field shows a link somebody typed, never one they did not: a preset
+  // is a link too, and so is an uploaded picture, but neither was typed here.
+  const customLink =
+    value && !AVATAR_PRESETS.includes(value) && !value.startsWith("/") ? value : "";
+  const presetIndex = AVATAR_PRESETS.indexOf(value);
+
+  /**
+   * Radio group keys: the arrows (and Home and End) move to the next preset
+   * and choose it, the way a native radio group does. One Tab stop for the set.
+   */
+  function handlePresetKey(event: KeyboardEvent<HTMLDivElement>) {
+    const last = AVATAR_PRESETS.length - 1;
+    const from = presetRefs.current.findIndex((el) => el === document.activeElement);
+    if (from < 0) {
+      return;
+    }
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        next = from === last ? 0 : from + 1;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = from === 0 ? last : from - 1;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = last;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    presetRefs.current[next]?.focus();
+    onChange(AVATAR_PRESETS[next]);
+  }
+
   return (
     <FileDropZone
       className="space-y-3"
@@ -179,6 +229,7 @@ export function AvatarPicker({
               type="button"
               variant="secondary"
               size="sm"
+              className="max-sm:h-11"
               disabled={uploading}
               onClick={() => fileRef.current?.click()}
             >
@@ -213,6 +264,7 @@ export function AvatarPicker({
             type="button"
             variant="ghost"
             size="sm"
+            className="max-sm:h-11"
             onClick={() => onChange("")}
           >
             {labels.remove}
@@ -222,6 +274,7 @@ export function AvatarPicker({
           type="button"
           variant="ghost"
           size="sm"
+          className="max-sm:h-11"
           aria-expanded={linkOpen}
           aria-controls={linkOpen ? linkId : undefined}
           onClick={() => setLinkOpen((open) => !open)}
@@ -232,32 +285,57 @@ export function AvatarPicker({
       </div>
 
       {linkOpen ? (
-        <Input
-          id={linkId}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={labels.urlPlaceholder}
-          aria-label={labels.urlLabel}
-          autoComplete="off"
-          spellCheck={false}
-        />
+        <div>
+          <label
+            htmlFor={linkId}
+            className="mb-1.5 block text-xs font-medium text-text-secondary"
+          >
+            {labels.urlLabel}
+          </label>
+          <Input
+            id={linkId}
+            value={customLink}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                onSubmit?.();
+              }
+            }}
+            placeholder={labels.urlPlaceholder}
+            className="max-sm:h-11"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+        </div>
       ) : null}
 
-      <div role="group" aria-label={labels.presets} className="flex flex-wrap gap-2">
+      <div
+        role="radiogroup"
+        aria-label={labels.presets}
+        onKeyDown={handlePresetKey}
+        className="flex flex-wrap gap-2 p-1 max-sm:grid max-sm:w-fit max-sm:grid-cols-4 max-sm:gap-3"
+      >
         {AVATAR_PRESETS.map((url, index) => {
           const selected = value === url;
           return (
             <button
               key={url}
+              ref={(el) => {
+                presetRefs.current[index] = el;
+              }}
               type="button"
-              aria-label={labels.preset(index + 1)}
-              aria-pressed={selected}
+              role="radio"
+              aria-label={labels.preset(labels.presetName(index + 1))}
+              aria-checked={selected}
+              // One Tab stop for the set: the chosen one, or the first.
+              tabIndex={index === (presetIndex >= 0 ? presetIndex : 0) ? 0 : -1}
               className={cn(
-                "h-9 w-9 overflow-hidden rounded-[var(--radius-card)] border",
+                "h-9 w-9 overflow-hidden rounded-[var(--radius-card)] border max-sm:h-11 max-sm:w-11",
                 SETTINGS_TRANSITION,
                 SETTINGS_FOCUS,
                 selected
-                  ? "border-accent ring-2 ring-accent"
+                  ? "border-accent ring-2 ring-accent ring-offset-2 ring-offset-ring-offset"
                   : "border-border hover:border-border-strong",
               )}
               onClick={() => onChange(url)}
@@ -267,6 +345,12 @@ export function AvatarPicker({
           );
         })}
       </div>
+
+      {presetIndex >= 0 ? (
+        <p className="text-xs text-text-tertiary">
+          {labels.presetSelected(labels.presetName(presetIndex + 1))}
+        </p>
+      ) : null}
 
       <SettingsInlineStatus
         state={dropError ? { kind: "error", message: dropError } : upload.state}

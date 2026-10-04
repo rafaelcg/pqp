@@ -1,5 +1,12 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { ExternalLink, Upload } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { Check, CircleX, ExternalLink, Loader2, Upload } from "lucide-react";
 import {
   canRenameHandle,
   DISPLAY_NAME_MAX_LENGTH,
@@ -13,6 +20,7 @@ import {
   USER_BANNER_HEIGHT,
   USER_BANNER_MIME_ALLOWLIST,
   USER_BANNER_WIDTH,
+  validateHandle,
   type User,
   type UserBannerConfig,
 } from "@pqp/shared";
@@ -36,7 +44,11 @@ import {
   localizedUploadFailure,
 } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
+import {
+  deleteUserBanner,
+  fetchPublicProfile,
+  fetchUserBannerConfig,
+} from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -44,6 +56,168 @@ import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+
+/**
+ * What the drawing of each ready-made avatar looks like, in the order of
+ * `AVATAR_PRESETS`. Literal keys, so the i18n scan sees every one.
+ */
+const PRESET_NAME_KEYS = [
+  "settings.profile.avatar.presetName.1",
+  "settings.profile.avatar.presetName.2",
+  "settings.profile.avatar.presetName.3",
+  "settings.profile.avatar.presetName.4",
+  "settings.profile.avatar.presetName.5",
+  "settings.profile.avatar.presetName.6",
+  "settings.profile.avatar.presetName.7",
+  "settings.profile.avatar.presetName.8",
+] as const;
+
+/**
+ * Enter in a single-line field is the same as pressing Salvar alterações: the
+ * shell's own button, so its checks and the 30-day link confirm run exactly as
+ * they do for a click. Asked after the render, so a value the handler just
+ * staged (the name with its spaces collapsed) is the one that is saved. A
+ * save bar that is not up (nothing staged) or is busy is a click on nothing.
+ */
+export function requestProfileSave(): void {
+  window.setTimeout(() => {
+    document.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.click();
+  }, 0);
+}
+
+/** Two or more spaces in a row become one. Leading and trailing ones are the save's to trim. */
+function collapseSpaces(value: string): string {
+  return value.replace(/ {2,}/g, " ");
+}
+
+/** Enter in a single-line field saves, unless it is confirming an IME word. */
+function saveOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+    requestProfileSave();
+  }
+}
+
+/** The counter shows from this many characters short of the limit. */
+const NAME_COUNTER_FROM = 8;
+
+/* ------------------------------------------------------------ availability */
+
+/** Long enough that typing a name is one request, short enough to feel live. */
+const HANDLE_CHECK_DEBOUNCE_MS = 350;
+
+export type HandleAvailability =
+  | "idle"
+  | "checking"
+  | "free"
+  | "taken"
+  | "reserved"
+  | "blocked";
+
+/**
+ * Whether the link being typed is free, asked of the same public profile read
+ * the claim page uses (a 404 is "free"). Debounced and aborted, so the answer
+ * on screen is always for what is in the box.
+ *
+ * Silent where it cannot tell: the link you already own, a link that is too
+ * short or malformed (the rule line under the field says so), a rename that
+ * is locked, and any failure of the read itself (a 429 from typing fast, the
+ * API being down). None of those is "free", and none of them is worth a red
+ * line either: the save still checks.
+ */
+export function useHandleAvailability(
+  handle: string,
+  ownedHandle: string | null,
+  enabled: boolean,
+): HandleAvailability {
+  const [availability, setAvailability] = useState<HandleAvailability>("idle");
+  useEffect(() => {
+    const candidate = handle.trim();
+    if (!enabled || !candidate || candidate === (ownedHandle ?? "")) {
+      setAvailability("idle");
+      return;
+    }
+    const rejection = validateHandle(candidate);
+    if (rejection === "reserved" || rejection === "blocked") {
+      // The public read 404s these too, which would say "free".
+      setAvailability(rejection);
+      return;
+    }
+    if (rejection) {
+      setAvailability("idle");
+      return;
+    }
+    setAvailability("checking");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetchPublicProfile(candidate, { signal: controller.signal })
+        .then((profile) => setAvailability(profile ? "taken" : "free"))
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setAvailability("idle");
+          }
+        });
+    }, HANDLE_CHECK_DEBOUNCE_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [handle, ownedHandle, enabled]);
+  return availability;
+}
+
+/**
+ * One line under the link field, in one live region that stays mounted, so a
+ * screen reader hears each new answer instead of a region that appears with it.
+ */
+function HandleAvailabilityLine({ availability }: { availability: HandleAvailability }) {
+  const { t } = useTranslation();
+  let text: string | null = null;
+  let icon: ReactNode = null;
+  let tone = "text-text-tertiary";
+  switch (availability) {
+    case "checking":
+      text = t("settings.profile.publicHandle.checking");
+      icon = <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />;
+      break;
+    case "free":
+      text = t("settings.profile.publicHandle.free");
+      icon = <Check aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-success";
+      break;
+    case "taken":
+      text = t("settings.profile.publicHandle.taken");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    case "reserved":
+      text = t("claim.reserved");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    case "blocked":
+      text = t("claim.blocked");
+      icon = <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />;
+      tone = "text-danger";
+      break;
+    default:
+      break;
+  }
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      data-handle-availability={availability}
+      className={cn("flex items-center gap-1.5 text-xs", tone)}
+    >
+      {text ? (
+        <>
+          {icon}
+          {text}
+        </>
+      ) : null}
+    </span>
+  );
+}
 
 /* ----------------------------------------------------------------- profile */
 
@@ -87,11 +261,17 @@ export function ProfileSection({
   const { t, locale } = useTranslation();
   const nameId = useId();
   const nameErrorId = useId();
+  const nameCountId = useId();
   const handleId = useId();
   const handleDescriptionId = useId();
   const handleErrorId = useId();
+  const handleRuleId = useId();
   const usernameId = useId();
   const storage = useStorageConfig();
+  // The name as it was when the field got focus, and whether it was left
+  // empty. The save says the same later; this says it as you leave the field.
+  const nameAtFocus = useRef("");
+  const [nameLeftEmpty, setNameLeftEmpty] = useState(false);
   // The last save lost the link to somebody else. The shell recognised the
   // 409, said it in the reader's language and clears it when the link changes.
   const { profileHandleError: handleError } = useSettingsShell();
@@ -102,11 +282,24 @@ export function ProfileSection({
     : handleRenameAvailableAt(user?.handleChangedAt, user?.handle);
 
   const ownedHandle = user?.handle ?? null;
+  const availability = useHandleAvailability(
+    handle,
+    ownedHandle,
+    renameAvailableAt === null,
+  );
   const tag = user?.tag ?? null;
   // The preview follows the drafts, so it changes while somebody types. The
   // number after the # is the saved one: a renamed username keeps it unless
   // the name is taken, and only the save can say.
   const previewName = displayName.trim() || user?.displayName || "";
+  // One line for the empty name, wherever it came from: the save's refusal
+  // wins, and the blur says it first.
+  const nameError =
+    displayNameError ??
+    (nameLeftEmpty && !displayName.trim()
+      ? t("settings.profile.displayNameRequired")
+      : null);
+  const nameCounting = displayName.length >= DISPLAY_NAME_MAX_LENGTH - NAME_COUNTER_FROM;
   const previewId = handle.trim()
     ? `@${handle.trim()}`
     : formatUserTag(username.trim() || user?.username, user?.discriminator) ??
@@ -146,16 +339,57 @@ export function ProfileSection({
                 id={nameId}
                 value={displayName}
                 maxLength={DISPLAY_NAME_MAX_LENGTH}
-                aria-invalid={displayNameError ? true : undefined}
-                aria-describedby={displayNameError ? nameErrorId : undefined}
-                className={cn(displayNameError && "border-danger")}
-                onChange={(event) => onDisplayName(event.target.value)}
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={
+                  [nameError ? nameErrorId : null, nameCounting ? nameCountId : null]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                className={cn("max-sm:h-11", nameError && "border-danger")}
+                onChange={(event) => {
+                  setNameLeftEmpty(false);
+                  onDisplayName(event.target.value);
+                }}
+                onFocus={() => {
+                  nameAtFocus.current = displayName;
+                }}
+                onBlur={() => {
+                  // Repeated spaces are collapsed only in a name that was
+                  // edited: an untouched "Ana  QA" must not turn dirty just
+                  // because somebody clicked through the field.
+                  const collapsed = collapseSpaces(displayName);
+                  if (displayName !== nameAtFocus.current && collapsed !== displayName) {
+                    onDisplayName(collapsed);
+                  }
+                  setNameLeftEmpty(!displayName.trim());
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    const collapsed = collapseSpaces(displayName);
+                    if (displayName !== nameAtFocus.current && collapsed !== displayName) {
+                      onDisplayName(collapsed);
+                    }
+                    requestProfileSave();
+                  }
+                }}
               />
-              {displayNameError ? (
-                <div id={nameErrorId}>
-                  <SettingsInlineStatus
-                    state={{ kind: "error", message: displayNameError }}
-                  />
+              {nameError || nameCounting ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div id={nameErrorId} className="min-w-0">
+                    {nameError ? (
+                      <SettingsInlineStatus
+                        state={{ kind: "error", message: nameError }}
+                      />
+                    ) : null}
+                  </div>
+                  {nameCounting ? (
+                    <span
+                      id={nameCountId}
+                      className="mt-1.5 shrink-0 text-xs tabular-nums text-text-tertiary"
+                    >
+                      {displayName.length}/{DISPLAY_NAME_MAX_LENGTH}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </>
@@ -175,8 +409,10 @@ export function ProfileSection({
                 urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
                 urlLabel: t("settings.profile.avatar.urlLabel"),
                 presets: t("settings.profile.avatar.presets"),
-                preset: (number) =>
-                  t("settings.profile.avatar.presetItem", { number }),
+                preset: (name) => t("settings.profile.avatar.presetItem", { name }),
+                presetName: (number) => t(PRESET_NAME_KEYS[number - 1]),
+                presetSelected: (name) =>
+                  t("settings.profile.avatar.presetSelected", { name }),
                 remove: t("settings.profile.avatar.clear"),
                 useLink: t("settings.profile.avatar.useLink"),
                 upload: t("settings.profile.avatar.upload"),
@@ -188,6 +424,7 @@ export function ProfileSection({
               // keeps the old picture. The draft follows too: left behind, it
               // would read as an unsaved edit, and a later save would put the
               // old picture back.
+              onSubmit={requestProfileSave}
               onUploaded={(updated) => {
                 onAvatarUrl(updated.avatarUrl ?? "");
                 onUserUpdated(updated);
@@ -240,15 +477,33 @@ export function ProfileSection({
                   spellCheck={false}
                   disabled={renameAvailableAt !== null}
                   placeholder={t("settings.profile.publicHandle.placeholder")}
-                  aria-invalid={handleError ? true : undefined}
-                  aria-describedby={
-                    handleError
-                      ? `${handleDescriptionId} ${handleErrorId}`
-                      : handleDescriptionId
+                  aria-invalid={
+                    handleError || availability === "taken" ? true : undefined
                   }
+                  aria-describedby={[
+                    handleDescriptionId,
+                    renameAvailableAt === null ? handleRuleId : null,
+                    handleError ? handleErrorId : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   onChange={(event) => onHandle(normalizeHandle(event.target.value))}
-                  className="font-mono"
+                  onKeyDown={saveOnEnter}
+                  className="font-mono max-sm:h-11"
                 />
+                {renameAvailableAt === null ? (
+                  // The rule is always there; the answer sits beside it. The
+                  // answer steps aside for the save's own refusal, which says
+                  // the same thing about the same link.
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span id={handleRuleId} className="text-xs text-text-tertiary">
+                      {t("settings.profile.publicHandle.rule")}
+                    </span>
+                    <HandleAvailabilityLine
+                      availability={handleError ? "idle" : availability}
+                    />
+                  </div>
+                ) : null}
                 {handleError ? (
                   <div id={handleErrorId}>
                     <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
@@ -271,8 +526,9 @@ export function ProfileSection({
                     text={`https://${publicProfileDisplayUrl(ownedHandle)}`}
                     label={t("settings.profile.publicHandle.copy")}
                     copiedLabel={t("settings.profile.publicHandle.copied")}
+                    className="max-sm:h-11"
                   />
-                  <Button asChild variant="ghost" size="sm">
+                  <Button asChild variant="ghost" size="sm" className="max-sm:h-11">
                     <a
                       href={publicProfilePath(ownedHandle)}
                       target="_blank"
@@ -307,7 +563,9 @@ export function ProfileSection({
                     event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
                   )
                 }
+                onKeyDown={saveOnEnter}
                 placeholder={t("settings.profile.usernamePlaceholder")}
+                className="max-sm:h-11"
               />
               {/* The tag is how somebody adds you inside the app. It is the
                   saved one, not the draft: the number is the server's. */}
@@ -315,13 +573,13 @@ export function ProfileSection({
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-tertiary">
                   <span>{t("settings.profile.handle")}</span>
                   <span className="min-w-0 break-all font-mono text-text">{tag}</span>
-                  {/* 40px on a phone, where it is a thumb target beside small
+                  {/* 44px on a phone, where it is a thumb target beside small
                       text; the kit's 32px from `sm` up. */}
                   <SettingsCopyButton
                     text={tag}
                     label={t("settings.profile.tag.copy")}
                     copiedLabel={t("settings.profile.tag.copied")}
-                    className="max-sm:h-[var(--control-lg)] max-sm:w-[var(--control-lg)]"
+                    className="max-sm:h-11 max-sm:w-11"
                   />
                 </div>
               ) : null}
@@ -527,6 +785,19 @@ function BannerRow({
     }, t("settings.profile.banner.removeFailed"));
   }
 
+  // This server takes no images at all (or no banner). There is nothing to
+  // do in a row, so there is no row: one quiet line says what does work. It
+  // is just there when the tab opens, so it is a note and not a live region.
+  if (storage && !storage.banner) {
+    return (
+      <SettingsNotice tone="info" inGroup role="note">
+        {storage.avatar
+          ? t("settings.profile.banner.unconfigured")
+          : t("settings.profile.media.unconfigured")}
+      </SettingsNotice>
+    );
+  }
+
   return (
     <FileDropZone
       mode={enabled && !busy ? "accept" : "off"}
@@ -559,6 +830,7 @@ function BannerRow({
               type="button"
               variant="secondary"
               size="sm"
+              className="max-sm:h-11"
               disabled={busy}
               onClick={() => fileRef.current?.click()}
             >
@@ -572,6 +844,7 @@ function BannerRow({
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="max-sm:h-11"
                 disabled={busy}
                 onClick={handleRemove}
               >
@@ -603,13 +876,6 @@ function BannerRow({
         ) : undefined
       }
     >
-      {storage && !storage.banner ? (
-        <SettingsNotice tone="info">
-          {storage.avatar
-            ? t("settings.profile.banner.unconfigured")
-            : t("settings.profile.media.unconfigured")}
-        </SettingsNotice>
-      ) : null}
     </SettingsRow>
     </FileDropZone>
   );
