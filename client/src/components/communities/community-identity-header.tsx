@@ -18,6 +18,7 @@ import { CommunityAboutText } from "@/components/communities/community-about-tex
 import { HeroMosaic } from "@/components/communities/hero-mosaic";
 import { CommunityOfficialLinks } from "@/components/communities/community-official-links";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
@@ -131,12 +132,25 @@ export function CommunityIdentityHeader({
       data-identity-layout={poster ? "poster" : layout}
       data-identity-editing={editing ? "1" : "0"}
     >
-      <div
+      <FileDropZone
         className={cn(
-          "relative w-full overflow-hidden",
+          "w-full overflow-hidden",
           poster ? "h-40 sm:h-52" : "h-32 sm:h-44",
         )}
         data-identity-banner
+        // The cover is the one big picture on this header, so it takes a drop
+        // while the owner is editing, the same file the "add cover" button
+        // opens a picker for and through the same `onPickImage`.
+        mode={edit?.uploadsEnabled && !busy ? "accept" : "off"}
+        // A dropped folder carries no file, so there is nothing to hand over;
+        // this header has no error line of its own to say so on.
+        onDrop={({ files }) => {
+          if (files[0]) {
+            edit?.onPickImage("banner", files[0]);
+          }
+        }}
+        acceptLabel={t("chrome.dropImage")}
+        size="field"
       >
         {bannerUrl ? (
           <img
@@ -184,7 +198,7 @@ export function CommunityIdentityHeader({
             onRemove={() => edit.onRemoveImage("banner")}
           />
         )}
-      </div>
+      </FileDropZone>
 
       <div className={cn("px-5 sm:px-8", poster ? "pb-8" : "pb-5")}>
         <div className="mx-auto max-w-5xl">

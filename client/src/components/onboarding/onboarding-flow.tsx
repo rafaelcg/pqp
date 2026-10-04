@@ -17,6 +17,7 @@ import {
 } from "react";
 import { DISPLAY_NAME_MAX_LENGTH, type Invite, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +40,7 @@ import { confettiSpent, sessionStore, spendConfetti } from "@/lib/arrival";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { IdempotencyAttempt } from "@/lib/idempotency";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   handleErrorMessage,
@@ -910,8 +912,23 @@ function PhotoRow({
     }
   }
 
+  /** A drop goes through the same `handleFile` as the picker. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      void handleFile(file);
+    } else if (folder) {
+      setError(t("composer.dropFolder_one", { name: folder }));
+    }
+  }
+
   return (
-    <div>
+    <FileDropZone
+      mode={canUpload && !disabled && !uploading ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
       <span className="mb-1.5 flex items-center justify-between text-xs font-medium text-text-secondary">
         {t("onboarding.you.photo")}
         {value && (
@@ -985,7 +1002,7 @@ function PhotoRow({
           {error}
         </p>
       )}
-    </div>
+    </FileDropZone>
   );
 }
 

@@ -99,6 +99,8 @@ import {
   type UploadedHomeMedia,
 } from "@/lib/community-home";
 import { gifMessageMedia } from "@/lib/gif-media";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
@@ -1432,16 +1434,34 @@ function ComposeCard({
     onCancelEdit();
   }
 
+  // One file per post, so a drop takes the first. `pickFile` is the picker's own
+  // path and does the size, type and "is it really an image" checks; a drop
+  // gets no shortcut around them.
+  const drop = useFileDropZone({
+    mode: mediaEnabled && uploading === null ? "accept" : "off",
+    onDrop: ({ files, folders }) => {
+      if (files[0]) {
+        void pickFile(files[0]);
+      } else if (folders[0]) {
+        setError(t("composer.dropFolder_one", { name: folders[0] }));
+      }
+    },
+  });
+
   return (
     <div className="space-y-3" data-home-compose-panel>
       <form
-        className="rounded-xl border border-dashed border-signal/40 bg-ink-3/40 p-4"
+        className="relative rounded-xl border border-dashed border-signal/40 bg-ink-3/40 p-4"
         data-home-compose
+        {...drop.zoneProps}
         onSubmit={(event) => {
           event.preventDefault();
           void run(editingPublished ? "save" : "publish");
         }}
       >
+        {drop.active && (
+          <FileDropOverlay label={t("chrome.dropToAttach")} />
+        )}
         <div className="mb-3 flex items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-signal">
             {editing

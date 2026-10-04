@@ -74,7 +74,6 @@ import { Tooltip } from "@/components/ui/tooltip";
 import {
   AttachmentAbortError,
   createPreviewUrl,
-  filesFromDataTransfer,
   formatByteSize,
   loadAttachmentConfig,
   revokePreviewUrl,
@@ -83,6 +82,7 @@ import {
   type AcceptedFile,
   type OutgoingAttachment,
 } from "@/lib/attachments";
+import { readDroppedItems, type DroppedItems } from "@/lib/file-drop";
 import { readDraft, writeDraft } from "@/lib/composer-drafts";
 
 /** How long typing pauses before the draft is written to storage. */
@@ -157,12 +157,14 @@ interface MessageComposerProps {
   /** Where uploads are minted. Null disables the paperclip along with the send. */
   channelId?: string | null;
   /**
-   * Files dropped on the message pane. The drop target is the whole
-   * conversation rather than the textarea, so it lives in the shell and arrives
-   * here the same way `insertText` does.
+   * Files (and folders) dropped on the pane this composer belongs to. The drop
+   * target is the whole conversation rather than the textarea, so it lives in
+   * the shell and arrives here the same way `insertText` does. Each drop goes
+   * down the same path as the paperclip and a paste: one set of limits, one
+   * progress chip per file, one error strip.
    */
-  droppedFiles?: File[] | null;
-  onDroppedFilesConsumed?: () => void;
+  droppedItems?: DroppedItems | null;
+  onDroppedItemsConsumed?: () => void;
   replyTarget?: ComposerReplyTarget | null;
   onCancelReply?: () => void;
   mentionCandidates?: MentionCandidate[];
@@ -351,8 +353,8 @@ export function MessageComposer({
   insertText,
   onInsertConsumed,
   channelId = null,
-  droppedFiles = null,
-  onDroppedFilesConsumed,
+  droppedItems = null,
+  onDroppedItemsConsumed,
   replyTarget = null,
   onCancelReply,
   mentionCandidates = [],
@@ -966,23 +968,31 @@ export function MessageComposer({
       .finally(() => uploadsRef.current.delete(localId));
   }
 
-  function addFiles(files: File[]) {
-    if (!channelId || !attachmentLimits?.enabled || files.length === 0) {
+  function addFiles(files: File[], folders: string[] = []) {
+    if (!channelId || !attachmentLimits?.enabled) {
+      return;
+    }
+    if (files.length === 0 && folders.length === 0) {
       return;
     }
     const { accepted, rejected } = selectAttachments(files, {
       existingCount: pendingRef.current.length,
       maxBytes: attachmentLimits.maxBytes,
     });
-    if (rejected.length > 0) {
+    const problems = rejected.map((item) => `${item.filename}: ${item.reason}`);
+    // A dropped folder cannot be uploaded and must not vanish: say so, and say
+    // what to do instead.
+    if (folders.length > 0) {
+      problems.push(
+        folders.length === 1
+          ? t("composer.dropFolder_one", { name: folders[0] })
+          : t("composer.dropFolder_other", { count: folders.length }),
+      );
+    }
+    if (problems.length > 0) {
       // Reuses the slash-command feedback strip: it already self-clears, and a
       // second error surface in the same three inches of screen helps nobody.
-      setFeedback({
-        tone: "error",
-        message: rejected
-          .map((item) => `${item.filename}: ${item.reason}`)
-          .join("\n"),
-      });
+      setFeedback({ tone: "error", message: problems.join("\n") });
     }
     for (const selected of accepted) {
       startUpload(channelId, selected);
@@ -998,12 +1008,12 @@ export function MessageComposer({
   addFilesRef.current = addFiles;
 
   useEffect(() => {
-    if (!droppedFiles?.length) {
+    if (!droppedItems) {
       return;
     }
-    addFilesRef.current(droppedFiles);
-    onDroppedFilesConsumed?.();
-  }, [droppedFiles, onDroppedFilesConsumed]);
+    addFilesRef.current(droppedItems.files, droppedItems.folders);
+    onDroppedItemsConsumed?.();
+  }, [droppedItems, onDroppedItemsConsumed]);
 
   function removeAttachment(localId: string) {
     const target = pendingRef.current.find((item) => item.localId === localId);
@@ -1026,7 +1036,7 @@ export function MessageComposer({
     if (!channelId || !attachmentLimits?.enabled) {
       return;
     }
-    const files = filesFromDataTransfer(event.clipboardData);
+    const { files } = readDroppedItems(event.clipboardData);
     if (files.length === 0) {
       return;
     }

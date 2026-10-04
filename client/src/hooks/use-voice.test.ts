@@ -4065,6 +4065,50 @@ describe("watch mode without a seat", () => {
     });
   });
 
+  it("shows the server's `viewers` in place of `watching` when the frame has one, and `watching` when it does not", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    // `watch_party_server_audience` on: this machine counted 49 sockets, the
+    // server counted 73 accounts.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream,
+      watching: 49,
+      viewers: 73,
+    });
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(73);
+
+    // A null the server did not vouch for keeps the stream and still takes
+    // the number the same way.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 40,
+      viewers: 70,
+    });
+    expect(voice.getState().channelLive[WATCHED]?.stream?.presenterPeerId).toBe("host");
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(70);
+
+    // Flag off again (or an older API): no field, today's number.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream,
+      watching: 49,
+    });
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(49);
+
+    // The one-time GET /live seed reads it the same way.
+    const OTHER = "00000000-0000-4000-8000-0000000000ef";
+    voice.seedChannelLive(OTHER, { stream, watching: 3, viewers: 12 });
+    expect(voice.getState().channelLive[OTHER]?.watching).toBe(12);
+    const THIRD = "00000000-0000-4000-8000-0000000000f0";
+    voice.seedChannelLive(THIRD, { stream, watching: 3 });
+    expect(voice.getState().channelLive[THIRD]?.watching).toBe(3);
+  });
+
   it("a null for a channel never described is not an end, and the GET seed's null is", () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);

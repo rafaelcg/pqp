@@ -12,6 +12,7 @@ import {
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
   type WatchPartyGuestsMode,
+  watchersWithoutSeat,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
@@ -5227,7 +5228,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           ) {
             state.channelLive = {
               ...state.channelLive,
-              [message.channelId]: { ...previous, watching: message.watching },
+              [message.channelId]: {
+                ...previous,
+                watching: watchersWithoutSeat(message),
+              },
             };
             emit();
             break;
@@ -5238,7 +5242,7 @@ export function createVoiceController(transport: RealtimeTransport) {
               stream: message.stream
                 ? resolveLiveHlsStream(message.stream)
                 : null,
-              watching: message.watching,
+              watching: watchersWithoutSeat(message),
               // "Ended" is the server's word, or one it already gave: a null
               // that was never vouched for is a channel we have not been
               // told about, and the seat backstop must not read it as over.
@@ -6988,7 +6992,12 @@ export function createVoiceController(transport: RealtimeTransport) {
      */
     seedChannelLive(
       channelId: string,
-      live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
+      live: {
+        stream: LiveHlsStream | null;
+        watching: number;
+        viewers?: number;
+        ended?: boolean;
+      },
     ) {
       const previous = state.channelLive[channelId];
       // An entry we hold only because of a null the server could not vouch
@@ -7002,7 +7011,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         ...state.channelLive,
         [channelId]: {
           stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
-          watching: live.watching,
+          watching: watchersWithoutSeat(live),
           // ONLY WHEN THE SERVER VOUCHED FOR IT. The route asks the session
           // table (PR 598) and says `ended` when it got an answer; a null
           // WITHOUT it is a query that failed, not a party that is over, and

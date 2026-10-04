@@ -2135,6 +2135,21 @@ if (probingShareAudio) {
 } else if (!gotLock) {
   app.quit();
 } else {
+  // A file dragged out of Finder / Explorer and let go over ANY of our windows
+  // is a navigation to `file://...` unless something stops it, and the window
+  // it replaces is the app. The main window's own `will-navigate` handler
+  // already blocks it (`classifyNavigation` answers "block" for a local file,
+  // see lib/nav-policy.js); this covers every other web contents (the sign-in
+  // popup, a window opened later) with the same verdict so no window is the
+  // exception. `loadFile` / `loadURL` are programmatic and never reach this.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (event, url) => {
+      if (classifyNavigation(url, null) === "block" && /^(file|filesystem):/i.test(url)) {
+        event.preventDefault();
+      }
+    });
+  });
+
   app.on("second-instance", (_event, argv) => {
     collectDeepLinkFromArgv(argv);
     // `showMainWindow` rather than focus: the first instance may be hidden in

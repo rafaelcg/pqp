@@ -112,6 +112,15 @@ default off; automatic translation of Baú posts, which also needs
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+`WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
+off, born as a flag): the in-app watch party count is the server's, distinct
+accounts on the playlist from every API machine, instead of the sockets one
+machine counted. Served as `viewers` on `channel-live` and `GET
+/api/channels/:id/live`; absent with the flag off, which is the old frame byte for
+byte. Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "watch_party_server_audience", serverId, enabled: true }` or from controles →
+interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
+`docs/WATCH_PARTY.md` §"How many people watched".
 
 Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
 default off, **per server**, client-only), the presenter's camera held to the

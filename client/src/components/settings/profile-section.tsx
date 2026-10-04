@@ -28,6 +28,7 @@ import {
 } from "@/components/settings/kit";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import {
   AvatarPicker,
@@ -39,6 +40,7 @@ import { deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
@@ -503,6 +505,20 @@ function BannerRow({
     }, failed);
   }
 
+  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      handleFile(file);
+    } else if (folder) {
+      const message = t("composer.dropFolder_one", { name: folder });
+      setAction("upload");
+      void write.run(async () => {
+        throw new Error(message);
+      }, message);
+    }
+  }
+
   function handleRemove() {
     setAction("remove");
     void write.run(async () => {
@@ -512,6 +528,12 @@ function BannerRow({
   }
 
   return (
+    <FileDropZone
+      mode={enabled && !busy ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
     <SettingsRow
       id="banner"
       data-profile-banner=""
@@ -589,5 +611,6 @@ function BannerRow({
         </SettingsNotice>
       ) : null}
     </SettingsRow>
+    </FileDropZone>
   );
 }

@@ -5543,6 +5543,10 @@ router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
       ? { ended: true, partyLive: party?.status === "live" }
       : {}),
     watching: state.watching,
+    // The server's own count of accounts on the playlist, only while
+    // `watch_party_server_audience` is on for this channel's server (absent
+    // otherwise, and a client that does not know it ignores it).
+    ...(state.viewers !== undefined ? { viewers: state.viewers } : {}),
     participants: state.participants,
   };
 });

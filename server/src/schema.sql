@@ -4934,3 +4934,21 @@ CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
 ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS device_class TEXT
   CHECK (device_class IN ('phone', 'tablet', 'desktop'));
 ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS detail JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- WHO IS WATCHING RIGHT NOW, one row per API process per broadcast. Each
+-- process rewrites its own row every ~10 s with the accounts IT saw within the
+-- heartbeat tolerance (`hls-viewer-counts.ts`, `publishPresence`), so a reader
+-- gets a count that is both fresh and deduplicated across machines:
+-- `hls_session_viewers` is flushed once a minute and is up to a flush behind,
+-- far too stale for a number somebody is looking at. A row ten seconds old is
+-- the whole point; readers ignore anything older than ~25 s, so a machine that
+-- died takes its viewers out of the count by itself. One upsert per process per
+-- broadcast per interval (HOT: no indexed column changes), never per poll.
+CREATE TABLE IF NOT EXISTS hls_session_presence (
+  channel_id     UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  started_at_ms  BIGINT NOT NULL,
+  instance_id    TEXT NOT NULL,
+  user_ids       UUID[] NOT NULL DEFAULT '{}',
+  sampled_at     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (channel_id, started_at_ms, instance_id)
+);

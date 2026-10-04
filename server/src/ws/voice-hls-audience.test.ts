@@ -72,6 +72,45 @@ vi.mock("../services/dms.js", () => ({
   resolveRingableConversation: async () => null,
 }));
 
+/**
+ * The server's count of who is on the playlist (`hls-viewer-counts.ts`). Its
+ * own tests run it against Postgres; here it is a dial, so this file can say
+ * what a frame carries for each answer without a database.
+ */
+const presence = vi.hoisted(() => ({
+  present: 0 as number | null,
+  reads: 0,
+  peeks: 0,
+  excluded: [] as string[][],
+  /** The next read throws, once. */
+  throwNext: false,
+  /** Reads never answer (a saturated pool). */
+  hang: false,
+}));
+
+vi.mock("../voice/hls-viewer-counts.js", () => ({
+  presentHlsViewers: async (
+    _channelId: string,
+    _startedAt: number,
+    options?: { excludeUserIds?: readonly string[] },
+  ) => {
+    presence.reads += 1;
+    presence.excluded.push([...(options?.excludeUserIds ?? [])]);
+    if (presence.hang) {
+      return new Promise<number | null>(() => {});
+    }
+    if (presence.throwNext) {
+      presence.throwNext = false;
+      throw new Error("pool exhausted");
+    }
+    return presence.present;
+  },
+  peekPresentHlsViewers: () => {
+    presence.peeks += 1;
+    return presence.present;
+  },
+}));
+
 const SERVER = randomUUID();
 const CINEMA = randomUUID();
 /**
@@ -876,5 +915,213 @@ describe("live HLS reaches the channel", () => {
     await sendAllVoiceRosters(banned.socket, asUser("banned"));
     expect(frames(banned, "channel-live")).toHaveLength(0);
     expect(frames(banned, "voice-roster")).toHaveLength(0);
+  });
+});
+
+describe("the server's audience count in channel-live (watch_party_server_audience)", () => {
+  const registered: Recorder[] = [];
+
+  function viewer(userId: string): Recorder {
+    const rec = recorder();
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    registered.push(rec);
+    return rec;
+  }
+
+  async function goLive() {
+    bits.byUser.set("host", PERMISSION_ALL);
+    const host = viewer("host");
+    await join(host, "host", CINEMA);
+    await claimStage(host, "host");
+    await settle();
+    return host;
+  }
+
+  beforeEach(() => {
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    bits.byUser.clear();
+    access.denied.clear();
+    egress.streams.clear();
+    egress.calls.length = 0;
+    egress.refuse = false;
+    backend.configured = "livekit";
+    presence.present = 0;
+    presence.reads = 0;
+    presence.peeks = 0;
+    presence.excluded = [];
+    presence.throwNext = false;
+    presence.hang = false;
+    process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    for (const rec of registered) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    registered.length = 0;
+    delete process.env.WATCH_PARTY_SERVER_AUDIENCE;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("flag off is today's frame: no viewers field, and the count is never asked", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    presence.present = 500;
+    const ana = viewer("ana");
+    const bia = viewer("bia");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    await vi.advanceTimersByTimeAsync(ROSTER_AUDIENCE_KEYFRAME_MS);
+    await settle();
+    await sendAllVoiceRosters(viewer("fresh").socket, asUser("fresh"));
+
+    for (const rec of registered) {
+      for (const frame of frames(rec, "channel-live")) {
+        expect("viewers" in frame).toBe(false);
+      }
+    }
+    expect(lastFrame(ana, "channel-live")!.watching).toBe(1);
+    expect(lastFrame(bia, "channel-live")!.watching).toBe(1);
+    const state = await getChannelLiveState(CINEMA);
+    expect("viewers" in state).toBe(false);
+    expect(presence.reads).toBe(0);
+    expect(presence.peeks).toBe(0);
+  });
+
+  it("flag on: the watch-live answer, the keyframe, the catch-up and GET /live carry the same number", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 73;
+    const ana = viewer("ana");
+    const bia = viewer("bia");
+    const host = await goLive();
+    // The goLive push itself said so to everybody who may view it.
+    expect(lastFrame(bia, "channel-live")!.viewers).toBe(73);
+
+    await watchLive(ana, "ana", true);
+    expect(lastFrame(ana, "channel-live")).toMatchObject({ watching: 1, viewers: 73 });
+
+    presence.present = 80;
+    await vi.advanceTimersByTimeAsync(ROSTER_AUDIENCE_KEYFRAME_MS);
+    await settle();
+    expect(lastFrame(bia, "channel-live")!.viewers).toBe(80);
+    expect(lastFrame(host, "channel-live")!.viewers).toBe(80);
+    expect(lastFrame(ana, "channel-live")!.viewers).toBe(80);
+
+    // The socket-auth catch-up answers from the last read and never queries.
+    const readsBefore = presence.reads;
+    const fresh = viewer("fresh");
+    await sendAllVoiceRosters(fresh.socket, asUser("fresh"));
+    expect(lastFrame(fresh, "channel-live")!.viewers).toBe(80);
+    expect(presence.reads).toBe(readsBefore);
+    expect(presence.peeks).toBeGreaterThan(0);
+
+    expect(await getChannelLiveState(CINEMA)).toMatchObject({ watching: 1, viewers: 80 });
+  });
+
+  it("the token renewal frame keeps the number, so the card does not fall back every 50 minutes", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 41;
+    const ana = viewer("ana");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    const before = frames(ana, "channel-live").length;
+    await vi.advanceTimersByTimeAsync(HLS_VIEWER_TOKEN_REMINT_MS);
+    await settle();
+    const renewed = frames(ana, "channel-live").slice(before);
+    expect(renewed.length).toBeGreaterThan(0);
+    for (const frame of renewed) {
+      expect(frame.viewers).toBe(41);
+    }
+  });
+
+  it("says the shared count and nothing local: this machine's own sockets never move it", async () => {
+    // Three sockets here, one account on the playlist: a machine that mixed its
+    // own socket count in would say 3 while its sibling said 1.
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 1;
+    const sockets = ["ana", "bia", "caio"].map(viewer);
+    await goLive();
+    for (const [index, rec] of sockets.entries()) {
+      await watchLive(rec, ["ana", "bia", "caio"][index]!, true);
+    }
+    expect(lastFrame(sockets[2]!, "channel-live")).toMatchObject({
+      watching: 3,
+      viewers: 1,
+    });
+  });
+
+  it("a count that never answers holds the frame for the deadline at most, then it goes without the field", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 5;
+    const ana = viewer("ana");
+    await goLive();
+    presence.hang = true;
+    const started = Date.now();
+    await watchLive(ana, "ana", true);
+    const waited = Date.now() - started;
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(reply.type).toBe("channel-live");
+    expect("viewers" in reply).toBe(false);
+    expect(reply.stream).not.toBeNull();
+    expect(waited).toBeLessThan(1500);
+    const snapshot = await getVoiceActivitySnapshot();
+    expect(snapshot.liveHls.audienceViewers.unavailable).toBeGreaterThan(0);
+  });
+
+  it("a failing server lookup never costs the frame its delivery", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 5;
+    const ana = viewer("ana");
+    await goLive();
+    presence.reads = 0;
+    // The count helper itself throws: the frame still goes, without the field.
+    presence.throwNext = true;
+    await watchLive(ana, "ana", true);
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(reply.type).toBe("channel-live");
+    expect("viewers" in reply).toBe(false);
+    expect(reply.watching).toBe(1);
+  });
+
+  it("asks the count to leave out the seats this machine holds", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    const ana = viewer("ana");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    expect(presence.excluded.at(-1)).toEqual(["host"]);
+  });
+
+  it("an unreadable count says nothing, and the client keeps `watching`", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = null;
+    const ana = viewer("ana");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    const reply = lastFrame(ana, "channel-live")!;
+    expect("viewers" in reply).toBe(false);
+    expect(reply.watching).toBe(1);
+    const snapshot = await getVoiceActivitySnapshot();
+    expect(snapshot.liveHls.audienceViewers.unavailable).toBeGreaterThan(0);
+  });
+
+  it("a stop carries no number", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 9;
+    const ana = viewer("ana");
+    const host = await goLive();
+    await handleVoiceMessage(
+      { socket: host.socket, user: asUser("host") },
+      { type: "set-sharing-screen", sharing: false },
+    );
+    await settle();
+    const stop = lastFrame(ana, "channel-live")!;
+    expect(stop.stream).toBeNull();
+    expect("viewers" in stop).toBe(false);
   });
 });

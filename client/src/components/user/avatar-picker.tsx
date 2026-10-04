@@ -8,10 +8,13 @@ import {
   useInlineSave,
 } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ApiError, fetchAvatarConfig } from "@/lib/api";
 import { uploadAvatar } from "@/lib/avatar-upload";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -105,6 +108,7 @@ export function AvatarPicker({
   onUploaded,
   labels,
 }: AvatarPickerProps) {
+  const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
   const linkId = useId();
   const [canUpload, setCanUpload] = useState(false);
@@ -112,6 +116,8 @@ export function AvatarPicker({
   const [linkOpen, setLinkOpen] = useState(false);
   const upload = useInlineSave({ savingLabel: labels.uploading });
   const uploading = upload.state.kind === "saving";
+  // A dropped folder is refused on the spot, before any upload starts.
+  const [dropError, setDropError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!onUploaded) {
@@ -129,6 +135,7 @@ export function AvatarPicker({
   }, [onUploaded]);
 
   function handleFile(file: File) {
+    setDropError(null);
     void upload.run(async () => {
       let user: User;
       try {
@@ -141,8 +148,24 @@ export function AvatarPicker({
     }, labels.uploadFailed);
   }
 
+  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      handleFile(file);
+    } else if (folder) {
+      setDropError(t("composer.dropFolder_one", { name: folder }));
+    }
+  }
+
   return (
-    <div className="space-y-3">
+    <FileDropZone
+      className="space-y-3"
+      mode={canUpload && !uploading ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <UserAvatar
           name={fallbackName}
@@ -246,7 +269,9 @@ export function AvatarPicker({
         })}
       </div>
 
-      <SettingsInlineStatus state={upload.state} />
-    </div>
+      <SettingsInlineStatus
+        state={dropError ? { kind: "error", message: dropError } : upload.state}
+      />
+    </FileDropZone>
   );
 }

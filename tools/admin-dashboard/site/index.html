@@ -6523,8 +6523,10 @@
       "em " + fmt(w.serversWaiting) + " servidor(es) · " + fmt(w.joins7d) + " entradas em 7 dias");
   }
 
-  // Quem está assistindo, somado entre as festas ao vivo. Um minuto atrás no
-  // máximo (a api grava uma vez por minuto). Nada quando a api é mais velha
+  // Quem está assistindo, somado entre as festas ao vivo: contas diferentes
+  // com batimento nos últimos 45 s, o mesmo número que o card do app mostra
+  // (a api regrava a presença a cada 10 s; aqui soma o cache de 30 s das
+  // métricas). Nada quando a api é mais velha
   // que esta página ou a leitura falhou: um zero ali seria inventado.
   function viewersNote(viewers) {
     if (!viewers || !Array.isArray(viewers.live)) return "";
