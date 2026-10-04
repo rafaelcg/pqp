@@ -250,8 +250,9 @@ export function SectionRail<Id extends string>({
           section.group !== undefined ? groupLabels?.[section.group] : undefined;
         const describedBy =
           [
-            groupName ? groupId(section.group!) : null,
+            // Unsaved first: "Perfil, alterações não salvas, Conta".
             section.dirty ? dirtyId : null,
+            groupName ? groupId(section.group!) : null,
           ]
             .filter(Boolean)
             .join(" ") || undefined;

@@ -90,7 +90,7 @@ describe("SectionRail", () => {
     render("voice", true);
     expect(tab("voice").getAttribute("aria-describedby")).toBeTruthy();
     expect(description(tab("voice"))).toBe("App");
-    expect(description(tab("profile"))).toMatch(/^Conta, (alterações não salvas|unsaved changes)$/);
+    expect(description(tab("profile"))).toMatch(/^(alterações não salvas|unsaved changes), Conta$/);
     // The name stays the label alone, so lookups by name keep working.
     expect(tab("profile").textContent).toBe("Perfil");
   });
