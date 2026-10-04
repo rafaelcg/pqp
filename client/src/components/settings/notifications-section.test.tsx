@@ -142,6 +142,25 @@ describe("NotificationsSection push rows", () => {
     expect(switchIn("push").disabled).toBe(true);
   });
 
+  it("keeps the push switch focusable while it saves and drops a second press", async () => {
+    const push = await import("@/lib/push");
+    let finish: (value: "enabled") => void = () => {};
+    vi.mocked(push.enablePush).mockClear();
+    vi.mocked(push.enablePush).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    await mount();
+    const toggle = switchIn("push");
+    await act(async () => {
+      toggle.click();
+      toggle.click();
+    });
+    expect(toggle.disabled).toBe(false);
+    expect(push.enablePush).toHaveBeenCalledTimes(1);
+    await act(async () => finish("enabled"));
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
+
   it.each([
     ["needs-install", false],
     ["unsupported", false],

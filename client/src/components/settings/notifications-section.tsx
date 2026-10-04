@@ -165,6 +165,8 @@ function usePushDevice(): PushDevice {
   const [loadFailed, setLoadFailed] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A ref, not the state: two presses inside one render both read busy=false.
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -204,9 +206,10 @@ function usePushDevice(): PushDevice {
   const toggle = async () => {
     // A second press while one is in flight is dropped here rather than by
     // disabling the switch, which would drop keyboard focus to the page.
-    if (busy) {
+    if (busyRef.current) {
       return;
     }
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -226,6 +229,7 @@ function usePushDevice(): PushDevice {
     } catch {
       setError(t("settings.push.unreachable"));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
