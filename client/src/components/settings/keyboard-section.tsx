@@ -128,11 +128,14 @@ export function KeyboardSection({
             key={group.id}
             title={t(GROUP_LABEL[group.id])}
             description={
-              // A behaviour fact, not how-to: channel keys (Alt + arrows by
-              // default) stand down in a text field, so the arrows move the
-              // caret. Mute and deafen use Cmd/Ctrl and still fire.
-              group.id === "navigation"
-                ? t("settings.keyboard.group.navigation.description")
+              // A behaviour fact, not how-to: a key with neither Ctrl nor Cmd
+              // stands down in a text field (`matchShortcut`), so Alt + arrows
+              // move the caret. Said only for a group where it holds for every
+              // key as bound now; by default that is Canais alone.
+              group.actions.every(
+                (action) => !bindings[action].ctrl && !bindings[action].meta,
+              )
+                ? t("settings.keyboard.group.typingNote")
                 : undefined
             }
           >

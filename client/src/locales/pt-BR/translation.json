@@ -1764,7 +1764,7 @@
   "settings.keyboard.noKeyboard": "Os atalhos só valem com um teclado conectado.",
   "settings.keyboard.pttLink": "Alterar em Voz e vídeo",
   "settings.keyboard.group.defaults.title": "Padrões",
-  "settings.keyboard.group.navigation.description": "Não disparam enquanto você digita.",
+  "settings.keyboard.group.typingNote": "Não disparam enquanto você digita.",
   "settings.keyboard.resetAll.label": "Voltar tudo ao padrão",
   "settings.keyboard.resetAll.description": "Inclui a tecla e o atraso do push-to-talk.",
   "settings.keyboard.resetConfirm.title": "Voltar todos os atalhos ao padrão?",
