@@ -50,6 +50,34 @@ import { useTranslation } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
+/**
+ * What the drawing of each ready-made avatar looks like, in the order of
+ * `AVATAR_PRESETS`. Literal keys, so the i18n scan sees every one.
+ */
+const PRESET_NAME_KEYS = [
+  "settings.profile.avatar.presetName.1",
+  "settings.profile.avatar.presetName.2",
+  "settings.profile.avatar.presetName.3",
+  "settings.profile.avatar.presetName.4",
+  "settings.profile.avatar.presetName.5",
+  "settings.profile.avatar.presetName.6",
+  "settings.profile.avatar.presetName.7",
+  "settings.profile.avatar.presetName.8",
+] as const;
+
+/**
+ * Enter in a single-line field is the same as pressing Salvar alterações: the
+ * shell's own button, so its checks and the 30-day link confirm run exactly as
+ * they do for a click. Asked after the render, so a value the handler just
+ * staged (the name with its spaces collapsed) is the one that is saved. A
+ * save bar that is not up (nothing staged) or is busy is a click on nothing.
+ */
+export function requestProfileSave(): void {
+  window.setTimeout(() => {
+    document.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.click();
+  }, 0);
+}
+
 /* ------------------------------------------------------------ availability */
 
 /** Long enough that typing a name is one request, short enough to feel live. */
@@ -305,8 +333,10 @@ export function ProfileSection({
                 urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
                 urlLabel: t("settings.profile.avatar.urlLabel"),
                 presets: t("settings.profile.avatar.presets"),
-                preset: (number) =>
-                  t("settings.profile.avatar.presetItem", { number }),
+                preset: (name) => t("settings.profile.avatar.presetItem", { name }),
+                presetName: (number) => t(PRESET_NAME_KEYS[number - 1]),
+                presetSelected: (name) =>
+                  t("settings.profile.avatar.presetSelected", { name }),
                 remove: t("settings.profile.avatar.clear"),
                 useLink: t("settings.profile.avatar.useLink"),
                 upload: t("settings.profile.avatar.upload"),
@@ -318,6 +348,7 @@ export function ProfileSection({
               // keeps the old picture. The draft follows too: left behind, it
               // would read as an unsaved edit, and a later save would put the
               // old picture back.
+              onSubmit={requestProfileSave}
               onUploaded={(updated) => {
                 onAvatarUrl(updated.avatarUrl ?? "");
                 onUserUpdated(updated);
