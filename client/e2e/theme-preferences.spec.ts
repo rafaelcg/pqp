@@ -185,7 +185,7 @@ test.describe("stage 3 — preferences follow the user", () => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
-    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+    await page.getByRole("radio", { name: /hue 210|matiz 210/i }).click();
 
     await expect
       .poll(async () => (await readPreferences()).accentHue, { timeout: 10_000 })

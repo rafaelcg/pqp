@@ -1,5 +1,7 @@
-import { useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
-import { Switch } from "@/components/ui/switch";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Button } from "@/components/ui/button";
+import { RadioGroup, useRovingRadio } from "@/components/ui/radio-group";
+import { Slider } from "@/components/ui/slider";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
@@ -16,176 +18,57 @@ import type { ContrastPreference } from "@/lib/contrast";
 import type { ThemePreference } from "@/lib/theme";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
-import { SettingBlock, segmentClass } from "@/components/settings/ui";
-import { useSettingsShell } from "@/components/settings/kit";
+import {
+  SETTINGS_FOCUS,
+  SettingsChoiceGrid,
+  SettingsGroup,
+  SettingsInlineStatus,
+  SettingsPreview,
+  SettingsRow,
+  SettingsSwitchRow,
+  useSettingsShell,
+} from "@/components/settings/kit";
 
-const APPEARANCE_OPTIONS: {
-  value: AppearancePreference;
-  label: MessageKey;
-}[] = [
-  { value: "signal", label: "settings.appearance.preset.signal" },
-  { value: "harmony", label: "settings.appearance.preset.harmony" },
-  { value: "hearth", label: "settings.appearance.preset.hearth" },
-  { value: "night", label: "settings.appearance.preset.night" },
-];
-
-function AppearancePicker() {
-  const { t } = useTranslation();
-  const { appearance, setAppearance } = useAppearance();
-
-  function choose(next: AppearancePreference) {
-    setAppearance(next);
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = APPEARANCE_OPTIONS.findIndex(
-      (option) => option.value === appearance,
-    );
-    const nextIndex =
-      (current + step + APPEARANCE_OPTIONS.length) % APPEARANCE_OPTIONS.length;
-    choose(APPEARANCE_OPTIONS[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
+/**
+ * Aparência e idioma. Every control here applies and persists on the spot:
+ * theme, look, accent and contrast through their own stores (the boot script
+ * reads them before first paint), the chat display through its store, link
+ * previews through `patchLocal`, the language through a reload. Nothing is
+ * staged, so nothing here ever shows a Save button.
+ */
+export function AppearanceSection({
+  showLinkEmbeds,
+  onShowLinkEmbeds,
+}: {
+  showLinkEmbeds: boolean;
+  onShowLinkEmbeds: (next: boolean) => void;
+}) {
   return (
-    <SettingBlock label={t("settings.appearance.preset")}>
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.preset")}
-        className="grid grid-cols-2 gap-2"
-        onKeyDown={handleKeyDown}
-      >
-        {APPEARANCE_OPTIONS.map((option) => {
-          const selected = option.value === appearance;
-          const darkOnly = option.value === "night";
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => choose(option.value)}
-              className={cn(
-                "flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-                selected
-                  ? "border-accent bg-surface-2 text-text"
-                  : "border-border text-text-muted hover:border-border-strong hover:text-text",
-              )}
-            >
-              <span
-                aria-hidden
-                className="appearance-preview"
-                style={
-                  {
-                    "--preview-rail": `var(--swatch-${option.value}-rail)`,
-                    "--preview-list": `var(--swatch-${option.value}-list)`,
-                    "--preview-surface": `var(--swatch-${option.value}-surface)`,
-                    "--preview-accent": `var(--swatch-${option.value}-accent)`,
-                  } as CSSProperties
-                }
-              >
-                <span className="appearance-preview-rail" />
-                <span className="appearance-preview-list">
-                  <span className="appearance-preview-channel" />
-                  <span className="appearance-preview-channel" />
-                  <span className="appearance-preview-channel" />
-                </span>
-                <span className="appearance-preview-chat">
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-composer" />
-                </span>
-              </span>
-              <span className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{t(option.label)}</span>
-                {option.value === "signal" ? (
-                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-                    {t("settings.appearance.preset.signalDefault")}
-                  </span>
-                ) : darkOnly ? (
-                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-                    {t("settings.appearance.preset.nightOnly")}
-                  </span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
+    <div className="space-y-6">
+      <ThemeGroup />
+      <ChatGroup
+        showLinkEmbeds={showLinkEmbeds}
+        onShowLinkEmbeds={onShowLinkEmbeds}
+      />
+      <LanguageGroup />
+      <DesktopGroup />
+    </div>
   );
 }
 
-function AccentHuePicker() {
-  const { t } = useTranslation();
-  const { appearance } = useAppearance();
-  const { preference, setPreference } = useAccentHue();
-  const sliderHue = effectiveAccentHue(preference, appearance);
-  const isCustom = preference !== "default";
+// ---------------------------------------------------------------------------
+// Tema
+// ---------------------------------------------------------------------------
 
+function ThemeGroup() {
+  const { t } = useTranslation();
   return (
-    <SettingBlock
-      label={t("settings.appearance.accent")}
-      hint={
-        isCustom
-          ? t("settings.appearance.accentCustomHint")
-          : t("settings.appearance.accentDefaultHint")
-      }
-    >
-      <div className="flex flex-col gap-2.5">
-        <input
-          type="range"
-          min={0}
-          max={360}
-          value={sliderHue}
-          aria-label={t("settings.appearance.accent")}
-          onChange={(event) =>
-            setPreference(Number(event.target.value) as AccentHuePreference)
-          }
-          className="accent-hue-slider"
-        />
-        <div className="flex flex-wrap items-center gap-1.5">
-          {ACCENT_SWATCHES.map((hue) => (
-            <button
-              key={hue}
-              type="button"
-              aria-label={t("settings.appearance.accentHue", { hue })}
-              aria-pressed={preference === hue}
-              onClick={() => setPreference(hue, { immediate: true })}
-              className={cn(
-                "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-                preference === hue
-                  ? "border-text"
-                  : "border-transparent hover:border-border-strong",
-              )}
-              style={{ "--swatch-hue": String(hue) } as CSSProperties}
-            />
-          ))}
-          <button
-            type="button"
-            onClick={() => setPreference("default")}
-            disabled={!isCustom}
-            className="ml-1 text-xs text-text-muted underline-offset-2 hover:text-text hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-40"
-          >
-            {t("settings.appearance.accentReset")}
-          </button>
-        </div>
-      </div>
-    </SettingBlock>
+    <SettingsGroup title={t("settings.appearance.group.theme.title")}>
+      <BrightnessRow />
+      <LookRow />
+      <AccentRow />
+      <ContrastRow />
+    </SettingsGroup>
   );
 }
 
@@ -196,94 +79,225 @@ const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
 ];
 
 /**
- * Theme is not part of `LocalSettings`: it applies on click rather than on
- * Save, and it persists under its own key so the boot script can read it
- * without parsing the audio blob.
+ * Theme is not part of `LocalSettings`: it applies on click and persists under
+ * its own key so the boot script can read it without parsing the audio blob.
+ * Night is a dark-only look, so it shows dark and disables the other two; the
+ * description says why.
  */
-function ThemePicker() {
+function BrightnessRow() {
   const { t } = useTranslation();
   const { appearance } = useAppearance();
   const { preference, resolved, setPreference } = useTheme();
   const nightLocked = appearance === "night";
   const shown = nightLocked ? "dark" : preference;
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const enabled = THEME_OPTIONS.filter(
-      (option) => !nightLocked || option.value === "dark",
-    );
-    const current = enabled.findIndex((option) => option.value === shown);
-    const nextIndex = (current + step + enabled.length) % enabled.length;
-    setPreference(enabled[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    const visualIndex = THEME_OPTIONS.findIndex(
-      (option) => option.value === enabled[nextIndex].value,
-    );
-    radios[visualIndex]?.focus();
+  const description = nightLocked
+    ? t("settings.appearance.themeNightLocked")
+    : preference === "system"
+      ? t("settings.appearance.themeFollowing", {
+          theme: t(
+            resolved === "light"
+              ? "settings.appearance.resolved.light"
+              : "settings.appearance.resolved.dark",
+          ),
+        })
+      : t(
+          preference === "light"
+            ? "settings.appearance.themeAlwaysLight"
+            : "settings.appearance.themeAlwaysDark",
+        );
+
+  return (
+    <SettingsRow
+      id="brightness"
+      label={t("settings.appearance.theme")}
+      description={description}
+      control={
+        <RadioGroup
+          label={t("settings.appearance.theme")}
+          value={shown}
+          onValueChange={(next) => {
+            if (!nightLocked) {
+              setPreference(next);
+            }
+          }}
+          options={THEME_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.label),
+            disabled: nightLocked && option.value !== "dark",
+          }))}
+        />
+      }
+    />
+  );
+}
+
+const LOOK_OPTIONS: {
+  value: AppearancePreference;
+  label: MessageKey;
+  badge?: MessageKey;
+}[] = [
+  {
+    value: "signal",
+    label: "settings.appearance.preset.signal",
+    badge: "settings.appearance.preset.signalDefault",
+  },
+  { value: "harmony", label: "settings.appearance.preset.harmony" },
+  { value: "hearth", label: "settings.appearance.preset.hearth" },
+  {
+    value: "night",
+    label: "settings.appearance.preset.night",
+    badge: "settings.appearance.preset.nightOnly",
+  },
+];
+
+function LookRow() {
+  const { t } = useTranslation();
+  const { appearance, setAppearance } = useAppearance();
+  return (
+    <SettingsRow
+      id="look"
+      label={t("settings.appearance.preset")}
+      stacked
+      control={
+        <SettingsChoiceGrid
+          label={t("settings.appearance.preset")}
+          value={appearance}
+          onValueChange={setAppearance}
+          columns={4}
+          options={LOOK_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.label),
+            badge: option.badge ? t(option.badge) : undefined,
+            preview: <LookMiniature look={option.value} />,
+          }))}
+        />
+      }
+    />
+  );
+}
+
+/**
+ * Miniature app chrome in the look's own static swatches. The drawing is the
+ * `appearance-preview*` recipe in `index.css`; only the four colours vary.
+ */
+function LookMiniature({ look }: { look: AppearancePreference }) {
+  return (
+    <span
+      className="appearance-preview"
+      style={
+        {
+          "--preview-rail": `var(--swatch-${look}-rail)`,
+          "--preview-list": `var(--swatch-${look}-list)`,
+          "--preview-surface": `var(--swatch-${look}-surface)`,
+          "--preview-accent": `var(--swatch-${look}-accent)`,
+        } as CSSProperties
+      }
+    >
+      <span className="appearance-preview-rail" />
+      <span className="appearance-preview-list">
+        <span className="appearance-preview-channel" />
+        <span className="appearance-preview-channel" />
+        <span className="appearance-preview-channel" />
+      </span>
+      <span className="appearance-preview-chat">
+        <span className="appearance-preview-message" />
+        <span className="appearance-preview-message" />
+        <span className="appearance-preview-message" />
+        <span className="appearance-preview-composer" />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The accent. A hue slider for any colour, then the eight suggested hues as one
+ * radio group, then "Usar a do visual", which only shows while a custom accent
+ * is set (the same rule as the chat reset). The reset sits outside the
+ * radiogroup's key handler, so an arrow pressed on it never picks a swatch.
+ */
+function AccentRow() {
+  const { t } = useTranslation();
+  const { appearance } = useAppearance();
+  const { preference, setPreference } = useAccentHue();
+  const sliderHue = effectiveAccentHue(preference, appearance);
+  const isCustom = preference !== "default";
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const checkedSwatch = typeof preference === "number" ? preference : -1;
+  const { onKeyDown, tabIndexFor } = useRovingRadio<number>(
+    ACCENT_SWATCHES,
+    checkedSwatch,
+    (hue) => setPreference(hue as AccentHuePreference, { immediate: true }),
+  );
+
+  function reset() {
+    setPreference("default");
+    // The button hides itself, so focus would drop to the page. The slider
+    // shows what the reset did, so focus lands there.
+    requestAnimationFrame(() => {
+      sliderRef.current?.querySelector<HTMLElement>('[role="slider"]')?.focus();
+    });
   }
 
   return (
-    <SettingBlock
-      label={t("settings.appearance.theme")}
-      hint={
-        nightLocked
-          ? t("settings.appearance.themeNightLocked")
-          : preference === "system"
-            ? t("settings.appearance.themeFollowing", {
-                theme: t(
-                  resolved === "light"
-                    ? "settings.appearance.resolved.light"
-                    : "settings.appearance.resolved.dark",
-                ),
-              })
-            : t(
-                preference === "light"
-                  ? "settings.appearance.themeAlwaysLight"
-                  : "settings.appearance.themeAlwaysDark",
-              )
+    <SettingsRow
+      id="accent"
+      label={t("settings.appearance.accent")}
+      description={
+        isCustom
+          ? t("settings.appearance.accentCustomHint")
+          : t("settings.appearance.accentDefaultHint")
       }
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.theme")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-        onKeyDown={handleKeyDown}
-      >
-        {THEME_OPTIONS.map((option) => {
-          const selected = option.value === shown;
-          const disabled = nightLocked && option.value !== "dark";
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              aria-disabled={disabled}
-              disabled={disabled}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => {
-                if (!disabled) {
-                  setPreference(option.value);
-                }
-              }}
-              className={segmentClass(selected, disabled)}
+      stacked
+      control={
+        <div className="flex flex-col gap-3">
+          <div ref={sliderRef}>
+            <Slider
+              variant="hue"
+              min={0}
+              max={360}
+              value={sliderHue}
+              aria-label={t("settings.appearance.accent")}
+              aria-valuetext={t("settings.appearance.accentHue", { hue: sliderHue })}
+              onValueChange={(hue) => setPreference(hue as AccentHuePreference)}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="radiogroup"
+              aria-label={t("settings.appearance.accent")}
+              onKeyDown={onKeyDown}
+              className="flex flex-wrap items-center gap-2"
             >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
+              {ACCENT_SWATCHES.map((hue) => (
+                <button
+                  key={hue}
+                  type="button"
+                  role="radio"
+                  aria-label={t("settings.appearance.accentHue", { hue })}
+                  aria-checked={preference === hue}
+                  tabIndex={tabIndexFor(hue)}
+                  onClick={() => setPreference(hue, { immediate: true })}
+                  className={cn(
+                    "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+                    SETTINGS_FOCUS,
+                    preference === hue
+                      ? "border-text"
+                      : "border-transparent hover:border-border-strong",
+                  )}
+                  style={{ "--swatch-hue": String(hue) } as CSSProperties}
+                />
+              ))}
+            </div>
+            {isCustom ? (
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={reset}>
+                {t("settings.appearance.accentReset")}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      }
+    />
   );
 }
 
@@ -293,36 +307,14 @@ const CONTRAST_OPTIONS: { value: ContrastPreference; label: MessageKey }[] = [
   { value: "system", label: "settings.appearance.contrast.system" },
 ];
 
-function ContrastPicker() {
+function ContrastRow() {
   const { t } = useTranslation();
   const { preference, resolved, setPreference } = useContrast();
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = CONTRAST_OPTIONS.findIndex(
-      (option) => option.value === preference,
-    );
-    const nextIndex =
-      (current + step + CONTRAST_OPTIONS.length) % CONTRAST_OPTIONS.length;
-    setPreference(CONTRAST_OPTIONS[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
   return (
-    <SettingBlock
+    <SettingsRow
+      id="contrast"
       label={t("settings.appearance.contrast")}
-      hint={
+      description={
         preference === "system"
           ? t("settings.appearance.contrastFollowing", {
               contrast: t(
@@ -333,232 +325,24 @@ function ContrastPicker() {
             })
           : t("settings.appearance.contrastHint")
       }
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.contrast")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-        onKeyDown={handleKeyDown}
-      >
-        {CONTRAST_OPTIONS.map((option) => {
-          const selected = option.value === preference;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => setPreference(option.value)}
-              className={segmentClass(selected)}
-            >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-const LOCALE_LABELS: Record<Locale, MessageKey> = {
-  en: "settings.appearance.language.en",
-  "pt-BR": "settings.appearance.language.ptBR",
-  es: "settings.appearance.language.es",
-};
-
-/**
- * The language switch `lib/locale.ts` has always been written for — it exposes
- * `setLocalePreference` with a comment saying "once there is UI to set one",
- * and this is that UI.
- *
- * Switching reloads rather than swapping strings under the mounted tree.
- * `I18nProvider` reads the locale once at boot on purpose, and Clerk's own
- * catalogue is wired at the provider in `main.tsx` — changing it in place would
- * leave the sign-in and account modals speaking the old language, which is a
- * worse answer than a reload. It is also what the legal pages already do.
- *
- * `?lang=` is dropped from the URL on the way out: it outranks the stored
- * preference, so a visitor who arrived on a `?lang=pt` link would otherwise
- * click "English" and get Portuguese back.
- */
-function LanguagePicker() {
-  const { t, locale } = useTranslation();
-  // Switching reloads the page, which would throw away staged profile edits
-  // without a word. Locked until they are saved or discarded.
-  const { profileDirty } = useSettingsShell();
-
-  async function choose(next: Locale) {
-    if (next === locale || profileDirty) {
-      return;
-    }
-    setLocalePreference(next);
-    // Server-side too, not just this browser's localStorage: it is the one
-    // signal `server/src/services/push-copy.ts` has for which language a
-    // closed phone's push should read in, and there is no i18next there to
-    // ask instead. Immediate, not debounced — the reload two lines down
-    // would otherwise race the request and drop it.
-    //
-    // The server's enum is still `pt-BR | en` (push copy has no Spanish yet),
-    // so a Spanish reader is stored as English: an English push beats a
-    // Portuguese one, which is what an absent value defaults to.
-    queuePreferenceSync(
-      { locale: next === "es" ? "en" : next },
-      { immediate: true },
-    );
-    await getDesktop()?.setLocale?.(next);
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("lang");
-      window.location.replace(url.toString());
-    } catch {
-      window.location.reload();
-    }
-  }
-
-  return (
-    <SettingBlock
-      label={t("settings.appearance.language")}
-      hint={
-        profileDirty
-          ? t("settings.unsaved.languageLocked")
-          : t("settings.appearance.languageHint")
-      }
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.language")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-      >
-        {SUPPORTED_LOCALES.map((option) => {
-          const selected = option === locale;
-          return (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              disabled={profileDirty}
-              onClick={() => void choose(option)}
-              className={segmentClass(selected, profileDirty)}
-            >
-              {t(LOCALE_LABELS[option])}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-/**
- * Launch pqp when the desktop app's platform starts.
- *
- * Desktop-only, and only where the shell can keep the promise: `getDesktop()
- * ?.platform` is a fact about the installed binary, and `loginItemSupported`
- * in the main process already refuses Linux, so this mirrors that refusal
- * here rather than showing a toggle that reports success and does nothing.
- * Absent entirely on the web and in a shell built before the bridge existed.
- */
-function DesktopStartupPicker() {
-  const { t } = useTranslation();
-  const desktop = getDesktop();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    const read = desktop?.getStartAtLogin;
-    if (typeof read !== "function") {
-      return;
-    }
-    let cancelled = false;
-    void read()
-      .then((value) => {
-        if (!cancelled) {
-          setEnabled(value === true);
-        }
-      })
-      // IPC can reject (main process gone, a handler missing on an older
-      // shell, mid-shutdown); left uncaught this was an unhandled promise
-      // rejection with the control silently never appearing (Farol review,
-      // PR 675). `enabled` stays null either way, which already hides the
-      // toggle below -- the catch only stops the rejection from going
-      // unhandled.
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          console.warn("[pqp] read start-at-login failed:", err);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [desktop]);
-
-  if (!desktop || desktop.platform === "linux" || enabled === null) {
-    return null;
-  }
-
-  function toggle(next: boolean) {
-    const write = desktop?.setStartAtLogin;
-    if (typeof write !== "function") {
-      return;
-    }
-    setPending(true);
-    void write(next)
-      .then((applied) => setEnabled(applied === true))
-      // A rejected write left the toggle spinning until `finally` cleared
-      // `pending`, but the rejection itself went unhandled with no
-      // user-visible failure state (Farol review, PR 675). `enabled` is
-      // left untouched on failure, so the Switch reverts to whatever it
-      // showed before the tap.
-      .catch((err: unknown) => {
-        console.warn("[pqp] set start-at-login failed:", err);
-      })
-      .finally(() => setPending(false));
-  }
-
-  return (
-    <div className="border-t border-border pt-6">
-      <Switch
-        checked={enabled}
-        onCheckedChange={toggle}
-        disabled={pending}
-        label={t("settings.appearance.startAtLogin")}
-        description={t("settings.appearance.startAtLoginHint")}
-        className="px-0"
-      />
-    </div>
-  );
-}
-
-export function AppearanceSection({
-  showLinkEmbeds,
-  onShowLinkEmbeds,
-}: {
-  showLinkEmbeds: boolean;
-  onShowLinkEmbeds: (next: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="space-y-6">
-      <p className="text-xs text-text-muted">
-        {t("settings.appearance.syncHint")}
-      </p>
-      <ThemePicker />
-      <AppearancePicker />
-      <AccentHuePicker />
-      <ContrastPicker />
-      <div className="space-y-6 border-t border-border pt-6">
-        <LanguagePicker />
-        <ChatDisplayPicker
-          showLinkEmbeds={showLinkEmbeds}
-          onShowLinkEmbeds={onShowLinkEmbeds}
+      control={
+        <RadioGroup
+          label={t("settings.appearance.contrast")}
+          value={preference}
+          onValueChange={setPreference}
+          options={CONTRAST_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.label),
+          }))}
         />
-      </div>
-      <DesktopStartupPicker />
-    </div>
+      }
+    />
   );
 }
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
 
 /**
  * Preset ladders for the two numeric axes. The store is numeric (a synced
@@ -593,73 +377,42 @@ function nearest(presets: { value: number }[], value: number): number {
   return best;
 }
 
-/**
- * One labelled row: the name on the left, a segmented control on the right,
- * stacked on a narrow dialog. Arrow keys move within the group.
- */
+/** A chat display row: its label, and a small segmented control. */
 function ChatOptionRow<T extends string | number>({
+  id,
   label,
   options,
   value,
   onChange,
 }: {
+  id: string;
   label: string;
   options: { value: T; label: MessageKey }[];
   value: T;
   onChange: (next: T) => void;
 }) {
   const { t } = useTranslation();
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = options.findIndex((option) => option.value === value);
-    const nextIndex = (current + step + options.length) % options.length;
-    onChange(options[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <span className="text-sm text-text">{label}</span>
-      <div
-        role="radiogroup"
-        aria-label={label}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5 sm:w-auto sm:min-w-[16rem]"
-        onKeyDown={handleKeyDown}
-      >
-        {options.map((option) => {
-          const selected = option.value === value;
-          return (
-            <button
-              key={String(option.value)}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => onChange(option.value)}
-              className={cn(segmentClass(selected), "h-8 px-2.5 text-xs")}
-            >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <SettingsRow
+      id={id}
+      label={label}
+      control={
+        <RadioGroup
+          label={label}
+          size="sm"
+          value={value}
+          onValueChange={onChange}
+          options={options.map((option) => ({
+            value: option.value,
+            label: t(option.label),
+          }))}
+        />
+      }
+    />
   );
 }
 
-function ChatDisplayPicker({
+function ChatGroup({
   showLinkEmbeds,
   onShowLinkEmbeds,
 }: {
@@ -674,58 +427,70 @@ function ChatDisplayPicker({
     display.groupSpacing === DEFAULT_CHAT_DISPLAY.groupSpacing;
 
   return (
-    <SettingBlock
-      label={t("settings.appearance.chat")}
-      hint={t("settings.appearance.chatHint")}
+    <SettingsGroup
+      title={t("settings.appearance.chat")}
+      surface="plain"
+      action={
+        isDefault ? undefined : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true });
+              // The button hides itself at the default, so focus would drop to
+              // the page. The first control it reset takes it.
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>(
+                    '[data-settings-row="density"] [role="radio"][tabindex="0"]',
+                  )
+                  ?.focus();
+              });
+            }}
+          >
+            {t("settings.appearance.chatReset")}
+          </Button>
+        )
+      }
     >
-      <div className="overflow-hidden rounded-lg border border-border">
+      <SettingsPreview
+        controls={
+          <>
+            <ChatOptionRow
+              id="density"
+              label={t("settings.appearance.density")}
+              options={DENSITY_OPTIONS}
+              value={display.density}
+              onChange={(density) => setDisplay({ density }, { immediate: true })}
+            />
+            <ChatOptionRow
+              id="text-size"
+              label={t("settings.appearance.textSize")}
+              options={FONT_SIZE_PRESETS}
+              value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
+              onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
+            />
+            <ChatOptionRow
+              id="group-spacing"
+              label={t("settings.appearance.spacing")}
+              options={GROUP_SPACING_PRESETS}
+              value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
+              onChange={(groupSpacing) =>
+                setDisplay({ groupSpacing }, { immediate: true })
+              }
+            />
+            <SettingsSwitchRow
+              id="link-previews"
+              label={t("settings.appearance.linkPreviews")}
+              checked={showLinkEmbeds}
+              onCheckedChange={onShowLinkEmbeds}
+            />
+          </>
+        }
+      >
         <ChatDisplayPreview compact={display.density === "compact"} />
-        <div className="space-y-4 border-t border-border bg-surface-1 p-4">
-          <ChatOptionRow
-            label={t("settings.appearance.density")}
-            options={DENSITY_OPTIONS}
-            value={display.density}
-            onChange={(density) => setDisplay({ density }, { immediate: true })}
-          />
-          <ChatOptionRow
-            label={t("settings.appearance.textSize")}
-            options={FONT_SIZE_PRESETS}
-            value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
-            onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
-          />
-          <ChatOptionRow
-            label={t("settings.appearance.spacing")}
-            options={GROUP_SPACING_PRESETS}
-            value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
-            onChange={(groupSpacing) =>
-              setDisplay({ groupSpacing }, { immediate: true })
-            }
-          />
-          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex cursor-pointer items-center gap-3 text-sm">
-              <input
-                type="checkbox"
-                checked={showLinkEmbeds}
-                onChange={(e) => onShowLinkEmbeds(e.target.checked)}
-                className="h-4 w-4 accent-[var(--color-accent)]"
-              />
-              <span>{t("settings.appearance.linkPreviews")}</span>
-            </label>
-            {!isDefault && (
-              <button
-                type="button"
-                onClick={() =>
-                  setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })
-                }
-                className="-my-1 py-1 text-left text-xs text-text-muted underline-offset-2 hover:text-text hover:underline"
-              >
-                {t("settings.appearance.chatReset")}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </SettingBlock>
+      </SettingsPreview>
+    </SettingsGroup>
   );
 }
 
@@ -733,8 +498,8 @@ function ChatDisplayPicker({
  * Three messages drawn with the message list's own recipe: the same CSS
  * variables for size, line height and group gap, the same avatar column, the
  * same timestamp gutter. It reads the variables off the root, so it follows
- * the sliders live without a save. Keep the class recipe in step with
- * `MessageRow` in `message-list.tsx`.
+ * the controls live. Keep the class recipe in step with `MessageRow` in
+ * `message-list.tsx`.
  */
 function ChatDisplayPreview({ compact }: { compact: boolean }) {
   const { t } = useTranslation();
@@ -762,10 +527,7 @@ function ChatDisplayPreview({ compact }: { compact: boolean }) {
     },
   ];
   return (
-    <div
-      aria-hidden
-      className="bg-channel py-3"
-    >
+    <div className="py-3">
       {rows.map((row, index) => (
         <div
           key={index}
@@ -782,13 +544,13 @@ function ChatDisplayPreview({ compact }: { compact: boolean }) {
                 avatarUrl={null}
                 rounded="lg"
                 className="h-9 w-9"
-                fallbackClassName="bg-ink-3 text-sm"
+                fallbackClassName="bg-surface-2 text-sm"
               />
             </div>
           ) : (
             <span
               className={cn(
-                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-text-tertiary",
                 compact ? "opacity-70" : "opacity-40",
               )}
             >
@@ -801,24 +563,216 @@ function ChatDisplayPreview({ compact }: { compact: boolean }) {
                 <span
                   className={cn(
                     "text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
-                    row.mine ? "text-signal" : "text-paper",
+                    row.mine ? "text-accent" : "text-text",
                   )}
                 >
                   {row.author}
                 </span>
                 {!compact && (
-                  <span className="text-[12px] leading-[var(--chat-line-height)] text-paper-muted">
+                  <span className="text-[12px] leading-[var(--chat-line-height)] text-text-tertiary">
                     {row.time}
                   </span>
                 )}
               </div>
             )}
-            <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+            <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-text">
               {row.body}
             </div>
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Idioma
+// ---------------------------------------------------------------------------
+
+/** Portuguese first: it is the product's language and most readers'. */
+const LOCALE_ORDER: readonly Locale[] = [
+  "pt-BR",
+  ...SUPPORTED_LOCALES.filter((option) => option !== "pt-BR"),
+];
+
+const LOCALE_LABELS: Record<Locale, MessageKey> = {
+  en: "settings.appearance.language.en",
+  "pt-BR": "settings.appearance.language.ptBR",
+  es: "settings.appearance.language.es",
+};
+
+/**
+ * The language switch `lib/locale.ts` has always been written for: it exposes
+ * `setLocalePreference` with a comment saying "once there is UI to set one",
+ * and this is that UI.
+ *
+ * Switching reloads rather than swapping strings under the mounted tree.
+ * `I18nProvider` reads the locale once at boot on purpose, and Clerk's own
+ * catalogue is wired at the provider in `main.tsx`; changing it in place would
+ * leave the sign-in and account modals speaking the old language, which is a
+ * worse answer than a reload. It is also what the legal pages already do.
+ *
+ * `?lang=` is dropped from the URL on the way out: it outranks the stored
+ * preference, so a visitor who arrived on a `?lang=pt` link would otherwise
+ * click "English" and get Portuguese back.
+ */
+function LanguageGroup() {
+  const { t, locale } = useTranslation();
+  // Switching reloads the page, which would throw away staged profile edits
+  // without a word. Locked until they are saved or discarded.
+  const { profileDirty } = useSettingsShell();
+
+  async function choose(next: Locale) {
+    if (next === locale || profileDirty) {
+      return;
+    }
+    setLocalePreference(next);
+    // Server-side too, not just this browser's localStorage: it is the one
+    // signal `server/src/services/push-copy.ts` has for which language a
+    // closed phone's push should read in, and there is no i18next there to
+    // ask instead. Immediate, not debounced: the reload below would otherwise
+    // race the request and drop it.
+    //
+    // The server's enum is still `pt-BR | en` (push copy has no Spanish yet),
+    // so a Spanish reader is stored as English: an English push beats a
+    // Portuguese one, which is what an absent value defaults to.
+    queuePreferenceSync(
+      { locale: next === "es" ? "en" : next },
+      { immediate: true },
+    );
+    await getDesktop()?.setLocale?.(next);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("lang");
+      window.location.replace(url.toString());
+    } catch {
+      window.location.reload();
+    }
+  }
+
+  return (
+    <SettingsGroup title={t("settings.appearance.language")}>
+      <SettingsRow
+        id="language"
+        label={t("settings.appearance.appLanguage")}
+        description={
+          profileDirty
+            ? t("settings.unsaved.languageLocked")
+            : t("settings.appearance.languageHint")
+        }
+        // Inline beside the label where it fits, under it where it does not.
+        // Each cell is as wide as its name, so "Português (Brasil)" is never
+        // cut, which is the one label a reader of another language needs whole.
+        wideControl
+        control={
+          <RadioGroup
+            label={t("settings.appearance.appLanguage")}
+            // Arrows only move focus: selecting reloads the app, so a keyboard
+            // or screen-reader user walking the options must not trigger it.
+            activation="manual"
+            fit="content"
+            value={locale}
+            disabled={profileDirty}
+            onValueChange={(next) => void choose(next)}
+            options={LOCALE_ORDER.map((option) => ({
+              value: option,
+              label: t(LOCALE_LABELS[option]),
+            }))}
+          />
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App para computador
+// ---------------------------------------------------------------------------
+
+/**
+ * Launch pqp when the computer starts.
+ *
+ * Desktop-only, and only where the shell can keep the promise: `getDesktop()
+ * ?.platform` is a fact about the installed binary, and `loginItemSupported`
+ * in the main process already refuses Linux, so this mirrors that refusal
+ * here rather than showing a toggle that reports success and does nothing.
+ * Absent entirely on the web and in a shell built before the bridge existed,
+ * and so is its group.
+ */
+function DesktopGroup() {
+  const { t } = useTranslation();
+  const desktop = getDesktop();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const read = desktop?.getStartAtLogin;
+    if (typeof read !== "function") {
+      return;
+    }
+    let cancelled = false;
+    void read()
+      .then((value) => {
+        if (!cancelled) {
+          setEnabled(value === true);
+        }
+      })
+      // IPC can reject (main process gone, a handler missing on an older
+      // shell, mid-shutdown). `enabled` stays null, which hides the group:
+      // a switch with an unknown state would be a guess.
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          console.warn("[pqp] read start-at-login failed:", err);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktop]);
+
+  if (!desktop || desktop.platform === "linux" || enabled === null) {
+    return null;
+  }
+
+  function toggle(next: boolean) {
+    const write = desktop?.setStartAtLogin;
+    if (typeof write !== "function") {
+      return;
+    }
+    setPending(true);
+    setFailed(false);
+    void write(next)
+      .then((applied) => setEnabled(applied === true))
+      // `enabled` is left untouched on failure, so the switch goes back to
+      // what it showed before the tap, and the row says the write failed.
+      .catch((err: unknown) => {
+        console.warn("[pqp] set start-at-login failed:", err);
+        setFailed(true);
+      })
+      .finally(() => setPending(false));
+  }
+
+  return (
+    <SettingsGroup title={t("settings.appearance.group.desktop.title")}>
+      <SettingsSwitchRow
+        id="start-at-login"
+        label={t("settings.appearance.startAtLogin")}
+        description={t("settings.appearance.startAtLoginHint")}
+        checked={enabled}
+        onCheckedChange={toggle}
+        disabled={pending}
+        status={
+          failed ? (
+            <SettingsInlineStatus
+              state={{
+                kind: "error",
+                message: t("settings.appearance.startAtLoginFailed"),
+              }}
+            />
+          ) : undefined
+        }
+      />
+    </SettingsGroup>
   );
 }
