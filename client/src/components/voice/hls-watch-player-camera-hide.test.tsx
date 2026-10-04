@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { resolveHlsUrl } from "@/lib/hls-playback";
 import { IDLE_CHROME_DELAY_MS } from "@/hooks/use-idle-chrome";
 import { CAMERA_SHOW_CHIP_MS } from "@/lib/watch-camera-pip";
+import { setWatchCameraSync, watchCameraSyncActive } from "@/lib/camera-sync";
 import { HlsWatchPlayer } from "./hls-watch-player";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -29,6 +30,9 @@ const CAMERA = resolveHlsUrl(
 
 /** Every `attachMedia`, by element: the film's must happen exactly once. */
 const attached: HTMLMediaElement[] = [];
+/** How often anything asked either player for its wall clock. */
+let playingDateReads = 0;
+const WALL = 1_790_000_000_000;
 
 vi.mock("hls.js", async () => {
   const actual = await vi.importActual<typeof import("hls.js")>("hls.js");
@@ -45,15 +49,25 @@ vi.mock("hls.js", async () => {
     currentLevel = -1;
     nextLevel = -1;
     latency = 20;
-    playingDate = null;
+    media: HTMLMediaElement | null = null;
     constructor(config: Record<string, unknown>) {
       this.config = config;
+    }
+    /** The camera's picture runs 13 s behind the film's, as on an LL party. */
+    get playingDate() {
+      playingDateReads += 1;
+      if (!this.media) {
+        return null;
+      }
+      const camera = this.media.closest('[data-testid="watch-camera-pip"]') !== null;
+      return new Date(WALL + this.media.currentTime * 1000 - (camera ? 13_000 : 0));
     }
     on() {}
     off() {}
     loadSource() {}
     attachMedia(media: HTMLMediaElement) {
       attached.push(media);
+      this.media = media;
     }
     stopLoad() {}
     startLoad() {}
@@ -286,5 +300,85 @@ describe("hiding the presenter's camera", { timeout: 30_000 }, () => {
     await settle();
     expect(q("watch-camera-pip-hide")!.className).toContain("opacity-100");
     expect(q("watch-camera-pip-hide")!.className).not.toMatch(/(^| )opacity-0( |$)/);
+  });
+
+  /**
+   * `watch_camera_sync` OFF (its default) IS THE CAMERA OF THE RELEASE BEFORE.
+   * Both pictures playing, the camera 13 s behind the film, twenty seconds of
+   * ticks: with the flag off nothing asks either player for its wall clock,
+   * nothing writes the camera's rate or position, and there is no console
+   * readout. The same setup with the flag on does all three, which is what
+   * makes the "off" half mean something.
+   */
+  describe("watch_camera_sync", () => {
+    afterEach(() => {
+      setWatchCameraSync(false);
+    });
+
+    async function playBoth() {
+      const clocks = new Map<HTMLVideoElement, number>();
+      const writes = { cameraTime: 0, cameraRate: 0 };
+      const started = Date.now();
+      for (const video of Array.from(container.querySelectorAll("video"))) {
+        const camera = video.closest('[data-testid="watch-camera-pip"]') !== null;
+        clocks.set(video, 0);
+        let rate = 1;
+        Object.defineProperty(video, "currentTime", {
+          configurable: true,
+          get: () => clocks.get(video)! + (Date.now() - started) / 1000,
+          set: (value: number) => {
+            if (camera) writes.cameraTime += 1;
+            clocks.set(video, value - (Date.now() - started) / 1000);
+          },
+        });
+        Object.defineProperty(video, "playbackRate", {
+          configurable: true,
+          get: () => rate,
+          set: (value: number) => {
+            if (camera) writes.cameraRate += 1;
+            rate = value;
+          },
+        });
+        Object.defineProperty(video, "paused", { configurable: true, get: () => false });
+        Object.defineProperty(video, "readyState", { configurable: true, get: () => 4 });
+        Object.defineProperty(video, "seeking", { configurable: true, get: () => false });
+      }
+      const camera = q("watch-camera-pip")!.querySelector("video")!;
+      await act(async () => {
+        camera.dispatchEvent(new Event("playing"));
+      });
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          vi.advanceTimersByTime(1_000);
+        });
+        await settle();
+      }
+      return writes;
+    }
+
+    it("is off by default", () => {
+      expect(watchCameraSyncActive()).toBe(false);
+    });
+
+    it("off: the camera behaves exactly as before, untouched and unmeasured", async () => {
+      await mount();
+      playingDateReads = 0;
+      const writes = await playBoth();
+      expect(playingDateReads).toBe(0);
+      expect(writes).toEqual({ cameraTime: 0, cameraRate: 0 });
+      expect(q("watch-camera-pip")!.hasAttribute("data-camera-sync")).toBe(false);
+      expect((window as { pqpCameraSync?: unknown }).pqpCameraSync).toBeUndefined();
+    });
+
+    it("on (the control): the same camera is measured and moved onto the film", async () => {
+      setWatchCameraSync(true);
+      await mount();
+      playingDateReads = 0;
+      const writes = await playBoth();
+      expect(playingDateReads).toBeGreaterThan(0);
+      expect(writes.cameraTime).toBeGreaterThan(0);
+      expect(q("watch-camera-pip")!.hasAttribute("data-camera-sync")).toBe(true);
+      expect((window as { pqpCameraSync?: unknown }).pqpCameraSync).toBeTypeOf("function");
+    });
   });
 });

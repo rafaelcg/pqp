@@ -311,10 +311,11 @@ export const FEATURE_FLAGS = {
     description:
       "Câmera de quem apresenta no compasso do filme (só cliente: o player da câmera acompanha o relógio do filme, com até 5 % de velocidade ou um salto; o filme nunca é mexido).",
     env: "WATCH_CAMERA_SYNC",
-    parseEnv: onUnlessOff,
-    // On: measured on the real player before it shipped (the PR that added
-    // it has the numbers), and off is the rollback for a server or for all.
-    codeDefault: true,
+    parseEnv: exactTrue,
+    // Off until it has been checked by hand on a real party: measured on the
+    // real player (the PR that added it has the numbers), but turned on one
+    // server at a time from the dashboard, then globally.
+    codeDefault: false,
     // The only reader is `GET /api/live-hls/config?serverId=`, which knows
     // the server; the deployment-wide answer is the global value.
     perServer: true,

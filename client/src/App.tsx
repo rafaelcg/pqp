@@ -2469,8 +2469,8 @@ function MainAppContent({
   useEffect(() => {
     setPartyFastStart(partyFastStartOn);
   }, [partyFastStartOn]);
-  // `watch_camera_sync` (runtime flag, per server, on by default): the same
-  // door. Absent (an older API, or no answer yet) is the default, on.
+  // `watch_camera_sync` (runtime flag, per server, off by default): the same
+  // door. Absent (an older API, or no answer yet) is the default, off.
   const watchCameraSyncOn = cameraSyncFromConfig(liveHlsConfig);
   useEffect(() => {
     setWatchCameraSync(watchCameraSyncOn);

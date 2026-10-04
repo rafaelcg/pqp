@@ -807,9 +807,9 @@ export interface LiveHlsConfig {
    */
   fastStart?: boolean;
   /**
-   * `watch_camera_sync` for this server (runtime flag, per server, ON by
+   * `watch_camera_sync` for this server (runtime flag, per server, off by
    * default): whether the presenter's camera follows the film's clock.
-   * Absent on an older API, which reads as on. See `lib/camera-sync.ts`.
+   * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
    */
   cameraSync?: boolean;
 }

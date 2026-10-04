@@ -2111,10 +2111,19 @@ audience's sense of where the show is.
   rate, buffer and hls.js are only ever read. The native engine (no MSE) has
   no fragment clock here and is left as it was.
 
-**Kill switch.** `watch_camera_sync` (env `WATCH_CAMERA_SYNC`, per server, ON by
-default), served as `cameraSync` on `GET /api/live-hls/config`. Off, the camera
-plays loose exactly as before. `pqpCameraSync()` in the browser console answers
-the live drift, the last decision and how many seeks it made.
+**The flag, OFF by default.** `watch_camera_sync` (env `WATCH_CAMERA_SYNC`, only
+`true` turns it on, per server), served as `cameraSync` on
+`GET /api/live-hls/config`. Off, the camera plays loose exactly as on the
+release before this one: nothing writes its rate or position and nothing reads
+the film's clock (`watch-camera-pip-sync.test.tsx`,
+`hls-watch-player-camera-hide.test.tsx`). The rollout: turn it on for one test
+server from the dashboard (controles, interruptores, that server's override),
+do the check below on a quiet-hour party, then turn it on globally. A tab
+already open follows within the 10 minute config refresh, or on focus.
+`pqpCameraSync()` in the browser console exists only while it is on, and
+answers the live drift, the last decision and how many seeks it made.
+
+The hide button, the chip and the quick toggle below are NOT behind the flag.
 
 **What this cannot fix.** It aligns what the two playlists SAY. A camera whose
 PROGRAM-DATE-TIME were wrong would be held wrong (`camPdtErrorMs` in the rig's
@@ -2126,8 +2135,8 @@ camera's can read 40 to 80 ms apart when their PDTs agree.
 (`WatchPane.kt`, a second ExoPlayer) run the camera as an independent player
 with no alignment, so they have the same drift. Not changed here.
 
-**Check it on a party.** Open the party in Chrome on a desktop, press F12, and
-run `pqpCameraSync()` a few times over a minute: `driftMs` should sit inside
+**Check it on a party.** With the flag on for that party's server, open the
+party in Chrome on a desktop, press F12, and run `pqpCameraSync()` a few times over a minute: `driftMs` should sit inside
 ±120 and `reason` should read `in-sync` (or `nudge` for a moment). Clap or snap
 on camera while something sharp happens on screen and watch the corner: the
 face and the film should land together. Then switch tabs for a minute, come

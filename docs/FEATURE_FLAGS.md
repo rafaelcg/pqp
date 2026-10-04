@@ -113,16 +113,16 @@ the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 
-Born as a flag, and **on by default**: `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
-**per server**, client-only), the presenter's camera held to the film's wall
-clock in a viewer's browser (`client/src/lib/camera-sync.ts`), served as
-`cameraSync` on `GET /api/live-hls/config`. Default on because it was measured
-on the real player before it shipped (`client/e2e/camera-sync/`, numbers in
-`docs/WATCH_PARTY.md` §"The camera follows the film"). Off for one server or for
-everybody is the rollback, and the camera then plays loose exactly as before:
-nothing writes its rate or its position. The variable reads off only for
-`false` / `0` / `off`. An API older than the flag sends no field, which the
-client reads as on.
+Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
+default off, **per server**, client-only), the presenter's camera held to the
+film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),
+served as `cameraSync` on `GET /api/live-hls/config`. Measured on the real
+player (`client/e2e/camera-sync/`, numbers in `docs/WATCH_PARTY.md` §"The camera
+follows the film"), and still off until a person has checked it on a real
+party: turn it on for one test server (the server's override), then globally.
+Off, the camera plays loose exactly as before: nothing writes its rate or its
+position, and nothing reads the film's clock. Only `true` turns the variable
+on. An API older than the flag sends no field, which the client reads as off.
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen

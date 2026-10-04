@@ -29,8 +29,8 @@ const params = new URLSearchParams(window.location.search);
 const base = params.get("base") ?? "http://127.0.0.1:8787";
 const mode = (params.get("mode") ?? "live") as "live" | "ll";
 // The `watch_camera_sync` flag, as the app shell sets it from the server's
-// config (`?sync=off` is the flag off, the camera exactly as before).
-setWatchCameraSync(params.get("sync") !== "off");
+// config. Off by default like the flag; `?sync=on` turns it on.
+setWatchCameraSync(params.get("sync") === "on");
 
 interface Sample {
   at: number;

@@ -16,6 +16,8 @@ import {
   hlsEdgeWallMs,
   hlsPlayingWallMs,
   nudgeRate,
+  setWatchCameraSync,
+  watchCameraSyncActive,
   type CameraSyncDecision,
   type CameraSyncInput,
 } from "./camera-sync";
@@ -400,10 +402,22 @@ describe("the readings", () => {
 });
 
 describe("the flag", () => {
-  it("is on unless the server says off", () => {
-    expect(cameraSyncFromConfig(null)).toBe(true);
-    expect(cameraSyncFromConfig({})).toBe(true);
-    expect(cameraSyncFromConfig({ cameraSync: true })).toBe(true);
+  it("starts off, before any config has answered", () => {
+    expect(watchCameraSyncActive()).toBe(false);
+  });
+
+  it("is on only when the server says true: no answer and an older API are off", () => {
+    expect(cameraSyncFromConfig(null)).toBe(false);
+    expect(cameraSyncFromConfig(undefined)).toBe(false);
+    expect(cameraSyncFromConfig({})).toBe(false);
     expect(cameraSyncFromConfig({ cameraSync: false })).toBe(false);
+    expect(cameraSyncFromConfig({ cameraSync: true })).toBe(true);
+  });
+
+  it("follows the store both ways", () => {
+    setWatchCameraSync(true);
+    expect(watchCameraSyncActive()).toBe(true);
+    setWatchCameraSync(false);
+    expect(watchCameraSyncActive()).toBe(false);
   });
 });

@@ -358,11 +358,12 @@ export function elementPlaying(video: HTMLVideoElement | null | undefined): bool
  * writes the selected server's answer here and the camera subscribes, so a
  * player that mounted before the config landed adopts it the moment it does.
  *
- * ON until the config says otherwise, which is the flag's own default: an API
- * that predates the flag sends no field and the sync runs, and the operator's
- * "off" reaches every open tab within the config refresh.
+ * OFF until the config says `true`, which is the flag's own default: it is
+ * turned on one server at a time from the dashboard after a person has checked
+ * it on a real party. An API that predates the flag sends no field, and that
+ * is off too. Off, nothing here runs and the camera plays exactly as before.
  */
-let syncActive = true;
+let syncActive = false;
 const listeners = new Set<() => void>();
 
 export function setWatchCameraSync(on: boolean): void {
@@ -390,7 +391,7 @@ export function useWatchCameraSync(): boolean {
   return useSyncExternalStore(subscribe, watchCameraSyncActive, () => syncActive);
 }
 
-/** What the config answer means for this flag: absent is the default, on. */
+/** What the config answer means for this flag: only an explicit true is on. */
 export function cameraSyncFromConfig(config: { cameraSync?: boolean } | null | undefined): boolean {
-  return config?.cameraSync !== false;
+  return config?.cameraSync === true;
 }
