@@ -180,7 +180,13 @@ export function KeyBindingField({
         setAttempted(null);
         setCapturing((prev) => !prev);
       }}
-      onBlur={() => setCapturing(false)}
+      // Leaving the field drops a refused combo: it was never saved, and a
+      // red key left on the row reads as if it were.
+      onBlur={() => {
+        setCapturing(false);
+        setRefused(null);
+        setAttempted(null);
+      }}
     />
   );
 }
@@ -455,7 +461,13 @@ export function PttBindingField({
         setAttempted(null);
         setCapturing((prev) => !prev);
       }}
-      onBlur={() => setCapturing(false)}
+      // Leaving the field drops a refused combo: it was never saved, and a
+      // red key left on the row reads as if it were.
+      onBlur={() => {
+        setCapturing(false);
+        setRefused(null);
+        setAttempted(null);
+      }}
     />
   );
 }
