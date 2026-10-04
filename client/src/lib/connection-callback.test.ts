@@ -110,18 +110,42 @@ describe("connection complete error stash", () => {
 });
 
 describe("messageFromCompleteFailure", () => {
-  it("keeps a distinct API reason instead of the generic fallback", () => {
+  const messages = {
+    alreadyLinked: "LINKED",
+    expired: "EXPIRED",
+    cancelled: "CANCELLED",
+    fallback: "FALLBACK",
+  };
+
+  it("names the reasons a person can act on, never the server's English", () => {
     expect(
       messageFromCompleteFailure(
         new ApiError(409, "That account is already connected to another pqp user"),
-        "Could not finish that connection.",
+        messages,
       ),
-    ).toBe("That account is already connected to another pqp user");
+    ).toBe("LINKED");
+    expect(
+      messageFromCompleteFailure(
+        new ApiError(400, "Connection request expired or was already used"),
+        messages,
+      ),
+    ).toBe("EXPIRED");
+    expect(
+      messageFromCompleteFailure(new ApiError(400, "Connection was cancelled"), messages),
+    ).toBe("CANCELLED");
+    expect(
+      messageFromCompleteFailure(
+        new ApiError(400, "The provider refused the connection"),
+        messages,
+      ),
+    ).toBe("CANCELLED");
   });
 
-  it("falls back when the failure is not an ApiError", () => {
+  it("falls back for anything else", () => {
     expect(
-      messageFromCompleteFailure(new Error("network"), "Could not finish that connection."),
-    ).toBe("Could not finish that connection.");
+      messageFromCompleteFailure(new ApiError(400, "Missing authorization code"), messages),
+    ).toBe("FALLBACK");
+    expect(messageFromCompleteFailure(new ApiError(503, "x"), messages)).toBe("FALLBACK");
+    expect(messageFromCompleteFailure(new Error("network"), messages)).toBe("FALLBACK");
   });
 });

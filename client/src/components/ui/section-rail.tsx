@@ -117,7 +117,13 @@ export function SectionRail<Id extends string>({
   // The selected tab is always on screen, including the phone strip, where
   // seven of ten tabs start off the right edge. A dirty tab pinned to the
   // strip's start would cover it, so the scroll leaves that much room.
-  // Optional call: jsdom has no `scrollIntoView`.
+  // Optional call: jsdom has no `scrollIntoView`. Keyed on what the strip
+  // shows, not on the array: two of the three dialogs build `sections` on
+  // every render, and a keystroke elsewhere must not snap the strip back
+  // while the person is scrolling it.
+  const railKey = sections
+    .map((section) => `${section.id}${section.dirty ? "*" : ""}`)
+    .join("|");
   useEffect(() => {
     const rail = railRef.current;
     const index = sections.findIndex((section) => section.id === active);
@@ -128,7 +134,9 @@ export function SectionRail<Id extends string>({
       rail.style.scrollPaddingInlineStart = room ? `${room + 8}px` : "";
     }
     tabs?.[index]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [active, sections, vertical]);
+    // `sections` is read through `railKey`, which changes when it matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, railKey, vertical]);
 
   // The fade says "there is more this way" and goes once the strip is at its
   // end. Measured, not assumed: on a desktop the rail is vertical and never

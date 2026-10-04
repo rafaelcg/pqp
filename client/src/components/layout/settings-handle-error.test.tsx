@@ -14,9 +14,11 @@ import type { User } from "@pqp/shared";
 vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
 
 const updateMe = vi.hoisted(() => vi.fn());
+const fetchMe = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   updateMe,
+  fetchMe,
 }));
 
 vi.mock("@/components/settings/profile-section", async () => {
@@ -69,6 +71,7 @@ afterEach(() => {
   root = null;
   host = null;
   updateMe.mockReset();
+  fetchMe.mockReset();
 });
 
 const USER = {
@@ -87,7 +90,7 @@ const USER = {
   isInstanceModerator: false,
 } as unknown as User;
 
-function mount() {
+function mount(onUserUpdated: (user: User) => void = () => {}) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -101,7 +104,7 @@ function mount() {
           blockedUsers={[]}
           onClose={() => {}}
           onLocalSave={() => {}}
-          onUserUpdated={() => {}}
+          onUserUpdated={onUserUpdated}
           onUnblockUser={() => {}}
           requestedSection="profile"
         />
@@ -171,6 +174,40 @@ describe("a taken public link", () => {
     expect(updateMe).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
     expect(handleError()).toMatch(/3 a 20|3 to 20/);
+  });
+
+  it("says a reserved link is reserved, not that it breaks the format", async () => {
+    updateMe.mockClear();
+    mount();
+    type(field("handle"), "admin");
+    await save();
+
+    expect(updateMe).not.toHaveBeenCalled();
+    expect(handleError()).toMatch(/reserved|reservado/i);
+    expect(handleError()).not.toMatch(/3 a 20|3 to 20/);
+  });
+
+  it("reads the account back when the link was claimed but another field failed", async () => {
+    updateMe.mockRejectedValueOnce(
+      new ApiError(409, "That username has no numbers left. Please pick a different one."),
+    );
+    fetchMe.mockResolvedValueOnce({ ...USER, handle: "rafa2" });
+    const onUserUpdated = vi.fn();
+    mount(onUserUpdated);
+    type(field("handle"), "rafa2");
+    await save();
+    const confirm = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] button, [role="alertdialog"] button',
+      ),
+    ].find((button) => button.textContent?.includes("@rafa2"))!;
+    await act(async () => {
+      confirm.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(fetchMe).toHaveBeenCalledTimes(1);
+    expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ handle: "rafa2" }));
   });
 
   it("does not blame an unchanged link for another field's 400", async () => {

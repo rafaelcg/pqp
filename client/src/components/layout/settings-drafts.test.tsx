@@ -276,6 +276,40 @@ describe("Settings profile drafts", () => {
     apple.value = false;
   });
 
+  it("reads clean after a save, and keeps an edit typed while the save was out", async () => {
+    updateMe.mockReset();
+    let land!: (user: User) => void;
+    updateMe.mockReturnValueOnce(new Promise<User>((resolve) => (land = resolve)));
+    mount(makeUser());
+    type(displayNameInput(), "Rafael");
+    await act(async () => {
+      barButton("save")!.click();
+      await Promise.resolve();
+    });
+    // Typed while the request is out: newer than the response.
+    type(displayNameInput(), "Rafael Gugli");
+    const saved = makeUser({ displayName: "Rafael" });
+    await act(async () => {
+      land(saved);
+      await Promise.resolve();
+    });
+    render(saved);
+    expect(displayNameInput().value).toBe("Rafael Gugli");
+    expect(bar()).not.toBeNull();
+
+    // A save with nothing typed meanwhile leaves nothing staged: the bar
+    // only flashes "Salvo".
+    updateMe.mockResolvedValueOnce(makeUser({ displayName: "Rafael Gugli" }));
+    await act(async () => {
+      barButton("save")!.click();
+      await Promise.resolve();
+    });
+    render(makeUser({ displayName: "Rafael Gugli" }));
+    expect(displayNameInput().value).toBe("Rafael Gugli");
+    expect(barButton("save")).toBeNull();
+    expect(bar()?.textContent).toMatch(/Saved|Salvo/);
+  });
+
   it("asks before claiming a link: Keep sends nothing, the confirm sends once", async () => {
     updateMe.mockReset();
     updateMe.mockImplementation(async () => makeUser({ handle: "rafa" }));

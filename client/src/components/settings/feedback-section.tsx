@@ -23,15 +23,92 @@ import { buildFeedbackContext, type FeedbackVoiceContext } from "@/lib/feedback-
  * consequence, no points, no leaderboard.
  */
 /**
- * The draft outlives the tab. Switching to Ajuda to check something, or
- * closing Settings by reflex, used to throw away a long bug report; it is kept
- * for the session and cleared once it is sent.
+ * The draft outlives the tab. Switching to Ajuda to check something, closing
+ * Settings by reflex, or changing the language (which reloads the page) used
+ * to throw away a long bug report; it is kept in `sessionStorage` for the
+ * session and cleared once it is sent.
  */
-const draft: { owner: string | null; kind: FeedbackKind; body: string } = {
-  owner: null,
-  kind: "bug",
-  body: "",
-};
+interface FeedbackDraft {
+  owner: string | null;
+  kind: FeedbackKind;
+  body: string;
+}
+
+const DRAFT_KEY = "pqp:feedback-draft";
+
+function loadDraft(): FeedbackDraft {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<FeedbackDraft>;
+      if (
+        (typeof parsed.owner === "string" || parsed.owner === null) &&
+        typeof parsed.body === "string" &&
+        FEEDBACK_KINDS.includes(parsed.kind as FeedbackKind)
+      ) {
+        return {
+          owner: parsed.owner,
+          kind: parsed.kind as FeedbackKind,
+          body: parsed.body.slice(0, FEEDBACK_BODY_MAX_LENGTH),
+        };
+      }
+    }
+  } catch {
+    // Storage blocked or a malformed value: start empty.
+  }
+  return { owner: null, kind: "bug", body: "" };
+}
+
+const draft: FeedbackDraft = loadDraft();
+
+function persistDraft() {
+  try {
+    if (draft.body === "" && draft.kind === "bug") {
+      sessionStorage.removeItem(DRAFT_KEY);
+    } else {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    }
+  } catch {
+    // Private mode or quota: the in-memory copy still covers tab switches.
+  }
+}
+
+type SendOutcome = "sent" | "rateLimited" | "failed";
+
+/**
+ * The send in flight, and how the last one ended if nobody was looking. Both
+ * live outside the pane: switching to Ajuda mid-send unmounts it, and coming
+ * back must show "Enviando…" (not a fresh Enviar that posts the report a
+ * second time), then the thanks or the error.
+ */
+let inflight: { owner: string | null; promise: Promise<SendOutcome> } | null = null;
+let unseen: { owner: string | null; outcome: SendOutcome } | null = null;
+
+function startSend(
+  owner: string | null,
+  payload: Parameters<typeof sendFeedback>[0],
+): Promise<SendOutcome> {
+  const promise = sendFeedback(payload)
+    .then(
+      (): SendOutcome => {
+        if (draft.owner === owner) {
+          draft.body = "";
+          draft.kind = "bug";
+          persistDraft();
+        }
+        return "sent";
+      },
+      (err: unknown): SendOutcome =>
+        err instanceof ApiError && err.status === 429 ? "rateLimited" : "failed",
+    )
+    .then((outcome) => {
+      inflight = null;
+      unseen = { owner, outcome };
+      return outcome;
+    });
+  inflight = { owner, promise };
+  return promise;
+}
 
 /** From this share of the limit the counter turns amber. */
 const COUNTER_WARN_RATIO = 0.9;
@@ -69,21 +146,37 @@ export function FeedbackSection({
     draft.owner = userId;
     draft.kind = "bug";
     draft.body = "";
+    persistDraft();
   }
   const { t } = useTranslation();
+  const outcomeMessage = (outcome: "rateLimited" | "failed") =>
+    outcome === "rateLimited"
+      ? t("settings.feedback.rateLimited")
+      : t("settings.feedback.error");
+  // Read once: a send still running, or one that ended while this pane was
+  // away. Cleared in the effect below, never here (React may call this twice).
+  const [initial] = useState(() => ({
+    pending: inflight !== null && inflight.owner === userId,
+    outcome: inflight === null && unseen?.owner === userId ? unseen.outcome : null,
+  }));
   const [kind, setKindState] = useState<FeedbackKind>(draft.kind);
   const [body, setBodyState] = useState(draft.body);
   const setKind = (next: FeedbackKind) => {
     draft.kind = next;
+    persistDraft();
     setKindState(next);
   };
   const setBody = (next: string) => {
     draft.body = next;
+    persistDraft();
     setBodyState(next);
   };
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(initial.pending);
+  const [sent, setSent] = useState(initial.outcome === "sent");
+  const [error, setError] = useState<string | null>(
+    initial.outcome && initial.outcome !== "sent" ? outcomeMessage(initial.outcome) : null,
+  );
+  const mounted = useRef(false);
   const messageId = useId();
   const counterId = useId();
   const noteId = useId();
@@ -97,6 +190,36 @@ export function FeedbackSection({
   // region, so focus is what reads it); after a failure, back to Enviar once
   // it is enabled again; after "Enviar outro", to the message.
   const focusAfter = useRef<"result" | "send" | "message" | null>(null);
+
+  const settle = (outcome: SendOutcome) => {
+    if (unseen?.owner === userId) unseen = null;
+    setSending(false);
+    if (outcome === "sent") {
+      focusAfter.current = "result";
+      setKindState("bug");
+      setBodyState("");
+      setSent(true);
+    } else {
+      focusAfter.current = "send";
+      setError(outcomeMessage(outcome));
+    }
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    if (unseen?.owner === userId) unseen = null;
+    const current = inflight;
+    if (current && current.owner === userId) {
+      void current.promise.then((outcome) => {
+        if (mounted.current) settle(outcome);
+      });
+    }
+    return () => {
+      mounted.current = false;
+    };
+    // Mount only: a send started here is followed by `submit` itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (sending) return;
@@ -171,30 +294,17 @@ export function FeedbackSection({
     );
   }
 
-  const submit = async () => {
-    if (sending || body.trim().length === 0) return;
+  const submit = () => {
+    if (sending || inflight !== null || body.trim().length === 0) return;
     setSending(true);
     setError(null);
-    try {
-      await sendFeedback({
-        kind,
-        body: body.trim(),
-        context: buildFeedbackContext(voice),
-      });
-      focusAfter.current = "result";
-      draft.body = "";
-      draft.kind = "bug";
-      setSent(true);
-    } catch (err) {
-      focusAfter.current = "send";
-      setError(
-        err instanceof ApiError && err.status === 429
-          ? t("settings.feedback.rateLimited")
-          : t("settings.feedback.error"),
-      );
-    } finally {
-      setSending(false);
-    }
+    void startSend(userId, {
+      kind,
+      body: body.trim(),
+      context: buildFeedbackContext(voice),
+    }).then((outcome) => {
+      if (mounted.current) settle(outcome);
+    });
   };
 
   // Ctrl+Enter, or Cmd+Enter on a Mac, sends from the message box. Not while
@@ -203,7 +313,7 @@ export function FeedbackSection({
     if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
     if (event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (canSend) void submit();
+    if (canSend) submit();
   };
 
   const kindOptions = FEEDBACK_KINDS.map((option) => ({
@@ -340,7 +450,7 @@ export function FeedbackSection({
               size="sm"
               aria-describedby={empty ? noteId : undefined}
               disabled={!canSend}
-              onClick={() => void submit()}
+              onClick={submit}
               className="h-11 flex-1 text-sm @lg:h-[var(--control-sm)] @lg:flex-none @lg:text-xs"
             >
               {sending ? t("settings.feedback.sending") : t("settings.feedback.send")}

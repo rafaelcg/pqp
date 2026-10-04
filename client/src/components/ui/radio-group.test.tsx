@@ -218,7 +218,9 @@ describe("manual activation", () => {
     radios()[0]!.focus();
     press("ArrowRight");
     expect(onChange).toHaveBeenCalledWith("dark");
-    // Enter is the button's own business in auto mode, not the group's.
+    // Enter is the button's own business in auto mode, not the group's: on an
+    // option that is not checked, the group must not select it.
+    radios()[2]!.focus();
     press("Enter");
     expect(onChange).toHaveBeenCalledTimes(1);
   });

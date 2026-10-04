@@ -140,6 +140,40 @@ describe("ConnectionsSection", () => {
     );
   });
 
+  it("shows what the server holds when an earlier change landed and a later one failed", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    let landFirst!: () => void;
+    let failSecond!: (error: unknown) => void;
+    api.updateConnectionVisibility
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          landFirst = () => resolve({ connection: { ...STEAM, visibility: "public" } });
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          failSecond = reject;
+        }),
+      );
+    const el = await render();
+    const select = el.querySelector("select")!;
+    const pick = async (value: string) =>
+      act(async () => {
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    await pick("public");
+    await pick("hidden");
+    await act(async () => landFirst());
+    await act(async () => failSecond(new ApiError(503, "x")));
+    expect(api.updateConnectionVisibility).toHaveBeenCalledTimes(2);
+    expect(select.value).toBe("public");
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not save that setting.",
+    );
+  });
+
   it("sets the linked name in mono", async () => {
     api.fetchConnectionConfig.mockResolvedValue({ steam: true });
     api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
@@ -324,9 +358,9 @@ describe("ConnectionsSection", () => {
       "pqp.connection.pending",
       JSON.stringify({ provider: "steam", at: Date.now() }),
     );
-    sessionStorage.setItem("pqp.connection.error", "Already linked elsewhere.");
+    sessionStorage.setItem("pqp.connection.error", "That account is already connected to someone else on pqp.");
     el = await render();
-    expect(el.textContent).toContain("Already linked elsewhere.");
+    expect(el.textContent).toContain("That account is already connected to someone else on pqp.");
     expect(el.textContent).not.toContain("Connection cancelled");
   });
 

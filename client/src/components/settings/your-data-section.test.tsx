@@ -253,6 +253,10 @@ describe("YourDataSection export feedback", () => {
     await tick(10_000);
     expect(exportButton().textContent).toBe("Download in 44 s");
     expect(alert?.isConnected).toBe(true);
+    // The alert is said once: the countdown a screen reader would hear every
+    // second is hidden from it.
+    expect(alert?.textContent).toBe("Too many downloads in a row. Try again in 54 s.");
+    expect(alert?.parentElement?.textContent).toContain("Try again in 44 s.");
 
     await tick(44_000);
     expect(exportButton().disabled).toBe(false);
@@ -323,6 +327,20 @@ describe("DeleteAccountDialog", () => {
     );
     typeTag();
   }
+
+  it("cannot be dismissed while the delete is in flight", async () => {
+    fetchMock.mockReturnValue(new Promise(() => {}));
+    const onCancel = vi.fn();
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={onCancel} onDeleted={() => {}} />,
+    );
+    typeTag();
+    await act(async () => confirmButton().click());
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 
   it("shows the localized line for the breaker's 503, never its code", async () => {
     respond(503, JSON.stringify({ error: "database_unavailable" }));

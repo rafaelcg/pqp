@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Check, Download, ExternalLink, Info } from "lucide-react";
+import { Check, CircleX, Download, ExternalLink, Info } from "lucide-react";
 import { deleteConfirmationMatches, expectedDeleteConfirmation, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -12,7 +12,6 @@ import {
   SettingsNotice,
   SettingsRow,
   useInlineSave,
-  type InlineSaveState,
 } from "@/components/settings/kit";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -97,6 +96,9 @@ function useDataExport(enabled: boolean) {
   const doneTimer = useRef<number | null>(null);
   const [until, setUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // The wait as it read when the limiter answered. Screen readers hear this
+  // once; the visible countdown ticks every second and is hidden from them.
+  const [announcedWait, setAnnouncedWait] = useState<number>(0);
 
   useEffect(
     () => () => {
@@ -146,6 +148,7 @@ function useDataExport(enabled: boolean) {
           const current = Date.now();
           setNow(current);
           setUntil(current + err.retryAfterMs);
+          setAnnouncedWait(Math.ceil(err.retryAfterMs / 1000));
           return;
         }
         throw localizedFailure(err, failed);
@@ -167,28 +170,30 @@ function useDataExport(enabled: boolean) {
     }, failed);
   }, [t, exp.run]);
 
-  const state: InlineSaveState = waiting
-    ? {
-        kind: "error",
-        message: t("settings.data.exportCooldown", { time: formatWait(waitSeconds) }),
-      }
-    : exp.state;
-
-  const status =
-    state.kind === "idle" && doneFile ? (
-      <p
-        role="status"
-        aria-live="polite"
-        className="mt-1.5 flex animate-fade-in items-start gap-1.5 text-xs text-text-secondary"
-      >
-        <Check aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-success" />
-        <span className="min-w-0 text-pretty [overflow-wrap:anywhere]">
-          {t("settings.data.exportDone", { file: doneFile })}
-        </span>
-      </p>
-    ) : (
-      <SettingsInlineStatus state={state} />
-    );
+  const status = waiting ? (
+    <p className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
+      <CircleX aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+      <span aria-hidden className="min-w-0 text-pretty">
+        {t("settings.data.exportCooldown", { time: formatWait(waitSeconds) })}
+      </span>
+      <span role="alert" className="sr-only">
+        {t("settings.data.exportCooldown", { time: formatWait(announcedWait) })}
+      </span>
+    </p>
+  ) : exp.state.kind === "idle" && doneFile ? (
+    <p
+      role="status"
+      aria-live="polite"
+      className="mt-1.5 flex animate-fade-in items-start gap-1.5 text-xs text-text-secondary"
+    >
+      <Check aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-success" />
+      <span className="min-w-0 text-pretty [overflow-wrap:anywhere]">
+        {t("settings.data.exportDone", { file: doneFile })}
+      </span>
+    </p>
+  ) : (
+    <SettingsInlineStatus state={exp.state} />
+  );
 
   return {
     download,
@@ -356,6 +361,11 @@ export function DeleteAccountDialog({
   // Settings is unmounted while this dialog is open; tell it to put focus back
   // on "Apagar conta…" when it returns.
   function cancel() {
+    // Leaving while the delete is in flight would not stop it: the account
+    // would still go, after the person believed they had backed out.
+    if (busy) {
+      return;
+    }
     deleteFocusReturnAt = Date.now();
     onCancel();
   }
@@ -398,6 +408,7 @@ export function DeleteAccountDialog({
       // A stray click on the backdrop must not be able to dismiss the one
       // screen in the app whose next action cannot be undone.
       closeOnBackdrop={false}
+      dismissible={!busy}
       // The long text scrolls; the one thing the person has to do does not.
       // The typed confirmation and whatever the delete answered sit above the
       // buttons, so they are on screen however short the window is.

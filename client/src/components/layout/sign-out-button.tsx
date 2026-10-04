@@ -1,5 +1,6 @@
 import { useClerk } from "@clerk/clerk-react";
 import { LogOut } from "lucide-react";
+import { useSettingsShell } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
 import { desktopSignedOutPath } from "@/lib/desktop-auth-flow";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -39,6 +40,9 @@ export function SignOutButton({ className }: { className?: string }) {
 function ClerkSignOut({ className }: { className?: string }) {
   const { signOut } = useClerk();
   const { t } = useTranslation();
+  // Inside Settings, staged profile edits are asked about before the session
+  // goes; outside it this never holds.
+  const { holdForDrafts } = useSettingsShell();
 
   return (
     <Button
@@ -46,7 +50,10 @@ function ClerkSignOut({ className }: { className?: string }) {
       className={className}
       // Web goes to `/`. Electron stays on `/app` so Clerk does not hop
       // into Chrome. The signed-out prompt is the next screen there.
-      onClick={() => void signOut({ redirectUrl: desktopSignedOutPath() })}
+      onClick={() => {
+        if (holdForDrafts()) return;
+        void signOut({ redirectUrl: desktopSignedOutPath() });
+      }}
     >
       <LogOut aria-hidden className="h-4 w-4" />
       {t("settings.signOut")}

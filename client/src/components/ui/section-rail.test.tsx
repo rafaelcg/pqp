@@ -144,3 +144,25 @@ describe("SectionRail", () => {
     outside.remove();
   });
 });
+
+describe("SectionRail scrolling", () => {
+  it("scrolls the selected tab into view when it changes, not on every re-render", () => {
+    const scroll = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scroll;
+    try {
+      render("profile");
+      const first = scroll.mock.calls.length;
+      // A parent that builds `sections` anew on each render (a keystroke in
+      // another field) must not snap the strip back.
+      render("profile");
+      render("profile");
+      expect(scroll.mock.calls.length).toBe(first);
+      render("voice");
+      expect(scroll.mock.calls.length).toBe(first + 1);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+});
+

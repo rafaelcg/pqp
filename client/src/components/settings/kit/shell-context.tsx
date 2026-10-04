@@ -18,6 +18,12 @@ export interface SettingsShellValue {
    */
   profileHandleError?: string | null;
   /**
+   * Asked before leaving the account (sign out). True means staged profile
+   * edits stopped it and Perfil now asks to save or discard. Optional so a
+   * test can build the value without it.
+   */
+  holdForDrafts?: () => boolean;
+  /**
    * Where the pane header's actions render. Internal: tabs use
    * `SettingsHeaderActions`, never this.
    */
@@ -41,11 +47,18 @@ export const SettingsShellContext = createContext<SettingsShellValue>(NOOP_SHELL
 export function useSettingsShell(): Pick<
   SettingsShellValue,
   "profileDirty" | "openSection"
-> & { profileHandleError: string | null } {
-  const { profileDirty, openSection, profileHandleError } =
+> & { profileHandleError: string | null; holdForDrafts: () => boolean } {
+  const { profileDirty, openSection, profileHandleError, holdForDrafts } =
     useContext(SettingsShellContext);
-  return { profileDirty, openSection, profileHandleError: profileHandleError ?? null };
+  return {
+    profileDirty,
+    openSection,
+    profileHandleError: profileHandleError ?? null,
+    holdForDrafts: holdForDrafts ?? notHeld,
+  };
 }
+
+const notHeld = () => false;
 
 /**
  * Secondary or ghost buttons for the pane header, beside the title the shell

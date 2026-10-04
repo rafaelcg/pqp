@@ -260,6 +260,61 @@ describe("FeedbackSection", () => {
     expect(radios()[2]!.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("keeps the draft in sessionStorage, so a reload for a language change keeps it", () => {
+    mount("user-a");
+    type("relato longo");
+    expect(JSON.parse(sessionStorage.getItem("pqp:feedback-draft")!)).toMatchObject({
+      owner: "user-a",
+      body: "relato longo",
+    });
+  });
+
+  it("comes back mid-send as sending, not as a second Enviar", async () => {
+    let finish!: () => void;
+    sendFeedback.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    mount();
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount();
+    expect(sendButton().disabled).toBe(true);
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    expect(sendFeedback).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host!.textContent).toContain("We read everything");
+  });
+
+  it("shows the thanks when the send finished while the pane was away", async () => {
+    let finish!: () => void;
+    sendFeedback.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    mount();
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    act(() => root?.unmount());
+    host?.remove();
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    mount();
+    expect(host!.textContent).toContain("We read everything");
+  });
+
   it("keeps a draft for the same account and drops it for another", () => {
     mount("user-a");
     type("relato privado da conta A");

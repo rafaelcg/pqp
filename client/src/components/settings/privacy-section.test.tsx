@@ -332,7 +332,9 @@ describe("PrivacySection", () => {
   });
 
   it("says nothing was unblocked when the request fails", async () => {
-    const onUnblockUser = vi.fn().mockRejectedValue(new ApiError(503, "x"));
+    const onUnblockUser = vi
+      .fn()
+      .mockRejectedValue(new ApiError(503, "Upstream unavailable"));
     mount({ onUnblockUser });
     await act(async () => {
       host!
@@ -342,7 +344,9 @@ describe("PrivacySection", () => {
       await Promise.resolve();
     });
     expect(host!.textContent).not.toContain("unblocked");
-    expect(host!.querySelector('[role="alert"]')).not.toBeNull();
+    const alert = host!.querySelector('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(alert!.textContent).not.toContain("Upstream unavailable");
   });
 
   it("goes back to the stored option and says so in words when the write fails", async () => {
@@ -375,14 +379,16 @@ describe("PrivacySection", () => {
       host!.querySelector<HTMLButtonElement>('button[aria-label="Unblock Trolinho"]')!;
 
     // A failed request keeps the row, says why, and announces nothing.
-    unblockUser.mockRejectedValueOnce(new ApiError(503, "x"));
+    unblockUser.mockRejectedValueOnce(new ApiError(503, "Upstream unavailable"));
     await act(async () => {
       unblockButton().click();
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(unblockButton()).not.toBeNull();
-    expect(host!.querySelector('[role="alert"]')).not.toBeNull();
+    const alert = host!.querySelector('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(alert!.textContent).not.toContain("Upstream unavailable");
     expect(host!.textContent).not.toContain("unblocked");
 
     unblockUser.mockResolvedValueOnce({ ok: true });

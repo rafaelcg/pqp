@@ -415,7 +415,10 @@ function ProviderRow({
     void visibility.run(async () => {
       try {
         const { connection } = await updateConnectionVisibility(provider, next);
-        if (save === latestSave.current) onChanged(provider, connection);
+        // Every success is applied, not only the newest: the writes run in
+        // order, so if a later one fails the row still shows what the server
+        // holds rather than the value from before both.
+        onChanged(provider, connection);
       } finally {
         if (save === latestSave.current) setPending(null);
       }

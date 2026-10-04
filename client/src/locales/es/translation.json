@@ -1808,6 +1808,8 @@
   "settings.connections.loadFailed": "No se pudieron cargar las conexiones.",
   "settings.connections.connectFailed": "No se pudo iniciar esa conexión.",
   "settings.connections.completeFailed": "No se pudo terminar esa conexión.",
+  "settings.connections.alreadyLinked": "Esa cuenta ya está conectada a otra persona en pqp.",
+  "settings.connections.expired": "Esa solicitud de conexión expiró. Intenta conectar de nuevo.",
   "settings.connections.saveFailed": "No se pudo guardar ese ajuste.",
   "settings.connections.disconnectFailed": "No se pudo desconectar esa cuenta.",
   "settings.connections.visibility.label": "Quién puede verlo",

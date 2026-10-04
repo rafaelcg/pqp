@@ -46,7 +46,12 @@ export const AVATAR_PRESETS = [
 let configPromise: Promise<{ enabled: boolean }> | null = null;
 
 export function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
-  configPromise ??= fetchAvatarConfig().catch(() => ({ enabled: false }));
+  configPromise ??= fetchAvatarConfig().catch(() => {
+    // A failed read is not the server's answer: forget it, so the next open
+    // of Settings asks again instead of hiding uploads for the whole tab.
+    configPromise = null;
+    return { enabled: false };
+  });
   return configPromise;
 }
 

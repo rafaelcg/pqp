@@ -18,7 +18,7 @@ import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type M
 import { intlLocale } from "@/lib/locale";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
-import { ApiError, updateMe } from "@/lib/api";
+import { ApiError, fetchMe, updateMe } from "@/lib/api";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { isDesktopApp } from "@/lib/desktop";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
@@ -800,12 +800,25 @@ export function SettingsModal({
           setSection("profile");
           setHandleError(message);
           setSaveError(message);
-        } else if (err instanceof ApiError && err.status === 409 && /username/i.test(err.message)) {
-          setSaveError(t("settings.profile.usernameExhausted"));
         } else {
-          setSaveError(
-            inlineErrorMessage(err, t("settings.saveFailed"), t("settings.status.rateLimited")),
-          );
+          if (err instanceof ApiError && err.status === 409 && /username/i.test(err.message)) {
+            setSaveError(t("settings.profile.usernameExhausted"));
+          } else {
+            setSaveError(
+              inlineErrorMessage(err, t("settings.saveFailed"), t("settings.status.rateLimited")),
+            );
+          }
+          if (linkChanged) {
+            // The server claims the link before it writes the rest, so a
+            // refusal of another field can leave the link already this
+            // account's (and its 30 days running). Read the account back so
+            // Perfil shows what the server holds.
+            void fetchMe()
+              .then((fresh) => {
+                if (fresh.handle !== user.handle) onUserUpdated(fresh);
+              })
+              .catch(() => undefined);
+          }
         }
       }
     } finally {
@@ -844,10 +857,18 @@ export function SettingsModal({
       return;
     }
     const handleChange = pendingHandleChange(user, drafts);
-    if (handleChange && validateHandle(drafts.handle.trim()) !== null) {
+    const handleRejection = handleChange ? validateHandle(drafts.handle.trim()) : null;
+    if (handleRejection !== null) {
       // Said before the 30-day confirm, not after it: confirming a link the
-      // server will refuse is a step that only leads to an error.
-      const message = t("settings.unsaved.handle.invalid");
+      // server will refuse is a step that only leads to an error. A reserved
+      // or blocked word fits the format, so it gets the same line the field
+      // showed while typing, not the format rule.
+      const message =
+        handleRejection === "reserved"
+          ? t("claim.reserved")
+          : handleRejection === "blocked"
+            ? t("claim.blocked")
+            : t("settings.unsaved.handle.invalid");
       setSection("profile");
       setHandleError(message);
       setSaveError(message);
@@ -867,14 +888,25 @@ export function SettingsModal({
    * out, and focus lands on "Continuar editando". Not on Salvar: a second
    * Escape and a reflex Enter used to save. Every attempt does the same.
    */
+  /**
+   * True when staged profile edits stop the person leaving: Perfil comes up
+   * with the bar asking to save or discard. Used by close and by sign out.
+   */
+  function holdForDrafts(): boolean {
+    if (!profileDirty) {
+      return false;
+    }
+    if (active.id !== "profile") {
+      setCloseJumped(true);
+    }
+    setSection("profile");
+    setCloseBlocked(true);
+    setFocusGuardNonce((n) => n + 1);
+    return true;
+  }
+
   function requestClose() {
-    if (profileDirty) {
-      if (active.id !== "profile") {
-        setCloseJumped(true);
-      }
-      setSection("profile");
-      setCloseBlocked(true);
-      setFocusGuardNonce((n) => n + 1);
+    if (holdForDrafts()) {
       return;
     }
     onClose();
@@ -981,14 +1013,22 @@ export function SettingsModal({
   // context updates once the header has mounted.
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
 
+  // Every sign-out button in the dialog asks this first. Signing out revokes
+  // the session before the page leaves, so the browser's leave prompt would
+  // come too late to keep anything. Stable, read through a ref.
+  const holdForDraftsRef = useRef(holdForDrafts);
+  holdForDraftsRef.current = holdForDrafts;
+  const holdForUnsaved = useCallback(() => holdForDraftsRef.current(), []);
+
   const shell = useMemo<SettingsShellValue>(
     () => ({
       profileDirty,
       openSection,
       headerActionsSlot,
       profileHandleError: handleError,
+      holdForDrafts: holdForUnsaved,
     }),
-    [profileDirty, openSection, headerActionsSlot, handleError],
+    [profileDirty, openSection, headerActionsSlot, handleError, holdForUnsaved],
   );
 
   // Memoized: the rail scrolls the active tab into view whenever this list

@@ -144,18 +144,35 @@ export function callbackParamsFromLocation(search: string): Record<string, strin
   return paramsFromSearch(search);
 }
 
-/** Prefer the API's own reason (409 already linked, cancelled) over a generic fallback. */
+/**
+ * What the Conexões tab says when the provider's return could not be finished.
+ * Never the API's own sentence, which is English: the reasons a person can act
+ * on (the account belongs to someone else, the request went stale, they
+ * cancelled at the provider) get their own line, everything else the fallback.
+ */
+export interface CompleteFailureMessages {
+  alreadyLinked: string;
+  expired: string;
+  cancelled: string;
+  fallback: string;
+}
+
 export function messageFromCompleteFailure(
   caught: unknown,
-  fallback: string,
+  messages: CompleteFailureMessages,
 ): string {
   if (caught instanceof ApiError) {
-    const message = caught.message.trim();
-    if (message.length > 0) {
-      return message;
+    if (caught.status === 409) {
+      return messages.alreadyLinked;
+    }
+    if (caught.status === 400 && /cancel|refused/i.test(caught.message)) {
+      return messages.cancelled;
+    }
+    if (caught.status === 400 && /expired|already used/i.test(caught.message)) {
+      return messages.expired;
     }
   }
-  return fallback;
+  return messages.fallback;
 }
 
 export function stashConnectionError(
