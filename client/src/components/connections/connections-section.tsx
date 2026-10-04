@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   CONNECTION_PROVIDERS,
   type ConnectionConfig,
@@ -9,7 +9,6 @@ import {
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ConnectionGlyph,
   UPCOMING_CONNECTION_PROVIDERS,
@@ -21,10 +20,11 @@ import {
   SettingsNotice,
   SettingsRow,
   SettingsSelect,
+  SettingsSkeletonRows,
+  inlineErrorMessage,
   useInlineSave,
 } from "@/components/settings/kit";
 import {
-  ApiError,
   disconnectConnection,
   fetchConnectionConfig,
   fetchMyConnections,
@@ -33,6 +33,7 @@ import {
 } from "@/lib/api";
 import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 const PROVIDER_NAME: Record<ConnectionGlyphProvider, MessageKey> = {
   steam: "connections.provider.steam",
@@ -52,10 +53,11 @@ const VISIBILITY_LABEL: Record<ConnectionVisibility, MessageKey> = {
 
 const VISIBILITIES = ["hidden", "shared", "public"] as const;
 
-/** An `ApiError` says what the server refused; anything else gets our sentence. */
-function apiMessage(caught: unknown, fallback: string): string {
-  return caught instanceof ApiError ? caught.message : fallback;
-}
+/** Splits "Conectado como {name}" so the name can be drawn on its own. */
+const NAME_SLOT = "\u0000";
+
+/** A busy button keeps focus: it looks disabled and ignores the click. */
+const BLOCKED_BUTTON = "cursor-not-allowed opacity-40 active:scale-100";
 
 type Load =
   | { kind: "loading" }
@@ -91,7 +93,7 @@ export function ConnectionsSection() {
         if (isAlive()) {
           setLoad({
             kind: "failed",
-            message: apiMessage(caught, t("settings.connections.loadFailed")),
+            message: inlineErrorMessage(caught, t("settings.connections.loadFailed")),
           });
         }
       }
@@ -145,9 +147,7 @@ export function ConnectionsSection() {
     ? CONNECTION_PROVIDERS.some((provider) => ready.config[provider] === true)
     : false;
   const soonProviders: ConnectionGlyphProvider[] = [
-    ...(ready
-      ? CONNECTION_PROVIDERS.filter((provider) => !rowProviders.includes(provider))
-      : []),
+    ...CONNECTION_PROVIDERS.filter((provider) => !rowProviders.includes(provider)),
     ...UPCOMING_CONNECTION_PROVIDERS,
   ];
 
@@ -156,21 +156,11 @@ export function ConnectionsSection() {
       <SettingsGroup title={linkedTitle} description={linkedDescription}>
         {callbackNotice}
         {load.kind === "loading" ? (
-          <div aria-busy="true" aria-label={t("settings.connections.loading")}>
-            {[0, 1, 2].map((index) => (
-              <div
-                key={index}
-                className="flex min-h-12 items-center gap-3 border-border px-4 py-3 [&:not(:first-child)]:border-t"
-              >
-                <Skeleton className="h-9 w-9 shrink-0 rounded-[var(--radius-card)]" />
-                <div className="min-w-0 flex-1 space-y-2">
-                  <Skeleton className="h-3.5 w-28" />
-                  <Skeleton className="h-3 w-40" />
-                </div>
-                <Skeleton className="h-[var(--control-sm)] w-20" />
-              </div>
-            ))}
-          </div>
+          <SettingsSkeletonRows
+            label={t("settings.connections.loading")}
+            leading="tile"
+            count={3}
+          />
         ) : null}
         {load.kind === "failed" ? (
           <SettingsNotice
@@ -211,19 +201,26 @@ export function ConnectionsSection() {
           : null}
       </SettingsGroup>
 
-      <SettingsGroup title={t("settings.connections.comingSoon")}>
-        <ul className="flex flex-wrap gap-x-5 gap-y-2 px-4 py-3">
-          {soonProviders.map((provider) => (
-            <li
-              key={provider}
-              className="flex items-center gap-2 text-sm text-text-tertiary"
-            >
-              <ConnectionGlyph provider={provider} className="h-5 w-5" />
-              {t(PROVIDER_NAME[provider])}
-            </li>
-          ))}
-        </ul>
-      </SettingsGroup>
+      {/* Drawn once the config is known, so the list does not grow when the
+          providers this server has not set up join it. */}
+      {ready ? (
+        <SettingsGroup title={t("settings.connections.comingSoon")}>
+          <ul className="flex flex-wrap gap-x-5 gap-y-2 px-4 py-3">
+            {soonProviders.map((provider) => (
+              <li
+                key={provider}
+                className="flex items-center gap-2 text-sm text-text-tertiary"
+              >
+                <ConnectionGlyph
+                  provider={provider}
+                  className="h-5 w-5 opacity-60"
+                />
+                {t(PROVIDER_NAME[provider])}
+              </li>
+            ))}
+          </ul>
+        </SettingsGroup>
+      ) : null}
     </div>
   );
 }
@@ -241,15 +238,23 @@ function ProviderRow({
 }) {
   const { t } = useTranslation();
   const selectId = useId();
+  const nameId = useId();
   const visibility = useInlineSave();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // The option just picked, shown while its write runs, so the select does
+  // not snap back to the old value under "Salvando…".
+  const [pending, setPending] = useState<ConnectionVisibility | null>(null);
+  const latestSave = useRef(0);
   const name = t(PROVIDER_NAME[provider]);
   const saving = visibility.state.kind === "saving";
-  const disabled = busy || saving;
+  // Busy buttons stay focusable (aria-disabled, click ignored) so keyboard
+  // focus does not drop to the page while the request runs.
+  const buttonsBlocked = busy || saving;
 
   async function connect() {
+    if (buttonsBlocked) return;
     onAction();
     setActionError(null);
     setBusy(true);
@@ -258,22 +263,23 @@ function ProviderRow({
       window.location.assign(url);
     } catch (caught) {
       setBusy(false);
-      setActionError(apiMessage(caught, t("settings.connections.connectFailed")));
+      setActionError(inlineErrorMessage(caught, t("settings.connections.connectFailed")));
     }
   }
 
   function changeVisibility(next: ConnectionVisibility) {
     onAction();
     setActionError(null);
-    const fallback = t("settings.connections.saveFailed");
+    setPending(next);
+    const save = ++latestSave.current;
     void visibility.run(async () => {
       try {
         const { connection } = await updateConnectionVisibility(provider, next);
-        onChanged(provider, connection);
-      } catch (caught) {
-        throw new Error(apiMessage(caught, fallback));
+        if (save === latestSave.current) onChanged(provider, connection);
+      } finally {
+        if (save === latestSave.current) setPending(null);
       }
-    }, fallback);
+    }, t("settings.connections.saveFailed"));
   }
 
   async function disconnect() {
@@ -284,7 +290,9 @@ function ProviderRow({
       await disconnectConnection(provider);
       onChanged(provider, null);
     } catch (caught) {
-      setActionError(apiMessage(caught, t("settings.connections.disconnectFailed")));
+      setActionError(
+        inlineErrorMessage(caught, t("settings.connections.disconnectFailed")),
+      );
     } finally {
       setBusy(false);
     }
@@ -296,17 +304,31 @@ function ProviderRow({
     <SettingsInlineStatus state={visibility.state} />
   );
 
+  const blockedProps = buttonsBlocked
+    ? { "aria-disabled": true as const, className: BLOCKED_BUTTON }
+    : {};
+
+  // The provider's name, so each row's select and buttons are told apart
+  // ("Quem vê isso, Steam") while the visible text stays the same.
+  const nameSpan = (
+    <span id={nameId} hidden>
+      {name}
+    </span>
+  );
+
   const control = linked ? (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={selectId} className="text-xs text-text-tertiary">
+      {nameSpan}
+      <label htmlFor={selectId} className="text-xs text-text-tertiary @lg:sr-only">
         {t("settings.connections.visibility.label")}
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <SettingsSelect
           id={selectId}
-          className="min-w-48 flex-1 @lg:max-w-72"
-          value={linked.visibility}
-          disabled={disabled}
+          aria-describedby={nameId}
+          className="basis-full @lg:w-auto @lg:basis-auto"
+          value={pending ?? linked.visibility}
+          disabled={busy}
           onChange={(event) =>
             changeVisibility(event.target.value as ConnectionVisibility)
           }
@@ -321,9 +343,13 @@ function ProviderRow({
           type="button"
           variant="ghost"
           size="sm"
-          className="shrink-0 text-sm"
-          disabled={disabled}
-          onClick={() => setConfirming(true)}
+          aria-describedby={nameId}
+          aria-busy={busy || undefined}
+          {...blockedProps}
+          className={cn("shrink-0 text-sm", blockedProps.className)}
+          onClick={() => {
+            if (!buttonsBlocked) setConfirming(true);
+          }}
         >
           {busy ? <Spinner /> : null}
           {t("settings.connections.disconnect")}
@@ -331,40 +357,49 @@ function ProviderRow({
       </div>
     </div>
   ) : (
-    <Button
-      type="button"
-      variant="secondary"
-      size="sm"
-      disabled={disabled}
-      onClick={() => void connect()}
-    >
-      {busy ? <Spinner /> : null}
-      {t("settings.connections.connect")}
-    </Button>
+    <>
+      {nameSpan}
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        aria-describedby={nameId}
+        aria-busy={busy || undefined}
+        {...blockedProps}
+        onClick={() => void connect()}
+      >
+        {busy ? <Spinner /> : null}
+        {t("settings.connections.connect")}
+      </Button>
+    </>
   );
 
   return (
-    <div className="flex items-start gap-3 pl-4">
-      <ConnectionGlyph
-        provider={provider}
-        className="mt-3 h-9 w-9 rounded-[var(--radius-card)] p-2"
+    <>
+      <SettingsRow
+        id={provider}
+        label={name}
+        searchable={false}
+        leading={
+          <ConnectionGlyph
+            provider={provider}
+            className="h-9 w-9 rounded-[var(--radius-card)] p-2"
+          />
+        }
+        description={
+          linked ? (
+            <LinkedAs name={linked.displayName} />
+          ) : (
+            t("settings.connections.notLinked")
+          )
+        }
+        control={control}
+        // A select plus Desconectar sits beside the label when the pane has
+        // room and wraps under it when it does not; Conectar stays beside it.
+        wideControl={linked !== null}
+        keepInline={linked === null}
+        status={status}
       />
-      <div className="min-w-0 flex-1 [&>[data-settings-row]]:pl-0">
-        <SettingsRow
-          id={provider}
-          label={name}
-          description={
-            linked
-              ? t("settings.connections.linkedAs", { name: linked.displayName })
-              : t("settings.connections.notLinked")
-          }
-          control={control}
-          // A select row sits under its label (kit grammar). The public
-          // option plus Desconectar do not fit beside a label at 40rem.
-          stacked={linked !== null}
-          status={status}
-        />
-      </div>
       <ConfirmDialog
         open={confirming}
         title={t("settings.connections.disconnectConfirm.title", { provider: name })}
@@ -374,7 +409,22 @@ function ProviderRow({
         onConfirm={() => void disconnect()}
         onClose={() => setConfirming(false)}
       />
-    </div>
+    </>
+  );
+}
+
+/** "Conectado como {name}", with the account's own name set in mono. */
+function LinkedAs({ name }: { name: string }) {
+  const { t } = useTranslation();
+  const [before, after = ""] = t("settings.connections.linkedAs", {
+    name: NAME_SLOT,
+  }).split(NAME_SLOT);
+  return (
+    <>
+      {before}
+      <span className="font-mono break-all text-text-secondary">{name}</span>
+      {after}
+    </>
   );
 }
 
