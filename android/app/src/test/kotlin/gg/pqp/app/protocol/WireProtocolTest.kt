@@ -256,6 +256,11 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
+        // A soundboard play. The clip is not in the frame: each web and
+        // desktop client plays a file it already has. The phone has no
+        // board and no local player for it yet, so dropping the frame is
+        // silence, not a missed message. See docs/SOUNDBOARD.md.
+        "soundboard-play" to "no soundboard on the phone yet; the clip is local playback, not a message",
         // The one-minute-before-hangup notice for the idle-alone timeout
         // (VOICE_IDLE_ALONE_MINUTES). The hangup itself still works correctly
         // without this: it arrives as an ordinary `voice-moderation` frame
