@@ -8,8 +8,20 @@ export interface UnsavedChangesBarProps {
   saving: boolean;
   /** The save just landed: "Salvo" for a moment, then the shell hides the bar. */
   saved?: boolean;
-  /** A close was refused: the guard copy and a danger edge. */
+  /**
+   * A close was refused: the guard copy, a danger edge and a third way out,
+   * "Continuar editando". The shell clears it as soon as the person edits
+   * again, and the bar goes back to its ordinary copy.
+   */
   blocked?: boolean;
+  /** "Continuar editando": drops the guard and goes back to the fields. */
+  onKeepEditing?: () => void;
+  /**
+   * Descartar just ran: "Alterações descartadas" with Desfazer for a few
+   * seconds, instead of a confirm before it. The shell times it out.
+   */
+  discarded?: boolean;
+  onUndoDiscard?: () => void;
   error?: string | null;
   onDiscard: () => void;
   onSave: () => void;
@@ -39,6 +51,9 @@ export function UnsavedChangesBar({
   saving,
   saved = false,
   blocked = false,
+  onKeepEditing,
+  discarded = false,
+  onUndoDiscard,
   error = null,
   onDiscard,
   onSave,
@@ -49,8 +64,12 @@ export function UnsavedChangesBar({
     return null;
   }
 
+  // A moment after an action: a check, a line, and at most an undo.
+  const settled = saved || discarded;
   const message = saved
     ? t("settings.status.saved")
+    : discarded
+      ? t("settings.unsaved.discarded")
     : blocked
       ? t("settings.unsaved.blocked")
       : onShowSource
@@ -62,7 +81,7 @@ export function UnsavedChangesBar({
       <div
         className={cn(
           "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
-          blocked && !saved && "border border-danger",
+          blocked && !settled && "border border-danger",
         )}
       >
         <div
@@ -77,25 +96,51 @@ export function UnsavedChangesBar({
               aria-live="polite"
               className="flex items-center gap-1.5 text-sm text-text"
             >
-              {saved ? (
+              {settled ? (
                 <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
               ) : null}
               {message}
             </p>
-            {error && !saved ? (
+            {error && !settled ? (
               <p role="alert" className="mt-0.5 text-xs text-danger">
                 {error}
               </p>
             ) : null}
           </div>
-          {saved ? null : (
-            <div className="flex shrink-0 items-center gap-2">
+          {saved ? null : discarded ? (
+            onUndoDiscard ? (
+              <Button
+                data-unsaved-undo=""
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onUndoDiscard}
+              >
+                {t("settings.unsaved.undo")}
+              </Button>
+            ) : null
+          ) : (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {blocked && onKeepEditing ? (
+                // The shell focuses this one when a close is refused, so an
+                // Escape followed by a reflex Enter never saves by accident.
+                <Button
+                  data-unsaved-continue=""
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={onKeepEditing}
+                >
+                  {t("settings.unsaved.keepEditing")}
+                </Button>
+              ) : null}
               {onShowSource ? (
                 <Button type="button" variant="ghost" size="sm" onClick={onShowSource}>
                   {t("settings.unsaved.showProfile")}
                 </Button>
               ) : null}
               <Button
+                data-unsaved-discard=""
                 type="button"
                 variant="ghost"
                 size="sm"
@@ -104,7 +149,6 @@ export function UnsavedChangesBar({
               >
                 {t("settings.unsaved.discard")}
               </Button>
-              {/* The shell focuses this one when a close is refused. */}
               <Button
                 data-unsaved-save=""
                 type="button"

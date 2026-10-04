@@ -12,6 +12,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
 import { ApiError, updateMe } from "@/lib/api";
 import { isApplePlatform } from "@/lib/composer-formatting";
+import { isDesktopApp } from "@/lib/desktop";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { HelpSection } from "@/components/layout/help-section";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -38,6 +39,7 @@ import { flashSettingsRow } from "@/components/settings/kit/flash-row";
 import { inlineErrorMessage } from "@/components/settings/kit/use-inline-save";
 import {
   SettingsBuildLine,
+  SettingsNotice,
   SettingsPaneHeader,
   SettingsSectionContext,
   SettingsShellContext,
@@ -199,6 +201,9 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
+/** How long "Alterações descartadas" offers Desfazer. */
+export const DISCARD_UNDO_MS = 5000;
+
 const EMPTY_DRAFTS: ProfileDrafts = {
   displayName: "",
   username: "",
@@ -273,9 +278,13 @@ export function SettingsModal({
   // The public link is somebody else's: said under the link field in Perfil
   // (through the shell context) and in the bar, in the reader's language.
   const [handleError, setHandleError] = useState<string | null>(null);
-  // A close was refused while the profile was dirty.
+  // A close was refused while the profile was dirty. `jumped`: the refusal
+  // also moved the person to Perfil from another tab, and Perfil says why.
   const [closeBlocked, setCloseBlocked] = useState(false);
-  const [focusSaveNonce, setFocusSaveNonce] = useState(0);
+  const [closeJumped, setCloseJumped] = useState(false);
+  // What Descartar threw away, kept for Desfazer a few seconds.
+  const [discarded, setDiscarded] = useState<ProfileDrafts | null>(null);
+  const [focusGuardNonce, setFocusGuardNonce] = useState(0);
   // The 30-day handle lock asks before a save claims or changes the link.
   const [handleConfirm, setHandleConfirm] = useState<"claim" | "change" | null>(null);
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
@@ -423,33 +432,63 @@ export function SettingsModal({
       setNameError(null);
       setHandleError(null);
       setCloseBlocked(false);
+      setCloseJumped(false);
+      setDiscarded(null);
       setSavedFlash(false);
     }
   }, [open, user]);
 
   const profileDirty = isProfileDirty(user, drafts);
 
-  // Descartar or a save hides the bar and unmounts the button that had
-  // focus. Put focus back on the pane so it stays inside the dialog.
+  // Descartar, a save or the end of the undo offer unmounts the button that
+  // had focus. Put focus on Desfazer while it is offered, so a keyboard user
+  // can take the discard back, and on the pane otherwise, so it stays inside
+  // the dialog.
   useEffect(() => {
     if (profileDirty || !open) {
       return;
     }
     const active = document.activeElement;
     if (!active || active === document.body || !active.isConnected) {
-      scrollerRef.current?.focus({ preventScroll: true });
+      const undo = document.querySelector<HTMLButtonElement>("[data-unsaved-undo]");
+      (undo ?? scrollerRef.current)?.focus({ preventScroll: true });
     }
-  }, [profileDirty]);
+  }, [profileDirty, discarded]);
 
   // Back to clean by any route (Descartar, a save, retyping the old value):
   // nothing is blocking a close any more.
   useEffect(() => {
     if (!profileDirty) {
       setCloseBlocked(false);
+      setCloseJumped(false);
       setSaveError(null);
       setHandleError(null);
     }
   }, [profileDirty]);
+
+  // Desfazer is offered for a few seconds, then the bar goes.
+  useEffect(() => {
+    if (!discarded) return;
+    const timer = window.setTimeout(() => setDiscarded(null), DISCARD_UNDO_MS);
+    return () => window.clearTimeout(timer);
+  }, [discarded]);
+
+  // A reload or a closed browser tab would drop staged profile edits without
+  // a word, so the browser asks first while there are any. Not in the desktop
+  // app: Electron cancels the close or reload outright instead of asking,
+  // because the shell does not handle `will-prevent-unload`.
+  useEffect(() => {
+    if (!open || !profileDirty || isDesktopApp()) {
+      return;
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      // Older Chromium and Safari still read this instead of preventDefault.
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [open, profileDirty]);
 
   useEffect(() => {
     if (!savedFlash) return;
@@ -577,16 +616,52 @@ export function SettingsModal({
     }
     // The bar's error was about the last attempt; an edit starts a new one.
     setSaveError(null);
+    // Editing again is the answer to a refused close: the danger edge and
+    // the "why are we on Perfil" line go, and the bar reads as usual.
+    setCloseBlocked(false);
+    setCloseJumped(false);
+    // A new edit replaces whatever Desfazer would have brought back.
+    setDiscarded(null);
   }
 
+  /**
+   * No confirm before it: one slip is cheap to undo. The drafts it threw away
+   * stay behind Desfazer for `DISCARD_UNDO_MS`.
+   */
   function discardProfile() {
     if (user) {
+      setDiscarded(drafts);
       setDrafts(profileDraftsFrom(user));
     }
     setSaveError(null);
     setNameError(null);
     setHandleError(null);
     setCloseBlocked(false);
+    setCloseJumped(false);
+  }
+
+  function undoDiscard() {
+    if (discarded) {
+      setDrafts(discarded);
+    }
+    setDiscarded(null);
+    setSection("profile");
+  }
+
+  /**
+   * "Continuar editando" on a refused close: the guard steps down and focus
+   * goes back to the first field, for somebody who only wanted to leave and
+   * found they could not.
+   */
+  function keepEditing() {
+    setCloseBlocked(false);
+    setCloseJumped(false);
+    window.setTimeout(() => {
+      const field = scrollerRef.current?.querySelector<HTMLElement>(
+        "input:not([type=hidden]):not([type=file]):not([disabled]), textarea:not([disabled])",
+      );
+      (field ?? scrollerRef.current)?.focus({ preventScroll: false });
+    }, 0);
   }
 
   /**
@@ -673,26 +748,34 @@ export function SettingsModal({
 
   /**
    * Escape, the X and the backdrop all come here. With staged profile edits
-   * the dialog does not close: it goes to Perfil, the bar says to save or
-   * discard, and focus lands on Salvar alterações. Every attempt does the same.
+   * the dialog does not close: it goes to Perfil (saying why, when it came
+   * from another tab), the bar asks "Salvar ou descartar?" with a third way
+   * out, and focus lands on "Continuar editando". Not on Salvar: a second
+   * Escape and a reflex Enter used to save. Every attempt does the same.
    */
   function requestClose() {
     if (profileDirty) {
+      if (active.id !== "profile") {
+        setCloseJumped(true);
+      }
       setSection("profile");
       setCloseBlocked(true);
-      setFocusSaveNonce((n) => n + 1);
+      setFocusGuardNonce((n) => n + 1);
       return;
     }
     onClose();
   }
 
   useEffect(() => {
-    if (focusSaveNonce === 0) return;
+    if (focusGuardNonce === 0) return;
     const timer = window.setTimeout(() => {
-      document.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.focus();
+      (
+        document.querySelector<HTMLButtonElement>("[data-unsaved-continue]") ??
+        document.querySelector<HTMLButtonElement>("[data-unsaved-save]")
+      )?.focus();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [focusSaveNonce]);
+  }, [focusGuardNonce]);
 
   // Cmd+S on Apple platforms, Ctrl+S elsewhere: the same path as the button,
   // handle confirm included. Swallowed while Settings is the top dialog even
@@ -724,7 +807,7 @@ export function SettingsModal({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [settingsOpen, handleConfirm]);
 
-  const barVisible = profileDirty || savedFlash;
+  const barVisible = profileDirty || savedFlash || discarded !== null;
 
   // The pane is the only scroller. A section always opens at its top: the
   // pane used to keep the previous section's offset, so Voz opened 136px down
@@ -870,6 +953,9 @@ export function SettingsModal({
 
                   <SettingsSectionContext.Provider value={active.id}>
                     <div className="space-y-6">
+                      {closeJumped && active.id === "profile" ? (
+                        <SettingsNotice tone="info">{t("settings.unsaved.jumped")}</SettingsNotice>
+                      ) : null}
                       {section === "profile" && (
                         <ProfileSection
                           user={user}
@@ -969,6 +1055,9 @@ export function SettingsModal({
                 saving={saving}
                 saved={savedFlash && !profileDirty}
                 blocked={closeBlocked}
+                onKeepEditing={keepEditing}
+                discarded={discarded !== null && !profileDirty}
+                onUndoDiscard={undoDiscard}
                 error={saveError}
                 onDiscard={discardProfile}
                 onSave={saveProfile}

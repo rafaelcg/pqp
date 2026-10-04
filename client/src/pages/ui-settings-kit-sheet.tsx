@@ -586,6 +586,7 @@ export function SettingsKitSheet() {
             visible
             saving={false}
             blocked
+            onKeepEditing={() => undefined}
             onDiscard={() => undefined}
             onSave={() => undefined}
           />
