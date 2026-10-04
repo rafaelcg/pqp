@@ -235,8 +235,12 @@ function BindingControl({
     >
       {hideLabel ? null : (
         // The button carries the same words for a screen reader, so this
-        // visible copy stays out of the accessibility tree.
-        <span aria-hidden="true" className="text-xs text-text-secondary">
+        // visible copy stays out of the accessibility tree. Same caption style
+        // as the Voz pane's other field labels, until Voz wraps it in a row.
+        <span
+          aria-hidden="true"
+          className="block text-xs uppercase tracking-wide text-paper-muted"
+        >
           {label}
         </span>
       )}
