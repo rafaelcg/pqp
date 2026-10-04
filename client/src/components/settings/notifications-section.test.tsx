@@ -16,6 +16,14 @@ const env = vi.hoisted(() => ({
   subscribed: false,
   permission: "default" as NotificationPermissionState,
   desktop: false,
+  dmDetails: false,
+}));
+
+const sounds = vi.hoisted(() => ({ playCue: vi.fn() }));
+
+vi.mock("@/lib/sounds", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sounds")>()),
+  playCue: sounds.playCue,
 }));
 
 vi.mock("@/lib/push", () => ({
@@ -24,7 +32,7 @@ vi.mock("@/lib/push", () => ({
     if (env.configFails) {
       throw new Error("Request failed");
     }
-    return { enabled: env.serverEnabled, publicKey: "k", dmDetails: false };
+    return { enabled: env.serverEnabled, publicKey: "k", dmDetails: env.dmDetails };
   },
   getCurrentPushSubscription: async () =>
     env.subscribed ? { endpoint: "https://push.example/x" } : null,
@@ -95,7 +103,9 @@ beforeEach(() => {
     subscribed: false,
     permission: "default",
     desktop: false,
+    dmDetails: false,
   });
+  sounds.playCue.mockClear();
 });
 
 afterEach(() => {
@@ -174,4 +184,121 @@ describe("NotificationsSection push rows", () => {
       expect(switchIn("dm-push-details").disabled).toBe(false);
     },
   );
+});
+
+describe("NotificationsSection blocked notice", () => {
+  const reloadButton = () =>
+    host!.querySelector<HTMLButtonElement>(
+      '[data-settings-row="system-notifications"] [role="status"] button',
+    );
+
+  it("offers a Reload button that reloads the page", async () => {
+    const original = window.location;
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...original, reload });
+    try {
+      env.permission = "denied";
+      await mount();
+      const button = reloadButton();
+      expect(button).not.toBeNull();
+      await act(async () => button!.click());
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("has nothing to reload in the desktop app", async () => {
+    env.permission = "denied";
+    env.desktop = true;
+    await mount();
+    expect(reloadButton()).toBeNull();
+  });
+
+  it("says how to unblock instead of only that it is blocked", async () => {
+    env.permission = "denied";
+    await mount();
+    const notice = host!.querySelector(
+      '[data-settings-row="system-notifications"] [role="status"]',
+    );
+    expect(notice?.textContent).toMatch(/padlock/i);
+  });
+});
+
+describe("NotificationsSection direct message push switch", () => {
+  const unavailableLine = () =>
+    host!.querySelector('[data-settings-row="dm-push-details"]')?.textContent ??
+    "";
+
+  it("reads off and says why when push cannot be turned on from here", async () => {
+    env.dmDetails = true;
+    env.serverEnabled = false;
+    await mount();
+    expect(switchIn("dm-push-details").getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(switchIn("dm-push-details").disabled).toBe(true);
+    expect(unavailableLine()).toMatch(/not available here/i);
+  });
+
+  it("reads off and says why while the site is blocked", async () => {
+    env.dmDetails = true;
+    env.permission = "denied";
+    await mount();
+    expect(switchIn("dm-push-details").getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(unavailableLine()).toMatch(/not available here/i);
+  });
+
+  it("keeps the order to turn push on, with the stored choice, when that is possible", async () => {
+    env.dmDetails = true;
+    await mount();
+    expect(switchIn("dm-push-details").disabled).toBe(true);
+    expect(switchIn("dm-push-details").getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(unavailableLine()).toMatch(/turn on push first/i);
+    expect(unavailableLine()).not.toMatch(/not available here/i);
+  });
+});
+
+describe("NotificationsSection sounds", () => {
+  it("puts the ringtones directly under Incoming call", async () => {
+    await mount();
+    const call = host!.querySelector('[data-settings-row="sound-incoming-call"]')!;
+    const ring = host!.querySelector('[data-settings-row="incoming-ring"]')!;
+    // Switch and ringtones share one wrapper, so the group draws no divider
+    // between them; the next row in the group is the outgoing call.
+    expect(call.nextElementSibling).toBe(ring.parentElement);
+    expect(ring.querySelector('[role="radiogroup"]')).not.toBeNull();
+    expect(
+      call.parentElement!.nextElementSibling?.getAttribute("data-settings-row"),
+    ).toBe("sound-outgoing-call");
+  });
+
+  it("plays the ringtone again when the chosen chip is clicked", async () => {
+    await mount();
+    const chosen = host!.querySelector<HTMLButtonElement>(
+      '[data-settings-row="incoming-ring"] [role="radio"][aria-checked="true"]',
+    )!;
+    await act(async () => chosen.click());
+    expect(sounds.playCue).toHaveBeenCalledWith("incomingCall");
+  });
+
+  it("labels every listen button with a visible word and the sound it plays", async () => {
+    await mount();
+    const buttons = [
+      ...host!.querySelectorAll<HTMLButtonElement>(
+        '[data-settings-row^="sound-"] button:not([role="switch"])',
+      ),
+    ];
+    expect(buttons).toHaveLength(6);
+    for (const button of buttons) {
+      expect(button.textContent?.trim()).toBeTruthy();
+      expect(button.getAttribute("aria-label")).toContain(
+        button.textContent!.trim(),
+      );
+    }
+  });
 });
