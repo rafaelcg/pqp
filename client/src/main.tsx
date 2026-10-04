@@ -54,6 +54,7 @@ import { StaleChunkBanner } from "./components/layout/stale-chunk-banner";
 import { recoverFromChunkLoadError } from "./lib/chunk-reload";
 import { isInCall } from "./lib/in-call-state";
 import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
+import { installFileDropGuard } from "./lib/file-drop";
 import { installShareAudioProbe } from "./lib/share-audio-probe";
 import { installShareHealth } from "./lib/share-health";
 import { setStaleChunkBannerVisible } from "./lib/stale-chunk-state";
@@ -482,6 +483,11 @@ rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
 installShareHealth();
+// A file dropped on anything that is not a drop zone must not replace the app
+// with that file (a browser tab, a call in progress and all) or, in the desktop
+// shell, try to. Page-wide on purpose: the landing page and the sign-in screen
+// are as navigable-away-from as the chat. See lib/file-drop.ts.
+installFileDropGuard();
 
 // Cloudflare Pages deletes an old deploy's hashed assets once a new one
 // lands, so a tab left open across a deploy 404s the moment Vite's build

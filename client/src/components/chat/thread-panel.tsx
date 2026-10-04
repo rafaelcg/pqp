@@ -11,6 +11,10 @@ import {
   X,
 } from "lucide-react";
 import { useRef, useState } from "react";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
+import { useFileDropZone } from "@/hooks/use-file-drop-zone";
+import type { DroppedItems } from "@/lib/file-drop";
 import {
   MessageComposer,
   type ComposerSlashContext,
@@ -113,6 +117,19 @@ export function ThreadPanel({
   const { t } = useTranslation();
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  // A thread has its own composer, and so its own drop zone: a file dropped on
+  // the parent channel belongs to the parent, one dropped here to the thread.
+  const attachmentsEnabled = useAttachmentsEnabled();
+  const [droppedItems, setDroppedItems] = useState<DroppedItems | null>(null);
+  const drop = useFileDropZone({
+    mode:
+      attachmentsEnabled === null
+        ? "off"
+        : attachmentsEnabled
+          ? "accept"
+          : "refuse",
+    onDrop: setDroppedItems,
+  });
 
   /* Swipe right to close, the gesture the full-viewport mobile layout implies.
      Deliberately crude: one touch, mostly horizontal, far enough to be meant.
@@ -150,6 +167,7 @@ export function ThreadPanel({
   return (
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
+      {...drop.zoneProps}
       onTouchStart={(event) => {
         if (isDockedPanel()) {
           return;
@@ -173,8 +191,18 @@ export function ThreadPanel({
           onClose();
         }
       }}
-      className="flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
+      className="relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
     >
+      {drop.active && (
+        <FileDropOverlay
+          tone={attachmentsEnabled ? "accept" : "refuse"}
+          label={
+            attachmentsEnabled
+              ? t("chrome.dropToAttach")
+              : t("chrome.dropAttachmentsOff")
+          }
+        />
+      )}
       {/* The header's job is orientation: which channel this hangs off, and a
           way back to it. The name is second, not first, because a thread born
           from a message carries that message AS its name — printing it loudest
@@ -370,6 +398,8 @@ export function ThreadPanel({
         }}
         onTyping={() => controller.notifyTyping()}
         channelId={thread.channelId}
+        droppedItems={droppedItems}
+        onDroppedItemsConsumed={() => setDroppedItems(null)}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
