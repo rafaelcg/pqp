@@ -1,4 +1,4 @@
-import { Volume2 } from "lucide-react";
+import { Info, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   SettingsGroup,
@@ -11,7 +11,6 @@ import {
 } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
-import { Tooltip } from "@/components/ui/tooltip";
 import { useNotificationSettings, useNotificationState } from "@/hooks/use-notifications";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { DOWNLOAD_PAGE_PATH } from "@/lib/downloads";
@@ -78,7 +77,24 @@ export function NotificationsSection() {
                 {t("settings.notifications.unsupported", desktopContext())}
               </SettingsNotice>
             ) : permission === "denied" ? (
-              <SettingsNotice tone="warning">
+              <SettingsNotice
+                tone="warning"
+                // The browser only re-reads a changed site permission on a
+                // new load. The desktop app has no padlock to explain and
+                // nothing to reload: its notice points at system settings.
+                action={
+                  isDesktopApp() ? undefined : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => window.location.reload()}
+                    >
+                      {t("settings.notifications.reload")}
+                    </Button>
+                  )
+                }
+              >
                 {t("settings.notifications.denied", desktopContext())}
               </SettingsNotice>
             ) : null
@@ -96,19 +112,24 @@ export function NotificationsSection() {
         ) : null}
       </SettingsGroup>
 
-      <SettingsGroup title={t("settings.notifications.group.communities.title")}>
+      <SettingsGroup title={t("settings.notifications.group.messages.title")}>
         <SettingsRow
           id="default-level"
           label={t("settings.notifications.levelLabel")}
           description={t("settings.notifications.levelHint")}
-          // Cells sized by their text, not equal: three equal cells cut
-          // "Só @menções" short beside the label and on a phone. The wide
-          // control keeps them inline where they fit.
-          wideControl
+          // Under the label at every width: the hint is two sentences and
+          // "Todas as mensagens" is the longest cell, so beside the label
+          // the control would squeeze both. Cells are sized by their text,
+          // not equal, so none is cut short.
+          stacked
           control={
             <RadioGroup
               variant="segmented"
               fit="content"
+              // One line on a phone: the three labels are 40px tall there
+              // already, but at full size "Todas as mensagens" pushes the
+              // last cell onto a second row.
+              className="max-sm:[&>button]:px-2.5 max-sm:[&>button]:text-xs"
               label={t("settings.notifications.levelLabel")}
               value={state.default}
               onValueChange={setDefaultLevel}
@@ -314,10 +335,12 @@ function PushRow({
  *
  * It is locked while push is off here and could be turned on here, because
  * its effect is invisible until then and "Liga o push primeiro." is a step the
- * person can take. Where this device can never have push (the desktop app, a
- * browser without it, Safari before install) it stays switchable: the
- * preference is for their other devices, and locking it here would leave no
- * way to change it from this one.
+ * person can take. When push cannot be turned on from here (this server has no
+ * push, it failed to load, the site is blocked) that order cannot be followed,
+ * so the switch reads off and a line says push is unavailable. Where this
+ * device can never have push (the desktop app, a browser without it, Safari
+ * before install) it stays switchable: the preference is for their other
+ * devices, and locking it here would leave no way to change it from this one.
  */
 function DirectMessagesGroup({
   push,
@@ -335,6 +358,10 @@ function DirectMessagesGroup({
   // already says why, so this one keeps its ordinary hint.
   const pushBlockedHere =
     push.serverEnabled === false || push.loadFailed || permission === "denied";
+  // Locked and nothing the person can do about it from here: show it off and
+  // say why, instead of an ON switch greyed out beside an order they cannot
+  // follow. The stored choice is untouched; a locked switch writes nothing.
+  const unavailable = locked && pushBlockedHere;
   const state = useNotificationState();
   const [dmDetails, setDmDetails] = useState(false);
   // Set the moment a person touches the switch, so the initial config fetch
@@ -408,9 +435,17 @@ function DirectMessagesGroup({
             ? t("settings.push.dmDetailsNeedsPush")
             : t("settings.push.dmDetailsHint")
         }
-        checked={dmDetails}
+        checked={dmDetails && !unavailable}
         disabled={locked}
         onCheckedChange={toggleDmDetails}
+        status={
+          unavailable ? (
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
+              <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />
+              {t("settings.push.dmDetailsUnavailable")}
+            </p>
+          ) : null
+        }
       />
     </SettingsGroup>
   );
@@ -445,7 +480,7 @@ function SoundsGroup() {
       />
       {SOUND_CUE_OPTIONS.map((option) => {
         const label = t(option.label);
-        return (
+        const row = (
           <SettingsSwitchRow
             key={option.cue}
             id={option.id}
@@ -454,49 +489,69 @@ function SoundsGroup() {
             disabled={!sounds.enabled}
             onCheckedChange={(next) => setSoundCueEnabled(option.cue, next)}
             trailing={
-              <Tooltip
-                label={t("settings.notifications.sounds.preview")}
-                name={t("settings.notifications.sounds.previewCue", { cue: label })}
+              // A visible word, not a hover tooltip: touch has no hover, and
+              // an icon alone is a mnemonic only once someone has told you
+              // what it is. The name says which sound, the text says what
+              // the button does (the name starts with it, so a voice-control
+              // user can say what they see).
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={t("settings.notifications.sounds.previewCue", {
+                  cue: label,
+                })}
+                // 40px on a phone, where it is a thumb target.
+                className="h-10 sm:h-[var(--control-sm)]"
+                disabled={!sounds.enabled || !sounds[option.cue]}
+                onClick={() => playCue(option.cue)}
               >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  // 40px on a phone, where it is a thumb target.
-                  className="h-10 w-10 sm:h-8 sm:w-8"
-                  disabled={!sounds.enabled || !sounds[option.cue]}
-                  onClick={() => playCue(option.cue)}
-                >
-                  <Volume2 aria-hidden className="h-4 w-4" />
-                </Button>
-              </Tooltip>
+                <Volume2 aria-hidden className="h-4 w-4" />
+                {t("settings.notifications.sounds.preview")}
+              </Button>
             }
           />
         );
-      })}
-      <SettingsRow
-        id="incoming-ring"
-        label={t("settings.notifications.sounds.ringLabel")}
-        description={t("settings.notifications.sounds.ringHint")}
-        disabled={ringDisabled}
-        stacked
-        control={
-          <RadioGroup
-            variant="chips"
-            label={t("settings.notifications.sounds.ringLabel")}
-            value={incomingRing}
-            disabled={ringDisabled}
-            onValueChange={(next) => {
-              setIncomingRing(next);
-              playCue("incomingCall");
-            }}
-            options={INCOMING_RING_OPTIONS.map((ring) => ({
-              value: ring.id,
-              label: t(ring.label),
-            }))}
-          />
+        if (option.cue !== "incomingCall") {
+          return row;
         }
-      />
+        // The ringtones belong to this row and only this one, so they hang
+        // under it, indented behind a rule. One wrapper keeps the group from
+        // drawing a divider between the switch and its own chips.
+        return (
+          <div key={option.cue}>
+            {row}
+            <div className="mb-2 ml-4 border-l-2 border-border">
+              <SettingsRow
+                id="incoming-ring"
+                label={t("settings.notifications.sounds.ringLabel")}
+                description={t("settings.notifications.sounds.ringHint")}
+                disabled={ringDisabled}
+                stacked
+                control={
+                  <RadioGroup
+                    variant="chips"
+                    label={t("settings.notifications.sounds.ringLabel")}
+                    value={incomingRing}
+                    disabled={ringDisabled}
+                    // Picking the chip that is already chosen plays it again:
+                    // the hint says a click on a ringtone lets you hear it.
+                    reselect
+                    onValueChange={(next) => {
+                      setIncomingRing(next);
+                      playCue("incomingCall");
+                    }}
+                    options={INCOMING_RING_OPTIONS.map((ring) => ({
+                      value: ring.id,
+                      label: t(ring.label),
+                    }))}
+                  />
+                }
+              />
+            </div>
+          </div>
+        );
+      })}
     </SettingsGroup>
   );
 }
