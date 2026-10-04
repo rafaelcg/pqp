@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { Download, Loader2 } from "lucide-react";
+import { Download } from "lucide-react";
 import { deleteConfirmationMatches, expectedDeleteConfirmation, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  inlineErrorMessage,
   SettingsGroup,
   SettingsInlineStatus,
   SettingsLinkRow,
   SettingsNotice,
   SettingsRow,
+  useInlineSave,
 } from "@/components/settings/kit";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -23,12 +25,14 @@ import {
 /* --------------------------------------------------------------- your data */
 
 /**
- * What a failed request says in the row or the dialog. A server answer is
- * shown as is; anything else (the network dropped, the body never came) gets
- * the tab's own sentence instead of a browser's "Failed to fetch".
+ * Both requests here go through `request()` itself, not `apiFetch`, so a
+ * dropped network arrives as the browser's own `TypeError` ("Failed to
+ * fetch") and a timeout as an `AbortError`, not as an `ApiError`. The kit's
+ * `inlineErrorMessage` shows a plain `Error`'s message as is, so anything that
+ * is not the server's answer becomes the tab's own sentence first.
  */
-function failureMessage(error: unknown, fallback: string): string {
-  return error instanceof ApiError && error.message ? error.message : fallback;
+function localizedFailure(err: unknown, fallback: string): unknown {
+  return err instanceof ApiError ? err : new Error(fallback);
 }
 
 /**
@@ -47,14 +51,20 @@ export function YourDataSection({
   onRequestDelete: () => void;
 }) {
   const { t } = useTranslation();
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  // A download has no "Salvo": the file appearing is the proof. The line says
+  // "Preparando…" while the server builds the copy, and the error after.
+  const exp = useInlineSave({
+    savingLabel: t("settings.data.exporting"),
+    showSaved: false,
+  });
+  const exporting = exp.state.kind === "saving";
 
-  async function download() {
-    setExporting(true);
-    setExportError(null);
-    try {
-      const blob = await exportMyData();
+  function download() {
+    const failed = t("settings.data.exportFailed");
+    void exp.run(async () => {
+      const blob = await exportMyData().catch((err: unknown) => {
+        throw localizedFailure(err, failed);
+      });
       // A Blob has no URL of its own, so one is minted just long enough for the
       // click to fire. The server export uses the same mechanism.
       const url = URL.createObjectURL(blob);
@@ -63,43 +73,24 @@ export function YourDataSection({
       link.download = `pqp-my-data-${new Date().toISOString().slice(0, 10)}.json`;
       link.click();
       URL.revokeObjectURL(url);
-    } catch (err) {
-      setExportError(failureMessage(err, t("settings.data.exportFailed")));
-    } finally {
-      setExporting(false);
-    }
+    }, failed);
   }
-
-  // Not `useInlineSave`: a download has no "Salvo", and the kit's status says
-  // "Salvando…" where this one has to say "Preparando…". The markup is the
-  // kit's saving line; the error goes through the kit itself.
-  const exportStatus = exporting ? (
-    <p
-      role="status"
-      aria-live="polite"
-      className="mt-1.5 flex items-center gap-1.5 text-xs text-text-tertiary"
-    >
-      <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
-      {t("settings.data.exporting")}
-    </p>
-  ) : exportError ? (
-    <SettingsInlineStatus state={{ kind: "error", message: exportError }} />
-  ) : null;
 
   return (
     <div className="space-y-6">
-      <SettingsGroup title={t("settings.data.exportGroup")}>
+      <SettingsGroup title={t("settings.data.group.export.title")}>
         <SettingsRow
           id="export"
-          label={t("settings.data.exportLabel")}
+          label={t("settings.data.row.export.label")}
           description={t("settings.data.exportBody")}
-          status={exportStatus}
+          status={<SettingsInlineStatus state={exp.state} />}
           control={
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => void download()}
+              onClick={download}
               disabled={exporting || !user}
+              aria-label={t("settings.data.row.export.action")}
             >
               <Download aria-hidden className="h-3.5 w-3.5" />
               {t("settings.data.export")}
@@ -108,10 +99,10 @@ export function YourDataSection({
         />
       </SettingsGroup>
 
-      <SettingsGroup title={t("settings.data.deleteGroup")}>
+      <SettingsGroup title={t("settings.data.group.delete.title")}>
         <SettingsRow
           id="delete-account"
-          label={t("settings.data.deleteLabel")}
+          label={t("settings.data.row.delete.label")}
           description={t("settings.data.deleteHint")}
           control={
             <Button
@@ -119,6 +110,7 @@ export function YourDataSection({
               size="sm"
               onClick={onRequestDelete}
               disabled={!user}
+              aria-label={t("settings.data.row.delete.action")}
             >
               {t("settings.data.delete")}
             </Button>
@@ -130,7 +122,7 @@ export function YourDataSection({
         <SettingsLinkRow
           id="privacy-policy"
           label={t("settings.data.privacy")}
-          description={t("settings.data.privacyHint")}
+          description={t("settings.data.row.privacy.description")}
           href="/privacy"
           external
         />
@@ -198,7 +190,8 @@ export function DeleteAccountDialog({
         setBlockingServers(err.servers);
         setError(null);
       } else {
-        setError(failureMessage(err, t("settings.delete.failed")));
+        const failed = t("settings.delete.failed");
+        setError(inlineErrorMessage(localizedFailure(err, failed), failed));
       }
     } finally {
       setBusy(false);
@@ -262,8 +255,13 @@ export function DeleteAccountDialog({
 
         {blockingServers && blockingServers.length > 0 && (
           // The list inherits the notice's own foreground: that pair is the
-          // one the bench measures on the warning fill.
-          <SettingsNotice tone="warning" title={t("settings.delete.ownedTitle")}>
+          // one the bench measures on the warning fill. An alert, because it
+          // answers the button just pressed and focus stays on that button.
+          <SettingsNotice
+            tone="warning"
+            role="alert"
+            title={t("settings.delete.ownedTitle")}
+          >
             <p>{t("settings.delete.ownedBody")}</p>
             <ul className="mt-2 space-y-1">
               {blockingServers.map((server) => (
