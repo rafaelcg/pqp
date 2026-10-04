@@ -84,3 +84,63 @@ describe("Settings shell section list", () => {
     );
   });
 });
+
+describe("Settings section memory", () => {
+  function renderOpen(open: boolean, requestedSection: "profile" | null = null) {
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <SettingsModal
+            open={open}
+            user={{ id: "u1", displayName: "Rafa", username: "rafa", handle: null } as unknown as User}
+            localSettings={defaultLocalSettings}
+            blockedUsers={[]}
+            onClose={() => {}}
+            onLocalSave={() => {}}
+            onUserUpdated={() => {}}
+            onUnblockUser={() => {}}
+            requestedSection={requestedSection}
+          />
+        </TooltipProvider>,
+      );
+    });
+  }
+
+  function selected(): string | null {
+    return document.querySelector('[role="tab"][aria-selected="true"]')?.id ?? null;
+  }
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("reopens after a reload where it was last closed", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    renderOpen(true);
+    expect(selected()).toBe("settings-tab-profile");
+    act(() => document.querySelector<HTMLButtonElement>("#settings-tab-notifications")!.click());
+    renderOpen(false);
+
+    // A reload: a fresh mount, nothing in memory but the browser tab's storage.
+    act(() => root!.unmount());
+    root = createRoot(host);
+    renderOpen(true);
+    expect(selected()).toBe("settings-tab-notifications");
+
+    // A caller asking for a section still wins.
+    renderOpen(false);
+    renderOpen(true, "profile");
+    expect(selected()).toBe("settings-tab-profile");
+  });
+
+  it("starts on Perfil when storage holds nothing it knows", () => {
+    window.sessionStorage.setItem("pqp:settings-section", "nonsense");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    renderOpen(true);
+    expect(selected()).toBe("settings-tab-profile");
+  });
+});

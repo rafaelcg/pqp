@@ -202,6 +202,33 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
+/**
+ * Where the dialog was last closed, for this browser tab. Session storage so a
+ * reload lands where a close-and-reopen lands; a new tab starts on Perfil.
+ */
+export const SETTINGS_SECTION_STORAGE_KEY = "pqp:settings-section";
+
+function readStoredSection(): SectionId {
+  try {
+    const stored = window.sessionStorage.getItem(SETTINGS_SECTION_STORAGE_KEY);
+    const known = SECTIONS.find((entry) => entry.id === stored);
+    if (known) {
+      return known.id;
+    }
+  } catch {
+    // Storage blocked: Perfil, as a new tab would.
+  }
+  return "profile";
+}
+
+function storeSection(id: SectionId) {
+  try {
+    window.sessionStorage.setItem(SETTINGS_SECTION_STORAGE_KEY, id);
+  } catch {
+    // Storage blocked: the next load starts on Perfil, which is fine.
+  }
+}
+
 /** How long "Alterações descartadas" offers Desfazer. */
 export const DISCARD_UNDO_MS = 5000;
 
@@ -298,8 +325,27 @@ export function SettingsModal({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Which section is showing. Deliberately NOT reset when the dialog closes:
   // somebody adjusting a level, listening, and coming back should land where
-  // they were rather than at the top of the tree every time.
-  const [section, setSection] = useState<SectionId>("profile");
+  // they were rather than at the top of the tree every time. A reload used to
+  // forget it, so the same reopen landed on two different tabs depending on
+  // whether the page had reloaded; it is kept for the browser tab now,
+  // written when the dialog closes or the page goes away.
+  const [section, setSection] = useState<SectionId>(readStoredSection);
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      // Just closed: this is where the next open lands.
+      storeSection(sectionRef.current);
+    }
+    wasOpenRef.current = open;
+    if (!open) {
+      return;
+    }
+    const remember = () => storeSection(sectionRef.current);
+    window.addEventListener("pagehide", remember);
+    return () => window.removeEventListener("pagehide", remember);
+  }, [open]);
   const settingsRef = useRef(localSettings);
   // Camera permission is asked once per open Settings session. Tabbing
   // through the Voice form must not blink the webcam LED on every focus.
