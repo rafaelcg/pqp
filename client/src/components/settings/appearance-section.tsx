@@ -1,6 +1,6 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
-import { RadioGroup } from "@/components/ui/radio-group";
+import { RadioGroup, useRovingRadio } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useAccentHue } from "@/hooks/use-accent-hue";
@@ -211,20 +211,33 @@ function LookMiniature({ look }: { look: AppearancePreference }) {
 }
 
 /**
- * The hue track. `ui/Slider` has no hue variant yet, so the track is repainted
- * here with the full-wheel gradient from `index.css` and the fill is hidden;
- * the thumb takes the accent it is choosing. Keyboard, pointer and the
- * `slider` role are the primitive's.
+ * The accent. A hue slider for any colour, then the eight suggested hues as one
+ * radio group, then "Usar a do visual", which only shows while a custom accent
+ * is set (the same rule as the chat reset). The reset sits outside the
+ * radiogroup's key handler, so an arrow pressed on it never picks a swatch.
  */
-const HUE_SLIDER =
-  "h-5 [&>span:first-child]:h-2 [&>span:first-child]:bg-[image:var(--accent-track)] [&>span:first-child>span]:hidden [&_[role=slider]]:h-4 [&_[role=slider]]:w-4 [&_[role=slider]]:border-2 [&_[role=slider]]:border-on-accent [&_[role=slider]]:bg-accent";
-
 function AccentRow() {
   const { t } = useTranslation();
   const { appearance } = useAppearance();
   const { preference, setPreference } = useAccentHue();
   const sliderHue = effectiveAccentHue(preference, appearance);
   const isCustom = preference !== "default";
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const checkedSwatch = typeof preference === "number" ? preference : -1;
+  const { onKeyDown, tabIndexFor } = useRovingRadio<number>(
+    ACCENT_SWATCHES,
+    checkedSwatch,
+    (hue) => setPreference(hue as AccentHuePreference, { immediate: true }),
+  );
+
+  function reset() {
+    setPreference("default");
+    // The button hides itself, so focus would drop to the page. The slider
+    // shows what the reset did, so focus lands there.
+    requestAnimationFrame(() => {
+      sliderRef.current?.querySelector<HTMLElement>('[role="slider"]')?.focus();
+    });
+  }
 
   return (
     <SettingsRow
@@ -238,43 +251,49 @@ function AccentRow() {
       stacked
       control={
         <div className="flex flex-col gap-3">
-          <Slider
-            variant="volume"
-            className={HUE_SLIDER}
-            min={0}
-            max={360}
-            value={sliderHue}
-            aria-label={t("settings.appearance.accent")}
-            aria-valuetext={t("settings.appearance.accentHue", { hue: sliderHue })}
-            onValueChange={(hue) => setPreference(hue as AccentHuePreference)}
-          />
+          <div ref={sliderRef}>
+            <Slider
+              variant="hue"
+              min={0}
+              max={360}
+              value={sliderHue}
+              aria-label={t("settings.appearance.accent")}
+              aria-valuetext={t("settings.appearance.accentHue", { hue: sliderHue })}
+              onValueChange={(hue) => setPreference(hue as AccentHuePreference)}
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            {ACCENT_SWATCHES.map((hue) => (
-              <button
-                key={hue}
-                type="button"
-                aria-label={t("settings.appearance.accentHue", { hue })}
-                aria-pressed={preference === hue}
-                onClick={() => setPreference(hue, { immediate: true })}
-                className={cn(
-                  "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-                  SETTINGS_FOCUS,
-                  preference === hue
-                    ? "border-text"
-                    : "border-transparent hover:border-border-strong",
-                )}
-                style={{ "--swatch-hue": String(hue) } as CSSProperties}
-              />
-            ))}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              disabled={!isCustom}
-              onClick={() => setPreference("default")}
+            <div
+              role="radiogroup"
+              aria-label={t("settings.appearance.accent")}
+              onKeyDown={onKeyDown}
+              className="flex flex-wrap items-center gap-2"
             >
-              {t("settings.appearance.accentReset")}
-            </Button>
+              {ACCENT_SWATCHES.map((hue) => (
+                <button
+                  key={hue}
+                  type="button"
+                  role="radio"
+                  aria-label={t("settings.appearance.accentHue", { hue })}
+                  aria-checked={preference === hue}
+                  tabIndex={tabIndexFor(hue)}
+                  onClick={() => setPreference(hue, { immediate: true })}
+                  className={cn(
+                    "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+                    SETTINGS_FOCUS,
+                    preference === hue
+                      ? "border-text"
+                      : "border-transparent hover:border-border-strong",
+                  )}
+                  style={{ "--swatch-hue": String(hue) } as CSSProperties}
+                />
+              ))}
+            </div>
+            {isCustom ? (
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={reset}>
+                {t("settings.appearance.accentReset")}
+              </Button>
+            ) : null}
           </div>
         </div>
       }
@@ -416,7 +435,18 @@ function ChatGroup({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })}
+            onClick={() => {
+              setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true });
+              // The button hides itself at the default, so focus would drop to
+              // the page. The first control it reset takes it.
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>(
+                    '[data-settings-row="density"] [role="radio"][tabindex="0"]',
+                  )
+                  ?.focus();
+              });
+            }}
           >
             {t("settings.appearance.chatReset")}
           </Button>
@@ -559,6 +589,12 @@ function ChatDisplayPreview({ compact }: { compact: boolean }) {
 // Idioma
 // ---------------------------------------------------------------------------
 
+/** Portuguese first: it is the product's language and most readers'. */
+const LOCALE_ORDER: readonly Locale[] = [
+  "pt-BR",
+  ...SUPPORTED_LOCALES.filter((option) => option !== "pt-BR"),
+];
+
 const LOCALE_LABELS: Record<Locale, MessageKey> = {
   en: "settings.appearance.language.en",
   "pt-BR": "settings.appearance.language.ptBR",
@@ -624,18 +660,21 @@ function LanguageGroup() {
             ? t("settings.unsaved.languageLocked")
             : t("settings.appearance.languageHint")
         }
-        // Stacked, and one option per line on a narrow pane: "Português
-        // (Brasil)" does not fit a third of either, and a truncated language
-        // name is the one label a reader of another language needs whole.
-        stacked
+        // Inline beside the label where it fits, under it where it does not.
+        // Each cell is as wide as its name, so "Português (Brasil)" is never
+        // cut, which is the one label a reader of another language needs whole.
+        wideControl
         control={
           <RadioGroup
             label={t("settings.appearance.appLanguage")}
-            className="@max-lg:grid-flow-row"
+            // Arrows only move focus: selecting reloads the app, so a keyboard
+            // or screen-reader user walking the options must not trigger it.
+            activation="manual"
+            fit="content"
             value={locale}
             disabled={profileDirty}
             onValueChange={(next) => void choose(next)}
-            options={SUPPORTED_LOCALES.map((option) => ({
+            options={LOCALE_ORDER.map((option) => ({
               value: option,
               label: t(LOCALE_LABELS[option]),
             }))}

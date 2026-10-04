@@ -280,7 +280,7 @@ test.describe("stage 2 — light and system", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
 
-    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+    await page.getByRole("radio", { name: /hue 210|matiz 210/i }).click();
 
     await expect
       .poll(() =>
