@@ -1748,7 +1748,7 @@
   "settings.connections.visibility.shared": "Quem está no pqp",
   "settings.connections.visibility.public": "Também na minha página pública",
   "settings.connections.group.linked.title": "Contas ligadas",
-  "settings.connections.group.linked.description": "Prove que a conta é sua. O pqp não entra nela e não muda nada.",
+  "settings.connections.group.linked.description": "Prove que a conta é sua. Não é o login do pqp, e o pqp não entra nela nem muda nada.",
   "settings.connections.linkedAs": "Conectado como {name}",
   "settings.connections.loading": "Carregando conexões",
   "settings.connections.retry": "Tentar de novo",

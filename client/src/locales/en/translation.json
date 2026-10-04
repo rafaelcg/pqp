@@ -1748,7 +1748,7 @@
   "settings.connections.visibility.shared": "People in pqp",
   "settings.connections.visibility.public": "Also on my public page",
   "settings.connections.group.linked.title": "Linked accounts",
-  "settings.connections.group.linked.description": "Prove the account is yours. pqp never signs in to it or changes anything.",
+  "settings.connections.group.linked.description": "Prove the account is yours. It is not how you sign in to pqp, and pqp never signs in to it or changes anything.",
   "settings.connections.linkedAs": "Connected as {name}",
   "settings.connections.loading": "Loading connections",
   "settings.connections.retry": "Try again",
