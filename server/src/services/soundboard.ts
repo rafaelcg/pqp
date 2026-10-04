@@ -177,18 +177,54 @@ export async function resolvePlayableSound(
 
 const pendingUploads = new Map<string, { serverId: string; expiresAt: number }>();
 
-function sweepPendingUploads(now: number): void {
-  for (const [key, row] of pendingUploads) {
-    if (row.expiresAt > now) {
-      continue;
-    }
+/**
+ * Drop a signed upload that nobody claimed.
+ *
+ * The pending map lives on one API process. The claim often lands on the
+ * other. Never delete an object a row already points at.
+ */
+async function dropUnclaimedObject(key: string): Promise<void> {
+  const kept = await getPool().query(
+    `SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`,
+    [key],
+  );
+  if ((kept.rowCount ?? 0) > 0) {
     pendingUploads.delete(key);
-    void deleteObject(key).catch(() => undefined);
+    return;
+  }
+  await deleteObject(key);
+  pendingUploads.delete(key);
+}
+
+async function sweepPendingUploads(now: number): Promise<void> {
+  const due = [...pendingUploads.entries()].filter(
+    ([, row]) => row.expiresAt <= now,
+  );
+  for (const [key, row] of due) {
+    try {
+      await dropUnclaimedObject(key);
+    } catch {
+      pendingUploads.set(key, {
+        serverId: row.serverId,
+        expiresAt: now + 60_000,
+      });
+    }
   }
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "23505"
+  );
+}
+
 if (typeof setInterval === "function") {
-  setInterval(() => sweepPendingUploads(Date.now()), 60_000).unref?.();
+  setInterval(() => {
+    void sweepPendingUploads(Date.now());
+  }, 60_000).unref?.();
 }
 
 function pendingUploadCount(serverId: string): number {
@@ -213,7 +249,7 @@ export async function createSoundboardUpload(input: {
     throw new SoundboardError("too_big");
   }
   const now = Date.now();
-  sweepPendingUploads(now);
+  await sweepPendingUploads(now);
   const count = await getPool().query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
     [input.serverId],
@@ -281,7 +317,7 @@ export async function claimSoundboardSound(input: {
     SOUNDBOARD_MAX_DURATION_MS,
   );
   if (rejection) {
-    await deleteObject(input.key).catch(() => undefined);
+    await dropUnclaimedObject(input.key).catch(() => undefined);
     throw new SoundboardError(rejection);
   }
 
@@ -298,7 +334,7 @@ export async function claimSoundboardSound(input: {
     );
     if (Number(count.rows[0]?.n ?? 0) >= SOUNDBOARD_MAX_SOUNDS) {
       await client.query("ROLLBACK");
-      await deleteObject(input.key).catch(() => undefined);
+      await dropUnclaimedObject(input.key).catch(() => undefined);
       throw new SoundboardError("slots");
     }
     const inserted = await client.query<SoundRow>(
@@ -329,14 +365,28 @@ export async function claimSoundboardSound(input: {
     if (error instanceof SoundboardError) {
       throw error;
     }
+    if (isUniqueViolation(error)) {
+      const existing = await getPool().query<SoundRow>(
+        `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+                duration_ms, volume
+           FROM soundboard_sounds
+          WHERE storage_key = $1 AND server_id = $2`,
+        [input.key, input.serverId],
+      );
+      const row = existing.rows[0];
+      if (row) {
+        pendingUploads.delete(input.key);
+        return toSound(row);
+      }
+      throw new SoundboardError("missing");
+    }
     const kept = await getPool()
       .query(`SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`, [
         input.key,
       ])
       .catch(() => null);
-    if (!kept || (kept.rowCount ?? 0) === 0) {
-      pendingUploads.delete(input.key);
-      await deleteObject(input.key).catch(() => undefined);
+    if (kept && (kept.rowCount ?? 0) === 0) {
+      await dropUnclaimedObject(input.key).catch(() => undefined);
     }
     throw error;
   } finally {

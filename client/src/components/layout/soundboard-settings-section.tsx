@@ -27,7 +27,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   function reload(): void {
     void fetchSoundboard(serverId)
       .then((page) => {
-        noteSoundboardCatalog(page.sounds);
+        noteSoundboardCatalog(serverId, page.sounds);
         setSounds(page.sounds);
         setMaxSounds(page.maxSounds);
         setError(null);
@@ -83,14 +83,10 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
             </button>
             <div className="min-w-0 flex-1">
               <p className="text-sm text-text">{sound.name}</p>
-              <Slider
-                variant="volume"
-                min={0}
-                max={1}
-                step={0.05}
-                value={sound.volume}
-                aria-label={t("soundboard.settings.clipVolume", { name: sound.name })}
-                onValueCommit={(volume) => {
+              <ClipVolume
+                volume={sound.volume}
+                label={t("soundboard.settings.clipVolume", { name: sound.name })}
+                onCommit={(volume) => {
                   void updateSoundboardSound(serverId, sound.id, { volume })
                     .then(() => reload())
                     .catch(() => setError(t("soundboard.settings.saveFailed")));
@@ -123,5 +119,32 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         }}
       />
     </section>
+  );
+}
+
+function ClipVolume({
+  volume,
+  label,
+  onCommit,
+}: {
+  volume: number;
+  label: string;
+  onCommit: (volume: number) => void;
+}) {
+  const [value, setValue] = useState(volume);
+  useEffect(() => {
+    setValue(volume);
+  }, [volume]);
+  return (
+    <Slider
+      variant="volume"
+      min={0}
+      max={1}
+      step={0.05}
+      value={value}
+      aria-label={label}
+      onValueChange={setValue}
+      onValueCommit={onCommit}
+    />
   );
 }

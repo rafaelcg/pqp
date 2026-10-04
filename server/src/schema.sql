@@ -4979,6 +4979,11 @@ CREATE TABLE IF NOT EXISTS soundboard_sounds (
 CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
   ON soundboard_sounds (server_id, created_at);
 
+-- One object, one row. A second claim of the same key returns the row
+-- that already owns it instead of deleting the file.
+CREATE UNIQUE INDEX IF NOT EXISTS soundboard_sounds_storage_key
+  ON soundboard_sounds (storage_key);
+
 -- USE_SOUNDBOARD (bit 25 = 33554432) onto @everyone, so a channel overwrite
 -- is what turns the board off. MANAGE_SOUNDBOARD (bit 26 = 67108864) onto
 -- manager and admin. Owner already resolves to every bit in application

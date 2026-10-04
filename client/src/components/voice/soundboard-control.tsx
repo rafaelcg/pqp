@@ -22,6 +22,7 @@ import {
   prefetchSoundboard,
   pulseSoundboardActive,
   requestSoundboardPlay,
+  setSoundboardCatalogServer,
   useSoundboardActiveIds,
   useSoundboardListenerVolume,
   useSoundboardMuted,
@@ -58,17 +59,21 @@ export function SoundboardControl({
   const [placement, setPlacement] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
+    setSoundboardCatalogServer(serverId);
+    return () => setSoundboardCatalogServer(null);
+  }, [serverId]);
+
+  useEffect(() => {
     setSounds([]);
   }, [serverId]);
 
   useEffect(() => {
-    if (!serverId || !canUse) {
-      setSounds([]);
+    if (!serverId) {
       return;
     }
     let cancelled = false;
     void prefetchSoundboard(serverId).then(() => {
-      if (cancelled) {
+      if (cancelled || !canUse) {
         return;
       }
       void fetchSoundboard(serverId)

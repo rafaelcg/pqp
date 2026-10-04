@@ -1,6 +1,7 @@
 import {
   soundboardBuiltin,
   SOUNDBOARD_BUILTINS,
+  SOUNDBOARD_MAX_DURATION_MS,
   type SoundboardSound,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
@@ -17,7 +18,10 @@ const MARK_MS = 2200;
 
 const buffers = new Map<string, AudioBuffer>();
 const loading = new Map<string, Promise<AudioBuffer | null>>();
-const customUrls = new Map<string, { url: string; volume: number }>();
+const customUrls = new Map<
+  string,
+  { url: string; volume: number; serverId: string }
+>();
 const customNames = new Map<string, string>();
 
 export interface SoundboardMark {
@@ -32,7 +36,8 @@ const marks = new Map<string, SoundboardMark>();
 const activeUntilById = new Map<string, number>();
 const listeners = new Set<() => void>();
 let sender: ((soundId: string) => void) | null = null;
-let catalogToken = 0;
+let catalogServerId: string | null = null;
+const catalogTokens = new Map<string, number>();
 
 /** The voice socket registers this while a call is up. */
 export function registerSoundboardSender(
@@ -129,15 +134,31 @@ export function useSoundboardListenerVolume(): [number, (volume: number) => void
   ];
 }
 
-export function noteSoundboardCatalog(sounds: readonly SoundboardSound[]): void {
-  catalogToken += 1;
-  rememberCustom(sounds);
+/** The call this machine is in. Plays for that server can refresh the catalog. */
+export function setSoundboardCatalogServer(serverId: string | null): void {
+  catalogServerId = serverId;
 }
 
-function rememberCustom(sounds: readonly SoundboardSound[]): void {
+export function noteSoundboardCatalog(
+  serverId: string,
+  sounds: readonly SoundboardSound[],
+): void {
+  catalogTokens.set(serverId, (catalogTokens.get(serverId) ?? 0) + 1);
+  rememberCustom(serverId, sounds);
+}
+
+function clipIdentity(url: string): string {
+  const query = url.indexOf("?");
+  return query === -1 ? url : url.slice(0, query);
+}
+
+function rememberCustom(
+  serverId: string,
+  sounds: readonly SoundboardSound[],
+): void {
   const nextIds = new Set(sounds.map((sound) => sound.id));
-  for (const id of customUrls.keys()) {
-    if (nextIds.has(id)) {
+  for (const [id, row] of customUrls) {
+    if (row.serverId !== serverId || nextIds.has(id)) {
       continue;
     }
     customUrls.delete(id);
@@ -151,11 +172,19 @@ function rememberCustom(sounds: readonly SoundboardSound[]): void {
       continue;
     }
     const previous = customUrls.get(sound.id);
-    if (previous && previous.url !== sound.url) {
+    if (
+      previous &&
+      (previous.serverId !== serverId ||
+        clipIdentity(previous.url) !== clipIdentity(sound.url))
+    ) {
       buffers.delete(sound.id);
       loading.delete(sound.id);
     }
-    customUrls.set(sound.id, { url: sound.url, volume: sound.volume });
+    customUrls.set(sound.id, {
+      url: sound.url,
+      volume: sound.volume,
+      serverId,
+    });
   }
 }
 
@@ -171,11 +200,12 @@ export function resetSoundboardMarksForTests(): void {
 }
 
 export async function prefetchSoundboard(serverId: string): Promise<void> {
-  const token = ++catalogToken;
+  const token = (catalogTokens.get(serverId) ?? 0) + 1;
+  catalogTokens.set(serverId, token);
   try {
     const page = await fetchSoundboard(serverId);
-    if (token === catalogToken) {
-      rememberCustom(page.sounds);
+    if (catalogTokens.get(serverId) === token) {
+      rememberCustom(serverId, page.sounds);
     }
   } catch {
     // The board still plays the built-in pack.
@@ -290,7 +320,40 @@ function startSoundboardClip(buffer: AudioBuffer, soundVolume: number): AudioBuf
   source.connect(clip);
   clip.connect(destination);
   source.start();
+  source.stop(ctx.currentTime + SOUNDBOARD_MAX_DURATION_MS / 1000);
   return source;
+}
+
+const catalogRefresh = new Map<string, Promise<void>>();
+const catalogRefreshAt = new Map<string, number>();
+
+/** Pull a fresh catalog when a custom clip is missing or its URL has expired. */
+async function refreshCustomCatalog(
+  serverId: string,
+  force: boolean,
+): Promise<void> {
+  const pending = catalogRefresh.get(serverId);
+  if (pending) {
+    await pending;
+    if (!force) {
+      return;
+    }
+  }
+  const now = Date.now();
+  if (!force && now - (catalogRefreshAt.get(serverId) ?? 0) < 4_000) {
+    return;
+  }
+  catalogRefreshAt.set(serverId, now);
+  const task = fetchSoundboard(serverId)
+    .then((page) => {
+      rememberCustom(serverId, page.sounds);
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      catalogRefresh.delete(serverId);
+    });
+  catalogRefresh.set(serverId, task);
+  await task;
 }
 
 /**
@@ -306,7 +369,11 @@ export async function playSoundboardClip(
     return;
   }
   unlockSounds();
-  const buffer = await bufferFor(soundId);
+  let buffer = await bufferFor(soundId);
+  if (!buffer && !soundboardBuiltin(soundId) && catalogServerId) {
+    await refreshCustomCatalog(catalogServerId, !customUrls.has(soundId));
+    buffer = await bufferFor(soundId);
+  }
   if (!buffer) {
     return;
   }

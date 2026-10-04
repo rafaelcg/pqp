@@ -36,7 +36,8 @@ CC BY 3.0.
 Custom clips live in the same bucket as attachments, capped at 24 per
 server, 512 KB, and 5.2 seconds, mp3 or ogg. A new upload is refused when
 the board is already full, counting uploads that were signed and not
-claimed yet. An unclaimed file is deleted when that signature expires.
+claimed yet. An unclaimed file is deleted when that signature expires,
+and only when no saved clip still points at it.
 Play clicks are not stored.
 
 ## Who can do what
