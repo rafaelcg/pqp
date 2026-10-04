@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Map as MapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -6,12 +6,17 @@ import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay"
 import {
   SettingsGroup,
   SettingsHeaderActions,
+  SettingsKeyCombo,
   SettingsLinkRow,
   SettingsNotice,
   SettingsRow,
   useSettingsShell,
 } from "@/components/settings/kit";
-import { KeyBindingField } from "@/components/voice/key-binding-field";
+import {
+  KeyBindingField,
+  KeyBindingRefusalStatus,
+  type KeyBindingRefusal,
+} from "@/components/voice/key-binding-field";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { findBindingConflict, resolveShortcutBindings, SHORTCUT_GROUPS, type BindableId, type ShortcutAction } from "@/lib/keyboard-shortcuts";
 import { defaultPttBinding, formatBinding, supportsKeyBinding, type KeyBinding } from "@/components/voice/push-to-talk";
@@ -45,12 +50,39 @@ export function KeyboardSection({
   const { t } = useTranslation();
   const { openSection } = useSettingsShell();
   const [confirmingReset, setConfirmingReset] = useState(false);
+  // Each field hands its refusal up, so the row draws it under its label
+  // (spec G: "inline under the row") rather than under the keycaps.
+  const [refusals, setRefusals] = useState<
+    Partial<Record<ShortcutAction, KeyBindingRefusal>>
+  >({});
+  const reportRefusal = useCallback(
+    (action: ShortcutAction) => (refusal: KeyBindingRefusal | null) => {
+      setRefusals((current) => {
+        const prev = current[action];
+        if (
+          prev?.message === refusal?.message &&
+          prev?.id === refusal?.id
+        ) {
+          return current;
+        }
+        const next = { ...current };
+        if (refusal) {
+          next[action] = refusal;
+        } else {
+          delete next[action];
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const canBindKey = useMemo(() => supportsKeyBinding(), []);
   const bindings = useMemo(
     () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
     [draftLocal.shortcuts],
   );
   const owned = bindableMap(draftLocal);
+  const pttCombo = formatBinding(draftLocal.pushToTalkKey);
 
   function remap(action: ShortcutAction, binding: KeyBinding) {
     if (findBindingConflict(owned, action, binding)) {
@@ -92,31 +124,58 @@ export function KeyboardSection({
 
       {canBindKey ? (
         SHORTCUT_GROUPS.map((group) => (
-          <SettingsGroup key={group.id} title={t(GROUP_LABEL[group.id])}>
-            {group.actions.map((action) => (
-              <SettingsRow
-                key={action}
-                id={rowId(action)}
-                label={t(ACTION_LABEL[action])}
-                control={
-                  <KeyBindingField
-                    label={t(ACTION_LABEL[action])}
-                    binding={bindings[action]}
-                    takenBy={takenBy(action)}
-                    onChange={(binding) => remap(action, binding)}
-                  />
-                }
-              />
-            ))}
+          <SettingsGroup
+            key={group.id}
+            title={t(GROUP_LABEL[group.id])}
+            description={
+              // A behaviour fact, not how-to: channel keys (Alt + arrows by
+              // default) stand down in a text field, so the arrows move the
+              // caret. Mute and deafen use Cmd/Ctrl and still fire.
+              group.id === "navigation"
+                ? t("settings.keyboard.group.navigation.description")
+                : undefined
+            }
+          >
+            {group.actions.map((action) => {
+              const refusal = refusals[action];
+              return (
+                <SettingsRow
+                  key={action}
+                  id={rowId(action)}
+                  label={t(ACTION_LABEL[action])}
+                  status={
+                    refusal ? (
+                      <div id={refusal.id}>
+                        <KeyBindingRefusalStatus message={refusal.message} />
+                      </div>
+                    ) : undefined
+                  }
+                  control={
+                    <KeyBindingField
+                      label={t(ACTION_LABEL[action])}
+                      hideLabel
+                      binding={bindings[action]}
+                      takenBy={takenBy(action)}
+                      onChange={(binding) => remap(action, binding)}
+                      onRefusedChange={reportRefusal(action)}
+                    />
+                  }
+                />
+              );
+            })}
             {group.id === "voice" && (
               // Push-to-talk is set in Voz e vídeo only (spec J3); this row
               // shows the key and jumps there.
               <SettingsLinkRow
                 id="push-to-talk"
                 label={t(ACTION_LABEL.pushToTalk)}
-                description={t("settings.keyboard.pttLink", {
-                  binding: formatBinding(draftLocal.pushToTalkKey),
-                })}
+                description={t("settings.keyboard.pttLink")}
+                value={
+                  <SettingsKeyCombo
+                    keys={pttCombo.split(" + ")}
+                    label={pttCombo}
+                  />
+                }
                 onClick={() => openSection("voice", "ptt")}
               />
             )}
@@ -124,7 +183,7 @@ export function KeyboardSection({
         ))
       ) : (
         <SettingsNotice tone="info">
-          {t("settings.voice.pttNoKeyboard")}
+          {t("settings.keyboard.noKeyboard")}
         </SettingsNotice>
       )}
 
@@ -149,7 +208,7 @@ export function KeyboardSection({
       <ConfirmDialog
         open={confirmingReset}
         title={t("settings.keyboard.resetConfirm.title")}
-        description={t("settings.keyboard.resetAll.description")}
+        description={t("settings.keyboard.resetConfirm.body")}
         confirmLabel={t("settings.keyboard.resetConfirm.confirm")}
         cancelLabel={t("settings.keyboard.resetConfirm.cancel")}
         destructive={false}
