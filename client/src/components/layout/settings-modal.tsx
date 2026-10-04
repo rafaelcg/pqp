@@ -1089,7 +1089,7 @@ export function SettingsModal({
                         />
                       )}
 
-                      {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+                      {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} userId={user?.id ?? null} />}
 
                       {active.id === "help" && (
                         <HelpSection onOpenFeedback={() => openSection("feedback")} />

@@ -11174,7 +11174,15 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onUnblockUser={async (userId) => {
+          // Settings says a failed unblock in its own row: the app's banner
+          // sits behind the dialog, where nobody sees it. Only the unblock
+          // itself can fail the row; a failed refresh afterwards is not an
+          // unblock failure and must not invite a retry of something done.
+          await unblockUser(userId);
+          setBlockedUsers((current) => current.filter((one) => one.id !== userId));
+          void loadBlocks().catch(() => undefined);
+        }}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
@@ -11317,12 +11325,7 @@ function MainAppContent({
           setMembersOpen(false);
         }}
         onBlockUser={(userId) => void handleBlockUser(userId)}
-        // Settings says a failed unblock in its own row: the app's banner sits
-        // behind the dialog, where nobody sees it.
-        onUnblockUser={async (userId) => {
-          await unblockUser(userId);
-          await loadBlocks();
-        }}
+        onUnblockUser={(userId) => void handleUnblockUser(userId)}
         onReportUser={(member) =>
           setReportTarget({
             kind: "user",

@@ -26,14 +26,14 @@ const MAX = FEEDBACK_BODY_MAX_LENGTH;
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-function mount() {
+function mount(userId: string | null = null) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   act(() =>
     root!.render(
       <SettingsSectionContext.Provider value="feedback">
-        <FeedbackSection voice={null} />
+        <FeedbackSection voice={null} userId={userId} />
       </SettingsSectionContext.Provider>,
     ),
   );
@@ -258,5 +258,20 @@ describe("FeedbackSection", () => {
     act(() => again.click());
     expect(radios()[0]!.getAttribute("aria-checked")).toBe("true");
     expect(radios()[2]!.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps a draft for the same account and drops it for another", () => {
+    mount("user-a");
+    type("relato privado da conta A");
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount("user-a");
+    expect(textarea().value).toBe("relato privado da conta A");
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount("user-b");
+    expect(textarea().value).toBe("");
   });
 });

@@ -27,7 +27,11 @@ import { buildFeedbackContext, type FeedbackVoiceContext } from "@/lib/feedback-
  * closing Settings by reflex, used to throw away a long bug report; it is kept
  * for the session and cleared once it is sent.
  */
-const draft: { kind: FeedbackKind; body: string } = { kind: "bug", body: "" };
+const draft: { owner: string | null; kind: FeedbackKind; body: string } = {
+  owner: null,
+  kind: "bug",
+  body: "",
+};
 
 /** From this share of the limit the counter turns amber. */
 const COUNTER_WARN_RATIO = 0.9;
@@ -51,7 +55,21 @@ export function counterTone(length: number, max: number): CounterTone {
   return "";
 }
 
-export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
+export function FeedbackSection({
+  voice,
+  userId = null,
+}: {
+  voice: FeedbackVoiceContext | null;
+  /** The signed-in account. The draft belongs to it and is dropped for another. */
+  userId?: string | null;
+}) {
+  if (draft.owner !== userId) {
+    // A different account in the same tab (sign out, sign in as someone
+    // else) must never see the previous person's unsent report.
+    draft.owner = userId;
+    draft.kind = "bug";
+    draft.body = "";
+  }
   const { t } = useTranslation();
   const [kind, setKindState] = useState<FeedbackKind>(draft.kind);
   const [body, setBodyState] = useState(draft.body);
