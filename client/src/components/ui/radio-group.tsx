@@ -1,4 +1,4 @@
-import { useCallback, type KeyboardEvent } from "react";
+import { useCallback, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export interface RadioOption<T extends string | number> {
@@ -18,7 +18,27 @@ export interface RadioGroupProps<T extends string | number> {
   size?: "sm" | "md";
   disabled?: boolean;
   className?: string;
+  /**
+   * `list` only: drawn under the checked option's description, for example a
+   * `SettingsInlineStatus` for the write that option just started.
+   */
+  status?: ReactNode;
+  /**
+   * `auto` (default): the arrows move and select. `manual`: the arrows move
+   * focus only, and Enter or Space selects. For a change that is expensive or
+   * disruptive, like the language switch that reloads the app.
+   */
+  activation?: RadioActivation;
+  /**
+   * `segmented` only. `equal` (default): equal cells that fill the track and
+   * truncate a label that does not fit. `content`: each cell as wide as its
+   * label, never truncated, wrapping onto a second line when the row is too
+   * narrow. Use it when one label is much longer than the others.
+   */
+  fit?: "equal" | "content";
 }
+
+export type RadioActivation = "auto" | "manual";
 
 /**
  * Roving tabindex and arrow keys for a `role="radiogroup"`.
@@ -33,6 +53,10 @@ export interface RadioGroupProps<T extends string | number> {
  * absent (night locks the brightness to dark and disables the rest), the first
  * enabled option takes the tab stop, so the group is never unreachable.
  *
+ * With `activation: "manual"` the arrows only move focus, and Enter or Space
+ * selects the focused option. The arrows always step from the option that has
+ * focus, so a manual group can be walked one option at a time.
+ *
  * Shared with `SettingsChoiceGrid`. The handler focuses the matching
  * `[role="radio"]` inside the element it is attached to, so the radios must be
  * rendered in the same order as `values`.
@@ -42,6 +66,7 @@ export function useRovingRadio<T>(
   value: T,
   onChange: (v: T) => void,
   isDisabled?: (v: T) => boolean,
+  { activation = "auto" }: { activation?: RadioActivation } = {},
 ): {
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   tabIndexFor: (v: T) => 0 | -1;
@@ -57,6 +82,29 @@ export function useRovingRadio<T>(
     stop >= 0 && values[stop] === v ? 0 : -1;
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]');
+    const focused = [...radios].findIndex(
+      (radio) => radio === document.activeElement,
+    );
+
+    if (
+      activation === "manual" &&
+      (event.key === "Enter" || event.key === " ")
+    ) {
+      if (focused < 0) {
+        return;
+      }
+      // Handled here rather than left to the button's own click, so Space
+      // does not also scroll the pane and the choice lands exactly once.
+      event.preventDefault();
+      const picked = values[focused];
+      if (picked !== undefined && enabled(picked) && picked !== value) {
+        onChange(picked);
+      }
+      return;
+    }
+
     const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
     const back = event.key === "ArrowLeft" || event.key === "ArrowUp";
     const home = event.key === "Home";
@@ -77,7 +125,8 @@ export function useRovingRadio<T>(
       index = order.find((i) => enabled(values[i]!)) ?? -1;
     } else {
       const step = forward ? 1 : -1;
-      const from = stop >= 0 ? stop : forward ? -1 : count;
+      const origin = focused >= 0 ? focused : stop;
+      const from = origin >= 0 ? origin : forward ? -1 : count;
       for (let hop = 1; hop <= count; hop++) {
         const candidate = (((from + step * hop) % count) + count) % count;
         if (enabled(values[candidate]!)) {
@@ -89,11 +138,9 @@ export function useRovingRadio<T>(
     if (index < 0) {
       return;
     }
-    if (values[index] !== value) {
+    if (activation === "auto" && values[index] !== value) {
       onChange(values[index]!);
     }
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]');
     radios[index]?.focus();
   };
 
@@ -127,6 +174,9 @@ export function RadioGroup<T extends string | number>({
   size = "md",
   disabled = false,
   className,
+  status,
+  activation = "auto",
+  fit = "equal",
 }: RadioGroupProps<T>) {
   const isDisabled = useCallback(
     (v: T) =>
@@ -138,7 +188,9 @@ export function RadioGroup<T extends string | number>({
     value,
     onValueChange,
     isDisabled,
+    { activation },
   );
+  const content = variant === "segmented" && fit === "content";
 
   return (
     <div
@@ -148,7 +200,11 @@ export function RadioGroup<T extends string | number>({
       onKeyDown={onKeyDown}
       className={cn(
         variant === "segmented" &&
-          "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5",
+          "gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5",
+        variant === "segmented" &&
+          (content
+            ? "inline-flex max-w-full flex-wrap"
+            : "grid auto-cols-fr grid-flow-col"),
         variant === "chips" && "flex flex-wrap gap-2",
         variant === "list" && "flex flex-col divide-y divide-border",
         className,
@@ -157,7 +213,8 @@ export function RadioGroup<T extends string | number>({
       {options.map((option) => {
         const checked = option.value === value;
         const optionDisabled = isDisabled(option.value);
-        return (
+        const showStatus = variant === "list" && checked && Boolean(status);
+        const radio = (
           <button
             key={String(option.value)}
             type="button"
@@ -172,7 +229,8 @@ export function RadioGroup<T extends string | number>({
               "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
               optionDisabled && "cursor-not-allowed opacity-40",
               variant === "segmented" && [
-                "inline-flex min-w-0 items-center justify-center rounded-[var(--radius-control)] whitespace-nowrap",
+                "inline-flex items-center justify-center rounded-[var(--radius-control)] whitespace-nowrap",
+                content ? "shrink-0" : "min-w-0",
                 size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-sm",
                 checked
                   ? "bg-surface-2 font-medium text-text"
@@ -192,7 +250,10 @@ export function RadioGroup<T extends string | number>({
                 FOCUS_RING,
               ],
               variant === "list" && [
-                "flex min-h-12 w-full items-center gap-3 px-4 py-3 text-left",
+                "flex min-h-12 w-full items-center gap-3 px-4 pt-3 text-left",
+                // With a status the option's bottom padding moves under the
+                // status, so the line sits tight under the description.
+                showStatus ? "pb-0" : "pb-3",
                 !optionDisabled && "hover:bg-surface-2",
                 INSET_FOCUS_RING,
               ],
@@ -221,9 +282,23 @@ export function RadioGroup<T extends string | number>({
                 </span>
               </>
             ) : (
-              <span className="truncate">{option.label}</span>
+              <span className={content ? undefined : "truncate"}>
+                {option.label}
+              </span>
             )}
           </button>
+        );
+        if (variant !== "list") {
+          return radio;
+        }
+        // Every list option has the same wrapper whether or not a status is
+        // showing, so the button is never remounted (and never drops focus)
+        // when "Salvando…" appears under it.
+        return (
+          <div key={String(option.value)}>
+            {radio}
+            {showStatus ? <div className="px-4 pb-3">{status}</div> : null}
+          </div>
         );
       })}
     </div>
