@@ -451,10 +451,14 @@ export interface RadioGroupProps<T extends string | number> {
   size?: "sm" | "md";
   disabled?: boolean;
   className?: string;
+  status?: ReactNode;                  // list only: under the checked option
+  activation?: "auto" | "manual";      // manual: arrows move focus, Enter/Space select
+  fit?: "equal" | "content";           // segmented only: content-sized cells that wrap
 }
 /** Roving tabindex and arrow keys; shared with SettingsChoiceGrid. Skips disabled options. */
 export function useRovingRadio<T>(values: readonly T[], value: T, onChange: (v: T) => void,
-  isDisabled?: (v: T) => boolean): { onKeyDown: (e: KeyboardEvent<HTMLElement>) => void; tabIndexFor: (v: T) => 0 | -1 };
+  isDisabled?: (v: T) => boolean, options?: { activation?: "auto" | "manual" }):
+  { onKeyDown: (e: KeyboardEvent<HTMLElement>) => void; tabIndexFor: (v: T) => 0 | -1 };
 ```
 
 - Markup: `div role="radiogroup" aria-label`; options are `button role="radio"
@@ -481,6 +485,18 @@ export function useRovingRadio<T>(values: readonly T[], value: T, onChange: (v: 
   bg-accent` dot. Disabled rows use `opacity-40` and are skipped by the arrows.
 - Options with a `description` cannot be segmented. Use list, chips or a choice
   grid.
+- `status` (list only) draws under the checked option's description, for the
+  write that option started: `status={<SettingsInlineStatus state={save.state} />}`.
+  It is a sibling of the radio, never inside it, and every list option keeps
+  the same wrapper whether or not a status shows, so focus survives the
+  "Salvando…" appearing. The option gives its bottom padding to the status.
+- `activation="manual"` is for a change that is expensive or disruptive (the
+  language switch reloads the app): the arrows step focus from the focused
+  option and select nothing; Enter or Space selects. A click still selects.
+- `fit="content"` (segmented only) sizes each cell to its label and never
+  truncates; when the row is too narrow the track wraps onto a second line.
+  Use it when one label is much longer than the rest ("Só @menções"). Pair it
+  with `SettingsRow wideControl` when the row should keep it inline.
 
 ### `Textarea` (ui)
 
@@ -491,6 +507,7 @@ resize-y` in place of the fixed height. Renders no label.
 
 ```ts
 interface SettingsGroupProps {
+  id?: string;                      // data-settings-row, an openSection target; not registered
   title?: string;
   description?: string;
   action?: ReactNode;               // one ghost or secondary sm button, or a link
@@ -529,6 +546,11 @@ interface SettingsRowProps {
   status?: ReactNode;    // a SettingsInlineStatus
   disabled?: boolean;
   children?: ReactNode;  // extra content under the row
+  leading?: ReactNode;   // avatar, tile or icon before the label column
+  searchable?: boolean;  // false: never registered (rows built from data)
+  keepInline?: boolean;  // control stays beside the label on a phone (sm button)
+  wideControl?: boolean; // control may pass 55% (select plus button); wraps when it cannot fit
+  [data: `data-${string}`]: string | number | boolean | undefined; // passed to the root
 }
 ```
 
@@ -552,6 +574,25 @@ interface SettingsRowProps {
 used in `friends/friends-view.tsx`. A narrow desktop window and a phone stack
 the same way.
 
+Recipes for the options (added after phase 1):
+
+- `leading`: `flex items-center gap-3` around the slot and the text column, so
+  an avatar or tile is centred on the label and description. It is inside the
+  row, so the `openSection` flash covers it, and disabled dims it with the
+  text. Blocked people: `leading={<UserAvatar ... className="h-8 w-8" rounded="full" />}`.
+  Connections: the `h-9 w-9` provider tile.
+- `searchable={false}`: the row renders and carries `data-settings-row` but
+  never enters the registry. Every row built from data (a blocked person, a
+  linked account, a device) uses it, so phase 2 search lists settings only.
+- `keepInline`: the row is `flex-row flex-wrap items-center justify-between`
+  at every width. For a small control (an `sm` button) in a list row, so a
+  20-person list does not double in height on a phone. `stacked` wins.
+- `wideControl`: the control loses the `@lg:max-w-[55%]` cap and the label
+  column keeps `@lg:min-w-40`, so a select plus a button sits inline when it
+  fits and wraps under the label when it does not.
+- `data-*`: any `data-` attribute lands on the row's root, so a tab's e2e hook
+  (`data-profile-banner`) needs no wrapper div.
+
 ### Row ids and the registry
 
 Every row component takes a required `id` (`SettingsRow`, `SettingsSwitchRow`,
@@ -560,7 +601,8 @@ within its tab (`ptt`, `input-device`). It renders as `data-settings-row`.
 
 The kit keeps a module-level registry of `{ id, section, label }`. A row
 registers itself on render; the section comes from a `SettingsSectionContext`
-that the shell sets around each tab. The registry exists in phase 0 so no tab
+that the shell sets around each tab. `searchable={false}` on `SettingsRow`,
+`SettingsSwitchRow`, `SettingsSliderRow` or `SettingsLinkRow` keeps a row out. The registry exists in phase 0 so no tab
 ships rows without ids. It feeds `openSection` (below) and, in phase 2, search.
 
 ### `SettingsSwitchRow`
@@ -575,6 +617,7 @@ interface SettingsSwitchRowProps {
   disabled?: boolean;
   status?: ReactNode;    // under the row, for example a notice
   trailing?: ReactNode;  // a secondary action beside the switch, for example an icon-only "Ouvir"
+  searchable?: boolean;
 }
 ```
 
@@ -582,6 +625,13 @@ Renders `ui/Switch` with `className="rounded-none px-4 py-3"` plus the inset
 focus ring, so the row is the hit target and the role is `switch`. With
 `trailing`, the row is a flex container: the `Switch` takes `flex-1` and the
 trailing button sits beside it (never a button inside a button).
+
+Disabled dims the whole row: the kit passes `Switch dimRowWhenDisabled`, which
+puts `opacity-60` on the row and drops the track's own `opacity-50`, so label,
+description and track read as one disabled thing (like a disabled
+`SettingsRow`). With a `status`, the switch gives up its bottom padding
+(`pb-0`) and the status block is `px-4 pb-3`, so the status sits `mt-1.5`
+under the description.
 
 ### `SettingsSelect`
 
@@ -606,6 +656,7 @@ interface SettingsSliderRowProps {
   onValueChange: (value: number) => void;
   onValueCommit?: (value: number) => void;
   disabled?: boolean;
+  searchable?: boolean;
 }
 ```
 
@@ -620,7 +671,7 @@ interface SettingsChoiceGridProps<T extends string> {
   label: string;
   value: T;
   onValueChange: (next: T) => void;
-  options: readonly { value: T; label: string; badge?: string; preview: ReactNode; disabled?: boolean }[];
+  options: readonly { value: T; label: string; badge?: string; description?: string; preview: ReactNode; disabled?: boolean }[];
   columns?: 2 | 3 | 4;   // at @lg; 2 below
 }
 ```
@@ -635,6 +686,11 @@ text-text-secondary`, on a second line under the name, never beside it (at 40rem
 a card is about 130px wide and "Só escuro" crowds "Noite"). Use inside
 `SettingsGroup surface="plain"`.
 
+`description` is one `text-xs text-text-tertiary text-pretty` line under the
+name (above the badge), for cards that must be read before choosing (Voz's
+input modes). With a description the radio is named by its label (and badge)
+through `aria-labelledby` and described through `aria-describedby`.
+
 ### `SettingsPreview`
 
 ```ts
@@ -642,8 +698,14 @@ interface SettingsPreviewProps {
   summary?: string;      // sr-only sentence in place of the drawing
   children: ReactNode;   // the aria-hidden drawing
   controls?: ReactNode;  // rows that drive it, under a divider
+  decorative?: boolean;  // default true; false keeps the drawing in the a11y tree
 }
 ```
+
+`decorative={false}` is for a drawing that holds a control operated in place:
+Voz's sensitivity handle on the live meter. The caller then marks the purely
+visual parts `aria-hidden` itself and names the control (`Slider aria-label`
+plus `aria-valuetext`).
 
 `overflow-hidden rounded-[var(--radius-card)] border border-border`; drawing on
 `bg-surface-0`; controls under `border-t border-border`. This generalizes
@@ -653,16 +715,30 @@ interface SettingsPreviewProps {
 
 ```ts
 type InlineSaveState =
-  | { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "error"; message: string };
-function SettingsInlineStatus({ state }: { state: InlineSaveState }): JSX.Element | null;
+  | { kind: "idle" } | { kind: "saving"; label?: string } | { kind: "saved" }
+  | { kind: "error"; message: string };
+function SettingsInlineStatus({ state, savingLabel }: { state: InlineSaveState; savingLabel?: string }): JSX.Element | null;
 /** Runs an async write, tracks its state, clears "saved" after 2s. */
-function useInlineSave(): { state: InlineSaveState; run: (fn: () => Promise<unknown>, fallbackError: string) => Promise<void> };
+function useInlineSave(options?: { savingLabel?: string; showSaved?: boolean }):
+  { state: InlineSaveState; run: (fn: () => Promise<unknown>, fallbackError: string) => Promise<void> };
+/** The line under a row for a failed write: a 4xx sentence as is, else the fallback. */
+function inlineErrorMessage(error: unknown, fallback: string): string;
 ```
 
 `mt-1.5 flex items-center gap-1.5 text-xs`. Saving: `Loader2 h-3.5 w-3.5
-motion-safe:animate-spin`, "Salvando…", `text-text-tertiary`, `role="status"
-aria-live="polite"`. Saved: `Check text-success`, "Salvo", `text-text-secondary`,
-`animate-fade-in`. Error: `text-danger`, `role="alert"`, the message.
+motion-safe:animate-spin`, "Salvando…" (or `savingLabel` / `state.label`:
+"Preparando…" for a download, "Enviando…" for an upload), `text-text-tertiary`,
+`role="status" aria-live="polite"`. Saved: `Check text-success`, "Salvo",
+`text-text-secondary`, `animate-fade-in`. Error: `CircleX h-3.5 w-3.5`,
+`text-danger`, `role="alert"`, the message.
+
+`useInlineSave({ showSaved: false })` goes from saving straight back to quiet,
+for an action whose result is its own proof (a download starting). Errors still
+show. The error text is `inlineErrorMessage(error, fallback)`: an `ApiError`
+4xx with a real sentence is shown as is; a 5xx (`database_unavailable`), a
+network failure (status 0, a client-built English line) or a bare "Request
+failed" shows the tab's localized fallback; any other `Error` keeps its
+message, so a tab can throw its own localized one.
 
 ### `SettingsNotice`
 
@@ -674,6 +750,9 @@ interface SettingsNoticeProps {
   title?: string;
   children: ReactNode;
   action?: ReactNode;    // one secondary sm button
+  inGroup?: boolean;     // a row inside a SettingsGroup
+  icon?: LucideIcon;     // replaces the tone icon (Feedback's Bug)
+  role?: "status" | "alert" | "note"; // default alert for danger, status otherwise
 }
 ```
 
@@ -681,7 +760,10 @@ interface SettingsNoticeProps {
 `border border-border text-text-secondary` on the pane surface (a measured
 pair). Others: `bg-<tone>-soft text-on-<tone>-soft` (measured pairs). Icons
 `Info`, `TriangleAlert`, `CircleX`, `CircleCheck`. `role="status"`, or
-`role="alert"` for danger. Inside a group it is a row (`rounded-none border-0`).
+`role="alert"` for danger; `role="alert"` on another tone for a refusal that
+answers what the person just pressed, `role="note"` for a static notice that
+must not be announced as news. Inside a group it is a row (`rounded-none`) and
+sets no border width of its own, so the group's `divide-y` line under it stays.
 It replaces `border-warning/40 bg-warning/10` (`voice-section.tsx` 339, 461).
 
 ### `SettingsLinkRow`
@@ -689,11 +771,19 @@ It replaces `border-warning/40 bg-warning/10` (`voice-section.tsx` 339, 461).
 ```ts
 interface SettingsLinkRowProps {
   id: string;
-  label: string; description?: string;
+  label: string; description?: ReactNode; // phrasing content only
+  value?: ReactNode;                     // current value before the icon (a SettingsKeyCombo)
   href?: string; external?: boolean;     // target=_blank rel=noreferrer, ExternalLink icon
   onClick?: () => void;                  // in-app jump, ChevronRight icon
+  searchable?: boolean;
 }
 ```
+
+`value` sits right of the label, `text-xs text-text-secondary`, `gap-3` before
+the icon. The whole row is an `<a>` or `<button>`, so `value` and
+`description` must be phrasing content (`<span>`, `<kbd>`), and both are part
+of the row's accessible name. Atalhos' push-to-talk row:
+`value={<SettingsKeyCombo keys={formatBinding(key).split(" + ")} label={...} />}`.
 
 The whole row is the `<a>` or `<button>`: `flex w-full items-center
 justify-between gap-4 px-4 py-3 text-left text-sm text-text hover:bg-surface-2`
@@ -705,6 +795,88 @@ icon `h-4 w-4 text-text-tertiary`.
 `px-4 py-6 text-center`; optional icon `h-5 w-5 text-text-tertiary`; title
 `text-sm text-text-secondary`; description `text-xs text-text-tertiary`. For an
 empty list inside a group.
+
+### `SettingsResult`
+
+```ts
+interface SettingsResultProps {
+  tone: "success" | "danger" | "info";
+  title: string;            // one line: what happened
+  description?: ReactNode;
+  action?: ReactNode;       // one button for what comes next
+  icon?: LucideIcon;
+}
+```
+
+The outcome of a one-shot action, in place of the form that produced it
+(Feedback after a send). Centred like `SettingsEmpty`: `flex flex-col
+items-center gap-3 px-4 py-6`, tone icon `h-5 w-5` (`text-success`,
+`text-danger`, `text-text-tertiary`), title `text-sm text-text`. Not a live
+region; move focus to the action (`Button` forwards its ref) or to the title,
+which is `tabIndex={-1}` and carries `data-settings-result-title`.
+
+### `SettingsActionRow`
+
+```ts
+function SettingsActionRow(props: { id?: string; note?: ReactNode; noteId?: string; children: ReactNode }): JSX.Element;
+```
+
+A group's closing row with no label: a tertiary note on the left and one
+button on the right (Feedback's "Vai junto: …" beside "Enviar"). `flex
+min-h-11 flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-3`;
+the note is `min-w-0 flex-1 basis-48 text-xs text-text-tertiary`, so on a
+phone the button wraps under it. Point the button's `aria-describedby` at
+`noteId`. Not registered; `id` is still an `openSection` target.
+
+### `SettingsSkeletonRow` and `SettingsSkeletonRows`
+
+```ts
+interface SettingsSkeletonRowProps {
+  leading?: "tile" | "avatar"; description?: boolean; control?: "button" | "switch" | "none";
+}
+function SettingsSkeletonRows(props: SettingsSkeletonRowProps & { label: string; count?: number }): JSX.Element;
+```
+
+A loading stand-in at a real row's height (`ui/Skeleton` bars). Use
+`SettingsSkeletonRows` inside a `SettingsGroup` in place of the rows: one
+`role="status" aria-busy` wrapper with `divide-y`, an sr-only `label`
+("Carregando conexões"), and `count` rows that are each `aria-hidden`.
+
+### `SettingsBadge`
+
+`inline-flex rounded-full px-1.5 py-0.5 text-[10px] leading-none
+font-semibold uppercase tracking-wide`; `accent` (default) `bg-accent-soft
+text-on-accent-soft`, `neutral` `bg-surface-2 text-text-secondary`. The NOVO
+chip, in `SettingsRow badge`. The copy stays "Novo"; CSS uppercases it.
+
+### `SettingsCopyButton` and `useCopyText`
+
+```ts
+interface SettingsCopyButtonProps {
+  text: string; label: string; copiedLabel?: string; // default "Copiado"
+  showLabel?: boolean; disabled?: boolean; className?: string;
+}
+const SETTINGS_COPIED_MS = 1500;
+function useCopyText(text: string): { copied: boolean; copy: () => void };
+```
+
+The one copy affordance in Settings. Icon-only by default: `Button
+variant="ghost" size="sm"` square (`w-[var(--control-sm)] px-0`) inside a
+`Tooltip` whose `label` is also the accessible name (needs the app's
+`TooltipProvider`; the dialog's unit tests mount one). `showLabel`: a
+secondary `sm` button with the icon and the label as text, swapping to
+`copiedLabel`, no tooltip (Perfil's "Copiar link"). `Copy` turns into `Check
+text-success animate-icon-swap` for `SETTINGS_COPIED_MS`; every copy restarts
+the clock; an always-mounted sr-only `role="status"` says `copiedLabel`. No
+clipboard: nothing happens.
+
+### `SettingsBuildLine`
+
+`variant?: "rail" | "row"`, both on `useCopyText`, the copy icon after the
+text. `rail` (default): `text-[11px] text-text-tertiary`, truncates, "Copiado"
+replaces the line for a moment. `row`: Ajuda's "Versão do app" control,
+`font-mono text-xs text-text-secondary`, `break-all`, the line stays and only
+the icon turns into a check.
 
 ### Danger
 
@@ -740,8 +912,10 @@ interface SettingsShellValue {
   profileDirty: boolean;
   /** Switches tab. With `rowId`, scrolls that row into view and flashes it. */
   openSection: (section: SettingsSectionId, rowId?: string) => void;
+  /** The profile save lost the public link (409), localized. Perfil draws it under the field. */
+  profileHandleError?: string | null;
 }
-export function useSettingsShell(): SettingsShellValue;
+export function useSettingsShell(): { profileDirty; openSection; profileHandleError: string | null };
 ```
 
 Provided by the shell. `HelpSection`'s `onOpenFeedback` prop keeps working.
@@ -750,7 +924,20 @@ Provided by the shell. `HelpSection`'s `onOpenFeedback` prop keeps working.
 a row. It looks the row up by `data-settings-row`, calls `scrollIntoView({
 block: "center" })` and gives the row `bg-accent-soft` for 1s
 (`duration-[var(--duration-base)]` in, plain removal after). A missing `rowId`
-only switches the tab.
+only switches the tab. A `rowId` that is not on screen is not an error: the
+pane lands at the top of the section at once, and the row still flashes if it
+renders within a second. `SettingsGroup id` makes a whole group a target
+(Voz gives its input-mode group the id "ptt" while voice activity is
+selected, so Atalhos' jump always lands somewhere).
+
+A taken public link: `PATCH /api/me` claims the handle first and answers 409
+"That handle is already taken". The shell recognises it
+(`isHandleTakenError` in `settings/profile-patch.ts`: 409, a handle in the
+patch, the sentence names the handle and not the username), goes to Perfil,
+puts `settings.unsaved.handle.taken` ("Esse link já tem dono. Tenta outro.")
+in the bar and in `profileHandleError`, and clears it when the link draft
+changes, on Descartar and on a good save. The server's English sentence is
+never shown for this case.
 
 ### Settings search (phase 2, not in the first build)
 
