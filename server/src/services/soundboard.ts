@@ -184,16 +184,30 @@ const pendingUploads = new Map<string, { serverId: string; expiresAt: number }>(
  * other. Never delete an object a row already points at.
  */
 async function dropUnclaimedObject(key: string): Promise<void> {
-  const kept = await getPool().query(
-    `SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`,
-    [key],
-  );
-  if ((kept.rowCount ?? 0) > 0) {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Same lock claim takes, so a sweep cannot delete a file between the
+    // insert and the commit on the other API machine.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [key]);
+    const kept = await client.query(
+      `SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`,
+      [key],
+    );
+    if ((kept.rowCount ?? 0) > 0) {
+      await client.query("COMMIT");
+      pendingUploads.delete(key);
+      return;
+    }
+    await deleteObject(key);
+    await client.query("COMMIT");
     pendingUploads.delete(key);
-    return;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
-  await deleteObject(key);
-  pendingUploads.delete(key);
 }
 
 async function sweepPendingUploads(now: number): Promise<void> {
@@ -227,10 +241,10 @@ if (typeof setInterval === "function") {
   }, 60_000).unref?.();
 }
 
-function pendingUploadCount(serverId: string): number {
+function pendingUploadCount(serverId: string, now: number): number {
   let count = 0;
   for (const row of pendingUploads.values()) {
-    if (row.serverId === serverId) {
+    if (row.serverId === serverId && row.expiresAt > now) {
       count += 1;
     }
   }
@@ -249,13 +263,14 @@ export async function createSoundboardUpload(input: {
     throw new SoundboardError("too_big");
   }
   const now = Date.now();
-  await sweepPendingUploads(now);
+  // Cleanup stays off this request. Expired signatures no longer count.
+  void sweepPendingUploads(now);
   const count = await getPool().query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
     [input.serverId],
   );
   if (
-    Number(count.rows[0]?.n ?? 0) + pendingUploadCount(input.serverId) >=
+    Number(count.rows[0]?.n ?? 0) + pendingUploadCount(input.serverId, now) >=
     SOUNDBOARD_MAX_SOUNDS
   ) {
     throw new SoundboardError("slots");
@@ -325,6 +340,9 @@ export async function claimSoundboardSound(input: {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+      input.key,
+    ]);
     await client.query(`SELECT id FROM servers WHERE id = $1 FOR UPDATE`, [
       input.serverId,
     ]);

@@ -4979,10 +4979,28 @@ CREATE TABLE IF NOT EXISTS soundboard_sounds (
 CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
   ON soundboard_sounds (server_id, created_at);
 
--- One object, one row. A second claim of the same key returns the row
--- that already owns it instead of deleting the file.
-CREATE UNIQUE INDEX IF NOT EXISTS soundboard_sounds_storage_key
-  ON soundboard_sounds (storage_key);
+-- One object, one row. An earlier revision of this table could claim the
+-- same key twice. Drop the later row before the unique index, or a database
+-- that already has those rows fails to boot. The kept row still points at
+-- the file, so the object stays.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'soundboard_storage_key_unique_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM soundboard_sounds AS extra
+   USING soundboard_sounds AS kept
+   WHERE extra.storage_key = kept.storage_key
+     AND (extra.created_at, extra.id) > (kept.created_at, kept.id);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS soundboard_sounds_storage_key
+    ON soundboard_sounds (storage_key);
+
+  INSERT INTO data_migrations (name) VALUES ('soundboard_storage_key_unique_2026_10');
+END $$;
 
 -- USE_SOUNDBOARD (bit 25 = 33554432) onto @everyone, so a channel overwrite
 -- is what turns the board off. MANAGE_SOUNDBOARD (bit 26 = 67108864) onto
