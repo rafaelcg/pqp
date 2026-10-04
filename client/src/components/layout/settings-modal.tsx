@@ -701,6 +701,13 @@ export function SettingsModal({
     }
     setDiscarded(null);
     setSection("profile");
+    // Desfazer unmounts with the click; Descartar is back in its place.
+    window.setTimeout(() => {
+      (
+        document.querySelector<HTMLButtonElement>("[data-unsaved-discard]") ??
+        scrollerRef.current
+      )?.focus({ preventScroll: true });
+    }, 0);
   }
 
   /**

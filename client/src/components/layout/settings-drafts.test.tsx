@@ -181,14 +181,23 @@ describe("Settings profile drafts", () => {
     }
   });
 
-  it("brings the discarded edits back on Desfazer", () => {
-    mount(makeUser());
-    type(displayNameInput(), "Rafael");
-    act(() => barButton("discard")!.click());
-    expect(displayNameInput().value).toBe("Rafa");
-    act(() => barButton("undo")!.click());
-    expect(displayNameInput().value).toBe("Rafael");
-    expect(barButton("save")).not.toBeNull();
+  it("brings the discarded edits back on Desfazer, with focus on Descartar", () => {
+    vi.useFakeTimers();
+    try {
+      mount(makeUser());
+      type(displayNameInput(), "Rafael");
+      act(() => barButton("discard")!.click());
+      expect(displayNameInput().value).toBe("Rafa");
+      const undo = barButton("undo")!;
+      act(() => undo.focus());
+      act(() => undo.click());
+      act(() => vi.advanceTimersByTime(0));
+      expect(displayNameInput().value).toBe("Rafael");
+      expect(barButton("save")).not.toBeNull();
+      expect(document.activeElement).toBe(barButton("discard"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops the undo offer once something new is typed", () => {
