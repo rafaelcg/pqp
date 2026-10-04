@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OwnConnection } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 
 const api = vi.hoisted(() => ({
   fetchConnectionConfig: vi.fn(),
+  fetchMe: vi.fn(),
   fetchMyConnections: vi.fn(),
   startConnection: vi.fn(),
   updateConnectionVisibility: vi.fn(),
@@ -35,6 +36,11 @@ const STEAM: OwnConnection = {
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
+
+beforeEach(() => {
+  api.fetchMe.mockResolvedValue({ handle: "andre" });
+  sessionStorage.clear();
+});
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -182,5 +188,167 @@ describe("ConnectionsSection", () => {
     const connect = row().querySelector("button")!;
     expect(connect.textContent).toBe("Connect");
     expect(document.activeElement).toBe(connect);
+  });
+  it("shows the visibility question at every width, not only on a phone", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    const el = await render();
+    const select = el.querySelector("select")!;
+    const label = el.querySelector(`label[for="${select.id}"]`)!;
+    expect(label.textContent).toBe("Who can see this");
+    expect(label.className).not.toContain("sr-only");
+  });
+
+  it("explains how to get a public page when the account has no @", async () => {
+    api.fetchMe.mockResolvedValue({ handle: null });
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    const el = await render();
+    const select = el.querySelector("select")!;
+    const hint = [...el.querySelectorAll("p")].find((p) =>
+      p.textContent?.includes("pick an @ in Profile"),
+    )!;
+    expect(hint.textContent).toContain("Also on my public page");
+    expect(select.getAttribute("aria-describedby")).toContain(hint.id);
+  });
+
+  it("leaves the hint out when the account has an @ or the answer is not in", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    let el = await render();
+    expect(el.textContent).not.toContain("pick an @");
+    act(() => root?.unmount());
+    host?.remove();
+    api.fetchMe.mockReturnValue(never());
+    el = await render();
+    expect(el.textContent).not.toContain("pick an @");
+  });
+
+  it("names the button Disconnect, bordered, with no ellipsis", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    const el = await render();
+    const button = el.querySelector<HTMLButtonElement>(
+      '[data-settings-row="steam"] button',
+    )!;
+    expect(button.textContent).toBe("Disconnect");
+    expect(button.className).toContain("border-border-strong");
+    expect(button.className).toContain("text-danger");
+    expect(button.className).toContain("pointer-coarse:h-11");
+  });
+
+  it("keeps a long name on one line and shows it whole in the tooltip", async () => {
+    const long = "UmNomeDeUsuarioAbsurdamenteLongoQueNaoCabeNaLinha_DoBattleNet_2026#12345";
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({
+      connections: [{ ...STEAM, displayName: long }],
+    });
+    const el = await render();
+    const line = [...el.querySelectorAll("span")].find(
+      (node) => node.title === long,
+    )!;
+    expect(line.className).toContain("truncate");
+    expect(line.textContent).toBe(`Connected as ${long}`);
+  });
+
+  it("holds two skeleton rows and no Em breve group while loading", async () => {
+    api.fetchConnectionConfig.mockReturnValue(never());
+    api.fetchMyConnections.mockReturnValue(never());
+    const el = await render();
+    expect(el.querySelector('[role="status"]')?.children.length).toBe(3);
+  });
+
+  it("says plainly that game connections are off and lists only what is coming", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({});
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    const el = await render();
+    expect(el.textContent).toContain("Game connections are not turned on for this server.");
+    const soon = [...el.querySelectorAll("li")].map((li) => li.textContent);
+    expect(soon).toEqual(["YouTube", "Riot", "Roblox", "GitHub"]);
+  });
+
+  it("confirms a disconnect in words that fit any provider and warns about visibility", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    const el = await render();
+    const disconnect = el.querySelector<HTMLButtonElement>(
+      '[data-settings-row="steam"] button',
+    )!;
+    await act(async () => disconnect.click());
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(
+      "Your Steam account leaves your profile and nobody else sees it.",
+    );
+    expect(dialog.textContent).toContain(
+      "If you connect a different Steam account, “Who can see this” goes back to “Friends and people who share a server with me”.",
+    );
+  });
+
+  it("says the connection was cancelled when the person comes back unlinked", async () => {
+    sessionStorage.setItem(
+      "pqp.connection.pending",
+      JSON.stringify({ provider: "steam", at: Date.now() }),
+    );
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    const el = await render();
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
+    expect(sessionStorage.getItem("pqp.connection.pending")).toBeNull();
+  });
+
+  it("stays quiet when the trip ended in a link, an error or a stale marker", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    sessionStorage.setItem(
+      "pqp.connection.pending",
+      JSON.stringify({ provider: "steam", at: Date.now() }),
+    );
+    let el = await render();
+    expect(el.textContent).not.toContain("Connection cancelled");
+    act(() => root?.unmount());
+    host?.remove();
+
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    sessionStorage.setItem(
+      "pqp.connection.pending",
+      JSON.stringify({ provider: "steam", at: Date.now() - 3 * 60 * 60 * 1000 }),
+    );
+    el = await render();
+    expect(el.textContent).not.toContain("Connection cancelled");
+    act(() => root?.unmount());
+    host?.remove();
+
+    sessionStorage.setItem(
+      "pqp.connection.pending",
+      JSON.stringify({ provider: "steam", at: Date.now() }),
+    );
+    sessionStorage.setItem("pqp.connection.error", "Already linked elsewhere.");
+    el = await render();
+    expect(el.textContent).toContain("Already linked elsewhere.");
+    expect(el.textContent).not.toContain("Connection cancelled");
+  });
+
+  it("stops the spinner and says cancelled when the page comes back from the browser cache", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ twitch: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    api.startConnection.mockResolvedValue({ url: "about:blank#provider" });
+    const el = await render();
+    const connect = el.querySelector<HTMLButtonElement>(
+      '[data-settings-row="twitch"] button',
+    )!;
+    await act(async () => connect.click());
+    expect(connect.getAttribute("aria-busy")).toBe("true");
+    expect(sessionStorage.getItem("pqp.connection.pending")).toContain("twitch");
+    await act(async () => {
+      const event = new Event("pageshow") as Event & { persisted: boolean };
+      event.persisted = true;
+      window.dispatchEvent(event);
+    });
+    expect(connect.getAttribute("aria-busy")).toBeNull();
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
   });
 });
