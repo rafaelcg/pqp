@@ -6,8 +6,9 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
-import { Keyboard, Mic, Square, Volume2, Wifi } from "lucide-react";
+import { Keyboard, Lock, Mic, MicOff, Square, Video, Volume2, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -21,7 +22,6 @@ import {
   SettingsPreview,
   SettingsRow,
   SettingsSelect,
-  SettingsSliderRow,
   SettingsSwitchRow,
 } from "@/components/settings/kit";
 import { ACTION_LABEL } from "@/components/layout/shortcut-overlay";
@@ -30,7 +30,13 @@ import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout"
 import { dismissObsVirtualCameraHint, isObsVirtualCameraHintDismissed, isObsVirtualCameraLabel } from "@/lib/obs-virtual-camera";
 import { parseVideoQuality, VIDEO_QUALITIES, type VideoQuality } from "@/lib/video-quality";
 import { parseScreenFrameRate, SCREEN_FRAME_RATES, type ScreenFrameRate } from "@/lib/hls-capture-rate";
-import { bindingTypesText, formatBinding, supportsKeyBinding } from "@/components/voice/push-to-talk";
+import {
+  bindingTypesText,
+  formatBinding,
+  isModifierCode,
+  supportsKeyBinding,
+  type PttBinding,
+} from "@/components/voice/push-to-talk";
 import { clampReleaseDelayMs, MAX_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
 import { KeyBindingRefusalStatus, PttBindingField, type KeyBindingRefusal } from "@/components/voice/key-binding-field";
 import { getPttReleaseStuck, subscribePttReleaseStuck } from "@/components/voice/shell-unbind";
@@ -40,6 +46,8 @@ import { parseVadThreshold } from "@/lib/voice-audio";
 import {
   applyAudioOutputDevice,
   buildAudioConstraints,
+  ensureMediaPermission,
+  listAudioDevices,
   supportsAudioOutputSelection,
   type MediaDeviceOption,
   type MicProcessing,
@@ -82,6 +90,204 @@ const SCREEN_FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
   "30": "settings.voice.screenFrameRate.30",
   "60": "settings.voice.screenFrameRate.60",
 };
+
+/* ------------------------------------------------------------ device lists */
+
+/** The id Chrome gives the "same as the system" entry in a device list. */
+const BROWSER_DEFAULT_ID = "default";
+
+/** Seconds as the buttons say them: 5000 ms is "5 s". */
+function wholeSeconds(ms: number): number {
+  return Math.max(1, Math.round(ms / 1000));
+}
+
+export interface MergedDevices {
+  /** The list without the browser's own "default" entry. */
+  devices: MediaDeviceOption[];
+  /** The device the system default points at, when the browser says. */
+  defaultName: string | null;
+}
+
+/**
+ * The browser lists "Default - <device>" next to the device itself, which is
+ * two entries for one piece of hardware beside our own "Padrão do sistema".
+ * Drops that entry and hands back the device name, so the empty option can
+ * read "Padrão do sistema (MacBook Pro)".
+ */
+export function mergeDefaultDevice(devices: MediaDeviceOption[]): MergedDevices {
+  const entry = devices.find((device) => device.deviceId === BROWSER_DEFAULT_ID);
+  if (!entry) {
+    return { devices, defaultName: null };
+  }
+  // The prefix is the browser's own word in its own language ("Default - ",
+  // "Padrão - "), so split on the first separator rather than match words.
+  const separator = entry.label.indexOf(" - ");
+  const name = (
+    separator > 0 ? entry.label.slice(separator + 3) : entry.label
+  ).trim();
+  return {
+    devices: devices.filter((device) => device.deviceId !== BROWSER_DEFAULT_ID),
+    defaultName: name && name.toLowerCase() !== "default" ? name : null,
+  };
+}
+
+/** The select value for a saved id: the browser default is "Padrão do sistema". */
+export function deviceSelectValue(savedId: string): string {
+  return savedId === BROWSER_DEFAULT_ID ? "" : savedId;
+}
+
+/**
+ * True when a device was chosen and is no longer in a list that was read.
+ * An empty list is "not read yet" or "none connected", never "missing".
+ */
+export function savedDeviceMissing(
+  savedId: string,
+  devices: readonly MediaDeviceOption[],
+): boolean {
+  return (
+    deviceSelectValue(savedId) !== "" &&
+    devices.length > 0 &&
+    !devices.some((device) => device.deviceId === savedId)
+  );
+}
+
+type DeviceKind = "input" | "output" | "camera";
+const DEVICE_LABELS_KEY = "pqp:voice:device-labels";
+
+/**
+ * Only the id is saved with the settings, so a device that was unplugged has
+ * no name left to show. The name is remembered here, in this browser, the last
+ * time the saved device was seen, purely to say which one went missing.
+ */
+function readDeviceLabels(): Partial<Record<DeviceKind, { id: string; label: string }>> {
+  try {
+    const raw = window.localStorage.getItem(DEVICE_LABELS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function rememberDeviceLabel(kind: DeviceKind, id: string, label: string): void {
+  try {
+    const labels = readDeviceLabels();
+    if (labels[kind]?.id === id && labels[kind]?.label === label) {
+      return;
+    }
+    labels[kind] = { id, label };
+    window.localStorage.setItem(DEVICE_LABELS_KEY, JSON.stringify(labels));
+  } catch {
+    // Private mode or blocked storage: the notice just loses the name.
+  }
+}
+
+export function recallDeviceLabel(kind: DeviceKind, id: string): string | null {
+  const entry = readDeviceLabels()[kind];
+  return entry && entry.id === id && entry.label ? entry.label : null;
+}
+
+/* ------------------------------------------------------------ push-to-talk key */
+
+const MODIFIER_NAMES: Record<string, string> = {
+  ControlLeft: "Ctrl",
+  ControlRight: "Ctrl",
+  ShiftLeft: "Shift",
+  ShiftRight: "Shift",
+  AltLeft: "Alt",
+  MetaLeft: "Cmd",
+  MetaRight: "Cmd",
+};
+
+/**
+ * The short name of a key that is bound on its own and is a modifier, or null.
+ * Holding Ctrl for Ctrl+C holds the push-to-talk key too, so every shortcut
+ * opens the microphone. Right Alt is left out: it is AltGr, and the typing
+ * note already covers it.
+ */
+export function loneModifierName(binding: PttBinding): string | null {
+  if (binding.device !== "keyboard" || !isModifierCode(binding.code)) {
+    return null;
+  }
+  return MODIFIER_NAMES[binding.code] ?? null;
+}
+
+/** Enough of `navigator.keyboard.getLayoutMap()` for a key name. */
+export interface KeyboardLayout {
+  get(code: string): string | undefined;
+}
+
+/**
+ * The factory binding is stored as a backquote, which is where that key sits
+ * on a US keyboard. On an ABNT2 keyboard the same physical key types an
+ * apostrophe, so the stock binding is drawn with the name the person's own
+ * keyboard prints. A key the person bound themselves already carries the name
+ * it had when they pressed it. Display only: the saved binding is untouched.
+ */
+export function relabelStockBinding(
+  binding: PttBinding,
+  layout: KeyboardLayout | null,
+): PttBinding {
+  const stock =
+    binding.device === "keyboard" &&
+    binding.code === "Backquote" &&
+    binding.label === "`" &&
+    !binding.ctrl &&
+    !binding.alt &&
+    !binding.shift &&
+    !binding.meta;
+  const name = stock ? layout?.get(binding.code) : undefined;
+  if (!name || name.length !== 1 || name === binding.label) {
+    return binding;
+  }
+  return { ...binding, label: name.toUpperCase() };
+}
+
+function useKeyboardLayout(): KeyboardLayout | null {
+  const [layout, setLayout] = useState<KeyboardLayout | null>(null);
+  useEffect(() => {
+    // Chromium only, and not every build of it makes `keyboard` a full event
+    // target, so each piece is checked before it is used. Anything missing
+    // leaves the label as it was saved.
+    const keyboard = (
+      navigator as Navigator & {
+        keyboard?: Partial<EventTarget> & {
+          getLayoutMap?: () => Promise<KeyboardLayout>;
+        };
+      }
+    ).keyboard;
+    if (typeof keyboard?.getLayoutMap !== "function") {
+      return;
+    }
+    let cancelled = false;
+    const read = () => {
+      try {
+        void keyboard
+          .getLayoutMap?.()
+          .then((map) => {
+            if (!cancelled) {
+              setLayout(map);
+            }
+          })
+          .catch(() => {});
+      } catch {
+        // A locked-down frame refuses the call; keep the saved label.
+      }
+    };
+    read();
+    const canListen = typeof keyboard.addEventListener === "function";
+    if (canListen) {
+      keyboard.addEventListener?.("layoutchange", read);
+    }
+    return () => {
+      cancelled = true;
+      if (canListen) {
+        keyboard.removeEventListener?.("layoutchange", read);
+      }
+    };
+  }, []);
+  return layout;
+}
 
 /* ------------------------------------------------------------------- voice */
 
@@ -311,10 +517,22 @@ export function startMicLoopback(
 function useMicTest(active: boolean) {
   const [playing, setPlaying] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Whole seconds until the test stops itself. Null until the microphone is
+  // really playing: while the permission prompt is open nothing is counting.
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const handle = useRef<MicLoopback | null>(null);
+  const ticker = useRef<number | null>(null);
   // Loops somebody (or the hook) stopped on purpose. A permission prompt that
   // rejects after Parar was pressed is not a failure to report.
   const stoppedOnPurpose = useRef(new WeakSet<MicLoopback>());
+
+  const clearTicker = useCallback(() => {
+    if (ticker.current !== null) {
+      window.clearInterval(ticker.current);
+      ticker.current = null;
+    }
+    setSecondsLeft(null);
+  }, []);
 
   const stop = useCallback(() => {
     const loop = handle.current;
@@ -345,18 +563,30 @@ function useMicTest(active: boolean) {
         if (handle.current === loop) {
           handle.current = null;
         }
+        clearTicker();
         setPlaying(false);
       },
     });
     handle.current = loop;
-    loop.ready.catch(() => {
-      if (!stoppedOnPurpose.current.has(loop)) {
-        setFailed(true);
-      }
-    });
+    loop.ready.then(
+      () => {
+        if (handle.current !== loop) {
+          return;
+        }
+        setSecondsLeft(wholeSeconds(options.durationMs ?? MIC_TEST_MS));
+        ticker.current = window.setInterval(() => {
+          setSecondsLeft((left) => (left === null ? null : Math.max(0, left - 1)));
+        }, 1000);
+      },
+      () => {
+        if (!stoppedOnPurpose.current.has(loop)) {
+          setFailed(true);
+        }
+      },
+    );
   };
 
-  return { playing, failed, start, stop };
+  return { playing, failed, secondsLeft, start, stop };
 }
 
 /* --------------------------------------------------------------- meter */
@@ -457,35 +687,40 @@ function useMicLevel({
 
 /**
  * The level meter, 12px tall. With `onThresholdChange` it also carries the
- * voice-activity sensitivity marker: a 2px line drawn on the meter, with an
- * invisible `Slider` stretched over the whole 24px strip so anywhere on it is
- * the grab target, and the arrow keys move it.
+ * voice-activity sensitivity marker: a 2px line drawn on the meter with a
+ * small grabber on top of it, and an invisible `Slider` stretched over the
+ * whole strip so anywhere on it is the grab target, and the arrow keys move
+ * it. `disabled` is the microphone being blocked: an empty bar, no marker, and
+ * nothing to operate until the person allows the microphone.
  */
 function MicLevelMeter({
   level,
   inputVolume,
   threshold,
   onThresholdChange,
+  disabled = false,
 }: {
   level: number;
   inputVolume: number;
   threshold?: number;
   onThresholdChange?: (value: number) => void;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const gated = threshold !== undefined && onThresholdChange !== undefined;
-  const levelPct = Math.round(level * 100);
+  const operable = gated && !disabled;
+  const levelPct = disabled ? 0 : Math.round(level * 100);
   const thresholdPct =
     threshold !== undefined
       ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
       : 0;
 
   return (
-    <div className="space-y-1.5">
+    <div className={cn("space-y-2", disabled && "opacity-45")}>
       <div
         className={cn(
-          "relative h-6 rounded-[var(--radius-control)]",
-          gated &&
+          "relative h-7 rounded-[var(--radius-control)]",
+          operable &&
             "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-ring-offset",
         )}
       >
@@ -495,29 +730,37 @@ function MicLevelMeter({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={levelPct}
-          className="absolute inset-x-0 top-1.5 h-3 overflow-hidden rounded-full border border-border bg-surface-0"
+          className="absolute inset-x-0 top-3 h-3 overflow-hidden rounded-full border border-border bg-surface-0"
         >
           <div
             className="h-full rounded-full bg-success transition-[width] duration-75"
             style={{ width: `${levelPct}%` }}
           />
         </div>
-        {gated ? (
+        {operable ? (
           <>
+            {/* The grabber: drawn only, the Slider below takes the pointer. */}
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-text"
+              data-sensitivity-grabber=""
+              className="pointer-events-none absolute inset-y-0 w-4 -translate-x-1/2"
               style={{ left: `${thresholdPct}%` }}
-            />
+            >
+              <div className="absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 bg-text" />
+              <div className="absolute inset-x-0 top-0 flex h-3 items-center justify-center gap-0.5 rounded bg-text">
+                <span className="h-1.5 w-0.5 rounded-sm bg-surface-card" />
+                <span className="h-1.5 w-0.5 rounded-sm bg-surface-card" />
+              </div>
+            </div>
             <Slider
               variant="volume"
-              className="absolute inset-0 h-6 cursor-ew-resize opacity-0"
+              className="absolute inset-0 h-7 cursor-ew-resize opacity-0"
               value={thresholdPct}
               min={0}
               max={100}
               step={1}
               aria-label={t("settings.voice.sensitivity")}
-              aria-valuetext={t("settings.voice.percent", {
+              aria-valuetext={t("settings.voice.sensitivityValueText", {
                 percent: thresholdPct,
               })}
               onValueChange={(percent) =>
@@ -530,13 +773,117 @@ function MicLevelMeter({
       {gated ? (
         <div
           aria-hidden
-          className="flex justify-between text-xs text-text-tertiary"
+          className="flex justify-between gap-2 text-xs text-text-tertiary"
         >
           <span>{t("settings.voice.sensitivityMore")}</span>
+          {operable ? (
+            <span className="tabular-nums">
+              {t("settings.voice.sensitivityOpensAt", { percent: thresholdPct })}
+            </span>
+          ) : null}
           <span>{t("settings.voice.sensitivityLess")}</span>
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A volume on a `Slider`, read out beside it. Local to Voz rather than the
+ * kit's `SettingsSliderRow` because the touch strip is 40px tall (the kit's is
+ * the 16px of the thumb, small for a finger), and the input volume needs a
+ * mark at 100% and a line under it. `tickAt` draws the mark.
+ */
+function VolumeRow({
+  id,
+  label,
+  description,
+  value,
+  min,
+  max,
+  step,
+  tickAt,
+  tickLabel,
+  hint,
+  readoutTone,
+  onValueChange,
+  format,
+  children,
+}: {
+  id: string;
+  label: string;
+  description?: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  tickAt?: number;
+  tickLabel?: string;
+  hint?: string;
+  readoutTone?: "danger";
+  onValueChange: (value: number) => void;
+  format: (value: number) => string;
+  children?: ReactNode;
+}) {
+  const readout = format(value);
+  const tickPct =
+    tickAt === undefined ? null : ((tickAt - min) / (max - min)) * 100;
+  return (
+    <SettingsRow
+      id={id}
+      label={label}
+      description={description}
+      stacked
+      control={
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Slider
+                variant="volume"
+                className="h-10"
+                value={value}
+                min={min}
+                max={max}
+                step={step}
+                aria-label={label}
+                aria-valuetext={readout}
+                onValueChange={onValueChange}
+              />
+              {tickPct !== null ? (
+                <>
+                  <div
+                    aria-hidden
+                    data-volume-tick=""
+                    className="pointer-events-none absolute top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-sm bg-border-strong"
+                    style={{ left: `${tickPct}%` }}
+                  />
+                  {tickLabel ? (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary"
+                      style={{ left: `${tickPct}%` }}
+                    >
+                      {tickLabel}
+                    </span>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+            <span
+              aria-hidden
+              className={cn(
+                "w-12 shrink-0 text-right text-xs tabular-nums",
+                readoutTone === "danger" ? "text-danger" : "text-text-secondary",
+              )}
+            >
+              {readout}
+            </span>
+          </div>
+          {hint ? <p className="text-xs text-text-tertiary">{hint}</p> : null}
+          {children}
+        </div>
+      }
+    />
   );
 }
 
@@ -645,49 +992,97 @@ function PttRows({
     isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey",
   );
   const [refusal, setRefusal] = useState<KeyBindingRefusal | null>(null);
+  // A combo another shortcut already owns. Kept here rather than in the field
+  // so the button keeps showing the key that is really bound, and the message
+  // can name the combo that was refused.
+  const [conflict, setConflict] = useState<{ combo: string; action: string } | null>(
+    null,
+  );
+  const layout = useKeyboardLayout();
+  // Stable between frames: the field forgets its refusal whenever the binding
+  // it is handed changes identity, and the level meter re-renders Voz every
+  // frame.
+  const shownBinding = useMemo(
+    () => relabelStockBinding(draftLocal.pushToTalkKey, layout),
+    [draftLocal.pushToTalkKey, layout],
+  );
   const typesText =
     draftLocal.pushToTalkKey.device === "keyboard" &&
     bindingTypesText(draftLocal.pushToTalkKey);
+  const modifierName = loneModifierName(draftLocal.pushToTalkKey);
+
+  const onKeyChange = (pushToTalkKey: PttBinding) => {
+    if (pushToTalkKey.device !== "mouse") {
+      // A mouse button cannot collide with a keyboard-only app shortcut. See
+      // the note on `PttBinding` in push-to-talk.ts.
+      const taken = findBindingConflict(
+        bindableMap(draftLocal),
+        "pushToTalk",
+        pushToTalkKey,
+      );
+      if (taken) {
+        setConflict({
+          combo: formatBinding(pushToTalkKey),
+          action: t(ACTION_LABEL[taken]),
+        });
+        return;
+      }
+    }
+    setConflict(null);
+    patchLocal({ pushToTalkKey });
+  };
 
   return (
     <>
       <SettingsRow
         id="ptt"
         label={keyLabel}
-        description={t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
+        description={`${t(hintKey, { key: formatBinding(shownBinding) })} ${t(
+          isDesktop
+            ? "settings.voice.pttRecommendDesktop"
+            : "settings.voice.pttRecommend",
+        )}`}
         status={
-          refusal ? (
+          conflict ? (
+            <SettingsInlineStatus
+              state={{
+                kind: "error",
+                message: t("settings.voice.pttConflict", conflict),
+              }}
+            />
+          ) : refusal ? (
             <div id={refusal.id}>
               <KeyBindingRefusalStatus message={refusal.message} />
             </div>
           ) : undefined
         }
         control={
-          <div>
+          <div
+            onClick={() => setConflict(null)}
+            onBlur={() => setConflict(null)}
+          >
             <PttBindingField
               label={keyLabel}
               hideLabel
               onRefusedChange={setRefusal}
-              binding={draftLocal.pushToTalkKey}
+              binding={shownBinding}
               allowMouse={isDesktop}
-              takenBy={(binding) => {
-                if (binding.device === "mouse") {
-                  // A mouse button cannot collide with a keyboard-only app
-                  // shortcut. See the note on `PttBinding` in push-to-talk.ts.
-                  return null;
-                }
-                const conflict = findBindingConflict(
-                  bindableMap(draftLocal),
-                  "pushToTalk",
-                  binding,
-                );
-                return conflict ? t(ACTION_LABEL[conflict]) : null;
-              }}
-              onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+              onChange={onKeyChange}
             />
           </div>
         }
       />
+
+      {modifierName ? (
+        <SettingsNotice tone="warning" inGroup>
+          {t(
+            isDesktop
+              ? "settings.voice.pttModifierWarningDesktop"
+              : "settings.voice.pttModifierWarning",
+            { key: modifierName },
+          )}
+        </SettingsNotice>
+      ) : null}
 
       {typesText ? (
         <SettingsNotice tone="info" inGroup>
@@ -707,7 +1102,7 @@ function PttRows({
       ) : null}
 
       {isDesktop && native.available ? (
-        <SettingsSliderRow
+        <VolumeRow
           id="ptt-release-delay"
           label={t("settings.voice.pttReleaseDelay")}
           description={t("settings.voice.pttReleaseDelayHint")}
@@ -769,6 +1164,134 @@ function PttRows({
   );
 }
 
+/* ------------------------------------------------------------ camera test */
+
+/** The picture from the camera, set once per stream. */
+function CameraPreview({ stream }: { stream: MediaStream | null }) {
+  const { t } = useTranslation();
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    if (!element) {
+      return;
+    }
+    element.srcObject = stream;
+    if (stream) {
+      void Promise.resolve(element.play?.()).catch(() => {});
+    }
+  }, [stream]);
+  return (
+    <div className="relative aspect-video w-full max-w-60 overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-0">
+      <video
+        ref={video}
+        muted
+        playsInline
+        autoPlay
+        aria-label={t("settings.voice.cameraPreview")}
+        // Mirrored, like a mirror: what people expect from a self-view.
+        className="h-full w-full -scale-x-100 object-cover"
+      />
+      <span className="absolute bottom-2 left-2 rounded-full bg-surface-0/80 px-2 py-0.5 text-xs text-text">
+        {t("settings.voice.cameraPreviewPrivate")}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * "Testar câmera": opens the chosen camera for a preview that only this
+ * person sees, and closes it when they press the button again, change the
+ * camera, leave Voz, or a call starts. Nothing is sent anywhere.
+ */
+function useCameraTest(deviceId: string, allowed: boolean, onOpened: () => void) {
+  const [on, setOn] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const onOpenedRef = useRef(onOpened);
+  onOpenedRef.current = onOpened;
+
+  useEffect(() => {
+    if (!allowed) {
+      setOn(false);
+    }
+  }, [allowed]);
+
+  useEffect(() => {
+    if (!on) {
+      return;
+    }
+    let cancelled = false;
+    let opened: MediaStream | null = null;
+    void Promise.resolve()
+      .then(() =>
+        navigator.mediaDevices.getUserMedia({
+          video: deviceId ? { deviceId: { exact: deviceId } } : true,
+          audio: false,
+        }),
+      )
+      .then((next) => {
+        if (cancelled) {
+          for (const track of next.getTracks()) {
+            track.stop();
+          }
+          return;
+        }
+        opened = next;
+        setStream(next);
+        // Labels of the other cameras are readable now.
+        onOpenedRef.current();
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFailed(true);
+          setOn(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+      for (const track of opened?.getTracks() ?? []) {
+        track.stop();
+      }
+      setStream(null);
+    };
+  }, [on, deviceId]);
+
+  return {
+    on,
+    failed,
+    stream,
+    toggle: () => {
+      setFailed(false);
+      setOn((value) => !value);
+    },
+  };
+}
+
+/**
+ * The saved device against the list that was read: whether it is gone, and the
+ * name it had the last time it was seen (the settings keep only an id).
+ */
+function useSavedDevice(
+  kind: DeviceKind,
+  savedId: string,
+  devices: readonly MediaDeviceOption[],
+  ready: boolean,
+): { missing: boolean; name: string | null } {
+  const found = devices.find((device) => device.deviceId === savedId);
+  const foundLabel = found?.label;
+  useEffect(() => {
+    if (ready && foundLabel && deviceSelectValue(savedId) !== "") {
+      rememberDeviceLabel(kind, savedId, foundLabel);
+    }
+  }, [ready, foundLabel, savedId, kind]);
+  const missing = ready && savedDeviceMissing(savedId, devices);
+  const name = useMemo(
+    () => (missing ? recallDeviceLabel(kind, savedId) : null),
+    [missing, kind, savedId],
+  );
+  return { missing, name };
+}
+
 /* -------------------------------------------------------------- section */
 
 /**
@@ -818,12 +1341,46 @@ export function VoiceSection({
   const [obsHintDismissed, setObsHintDismissed] = useState(
     isObsVirtualCameraHintDismissed,
   );
+
+  // "Permitir microfone". The shell asks once when Voz opens and has no way to
+  // ask again, so the retry is made here, on a click, and the lists it reads
+  // are held here until the shell's own catch up.
+  const [allowed, setAllowed] = useState<Awaited<
+    ReturnType<typeof listAudioDevices>
+  > | null>(null);
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (devicesError === null) {
+      setAllowed(null);
+    }
+  }, [devicesError]);
+  const blocked = devicesError !== null && allowed === null;
+  const loaded = devicesLoaded || allowed !== null;
+  const allowMicrophone = async () => {
+    setAsking(true);
+    try {
+      if (await ensureMediaPermission()) {
+        setAllowed(await listAudioDevices());
+      }
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const inputList = mergeDefaultDevice(inputs.length > 0 ? inputs : (allowed?.inputs ?? []));
+  const outputList = mergeDefaultDevice(outputs.length > 0 ? outputs : (allowed?.outputs ?? []));
+  const cameraList = cameras.length > 0 ? cameras : (allowed?.cameras ?? []);
+  const systemDefault = (name: string | null) =>
+    name
+      ? t("settings.voice.systemDefaultNamed", { name })
+      : t("settings.voice.systemDefault");
+
   // In a call the meter reads the call's own analyser and opens nothing.
   const micLevel = useMicLevel({
     deviceId: draftLocal.inputDeviceId,
     inputVolume: draftLocal.inputVolume,
     liveAnalyser: voiceAnalyser,
-    active: metering,
+    active: metering && !blocked,
   });
   const voiceActivity = draftLocal.inputMode === "voice-activity";
   // The analyser alone is not the signal: a listen-only join (no mic, or the
@@ -834,10 +1391,33 @@ export function VoiceSection({
   // Never a second capture during a call, and never the mic played into the
   // speakers a live call is listening through.
   const micTest = useMicTest(metering && !inCall);
+  const cameraTest = useCameraTest(
+    draftLocal.cameraDeviceId,
+    metering && !inCall,
+    onRevealCameras,
+  );
   // Only after the list was really read: while the permission prompt is up
   // the list is empty too, and that is not "no microphone".
   const noInputs =
-    metering && devicesLoaded && devicesError === null && inputs.length === 0;
+    metering && loaded && !blocked && inputList.devices.length === 0;
+  const inputSaved = useSavedDevice(
+    "input",
+    draftLocal.inputDeviceId,
+    inputList.devices,
+    metering && loaded && !blocked,
+  );
+  const outputSaved = useSavedDevice(
+    "output",
+    draftLocal.outputDeviceId,
+    outputList.devices,
+    metering && loaded && !blocked && canSelectOutput,
+  );
+  const cameraSaved = useSavedDevice(
+    "camera",
+    draftLocal.cameraDeviceId,
+    cameraList,
+    metering,
+  );
 
   const onBeepChange = (pttBeep: boolean) => {
     setPttBeepEnabled(pttBeep);
@@ -847,7 +1427,7 @@ export function VoiceSection({
   const showObsHint =
     !obsHintDismissed &&
     isObsVirtualCameraLabel(
-      cameras.find((device) => device.deviceId === draftLocal.cameraDeviceId)
+      cameraList.find((device) => device.deviceId === draftLocal.cameraDeviceId)
         ?.label ?? "",
     );
 
@@ -857,6 +1437,23 @@ export function VoiceSection({
   const cameraId = `${ids}-camera`;
   const qualityId = `${ids}-quality`;
   const frameRateId = `${ids}-fps`;
+
+  const testSeconds = wholeSeconds(MIC_TEST_MS);
+  const micTestLabel = micTest.playing
+    ? micTest.secondsLeft === null
+      ? t("settings.voice.micTestStop")
+      : t("settings.voice.micTestStopIn", { seconds: micTest.secondsLeft })
+    : t("settings.voice.micTestWithTime", { seconds: testSeconds });
+  // The label the button is not showing, so it keeps the wider of the two.
+  const micTestSpare = micTest.playing
+    ? t("settings.voice.micTestWithTime", { seconds: testSeconds })
+    : t("settings.voice.micTestStopIn", { seconds: testSeconds });
+
+  const noiseHintKey = {
+    off: "settings.voice.processing.noise.offHint",
+    browser: "settings.voice.processing.noiseHint",
+    advanced: "settings.voice.processing.noise.advancedHint",
+  } as const satisfies Record<NoiseSuppressionMode, MessageKey>;
 
   return (
     <div className="space-y-6">
@@ -878,9 +1475,9 @@ export function VoiceSection({
         <SettingsRow
           id="input-device"
           label={t("settings.voice.inputDevice")}
-          htmlFor={devicesError || noInputs ? undefined : inputId}
+          htmlFor={blocked || noInputs ? undefined : inputId}
           description={
-            inCall && !devicesError && !noInputs
+            inCall && !blocked && !noInputs
               ? t("settings.voice.micTestInCall")
               : undefined
           }
@@ -893,93 +1490,141 @@ export function VoiceSection({
             ) : undefined
           }
           control={
-            devicesError ? (
-              <SettingsNotice tone="warning">{devicesError}</SettingsNotice>
-            ) : noInputs ? (
+            blocked ? undefined : noInputs ? (
               <SettingsNotice tone="info">{t("settings.voice.noInputs")}</SettingsNotice>
             ) : (
-              <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
-                <SettingsSelect
-                  id={inputId}
-                  className="min-w-0 @lg:flex-1"
-                  value={draftLocal.inputDeviceId}
-                  onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-                >
-                  <option value="">{t("settings.voice.systemDefault")}</option>
-                  {inputs.map((device) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label}
-                    </option>
-                  ))}
-                </SettingsSelect>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="self-start @lg:self-auto"
-                  disabled={!metering || inCall}
-                  data-mic-test=""
-                  onClick={() =>
-                    micTest.playing
-                      ? micTest.stop()
-                      : micTest.start({
-                          deviceId: draftLocal.inputDeviceId,
-                          processing: draftLocal.micProcessing,
-                          inputVolume: draftLocal.inputVolume,
-                          outputDeviceId: canSelectOutput
-                            ? draftLocal.outputDeviceId
-                            : "",
-                          outputVolume: draftLocal.outputVolume,
-                        })
-                  }
-                >
-                  {micTest.playing ? (
-                    <Square className="h-3.5 w-3.5" aria-hidden />
-                  ) : (
-                    <Volume2 className="h-3.5 w-3.5" aria-hidden />
-                  )}
-                  {/* Both labels share one grid cell, so the button is as wide
-                      as the longer one and the select beside it never resizes
-                      when the test starts or stops. The hidden one is out of
-                      the accessible name. */}
-                  <span className="grid">
-                    <span className="col-start-1 row-start-1">
-                      {t(
-                        micTest.playing
-                          ? "settings.voice.micTestStop"
-                          : "settings.voice.micTest",
-                      )}
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
+                  <SettingsSelect
+                    id={inputId}
+                    className="min-w-0 @lg:flex-1"
+                    value={deviceSelectValue(draftLocal.inputDeviceId)}
+                    onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
+                  >
+                    <option value="">{systemDefault(inputList.defaultName)}</option>
+                    {inputList.devices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </option>
+                    ))}
+                  </SettingsSelect>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="self-start @lg:self-auto"
+                    disabled={!metering || inCall}
+                    data-mic-test=""
+                    onClick={() =>
+                      micTest.playing
+                        ? micTest.stop()
+                        : micTest.start({
+                            deviceId: draftLocal.inputDeviceId,
+                            processing: draftLocal.micProcessing,
+                            inputVolume: draftLocal.inputVolume,
+                            outputDeviceId: canSelectOutput
+                              ? draftLocal.outputDeviceId
+                              : "",
+                            outputVolume: draftLocal.outputVolume,
+                          })
+                    }
+                  >
+                    {micTest.playing ? (
+                      <Square className="h-3.5 w-3.5" aria-hidden />
+                    ) : (
+                      <Volume2 className="h-3.5 w-3.5" aria-hidden />
+                    )}
+                    {/* Both labels share one grid cell, so the button is as wide
+                        as the longer one and the select beside it never resizes
+                        when the test starts or stops. The hidden one is out of
+                        the accessible name. */}
+                    <span className="grid tabular-nums">
+                      <span className="col-start-1 row-start-1">{micTestLabel}</span>
+                      <span aria-hidden className="invisible col-start-1 row-start-1">
+                        {micTestSpare}
+                      </span>
                     </span>
-                    <span aria-hidden className="invisible col-start-1 row-start-1">
-                      {t(
-                        micTest.playing
-                          ? "settings.voice.micTest"
-                          : "settings.voice.micTestStop",
-                      )}
-                    </span>
-                  </span>
-                </Button>
+                  </Button>
+                </div>
+                <p className="text-xs text-text-tertiary">
+                  {t("settings.voice.micTestHint", { seconds: testSeconds })}
+                </p>
+                {inputSaved.missing ? (
+                  <SettingsNotice tone="warning">
+                    {inputSaved.name
+                      ? t("settings.voice.inputMissing", { name: inputSaved.name })
+                      : t("settings.voice.inputMissingUnnamed")}
+                  </SettingsNotice>
+                ) : null}
               </div>
             )
           }
         />
 
-        <SettingsSliderRow
+        {blocked ? (
+          <>
+            <SettingsNotice
+              tone="warning"
+              inGroup
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={asking}
+                  onClick={() => void allowMicrophone()}
+                  data-allow-microphone=""
+                >
+                  {t("settings.voice.allowMic")}
+                </Button>
+              }
+            >
+              {devicesError}
+            </SettingsNotice>
+            <SettingsNotice tone="info" inGroup role="note" icon={Lock}>
+              {t("settings.voice.allowMicSteps", desktopContext())}
+            </SettingsNotice>
+          </>
+        ) : null}
+
+        <VolumeRow
           id="input-volume"
           label={t("settings.voice.inputVolume")}
           value={Math.round(draftLocal.inputVolume * 100)}
           min={0}
           max={200}
+          tickAt={100}
+          tickLabel={t("settings.voice.percent", { percent: 100 })}
+          hint={t("settings.voice.inputVolumeHint")}
+          readoutTone={draftLocal.inputVolume === 0 ? "danger" : undefined}
           format={(percent) => t("settings.voice.percent", { percent })}
           onValueChange={(percent) => patchLocal({ inputVolume: percent / 100 })}
-        />
+        >
+          {draftLocal.inputVolume === 0 ? (
+            <p
+              role="status"
+              className="flex items-center gap-1.5 text-xs text-danger"
+            >
+              <MicOff aria-hidden className="h-3.5 w-3.5 shrink-0" />
+              {t("settings.voice.inputVolumeZero")}
+            </p>
+          ) : null}
+        </VolumeRow>
 
         <SettingsRow
           id={voiceActivity ? "sensitivity" : "input-level"}
           label={t(
             voiceActivity ? "settings.voice.sensitivity" : "settings.voice.inputLevel",
           )}
-          description={voiceActivity ? t("settings.voice.sensitivityHint") : undefined}
+          description={
+            voiceActivity
+              ? t(
+                  blocked
+                    ? "settings.voice.sensitivityBlocked"
+                    : "settings.voice.sensitivityHint",
+                )
+              : undefined
+          }
           stacked
           control={
             // Not decorative: the sensitivity handle is operated in place.
@@ -990,6 +1635,7 @@ export function VoiceSection({
                 <MicLevelMeter
                   level={micLevel}
                   inputVolume={draftLocal.inputVolume}
+                  disabled={blocked}
                   threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
                   onThresholdChange={
                     voiceActivity
@@ -1008,22 +1654,31 @@ export function VoiceSection({
           id="output-device"
           label={t("settings.voice.outputDevice")}
           htmlFor={canSelectOutput ? outputId : undefined}
-          stacked={!canSelectOutput}
+          stacked={!canSelectOutput || outputSaved.missing}
           control={
             canSelectOutput ? (
-              <SettingsSelect
-                id={outputId}
-                className="@lg:w-64"
-                value={draftLocal.outputDeviceId}
-                onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
-              >
-                <option value="">{t("settings.voice.systemDefault")}</option>
-                {outputs.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </SettingsSelect>
+              <div className="flex flex-col gap-2">
+                <SettingsSelect
+                  id={outputId}
+                  className="@lg:w-64"
+                  value={deviceSelectValue(draftLocal.outputDeviceId)}
+                  onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
+                >
+                  <option value="">{systemDefault(outputList.defaultName)}</option>
+                  {outputList.devices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </SettingsSelect>
+                {outputSaved.missing ? (
+                  <SettingsNotice tone="warning">
+                    {outputSaved.name
+                      ? t("settings.voice.outputMissing", { name: outputSaved.name })
+                      : t("settings.voice.outputMissingUnnamed")}
+                  </SettingsNotice>
+                ) : null}
+              </div>
             ) : (
               <SettingsNotice tone="info">
                 {t("settings.voice.outputUnsupported", desktopContext())}
@@ -1031,7 +1686,7 @@ export function VoiceSection({
             )
           }
         />
-        <SettingsSliderRow
+        <VolumeRow
           id="output-volume"
           label={t("settings.voice.outputVolume")}
           value={Math.round(draftLocal.outputVolume * 100)}
@@ -1117,11 +1772,7 @@ export function VoiceSection({
               <SettingsBadge>{t("voiceClean.badge")}</SettingsBadge>
             ) : undefined
           }
-          description={t(
-            draftLocal.micProcessing.noiseSuppression === "advanced"
-              ? "settings.voice.processing.noise.advancedHint"
-              : "settings.voice.processing.noiseHint",
-          )}
+          description={t(noiseHintKey[draftLocal.micProcessing.noiseSuppression])}
           control={
             <SettingsSelect
               id={noiseId}
@@ -1173,21 +1824,59 @@ export function VoiceSection({
           id="camera"
           label={t("settings.voice.cameraDevice")}
           htmlFor={cameraId}
+          description={inCall ? t("settings.voice.cameraTestInCall") : undefined}
+          stacked
+          status={
+            cameraTest.failed ? (
+              <SettingsInlineStatus
+                state={{ kind: "error", message: t("settings.voice.cameraTestFailed") }}
+              />
+            ) : undefined
+          }
           control={
-            <SettingsSelect
-              id={cameraId}
-              className="@lg:w-64"
-              value={draftLocal.cameraDeviceId}
-              onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
-              onFocus={() => onRevealCameras()}
-            >
-              <option value="">{t("settings.voice.systemDefault")}</option>
-              {cameras.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label}
-                </option>
-              ))}
-            </SettingsSelect>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
+                <SettingsSelect
+                  id={cameraId}
+                  className="min-w-0 @lg:flex-1"
+                  value={draftLocal.cameraDeviceId}
+                  onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+                  onFocus={() => onRevealCameras()}
+                >
+                  <option value="">{t("settings.voice.systemDefault")}</option>
+                  {cameraList.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </SettingsSelect>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="self-start @lg:self-auto"
+                  disabled={!metering || inCall}
+                  aria-pressed={cameraTest.on}
+                  data-camera-test=""
+                  onClick={cameraTest.toggle}
+                >
+                  <Video className="h-3.5 w-3.5" aria-hidden />
+                  {t(
+                    cameraTest.on
+                      ? "settings.voice.cameraTestStop"
+                      : "settings.voice.cameraTest",
+                  )}
+                </Button>
+              </div>
+              {cameraTest.on ? <CameraPreview stream={cameraTest.stream} /> : null}
+              {cameraSaved.missing ? (
+                <SettingsNotice tone="warning">
+                  {cameraSaved.name
+                    ? t("settings.voice.cameraMissing", { name: cameraSaved.name })
+                    : t("settings.voice.cameraMissingUnnamed")}
+                </SettingsNotice>
+              ) : null}
+            </div>
           }
         >
           {showObsHint ? (
@@ -1213,7 +1902,7 @@ export function VoiceSection({
         </SettingsRow>
         <SettingsRow
           id="video-quality"
-          label={t("settings.voice.videoQuality")}
+          label={t("settings.voice.videoQualityRow")}
           htmlFor={qualityId}
           description={t("settings.voice.videoQuality.hint")}
           // The number beside the control that asks for it. Without this a
@@ -1269,12 +1958,14 @@ export function VoiceSection({
         <SettingsSwitchRow
           id="mute-on-join"
           label={t("settings.voice.muteOnJoin")}
+          description={t("settings.voice.muteOnJoinHint")}
           checked={draftLocal.muteOnJoin}
           onCheckedChange={(muteOnJoin) => patchLocal({ muteOnJoin })}
         />
         <SettingsSwitchRow
           id="compact-peers"
           label={t("settings.voice.compactPeers")}
+          description={t("settings.voice.compactPeersHint")}
           checked={draftLocal.compactPeers}
           onCheckedChange={(compactPeers) => patchLocal({ compactPeers })}
         />
@@ -1288,6 +1979,7 @@ export function VoiceSection({
         <SettingsSwitchRow
           id="music-duck"
           label={t("settings.voice.musicDuck")}
+          description={t("settings.voice.musicDuckHint")}
           checked={musicDucking}
           onCheckedChange={setMusicDucking}
         />

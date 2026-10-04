@@ -5,6 +5,16 @@ import {
   type MicLoopbackDeps,
   type MicLoopbackOptions,
 } from "@/components/settings/voice-section";
+import {
+  deviceSelectValue,
+  loneModifierName,
+  mergeDefaultDevice,
+  recallDeviceLabel,
+  relabelStockBinding,
+  rememberDeviceLabel,
+  savedDeviceMissing,
+} from "@/components/settings/voice-section";
+import { defaultPttBinding, type PttBinding } from "@/components/voice/push-to-talk";
 import { defaultMicProcessing } from "@/lib/audio-devices";
 
 /** The audio graph, recorded: who connected to whom, and what was closed. */
@@ -240,5 +250,140 @@ describe("startMicLoopback (Ouvir meu mic)", () => {
     const call = (d.getUserMedia as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(call.audio).not.toHaveProperty("deviceId");
     expect(d.setSink).toHaveBeenCalledWith(fake.element, "");
+  });
+});
+
+describe("mergeDefaultDevice", () => {
+  const list = [
+    { deviceId: "default", label: "Default - MacBook Pro Microphone (Built-in)" },
+    { deviceId: "abc", label: "MacBook Pro Microphone (Built-in)" },
+    { deviceId: "def", label: "Yeti Nano" },
+  ];
+
+  it("drops the browser's default entry and names the device it points at", () => {
+    const merged = mergeDefaultDevice(list);
+    expect(merged.devices.map((d) => d.deviceId)).toEqual(["abc", "def"]);
+    expect(merged.defaultName).toBe("MacBook Pro Microphone (Built-in)");
+  });
+
+  it("reads the name after the browser's own prefix, in any language", () => {
+    expect(
+      mergeDefaultDevice([{ deviceId: "default", label: "Padrão - Fones" }]).defaultName,
+    ).toBe("Fones");
+  });
+
+  it("keeps a label with no prefix whole, and never names a bare 'Default'", () => {
+    expect(
+      mergeDefaultDevice([{ deviceId: "default", label: "Fake Default Audio Input" }])
+        .defaultName,
+    ).toBe("Fake Default Audio Input");
+    expect(
+      mergeDefaultDevice([{ deviceId: "default", label: "Default" }]).defaultName,
+    ).toBeNull();
+  });
+
+  it("leaves a list without the entry alone", () => {
+    const only = [{ deviceId: "abc", label: "Mic" }];
+    expect(mergeDefaultDevice(only)).toEqual({ devices: only, defaultName: null });
+  });
+
+  it("shows a saved 'default' id as the system default", () => {
+    expect(deviceSelectValue("default")).toBe("");
+    expect(deviceSelectValue("abc")).toBe("abc");
+  });
+});
+
+describe("savedDeviceMissing", () => {
+  const devices = [{ deviceId: "abc", label: "Mic" }];
+
+  it("is true only for a chosen device that a read list no longer holds", () => {
+    expect(savedDeviceMissing("gone", devices)).toBe(true);
+    expect(savedDeviceMissing("abc", devices)).toBe(false);
+  });
+
+  it("is never true for the system default or an empty list", () => {
+    expect(savedDeviceMissing("", devices)).toBe(false);
+    expect(savedDeviceMissing("default", devices)).toBe(false);
+    expect(savedDeviceMissing("gone", [])).toBe(false);
+  });
+});
+
+describe("remembered device names", () => {
+  it("brings back the name a device had, but only for that device", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+      },
+    });
+    rememberDeviceLabel("input", "abc", "Yeti Nano");
+    expect(recallDeviceLabel("input", "abc")).toBe("Yeti Nano");
+    expect(recallDeviceLabel("input", "other")).toBeNull();
+    expect(recallDeviceLabel("camera", "abc")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("survives storage that throws", () => {
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: () => {
+          throw new Error("blocked");
+        },
+      },
+    });
+    expect(() => rememberDeviceLabel("input", "abc", "Mic")).not.toThrow();
+    expect(recallDeviceLabel("input", "abc")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("loneModifierName", () => {
+  const key = (code: string, extra: Partial<PttBinding> = {}): PttBinding => ({
+    ...defaultPttBinding(),
+    code,
+    label: code,
+    ...extra,
+  });
+
+  it("names a modifier bound on its own", () => {
+    expect(loneModifierName(key("ControlLeft"))).toBe("Ctrl");
+    expect(loneModifierName(key("ShiftRight"))).toBe("Shift");
+    expect(loneModifierName(key("AltLeft"))).toBe("Alt");
+    expect(loneModifierName(key("MetaLeft"))).toBe("Cmd");
+  });
+
+  it("leaves ordinary keys, F keys, mouse buttons and AltGr alone", () => {
+    expect(loneModifierName(key("KeyV"))).toBeNull();
+    expect(loneModifierName(key("F13"))).toBeNull();
+    expect(loneModifierName(key("ControlLeft", { device: "mouse" }))).toBeNull();
+    expect(loneModifierName(key("AltRight"))).toBeNull();
+  });
+});
+
+describe("relabelStockBinding", () => {
+  const abnt2 = { get: (code: string) => (code === "Backquote" ? "'" : undefined) };
+
+  it("draws the factory backquote with the name the person's keyboard prints", () => {
+    const shown = relabelStockBinding(defaultPttBinding(), abnt2);
+    expect(shown.label).toBe("'");
+    expect(shown.code).toBe("Backquote");
+  });
+
+  it("is the same object when nothing changes, so the field keeps its refusal", () => {
+    const stock = defaultPttBinding();
+    expect(relabelStockBinding(stock, null)).toBe(stock);
+    expect(relabelStockBinding(stock, { get: () => "`" })).toBe(stock);
+    expect(relabelStockBinding(stock, { get: () => undefined })).toBe(stock);
+  });
+
+  it("never renames a key the person bound themselves", () => {
+    const own: PttBinding = { ...defaultPttBinding(), code: "KeyV", label: "V" };
+    expect(relabelStockBinding(own, abnt2)).toBe(own);
+    const chord: PttBinding = { ...defaultPttBinding(), ctrl: true };
+    expect(relabelStockBinding(chord, abnt2)).toBe(chord);
   });
 });
