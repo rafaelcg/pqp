@@ -62,6 +62,7 @@ async function mount({
           cameras={[]}
           onRevealCameras={() => undefined}
           devicesError={null}
+          devicesLoaded
           voiceAnalyser={voiceAnalyser}
           metering
           showVoiceCleanBadge={false}

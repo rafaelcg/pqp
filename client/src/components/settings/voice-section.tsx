@@ -32,7 +32,7 @@ import { parseVideoQuality, VIDEO_QUALITIES, type VideoQuality } from "@/lib/vid
 import { parseScreenFrameRate, SCREEN_FRAME_RATES, type ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { bindingTypesText, formatBinding, supportsKeyBinding } from "@/components/voice/push-to-talk";
 import { clampReleaseDelayMs, MAX_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
-import { PttBindingField } from "@/components/voice/key-binding-field";
+import { KeyBindingRefusalStatus, PttBindingField, type KeyBindingRefusal } from "@/components/voice/key-binding-field";
 import { getPttReleaseStuck, subscribePttReleaseStuck } from "@/components/voice/shell-unbind";
 import { pttHintMessageKey, usePttNativeSupport } from "@/lib/ptt-native-support";
 import type { VoiceInputMode } from "@/hooks/use-voice";
@@ -359,28 +359,6 @@ function useMicTest(active: boolean) {
   return { playing, failed, start, stop };
 }
 
-/* ------------------------------------------------------------ no devices */
-
-/**
- * How long an empty microphone list has to stay empty before Voz says there
- * is no microphone. The list starts empty while the shell asks for permission
- * and enumerates, so an immediate notice would flash on every visit.
- */
-export const NO_INPUTS_SETTLE_MS = 1500;
-
-function useNoInputsSettled(empty: boolean): boolean {
-  const [settled, setSettled] = useState(false);
-  useEffect(() => {
-    if (!empty) {
-      setSettled(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSettled(true), NO_INPUTS_SETTLE_MS);
-    return () => window.clearTimeout(timer);
-  }, [empty]);
-  return empty && settled;
-}
-
 /* --------------------------------------------------------------- meter */
 
 function useMicLevel({
@@ -633,11 +611,9 @@ function PttBeepRow({
  * notice) need `usePttNativeSupport`'s state, and that state has nothing to say
  * on the web build.
  *
- * `PttBindingField` draws its own small label above the button; the row
- * already names it, so that one is hidden visually and kept for the field's
- * own layout. Atalhos (feat/settings-keyboard) rebuilds the field with an
- * sr-only label and the button first, which makes the wrapper's selector
- * match nothing; delete the wrapper when the two branches meet.
+ * The row names the key field, so the field hides its own label, and a
+ * refused key (already used by a shortcut) is said in the row's status slot,
+ * the same way Atalhos does it.
  */
 function PttRows({
   draftLocal,
@@ -668,6 +644,7 @@ function PttRows({
   const keyLabel = t(
     isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey",
   );
+  const [refusal, setRefusal] = useState<KeyBindingRefusal | null>(null);
   const typesText =
     draftLocal.pushToTalkKey.device === "keyboard" &&
     bindingTypesText(draftLocal.pushToTalkKey);
@@ -678,10 +655,19 @@ function PttRows({
         id="ptt"
         label={keyLabel}
         description={t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
+        status={
+          refusal ? (
+            <div id={refusal.id}>
+              <KeyBindingRefusalStatus message={refusal.message} />
+            </div>
+          ) : undefined
+        }
         control={
-          <div className="[&>div>span:first-child]:sr-only">
+          <div>
             <PttBindingField
               label={keyLabel}
+              hideLabel
+              onRefusedChange={setRefusal}
               binding={draftLocal.pushToTalkKey}
               allowMouse={isDesktop}
               takenBy={(binding) => {
@@ -799,6 +785,7 @@ export function VoiceSection({
   cameras,
   onRevealCameras,
   devicesError,
+  devicesLoaded,
   voiceAnalyser,
   metering,
   showVoiceCleanBadge,
@@ -810,6 +797,8 @@ export function VoiceSection({
   cameras: MediaDeviceOption[];
   onRevealCameras: () => void;
   devicesError: string | null;
+  /** The device list has been read this visit (not still waiting on a prompt). */
+  devicesLoaded: boolean;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
   /** NOVO chip on the noise-suppression row; see `lib/voice-clean.ts`. */
@@ -845,9 +834,10 @@ export function VoiceSection({
   // Never a second capture during a call, and never the mic played into the
   // speakers a live call is listening through.
   const micTest = useMicTest(metering && !inCall);
-  const noInputs = useNoInputsSettled(
-    metering && devicesError === null && inputs.length === 0,
-  );
+  // Only after the list was really read: while the permission prompt is up
+  // the list is empty too, and that is not "no microphone".
+  const noInputs =
+    metering && devicesLoaded && devicesError === null && inputs.length === 0;
 
   const onBeepChange = (pttBeep: boolean) => {
     setPttBeepEnabled(pttBeep);

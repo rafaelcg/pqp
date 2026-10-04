@@ -90,6 +90,8 @@ export function NotificationsSection() {
             id="push-install"
             label={t("settings.push.howToInstall")}
             href={DOWNLOAD_PAGE_PATH}
+            // A new tab: a same-tab link would drop the open dialog.
+            external
           />
         ) : null}
       </SettingsGroup>

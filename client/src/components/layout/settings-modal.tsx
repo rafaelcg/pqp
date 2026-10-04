@@ -277,6 +277,9 @@ export function SettingsModal({
   const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
+  // True once the device list has actually been read this visit, so Voz can
+  // tell "no microphone" from "still waiting on the permission prompt".
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Which section is showing. Deliberately NOT reset when the dialog closes:
   // somebody adjusting a level, listening, and coming back should land where
@@ -434,6 +437,8 @@ export function SettingsModal({
 
     let cancelled = false;
 
+    setDevicesLoaded(false);
+
     async function loadDevices() {
       setDevicesError(null);
       const granted = await ensureMediaPermission();
@@ -451,6 +456,7 @@ export function SettingsModal({
       setInputs(nextInputs);
       setOutputs(nextOutputs);
       setCameras(nextCameras);
+      setDevicesLoaded(true);
     }
 
     void loadDevices();
@@ -646,6 +652,13 @@ export function SettingsModal({
       if (!chord || event.altKey || event.shiftKey || event.key.toLowerCase() !== "s") {
         return;
       }
+      // Only while Settings is the top dialog: a confirm stacked over it
+      // (Conexões' disconnect) owns the keyboard.
+      const layers = document.querySelectorAll("[data-dialog-layer]");
+      const top = layers[layers.length - 1];
+      if (top && scrollerRef.current && !top.contains(scrollerRef.current)) {
+        return;
+      }
       event.preventDefault();
       saveProfileRef.current();
     }
@@ -695,6 +708,9 @@ export function SettingsModal({
       }
       if (++attempts < 20) {
         retry = window.setTimeout(find, 50);
+      } else {
+        // The row never mounted: land on the section itself, focusably.
+        scrollerRef.current?.focus({ preventScroll: true });
       }
     };
     find();
@@ -718,15 +734,21 @@ export function SettingsModal({
     [profileDirty, openSection, headerActionsSlot, handleError],
   );
 
-  const railItems = visibleSections.map((entry) => ({
-    id: entry.id,
-    label: t(entry.label),
-    icon: entry.icon,
-    group: entry.group,
-    // The dot that says Perfil has edits the bar is waiting on, so the
-    // unsaved state is visible from any tab, not only from the bar.
-    dirty: entry.id === "profile" && profileDirty,
-  }));
+  // Memoized: the rail scrolls the active tab into view whenever this list
+  // changes, and a new array on every profile keystroke re-ran that.
+  const railItems = useMemo(
+    () =>
+      visibleSections.map((entry) => ({
+        id: entry.id,
+        label: t(entry.label),
+        icon: entry.icon,
+        group: entry.group,
+        // The dot that says Perfil has edits the bar is waiting on, so the
+        // unsaved state is visible from any tab, not only from the bar.
+        dirty: entry.id === "profile" && profileDirty,
+      })),
+    [visibleSections, t, profileDirty],
+  );
   const groupLabels = {
     account: t(GROUP_LABELS.account),
     app: t(GROUP_LABELS.app),
@@ -819,6 +841,7 @@ export function SettingsModal({
                             void revealCameras();
                           }}
                           devicesError={devicesError}
+                          devicesLoaded={devicesLoaded}
                           voiceAnalyser={voiceAnalyser}
                           metering={voiceVisible}
                           showVoiceCleanBadge={showVoiceCleanBadge}
@@ -905,7 +928,11 @@ export function SettingsModal({
             : "settings.unsaved.handle.changeTitle",
           { handle: drafts.handle.trim() },
         )}
-        description={t("settings.unsaved.handle.body")}
+        description={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claimBody"
+            : "settings.unsaved.handle.body",
+        )}
         confirmLabel={t(
           handleConfirm === "claim"
             ? "settings.unsaved.handle.claim"

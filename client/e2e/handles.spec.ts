@@ -92,6 +92,11 @@ test.describe("public handles", () => {
     await expect(
       panel.getByRole("button", { name: "Copy link" }),
     ).toBeVisible();
+    // The saved link is written out beside the actions, apart from the field
+    // (which holds a draft once the 30 days pass): it is what Copy link copies.
+    await expect(panel.locator("[data-owned-public-link]")).toHaveText(
+      `pqp.gg/@${HANDLE}`,
+    );
   });
 
   test("claiming from Settings is refused a second time inside the window", async ({

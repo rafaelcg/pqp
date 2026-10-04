@@ -114,6 +114,9 @@ export function SettingsCopyButton({
           disabled={disabled}
           onClick={copy}
           className={className}
+          // A steady name while the visible text swaps to "Copiado": the swap
+          // is announced by the live region below, not by renaming the button.
+          aria-label={label}
         >
           {icon}
           <span aria-hidden={copied || undefined}>{copied ? copiedLabel : label}</span>

@@ -30,6 +30,14 @@ export function flashSettingsRow(
     return null;
   }
   row.scrollIntoView?.({ block: "center" });
+  // The tab the person came from has unmounted, taking focus with it. Put
+  // focus on the row's first control so a keyboard user lands where they
+  // were sent, not on <body>.
+  row
+    .querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )
+    ?.focus({ preventScroll: true });
   row.classList.add(...ROW_FLASH_CLASSES);
   const timer = window.setTimeout(
     () => row.classList.remove(...ROW_FLASH_CLASSES),

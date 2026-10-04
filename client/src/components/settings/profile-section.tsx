@@ -258,6 +258,12 @@ export function ProfileSection({
                   act on the saved link, never on a draft. */}
               {ownedHandle ? (
                 <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    data-owned-public-link
+                    className="min-w-0 break-all font-mono text-xs text-text-secondary"
+                  >
+                    {publicProfileDisplayUrl(ownedHandle)}
+                  </span>
                   <SettingsCopyButton
                     showLabel
                     text={`https://${publicProfileDisplayUrl(ownedHandle)}`}
