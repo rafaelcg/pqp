@@ -106,8 +106,9 @@ describe("HelpSection", () => {
     expect(out).toContain("Is it down? Check if the problem is on our side.");
   });
 
-  it("states the reply window", () => {
-    expect(html()).toContain("within 2 business days");
+  it("promises no reply window it cannot keep", () => {
+    expect(html()).toContain("as soon as we can");
+    expect(html()).not.toMatch(/business days/);
   });
 
   it("ends with sign out on a phone only", () => {
