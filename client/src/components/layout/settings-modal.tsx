@@ -5,6 +5,7 @@ import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import { SectionRail } from "@/components/ui/section-rail";
+import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type MediaDeviceOption } from "@/lib/audio-devices";
@@ -329,15 +330,23 @@ export function SettingsModal({
     }
   }, [canModerateInstance, section]);
 
+  // Atalhos on a phone or tablet with no mouse or trackpad mostly said
+  // "shortcuts only work with a keyboard connected", and cost a swipe on a
+  // strip that already shows three of ten tabs at a time.
+  const touchOnly = useTouchOnly();
+
   // The whole nav, minus the moderation door for every account it did not
-  // open for. Derived per render rather than mutating the module-level
-  // `SECTIONS` constant, which every other settings dialog instance shares.
+  // open for, and minus Atalhos on a touch-only device. Derived per render
+  // rather than mutating the module-level `SECTIONS` constant, which every
+  // other settings dialog instance shares.
   const visibleSections = useMemo(
     () =>
-      canModerateInstance
-        ? SECTIONS
-        : SECTIONS.filter((entry) => entry.id !== "moderation"),
-    [canModerateInstance],
+      SECTIONS.filter(
+        (entry) =>
+          (canModerateInstance || entry.id !== "moderation") &&
+          !(touchOnly && entry.id === "keyboard"),
+      ),
+    [canModerateInstance, touchOnly],
   );
 
   // A caller (or a stale sticky section from a previous session) pointing at
@@ -357,7 +366,7 @@ export function SettingsModal({
   // The microphone is only opened while the section that shows a level meter is
   // actually on screen. Under the old single column, merely opening settings to
   // change a display name prompted for the mic.
-  const voiceVisible = settingsOpen && section === "voice";
+  const voiceVisible = settingsOpen && active.id === "voice";
   // The NOVO dot on the noise-suppression row: owed until this section has
   // been opened once, or the Voz limpa nudge card was acted on — whichever
   // comes first (`lib/voice-clean.ts`).
@@ -956,7 +965,7 @@ export function SettingsModal({
                       {closeJumped && active.id === "profile" ? (
                         <SettingsNotice tone="info">{t("settings.unsaved.jumped")}</SettingsNotice>
                       ) : null}
-                      {section === "profile" && (
+                      {active.id === "profile" && (
                         <ProfileSection
                           user={user}
                           displayName={drafts.displayName}
@@ -972,9 +981,9 @@ export function SettingsModal({
                         />
                       )}
 
-                      {section === "connections" && <ConnectionsSection />}
+                      {active.id === "connections" && <ConnectionsSection />}
 
-                      {section === "voice" && (
+                      {active.id === "voice" && (
                         <VoiceSection
                           draftLocal={draftLocal}
                           patchLocal={patchLocal}
@@ -992,7 +1001,7 @@ export function SettingsModal({
                         />
                       )}
 
-                      {section === "keyboard" && (
+                      {active.id === "keyboard" && (
                         <KeyboardSection
                           draftLocal={draftLocal}
                           patchLocal={patchLocal}
@@ -1000,9 +1009,9 @@ export function SettingsModal({
                         />
                       )}
 
-                      {section === "notifications" && <NotificationsSection />}
+                      {active.id === "notifications" && <NotificationsSection />}
 
-                      {section === "appearance" && (
+                      {active.id === "appearance" && (
                         <AppearanceSection
                           showLinkEmbeds={draftLocal.showLinkEmbeds}
                           onShowLinkEmbeds={(showLinkEmbeds) =>
@@ -1011,7 +1020,7 @@ export function SettingsModal({
                         />
                       )}
 
-                      {section === "privacy" && (
+                      {active.id === "privacy" && (
                         <PrivacySection
                           user={user}
                           blockedUsers={blockedUsers}
@@ -1020,20 +1029,20 @@ export function SettingsModal({
                         />
                       )}
 
-                      {section === "data" && (
+                      {active.id === "data" && (
                         <YourDataSection
                           user={user}
                           onRequestDelete={() => setConfirmingDelete(true)}
                         />
                       )}
 
-                      {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+                      {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} />}
 
-                      {section === "help" && (
+                      {active.id === "help" && (
                         <HelpSection onOpenFeedback={() => openSection("feedback")} />
                       )}
 
-                      {section === "moderation" &&
+                      {active.id === "moderation" &&
                         (canModerateInstance ? (
                           <AllReportsSection />
                         ) : (
