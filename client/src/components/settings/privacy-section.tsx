@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { UserX } from "lucide-react";
 import { type BlockedUser, type DmPrivacy, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -71,6 +71,11 @@ export function PrivacySection({
   // second click in the same tick is refused too, and the radios stay enabled
   // (and focused) while the first one is in flight.
   const busy = useRef(false);
+  // The option just picked, checked while its write is in flight so the save
+  // status sits under the option the user chose. Cleared when the write ends:
+  // on success the account carries the new value, on failure the radio goes
+  // back to the value that is actually stored and the error sits under it.
+  const [pending, setPending] = useState<DmPrivacy | null>(null);
   const current = user?.dmPrivacy ?? "server_members";
 
   const options: RadioOption<DmPrivacy>[] = DM_PRIVACY_OPTIONS.map((option) => ({
@@ -95,12 +100,14 @@ export function PrivacySection({
       return;
     }
     busy.current = true;
+    setPending(value);
     try {
       await save.run(async () => {
         onUserUpdated(await updateMe({ dmPrivacy: value }));
       }, t("settings.privacy.saveFailed"));
     } finally {
       busy.current = false;
+      setPending(null);
     }
   }
 
@@ -114,11 +121,15 @@ export function PrivacySection({
           <RadioGroup
             variant="list"
             label={t("settings.privacy.dmLabel")}
-            value={current}
+            value={pending ?? current}
             options={options}
             disabled={!user}
             onValueChange={(value) => void choose(value)}
-            status={<SettingsInlineStatus state={save.state} />}
+            status={
+              save.state.kind === "idle" ? undefined : (
+                <SettingsInlineStatus state={save.state} />
+              )
+            }
           />
         </div>
       </SettingsGroup>
@@ -147,7 +158,7 @@ export function PrivacySection({
               label={blocked.displayName}
               description={
                 blocked.tag ? (
-                  <span className="font-mono">{blocked.tag}</span>
+                  <span className="font-mono [overflow-wrap:anywhere]">{blocked.tag}</span>
                 ) : undefined
               }
               control={

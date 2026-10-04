@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BlockedUser, User } from "@pqp/shared";
+import { ApiError } from "@/lib/api";
 import {
   listSettingsRows,
   resetSettingsRowsForTest,
@@ -105,9 +106,11 @@ describe("PrivacySection", () => {
     });
     const status = host!.querySelector('[role="status"]');
     expect(status).not.toBeNull();
-    // A sibling of the radio, inside the same option, not a band of its own.
+    // The picked option is checked while its write runs, and the status is a
+    // sibling of that radio, inside the same option, not a band of its own.
+    expect(radios()[2]!.getAttribute("aria-checked")).toBe("true");
     expect(status!.closest("[role='radiogroup']")).not.toBeNull();
-    expect(radios()[1]!.parentElement!.contains(status)).toBe(true);
+    expect(radios()[2]!.parentElement!.contains(status)).toBe(true);
     await act(async () => {
       finish({ ...user, dmPrivacy: "nobody" } as User);
       await Promise.resolve();
@@ -124,14 +127,16 @@ describe("PrivacySection", () => {
     });
     expect(updateMe).toHaveBeenCalledTimes(1);
 
-    const checked = radios()[1]!;
+    // The picked option holds the check (and focus) while the write runs.
+    const checked = radios()[0]!;
+    expect(checked.getAttribute("aria-checked")).toBe("true");
     checked.focus();
     act(() => {
       checked.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
       );
     });
-    // Focus stays on the checked option and nothing else is written.
+    // Focus stays on the picked option and nothing else is written.
     expect(document.activeElement).toBe(checked);
     expect(updateMe).toHaveBeenCalledTimes(1);
 
@@ -139,5 +144,19 @@ describe("PrivacySection", () => {
       finish({ ...user, dmPrivacy: "everyone" } as User);
       await Promise.resolve();
     });
+  });
+
+  it("goes back to the stored option and says so in words when the write fails", async () => {
+    updateMe.mockRejectedValue(new ApiError(503, "database_unavailable"));
+    mount();
+    await act(async () => {
+      radios()[2]!.click();
+      await Promise.resolve();
+    });
+    const alert = host!.querySelector('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(alert!.textContent).not.toContain("database_unavailable");
+    expect(radios()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(radios()[1]!.parentElement!.contains(alert)).toBe(true);
   });
 });
