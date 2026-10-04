@@ -234,6 +234,7 @@ import {
   cameraSoloId,
   formatCallDuration,
   hasWatchableVideo,
+  sharePeerIdsIncludingLocal,
   isCameraSoloId,
   isMusicPictureOnlyStage,
   stageHeightClass,
@@ -816,13 +817,18 @@ export function CallStage({
     setUserCollapsed(isStageCollapsed(channelId));
   }, [channelId]);
 
+  const sharePeerIds = sharePeerIdsIncludingLocal(
+    voiceState.screenSharePeerIds,
+    voiceState.peerId,
+    voiceState.localScreenStream !== null,
+  );
   const hasVideo = hasWatchableVideo({
     localCameraOn:
       voiceState.isCameraOn || voiceState.localCameraStream !== null,
     remoteHasCamera: voiceState.remotePeers.some(
       (peer) => peer.cameraStream !== null,
     ),
-    screenShareCount: voiceState.screenSharePeerIds.length,
+    screenShareCount: sharePeerIds.length,
   });
 
   return (
@@ -1108,8 +1114,13 @@ function ActiveCall({
     };
   });
 
+  const sharePeerIds = sharePeerIdsIncludingLocal(
+    voiceState.screenSharePeerIds,
+    voiceState.peerId,
+    voiceState.localScreenStream !== null,
+  );
   const advertisedTiles = collectScreenTiles({
-    peerIds: voiceState.screenSharePeerIds,
+    peerIds: sharePeerIds,
     localPeerId: voiceState.peerId,
     localName: currentUser?.displayName ?? t("voice.share.someone"),
     localStream: voiceState.localScreenStream,
