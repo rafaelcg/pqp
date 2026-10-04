@@ -143,4 +143,44 @@ describe("ConnectionsSection", () => {
     );
     expect(name?.parentElement?.textContent).toBe("Connected as andre_gg");
   });
+
+  it("hands focus back to the row after the confirm closes and after a disconnect", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ steam: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [STEAM] });
+    let finish!: () => void;
+    api.disconnectConnection.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const el = await render();
+    const row = () => el.querySelector('[data-settings-row="steam"]')!;
+    const disconnect = [...row().querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Disconnect"),
+    )!;
+    await act(async () => disconnect.click());
+    const cancel = [...document.querySelectorAll('[role="dialog"] button')].find(
+      (b) => b.textContent === "Keep connection",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      cancel.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement).toBe(disconnect);
+
+    await act(async () => disconnect.click());
+    const confirm = [...document.querySelectorAll('[role="dialog"] button')].find(
+      (b) => b.textContent === "Disconnect",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      confirm.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement).toBe(disconnect);
+    expect(disconnect.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => finish());
+    const connect = row().querySelector("button")!;
+    expect(connect.textContent).toBe("Connect");
+    expect(document.activeElement).toBe(connect);
+  });
 });

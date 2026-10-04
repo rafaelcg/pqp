@@ -247,7 +247,20 @@ function ProviderRow({
   // not snap back to the old value under "Salvando…".
   const [pending, setPending] = useState<ConnectionVisibility | null>(null);
   const latestSave = useRef(0);
+  // The row's Conectar or Desconectar button. The confirm dialog cannot hand
+  // focus back on its own (it opens onto its autofocused Cancel), and a
+  // successful disconnect swaps Desconectar for Conectar, so the row does it.
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const refocusAction = useRef(false);
   const name = t(PROVIDER_NAME[provider]);
+
+  useEffect(() => {
+    if (refocusAction.current && linked === null) {
+      refocusAction.current = false;
+      actionRef.current?.focus();
+    }
+  }, [linked]);
+
   const saving = visibility.state.kind === "saving";
   // Busy buttons stay focusable (aria-disabled, click ignored) so keyboard
   // focus does not drop to the page while the request runs.
@@ -288,6 +301,7 @@ function ProviderRow({
     setBusy(true);
     try {
       await disconnectConnection(provider);
+      refocusAction.current = true;
       onChanged(provider, null);
     } catch (caught) {
       setActionError(
@@ -322,7 +336,7 @@ function ProviderRow({
       <label htmlFor={selectId} className="text-xs text-text-tertiary @lg:sr-only">
         {t("settings.connections.visibility.label")}
       </label>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 @lg:flex-col @lg:items-end @lg:gap-1">
         <SettingsSelect
           id={selectId}
           aria-describedby={nameId}
@@ -341,6 +355,7 @@ function ProviderRow({
         </SettingsSelect>
         <Button
           type="button"
+          ref={actionRef}
           variant="ghost"
           size="sm"
           aria-describedby={nameId}
@@ -361,6 +376,7 @@ function ProviderRow({
       {nameSpan}
       <Button
         type="button"
+        ref={actionRef}
         variant="secondary"
         size="sm"
         aria-describedby={nameId}
@@ -394,8 +410,9 @@ function ProviderRow({
           )
         }
         control={control}
-        // A select plus Desconectar sits beside the label when the pane has
-        // room and wraps under it when it does not; Conectar stays beside it.
+        // On a wide pane the select sits beside the label with Desconectar
+        // under it, which fits the longest option; on a phone both go under
+        // the label at full width. Conectar stays beside the label always.
         wideControl={linked !== null}
         keepInline={linked === null}
         status={status}
@@ -407,7 +424,10 @@ function ProviderRow({
         confirmLabel={t("settings.connections.disconnectConfirm.confirm")}
         cancelLabel={t("settings.connections.disconnectConfirm.cancel")}
         onConfirm={() => void disconnect()}
-        onClose={() => setConfirming(false)}
+        onClose={() => {
+          setConfirming(false);
+          window.setTimeout(() => actionRef.current?.focus(), 0);
+        }}
       />
     </>
   );
