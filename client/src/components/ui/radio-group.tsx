@@ -36,6 +36,12 @@ export interface RadioGroupProps<T extends string | number> {
    * narrow. Use it when one label is much longer than the others.
    */
   fit?: "equal" | "content";
+  /**
+   * Clicking the checked option commits it again. For a group whose checked
+   * option is only the nearest match to a stored value (a synced chat size
+   * between presets): picking it must snap the value to the preset.
+   */
+  reselect?: boolean;
 }
 
 export type RadioActivation = "auto" | "manual";
@@ -177,6 +183,7 @@ export function RadioGroup<T extends string | number>({
   status,
   activation = "auto",
   fit = "equal",
+  reselect = false,
 }: RadioGroupProps<T>) {
   const isDisabled = useCallback(
     (v: T) =>
@@ -223,7 +230,7 @@ export function RadioGroup<T extends string | number>({
             disabled={optionDisabled}
             tabIndex={tabIndexFor(option.value)}
             onClick={() => {
-              if (!checked) onValueChange(option.value);
+              if (!checked || reselect) onValueChange(option.value);
             }}
             className={cn(
               "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",

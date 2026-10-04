@@ -384,12 +384,15 @@ function ChatOptionRow<T extends string | number>({
   options,
   value,
   onChange,
+  between = false,
 }: {
   id: string;
   label: string;
   options: { value: T; label: MessageKey }[];
   value: T;
   onChange: (next: T) => void;
+  /** The stored value is not exactly `value` (it sits between presets). */
+  between?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -402,6 +405,7 @@ function ChatOptionRow<T extends string | number>({
           size="sm"
           value={value}
           onValueChange={onChange}
+          reselect={between}
           options={options.map((option) => ({
             value: option.value,
             label: t(option.label),
@@ -468,6 +472,7 @@ function ChatGroup({
               label={t("settings.appearance.textSize")}
               options={FONT_SIZE_PRESETS}
               value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
+              between={nearest(FONT_SIZE_PRESETS, display.fontSize) !== display.fontSize}
               onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
             />
             <ChatOptionRow
@@ -475,6 +480,9 @@ function ChatGroup({
               label={t("settings.appearance.spacing")}
               options={GROUP_SPACING_PRESETS}
               value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
+              between={
+                nearest(GROUP_SPACING_PRESETS, display.groupSpacing) !== display.groupSpacing
+              }
               onChange={(groupSpacing) =>
                 setDisplay({ groupSpacing }, { immediate: true })
               }
