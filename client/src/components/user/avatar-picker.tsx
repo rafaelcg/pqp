@@ -10,7 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { fetchAvatarConfig } from "@/lib/api";
+import { ApiError, fetchAvatarConfig } from "@/lib/api";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +47,19 @@ export function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
   return configPromise;
 }
 
+/**
+ * What an upload failure says, in the reader's language.
+ *
+ * The upload helpers (`lib/avatar-upload.ts`, `lib/banner-upload.ts`) throw
+ * English sentences of their own for the crop and the storage PUT. Those are
+ * replaced by the caller's localized `fallback`. An `ApiError` is kept, so the
+ * kit's `inlineErrorMessage` decides: a 4xx sentence as is, anything else the
+ * fallback.
+ */
+export function localizedUploadFailure(error: unknown, fallback: string): Error {
+  return error instanceof ApiError ? error : new Error(fallback);
+}
+
 interface AvatarPickerProps {
   value: string;
   onChange: (next: string) => void;
@@ -73,6 +86,8 @@ interface AvatarPickerProps {
     remove: string;
     useLink: string;
     upload: string;
+    /** Under the row while an upload runs, in place of "Salvando…". */
+    uploading: string;
     uploadFailed: string;
   };
 }
@@ -95,7 +110,7 @@ export function AvatarPicker({
   const [canUpload, setCanUpload] = useState(false);
   // The pasted link is the rare path, so it starts folded away.
   const [linkOpen, setLinkOpen] = useState(false);
-  const upload = useInlineSave();
+  const upload = useInlineSave({ savingLabel: labels.uploading });
   const uploading = upload.state.kind === "saving";
 
   useEffect(() => {
@@ -115,7 +130,12 @@ export function AvatarPicker({
 
   function handleFile(file: File) {
     void upload.run(async () => {
-      const user = await uploadAvatar(file);
+      let user: User;
+      try {
+        user = await uploadAvatar(file);
+      } catch (error) {
+        throw localizedUploadFailure(error, labels.uploadFailed);
+      }
       onChange(user.avatarUrl ?? "");
       onUploaded?.(user);
     }, labels.uploadFailed);

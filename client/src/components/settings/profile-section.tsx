@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Check, Copy, ExternalLink, Upload } from "lucide-react";
+import { ExternalLink, Upload } from "lucide-react";
 import {
   canRenameHandle,
   DISPLAY_NAME_MAX_LENGTH,
@@ -17,17 +17,23 @@ import {
   type UserBannerConfig,
 } from "@pqp/shared";
 import {
+  SettingsCopyButton,
   SettingsGroup,
   SettingsInlineStatus,
   SettingsNotice,
   SettingsPreview,
   SettingsRow,
   useInlineSave,
+  useSettingsShell,
 } from "@/components/settings/kit";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AvatarPicker, avatarUploadEnabled } from "@/components/user/avatar-picker";
+import {
+  AvatarPicker,
+  avatarUploadEnabled,
+  localizedUploadFailure,
+} from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { deleteUserBanner, fetchUserBannerConfig } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
@@ -80,10 +86,13 @@ export function ProfileSection({
   const nameId = useId();
   const nameErrorId = useId();
   const handleId = useId();
+  const handleDescriptionId = useId();
+  const handleErrorId = useId();
   const usernameId = useId();
-  const [copiedLink, setCopiedLink] = useCopiedFlag();
-  const [copiedTag, setCopiedTag] = useCopiedFlag();
   const storage = useStorageConfig();
+  // The last save lost the link to somebody else. The shell recognised the
+  // 409, said it in the reader's language and clears it when the link changes.
+  const { profileHandleError: handleError } = useSettingsShell();
 
   // Null while the account has never claimed one, or once the window is over.
   const renameAvailableAt = canRenameHandle(user?.handleChangedAt, user?.handle)
@@ -101,21 +110,18 @@ export function ProfileSection({
     : formatUserTag(username.trim() || user?.username, user?.discriminator) ??
       tag ??
       "";
-
-  function copy(text: string, onCopied: () => void) {
-    void navigator.clipboard
-      ?.writeText(text)
-      .then(onCopied)
-      .catch(() => {
-        // No clipboard (plain http, an embedded webview). The text is on
-        // screen, which is the fallback.
-      });
-  }
+  // The group title already names the drawing, so the summary says what is in
+  // it: the name and the link or tag, as the public page would show them.
+  const previewSummary = previewName
+    ? previewId
+      ? t("settings.profile.preview.summary", { name: previewName, identifier: previewId })
+      : t("settings.profile.preview.summaryName", { name: previewName })
+    : undefined;
 
   return (
     <div className="space-y-6">
       <SettingsGroup title={t("settings.profile.preview")} surface="plain">
-        <SettingsPreview summary={t("settings.profile.preview")}>
+        <SettingsPreview summary={previewSummary}>
           <ProfilePreviewCard
             bannerUrl={resolveUploadedImageUrl(user?.bannerUrl ?? null)}
             name={previewName}
@@ -172,6 +178,7 @@ export function ProfileSection({
                 remove: t("settings.profile.avatar.clear"),
                 useLink: t("settings.profile.avatar.useLink"),
                 upload: t("settings.profile.avatar.upload"),
+                uploading: t("settings.profile.uploading"),
                 uploadFailed: t("settings.profile.avatar.failed"),
               }}
               // The claim already wrote it, so the app's copy of the account
@@ -200,15 +207,19 @@ export function ProfileSection({
           label={t("settings.profile.publicHandle")}
           htmlFor={handleId}
           description={
-            renameAvailableAt
-              ? t("settings.profile.publicHandle.cooldown", {
-                  date: renameAvailableAt.toLocaleDateString(intlLocale(locale), {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  }),
-                })
-              : t("settings.profile.publicHandle.hint")
+            // Its id describes the field too, so the cooldown date is read
+            // with it rather than only with the row.
+            <span id={handleDescriptionId}>
+              {renameAvailableAt
+                ? t("settings.profile.publicHandle.cooldown", {
+                    date: renameAvailableAt.toLocaleDateString(intlLocale(locale), {
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                    }),
+                  })
+                : t("settings.profile.publicHandle.hint")}
+            </span>
           }
           stacked
           control={
@@ -216,18 +227,10 @@ export function ProfileSection({
               {/* One field with the address in front, so what you type reads
                   as the link it becomes. The prefix is text, never part of the
                   value. */}
-              <div
-                className={cn(
-                  "flex h-[var(--control-lg)] items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface-0",
-                  "focus-within:ring-2 focus-within:ring-focus-ring focus-within:ring-offset-2 focus-within:ring-offset-ring-offset",
-                  renameAvailableAt && "opacity-50",
-                )}
-              >
-                <span className="select-none pl-3 font-mono text-sm text-text-secondary">
-                  pqp.gg/@
-                </span>
+              <div>
                 <Input
                   id={handleId}
+                  prefix="pqp.gg/@"
                   value={handle}
                   maxLength={HANDLE_MAX_LENGTH}
                   autoComplete="off"
@@ -235,32 +238,32 @@ export function ProfileSection({
                   spellCheck={false}
                   disabled={renameAvailableAt !== null}
                   placeholder={t("settings.profile.publicHandle.placeholder")}
+                  aria-invalid={handleError ? true : undefined}
+                  aria-describedby={
+                    handleError
+                      ? `${handleDescriptionId} ${handleErrorId}`
+                      : handleDescriptionId
+                  }
                   onChange={(event) => onHandle(normalizeHandle(event.target.value))}
-                  className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent pl-0.5 font-mono focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-100"
+                  className="font-mono"
                 />
+                {handleError ? (
+                  <div id={handleErrorId}>
+                    <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
+                  </div>
+                ) : null}
               </div>
 
               {/* What you own, as opposed to what you are typing: the actions
                   act on the saved link, never on a draft. */}
               {ownedHandle ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() =>
-                      copy(`https://${publicProfileDisplayUrl(ownedHandle)}`, setCopiedLink)
-                    }
-                  >
-                    {copiedLink ? (
-                      <Check aria-hidden className="h-3.5 w-3.5 text-success" />
-                    ) : (
-                      <Copy aria-hidden className="h-3.5 w-3.5" />
-                    )}
-                    {copiedLink
-                      ? t("settings.profile.publicHandle.copied")
-                      : t("settings.profile.publicHandle.copy")}
-                  </Button>
+                  <SettingsCopyButton
+                    showLabel
+                    text={`https://${publicProfileDisplayUrl(ownedHandle)}`}
+                    label={t("settings.profile.publicHandle.copy")}
+                    copiedLabel={t("settings.profile.publicHandle.copied")}
+                  />
                   <Button asChild variant="ghost" size="sm">
                     <a
                       href={publicProfilePath(ownedHandle)}
@@ -271,9 +274,6 @@ export function ProfileSection({
                       {t("settings.profile.publicHandle.view")}
                     </a>
                   </Button>
-                  <span role="status" className="sr-only">
-                    {copiedLink ? t("settings.profile.publicHandle.copied") : ""}
-                  </span>
                 </div>
               ) : null}
             </div>
@@ -307,27 +307,14 @@ export function ProfileSection({
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-tertiary">
                   <span>{t("settings.profile.handle")}</span>
                   <span className="min-w-0 break-all font-mono text-text">{tag}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    aria-label={
-                      copiedTag
-                        ? t("settings.profile.tag.copied")
-                        : t("settings.profile.tag.copy")
-                    }
-                    onClick={() => copy(tag, setCopiedTag)}
-                  >
-                    {copiedTag ? (
-                      <Check aria-hidden className="h-3.5 w-3.5 text-success" />
-                    ) : (
-                      <Copy aria-hidden className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                  <span role="status" className="sr-only">
-                    {copiedTag ? t("settings.profile.tag.copied") : ""}
-                  </span>
+                  {/* 40px on a phone, where it is a thumb target beside small
+                      text; the kit's 32px from `sm` up. */}
+                  <SettingsCopyButton
+                    text={tag}
+                    label={t("settings.profile.tag.copy")}
+                    copiedLabel={t("settings.profile.tag.copied")}
+                    className="max-sm:h-[var(--control-lg)] max-sm:w-[var(--control-lg)]"
+                  />
                 </div>
               ) : null}
             </div>
@@ -353,17 +340,6 @@ export function ProfileSection({
       )}
     </div>
   );
-}
-
-/** True for two seconds after `set()`, for a "Copiado" that goes away. */
-function useCopiedFlag(): [boolean, () => void] {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-  return [copied, () => setCopied(true)];
 }
 
 /* ----------------------------------------------------------------- preview */
@@ -497,17 +473,27 @@ function BannerRow({
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
   const write = useInlineSave();
+  // One status line for both writes: "Enviando…" for an upload, the kit's
+  // "Salvando…" for a removal.
+  const [action, setAction] = useState<"upload" | "remove">("upload");
   const busy = write.state.kind === "saving";
   const hasBanner = Boolean(user?.bannerUrl);
   const enabled = storage?.banner ?? false;
 
   function handleFile(file: File) {
+    const failed = t("settings.profile.banner.failed");
+    setAction("upload");
     void write.run(async () => {
-      onUserUpdated(await uploadUserBanner(file));
-    }, t("settings.profile.banner.failed"));
+      try {
+        onUserUpdated(await uploadUserBanner(file));
+      } catch (error) {
+        throw localizedUploadFailure(error, failed);
+      }
+    }, failed);
   }
 
   function handleRemove() {
+    setAction("remove");
     void write.run(async () => {
       const res = await deleteUserBanner();
       onUserUpdated(res.user);
@@ -515,78 +501,82 @@ function BannerRow({
   }
 
   return (
-    <div data-profile-banner>
-      <SettingsRow
-        id="banner"
-        label={t("settings.profile.banner")}
-        description={
-          enabled
-            ? t("settings.profile.banner.hint", {
-                width: USER_BANNER_WIDTH,
-                height: USER_BANNER_HEIGHT,
-              })
-            : t("settings.profile.banner.description")
-        }
-        status={<SettingsInlineStatus state={write.state} />}
-        control={
-          enabled ? (
-            <div className="flex flex-wrap items-center gap-2">
+    <SettingsRow
+      id="banner"
+      data-profile-banner=""
+      label={t("settings.profile.banner")}
+      description={
+        enabled
+          ? t("settings.profile.banner.hint", {
+              width: USER_BANNER_WIDTH,
+              height: USER_BANNER_HEIGHT,
+            })
+          : t("settings.profile.banner.description")
+      }
+      status={
+        <SettingsInlineStatus
+          state={write.state}
+          savingLabel={action === "upload" ? t("settings.profile.uploading") : undefined}
+        />
+      }
+      control={
+        enabled ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload aria-hidden className="h-3.5 w-3.5" />
+              {hasBanner
+                ? t("settings.profile.banner.replace")
+                : t("settings.profile.banner.upload")}
+            </Button>
+            {hasBanner ? (
               <Button
                 type="button"
-                variant="secondary"
+                variant="ghost"
                 size="sm"
                 disabled={busy}
-                onClick={() => fileRef.current?.click()}
+                onClick={handleRemove}
               >
-                <Upload aria-hidden className="h-3.5 w-3.5" />
-                {hasBanner
-                  ? t("settings.profile.banner.replace")
-                  : t("settings.profile.banner.upload")}
+                {t("settings.profile.banner.remove")}
               </Button>
-              {hasBanner ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={handleRemove}
-                >
-                  {t("settings.profile.banner.remove")}
-                </Button>
-              ) : null}
-              <input
-                ref={fileRef}
-                type="file"
-                tabIndex={-1}
-                aria-label={t("settings.profile.banner")}
-                // A hint to the picker, never a check: the real gate is that
-                // `createImageBitmap` refuses to decode anything that is not an
-                // image, and what is uploaded is a JPEG this browser produced
-                // rather than the bytes that were chosen.
-                accept={USER_BANNER_MIME_ALLOWLIST.join(",")}
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  // Cleared before the upload, so picking the same file twice
-                  // after a failure still fires a change event.
-                  event.target.value = "";
-                  if (file) {
-                    handleFile(file);
-                  }
-                }}
-              />
-            </div>
-          ) : undefined
-        }
-      >
-        {storage && !storage.banner ? (
-          <SettingsNotice tone="info">
-            {storage.avatar
-              ? t("settings.profile.banner.unconfigured")
-              : t("settings.profile.media.unconfigured")}
-          </SettingsNotice>
-        ) : null}
-      </SettingsRow>
-    </div>
+            ) : null}
+            <input
+              ref={fileRef}
+              type="file"
+              tabIndex={-1}
+              aria-label={t("settings.profile.banner")}
+              // A hint to the picker, never a check: the real gate is that
+              // `createImageBitmap` refuses to decode anything that is not an
+              // image, and what is uploaded is a JPEG this browser produced
+              // rather than the bytes that were chosen.
+              accept={USER_BANNER_MIME_ALLOWLIST.join(",")}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Cleared before the upload, so picking the same file twice
+                // after a failure still fires a change event.
+                event.target.value = "";
+                if (file) {
+                  handleFile(file);
+                }
+              }}
+            />
+          </div>
+        ) : undefined
+      }
+    >
+      {storage && !storage.banner ? (
+        <SettingsNotice tone="info">
+          {storage.avatar
+            ? t("settings.profile.banner.unconfigured")
+            : t("settings.profile.media.unconfigured")}
+        </SettingsNotice>
+      ) : null}
+    </SettingsRow>
   );
 }
