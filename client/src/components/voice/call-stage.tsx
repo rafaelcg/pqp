@@ -218,7 +218,9 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { SoundboardControl } from "@/components/voice/soundboard-control";
+import { SoundboardFloat } from "@/components/voice/soundboard-float";
+import { shouldSuppressHints } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
@@ -255,6 +257,7 @@ import {
 /** How one person appears on the stage, whatever transport carried them. */
 export interface StagePerson {
   key: string;
+  userId?: string;
   name: string;
   avatarUrl: string | null;
   /** Camera video when they send it; null renders the avatar instead. */
@@ -641,6 +644,8 @@ export interface CallStagePerson {
 
 export interface CallStageProps {
   channelId: string;
+  /** Set on a server voice channel. A DM has no soundboard. */
+  serverId?: string | null;
   title: string;
   /** Server or community name, for the watch player's lock-screen metadata. */
   serverName?: string | null;
@@ -760,6 +765,7 @@ export interface CallStageProps {
 
 export function CallStage({
   channelId,
+  serverId = null,
   title,
   watchPartyChrome = false,
   isWatchPartyChannel = false,
@@ -819,6 +825,7 @@ export function CallStage({
   return (
     <ActiveCall
       channelId={channelId}
+      serverId={serverId}
       title={title}
       presenterStage={presenterStage}
       watchPartyChrome={watchPartyChrome}
@@ -870,6 +877,7 @@ export function CallStage({
 
 function ActiveCall({
   channelId,
+  serverId = null,
   title,
   watchPartyChrome = false,
   isWatchPartyChannel = false,
@@ -914,6 +922,7 @@ function ActiveCall({
   onShapeChange,
 }: {
   channelId: string;
+  serverId?: string | null;
   title: string;
   watchPartyChrome?: boolean;
   isWatchPartyChannel?: boolean;
@@ -1047,6 +1056,7 @@ function ActiveCall({
   const self: StagePerson | null = currentUser
     ? {
         key: "self",
+        userId: currentUser.id,
         name: currentUser.displayName,
         avatarUrl: currentUser.avatarUrl,
         stream: voiceState.localCameraStream,
@@ -1065,6 +1075,7 @@ function ActiveCall({
     const failed = peer.connectionState === "failed";
     return {
       key: peer.peerId,
+      userId: peer.userId,
       name: peer.displayName ?? t("voice.share.someone"),
       avatarUrl: peer.avatarUrl ?? null,
       stream: peer.cameraStream,
@@ -1635,6 +1646,7 @@ function ActiveCall({
               const isSelf = person.peerId === voiceState.peerId;
               return {
                 key: person.peerId,
+                userId: person.userId,
                 displayName: person.displayName,
                 avatarUrl: person.avatarUrl,
                 speaking: isSelf
@@ -1650,6 +1662,7 @@ function ActiveCall({
             })
           : allPeople.map((person) => ({
               key: person.key,
+              userId: person.userId,
               displayName: person.name,
               avatarUrl: person.avatarUrl,
               speaking: person.speaking,
@@ -1727,6 +1740,7 @@ function ActiveCall({
   const controls = (
     <CallControls
       voiceState={voiceState}
+      serverId={serverId}
       rowRef={controlRowRef}
       collapsed={collapsed || dockComposer}
       leading={collapsedLeading}
@@ -2700,6 +2714,7 @@ const STAGE_CONTROL_ROW_REM = 3.25;
  */
 export function CallControls({
   voiceState,
+  serverId = null,
   collapsed,
   canExpand,
   userCollapsed,
@@ -2733,6 +2748,7 @@ export function CallControls({
   rowRef,
 }: {
   voiceState: VoiceState;
+  serverId?: string | null;
   collapsed: boolean;
   /**
    * Expanded only: the row of tiles, so the stage can see it fold onto a
@@ -2811,7 +2827,7 @@ export function CallControls({
   // two do not share a key, and why "spent" is a store rather than a read.
   const musicPip = shouldShowMusicPip({
     seen: useMusicPipSpent(),
-    automated: isAutomatedBrowser(),
+    automated: shouldSuppressHints(),
     canSpeak: voiceState.canSpeak,
     playing: musicDock.on,
   });
@@ -3423,6 +3439,13 @@ export function CallControls({
             </button>
           </Tooltip>
         )}
+      <SoundboardControl
+        serverId={serverId}
+        canUse={voiceState.canUseSoundboard}
+        canManage={voiceState.canManageSoundboard}
+        size={size}
+        iconSize={iconSize}
+      />
       <Tooltip
         label={musicDock.open ? t("music.close") : t("music.open")}
       >
@@ -3853,6 +3876,7 @@ function PrimaryTile({
         audio={person.failed ? undefined : personAudioTracks(person)}
         fit={person.stream ? fit : undefined}
       />
+      <SoundboardFloat userId={person.userId} />
       <TileBadge
         name={person.name}
         muted={person.muted}
@@ -3954,6 +3978,7 @@ export function CameraTile({
         audio={person.failed ? undefined : personAudioTracks(person)}
         fit={person.stream ? fit : undefined}
       />
+      <SoundboardFloat userId={person.userId} />
       <TileBadge
         name={person.isSelf ? youLabel : person.name}
         muted={person.muted}
@@ -4077,6 +4102,7 @@ function RoomFace({
       data-call-listener={person.name}
       className="relative flex w-20 flex-col items-center gap-1"
     >
+      <SoundboardFloat userId={person.userId} />
       {actionable ? (
         <button
           type="button"
@@ -4238,6 +4264,7 @@ function TileBadge({
 
 export interface OccupantFace {
   key: string;
+  userId?: string;
   displayName: string;
   avatarUrl: string | null;
   speaking?: boolean;
@@ -4291,6 +4318,7 @@ function BannerFace({ person }: { person: OccupantFace }) {
   );
   return (
     <span ref={menu.rootRef} className="relative inline-flex">
+      <SoundboardFloat userId={person.userId} />
       {actionable ? (
         <button
           type="button"

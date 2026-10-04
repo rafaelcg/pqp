@@ -272,6 +272,8 @@ describe("SPEAK in voice rooms", () => {
           canSpeak: false,
           canStream: false,
           canManageMusic: false,
+          canUseSoundboard: false,
+          canManageSoundboard: false,
         },
       ]);
 
@@ -287,6 +289,8 @@ describe("SPEAK in voice rooms", () => {
         canSpeak: true,
         canStream: true,
         canManageMusic: false,
+        canUseSoundboard: false,
+        canManageSoundboard: false,
       });
       expect(setSfuUserCanPublish).not.toHaveBeenCalled();
     });

@@ -19,11 +19,9 @@ import { WhatsNewPrompt } from "./whats-new-prompt";
  * card nobody could see and buried every attached tip behind it — the call
  * dock card and both music cards — for the rest of the page load.
  *
- * On localhost that was every load, because `lib/hints.ts` deliberately
- * remembers no dismissal there, so the card came back on the next render of
- * the queue and the in-call tips were never drawn once.
- *
- * The URL above is not localhost on purpose: this was not a localhost bug.
+ * Localhost used to replay every card on every reload. It now keeps them
+ * off unless `pqp:hints-persist` is set. The URL above is not localhost
+ * on purpose: this was not a localhost bug.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =

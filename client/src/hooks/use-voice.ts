@@ -18,6 +18,11 @@ import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
+  playSoundboardClip,
+  registerSoundboardSender,
+  showSoundboardMark,
+} from "@/lib/soundboard";
+import {
   audibleScreenPeerIds,
   isCameraAtCap,
   isScreenShareAtCap,
@@ -328,6 +333,10 @@ export interface VoiceState {
   canStream: boolean;
   /** `Permission.MANAGE_MUSIC` in this room, from `welcome`. Older servers: true. */
   canManageMusic: boolean;
+  /** `Permission.USE_SOUNDBOARD`. False until welcome, and false in a DM. */
+  canUseSoundboard: boolean;
+  /** `Permission.MANAGE_SOUNDBOARD`. False until welcome says otherwise. */
+  canManageSoundboard: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -1738,6 +1747,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     canSpeak: true,
     canStream: true,
     canManageMusic: true,
+    canUseSoundboard: false,
+    canManageSoundboard: false,
     isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
@@ -2970,6 +2981,25 @@ export function createVoiceController(transport: RealtimeTransport) {
       sendListening: (listening) =>
         transport.sendVoice({ type: "set-music-listening", listening }),
       canManage: () => state.canManageMusic,
+    });
+  }
+
+  let unregisterSoundboard: (() => void) | null = null;
+  function bindSoundboardSender() {
+    unregisterSoundboard?.();
+    unregisterSoundboard = registerSoundboardSender((soundId) => {
+      if (
+        !state.voiceChannelId ||
+        state.status === "idle" ||
+        !state.canUseSoundboard
+      ) {
+        return;
+      }
+      transport.sendVoice({
+        type: "soundboard-play",
+        channelId: state.voiceChannelId,
+        soundId,
+      });
     });
   }
 
@@ -4331,6 +4361,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // last one closed it: "the rest of the call" ends here.
     activeMicFallback = null;
     dismissedMicFallbackKey = null;
+    unregisterSoundboard?.();
+    unregisterSoundboard = null;
     state = {
       status: "idle",
       peerId: null,
@@ -4340,6 +4372,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       canSpeak: true,
       canStream: true,
       canManageMusic: true,
+      canUseSoundboard: false,
+      canManageSoundboard: false,
       isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
@@ -4700,8 +4734,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.peerId = peerId;
           state.voiceChannelId = channelId;
           state.canManageMusic = message.canManageMusic ?? true;
+          state.canUseSoundboard = message.canUseSoundboard ?? false;
+          state.canManageSoundboard = message.canManageSoundboard ?? false;
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
+          bindSoundboardSender();
           state.status = "connected";
           applyPublishRules(
             publishFlagsFrom(message).canSpeak,
@@ -4774,12 +4811,15 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.canManageMusic = message.canManageMusic ?? true;
+        state.canUseSoundboard = message.canUseSoundboard ?? false;
+        state.canManageSoundboard = message.canManageSoundboard ?? false;
         state.transportFailure = null;
         registerMusicSession(
           message.peerId,
           message.voiceChannelId,
           message.self,
         );
+        bindSoundboardSender();
         // A fresh seat, so there is no "before" to have grown from. This is
         // what keeps the capacity card off the screen of somebody who walks
         // into a room that was already promoted.
@@ -5018,6 +5058,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.canManageMusic !== undefined) {
           state.canManageMusic = message.canManageMusic;
         }
+        if (message.canUseSoundboard !== undefined) {
+          state.canUseSoundboard = message.canUseSoundboard;
+        }
+        if (message.canManageSoundboard !== undefined) {
+          state.canManageSoundboard = message.canManageSoundboard;
+        }
         emit();
         break;
       case "peer-joined": {
@@ -5205,6 +5251,21 @@ export function createVoiceController(transport: RealtimeTransport) {
         // track, so a 720p share caps every viewer at 720p.
         void refreshHlsSource();
         emit();
+        break;
+      case "soundboard-play":
+        if (
+          state.status === "idle" ||
+          message.channelId !== state.voiceChannelId
+        ) {
+          break;
+        }
+        showSoundboardMark({
+          userId: message.userId,
+          displayName: message.displayName,
+          emoji: message.emoji,
+          soundId: message.soundId,
+        });
+        void playSoundboardClip(message.soundId, !state.isDeafened);
         break;
       case "channel-live":
         // Every channel this socket may view, in or out of the room. Same

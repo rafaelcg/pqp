@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   ensureLinuxShellShareAudio,
@@ -32,7 +33,9 @@ export function LinuxShareAudioHint({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const [eligible] = useState(() => shouldShowLinuxShareAudioHint());
+  const [eligible] = useState(
+    () => !shouldSuppressHints() && shouldShowLinuxShareAudioHint(),
+  );
   const [open, setOpen] = useState(true);
   // The desktop copy says "this app cannot share sound". Once the runtime
   // flag and the shell say it can (`lib/linux-shell-share-audio.ts`), that

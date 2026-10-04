@@ -19,6 +19,10 @@ export interface VoicePublishGrant {
   canShowFace: boolean;
   /** `Permission.MANAGE_MUSIC`; true where there are no cargos. */
   canManageMusic: boolean;
+  /** `Permission.USE_SOUNDBOARD`. False in a conversation: no server library. */
+  canUseSoundboard: boolean;
+  /** `Permission.MANAGE_SOUNDBOARD`. False in a conversation. */
+  canManageSoundboard: boolean;
 }
 
 /**
@@ -53,7 +57,14 @@ export async function resolveVoicePublish(
   userId: string,
 ): Promise<VoicePublishGrant> {
   if (!channel || channel.kind !== "server" || !channel.server_id) {
-    return { canSpeak: true, canStream: true, canShowFace: false, canManageMusic: true };
+    return {
+      canSpeak: true,
+      canStream: true,
+      canShowFace: false,
+      canManageMusic: true,
+      canUseSoundboard: false,
+      canManageSoundboard: false,
+    };
   }
   // Hand over the row when the caller has one. `type` and `parent_id` are the
   // only two columns the overwrite pass would otherwise re-read the channel
@@ -90,6 +101,8 @@ export async function resolveVoicePublish(
     canStream,
     canShowFace,
     canManageMusic: hasPermission(perms, Permission.MANAGE_MUSIC),
+    canUseSoundboard: hasPermission(perms, Permission.USE_SOUNDBOARD),
+    canManageSoundboard: hasPermission(perms, Permission.MANAGE_SOUNDBOARD),
   };
 }
 

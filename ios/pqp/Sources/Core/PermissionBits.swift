@@ -10,7 +10,7 @@ import Foundation
  bits instead of rank. `PermissionBit` names follow that package's own
  comment: "Never do this math in JS `number`... always `bigint`". Swift has
  no arbitrary-precision integer either, so this uses `UInt64`, which is
- large enough for every bit defined today (`permissions.ts` runs 0-24) and
+ large enough for every bit defined today (`permissions.ts` runs 0-26) and
  fails closed rather than wrapping if that ever changes -- see
  `PermissionsSnapshot`'s own doc.
 
@@ -45,7 +45,7 @@ enum PermissionBit {
  concern there); `UInt64(_:)` returns `nil` for a string that does not fit
  or is not a plain decimal, and that reads as holding NOTHING rather than
  crashing the decode or, worse, wrapping into some other bit pattern. The
- highest bit defined today is 24, so this should never actually trigger --
+ highest bit defined today is 26, so this should never actually trigger --
  it is the same margin `WatchPartyHostGate.swift`'s `.unknown` case keeps
  for "this has not resolved cleanly, so refuse rather than guess".
  */

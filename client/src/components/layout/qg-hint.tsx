@@ -4,7 +4,7 @@ import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { joinCommunity, lookupCommunityBySlug } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   QG_HINT_SLUG,
@@ -54,7 +54,7 @@ export function QgHint({
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
-    () => !isAutomatedBrowser() && !isQgHintSeen(),
+    () => !shouldSuppressHints() && !isQgHintSeen(),
   );
   const [open, setOpen] = useState(true);
   const [joining, setJoining] = useState(false);

@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   rememberCinemaHint,
@@ -13,8 +14,8 @@ import { cn } from "@/lib/utils";
  * because it is about the thing under it, and the corner queue is for cards
  * that could show anywhere. See `docs/ONBOARDING.md`.
  *
- * Not gated on `navigator.webdriver`: it only ever renders under an iOS user
- * agent, which the one suite that emulates an iPhone wants to see.
+ * Gated on `shouldSuppressHints` so localhost is quiet. The iPhone suite
+ * sets `pqp:hints-persist` and still sees it.
  */
 export function CinemaHint({
   visible,
@@ -25,7 +26,9 @@ export function CinemaHint({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const [eligible] = useState(() => shouldShowCinemaHint());
+  const [eligible] = useState(
+    () => !shouldSuppressHints() && shouldShowCinemaHint(),
+  );
   const [open, setOpen] = useState(true);
   const show = eligible && visible && open;
 

@@ -12,10 +12,9 @@ import { browserStorage } from "./arrival";
  * and tests are untouched; they are thin wrappers over these.
  *
  * THE RULES, ONCE:
- *  - `localhost` / `127.0.0.1` never persist, so a developer sees every card
- *    on every reload without clearing storage. Unless `HINTS_PERSIST_OVERRIDE_KEY`
- *    is set in that browser's storage: then localhost remembers dismissals
- *    like any host, for the developer who has seen the cards enough
+ *  - `localhost` / `127.0.0.1` never persist, and the cards stay off there,
+ *    so a reload is not a stack of coachmarks. Set `HINTS_PERSIST_OVERRIDE_KEY`
+ *    in that browser's storage to preview them
  *    (`localStorage.setItem("pqp:hints-persist", "1")` once, in the console);
  *  - Playwright (`navigator.webdriver`) never sees a card, because a corner
  *    card over the composer or the call stage is what a screenshot suite
@@ -51,6 +50,20 @@ export function isAutomatedBrowser(
     : navigator,
 ): boolean {
   return Boolean(nav?.webdriver);
+}
+
+/**
+ * Coachmarks stay off on localhost (unless `pqp:hints-persist` is set) and
+ * in Playwright. Localhost used to replay every card on every reload.
+ */
+export function shouldSuppressHints(
+  hostname: string = typeof window === "undefined"
+    ? ""
+    : window.location.hostname,
+  storage: Pick<Storage, "getItem"> | null = browserStorage(),
+  nav?: { webdriver?: boolean },
+): boolean {
+  return isAutomatedBrowser(nav) || !shouldPersistHints(hostname, storage);
 }
 
 export function isHintSeen(

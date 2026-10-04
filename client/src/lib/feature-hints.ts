@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from "react";
 import {
-  isAutomatedBrowser,
   isHintSeen,
   rememberHint,
   shouldPersistHints,
+  shouldSuppressHints,
 } from "./hints";
 
 /**
@@ -350,5 +350,5 @@ export function shouldOfferChannelPinHint(input: {
 }
 
 export function featureHintEligible(id: FeatureHintId): boolean {
-  return !isAutomatedBrowser() && !isFeatureHintSeen(id);
+  return !shouldSuppressHints() && !isFeatureHintSeen(id);
 }

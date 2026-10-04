@@ -1,0 +1,317 @@
+import { randomUUID } from "node:crypto";
+import {
+  audioDurationMs,
+  soundboardBuiltin,
+  soundboardClipRejection,
+  SOUNDBOARD_MAX_BYTES,
+  SOUNDBOARD_MAX_DURATION_MS,
+  SOUNDBOARD_MAX_SOUNDS,
+  type SoundboardContentType,
+  type SoundboardSound,
+} from "@pqp/shared";
+import { getPool } from "../db.js";
+import {
+  deleteObject,
+  getObjectPrefix,
+  headObject,
+  isStorageConfigured,
+  presignGet,
+  presignPut,
+} from "../lib/s3.js";
+
+const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+const READ_URL_TTL_SECONDS = 60 * 60;
+
+const EXTENSION: Record<SoundboardContentType, string> = {
+  "audio/mpeg": ".mp3",
+  "audio/ogg": ".ogg",
+};
+
+export type SoundboardUploadError =
+  | "storage"
+  | "slots"
+  | "too_big"
+  | "too_long"
+  | "unreadable"
+  | "type"
+  | "missing";
+
+export class SoundboardError extends Error {
+  constructor(readonly code: SoundboardUploadError) {
+    super(code);
+    this.name = "SoundboardError";
+  }
+}
+
+interface SoundRow {
+  id: string;
+  server_id: string;
+  name: string;
+  emoji: string;
+  storage_key: string;
+  content_type: string;
+  bytes: number;
+  duration_ms: number;
+  volume: number;
+}
+
+export interface PlayableSound {
+  id: string;
+  emoji: string;
+  durationMs: number;
+  volume: number;
+}
+
+function prefix(serverId: string): string {
+  return `soundboard/${serverId}/`;
+}
+
+export function soundboardObjectKey(
+  serverId: string,
+  contentType: SoundboardContentType,
+): string {
+  return `${prefix(serverId)}${randomUUID()}${EXTENSION[contentType]}`;
+}
+
+export function isSoundboardKey(serverId: string, key: string): boolean {
+  const root = prefix(serverId);
+  return key.startsWith(root) && !key.includes("..") && key.length > root.length;
+}
+
+function toSound(row: SoundRow): SoundboardSound {
+  let url: string | null = null;
+  if (isStorageConfigured()) {
+    try {
+      url = presignGet(row.storage_key, { ttlSeconds: READ_URL_TTL_SECONDS });
+    } catch {
+      url = null;
+    }
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    emoji: row.emoji,
+    contentType: row.content_type as SoundboardContentType,
+    byteSize: row.bytes,
+    durationMs: row.duration_ms,
+    volume: Number(row.volume),
+    url,
+  };
+}
+
+export async function listSoundboardSounds(
+  serverId: string,
+): Promise<SoundboardSound[]> {
+  const result = await getPool().query<SoundRow>(
+    `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+            duration_ms, volume
+       FROM soundboard_sounds
+      WHERE server_id = $1
+      ORDER BY created_at ASC, id ASC`,
+    [serverId],
+  );
+  return result.rows.map(toSound);
+}
+
+/**
+ * What a play is allowed to sound like. Built-ins never touch the database.
+ * A custom id must belong to this server.
+ */
+export async function resolvePlayableSound(
+  serverId: string,
+  soundId: string,
+): Promise<PlayableSound | null> {
+  const builtin = soundboardBuiltin(soundId);
+  if (builtin) {
+    return {
+      id: builtin.id,
+      emoji: builtin.emoji,
+      durationMs: builtin.durationMs,
+      volume: 1,
+    };
+  }
+  const result = await getPool().query<SoundRow>(
+    `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+            duration_ms, volume
+       FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2`,
+    [soundId, serverId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    emoji: row.emoji,
+    durationMs: row.duration_ms,
+    volume: Number(row.volume),
+  };
+}
+
+export function createSoundboardUpload(input: {
+  serverId: string;
+  contentType: SoundboardContentType;
+  byteSize: number;
+}): { key: string; uploadUrl: string; expiresAt: string } {
+  if (!isStorageConfigured()) {
+    throw new SoundboardError("storage");
+  }
+  if (input.byteSize <= 0 || input.byteSize > SOUNDBOARD_MAX_BYTES) {
+    throw new SoundboardError("too_big");
+  }
+  const key = soundboardObjectKey(input.serverId, input.contentType);
+  return {
+    key,
+    uploadUrl: presignPut(
+      key,
+      input.contentType,
+      input.byteSize,
+      UPLOAD_URL_TTL_SECONDS,
+    ),
+    expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+  };
+}
+
+/**
+ * Read the object, time it, and insert the row.
+ *
+ * The GET happens before the transaction. Nothing between BEGIN and COMMIT
+ * touches the network. The server row is locked so two claims cannot both
+ * pass a count of 23.
+ */
+export async function claimSoundboardSound(input: {
+  serverId: string;
+  userId: string;
+  key: string;
+  name: string;
+  emoji: string;
+  volume?: number;
+}): Promise<SoundboardSound> {
+  if (!isStorageConfigured()) {
+    throw new SoundboardError("storage");
+  }
+  if (!isSoundboardKey(input.serverId, input.key)) {
+    throw new SoundboardError("missing");
+  }
+
+  const head = await headObject(input.key);
+  if (!head) {
+    throw new SoundboardError("missing");
+  }
+  const contentType = head.contentType as SoundboardContentType;
+  if (contentType !== "audio/mpeg" && contentType !== "audio/ogg") {
+    throw new SoundboardError("type");
+  }
+  const bytes = await getObjectPrefix(input.key, SOUNDBOARD_MAX_BYTES);
+  if (!bytes) {
+    throw new SoundboardError("missing");
+  }
+  const durationMs = audioDurationMs(bytes, contentType);
+  const rejection = soundboardClipRejection(
+    head.contentLength,
+    durationMs,
+    SOUNDBOARD_MAX_BYTES,
+    SOUNDBOARD_MAX_DURATION_MS,
+  );
+  if (rejection) {
+    await deleteObject(input.key).catch(() => undefined);
+    throw new SoundboardError(rejection);
+  }
+
+  const volume = input.volume ?? 1;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT id FROM servers WHERE id = $1 FOR UPDATE`, [
+      input.serverId,
+    ]);
+    const count = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
+      [input.serverId],
+    );
+    if (Number(count.rows[0]?.n ?? 0) >= SOUNDBOARD_MAX_SOUNDS) {
+      await client.query("ROLLBACK");
+      await deleteObject(input.key).catch(() => undefined);
+      throw new SoundboardError("slots");
+    }
+    const inserted = await client.query<SoundRow>(
+      `INSERT INTO soundboard_sounds (
+         server_id, name, emoji, storage_key, content_type, bytes,
+         duration_ms, volume, created_by
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
+                 duration_ms, volume`,
+      [
+        input.serverId,
+        input.name,
+        input.emoji,
+        input.key,
+        contentType,
+        head.contentLength,
+        durationMs,
+        volume,
+        input.userId,
+      ],
+    );
+    await client.query("COMMIT");
+    return toSound(inserted.rows[0]!);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    if (error instanceof SoundboardError) {
+      throw error;
+    }
+    await deleteObject(input.key).catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateSoundboardSound(input: {
+  serverId: string;
+  soundId: string;
+  name?: string;
+  emoji?: string;
+  volume?: number;
+}): Promise<SoundboardSound | null> {
+  const result = await getPool().query<SoundRow>(
+    `UPDATE soundboard_sounds
+        SET name = COALESCE($3, name),
+            emoji = COALESCE($4, emoji),
+            volume = COALESCE($5, volume)
+      WHERE id = $1 AND server_id = $2
+      RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
+                duration_ms, volume`,
+    [
+      input.soundId,
+      input.serverId,
+      input.name ?? null,
+      input.emoji ?? null,
+      input.volume ?? null,
+    ],
+  );
+  const row = result.rows[0];
+  return row ? toSound(row) : null;
+}
+
+export async function deleteSoundboardSound(
+  serverId: string,
+  soundId: string,
+): Promise<boolean> {
+  const result = await getPool().query<{ storage_key: string }>(
+    `DELETE FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2
+      RETURNING storage_key`,
+    [soundId, serverId],
+  );
+  const key = result.rows[0]?.storage_key;
+  if (!key) {
+    return false;
+  }
+  if (isStorageConfigured()) {
+    await deleteObject(key).catch(() => undefined);
+  }
+  return true;
+}
