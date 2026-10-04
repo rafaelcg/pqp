@@ -259,6 +259,7 @@ import {
 import {
   offerSoundboardPlay,
   soundboardPlayAllowed,
+  soundboardRoomFull,
 } from "./soundboard.js";
 import { resolvePlayableSound } from "../services/soundboard.js";
 import {
@@ -9188,6 +9189,9 @@ export async function handleVoiceMessage(
       }) ||
       !peer.soundboardServerId
     ) {
+      return;
+    }
+    if (soundboardRoomFull(peer.voiceChannelId)) {
       return;
     }
     const sound = await resolvePlayableSound(

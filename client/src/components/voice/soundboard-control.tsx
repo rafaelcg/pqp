@@ -58,7 +58,12 @@ export function SoundboardControl({
   const [placement, setPlacement] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
+    setSounds([]);
+  }, [serverId]);
+
+  useEffect(() => {
     if (!serverId || !canUse) {
+      setSounds([]);
       return;
     }
     let cancelled = false;

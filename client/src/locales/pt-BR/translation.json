@@ -1161,6 +1161,7 @@
   "soundboard.settings.count": "{count} de {max} sons",
   "soundboard.settings.empty": "Nenhum som seu ainda. O pacote que já vem aparece na call.",
   "soundboard.settings.loadFailed": "Não deu para carregar o soundboard.",
+  "soundboard.settings.saveFailed": "Não deu para salvar.",
   "soundboard.settings.clipVolume": "Volume de {name}",
   "soundboard.settings.delete": "Apagar {name}",
   "music.close": "Fechar a fila de músicas",

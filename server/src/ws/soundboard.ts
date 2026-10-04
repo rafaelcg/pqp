@@ -47,6 +47,22 @@ function livePlays(channelId: string, now: number): ActivePlay[] {
   return plays;
 }
 
+/** True when this room is already at the overlap cap. */
+export function soundboardRoomFull(channelId: string, now = Date.now()): boolean {
+  return livePlays(channelId, now).length >= SOUNDBOARD_ROOM_CONCURRENCY;
+}
+
+/** Drop finished plays in rooms that have gone quiet. */
+export function sweepSoundboardPlays(now = Date.now()): void {
+  for (const channelId of [...active.keys()]) {
+    livePlays(channelId, now);
+  }
+}
+
+if (typeof setInterval === "function") {
+  setInterval(() => sweepSoundboardPlays(), 30_000).unref?.();
+}
+
 /**
  * Take a slot in this room.
  *
@@ -59,6 +75,7 @@ export function offerSoundboardPlay(input: {
   durationMs: number;
   now: number;
 }): boolean {
+  sweepSoundboardPlays(input.now);
   const plays = livePlays(input.channelId, input.now);
   if (plays.length >= SOUNDBOARD_ROOM_CONCURRENCY) {
     return false;

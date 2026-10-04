@@ -32,6 +32,7 @@ const marks = new Map<string, SoundboardMark>();
 const activeUntilById = new Map<string, number>();
 const listeners = new Set<() => void>();
 let sender: ((soundId: string) => void) | null = null;
+let catalogToken = 0;
 
 /** The voice socket registers this while a call is up. */
 export function registerSoundboardSender(
@@ -129,15 +130,32 @@ export function useSoundboardListenerVolume(): [number, (volume: number) => void
 }
 
 export function noteSoundboardCatalog(sounds: readonly SoundboardSound[]): void {
+  catalogToken += 1;
   rememberCustom(sounds);
 }
 
 function rememberCustom(sounds: readonly SoundboardSound[]): void {
+  const nextIds = new Set(sounds.map((sound) => sound.id));
+  for (const id of customUrls.keys()) {
+    if (nextIds.has(id)) {
+      continue;
+    }
+    customUrls.delete(id);
+    customNames.delete(id);
+    buffers.delete(id);
+    loading.delete(id);
+  }
   for (const sound of sounds) {
     customNames.set(sound.id, sound.name);
-    if (sound.url) {
-      customUrls.set(sound.id, { url: sound.url, volume: sound.volume });
+    if (!sound.url) {
+      continue;
     }
+    const previous = customUrls.get(sound.id);
+    if (previous && previous.url !== sound.url) {
+      buffers.delete(sound.id);
+      loading.delete(sound.id);
+    }
+    customUrls.set(sound.id, { url: sound.url, volume: sound.volume });
   }
 }
 
@@ -153,18 +171,20 @@ export function resetSoundboardMarksForTests(): void {
 }
 
 export async function prefetchSoundboard(serverId: string): Promise<void> {
+  const token = ++catalogToken;
   try {
     const page = await fetchSoundboard(serverId);
-    rememberCustom(page.sounds);
+    if (token === catalogToken) {
+      rememberCustom(page.sounds);
+    }
   } catch {
     // The board still plays the built-in pack.
   }
-  await Promise.all([
-    ...SOUNDBOARD_BUILTINS.map((sound) =>
+  await Promise.all(
+    SOUNDBOARD_BUILTINS.map((sound) =>
       warm(`/sounds/soundboard/${sound.file}`, sound.id),
     ),
-    ...[...customUrls.entries()].map(([id, sound]) => warm(sound.url, id)),
-  ]);
+  );
 }
 
 function warm(url: string, id: string): Promise<AudioBuffer | null> {

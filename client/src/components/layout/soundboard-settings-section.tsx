@@ -91,9 +91,9 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                 value={sound.volume}
                 aria-label={t("soundboard.settings.clipVolume", { name: sound.name })}
                 onValueCommit={(volume) => {
-                  void updateSoundboardSound(serverId, sound.id, { volume }).then(
-                    () => reload(),
-                  );
+                  void updateSoundboardSound(serverId, sound.id, { volume })
+                    .then(() => reload())
+                    .catch(() => setError(t("soundboard.settings.saveFailed")));
                 }}
               />
             </div>
@@ -102,7 +102,9 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
               size="icon"
               aria-label={t("soundboard.settings.delete", { name: sound.name })}
               onClick={() => {
-                void deleteSoundboardSound(serverId, sound.id).then(() => reload());
+                void deleteSoundboardSound(serverId, sound.id)
+                  .then(() => reload())
+                  .catch(() => setError(t("soundboard.settings.saveFailed")));
               }}
             >
               <Trash2 className="h-4 w-4" />

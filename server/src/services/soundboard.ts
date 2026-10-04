@@ -113,9 +113,24 @@ export async function listSoundboardSounds(
   return result.rows.map(toSound);
 }
 
+const playableCache = new Map<
+  string,
+  { serverId: string; sound: PlayableSound; at: number }
+>();
+const PLAYABLE_TTL_MS = 30_000;
+
+function rememberPlayable(serverId: string, sound: PlayableSound): void {
+  playableCache.set(sound.id, { serverId, sound, at: Date.now() });
+}
+
+function forgetPlayable(soundId: string): void {
+  playableCache.delete(soundId);
+}
+
 /**
  * What a play is allowed to sound like. Built-ins never touch the database.
- * A custom id must belong to this server.
+ * A custom id must belong to this server. Hits stay in memory for a short
+ * while so a burst of plays does not query once per click.
  */
 export async function resolvePlayableSound(
   serverId: string,
@@ -130,6 +145,14 @@ export async function resolvePlayableSound(
       volume: 1,
     };
   }
+  const cached = playableCache.get(soundId);
+  if (
+    cached &&
+    cached.serverId === serverId &&
+    Date.now() - cached.at < PLAYABLE_TTL_MS
+  ) {
+    return cached.sound;
+  }
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
             duration_ms, volume
@@ -139,28 +162,71 @@ export async function resolvePlayableSound(
   );
   const row = result.rows[0];
   if (!row) {
+    playableCache.delete(soundId);
     return null;
   }
-  return {
+  const sound: PlayableSound = {
     id: row.id,
     emoji: row.emoji,
     durationMs: row.duration_ms,
     volume: Number(row.volume),
   };
+  rememberPlayable(serverId, sound);
+  return sound;
 }
 
-export function createSoundboardUpload(input: {
+const pendingUploads = new Map<string, { serverId: string; expiresAt: number }>();
+
+function sweepPendingUploads(now: number): void {
+  for (const [key, row] of pendingUploads) {
+    if (row.expiresAt > now) {
+      continue;
+    }
+    pendingUploads.delete(key);
+    void deleteObject(key).catch(() => undefined);
+  }
+}
+
+if (typeof setInterval === "function") {
+  setInterval(() => sweepPendingUploads(Date.now()), 60_000).unref?.();
+}
+
+function pendingUploadCount(serverId: string): number {
+  let count = 0;
+  for (const row of pendingUploads.values()) {
+    if (row.serverId === serverId) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export async function createSoundboardUpload(input: {
   serverId: string;
   contentType: SoundboardContentType;
   byteSize: number;
-}): { key: string; uploadUrl: string; expiresAt: string } {
+}): Promise<{ key: string; uploadUrl: string; expiresAt: string }> {
   if (!isStorageConfigured()) {
     throw new SoundboardError("storage");
   }
   if (input.byteSize <= 0 || input.byteSize > SOUNDBOARD_MAX_BYTES) {
     throw new SoundboardError("too_big");
   }
+  const now = Date.now();
+  sweepPendingUploads(now);
+  const count = await getPool().query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
+    [input.serverId],
+  );
+  if (
+    Number(count.rows[0]?.n ?? 0) + pendingUploadCount(input.serverId) >=
+    SOUNDBOARD_MAX_SOUNDS
+  ) {
+    throw new SoundboardError("slots");
+  }
   const key = soundboardObjectKey(input.serverId, input.contentType);
+  const expiresAtMs = now + UPLOAD_URL_TTL_SECONDS * 1000;
+  pendingUploads.set(key, { serverId: input.serverId, expiresAt: expiresAtMs });
   return {
     key,
     uploadUrl: presignPut(
@@ -169,7 +235,7 @@ export function createSoundboardUpload(input: {
       input.byteSize,
       UPLOAD_URL_TTL_SECONDS,
     ),
-    expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
   };
 }
 
@@ -256,13 +322,22 @@ export async function claimSoundboardSound(input: {
       ],
     );
     await client.query("COMMIT");
+    pendingUploads.delete(input.key);
     return toSound(inserted.rows[0]!);
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     if (error instanceof SoundboardError) {
       throw error;
     }
-    await deleteObject(input.key).catch(() => undefined);
+    const kept = await getPool()
+      .query(`SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`, [
+        input.key,
+      ])
+      .catch(() => null);
+    if (!kept || (kept.rowCount ?? 0) === 0) {
+      pendingUploads.delete(input.key);
+      await deleteObject(input.key).catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();
@@ -293,6 +368,7 @@ export async function updateSoundboardSound(input: {
     ],
   );
   const row = result.rows[0];
+  forgetPlayable(input.soundId);
   return row ? toSound(row) : null;
 }
 
@@ -301,9 +377,9 @@ export async function deleteSoundboardSound(
   soundId: string,
 ): Promise<boolean> {
   const result = await getPool().query<{ storage_key: string }>(
-    `DELETE FROM soundboard_sounds
-      WHERE id = $1 AND server_id = $2
-      RETURNING storage_key`,
+    `SELECT storage_key
+       FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2`,
     [soundId, serverId],
   );
   const key = result.rows[0]?.storage_key;
@@ -311,7 +387,12 @@ export async function deleteSoundboardSound(
     return false;
   }
   if (isStorageConfigured()) {
-    await deleteObject(key).catch(() => undefined);
+    await deleteObject(key);
   }
+  await getPool().query(
+    `DELETE FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
+    [soundId, serverId],
+  );
+  forgetPlayable(soundId);
   return true;
 }

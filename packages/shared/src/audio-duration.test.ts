@@ -61,6 +61,17 @@ describe("audioDurationMs", () => {
     expect(audioDurationMs(bytes, "audio/ogg")).toBe(1000);
   });
 
+  it("times a vorbis ogg from the identification header's sample rate", () => {
+    const head = new Uint8Array(30);
+    head[0] = 0x01;
+    head.set([0x76, 0x6f, 0x72, 0x62, 0x69, 0x73], 1);
+    head[11] = 2;
+    head[12] = 0x44;
+    head[13] = 0xac;
+    const bytes = concat(oggPage(head, 0), oggPage(new Uint8Array([0]), 44100));
+    expect(audioDurationMs(bytes, "audio/ogg")).toBe(1000);
+  });
+
   it("refuses a clip past 5.2 seconds and accepts a short one", () => {
     const shortMs = audioDurationMs(mp3Seconds(1), "audio/mp3");
     const longMs = audioDurationMs(mp3Seconds(6), "audio/mpeg");

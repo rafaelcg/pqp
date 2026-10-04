@@ -27,6 +27,9 @@ export async function inspectSoundboardFile(
   if (!contentType) {
     return "type";
   }
+  if (file.size <= 0 || file.size > SOUNDBOARD_MAX_BYTES) {
+    return "too_big";
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const durationMs = audioDurationMs(bytes, contentType);
   const rejection = soundboardClipRejection(

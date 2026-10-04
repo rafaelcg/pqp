@@ -189,13 +189,13 @@ function identifyOgg(
     return { codec: "opus", preSkip };
   }
   const vorbis = indexOfAscii(body, "vorbis");
-  // Identification header is 0x01 + "vorbis", sample rate at byte 12 of that packet.
-  if (vorbis >= 1 && body[vorbis - 1] === 0x01 && vorbis + 11 <= body.length) {
+  // Packet is 0x01 + "vorbis", then version (4), channels (1), sample rate (4).
+  if (vorbis >= 1 && body[vorbis - 1] === 0x01 && vorbis + 15 <= body.length) {
     const sampleRate =
-      body[vorbis + 7]! |
-      (body[vorbis + 8]! << 8) |
-      (body[vorbis + 9]! << 16) |
-      (body[vorbis + 10]! << 24);
+      body[vorbis + 11]! |
+      (body[vorbis + 12]! << 8) |
+      (body[vorbis + 13]! << 16) |
+      (body[vorbis + 14]! << 24);
     if (sampleRate > 0) {
       return { codec: "vorbis", sampleRate };
     }

@@ -1161,6 +1161,7 @@
   "soundboard.settings.count": "{count} of {max} custom sounds",
   "soundboard.settings.empty": "No custom sounds yet. The built-in pack is already on the call bar.",
   "soundboard.settings.loadFailed": "Could not load the soundboard.",
+  "soundboard.settings.saveFailed": "Could not save that change.",
   "soundboard.settings.clipVolume": "Volume for {name}",
   "soundboard.settings.delete": "Delete {name}",
   "music.close": "Close the music queue",

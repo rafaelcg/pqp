@@ -34,7 +34,10 @@ Cricket is by Delapouite, and the drum kit and trombone are by Caro Asercion, fr
 CC BY 3.0.
 
 Custom clips live in the same bucket as attachments, capped at 24 per
-server, 512 KB, and 5.2 seconds, mp3 or ogg. Play clicks are not stored.
+server, 512 KB, and 5.2 seconds, mp3 or ogg. A new upload is refused when
+the board is already full, counting uploads that were signed and not
+claimed yet. An unclaimed file is deleted when that signature expires.
+Play clicks are not stored.
 
 ## Who can do what
 

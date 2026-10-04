@@ -3397,7 +3397,7 @@ router.post(
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
     const body = createSoundboardUploadSchema.parse(await readJsonBody(req));
     try {
-      return createSoundboardUpload({
+      return await createSoundboardUpload({
         serverId,
         contentType: body.contentType,
         byteSize: body.byteSize,
