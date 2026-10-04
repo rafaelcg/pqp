@@ -571,6 +571,16 @@ describe("VoiceSection push-to-talk key", () => {
     Reflect.deleteProperty(navigator, "keyboard");
   });
 
+  it("survives a keyboard object that is not an event target (Chromium's)", async () => {
+    Object.defineProperty(navigator, "keyboard", {
+      configurable: true,
+      value: { getLayoutMap: async () => ({ get: () => "'" }) },
+    });
+    await mount({ settings: ptt({}) });
+    expect(keyButton().textContent).toContain("'");
+    Reflect.deleteProperty(navigator, "keyboard");
+  });
+
   it("names the refused combo, and leaves the old key on the button", async () => {
     const patch = vi.fn();
     await mount({ settings: ptt({}), patchLocal: patch });

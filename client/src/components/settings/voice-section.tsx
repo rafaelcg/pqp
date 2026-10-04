@@ -246,30 +246,44 @@ export function relabelStockBinding(
 function useKeyboardLayout(): KeyboardLayout | null {
   const [layout, setLayout] = useState<KeyboardLayout | null>(null);
   useEffect(() => {
+    // Chromium only, and not every build of it makes `keyboard` a full event
+    // target, so each piece is checked before it is used. Anything missing
+    // leaves the label as it was saved.
     const keyboard = (
       navigator as Navigator & {
-        keyboard?: EventTarget & { getLayoutMap?: () => Promise<KeyboardLayout> };
+        keyboard?: Partial<EventTarget> & {
+          getLayoutMap?: () => Promise<KeyboardLayout>;
+        };
       }
     ).keyboard;
-    if (!keyboard?.getLayoutMap) {
+    if (typeof keyboard?.getLayoutMap !== "function") {
       return;
     }
     let cancelled = false;
     const read = () => {
-      keyboard
-        .getLayoutMap?.()
-        .then((map) => {
-          if (!cancelled) {
-            setLayout(map);
-          }
-        })
-        .catch(() => {});
+      try {
+        void keyboard
+          .getLayoutMap?.()
+          .then((map) => {
+            if (!cancelled) {
+              setLayout(map);
+            }
+          })
+          .catch(() => {});
+      } catch {
+        // A locked-down frame refuses the call; keep the saved label.
+      }
     };
     read();
-    keyboard.addEventListener("layoutchange", read);
+    const canListen = typeof keyboard.addEventListener === "function";
+    if (canListen) {
+      keyboard.addEventListener?.("layoutchange", read);
+    }
     return () => {
       cancelled = true;
-      keyboard.removeEventListener("layoutchange", read);
+      if (canListen) {
+        keyboard.removeEventListener?.("layoutchange", read);
+      }
     };
   }, []);
   return layout;
