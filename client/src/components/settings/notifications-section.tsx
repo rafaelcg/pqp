@@ -54,6 +54,22 @@ const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
  * and there is no second prompt to fall back on, so the ask has to be worth
  * spending. Push subscribes from its own switch for the same reason.
  */
+/**
+ * The device row and the DM group both read the push config as the tab
+ * opens. One request serves both; the next open asks again.
+ */
+let pushConfigRequest: ReturnType<typeof getPushConfig> | null = null;
+function sharedPushConfig(): ReturnType<typeof getPushConfig> {
+  if (!pushConfigRequest) {
+    pushConfigRequest = getPushConfig();
+    const clear = () => {
+      pushConfigRequest = null;
+    };
+    pushConfigRequest.then(clear, clear);
+  }
+  return pushConfigRequest;
+}
+
 export function NotificationsSection() {
   const { t } = useTranslation();
   const { state, permission, enable, disable, setDefaultLevel } =
@@ -205,7 +221,7 @@ function usePushDevice(): PushDevice {
     void (async () => {
       try {
         const [config, subscription] = await Promise.all([
-          getPushConfig(),
+          sharedPushConfig(),
           getCurrentPushSubscription(),
         ]);
         if (cancelled) {
@@ -373,7 +389,7 @@ function DirectMessagesGroup({
 
   useEffect(() => {
     let cancelled = false;
-    void getPushConfig()
+    void sharedPushConfig()
       .then((config) => {
         if (!cancelled && !touchedRef.current) {
           setDmDetails(config.dmDetails);
