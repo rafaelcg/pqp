@@ -44,9 +44,23 @@ function fakeAnalyser(): AnalyserNode {
 async function mount({
   settings = defaultLocalSettings,
   voiceAnalyser = null,
+  inputs = [MIC],
+  outputs = [],
+  cameras = [],
+  devicesError = null,
+  devicesLoaded = true,
+  patchLocal = () => undefined,
+  onRevealCameras = () => undefined,
 }: {
   settings?: LocalSettings;
   voiceAnalyser?: AnalyserNode | null;
+  inputs?: { deviceId: string; label: string }[];
+  outputs?: { deviceId: string; label: string }[];
+  cameras?: { deviceId: string; label: string }[];
+  devicesError?: string | null;
+  devicesLoaded?: boolean;
+  patchLocal?: (partial: Partial<LocalSettings>) => void;
+  onRevealCameras?: () => void;
 } = {}) {
   host = document.createElement("div");
   document.body.append(host);
@@ -56,13 +70,13 @@ async function mount({
       <TooltipProvider>
         <VoiceSection
           draftLocal={settings}
-          patchLocal={() => undefined}
-          inputs={[MIC]}
-          outputs={[]}
-          cameras={[]}
-          onRevealCameras={() => undefined}
-          devicesError={null}
-          devicesLoaded
+          patchLocal={patchLocal}
+          inputs={inputs}
+          outputs={outputs}
+          cameras={cameras}
+          onRevealCameras={onRevealCameras}
+          devicesError={devicesError}
+          devicesLoaded={devicesLoaded}
           voiceAnalyser={voiceAnalyser}
           metering
           showVoiceCleanBadge={false}
@@ -185,5 +199,502 @@ describe("VoiceSection ptt target", () => {
     expect(descriptions[0]).not.toBe("");
     expect(descriptions[1]).not.toBe("");
     expect(descriptions[0]).not.toBe(descriptions[1]);
+  });
+});
+
+/* ------------------------------------------------------------------ helpers */
+
+/** A microphone and a camera that open, and an audio graph that does nothing. */
+function installWorkingMedia() {
+  const tracks: { stop: ReturnType<typeof vi.fn> }[] = [];
+  const open = vi.fn(async (_constraints?: MediaStreamConstraints) => {
+    const track = { stop: vi.fn(), applyConstraints: vi.fn(async () => undefined) };
+    tracks.push(track);
+    return {
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+    } as unknown as MediaStream;
+  });
+  const node = () => ({ connect: () => undefined, disconnect: () => undefined });
+  class FakeContext {
+    createAnalyser = () => ({
+      fftSize: 0,
+      frequencyBinCount: 4,
+      getByteFrequencyData: () => undefined,
+      ...node(),
+    });
+    createMediaStreamSource = () => node();
+    createGain = () => ({ gain: { value: 1 }, ...node() });
+    createMediaStreamDestination = () => ({ stream: {}, ...node() });
+    close = async () => undefined;
+  }
+  vi.stubGlobal("AudioContext", FakeContext);
+  getUserMedia = open;
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: open },
+  });
+  return { open, tracks };
+}
+
+function visibleLabel(button: HTMLElement): string {
+  return button.querySelector("span > span:not([aria-hidden])")!.textContent ?? "";
+}
+
+function buttonByText(pattern: RegExp): HTMLButtonElement | undefined {
+  return [...host!.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+    pattern.test(b.textContent ?? ""),
+  );
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  window.localStorage.clear();
+});
+
+/* ------------------------------------------------------------ mic test timing */
+
+describe("VoiceSection mic test timing", () => {
+  it("says how long it plays and why to wear headphones", async () => {
+    await mount();
+    expect(visibleLabel(micTestButton())).toMatch(/\(5 s\)/);
+    expect(host!.textContent).toMatch(
+      /headphones.*(5 seconds)|fones.*(5 segundos)|auriculares.*(5 segundos)/i,
+    );
+  });
+
+  it("counts down on the button once the microphone is playing, then ends by itself", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+    installWorkingMedia();
+    await mount();
+    const idle = visibleLabel(micTestButton());
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(visibleLabel(micTestButton())).toMatch(/· 5 s$/);
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(visibleLabel(micTestButton())).toMatch(/· 4 s$/);
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(visibleLabel(micTestButton())).toMatch(/· 3 s$/);
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(visibleLabel(micTestButton())).toBe(idle);
+  });
+
+  it("does not count while the permission prompt is still open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+    await mount();
+    await act(async () => {
+      micTestButton().click();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(visibleLabel(micTestButton())).not.toMatch(/\d s$/);
+  });
+
+  it("keeps both stop buttons secondary, so only one primary can ever show", async () => {
+    await mount();
+    expect(micTestButton().className).not.toMatch(/bg-accent/);
+  });
+});
+
+/* ------------------------------------------------------- permission blocked */
+
+describe("VoiceSection with the microphone blocked", () => {
+  const blockedProps = {
+    inputs: [],
+    devicesLoaded: false,
+    devicesError: "Needs the microphone to list devices.",
+  };
+
+  it("offers a button and the padlock steps, and hides the device list", async () => {
+    await mount(blockedProps);
+    expect(host!.querySelector("[data-allow-microphone]")).not.toBeNull();
+    expect(host!.querySelector("[data-mic-test]")).toBeNull();
+    expect(host!.textContent).toMatch(/lock|candado|cadeado/i);
+    expect(host!.textContent).toContain("Needs the microphone to list devices.");
+  });
+
+  it("greys out the sensitivity meter instead of showing a dead bar", async () => {
+    await mount(blockedProps);
+    expect(
+      host!.querySelector('[role="slider"][aria-label="Sensitivity"]'),
+    ).toBeNull();
+    expect(host!.querySelector("[data-sensitivity-grabber]")).toBeNull();
+    const row = host!.querySelector('[data-settings-row="sensitivity"]')!;
+    expect(row.textContent).toMatch(/Allow the microphone|Libere o microfone|Permite el micrófono/);
+  });
+
+  it("asks on the click, and recovers on its own when the person allows it", async () => {
+    const { open } = installWorkingMedia();
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", {
+      configurable: true,
+      value: async () => [
+        { kind: "audioinput", deviceId: "mic-9", label: "Yeti Nano" },
+      ],
+    });
+    await mount(blockedProps);
+    // Blocked: the meter has not opened anything behind the button's back.
+    expect(open).not.toHaveBeenCalled();
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!.click();
+    });
+    expect(open).toHaveBeenCalled();
+    expect(host!.querySelector("[data-allow-microphone]")).toBeNull();
+    const options = [...host!.querySelectorAll("option")].map((o) => o.textContent);
+    expect(options).toContain("Yeti Nano");
+    expect(
+      host!.querySelector('[role="slider"][aria-label="Sensitivity"]'),
+    ).not.toBeNull();
+  });
+
+  it("stays blocked when the browser says no", async () => {
+    vi.stubGlobal("AudioContext", class {});
+    getUserMedia = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    await mount(blockedProps);
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!.click();
+    });
+    expect(host!.querySelector("[data-allow-microphone]")).not.toBeNull();
+    expect(
+      (host!.querySelector("[data-allow-microphone]") as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------- sensitivity */
+
+describe("VoiceSection sensitivity", () => {
+  it("has a visible grabber and tells a screen reader where the mic opens", async () => {
+    await mount();
+    expect(host!.querySelector("[data-sensitivity-grabber]")).not.toBeNull();
+    const thumb = host!.querySelector('[role="slider"][aria-label="Sensitivity"]')!;
+    expect(thumb.getAttribute("aria-valuetext")).toMatch(
+      /^(Opens above|Abre acima de|Se abre por encima del) \d+%/,
+    );
+    // The same words are on screen, between the two ends of the bar.
+    expect(
+      host!.querySelector('[data-settings-row="sensitivity"]')!.textContent,
+    ).toMatch(/(Opens above|Abre acima de|Se abre por encima de) \d+%/);
+  });
+
+  it("tells you what to do", async () => {
+    await mount();
+    expect(
+      host!.querySelector('[data-settings-row="sensitivity"]')!.textContent,
+    ).toMatch(/Drag the line|Arraste a linha|Arrastra la línea/);
+  });
+});
+
+/* ------------------------------------------------------------------ volumes */
+
+describe("VoiceSection volumes", () => {
+  it("marks 100% on the input volume and warns about going over it", async () => {
+    await mount();
+    const row = host!.querySelector('[data-settings-row="input-volume"]')!;
+    expect(row.querySelector("[data-volume-tick]")).not.toBeNull();
+    expect(row.textContent).toMatch(/100%/);
+    expect(row.textContent).toMatch(/distort|distorcer|distorsionar/);
+    expect(
+      host!.querySelector('[data-settings-row="output-volume"] [data-volume-tick]'),
+    ).toBeNull();
+  });
+
+  it("gives both volume sliders a 40px touch strip", async () => {
+    await mount();
+    for (const id of ["input-volume", "output-volume"]) {
+      const slider = host!.querySelector(`[data-settings-row="${id}"] [data-slider]`)!;
+      expect(slider.className).toContain("h-10");
+      expect(slider.className).not.toContain("h-4");
+    }
+  });
+
+  it("says the microphone is silent at 0%, and only then", async () => {
+    await mount();
+    expect(host!.querySelector('[data-settings-row="input-volume"] [role="status"]')).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    await mount({ settings: { ...defaultLocalSettings, inputVolume: 0 } });
+    const status = host!.querySelector('[data-settings-row="input-volume"] [role="status"]');
+    expect(status?.textContent).toMatch(/silent|sem som|sin sonido/);
+  });
+});
+
+/* ------------------------------------------------------------------ devices */
+
+describe("VoiceSection device lists", () => {
+  it("merges the browser's default entry into 'System default (name)'", async () => {
+    await mount({
+      inputs: [
+        { deviceId: "default", label: "Default - MacBook Pro Microphone" },
+        { deviceId: "mic-1", label: "MacBook Pro Microphone" },
+      ],
+    });
+    const select = host!.querySelector<HTMLSelectElement>(
+      '[data-settings-row="input-device"] select',
+    )!;
+    const options = [...select.options].map((o) => [o.value, o.textContent]);
+    expect(options).toHaveLength(2);
+    expect(options[0]![0]).toBe("");
+    expect(options[0]![1]).toMatch(/\(MacBook Pro Microphone\)$/);
+    expect(options.some(([value]) => value === "default")).toBe(false);
+  });
+
+  it("shows a saved 'default' id as the system default", async () => {
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "default" },
+      inputs: [
+        { deviceId: "default", label: "Default - Mic" },
+        { deviceId: "mic-1", label: "Mic" },
+      ],
+    });
+    const select = host!.querySelector<HTMLSelectElement>(
+      '[data-settings-row="input-device"] select',
+    )!;
+    expect(select.value).toBe("");
+    expect(host!.textContent).not.toMatch(/not found|não encontrad|no encontrad/);
+  });
+
+  it("says when the saved microphone is gone, by name when it was seen before", async () => {
+    window.localStorage.setItem(
+      "pqp:voice:device-labels",
+      JSON.stringify({ input: { id: "yeti", label: "Yeti Nano" } }),
+    );
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "yeti" },
+    });
+    expect(
+      host!.querySelector('[data-settings-row="input-device"]')!.textContent,
+    ).toMatch(/Yeti Nano.*(not found|não encontrado|no encontrado)/);
+  });
+
+  it("says it without a name when it never saw the device", async () => {
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "yeti" },
+    });
+    expect(
+      host!.querySelector('[data-settings-row="input-device"]')!.textContent,
+    ).toMatch(/saved microphone|microfone salvo|micrófono guardado/);
+  });
+
+  it("stays quiet while the list has not been read", async () => {
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "yeti" },
+      devicesLoaded: false,
+    });
+    expect(host!.textContent).not.toMatch(/not found|não encontrad|no encontrad/);
+  });
+
+  it("remembers the name of the saved device while it is connected", async () => {
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "mic-1" },
+    });
+    expect(window.localStorage.getItem("pqp:voice:device-labels")).toContain("USB mic");
+  });
+});
+
+/* --------------------------------------------------------------- noise hints */
+
+describe("VoiceSection sound processing", () => {
+  it("explains the chosen option in one line, each option differently", async () => {
+    const hints = new Set<string>();
+    for (const noiseSuppression of ["off", "browser", "advanced"] as const) {
+      await mount({
+        settings: {
+          ...defaultLocalSettings,
+          micProcessing: { ...defaultLocalSettings.micProcessing, noiseSuppression },
+        },
+      });
+      hints.add(
+        host!.querySelector('[data-settings-row="noise-suppression"] p')!.textContent ?? "",
+      );
+      act(() => root?.unmount());
+      host?.remove();
+    }
+    expect(hints.size).toBe(3);
+    expect(hints.has("")).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------- push-to-talk */
+
+describe("VoiceSection push-to-talk key", () => {
+  const ptt = (key: Partial<LocalSettings["pushToTalkKey"]>): LocalSettings => ({
+    ...defaultLocalSettings,
+    inputMode: "push-to-talk",
+    pushToTalkKey: { ...defaultLocalSettings.pushToTalkKey, ...key },
+  });
+  const keyButton = () =>
+    host!.querySelector<HTMLButtonElement>("[data-key-binding-field]")!;
+
+  it("warns about a lone modifier, and not about an F key", async () => {
+    await mount({ settings: ptt({ code: "ControlLeft", label: "Left Ctrl" }) });
+    expect(host!.textContent).toMatch(/alone opens the mic|sozinho abre o mic|solo abre el micro/);
+    act(() => root?.unmount());
+    host?.remove();
+    await mount({ settings: ptt({ code: "F13", label: "F13" }) });
+    expect(host!.textContent).not.toMatch(/alone opens the mic|sozinho abre o mic|solo abre el micro/);
+  });
+
+  it("recommends an F key in the hint", async () => {
+    await mount({ settings: ptt({}) });
+    expect(
+      host!.querySelector('[data-settings-row="ptt"]')!.textContent,
+    ).toMatch(/F key|tecla F/);
+  });
+
+  it("draws the stock key with the name the keyboard layout gives it", async () => {
+    Object.defineProperty(navigator, "keyboard", {
+      configurable: true,
+      value: {
+        getLayoutMap: async () => ({ get: () => "'" }),
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      },
+    });
+    await mount({ settings: ptt({}) });
+    expect(keyButton().textContent).toContain("'");
+    expect(keyButton().textContent).not.toContain("`");
+    Reflect.deleteProperty(navigator, "keyboard");
+  });
+
+  it("names the refused combo, and leaves the old key on the button", async () => {
+    const patch = vi.fn();
+    await mount({ settings: ptt({}), patchLocal: patch });
+    const before = keyButton().textContent;
+    await act(async () => {
+      keyButton().click();
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { code: "ArrowUp", key: "ArrowUp", altKey: true }),
+      );
+    });
+    expect(patch).not.toHaveBeenCalled();
+    expect(keyButton().textContent).toBe(before);
+    const alert = host!.querySelector('[data-settings-row="ptt"] [role="alert"]');
+    expect(alert?.textContent).toMatch(/Alt \+ ArrowUp.*(already|já é|ya es)/);
+    // Clicking the key again starts over with no stale message.
+    await act(async () => {
+      keyButton().click();
+    });
+    expect(host!.querySelector('[data-settings-row="ptt"] [role="alert"]')).toBeNull();
+  });
+
+  it("binds a free key", async () => {
+    const patch = vi.fn();
+    await mount({ settings: ptt({}), patchLocal: patch });
+    await act(async () => {
+      keyButton().click();
+    });
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "F9", key: "F9" }));
+    });
+    expect(patch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pushToTalkKey: expect.objectContaining({ code: "F9" }),
+      }),
+    );
+  });
+
+  it("calls the beep button 'Hear the beep', not 'Test'", async () => {
+    await mount({ settings: ptt({}) });
+    expect(buttonByText(/Hear the beep|Ouvir o bipe|Escuchar el pitido/)).toBeDefined();
+  });
+});
+
+/* -------------------------------------------------------------------- camera */
+
+describe("VoiceSection camera test", () => {
+  it("opens a private preview and closes it on the second press", async () => {
+    const { open, tracks } = installWorkingMedia();
+    const reveal = vi.fn();
+    await mount({ onRevealCameras: reveal });
+    const button = host!.querySelector<HTMLButtonElement>("[data-camera-test]")!;
+    await act(async () => {
+      button.click();
+    });
+    const asked = open.mock.calls.map((call) => call[0] as MediaStreamConstraints);
+    expect(asked.some((c) => c.video && c.audio === false)).toBe(true);
+    expect(host!.querySelector("video")).not.toBeNull();
+    expect(host!.textContent).toMatch(/Only you see this|Só você vê isso|Solo tú ves esto/);
+    expect(reveal).toHaveBeenCalled();
+    const stopsBefore = tracks.filter((t) => t.stop.mock.calls.length > 0).length;
+    await act(async () => {
+      button.click();
+    });
+    expect(host!.querySelector("video")).toBeNull();
+    expect(tracks.filter((t) => t.stop.mock.calls.length > 0).length).toBeGreaterThan(
+      stopsBefore,
+    );
+  });
+
+  it("is disabled in a call, and says why", async () => {
+    setInCall(true);
+    await mount({ voiceAnalyser: fakeAnalyser() });
+    const button = host!.querySelector<HTMLButtonElement>("[data-camera-test]")!;
+    expect(button.disabled).toBe(true);
+    expect(
+      host!.querySelector('[data-settings-row="camera"]')!.textContent,
+    ).toMatch(/outside a call|fora da call|fuera de una llamada/);
+  });
+
+  it("says so when the camera cannot be opened", async () => {
+    vi.stubGlobal("AudioContext", class {});
+    getUserMedia = vi.fn(async (c: MediaStreamConstraints) => {
+      if (c.video) {
+        throw new Error("denied");
+      }
+      return { getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream;
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    await mount();
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-camera-test]")!.click();
+    });
+    expect(host!.querySelector("video")).toBeNull();
+    expect(
+      host!.querySelector('[data-settings-row="camera"] [role="alert"]'),
+    ).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------- video + call */
+
+describe("VoiceSection copy", () => {
+  it("names what the video quality covers, and uses plain words for the frame rate", async () => {
+    await mount();
+    expect(
+      host!.querySelector('[data-settings-row="video-quality"]')!.textContent,
+    ).toMatch(/camera and screen|câmera e tela|cámara y pantalla/);
+    expect(
+      host!.querySelector('[data-settings-row="screen-frame-rate"]')!.textContent,
+    ).not.toMatch(/FPS/);
+  });
+
+  it("describes every switch in the call group", async () => {
+    await mount();
+    const says = (id: string) =>
+      host!.querySelector(`[data-settings-row="${id}"]`)!.textContent ?? "";
+    expect(says("mute-on-join")).toMatch(/push.to.talk/i);
+    expect(says("compact-peers")).toMatch(/avatar/i);
+    expect(says("music-auto-join")).toMatch(/whether to listen|se quer ouvir|si quieres escuchar/);
+    expect(says("music-duck")).toMatch(/drops while|baixa enquanto|baja mientras/);
   });
 });
