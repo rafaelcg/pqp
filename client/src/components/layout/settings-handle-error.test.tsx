@@ -210,6 +210,28 @@ describe("a taken public link", () => {
     expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ handle: "rafa2" }));
   });
 
+  it("says the request limiter's 429 in the bar, without blaming the new link", async () => {
+    updateMe.mockRejectedValueOnce(new ApiError(429, "Slow down"));
+    fetchMe.mockResolvedValueOnce(USER);
+    mount();
+    type(field("handle"), "rafa2");
+    await save();
+    const confirm = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] button, [role="alertdialog"] button',
+      ),
+    ].find((button) => button.textContent?.includes("@rafa2"))!;
+    await act(async () => {
+      confirm.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(handleError()).toBe("");
+    expect(bar()!.querySelector('[role="alert"]')?.textContent).toMatch(
+      /Wait a moment|Espera um pouco|Espere um pouco/,
+    );
+  });
+
   it("does not blame an unchanged link for another field's 400", async () => {
     updateMe.mockClear();
     updateMe.mockRejectedValueOnce(new ApiError(400, "Invalid request"));

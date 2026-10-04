@@ -34,7 +34,7 @@ import { NotificationsSection } from "@/components/settings/notifications-sectio
 import { PrivacySection } from "@/components/settings/privacy-section";
 import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
 import { ProfileSection } from "@/components/settings/profile-section";
-import { FeedbackSection } from "@/components/settings/feedback-section";
+import { endFeedbackVisit, FeedbackSection } from "@/components/settings/feedback-section";
 import {
   buildProfilePatch,
   isHandleTakenError,
@@ -278,6 +278,11 @@ function RailFooter({ user }: { user: User | null }) {
       <SettingsBuildLine className="self-start" />
     </div>
   );
+}
+
+/** The day a link's rename cooldown ends, from the 429 that refused it. */
+function cooldownDay(message: string): string | null {
+  return /(\d{4}-\d{2}-\d{2})/.exec(message)?.[1] ?? null;
 }
 
 export function SettingsModal({
@@ -541,6 +546,12 @@ export function SettingsModal({
     return () => window.clearTimeout(timer);
   }, [discarded]);
 
+  // A feedback result nobody saw belongs to this visit only.
+  useEffect(() => {
+    if (!open) return;
+    return () => endFeedbackVisit();
+  }, [open]);
+
   // A reload or a closed browser tab would drop staged profile edits without
   // a word, so the browser asks first while there are any. Not in the desktop
   // app: Electron cancels the close or reload outright instead of asking,
@@ -785,18 +796,22 @@ export function SettingsModal({
           setSection("profile");
           setHandleError(message);
           setSaveError(message);
-        } else if (linkChanged && err instanceof ApiError && err.status === 429) {
-          // The 30-day rename cooldown, not a burst of requests.
-          const day = /(\d{4}-\d{2}-\d{2})/.exec(err.message)?.[1];
-          const message = day
-            ? t("settings.profile.publicHandle.cooldown", {
-                date: new Date(`${day}T12:00:00`).toLocaleDateString(intlLocale(locale), {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                }),
-              })
-            : t("settings.saveFailed");
+        } else if (
+          linkChanged &&
+          err instanceof ApiError &&
+          err.status === 429 &&
+          cooldownDay(err.message) !== null
+        ) {
+          // The 30-day rename cooldown, which names the day it ends. A 429
+          // without one is the request limiter, said in the bar below.
+          const day = cooldownDay(err.message)!;
+          const message = t("settings.profile.publicHandle.cooldown", {
+            date: new Date(`${day}T12:00:00`).toLocaleDateString(intlLocale(locale), {
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            }),
+          });
           setSection("profile");
           setHandleError(message);
           setSaveError(message);

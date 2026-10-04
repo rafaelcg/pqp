@@ -82,12 +82,27 @@ type SendOutcome = "sent" | "rateLimited" | "failed";
  * second time), then the thanks or the error.
  */
 let inflight: { owner: string | null; promise: Promise<SendOutcome> } | null = null;
-let unseen: { owner: string | null; outcome: SendOutcome } | null = null;
+let unseen: { owner: string | null; outcome: SendOutcome; visit: number } | null =
+  null;
+
+/**
+ * Which opening of Settings this is. An outcome nobody saw is shown when the
+ * pane comes back in the same visit, never on a later one: an hour later the
+ * form is what the person came for, not an old "Obrigado".
+ */
+let visit = 0;
+
+/** Called by the shell when Settings closes. */
+export function endFeedbackVisit(): void {
+  visit += 1;
+  unseen = null;
+}
 
 function startSend(
   owner: string | null,
   payload: Parameters<typeof sendFeedback>[0],
 ): Promise<SendOutcome> {
+  const startedIn = visit;
   const promise = sendFeedback(payload)
     .then(
       (): SendOutcome => {
@@ -103,7 +118,7 @@ function startSend(
     )
     .then((outcome) => {
       inflight = null;
-      unseen = { owner, outcome };
+      unseen = { owner, outcome, visit: startedIn };
       return outcome;
     });
   inflight = { owner, promise };
@@ -157,7 +172,10 @@ export function FeedbackSection({
   // away. Cleared in the effect below, never here (React may call this twice).
   const [initial] = useState(() => ({
     pending: inflight !== null && inflight.owner === userId,
-    outcome: inflight === null && unseen?.owner === userId ? unseen.outcome : null,
+    outcome:
+      inflight === null && unseen?.owner === userId && unseen.visit === visit
+        ? unseen.outcome
+        : null,
   }));
   const [kind, setKindState] = useState<FeedbackKind>(draft.kind);
   const [body, setBodyState] = useState(draft.body);

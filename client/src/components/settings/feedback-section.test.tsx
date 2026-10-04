@@ -8,6 +8,7 @@ import { resetSettingsRowsForTest } from "@/components/settings/kit/registry";
 import { SettingsSectionContext } from "@/components/settings/kit/sections";
 import {
   FeedbackSection,
+  endFeedbackVisit,
   counterTone,
   feedbackCount,
 } from "@/components/settings/feedback-section";
@@ -313,6 +314,28 @@ describe("FeedbackSection", () => {
 
     mount();
     expect(host!.textContent).toContain("We read everything");
+  });
+
+  it("shows the form, not an old thanks, once Settings was closed in between", async () => {
+    let finish!: () => void;
+    sendFeedback.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    mount();
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    act(() => root?.unmount());
+    host?.remove();
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    endFeedbackVisit();
+
+    mount();
+    expect(host!.textContent).not.toContain("We read everything");
+    expect(textarea().value).toBe("");
   });
 
   it("keeps a draft for the same account and drops it for another", () => {
