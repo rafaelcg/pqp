@@ -1,10 +1,28 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { Keyboard, Mic, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import {
+  SettingsChoiceGrid,
+  SettingsGroup,
+  SettingsHeaderActions,
+  SettingsLinkRow,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSelect,
+  SettingsSliderRow,
+  SettingsSwitchRow,
+} from "@/components/settings/kit";
 import { ACTION_LABEL } from "@/components/layout/shortcut-overlay";
 import { findBindingConflict } from "@/lib/keyboard-shortcuts";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
-import { ObsVirtualCameraHint } from "@/components/voice/obs-virtual-camera-hint";
 import { dismissObsVirtualCameraHint, isObsVirtualCameraHintDismissed, isObsVirtualCameraLabel } from "@/lib/obs-virtual-camera";
 import { parseVideoQuality, VIDEO_QUALITIES, type VideoQuality } from "@/lib/video-quality";
 import { parseScreenFrameRate, SCREEN_FRAME_RATES, type ScreenFrameRate } from "@/lib/hls-capture-rate";
@@ -72,29 +90,23 @@ export function sliderToVadThreshold(percent: number, volume: number): number {
   return parseVadThreshold(percent / 100 / scale);
 }
 
-/**
- * Volume only scales how the level reads, so it is held in a ref: putting it in
- * the effect deps would tear down the preview stream and re-prompt
- * `getUserMedia` on every slider tick.
- */
-function MicLevelMeter({
+/* --------------------------------------------------------------- meter */
+
+function useMicLevel({
   deviceId,
   inputVolume,
   liveAnalyser,
   active,
-  threshold,
-  onThresholdChange,
 }: {
   deviceId: string;
   inputVolume: number;
   liveAnalyser: AnalyserNode | null;
   active: boolean;
-  /** When set, the meter also hosts the voice-activity sensitivity line. */
-  threshold?: number;
-  onThresholdChange?: (value: number) => void;
-}) {
-  const { t } = useTranslation();
+}): number {
   const [level, setLevel] = useState(0);
+  // Volume only scales how the level reads, so it is held in a ref: putting it
+  // in the effect deps would tear down the preview stream and re-prompt
+  // `getUserMedia` on every slider tick.
   const volumeRef = useRef(inputVolume);
 
   useEffect(() => {
@@ -171,8 +183,29 @@ function MicLevelMeter({
     };
   }, [active, deviceId, liveAnalyser]);
 
-  const label = t("settings.voice.inputLevel");
+  return level;
+}
+
+/**
+ * The level meter, 12px tall. With `onThresholdChange` it also carries the
+ * voice-activity sensitivity marker: a 2px line drawn on the meter, with an
+ * invisible `Slider` stretched over the whole 24px strip so anywhere on it is
+ * the grab target, and the arrow keys move it.
+ */
+function MicLevelMeter({
+  level,
+  inputVolume,
+  threshold,
+  onThresholdChange,
+}: {
+  level: number;
+  inputVolume: number;
+  threshold?: number;
+  onThresholdChange?: (value: number) => void;
+}) {
+  const { t } = useTranslation();
   const gated = threshold !== undefined && onThresholdChange !== undefined;
+  const levelPct = Math.round(level * 100);
   const thresholdPct =
     threshold !== undefined
       ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
@@ -180,100 +213,74 @@ function MicLevelMeter({
 
   return (
     <div className="space-y-1.5">
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {gated ? t("settings.voice.sensitivity") : label}
-      </span>
       <div
         className={cn(
-          "relative h-2 rounded-full",
-          gated && "has-[:focus]:ring-2 has-[:focus]:ring-signal/60",
+          "relative h-6 rounded-[var(--radius-control)]",
+          gated &&
+            "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-ring-offset",
         )}
       >
         <div
-          className="h-2 overflow-hidden rounded-full bg-ink"
           role="progressbar"
-          aria-label={label}
+          aria-label={t("settings.voice.inputLevel")}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(level * 100)}
+          aria-valuenow={levelPct}
+          className="absolute inset-x-0 top-1.5 h-3 overflow-hidden rounded-full border border-border bg-surface-0"
         >
           <div
-            className="h-full rounded-full bg-signal transition-[width] duration-75"
-            style={{ width: `${Math.round(level * 100)}%` }}
+            className="h-full rounded-full bg-success transition-[width] duration-75"
+            style={{ width: `${levelPct}%` }}
           />
         </div>
-        {gated && (
+        {gated ? (
           <>
             <div
               aria-hidden
-              className="pointer-events-none absolute top-[-3px] h-[14px] w-1 -translate-x-1/2 rounded-full bg-paper"
+              className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-text"
               style={{ left: `${thresholdPct}%` }}
             />
-            <input
-              type="range"
+            <Slider
+              variant="volume"
+              className="absolute inset-0 h-6 cursor-ew-resize opacity-0"
+              value={thresholdPct}
               min={0}
               max={100}
               step={1}
-              value={thresholdPct}
-              onChange={(e) =>
-                onThresholdChange?.(
-                  sliderToVadThreshold(Number(e.target.value), inputVolume),
-                )
-              }
-              className="absolute -inset-y-2 inset-x-0 w-full cursor-pointer opacity-0"
               aria-label={t("settings.voice.sensitivity")}
               aria-valuetext={t("settings.voice.percent", {
                 percent: thresholdPct,
               })}
+              onValueChange={(percent) =>
+                onThresholdChange?.(sliderToVadThreshold(percent, inputVolume))
+              }
             />
           </>
-        )}
+        ) : null}
       </div>
-      {gated && (
-        <span className="block text-xs text-paper-muted">
-          {t("settings.voice.sensitivityHint")}
-        </span>
-      )}
+      {gated ? (
+        <div
+          aria-hidden
+          className="flex justify-between text-xs text-text-tertiary"
+        >
+          <span>{t("settings.voice.sensitivityMore")}</span>
+          <span>{t("settings.voice.sensitivityLess")}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-const INPUT_MODES: {
-  value: VoiceInputMode;
-  label: MessageKey;
-  description: MessageKey;
-}[] = [
-  {
-    value: "voice-activity",
-    label: "settings.voice.mode.activity",
-    description: "settings.voice.mode.activityHint",
-  },
-  {
-    value: "push-to-talk",
-    label: "settings.voice.mode.ptt",
-    description: "settings.voice.mode.pttHint",
-  },
-];
+/* ----------------------------------------------------------- input mode */
 
-/**
- * The two that are still yes-or-no. Noise suppression left this list when it
- * grew a third setting; it gets a select of its own below.
- */
-const MIC_PROCESSING_OPTIONS: {
-  key: "echoCancellation" | "autoGainControl";
-  label: MessageKey;
-  description: MessageKey;
-}[] = [
-  {
-    key: "echoCancellation",
-    label: "settings.voice.processing.echo",
-    description: "settings.voice.processing.echoHint",
-  },
-  {
-    key: "autoGainControl",
-    label: "settings.voice.processing.gain",
-    description: "settings.voice.processing.gainHint",
-  },
+const INPUT_MODE_ICON: Record<VoiceInputMode, typeof Mic> = {
+  "voice-activity": Mic,
+  "push-to-talk": Keyboard,
+};
+
+const INPUT_MODES: { value: VoiceInputMode; label: MessageKey }[] = [
+  { value: "voice-activity", label: "settings.voice.mode.activity" },
+  { value: "push-to-talk", label: "settings.voice.mode.ptt" },
 ];
 
 /** Labels for the three suppressors, in the order the select offers them. */
@@ -282,6 +289,8 @@ const NOISE_SUPPRESSION_LABELS: Record<NoiseSuppressionMode, MessageKey> = {
   browser: "settings.voice.processing.noise.browser",
   advanced: "settings.voice.processing.noise.advanced",
 };
+
+/* ------------------------------------------------------------- push to talk */
 
 function PttBeepRow({
   enabled,
@@ -294,75 +303,47 @@ function PttBeepRow({
 }) {
   const { t } = useTranslation();
   return (
-    <label className="flex cursor-pointer items-start gap-3">
-      <input
-        type="checkbox"
-        className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-        checked={enabled}
-        onChange={(e) => onEnabledChange(e.target.checked)}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm">{t("settings.voice.pttBeep")}</span>
-        <span className="block text-xs text-paper-muted">
-          {t("settings.voice.pttBeepHint")}
-        </span>
-      </span>
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={!soundsOn || !enabled}
-        onClick={(event) => {
-          event.preventDefault();
-          previewPttBeeps();
-        }}
-      >
-        {t("settings.voice.pttBeepTest")}
-      </Button>
-    </label>
+    <SettingsSwitchRow
+      id="ptt-beep"
+      label={t("settings.voice.pttBeep")}
+      description={t("settings.voice.pttBeepHint")}
+      checked={enabled}
+      onCheckedChange={onEnabledChange}
+      trailing={
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!soundsOn || !enabled}
+          onClick={() => previewPttBeeps()}
+        >
+          {t("settings.voice.pttBeepTest")}
+        </Button>
+      }
+    />
   );
 }
 
 /**
- * macOS-only: shown while `usePttNativeSupport().permission === "denied"`.
- * macOS never re-prompts once Accessibility/Input Monitoring have been said
- * no to (or simply never granted), so the only way back is Settings. This
- * is the deep link, not a native system dialog we do not have a way to
- * trigger reliably ourselves. See `MAC_ACCESSIBILITY_SETTINGS_URL` /
- * `MAC_INPUT_MONITORING_SETTINGS_URL` in `electron/lib/native-ptt-hook.js`.
+ * The push-to-talk rows, sized to whatever this shell can actually do. The
+ * desktop-only pieces (release delay, the background switch, the permission
+ * notice) need `usePttNativeSupport`'s state, and that state has nothing to say
+ * on the web build.
+ *
+ * `PttBindingField` draws its own small label above the button; the row
+ * already names it, so that one is hidden visually and kept for the field's
+ * own layout.
  */
-function PttPermissionNudge({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="status"
-      className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5"
-    >
-      <p className="text-sm font-medium">{t("settings.voice.pttPermissionTitle")}</p>
-      <p className="text-xs text-paper-muted">{t("settings.voice.pttPermissionBody")}</p>
-      <Button type="button" size="sm" variant="secondary" onClick={onOpenSettings}>
-        {t("settings.voice.pttPermissionOpenSettings")}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * The push-to-talk binding, its release delay (desktop only) and the
- * "works everywhere on this computer" hint, sized to whatever this shell
- * can actually do. Split out of `VoiceSection` because the desktop-only
- * pieces (release delay, the permission nudge, the native-vs-fallback hint)
- * need `usePttNativeSupport`'s state and that state has nothing to say on
- * the web build.
- */
-function PttControls({
+function PttRows({
   draftLocal,
   patchLocal,
   sounds,
+  onBeepChange,
 }: {
   draftLocal: LocalSettings;
   patchLocal: (partial: Partial<LocalSettings>) => void;
   sounds: SoundState;
+  onBeepChange: (next: boolean) => void;
 }) {
   const { t } = useTranslation();
   const isDesktop = isDesktopApp();
@@ -379,131 +360,133 @@ function PttControls({
     permission: native.permission,
     global: draftLocal.pttGlobal,
   });
+  const keyLabel = t(
+    isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey",
+  );
+  const typesText =
+    draftLocal.pushToTalkKey.device === "keyboard" &&
+    bindingTypesText(draftLocal.pushToTalkKey);
 
   return (
-    <div className="space-y-3">
-      <PttBindingField
-        label={t(isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey")}
-        binding={draftLocal.pushToTalkKey}
-        allowMouse={isDesktop}
-        takenBy={(binding) => {
-          if (binding.device === "mouse") {
-            // A mouse button cannot collide with a keyboard-only app
-            // shortcut. See the note on `PttBinding` in push-to-talk.ts.
-            return null;
-          }
-          const conflict = findBindingConflict(
-            bindableMap(draftLocal),
-            "pushToTalk",
-            binding,
-          );
-          return conflict ? t(ACTION_LABEL[conflict]) : null;
-        }}
-        onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+    <>
+      <SettingsRow
+        id="ptt"
+        label={keyLabel}
+        description={t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
+        control={
+          <div className="[&>div>span:first-child]:sr-only">
+            <PttBindingField
+              label={keyLabel}
+              binding={draftLocal.pushToTalkKey}
+              allowMouse={isDesktop}
+              takenBy={(binding) => {
+                if (binding.device === "mouse") {
+                  // A mouse button cannot collide with a keyboard-only app
+                  // shortcut. See the note on `PttBinding` in push-to-talk.ts.
+                  return null;
+                }
+                const conflict = findBindingConflict(
+                  bindableMap(draftLocal),
+                  "pushToTalk",
+                  binding,
+                );
+                return conflict ? t(ACTION_LABEL[conflict]) : null;
+              }}
+              onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+            />
+          </div>
+        }
       />
 
-      {isDesktop && native.available && (
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.pttReleaseDelay")}
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={MAX_RELEASE_DELAY_MS}
-            step={10}
-            value={draftLocal.pttReleaseDelayMs}
-            onChange={(e) =>
-              patchLocal({
-                pttReleaseDelayMs: clampReleaseDelayMs(Number(e.target.value)),
-              })
-            }
-            className="w-full accent-[var(--color-signal)]"
-          />
-          <span className="mt-0.5 block text-xs text-paper-muted">
-            {t("settings.voice.pttReleaseDelayMs", { ms: draftLocal.pttReleaseDelayMs })}
-          </span>
-          <span className="mt-0.5 block text-xs text-paper-muted">
-            {t("settings.voice.pttReleaseDelayHint")}
-          </span>
-        </label>
-      )}
+      {typesText ? (
+        <div>
+          <SettingsNotice tone="info" inGroup>
+            {t("settings.voice.pttTypingNote", {
+              key: formatBinding(draftLocal.pushToTalkKey),
+            })}
+          </SettingsNotice>
+        </div>
+      ) : null}
 
-      {isDesktop && (
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-            checked={draftLocal.pttGlobal}
-            onChange={(e) => patchLocal({ pttGlobal: e.target.checked })}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm">{t("settings.voice.pttGlobal")}</span>
-            <span className="block text-xs text-paper-muted">
-              {t("settings.voice.pttGlobalHint")}
-            </span>
-          </span>
-        </label>
-      )}
+      {!isDesktop ? (
+        <SettingsLinkRow
+          id="ptt-desktop"
+          label={t("settings.voice.pttGetDesktop")}
+          href="/download"
+          external
+        />
+      ) : null}
+
+      {isDesktop && native.available ? (
+        <SettingsSliderRow
+          id="ptt-release-delay"
+          label={t("settings.voice.pttReleaseDelay")}
+          description={t("settings.voice.pttReleaseDelayHint")}
+          value={draftLocal.pttReleaseDelayMs}
+          min={0}
+          max={MAX_RELEASE_DELAY_MS}
+          step={10}
+          format={(ms) => t("settings.voice.pttReleaseDelayMs", { ms })}
+          onValueChange={(ms) =>
+            patchLocal({ pttReleaseDelayMs: clampReleaseDelayMs(ms) })
+          }
+        />
+      ) : null}
+
+      {isDesktop ? (
+        <SettingsSwitchRow
+          id="ptt-global"
+          label={t("settings.voice.pttGlobal")}
+          description={t("settings.voice.pttGlobalHint")}
+          checked={draftLocal.pttGlobal}
+          onCheckedChange={(pttGlobal) => patchLocal({ pttGlobal })}
+          status={
+            draftLocal.pttGlobal && native.permission === "denied" ? (
+              <SettingsNotice
+                tone="warning"
+                title={t("settings.voice.pttPermissionTitle")}
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={native.openSettings}
+                  >
+                    {t("settings.voice.pttPermissionOpenSettings")}
+                  </Button>
+                }
+              >
+                {t("settings.voice.pttPermissionBody")}
+              </SettingsNotice>
+            ) : undefined
+          }
+        />
+      ) : null}
+
+      {isDesktop && releaseStuck ? (
+        <div>
+          <SettingsNotice tone="warning" inGroup>
+            {t("settings.voice.pttGlobalReleaseFailed")}
+          </SettingsNotice>
+        </div>
+      ) : null}
 
       <PttBeepRow
         enabled={draftLocal.pttBeep}
         soundsOn={sounds.enabled}
-        onEnabledChange={(pttBeep) => {
-          setPttBeepEnabled(pttBeep);
-          patchLocal({ pttBeep });
-        }}
+        onEnabledChange={onBeepChange}
       />
-
-      {isDesktop && releaseStuck && (
-        <p
-          role="alert"
-          className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs"
-        >
-          {t("settings.voice.pttGlobalReleaseFailed")}
-        </p>
-      )}
-
-      {isDesktop && draftLocal.pttGlobal && native.permission === "denied" && (
-        <PttPermissionNudge onOpenSettings={native.openSettings} />
-      )}
-
-      {/* The honest limit, stated where the binding is set rather than
-          discovered later by talking to nobody. */}
-      <p className="text-xs text-paper-muted">
-        {t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
-        {!isDesktop && (
-          <>
-            {" "}
-            <a
-              href="/download"
-              target="_blank"
-              rel="noopener"
-              className="text-accent underline underline-offset-2"
-            >
-              {t("settings.voice.pttGetDesktop")}
-            </a>
-          </>
-        )}
-      </p>
-      {draftLocal.pushToTalkKey.device === "keyboard" &&
-        bindingTypesText(draftLocal.pushToTalkKey) && (
-          <p className="text-xs text-paper-muted">
-            {t("settings.voice.pttTypingNote", {
-              key: formatBinding(draftLocal.pushToTalkKey),
-            })}
-          </p>
-        )}
-    </div>
+    </>
   );
 }
 
+/* -------------------------------------------------------------- section */
+
 /**
- * Devices, levels, input mode and microphone processing.
+ * Devices, levels, input mode, processing, video and call preferences.
  *
- * Everything here applies live rather than on Save — the same behaviour it had
- * in the single column, kept because a level you cannot hear while you set it
- * is a level you set twice.
+ * Everything here applies live, because a level you cannot hear while you set
+ * it is a level you set twice.
  */
 export function VoiceSection({
   draftLocal,
@@ -526,14 +509,14 @@ export function VoiceSection({
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
-  /** NOVO dot on the noise-suppression row; see `lib/voice-clean.ts`. */
+  /** NOVO chip on the noise-suppression row; see `lib/voice-clean.ts`. */
   showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
+  const ids = useId();
   const musicAutoJoin = useMusicAutoJoin();
   const musicDucking = useMusicDucking();
   const canSelectOutput = supportsAudioOutputSelection();
-  const checkConnection = () => requestConnectionCheck();
   const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
   // Probed once: whether this machine has a keyboard worth binding does not
   // change while the dialog is open, and re-evaluating it per render would run
@@ -542,369 +525,397 @@ export function VoiceSection({
   const [obsHintDismissed, setObsHintDismissed] = useState(
     isObsVirtualCameraHintDismissed,
   );
-  const selectClass =
-    "h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal";
+  const micLevel = useMicLevel({
+    deviceId: draftLocal.inputDeviceId,
+    inputVolume: draftLocal.inputVolume,
+    liveAnalyser: voiceAnalyser,
+    active: metering,
+  });
+  const voiceActivity = draftLocal.inputMode === "voice-activity";
+  // The live pipeline's analyser only exists while this person is in voice.
+  const inCall = voiceAnalyser !== null;
+
+  const onBeepChange = (pttBeep: boolean) => {
+    setPttBeepEnabled(pttBeep);
+    patchLocal({ pttBeep });
+  };
+
+  const showObsHint =
+    !obsHintDismissed &&
+    isObsVirtualCameraLabel(
+      cameras.find((device) => device.deviceId === draftLocal.cameraDeviceId)
+        ?.label ?? "",
+    );
+
+  const inputId = `${ids}-input`;
+  const outputId = `${ids}-output`;
+  const noiseId = `${ids}-noise`;
+  const cameraId = `${ids}-camera`;
+  const qualityId = `${ids}-quality`;
+  const frameRateId = `${ids}-fps`;
 
   return (
-    <div className="space-y-5">
-      {devicesError && (
-        <p className="text-xs text-warning" role="status">
-          {devicesError}
-        </p>
-      )}
-
-      {/* The way out of "stuck on connecting": five checks and the fix. */}
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-4 bg-ink-3/40 px-3 py-2">
-        <p className="min-w-0 flex-1 text-xs text-paper-muted">
-          {t("connection.checkHint")}
-        </p>
+    <div className="space-y-6">
+      <SettingsHeaderActions>
+        {/* The way out of "stuck on connecting": five checks and the fix. */}
         <Button
           type="button"
-          size="sm"
           variant="secondary"
-          onClick={checkConnection}
+          size="sm"
+          onClick={() => requestConnectionCheck()}
           data-settings-check-connection
         >
+          <Wifi className="h-3.5 w-3.5" aria-hidden />
           {t("connection.check")}
         </Button>
-      </div>
+      </SettingsHeaderActions>
 
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputDevice")}
-        </span>
-        <select
-          value={draftLocal.inputDeviceId}
-          onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-          className={selectClass}
-        >
-          <option value="">{t("settings.voice.systemDefault")}</option>
-          {inputs.map((device) => (
-            <option key={device.deviceId} value={device.deviceId}>
-              {device.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SettingsGroup title={t("settings.voice.group.mic.title")}>
+        <SettingsRow
+          id="input-device"
+          label={t("settings.voice.inputDevice")}
+          htmlFor={devicesError ? undefined : inputId}
+          stacked
+          control={
+            devicesError ? (
+              <SettingsNotice tone="warning">{devicesError}</SettingsNotice>
+            ) : (
+              <SettingsSelect
+                id={inputId}
+                value={draftLocal.inputDeviceId}
+                onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
+              >
+                <option value="">{t("settings.voice.systemDefault")}</option>
+                {inputs.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </SettingsSelect>
+            )
+          }
+        />
 
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputVolume")}
-        </span>
-        <input
-          type="range"
+        <SettingsSliderRow
+          id="input-volume"
+          label={t("settings.voice.inputVolume")}
+          value={Math.round(draftLocal.inputVolume * 100)}
           min={0}
           max={200}
-          value={Math.round(draftLocal.inputVolume * 100)}
-          onChange={(e) =>
-            patchLocal({ inputVolume: Number(e.target.value) / 100 })
-          }
-          className="w-full accent-[var(--color-signal)]"
+          format={(percent) => t("settings.voice.percent", { percent })}
+          onValueChange={(percent) => patchLocal({ inputVolume: percent / 100 })}
         />
-        <span className="mt-0.5 block text-xs text-paper-muted">
-          {t("settings.voice.percent", {
-            percent: Math.round(draftLocal.inputVolume * 100),
+
+        <SettingsRow
+          id={voiceActivity ? "sensitivity" : "input-level"}
+          label={t(
+            voiceActivity ? "settings.voice.sensitivity" : "settings.voice.inputLevel",
+          )}
+          description={voiceActivity ? t("settings.voice.sensitivityHint") : undefined}
+          stacked
+          control={
+            <MicLevelMeter
+              level={micLevel}
+              inputVolume={draftLocal.inputVolume}
+              threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
+              onThresholdChange={
+                voiceActivity
+                  ? (vadThreshold) => patchLocal({ vadThreshold })
+                  : undefined
+              }
+            />
+          }
+        />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.voice.group.output.title")}>
+        <SettingsRow
+          id="output-device"
+          label={t("settings.voice.outputDevice")}
+          htmlFor={canSelectOutput ? outputId : undefined}
+          stacked={!canSelectOutput}
+          control={
+            canSelectOutput ? (
+              <SettingsSelect
+                id={outputId}
+                className="@lg:w-64"
+                value={draftLocal.outputDeviceId}
+                onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
+              >
+                <option value="">{t("settings.voice.systemDefault")}</option>
+                {outputs.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </SettingsSelect>
+            ) : (
+              <SettingsNotice tone="info">
+                {t("settings.voice.outputUnsupported", desktopContext())}
+              </SettingsNotice>
+            )
+          }
+        />
+        <SettingsSliderRow
+          id="output-volume"
+          label={t("settings.voice.outputVolume")}
+          value={Math.round(draftLocal.outputVolume * 100)}
+          min={0}
+          max={100}
+          format={(percent) => t("settings.voice.percent", { percent })}
+          onValueChange={(percent) => patchLocal({ outputVolume: percent / 100 })}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup
+        title={t("settings.voice.inputMode")}
+        // The choice grid has no slot for a line per card, so the chosen
+        // mode's one-line effect sits under the title instead.
+        description={t(
+          voiceActivity
+            ? "settings.voice.mode.activityHint"
+            : "settings.voice.mode.pttHint",
+        )}
+        surface="plain"
+      >
+        <SettingsChoiceGrid
+          label={t("settings.voice.inputMode")}
+          value={draftLocal.inputMode}
+          onValueChange={(inputMode) => patchLocal({ inputMode })}
+          columns={2}
+          options={INPUT_MODES.map((mode) => {
+            const Icon = INPUT_MODE_ICON[mode.value];
+            return {
+              value: mode.value,
+              label: t(mode.label),
+              preview: (
+                <Icon
+                  className={cn(
+                    "m-1 h-5 w-5",
+                    draftLocal.inputMode === mode.value
+                      ? "text-accent"
+                      : "text-text-tertiary",
+                  )}
+                />
+              ),
+            };
           })}
-        </span>
-      </label>
+        />
+      </SettingsGroup>
 
-      <MicLevelMeter
-        deviceId={draftLocal.inputDeviceId}
-        inputVolume={draftLocal.inputVolume}
-        liveAnalyser={voiceAnalyser}
-        active={metering}
-        threshold={
-          draftLocal.inputMode === "voice-activity"
-            ? draftLocal.vadThreshold
-            : undefined
-        }
-        onThresholdChange={
-          draftLocal.inputMode === "voice-activity"
-            ? (vadThreshold) => patchLocal({ vadThreshold })
-            : undefined
-        }
-      />
-
-      <fieldset className="space-y-2">
-        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputMode")}
-        </legend>
-        {INPUT_MODES.map((mode) => (
-          <label
-            key={mode.value}
-            className="flex cursor-pointer items-start gap-3"
-          >
-            <input
-              type="radio"
-              name="input-mode"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={draftLocal.inputMode === mode.value}
-              onChange={() => patchLocal({ inputMode: mode.value })}
+      {draftLocal.inputMode === "push-to-talk" ? (
+        <SettingsGroup title={t("settings.voice.group.ptt.title")}>
+          {canBindKey ? (
+            <PttRows
+              draftLocal={draftLocal}
+              patchLocal={patchLocal}
+              sounds={sounds}
+              onBeepChange={onBeepChange}
             />
-            <span className="min-w-0">
-              <span className="block text-sm">{t(mode.label)}</span>
-              <span className="block text-xs text-paper-muted">
-                {t(mode.description)}
+          ) : (
+            <>
+              <div>
+                <SettingsNotice tone="info" inGroup>
+                  {t("settings.voice.pttNoKeyboard")}
+                </SettingsNotice>
+              </div>
+              <PttBeepRow
+                enabled={draftLocal.pttBeep}
+                soundsOn={sounds.enabled}
+                onEnabledChange={onBeepChange}
+              />
+            </>
+          )}
+        </SettingsGroup>
+      ) : null}
+
+      <SettingsGroup
+        title={t("settings.voice.processing")}
+        description={t("settings.voice.processing.note")}
+      >
+        <SettingsRow
+          id="noise-suppression"
+          label={t("settings.voice.processing.noise")}
+          htmlFor={noiseId}
+          badge={
+            showVoiceCleanBadge ? (
+              <span className="rounded-full bg-accent-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-on-accent-soft">
+                {t("voiceClean.badge")}
               </span>
-            </span>
-          </label>
-        ))}
-      </fieldset>
-
-      {draftLocal.inputMode === "push-to-talk" &&
-        (canBindKey ? (
-          <PttControls draftLocal={draftLocal} patchLocal={patchLocal} sounds={sounds} />
-        ) : (
-          <div className="space-y-1.5">
-            <p className="text-xs text-paper-muted">
-              {t("settings.voice.pttNoKeyboard")}
-            </p>
-            <PttBeepRow
-              enabled={draftLocal.pttBeep}
-              soundsOn={sounds.enabled}
-              onEnabledChange={(pttBeep) => {
-                setPttBeepEnabled(pttBeep);
-                patchLocal({ pttBeep });
-              }}
-            />
-          </div>
-        ))}
-
-      <fieldset className="space-y-2">
-        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.processing")}
-        </legend>
-        {MIC_PROCESSING_OPTIONS.map((option) => (
-          <label
-            key={option.key}
-            className="flex cursor-pointer items-start gap-3"
-          >
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={draftLocal.micProcessing[option.key]}
+            ) : undefined
+          }
+          description={t(
+            draftLocal.micProcessing.noiseSuppression === "advanced"
+              ? "settings.voice.processing.noise.advancedHint"
+              : "settings.voice.processing.noiseHint",
+          )}
+          control={
+            <SettingsSelect
+              id={noiseId}
+              className="@lg:w-48"
+              value={draftLocal.micProcessing.noiseSuppression}
               onChange={(e) =>
                 patchLocal({
                   micProcessing: {
                     ...draftLocal.micProcessing,
-                    [option.key]: e.target.checked,
+                    noiseSuppression: parseNoiseSuppressionMode(e.target.value),
                   },
                 })
               }
-            />
-            <span className="min-w-0">
-              <span className="block text-sm">{t(option.label)}</span>
-              <span className="block text-xs text-paper-muted">
-                {t(option.description)}
-              </span>
-            </span>
-          </label>
-        ))}
-        <label className="block">
-          <span className="mb-1 flex items-center gap-2 text-sm">
-            {t("settings.voice.processing.noise")}
-            {showVoiceCleanBadge && (
-              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
-                {t("voiceClean.badge")}
-              </span>
-            )}
-          </span>
-          <select
-            value={draftLocal.micProcessing.noiseSuppression}
-            onChange={(e) =>
-              patchLocal({
-                micProcessing: {
-                  ...draftLocal.micProcessing,
-                  noiseSuppression: parseNoiseSuppressionMode(e.target.value),
-                },
-              })
-            }
-            className={selectClass}
-          >
-            {NOISE_SUPPRESSION_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {t(NOISE_SUPPRESSION_LABELS[mode])}
-              </option>
-            ))}
-          </select>
-          <span className="mt-1 block text-xs text-paper-muted">
-            {t(
-              draftLocal.micProcessing.noiseSuppression === "advanced"
-                ? "settings.voice.processing.noise.advancedHint"
-                : "settings.voice.processing.noiseHint",
-            )}
-          </span>
-        </label>
-        <p className="text-xs text-paper-muted">
-          {t("settings.voice.processing.note")}
-        </p>
-      </fieldset>
-
-      {canSelectOutput ? (
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.outputDevice")}
-          </span>
-          <select
-            value={draftLocal.outputDeviceId}
-            onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
-            className={selectClass}
-          >
-            <option value="">{t("settings.voice.systemDefault")}</option>
-            {outputs.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <p className="text-xs text-paper-muted">
-          {t("settings.voice.outputUnsupported", desktopContext())}
-        </p>
-      )}
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.outputVolume")}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={Math.round(draftLocal.outputVolume * 100)}
-          onChange={(e) =>
-            patchLocal({ outputVolume: Number(e.target.value) / 100 })
+            >
+              {NOISE_SUPPRESSION_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {t(NOISE_SUPPRESSION_LABELS[mode])}
+                </option>
+              ))}
+            </SettingsSelect>
           }
-          className="w-full accent-[var(--color-signal)]"
         />
-        <span className="mt-0.5 block text-xs text-paper-muted">
-          {t("settings.voice.percent", {
-            percent: Math.round(draftLocal.outputVolume * 100),
-          })}
-        </span>
-      </label>
-
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.cameraDevice")}
-          </span>
-          <select
-            value={draftLocal.cameraDeviceId}
-            onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
-            onFocus={() => onRevealCameras()}
-            className={selectClass}
-          >
-            <option value="">{t("settings.voice.systemDefault")}</option>
-            {cameras.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ObsVirtualCameraHint
-          show={
-            !obsHintDismissed &&
-            isObsVirtualCameraLabel(
-              cameras.find(
-                (device) => device.deviceId === draftLocal.cameraDeviceId,
-              )?.label ?? "",
-            )
+        <SettingsSwitchRow
+          id="echo-cancellation"
+          label={t("settings.voice.processing.echo")}
+          description={t("settings.voice.processing.echoHint")}
+          checked={draftLocal.micProcessing.echoCancellation}
+          onCheckedChange={(echoCancellation) =>
+            patchLocal({
+              micProcessing: { ...draftLocal.micProcessing, echoCancellation },
+            })
           }
-          onDismiss={() => {
-            dismissObsVirtualCameraHint();
-            setObsHintDismissed(true);
-          }}
         />
-      </div>
+        <SettingsSwitchRow
+          id="auto-gain"
+          label={t("settings.voice.processing.gain")}
+          description={t("settings.voice.processing.gainHint")}
+          checked={draftLocal.micProcessing.autoGainControl}
+          onCheckedChange={(autoGainControl) =>
+            patchLocal({
+              micProcessing: { ...draftLocal.micProcessing, autoGainControl },
+            })
+          }
+        />
+      </SettingsGroup>
 
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.videoQuality")}
-          </span>
-          <select
-            value={draftLocal.videoQuality}
-            onChange={(e) =>
-              patchLocal({ videoQuality: parseVideoQuality(e.target.value) })
-            }
-            className={selectClass}
-          >
-            {VIDEO_QUALITIES.map((quality) => (
-              <option key={quality} value={quality}>
-                {t(VIDEO_QUALITY_LABELS[quality])}
-              </option>
-            ))}
-          </select>
-        </label>
-        {/* The number beside the control that asks for it. Without this a
-            person can pick 720p, receive 320x240 and have no way to know. */}
-        <OutboundVideoReadout />
-        <p className="mt-1 text-xs text-paper-muted">
-          {t("settings.voice.videoQuality.hint")}
-        </p>
-      </div>
+      <SettingsGroup title={t("settings.voice.group.video.title")}>
+        <SettingsRow
+          id="camera"
+          label={t("settings.voice.cameraDevice")}
+          htmlFor={cameraId}
+          control={
+            <SettingsSelect
+              id={cameraId}
+              className="@lg:w-64"
+              value={draftLocal.cameraDeviceId}
+              onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+              onFocus={() => onRevealCameras()}
+            >
+              <option value="">{t("settings.voice.systemDefault")}</option>
+              {cameras.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label}
+                </option>
+              ))}
+            </SettingsSelect>
+          }
+        >
+          {showObsHint ? (
+            <SettingsNotice
+              tone="info"
+              action={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    dismissObsVirtualCameraHint();
+                    setObsHintDismissed(true);
+                  }}
+                >
+                  {t("settings.voice.obsVirtualCameraHint.dismiss")}
+                </Button>
+              }
+            >
+              {t("settings.voice.obsVirtualCameraHint")}
+            </SettingsNotice>
+          ) : null}
+        </SettingsRow>
+        <SettingsRow
+          id="video-quality"
+          label={t("settings.voice.videoQuality")}
+          htmlFor={qualityId}
+          description={t("settings.voice.videoQuality.hint")}
+          // The number beside the control that asks for it. Without this a
+          // person can pick 720p, receive 320x240 and have no way to know.
+          status={inCall ? <OutboundVideoReadout /> : undefined}
+          control={
+            <SettingsSelect
+              id={qualityId}
+              className="@lg:w-48"
+              value={draftLocal.videoQuality}
+              onChange={(e) =>
+                patchLocal({ videoQuality: parseVideoQuality(e.target.value) })
+              }
+            >
+              {VIDEO_QUALITIES.map((quality) => (
+                <option key={quality} value={quality}>
+                  {t(VIDEO_QUALITY_LABELS[quality])}
+                </option>
+              ))}
+            </SettingsSelect>
+          }
+        />
+        <SettingsRow
+          id="screen-frame-rate"
+          label={t("settings.voice.screenFrameRate")}
+          htmlFor={frameRateId}
+          description={t("settings.voice.screenFrameRate.hint")}
+          control={
+            <SettingsSelect
+              id={frameRateId}
+              className="@lg:w-48"
+              value={draftLocal.screenFrameRate}
+              onChange={(e) =>
+                patchLocal({
+                  screenFrameRate: parseScreenFrameRate(e.target.value),
+                })
+              }
+            >
+              {SCREEN_FRAME_RATES.map((rate) => (
+                <option key={rate} value={rate}>
+                  {t(SCREEN_FRAME_RATE_LABELS[rate])}
+                </option>
+              ))}
+            </SettingsSelect>
+          }
+        />
+      </SettingsGroup>
 
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.screenFrameRate")}
-          </span>
-          <select
-            value={draftLocal.screenFrameRate}
-            onChange={(e) =>
-              patchLocal({
-                screenFrameRate: parseScreenFrameRate(e.target.value),
-              })
-            }
-            className={selectClass}
-          >
-            {SCREEN_FRAME_RATES.map((rate) => (
-              <option key={rate} value={rate}>
-                {t(SCREEN_FRAME_RATE_LABELS[rate])}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="mt-1 text-xs text-paper-muted">
-          {t("settings.voice.screenFrameRate.hint")}
-        </p>
-      </div>
-
-      <label className="flex cursor-pointer items-center gap-3">
-        <input
-          type="checkbox"
+      <SettingsGroup title={t("settings.voice.group.call.title")}>
+        <SettingsSwitchRow
+          id="mute-on-join"
+          label={t("settings.voice.muteOnJoin")}
           checked={draftLocal.muteOnJoin}
-          onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
-          className="h-4 w-4 accent-[var(--color-signal)]"
+          onCheckedChange={(muteOnJoin) => patchLocal({ muteOnJoin })}
         />
-        <span className="text-sm">{t("settings.voice.muteOnJoin")}</span>
-      </label>
-      <label className="flex cursor-pointer items-center gap-3">
-        <input
-          type="checkbox"
+        <SettingsSwitchRow
+          id="compact-peers"
+          label={t("settings.voice.compactPeers")}
           checked={draftLocal.compactPeers}
-          onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
-          className="h-4 w-4 accent-[var(--color-signal)]"
+          onCheckedChange={(compactPeers) => patchLocal({ compactPeers })}
         />
-        <span className="text-sm">{t("settings.voice.compactPeers")}</span>
-      </label>
-      <Switch
-        checked={musicAutoJoin}
-        onCheckedChange={setMusicAutoJoin}
-        label={t("settings.voice.musicAutoJoin")}
-        description={t("settings.voice.musicAutoJoinHint")}
-        className="px-0"
-      />
-      <Switch
-        checked={musicDucking}
-        onCheckedChange={setMusicDucking}
-        label={t("settings.voice.musicDuck")}
-        description={t("settings.voice.musicDuckHint")}
-        className="px-0"
-      />
+        <SettingsSwitchRow
+          id="music-auto-join"
+          label={t("settings.voice.musicAutoJoin")}
+          description={t("settings.voice.musicAutoJoinHint")}
+          checked={musicAutoJoin}
+          onCheckedChange={setMusicAutoJoin}
+        />
+        <SettingsSwitchRow
+          id="music-duck"
+          label={t("settings.voice.musicDuck")}
+          checked={musicDucking}
+          onCheckedChange={setMusicDucking}
+        />
+      </SettingsGroup>
     </div>
   );
 }

@@ -35,8 +35,10 @@ async function openSettings(page: Page): Promise<void> {
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
+// A switch row since the Voz e vídeo redesign. Playwright's `check()` and
+// `toBeChecked()` accept `role="switch"` with `aria-checked`.
 const compactPeers = (page: Page) =>
-  page.getByRole("checkbox", { name: "Compact peer list" });
+  page.getByRole("switch", { name: "Compact peer list" });
 
 test.describe("settings sections", () => {
   test("opens on a section, and every section is reachable", async ({ page }) => {
