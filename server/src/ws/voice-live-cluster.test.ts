@@ -1029,7 +1029,9 @@ describeDb("watch party stream and state across two instances", () => {
       await a.viewerCounts.hlsViewerCounter.publishPresence();
       await b.viewerCounts.hlsViewerCounter.publishPresence();
       // The relayed stream already made each machine read the (then empty)
-      // count once, and a read is shared for a few seconds: start clean.
+      // count once, and a read is shared for a few seconds: wait for that read
+      // to land (it can still be in flight on a slow runner) and start clean.
+      await new Promise((resolve) => setTimeout(resolve, 400));
       a.viewerCounts.resetHlsPresentCacheForTests();
       b.viewerCounts.resetHlsPresentCacheForTests();
       return { a, b, host, startedAt };
@@ -1064,6 +1066,7 @@ describeDb("watch party stream and state across two instances", () => {
       // stream: seated on A, on the playlist through either machine.
       await join(a, person(7), channelUnderTest);
       await a.registry.settleVoiceRegistryWrites();
+      await new Promise((resolve) => setTimeout(resolve, 400));
       a.viewerCounts.resetHlsPresentCacheForTests();
       b.viewerCounts.resetHlsPresentCacheForTests();
       const onB = watcher(b);

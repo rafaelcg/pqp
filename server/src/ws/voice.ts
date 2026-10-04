@@ -3900,12 +3900,15 @@ async function audienceViewersFor(
     if (options.cacheOnly) {
       present = peekPresentHlsViewers(channelId, stream.startedAt);
       if (present === null) {
+        // A cold cache is warming, not a failure: it says nothing and is not
+        // counted as unavailable (that counter is for reads that failed).
         // Cold (a fresh process): warm it for the next one, off this path. One
         // coalesced read per broadcast per `HLS_PRESENCE_READ_CACHE_MS`, however
         // many sockets arrive, so a reconnect storm still asks once.
         void presentHlsViewers(channelId, stream.startedAt, {
           excludeUserIds: getRoomPeers(channelId).map((peer) => peer.userId),
         });
+        return undefined;
       }
     } else {
       present = await presentHlsViewers(channelId, stream.startedAt, {
@@ -3949,20 +3952,31 @@ async function audienceServerId(
   if (remembered && Date.now() - remembered.at < AUDIENCE_SERVER_ID_TTL_MS) {
     return { known: true, serverId: remembered.serverId };
   }
-  const resolve = async () => {
-    const serverId = await hlsServerIdFor(channelId);
-    if (audienceServerIds.size > 512) {
-      audienceServerIds.clear();
-    }
-    audienceServerIds.set(channelId, { at: Date.now(), serverId });
-    return serverId;
-  };
+  // SINGLE-FLIGHT: a reconnect wave asks for the same channel once per socket
+  // before the first answer lands, and must share one lookup, not start one each.
+  let pending = audienceServerIdInFlight.get(channelId);
+  if (!pending) {
+    pending = hlsServerIdFor(channelId)
+      .then((serverId) => {
+        if (audienceServerIds.size > 512) {
+          audienceServerIds.clear();
+  audienceServerIdInFlight.clear();
+        }
+        audienceServerIds.set(channelId, { at: Date.now(), serverId });
+        return serverId;
+      })
+      .finally(() => {
+        audienceServerIdInFlight.delete(channelId);
+      });
+    audienceServerIdInFlight.set(channelId, pending);
+  }
   if (cacheOnly) {
-    void resolve().catch(() => undefined);
+    pending.catch(() => undefined);
     return { known: false };
   }
-  return { known: true, serverId: await resolve() };
+  return { known: true, serverId: await pending };
 }
+const audienceServerIdInFlight = new Map<string, Promise<string | null>>();
 
 async function channelLiveFrame(
   channelId: string,
