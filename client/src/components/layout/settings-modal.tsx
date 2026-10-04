@@ -35,6 +35,7 @@ import {
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { AvatarPicker } from "@/components/user/avatar-picker";
@@ -121,6 +122,7 @@ import {
   type NoiseSuppressionMode,
 } from "../../lib/noise-suppression";
 import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
 import {
@@ -3706,8 +3708,25 @@ function BannerField({
     }
   }
 
+  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      void handleFile(file);
+    } else if (folder) {
+      setError(t("composer.dropFolder_one", { name: folder }));
+    }
+  }
+
   return (
-    <div className="space-y-2" data-profile-banner>
+    <FileDropZone
+      className="space-y-2"
+      data-profile-banner
+      mode={enabled && busy === null ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
         {t("settings.profile.banner")}
       </span>
@@ -3796,7 +3815,7 @@ function BannerField({
           {error}
         </p>
       )}
-    </div>
+    </FileDropZone>
   );
 }
 

@@ -7,8 +7,10 @@ import {
 } from "@pqp/shared";
 import { useEffect, useRef, useState } from "react";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { ApiError, deleteServerImage, fetchServerImageConfig } from "@/lib/api";
 import { uploadServerImage } from "@/lib/server-image-upload";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -182,8 +184,25 @@ function ImageField({
     }
   }
 
+  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      void handleFile(file);
+    } else if (folder) {
+      setError(t("composer.dropFolder_one", { name: folder }));
+    }
+  }
+
   return (
-    <div className="space-y-2" data-server-image={kind}>
+    <FileDropZone
+      className="space-y-2"
+      data-server-image={kind}
+      mode={busy === null ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
       <p className="text-xs font-semibold uppercase tracking-wide text-paper-muted">
         {label}
       </p>
@@ -244,6 +263,6 @@ function ImageField({
           {error}
         </p>
       )}
-    </div>
+    </FileDropZone>
   );
 }

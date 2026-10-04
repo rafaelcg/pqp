@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 
 const require = createRequire(import.meta.url);
-const { isAuthUrl } = require("./nav-policy.js");
+const { classifyNavigation, isAuthUrl } = require("./nav-policy.js");
 
 /**
  * The allowlist that lets sign-in finish in-window.
@@ -107,5 +107,60 @@ describe("isAuthUrl", () => {
     ]) {
       assert.equal(isAuthUrl(url, APP), false, url);
     }
+  });
+});
+
+/**
+ * A FILE DROPPED ON THE WINDOW.
+ *
+ * Chromium answers a drop that no page handler claimed by navigating to the
+ * file, and Electron reports that as `will-navigate` with a `file://` URL. The
+ * handler in main.js turns "block" into `preventDefault()`, so what keeps the
+ * app on screen is this verdict, including the case the policy used to skip:
+ * with no app origin it stopped policing at all ("the window would have
+ * nowhere to go"), and a window with nowhere to go is the one a dropped file
+ * most easily replaces.
+ */
+describe("classifyNavigation and a dropped file", () => {
+  const dropped = [
+    "file:///Users/someone/Desktop/screenshot.png",
+    "file:///C:/Users/someone/Desktop/screenshot.png",
+    "file:///home/someone/Pictures/a%20b.jpg",
+    "file://server/share/doc.pdf",
+    "filesystem:https://pqp.gg/temporary/x",
+  ];
+
+  it("blocks a navigation to a local file", () => {
+    for (const url of dropped) {
+      assert.equal(classifyNavigation(url, "https://pqp.gg"), "block", url);
+    }
+  });
+
+  it("blocks it even when no app origin could be worked out", () => {
+    for (const url of dropped) {
+      assert.equal(classifyNavigation(url, null), "block", url);
+    }
+  });
+
+  it("does not hand a local file to the system browser either", () => {
+    // "external" would shell.openExternal() it: a drop must never open the file.
+    for (const url of dropped) {
+      assert.notEqual(classifyNavigation(url, "https://pqp.gg"), "external", url);
+    }
+  });
+
+  it("still lets the app, sign-in and ordinary links behave as before", () => {
+    assert.equal(classifyNavigation("https://pqp.gg/app", "https://pqp.gg"), "allow");
+    assert.equal(
+      classifyNavigation("https://accounts.google.com/o/oauth2/auth", "https://pqp.gg"),
+      "allow",
+    );
+    assert.equal(
+      classifyNavigation("https://example.com/", "https://pqp.gg"),
+      "external",
+    );
+    // No origin and not a file: the old "do not police" answer is unchanged.
+    assert.equal(classifyNavigation("https://example.com/", null), "allow");
+    assert.equal(classifyNavigation("not a url", "https://pqp.gg"), "block");
   });
 });

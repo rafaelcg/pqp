@@ -459,11 +459,10 @@ import {
   selectionServerId,
   type Selection,
 } from "@/lib/selection";
-import {
-  filesFromDataTransfer,
-  isFileDrag,
-  loadAttachmentConfig,
-} from "@/lib/attachments";
+import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
+import { chatDropVerdict } from "@/lib/chat-file-drop";
+import type { DroppedItems } from "@/lib/file-drop";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -1951,15 +1950,7 @@ function MainAppContent({
     string | null
   >(null);
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
-  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
-  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [isAttachmentsEnabled, setIsAttachmentsEnabled] = useState(false);
-  /**
-   * `dragenter` / `dragleave` fire for every element the pointer crosses, so a
-   * boolean alone flickers off the moment the drag passes over a message. Only
-   * the count returning to zero means the drag has actually left the pane.
-   */
-  const dragDepth = useRef(0);
+  const [droppedItems, setDroppedItems] = useState<DroppedItems | null>(null);
   const [localSettings, setLocalSettings] = useState<LocalSettings>(
     defaultLocalSettings,
   );
@@ -3009,6 +3000,13 @@ function MainAppContent({
     setAuthTokenProvider(resolveToken);
   }, [resolveToken]);
 
+  // `null` until the config probe answers; unknown is not the same as off.
+  // DECLARED AFTER the token provider effect above on purpose: effects run in
+  // declaration order, and the probe's request goes out from its effect, so
+  // above that line it left with no Authorization header, answered 401, and
+  // put a console error on every boot (`theme-tokens.spec.ts` counts them).
+  const isAttachmentsEnabled = useAttachmentsEnabled();
+
   useEffect(() => {
     setLocalSettings(loadLocalSettings());
   }, []);
@@ -3024,20 +3022,6 @@ function MainAppContent({
     setPttBeepEnabled(localSettings.pttBeep);
   }, [localSettings.pttBeep]);
 
-  // Asked here as well as in the composer so the pane does not offer a drop
-  // target on a deployment that has nowhere to put the bytes. The probe itself
-  // is memoised, so this is the same answer rather than a second request.
-  useEffect(() => {
-    let active = true;
-    void loadAttachmentConfig().then((config) => {
-      if (active) {
-        setIsAttachmentsEnabled(config.enabled);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     chat.onChange(refresh);
@@ -8951,7 +8935,20 @@ function MainAppContent({
         (one) => one.channelId === voiceState.voiceChannelId,
       ) ?? null)
     : null;
-  const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
+  // Perms are only trusted once the snapshot has landed (`serverBits` is never
+  // zero for a real member), and only for server channels: a conversation has
+  // no roles to lack.
+  const canSendHere =
+    !selectedChannel ||
+    selectedChannel.kind !== "server" ||
+    perms.serverBits === 0n ||
+    perms.can(Permission.SEND_MESSAGES, selectedChannel.id);
+  const chatDrop = chatDropVerdict({
+    attachmentsEnabled: isAttachmentsEnabled,
+    channelType: selectedChannel?.type ?? "",
+    streamChat: isWatchPartySplit,
+    canSend: canSendHere,
+  });
 
   /**
    * Who the member sidebar would list, and therefore whether it exists here.
@@ -9167,52 +9164,22 @@ function MainAppContent({
   );
 
   const chatPane = selectedChannel ? (
-    <div
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+    <FileDropZone
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
-      onDragEnter={(event) => {
-        if (!canDropFiles || !isFileDrag(event.dataTransfer)) {
-          return;
-        }
-        dragDepth.current += 1;
-        setIsDraggingFiles(true);
-      }}
-      onDragOver={(event) => {
-        if (canDropFiles && isFileDrag(event.dataTransfer)) {
-          // Without this the browser navigates to the file instead of dropping.
-          event.preventDefault();
-        }
-      }}
-      onDragLeave={() => {
-        dragDepth.current = Math.max(0, dragDepth.current - 1);
-        if (dragDepth.current === 0) {
-          setIsDraggingFiles(false);
-        }
-      }}
-      onDrop={(event) => {
-        dragDepth.current = 0;
-        setIsDraggingFiles(false);
-        if (!canDropFiles) {
-          return;
-        }
-        const files = filesFromDataTransfer(event.dataTransfer);
-        if (files.length === 0) {
-          return;
-        }
-        event.preventDefault();
-        setDroppedFiles(files);
-      }}
+      mode={chatDrop.mode}
+      onDrop={setDroppedItems}
+      acceptLabel={t("chrome.dropToAttach")}
+      refuseLabel={
+        chatDrop.mode === "refuse"
+          ? chatDrop.reason === "attachmentsOff"
+            ? t("chrome.dropAttachmentsOff")
+            : t("chrome.dropCannotSend")
+          : undefined
+      }
     >
-      {isDraggingFiles && (
-        // Inert, so the drop lands on the pane below rather than on the overlay.
-        <div className="pointer-events-none absolute inset-0 z-30 m-2 flex items-center justify-center rounded-lg border-2 border-dashed border-signal bg-ink/85">
-          <p className="font-display text-lg font-bold text-signal">
-            {t("chrome.dropToAttach")}
-          </p>
-        </div>
-      )}
       {!partyOwnsHeader && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
@@ -10287,8 +10254,8 @@ function MainAppContent({
         insertText={composerInsert}
         onInsertConsumed={() => setComposerInsert(null)}
         channelId={selectedChannel.id}
-        droppedFiles={droppedFiles}
-        onDroppedFilesConsumed={() => setDroppedFiles(null)}
+        droppedItems={droppedItems}
+        onDroppedItemsConsumed={() => setDroppedItems(null)}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
@@ -10350,7 +10317,7 @@ function MainAppContent({
       />
       </CallSplit>
       </CallDockProvider>
-    </div>
+    </FileDropZone>
   ) : null;
 
   // The second half of the hand-rolled memoization declared near the top of
@@ -11072,6 +11039,10 @@ function MainAppContent({
           }
           onShowMembers={memberSidebarAvailable ? stashThreadForMembers : null}
           canModerate={canManageMessages}
+          canSend={
+            perms.serverBits === 0n ||
+            perms.can(Permission.SEND_MESSAGES, openThread.thread.parentChannelId)
+          }
           blockedAuthorIds={blockedUserIds}
           mentionCandidates={mentionCandidates}
           isLoading={threadLoading}

@@ -18,6 +18,7 @@ import {
 import { Globe } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import {
   ApiError,
@@ -559,7 +560,19 @@ export function CommunitySettingsSection({
             )}
           </div>
 
-          <div className="space-y-2">
+          <FileDropZone
+            className="space-y-2"
+            mode={uploadsOn && !formBusy ? "accept" : "off"}
+            // Same `uploadFeatured` as the button: the server is the judge of
+            // type and size here, exactly as it is for a picked file.
+            onDrop={({ files }) => {
+              if (files[0]) {
+                void uploadFeatured(files[0]);
+              }
+            }}
+            acceptLabel={t("chrome.dropImage")}
+            size="field"
+          >
             <label
               className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
               htmlFor={featuredId}
@@ -621,7 +634,7 @@ export function CommunitySettingsSection({
                 {t("communities.settings.featuredImageSet")}
               </p>
             )}
-          </div>
+          </FileDropZone>
 
           <div className="space-y-1">
             <label

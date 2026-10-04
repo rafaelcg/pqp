@@ -11,6 +11,11 @@ import {
   X,
 } from "lucide-react";
 import { useRef, useState } from "react";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
+import { useFileDropZone } from "@/hooks/use-file-drop-zone";
+import { chatDropVerdict } from "@/lib/chat-file-drop";
+import type { DroppedItems } from "@/lib/file-drop";
 import {
   MessageComposer,
   type ComposerSlashContext,
@@ -59,6 +64,12 @@ interface ThreadPanelProps {
   /** Swap the right column to the roster, keeping this thread one tap away. */
   onShowMembers?: (() => void) | null;
   canModerate: boolean;
+  /**
+   * False only when this reader is positively known to lack SEND_MESSAGES in
+   * the thread: the drop zone then refuses instead of staging uploads that
+   * could never be sent. Unknown is true.
+   */
+  canSend?: boolean;
   blockedAuthorIds: ReadonlySet<string>;
   mentionCandidates: MentionCandidate[];
   isLoading: boolean;
@@ -92,6 +103,7 @@ export function ThreadPanel({
   parentChannelName,
   onShowMembers = null,
   canModerate,
+  canSend = true,
   blockedAuthorIds,
   mentionCandidates,
   isLoading,
@@ -113,6 +125,22 @@ export function ThreadPanel({
   const { t } = useTranslation();
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  // A thread has its own composer, and so its own drop zone: a file dropped on
+  // the parent channel belongs to the parent, one dropped here to the thread.
+  const attachmentsEnabled = useAttachmentsEnabled();
+  const [droppedItems, setDroppedItems] = useState<DroppedItems | null>(null);
+  // The same verdict as the channel the thread hangs off, so a thread never
+  // takes a file its composer could not send.
+  const dropVerdict = chatDropVerdict({
+    attachmentsEnabled,
+    channelType: "text",
+    streamChat: false,
+    canSend,
+  });
+  const drop = useFileDropZone({
+    mode: dropVerdict.mode,
+    onDrop: setDroppedItems,
+  });
 
   /* Swipe right to close, the gesture the full-viewport mobile layout implies.
      Deliberately crude: one touch, mostly horizontal, far enough to be meant.
@@ -150,6 +178,7 @@ export function ThreadPanel({
   return (
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
+      {...drop.zoneProps}
       onTouchStart={(event) => {
         if (isDockedPanel()) {
           return;
@@ -173,8 +202,21 @@ export function ThreadPanel({
           onClose();
         }
       }}
-      className="flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
+      className="relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
     >
+      {drop.active && (
+        <FileDropOverlay
+          tone={dropVerdict.mode === "accept" ? "accept" : "refuse"}
+          label={
+            dropVerdict.mode === "accept"
+              ? t("chrome.dropToAttach")
+              : dropVerdict.mode === "refuse" &&
+                  dropVerdict.reason === "cannotSend"
+                ? t("chrome.dropCannotSend")
+                : t("chrome.dropAttachmentsOff")
+          }
+        />
+      )}
       {/* The header's job is orientation: which channel this hangs off, and a
           way back to it. The name is second, not first, because a thread born
           from a message carries that message AS its name — printing it loudest
@@ -370,6 +412,8 @@ export function ThreadPanel({
         }}
         onTyping={() => controller.notifyTyping()}
         channelId={thread.channelId}
+        droppedItems={droppedItems}
+        onDroppedItemsConsumed={() => setDroppedItems(null)}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
