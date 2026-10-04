@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { CircleCheck } from "lucide-react";
+import { Bug } from "lucide-react";
 import { FEEDBACK_BODY_MAX_LENGTH, FEEDBACK_KINDS, type FeedbackKind } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  SettingsActionRow,
   SettingsGroup,
-  SettingsInlineStatus,
   SettingsNotice,
+  SettingsResult,
   SettingsRow,
 } from "@/components/settings/kit";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -28,46 +29,52 @@ export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null 
   const [error, setError] = useState<string | null>(null);
   const messageId = useId();
   const counterId = useId();
+  const noteId = useId();
+  const paneRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
-  const sentRef = useRef<HTMLDivElement>(null);
-  // Enviar unmounts when the item lands, so focus would fall to the page.
-  // Hand it to "Enviar outro", and back to the message after a reset.
-  const focusAfter = useRef<"again" | "message" | null>(null);
+  const sendRef = useRef<HTMLButtonElement>(null);
+  // Enviar is disabled while the item is in flight, so focus would fall to the
+  // page. After a send, hand it to the thanks line (the result is not a live
+  // region, so focus is what reads it); after a failure, back to Enviar once
+  // it is enabled again; after "Enviar outro", to the message.
+  const focusAfter = useRef<"result" | "send" | "message" | null>(null);
 
   useEffect(() => {
-    if (focusAfter.current === "again") {
-      sentRef.current?.querySelector("button")?.focus();
+    if (sending) return;
+    if (focusAfter.current === "result") {
+      paneRef.current
+        ?.querySelector<HTMLElement>("[data-settings-result-title]")
+        ?.focus();
+    } else if (focusAfter.current === "send") {
+      sendRef.current?.focus();
     } else if (focusAfter.current === "message") {
       messageRef.current?.focus();
     }
     focusAfter.current = null;
-  }, [sent]);
+  }, [sent, sending]);
 
   if (sent) {
     return (
-      <div className="space-y-6">
+      <div ref={paneRef} className="space-y-6">
         <SettingsGroup>
-          <div
-            ref={sentRef}
-            className="flex flex-col items-center gap-3 px-4 py-6 text-center"
-          >
-            <CircleCheck aria-hidden className="h-5 w-5 text-success" />
-            <p role="status" className="text-sm text-pretty text-text">
-              {t("settings.feedback.done")}
-            </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                focusAfter.current = "message";
-                setSent(false);
-                setBody("");
-                setError(null);
-              }}
-            >
-              {t("settings.feedback.again")}
-            </Button>
-          </div>
+          <SettingsResult
+            tone="success"
+            title={t("settings.feedback.done")}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  focusAfter.current = "message";
+                  setSent(false);
+                  setBody("");
+                  setError(null);
+                }}
+              >
+                {t("settings.feedback.again")}
+              </Button>
+            }
+          />
         </SettingsGroup>
       </div>
     );
@@ -82,9 +89,10 @@ export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null 
         body: body.trim(),
         context: buildFeedbackContext(voice),
       });
-      focusAfter.current = "again";
+      focusAfter.current = "result";
       setSent(true);
     } catch {
+      focusAfter.current = "send";
       setError(t("settings.feedback.error"));
     } finally {
       setSending(false);
@@ -97,7 +105,7 @@ export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null 
   }));
 
   return (
-    <div className="space-y-6">
+    <div ref={paneRef} className="space-y-6">
       <SettingsGroup>
         <SettingsRow
           id="kind"
@@ -141,27 +149,30 @@ export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null 
             </>
           }
         />
-        <SettingsRow
-          id="send"
-          label={t("settings.feedback.attachedLabel")}
-          description={t("settings.feedback.attached")}
-          status={
-            error ? (
-              <SettingsInlineStatus state={{ kind: "error", message: error }} />
-            ) : null
-          }
-          control={
-            <Button
-              size="sm"
-              disabled={sending || body.trim().length === 0}
-              onClick={() => void submit()}
-            >
-              {sending ? t("settings.feedback.sending") : t("settings.feedback.send")}
-            </Button>
-          }
-        />
+        {/* The action row has no status slot, so a failed send is the row
+            right above Enviar: a danger notice (role="alert", CircleX). */}
+        {error ? (
+          <SettingsNotice tone="danger" inGroup>
+            {error}
+          </SettingsNotice>
+        ) : null}
+        <SettingsActionRow id="send" note={t("settings.feedback.attached")} noteId={noteId}>
+          <Button
+            ref={sendRef}
+            size="sm"
+            aria-describedby={noteId}
+            disabled={sending || body.trim().length === 0}
+            onClick={() => void submit()}
+          >
+            {sending ? t("settings.feedback.sending") : t("settings.feedback.send")}
+          </Button>
+        </SettingsActionRow>
       </SettingsGroup>
-      <SettingsNotice tone="info">{t("settings.feedback.intro")}</SettingsNotice>
+      <SettingsGroup>
+        <SettingsNotice tone="info" icon={Bug} role="note" inGroup>
+          {t("settings.feedback.intro")}
+        </SettingsNotice>
+      </SettingsGroup>
     </div>
   );
 }
