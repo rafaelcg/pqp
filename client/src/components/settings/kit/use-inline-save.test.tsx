@@ -214,3 +214,35 @@ describe("SettingsInlineStatus", () => {
     expect(html).toContain("Não deu.");
   });
 });
+
+describe("useInlineSave ordering", () => {
+  it("sends writes one at a time and skips one a newer run overtook", async () => {
+    const first = deferred();
+    const calls: string[] = [];
+    let p1!: Promise<void>, p2!: Promise<void>, p3!: Promise<void>;
+    act(() => {
+      p1 = current!.run(() => {
+        calls.push("a");
+        return first.promise;
+      }, "falhou");
+      p2 = current!.run(async () => {
+        calls.push("b");
+      }, "falhou");
+      p3 = current!.run(async () => {
+        calls.push("c");
+      }, "falhou");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Only the first write is out; the next waits for it.
+    expect(calls).toEqual(["a"]);
+    await act(async () => {
+      first.resolve();
+      await Promise.all([p1, p2, p3]);
+    });
+    // "b" was overtaken by "c" while it waited, so it never went out.
+    expect(calls).toEqual(["a", "c"]);
+    expect(state().kind).toBe("saved");
+  });
+});

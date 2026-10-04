@@ -54,6 +54,13 @@ export interface UseInlineSaveOptions {
  * Only the latest `run` reports. A slow first request that lands after a second
  * one started must not paint "Salvo" over the second one's spinner, or flip an
  * error back to saved. Nothing is reported after unmount.
+ *
+ * Writes also run one at a time, in order. Two requests in flight for the same
+ * setting can reach the server in either order (production runs two API
+ * machines), so the older one could win there while the screen shows the newer
+ * one. A run waits for the one before it, and a run that a newer one overtook
+ * while it waited is skipped: only the last choice is ever sent after the
+ * current write.
  */
 export function useInlineSave({
   savingLabel,
@@ -66,6 +73,10 @@ export function useInlineSave({
   const latest = useRef(0);
   const mounted = useRef(true);
   const timer = useRef<number | null>(null);
+  // The last write sent or queued, so the next run can wait for it, and how
+  // many have not settled yet (none: a run goes out at once).
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+  const unsettled = useRef(0);
   // Read at run time, so a caller passing a fresh label each render does not
   // hand out a new `run`.
   const options = useRef({ savingLabel, showSaved });
@@ -88,8 +99,26 @@ export function useInlineSave({
       }
       const { savingLabel: label, showSaved: saved } = options.current;
       setState(label ? { kind: "saving", label } : { kind: "saving" });
+      const write =
+        unsettled.current === 0
+          ? fn()
+          : chain.current.then(() =>
+              // Overtaken while waiting: the newer run sends the value that
+              // matters.
+              ticket === latest.current ? fn() : undefined,
+            );
+      unsettled.current += 1;
+      // The next run waits on this one whatever its outcome.
+      chain.current = write.then(
+        () => {
+          unsettled.current -= 1;
+        },
+        () => {
+          unsettled.current -= 1;
+        },
+      );
       try {
-        await fn();
+        await write;
         if (!mounted.current || ticket !== latest.current) return;
         if (!saved) {
           setState(IDLE);
