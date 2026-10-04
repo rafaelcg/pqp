@@ -11,6 +11,13 @@ export interface SettingsShellValue {
    */
   openSection: (section: SettingsSectionId, rowId?: string) => void;
   /**
+   * The last profile save failed because the public link is somebody else's
+   * (the handle claim's 409), already localized. Perfil draws it under the
+   * link field. Cleared when the link draft changes, on discard and on a
+   * successful save. Optional so a test can build the value without it.
+   */
+  profileHandleError?: string | null;
+  /**
    * Where the pane header's actions render. Internal: tabs use
    * `SettingsHeaderActions`, never this.
    */
@@ -34,9 +41,10 @@ export const SettingsShellContext = createContext<SettingsShellValue>(NOOP_SHELL
 export function useSettingsShell(): Pick<
   SettingsShellValue,
   "profileDirty" | "openSection"
-> {
-  const { profileDirty, openSection } = useContext(SettingsShellContext);
-  return { profileDirty, openSection };
+> & { profileHandleError: string | null } {
+  const { profileDirty, openSection, profileHandleError } =
+    useContext(SettingsShellContext);
+  return { profileDirty, openSection, profileHandleError: profileHandleError ?? null };
 }
 
 /**

@@ -80,4 +80,34 @@ describe("settings row registry", () => {
   it("answers null for a row that never rendered", () => {
     expect(findSettingsRow("voice", "missing")).toBeNull();
   });
+
+  it("leaves out a row that opts out, and still renders it", () => {
+    const html = renderToStaticMarkup(
+      <SettingsSectionContext.Provider value="privacy">
+        <SettingsRow id="dm-privacy" label="Quem pode te mandar DM" />
+        <SettingsRow
+          id="blocked-0b8c"
+          label="Fulano"
+          searchable={false}
+          data-blocked-user="0b8c"
+        />
+        <SettingsSliderRow
+          id="dynamic-slider"
+          label="Volume de Fulano"
+          searchable={false}
+          value={1}
+          min={0}
+          max={2}
+          format={String}
+          onValueChange={() => undefined}
+        />
+      </SettingsSectionContext.Provider>,
+    );
+    expect(html).toContain('data-settings-row="blocked-0b8c"');
+    expect(html).toContain('data-blocked-user="0b8c"');
+    expect(html).toContain("Fulano");
+    expect(listSettingsRows("privacy").map((row) => row.id)).toEqual([
+      "dm-privacy",
+    ]);
+  });
 });

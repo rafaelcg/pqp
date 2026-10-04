@@ -26,8 +26,15 @@ const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
 /** `ADMIN_METRICS_TOKEN` of the suite's server, see `playwright.config.ts`. */
 const ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
-/** Where `playwright.config.ts` points the API's translation calls. */
-const STUB_PORT = Number(process.env.E2E_TRANSLATION_STUB_PORT ?? 3199);
+/**
+ * Where `playwright.config.ts` points the API's translation calls. The config
+ * writes the resolved port into the environment; the fallback repeats its
+ * rule (server port plus 98) for a run that bypasses it.
+ */
+const STUB_PORT = Number(
+  process.env.E2E_TRANSLATION_STUB_PORT ??
+    Number(process.env.E2E_SERVER_PORT ?? 3101) + 98,
+);
 const STAMP = Date.now().toString(36);
 const OWNER = `tr-owner-${STAMP}`;
 const READER = `tr-reader-${STAMP}`;

@@ -1,13 +1,16 @@
 import { Check, Copy } from "lucide-react";
-import { useEffect, useState } from "react";
 import { BUILD_ID, BUILD_TIME, DEV_BUILD_ID } from "@/lib/build-info";
 import { isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { SETTINGS_FOCUS } from "@/components/settings/kit/classes";
+import {
+  SETTINGS_COPIED_MS,
+  useCopyText,
+} from "@/components/settings/kit/copy-button";
 import { cn } from "@/lib/utils";
 
-/** How long "Copiado" replaces the line after a copy. */
-export const BUILD_LINE_COPIED_MS = 1500;
+/** How long "Copiado" replaces the line after a copy. Kept for callers. */
+export const BUILD_LINE_COPIED_MS = SETTINGS_COPIED_MS;
 
 function pad(value: number): string {
   return String(value).padStart(2, "0");
@@ -36,48 +39,55 @@ export function formatBuildLine({
 }
 
 /**
- * The build line as a button that copies itself. Shown under the account card
- * in the rail and in Ajuda's "Versão" row, so whoever writes to the team can
- * paste exactly what they are running.
+ * The build line as a button that copies itself, so whoever writes to the team
+ * can paste exactly what they are running.
  *
- * No clipboard (plain http, an old webview): the click does nothing and the
- * line stays selectable text.
+ * - `rail` (default): under the account card in the rail. Small and quiet;
+ *   "Copiado" replaces the line for a moment after a copy.
+ * - `row`: a row control, Ajuda's "Versão do app". Monospace, the line stays
+ *   put and only the icon turns into a check, and it wraps rather than
+ *   truncating on a phone.
+ *
+ * The icon sits after the text in both. No clipboard (plain http, an old
+ * webview): the click does nothing and the line stays selectable text.
  */
-export function SettingsBuildLine({ className }: { className?: string }) {
+export function SettingsBuildLine({
+  className,
+  variant = "rail",
+}: {
+  className?: string;
+  variant?: "rail" | "row";
+}) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
   const line = formatBuildLine();
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), BUILD_LINE_COPIED_MS);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+  const { copied, copy } = useCopyText(line);
+  const row = variant === "row";
 
   return (
     <button
       type="button"
-      onClick={() => {
-        void navigator.clipboard
-          ?.writeText(line)
-          .then(() => setCopied(true))
-          .catch(() => undefined);
-      }}
+      onClick={copy}
       aria-label={t("settings.rail.copyBuild", { build: line })}
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-0.5 text-left text-[11px] tabular-nums text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:text-text",
+        "inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-control)] text-left tabular-nums transition-colors duration-[var(--duration-fast)] hover:text-text",
+        row
+          ? "px-1 py-0.5 font-mono text-xs text-text-secondary"
+          : "px-2 py-0.5 text-[11px] text-text-tertiary",
         SETTINGS_FOCUS,
         className,
       )}
     >
-      {copied ? (
-        <Check aria-hidden className="h-3 w-3 shrink-0 animate-icon-swap text-success" />
-      ) : (
-        <Copy aria-hidden className="h-3 w-3 shrink-0" />
-      )}
-      <span aria-hidden className="min-w-0 truncate">
-        {copied ? t("settings.rail.copied") : line}
+      <span aria-hidden className={cn("min-w-0", row ? "break-all" : "truncate")}>
+        {copied && !row ? t("settings.rail.copied") : line}
       </span>
+      {copied ? (
+        <Check
+          aria-hidden
+          className={cn("shrink-0 animate-icon-swap text-success", row ? "h-3.5 w-3.5" : "h-3 w-3")}
+        />
+      ) : (
+        <Copy aria-hidden className={cn("shrink-0", row ? "h-3.5 w-3.5" : "h-3 w-3")} />
+      )}
       {/* Always mounted, so the change is announced: a live region that
           appears together with its text is often not read at all. */}
       <span role="status" className="sr-only">
