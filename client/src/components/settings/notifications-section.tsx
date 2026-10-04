@@ -291,8 +291,9 @@ function PushRow({
       }
       checked={on}
       // Blocked: the warning on the row above says why, and a switch that can
-      // only fail would add a second message about the same block.
-      disabled={!ready || permission === "denied"}
+      // only fail would add a second message about the same block. Turning an
+      // existing subscription off needs no permission, so that stays possible.
+      disabled={!ready || (permission === "denied" && !on)}
       onCheckedChange={() => void push.toggle()}
       status={
         notice ?? (status ? <SettingsInlineStatus state={status} /> : null)
@@ -338,6 +339,8 @@ function DirectMessagesGroup({
   // (which can resolve after that click) knows not to stomp a choice
   // already in flight with whatever the server answered a moment earlier.
   const touchedRef = useRef(false);
+  const dmTicket = useRef(0);
+  const dmChain = useRef<Promise<unknown>>(Promise.resolve());
 
   useEffect(() => {
     let cancelled = false;
@@ -360,9 +363,21 @@ function DirectMessagesGroup({
     touchedRef.current = true;
     const next = !dmDetails;
     setDmDetails(next);
-    void setPushDmDetails(next)
-      .then((saved) => setDmDetails(saved.dmDetails))
-      .catch(() => setDmDetails(!next));
+    // One write at a time, and only the newest choice reports back: two
+    // requests in flight can land in either order, and an older answer (or
+    // its rollback) must not overwrite a newer click.
+    const ticket = ++dmTicket.current;
+    const write = dmChain.current.then(() =>
+      ticket === dmTicket.current ? setPushDmDetails(next) : null,
+    );
+    dmChain.current = write.catch(() => undefined);
+    void write
+      .then((saved) => {
+        if (saved && ticket === dmTicket.current) setDmDetails(saved.dmDetails);
+      })
+      .catch(() => {
+        if (ticket === dmTicket.current) setDmDetails(!next);
+      });
   };
 
   return (
