@@ -420,7 +420,10 @@ export function Dialog({
           <div
             className={cn(
               "min-h-0 flex-1 overscroll-contain",
-              fill ? "overflow-hidden" : "overflow-y-auto",
+              // `clip`, not `hidden`: a hidden box can still be scrolled from
+              // code, and focusing a control mid-animation (the settings save
+              // bar) scrolled the whole body away with no way back.
+              fill ? "overflow-clip" : "overflow-y-auto",
             )}
           >
             {children}
