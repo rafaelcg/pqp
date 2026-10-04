@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Lock } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, useRovingRadio } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
@@ -20,10 +28,10 @@ import { queuePreferenceSync } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 import {
   SETTINGS_FOCUS,
+  SETTINGS_TRANSITION,
   SettingsChoiceGrid,
   SettingsGroup,
   SettingsInlineStatus,
-  SettingsPreview,
   SettingsRow,
   SettingsSwitchRow,
   useSettingsShell,
@@ -79,10 +87,45 @@ const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
 ];
 
 /**
- * Theme is not part of `LocalSettings`: it applies on click and persists under
- * its own key so the boot script can read it without parsing the audio blob.
- * Night is a dark-only look, so it shows dark and disables the other two; the
- * description says why.
+ * On a phone every option is at least 44px tall. The shared `RadioGroup` draws
+ * 36 to 40px there, and takes no per-option class, so the target comes from the
+ * group: this selector wins over the button's own height by specificity.
+ */
+const PHONE_TARGETS = "max-sm:[&>[role=radio]]:h-11";
+
+/**
+ * Where "the mode before Night" is remembered. Night pins the mode to dark and
+ * the theme store writes that over the account's choice, so without this note
+ * leaving Night would leave a person who used Light (or Automático) on Dark.
+ * Local to this browser on purpose: another device has its own history.
+ */
+export const MODE_BEFORE_NIGHT_KEY = "pqp:mode-before-night";
+
+export function rememberModeBeforeNight(mode: ThemePreference): void {
+  try {
+    localStorage.setItem(MODE_BEFORE_NIGHT_KEY, mode);
+  } catch {
+    // Remembering is a convenience; leaving Night then stays on Dark.
+  }
+}
+
+/** The remembered mode, once. Reading it forgets it. */
+export function takeModeBeforeNight(): ThemePreference | null {
+  try {
+    const raw = localStorage.getItem(MODE_BEFORE_NIGHT_KEY);
+    localStorage.removeItem(MODE_BEFORE_NIGHT_KEY);
+    return raw === "light" || raw === "dark" || raw === "system" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mode (claro, escuro, automático). Not part of `LocalSettings`: it applies on
+ * click and persists under its own key so the boot script can read it without
+ * parsing the audio blob. Night is a dark-only look, so it shows dark and locks
+ * the other two. A locked option stays focusable by pointer and explains
+ * itself, instead of being a dead button.
  */
 function BrightnessRow() {
   const { t } = useTranslation();
@@ -101,11 +144,7 @@ function BrightnessRow() {
               : "settings.appearance.resolved.dark",
           ),
         })
-      : t(
-          preference === "light"
-            ? "settings.appearance.themeAlwaysLight"
-            : "settings.appearance.themeAlwaysDark",
-        );
+      : t("settings.appearance.themeHint");
 
   return (
     <SettingsRow
@@ -113,7 +152,7 @@ function BrightnessRow() {
       label={t("settings.appearance.theme")}
       description={description}
       control={
-        <RadioGroup
+        <LockableSegmented
           label={t("settings.appearance.theme")}
           value={shown}
           onValueChange={(next) => {
@@ -121,14 +160,128 @@ function BrightnessRow() {
               setPreference(next);
             }
           }}
+          lockedHint={t("settings.appearance.themeNightTip")}
           options={THEME_OPTIONS.map((option) => ({
             value: option.value,
             label: t(option.label),
-            disabled: nightLocked && option.value !== "dark",
+            locked: nightLocked && option.value !== "dark",
           }))}
         />
       }
     />
+  );
+}
+
+/**
+ * A segmented control whose locked options say why. Same roles and keyboard
+ * model as `RadioGroup` (the group and each radio keep their names, the arrows
+ * skip locked options), but a locked option is `aria-disabled` rather than
+ * `disabled`: it still takes the pointer, wears a lock, and shows a tip on
+ * hover, focus or tap. `RadioGroup` has no slot for any of that, so it lives
+ * here.
+ */
+function LockableSegmented<T extends string>({
+  label,
+  value,
+  onValueChange,
+  options,
+  lockedHint,
+}: {
+  label: string;
+  value: T;
+  onValueChange: (next: T) => void;
+  options: { value: T; label: string; locked: boolean }[];
+  lockedHint: string;
+}) {
+  const baseId = useId();
+  const [tipFor, setTipFor] = useState<T | null>(null);
+  const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { onKeyDown, tabIndexFor } = useRovingRadio(
+    options.map((option) => option.value),
+    value,
+    onValueChange,
+    (v) => Boolean(options.find((option) => option.value === v)?.locked),
+  );
+
+  useEffect(
+    () => () => {
+      if (tipTimer.current) {
+        clearTimeout(tipTimer.current);
+      }
+    },
+    [],
+  );
+
+  function showTip(option: T) {
+    // Touch has no hover, so a tap on a locked option shows the tip for a moment.
+    setTipFor(option);
+    if (tipTimer.current) {
+      clearTimeout(tipTimer.current);
+    }
+    tipTimer.current = setTimeout(() => setTipFor(null), 2500);
+  }
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      // Each cell is as wide as its label plus the lock, never cut: the equal
+      // cells of `RadioGroup` would shorten "Automático" once it wears a lock.
+      className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5"
+    >
+      {options.map((option, index) => {
+        const checked = option.value === value;
+        const tipId = `${baseId}-${index}-tip`;
+        return (
+          <span key={option.value} className="group/option relative flex shrink-0">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              aria-disabled={option.locked || undefined}
+              aria-describedby={option.locked ? tipId : undefined}
+              tabIndex={tabIndexFor(option.value)}
+              onClick={() => {
+                if (option.locked) {
+                  showTip(option.value);
+                } else if (!checked) {
+                  onValueChange(option.value);
+                }
+              }}
+              className={cn(
+                "inline-flex h-11 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3 text-sm whitespace-nowrap sm:h-8",
+                SETTINGS_TRANSITION,
+                SETTINGS_FOCUS,
+                checked ? "bg-surface-2 font-medium text-text" : "text-text-tertiary",
+                !checked && !option.locked && "hover:text-text",
+                option.locked && "cursor-not-allowed opacity-45",
+              )}
+            >
+              {option.locked ? (
+                <Lock aria-hidden className="h-3 w-3 shrink-0" strokeWidth={2} />
+              ) : null}
+              {option.label}
+            </button>
+            {option.locked ? (
+              <span
+                id={tipId}
+                role="tooltip"
+                className={cn(
+                  "elevation-3 pointer-events-none absolute top-full z-10 mt-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs whitespace-nowrap text-text",
+                  index === 0 ? "left-0" : "right-0",
+                  tipFor === option.value
+                    ? "block"
+                    : "hidden group-hover/option:block group-focus-within/option:block",
+                )}
+              >
+                {lockedHint}
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -154,22 +307,56 @@ const LOOK_OPTIONS: {
 function LookRow() {
   const { t } = useTranslation();
   const { appearance, setAppearance } = useAppearance();
+  const { preference, resolved, setPreference } = useTheme();
+  const { preference: accentPreference } = useAccentHue();
+  // The miniatures are drawn the way the app would look after the pick: in the
+  // current mode and, when there is one, in the person's own accent. Night is
+  // dark whatever the mode is.
+  const mode = appearance === "night" ? "dark" : resolved;
+  const customAccent = accentPreference !== "default";
+
+  function choose(next: AppearancePreference) {
+    if (next === appearance) {
+      return;
+    }
+    if (next === "night") {
+      // Choosing Night pins the mode to dark. Note what it was first.
+      rememberModeBeforeNight(preference);
+      setAppearance(next);
+      return;
+    }
+    setAppearance(next);
+    if (appearance === "night") {
+      const before = takeModeBeforeNight();
+      if (before && before !== "dark") {
+        setPreference(before);
+      }
+    }
+  }
+
   return (
     <SettingsRow
       id="look"
       label={t("settings.appearance.preset")}
+      description={t("settings.appearance.presetHint")}
       stacked
       control={
         <SettingsChoiceGrid
           label={t("settings.appearance.preset")}
           value={appearance}
-          onValueChange={setAppearance}
+          onValueChange={choose}
           columns={4}
           options={LOOK_OPTIONS.map((option) => ({
             value: option.value,
             label: t(option.label),
             badge: option.badge ? t(option.badge) : undefined,
-            preview: <LookMiniature look={option.value} />,
+            preview: (
+              <LookMiniature
+                look={option.value}
+                mode={mode}
+                customAccent={customAccent}
+              />
+            ),
           }))}
         />
       }
@@ -178,22 +365,53 @@ function LookRow() {
 }
 
 /**
- * Miniature app chrome in the look's own static swatches. The drawing is the
- * `appearance-preview*` recipe in `index.css`; only the four colours vary.
+ * Miniature app chrome in the look's own swatches. The drawing is the
+ * `appearance-preview*` recipe in `index.css`; only the colours vary.
+ *
+ * The swatches are dark. A light miniature is the same swatch mixed toward
+ * white (and its ink flipped to the near-black rail), so nothing here is a new
+ * colour, only a mix of ones the stylesheet already defines. A custom accent
+ * wears the live accent token, which already follows the mode.
  */
-function LookMiniature({ look }: { look: AppearancePreference }) {
+function LookMiniature({
+  look,
+  mode,
+  customAccent,
+}: {
+  look: AppearancePreference;
+  mode: "light" | "dark";
+  customAccent: boolean;
+}) {
+  const light = mode === "light" && look !== "night";
+  const swatch = (part: string) => `var(--swatch-${look}-${part})`;
+  const toward = (part: string, share: number) =>
+    `color-mix(in oklch, ${swatch(part)} ${share}%, white)`;
+  // The live accent token follows the page's mode, so it only suits a card
+  // drawn in that same mode (Night stays dark on a light page).
+  const accent =
+    customAccent && (light ? "light" : "dark") === mode
+      ? "var(--color-accent)"
+      : light
+        ? `color-mix(in oklch, ${swatch("accent")} 62%, black)`
+        : swatch("accent");
+  const style = (
+    light
+      ? ({
+          "--preview-rail": toward("rail", 18),
+          "--preview-list": toward("list", 12),
+          "--preview-surface": toward("surface", 5),
+          "--preview-accent": accent,
+          "--swatch-ink": "var(--swatch-signal-rail)",
+        } as CSSProperties)
+      : ({
+          "--preview-rail": swatch("rail"),
+          "--preview-list": swatch("list"),
+          "--preview-surface": swatch("surface"),
+          "--preview-accent": accent,
+        } as CSSProperties)
+  );
   return (
-    <span
-      className="appearance-preview"
-      style={
-        {
-          "--preview-rail": `var(--swatch-${look}-rail)`,
-          "--preview-list": `var(--swatch-${look}-list)`,
-          "--preview-surface": `var(--swatch-${look}-surface)`,
-          "--preview-accent": `var(--swatch-${look}-accent)`,
-        } as CSSProperties
-      }
-    >
+    <span className="appearance-preview" style={style}>
       <span className="appearance-preview-rail" />
       <span className="appearance-preview-list">
         <span className="appearance-preview-channel" />
@@ -210,28 +428,60 @@ function LookMiniature({ look }: { look: AppearancePreference }) {
   );
 }
 
+/** The eight suggested hues, by the name a person would give the colour. */
+const SWATCH_NAMES: Record<(typeof ACCENT_SWATCHES)[number], MessageKey> = {
+  15: "settings.appearance.swatch.red",
+  80: "settings.appearance.swatch.orange",
+  125: "settings.appearance.swatch.green",
+  180: "settings.appearance.swatch.teal",
+  210: "settings.appearance.swatch.cyan",
+  255: "settings.appearance.swatch.blue",
+  300: "settings.appearance.swatch.purple",
+  340: "settings.appearance.swatch.pink",
+};
+
+/** Hue 360 is hue 0, so the slider stops one short of the wrap. */
+const ACCENT_SLIDER_MAX = 359;
+
+/** The accent radios: "Do visual" first, then the eight named hues. */
+const ACCENT_CHOICES: readonly (AccentHuePreference)[] = [
+  "default",
+  ...ACCENT_SWATCHES,
+];
+
 /**
- * The accent. A hue slider for any colour, then the eight suggested hues as one
- * radio group, then "Usar a do visual", which only shows while a custom accent
- * is set (the same rule as the chat reset). The reset sits outside the
- * radiogroup's key handler, so an arrow pressed on it never picks a swatch.
+ * The accent. A hue slider for any colour, with its value spelled out beside
+ * it, then one radio group: "Do visual" (no custom accent) and the eight named
+ * hues. "Voltar à cor do visual" only shows while a custom accent is set. The
+ * reset sits outside the radiogroup's key handler, so an arrow pressed on it
+ * never picks a swatch.
  */
 function AccentRow() {
   const { t } = useTranslation();
   const { appearance } = useAppearance();
   const { preference, setPreference } = useAccentHue();
-  const sliderHue = effectiveAccentHue(preference, appearance);
+  const sliderHue = Math.min(
+    ACCENT_SLIDER_MAX,
+    effectiveAccentHue(preference, appearance),
+  );
   const isCustom = preference !== "default";
   const sliderRef = useRef<HTMLDivElement>(null);
-  const checkedSwatch = typeof preference === "number" ? preference : -1;
-  const { onKeyDown, tabIndexFor } = useRovingRadio<number>(
-    ACCENT_SWATCHES,
-    checkedSwatch,
-    (hue) => setPreference(hue as AccentHuePreference, { immediate: true }),
+  const { onKeyDown, tabIndexFor } = useRovingRadio<AccentHuePreference>(
+    ACCENT_CHOICES,
+    preference,
+    (choice) => setPreference(choice, { immediate: true }),
   );
 
+  const swatchName = (hue: number): string | null =>
+    hue in SWATCH_NAMES
+      ? t(SWATCH_NAMES[hue as keyof typeof SWATCH_NAMES])
+      : null;
+  const valueText = isCustom
+    ? (swatchName(preference) ?? t("settings.appearance.accentHue", { hue: preference }))
+    : t("settings.appearance.accentFromLook");
+
   function reset() {
-    setPreference("default");
+    setPreference("default", { immediate: true });
     // The button hides itself, so focus would drop to the page. The slider
     // shows what the reset did, so focus lands there.
     requestAnimationFrame(() => {
@@ -251,46 +501,85 @@ function AccentRow() {
       stacked
       control={
         <div className="flex flex-col gap-3">
-          <div ref={sliderRef}>
-            <Slider
-              variant="hue"
-              min={0}
-              max={360}
-              value={sliderHue}
-              aria-label={t("settings.appearance.accent")}
-              aria-valuetext={t("settings.appearance.accentHue", { hue: sliderHue })}
-              onValueChange={(hue) => setPreference(hue as AccentHuePreference)}
-            />
+          <div className="flex items-center gap-3">
+            <div ref={sliderRef} className="min-w-0 flex-1">
+              <Slider
+                variant="hue"
+                min={0}
+                max={ACCENT_SLIDER_MAX}
+                value={sliderHue}
+                aria-label={t("settings.appearance.accent")}
+                aria-valuetext={
+                  isCustom
+                    ? valueText
+                    : `${valueText}, ${t("settings.appearance.accentHue", { hue: sliderHue })}`
+                }
+                onValueChange={(hue) => setPreference(hue as AccentHuePreference)}
+              />
+            </div>
+            <span
+              aria-hidden
+              className="w-20 shrink-0 truncate text-right text-xs text-text-secondary"
+            >
+              {valueText}
+            </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 max-sm:gap-3">
             <div
               role="radiogroup"
               aria-label={t("settings.appearance.accent")}
               onKeyDown={onKeyDown}
-              className="flex flex-wrap items-center gap-2"
+              className="flex flex-wrap items-center gap-2 max-sm:gap-3"
             >
-              {ACCENT_SWATCHES.map((hue) => (
-                <button
-                  key={hue}
-                  type="button"
-                  role="radio"
-                  aria-label={t("settings.appearance.accentHue", { hue })}
-                  aria-checked={preference === hue}
-                  tabIndex={tabIndexFor(hue)}
-                  onClick={() => setPreference(hue, { immediate: true })}
-                  className={cn(
-                    "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-                    SETTINGS_FOCUS,
-                    preference === hue
-                      ? "border-text"
-                      : "border-transparent hover:border-border-strong",
-                  )}
-                  style={{ "--swatch-hue": String(hue) } as CSSProperties}
-                />
-              ))}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!isCustom}
+                tabIndex={tabIndexFor("default")}
+                onClick={() => setPreference("default", { immediate: true })}
+                className={cn(
+                  "relative inline-flex h-7 items-center gap-1.5 rounded-full border py-0 pr-2.5 pl-1.5 text-xs max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']",
+                  SETTINGS_TRANSITION,
+                  SETTINGS_FOCUS,
+                  !isCustom
+                    ? "border-accent bg-accent-soft font-medium text-on-accent-soft"
+                    : "border-border text-text-secondary hover:bg-surface-2 hover:text-text",
+                )}
+              >
+                <span aria-hidden className="h-4 w-4 rounded-full bg-accent" />
+                {t("settings.appearance.accentFromLook")}
+              </button>
+              {ACCENT_SWATCHES.map((hue) => {
+                const name = t(SWATCH_NAMES[hue]);
+                return (
+                  <button
+                    key={hue}
+                    type="button"
+                    role="radio"
+                    aria-label={name}
+                    title={name}
+                    aria-checked={preference === hue}
+                    tabIndex={tabIndexFor(hue)}
+                    onClick={() => setPreference(hue, { immediate: true })}
+                    className={cn(
+                      "accent-hue-dot relative h-7 w-7 rounded-full border-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)] max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']",
+                      SETTINGS_FOCUS,
+                      preference === hue
+                        ? "border-text"
+                        : "border-transparent hover:border-border-strong",
+                    )}
+                    style={{ "--swatch-hue": String(hue) } as CSSProperties}
+                  />
+                );
+              })}
             </div>
             {isCustom ? (
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={reset}>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="ml-auto max-sm:h-11"
+                onClick={reset}
+              >
                 {t("settings.appearance.accentReset")}
               </Button>
             ) : null}
@@ -310,26 +599,31 @@ const CONTRAST_OPTIONS: { value: ContrastPreference; label: MessageKey }[] = [
 function ContrastRow() {
   const { t } = useTranslation();
   const { preference, resolved, setPreference } = useContrast();
+  // The hint describes the option that is on, so "Padrão" never reads as if it
+  // were the line about "Alto".
+  const description =
+    preference === "system"
+      ? t("settings.appearance.contrastFollowing", {
+          contrast: t(
+            resolved === "more"
+              ? "settings.appearance.resolved.more"
+              : "settings.appearance.resolved.default",
+          ),
+        })
+      : preference === "more"
+        ? t("settings.appearance.contrastHint")
+        : t("settings.appearance.contrastDefaultHint");
   return (
     <SettingsRow
       id="contrast"
       label={t("settings.appearance.contrast")}
-      description={
-        preference === "system"
-          ? t("settings.appearance.contrastFollowing", {
-              contrast: t(
-                resolved === "more"
-                  ? "settings.appearance.resolved.more"
-                  : "settings.appearance.resolved.default",
-              ),
-            })
-          : t("settings.appearance.contrastHint")
-      }
+      description={description}
       control={
         <RadioGroup
           label={t("settings.appearance.contrast")}
           value={preference}
           onValueChange={setPreference}
+          className={PHONE_TARGETS}
           options={CONTRAST_OPTIONS.map((option) => ({
             value: option.value,
             label: t(option.label),
@@ -406,6 +700,7 @@ function ChatOptionRow<T extends string | number>({
           value={value}
           onValueChange={onChange}
           reselect={between}
+          className={PHONE_TARGETS}
           options={options.map((option) => ({
             value: option.value,
             label: t(option.label),
@@ -435,29 +730,32 @@ function ChatGroup({
       title={t("settings.appearance.chat")}
       surface="plain"
       action={
-        isDefault ? undefined : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true });
-              // The button hides itself at the default, so focus would drop to
-              // the page. The first control it reset takes it.
-              requestAnimationFrame(() => {
-                document
-                  .querySelector<HTMLElement>(
-                    '[data-settings-row="density"] [role="radio"][tabindex="0"]',
-                  )
-                  ?.focus();
-              });
-            }}
-          >
-            {t("settings.appearance.chatReset")}
-          </Button>
-        )
+        // Always there so it can be found; dim and inert while there is
+        // nothing to restore. It names what it restores: the link-preview
+        // switch below is a different kind of choice and is left alone.
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={isDefault}
+          className="max-sm:h-11"
+          onClick={() => {
+            setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true });
+            // The button goes inert at the default, so focus would drop to
+            // the page. The first control it reset takes it.
+            requestAnimationFrame(() => {
+              document
+                .querySelector<HTMLElement>(
+                  '[data-settings-row="density"] [role="radio"][tabindex="0"]',
+                )
+                ?.focus();
+            });
+          }}
+        >
+          {t("settings.appearance.chatReset")}
+        </Button>
       }
     >
-      <SettingsPreview
+      <StickyPreview
         controls={
           <>
             <ChatOptionRow
@@ -490,6 +788,7 @@ function ChatGroup({
             <SettingsSwitchRow
               id="link-previews"
               label={t("settings.appearance.linkPreviews")}
+              description={t("settings.appearance.linkPreviewsHint")}
               checked={showLinkEmbeds}
               onCheckedChange={onShowLinkEmbeds}
             />
@@ -497,8 +796,37 @@ function ChatGroup({
         }
       >
         <ChatDisplayPreview compact={display.density === "compact"} />
-      </SettingsPreview>
+      </StickyPreview>
     </SettingsGroup>
+  );
+}
+
+/**
+ * `SettingsPreview`'s box, with one difference: on a phone the drawing sticks
+ * to the top of the pane while the controls under it scroll past, so the person
+ * sees what each tap does. The kit's box clips (`overflow-hidden`), and a
+ * clipping ancestor stops `position: sticky` from reaching the pane, so the
+ * clip is moved onto the two halves instead.
+ */
+function StickyPreview({
+  children,
+  controls,
+}: {
+  children: ReactNode;
+  controls: ReactNode;
+}) {
+  return (
+    <div className="rounded-[var(--radius-card)] border border-border">
+      <div
+        aria-hidden
+        className="overflow-hidden rounded-t-[var(--radius-card)] bg-surface-0 max-sm:sticky max-sm:top-0 max-sm:z-10 max-sm:border-b max-sm:border-border"
+      >
+        {children}
+      </div>
+      <div className="divide-y divide-border overflow-hidden rounded-b-[var(--radius-card)] border-t border-border bg-surface-card max-sm:border-t-0">
+        {controls}
+      </div>
+    </div>
   );
 }
 
@@ -684,6 +1012,7 @@ function LanguageGroup() {
             // or screen-reader user walking the options must not trigger it.
             activation="manual"
             fit="content"
+            className={PHONE_TARGETS}
             value={locale}
             disabled={profileDirty}
             onValueChange={(next) => void choose(next)}
