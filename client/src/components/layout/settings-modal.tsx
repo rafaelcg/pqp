@@ -28,6 +28,7 @@ import { ProfileSection } from "@/components/settings/profile-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import {
   buildProfilePatch,
+  isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
   profileDraftsFrom,
@@ -264,6 +265,9 @@ export function SettingsModal({
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  // The public link is somebody else's: said under the link field in Perfil
+  // (through the shell context) and in the bar, in the reader's language.
+  const [handleError, setHandleError] = useState<string | null>(null);
   // A close was refused while the profile was dirty.
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [focusSaveNonce, setFocusSaveNonce] = useState(0);
@@ -390,6 +394,7 @@ export function SettingsModal({
       setDrafts(profileDraftsFrom(user));
       setSaveError(null);
       setNameError(null);
+      setHandleError(null);
       setCloseBlocked(false);
       setSavedFlash(false);
     }
@@ -403,6 +408,7 @@ export function SettingsModal({
     if (!profileDirty) {
       setCloseBlocked(false);
       setSaveError(null);
+      setHandleError(null);
     }
   }, [profileDirty]);
 
@@ -513,6 +519,9 @@ export function SettingsModal({
     if (key === "displayName" && value.trim() !== "") {
       setNameError(null);
     }
+    if (key === "handle") {
+      setHandleError(null);
+    }
   }
 
   function discardProfile() {
@@ -521,6 +530,7 @@ export function SettingsModal({
     }
     setSaveError(null);
     setNameError(null);
+    setHandleError(null);
     setCloseBlocked(false);
   }
 
@@ -535,15 +545,26 @@ export function SettingsModal({
     }
     setSaving(true);
     setSaveError(null);
+    setHandleError(null);
+    const patch = buildProfilePatch(user, drafts);
     try {
-      const updated = await updateMe(buildProfilePatch(user, drafts));
+      const updated = await updateMe(patch);
       onUserUpdated(updated);
       // The one reseed while open: the server may have normalised what was
       // sent (a regenerated tag number), and the bar must read clean.
       setDrafts(profileDraftsFrom(updated));
       setSavedFlash(true);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      if (isHandleTakenError(err, patch)) {
+        // Never the server's English sentence for this one: it is the one
+        // failure a person fixes by typing, so it is said where they type.
+        const message = t("settings.unsaved.handle.taken");
+        setSection("profile");
+        setHandleError(message);
+        setSaveError(message);
+      } else {
+        setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      }
     } finally {
       setSaving(false);
     }
@@ -631,6 +652,11 @@ export function SettingsModal({
   // `openSection(section, rowId)`: switch, then find the row once the tab has
   // rendered it, bring it to the middle of the pane and flash it once. Tabs
   // that load their rows asynchronously get a second until the row shows.
+  //
+  // A row that is not on screen (Voz draws "ptt" only in push-to-talk mode)
+  // is not an error: the pane lands at the top of the section at once, the
+  // same place a plain tab switch lands, and the late row still flashes if it
+  // turns up within the second.
   const [pendingRow, setPendingRow] = useState<{ id: string; nonce: number } | null>(null);
   const openSection = useCallback((next: SectionId, rowId?: string) => {
     setSection(next);
@@ -645,7 +671,13 @@ export function SettingsModal({
     let stop: (() => void) | null = null;
     const find = () => {
       stop = flashSettingsRow(scrollerRef.current, pendingRow.id);
-      if (!stop && ++attempts < 20) {
+      if (stop) {
+        return;
+      }
+      if (attempts === 0 && scrollerRef.current) {
+        scrollerRef.current.scrollTop = 0;
+      }
+      if (++attempts < 20) {
         retry = window.setTimeout(find, 50);
       }
     };
@@ -661,8 +693,13 @@ export function SettingsModal({
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
 
   const shell = useMemo<SettingsShellValue>(
-    () => ({ profileDirty, openSection, headerActionsSlot }),
-    [profileDirty, openSection, headerActionsSlot],
+    () => ({
+      profileDirty,
+      openSection,
+      headerActionsSlot,
+      profileHandleError: handleError,
+    }),
+    [profileDirty, openSection, headerActionsSlot, handleError],
   );
 
   const railItems = visibleSections.map((entry) => ({
