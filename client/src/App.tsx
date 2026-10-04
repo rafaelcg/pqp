@@ -9103,6 +9103,7 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
+          hideLeave={callDockOnScreen}
           compact={compact}
           hideActions={callDockOnScreen}
         />

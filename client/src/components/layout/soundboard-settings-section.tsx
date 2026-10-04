@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AudioLines, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -9,6 +9,7 @@ import {
   type SoundboardSoundDto,
 } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { soundboardIcon } from "@/lib/soundboard-icons";
 import {
   noteSoundboardCatalog,
   previewSoundboardClip,
@@ -65,18 +66,20 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         <p className="text-sm text-text-secondary">{t("soundboard.settings.empty")}</p>
       )}
       <ul className="space-y-2">
-        {sounds?.map((sound) => (
+        {sounds?.map((sound) => {
+          const Icon = soundboardIcon(sound.id);
+          return (
           <li
             key={sound.id}
             className="flex items-center gap-3 rounded-[var(--radius-control)] bg-surface-2 px-3 py-2"
           >
             <button
               type="button"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-surface-3 text-xl hover:bg-border"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-surface-3 hover:bg-border"
               aria-label={t("soundboard.preview")}
               onClick={() => previewSoundboardClip(sound.id)}
             >
-              <AudioLines className="h-4 w-4" aria-hidden="true" />
+              <Icon className="h-5 w-5" />
             </button>
             <div className="min-w-0 flex-1">
               <p className="text-sm text-text">{sound.name}</p>
@@ -105,7 +108,8 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
               <Trash2 className="h-4 w-4" />
             </Button>
           </li>
-        ))}
+          );
+        })}
       </ul>
       <SoundboardAddDialog
         open={adding}

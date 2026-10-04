@@ -25,9 +25,13 @@ license stays with the files.
 | `risada.wav` | Joseph Sardin, BigSoundBank 490, CC0. The first laugh. |
 | `buzina.wav` | guitarguy1985, Freesound 68999, CC0. The horn hit. |
 | `grilo.wav` | Joseph Sardin, BigSoundBank 1020, CC0. Two seconds of a field cricket. |
-| `vidro.wav` | Joseph Sardin, BigSoundBank 148, CC0. A glass bursting on the floor. |
 | `ba-dum-tss.wav` | Bart Nagel, public domain. Wikimedia Commons `Sting.ogg`. |
 | `trombone.wav` | kirbydx, Freesound 175409, CC0. Trailing silence removed. |
+
+The pictures on the tiles are separate from the clips. Clap, laugh, airhorn,
+and the speaker mark are Material Design Icons by Pictogrammers, Apache 2.0.
+Cricket is by Delapouite, and the drum kit and trombone are by Caro Asercion, from [game-icons.net](https://game-icons.net),
+CC BY 3.0.
 
 Custom clips live in the same bucket as attachments, capped at 24 per
 server, 512 KB, and 5.2 seconds, mp3 or ogg. Play clicks are not stored.
@@ -45,5 +49,11 @@ not scanned.
 
 DMs have no library. Phones do not play the frame yet. Web and Electron do.
 
-The room accepts three clips at once. You cannot stack your own. Extra
-clicks are dropped in silence.
+The room accepts twelve clips at once, including several from the same
+person. Extra clicks past that are dropped. Muting the board is local.
+It cuts what you are hearing, including a clip already playing. The
+volume slider does the same. Your clicks still go out to the room.
+
+A play lights that person's row under the voice channel, and the same
+icon on their tile when the stage is up. It lasts a couple of seconds.
+Another click swaps the icon. Muting the board does not hide it.

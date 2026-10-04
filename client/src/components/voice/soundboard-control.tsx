@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Plus, Volume2, type LucideIcon } from "lucide-react";
+import { AudioLines, Plus, Volume2, VolumeX } from "lucide-react";
 import { SOUNDBOARD_BUILTINS, type SoundboardBuiltinId } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -14,13 +14,17 @@ import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { fetchSoundboard, type SoundboardSoundDto } from "@/lib/api";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { soundboardIcon } from "@/lib/soundboard-icons";
+import {
+  soundboardIcon,
+  type SoundboardIcon,
+} from "@/lib/soundboard-icons";
 import {
   prefetchSoundboard,
   pulseSoundboardActive,
   requestSoundboardPlay,
-  useSoundboardActiveId,
+  useSoundboardActiveIds,
   useSoundboardListenerVolume,
+  useSoundboardMuted,
 } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
@@ -45,8 +49,9 @@ export function SoundboardControl({
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [sounds, setSounds] = useState<SoundboardSoundDto[]>([]);
-  const activeId = useSoundboardActiveId();
+  const activeIds = useSoundboardActiveIds();
   const [volume, setVolume] = useSoundboardListenerVolume();
+  const [muted, setMuted] = useSoundboardMuted();
   const portalHost = useFullscreenPortalHost();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -171,18 +176,18 @@ export function SoundboardControl({
               maxHeight: placement?.maxHeight,
               visibility: placement ? "visible" : "hidden",
             }}
-            className="elevation-3 z-[100] flex w-[17.5rem] flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-fade-in"
+            className="elevation-3 z-[100] flex w-[17.5rem] origin-bottom-right flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-pop-in"
           >
             <p className="px-0.5 pb-2 text-xs font-medium text-text">
               {t("soundboard.title")}
             </p>
-            <div className="grid min-h-0 grid-cols-4 gap-1.5 overflow-y-auto">
+            <div className="grid min-h-0 grid-cols-3 gap-1.5 overflow-y-auto">
               {SOUNDBOARD_BUILTINS.map((sound) => (
                 <SoundTile
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
                   name={t(builtinNameKey(sound.id))}
-                  pressed={activeId === sound.id}
+                  pressed={activeIds.has(sound.id)}
                   onPlay={() => {
                     pulseSoundboardActive(sound.id);
                     requestSoundboardPlay(sound.id);
@@ -194,7 +199,7 @@ export function SoundboardControl({
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
                   name={sound.name}
-                  pressed={activeId === sound.id}
+                  pressed={activeIds.has(sound.id)}
                   onPlay={() => {
                     pulseSoundboardActive(sound.id);
                     requestSoundboardPlay(sound.id);
@@ -203,19 +208,40 @@ export function SoundboardControl({
               ))}
             </div>
             <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
-              <Volume2
-                className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
-                aria-hidden="true"
-              />
+              <button
+                type="button"
+                aria-pressed={muted}
+                aria-label={muted ? t("soundboard.unmute") : t("soundboard.mute")}
+                className={cn(
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none",
+                  muted
+                    ? "bg-danger-soft text-danger hover:bg-danger-soft-hover"
+                    : "text-text-tertiary hover:bg-border-strong hover:text-text",
+                )}
+                onClick={() => setMuted(!muted)}
+              >
+                <span key={muted ? "off" : "on"} className="flex animate-icon-swap">
+                  {muted ? (
+                    <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                </span>
+              </button>
               <Slider
                 variant="volume"
                 min={0}
                 max={1}
                 step={0.05}
-                value={volume}
+                value={muted ? 0 : volume}
                 aria-label={t("soundboard.volume")}
                 className="min-w-0 flex-1"
-                onValueChange={setVolume}
+                onValueChange={(next) => {
+                  if (muted) {
+                    setMuted(false);
+                  }
+                  setVolume(next);
+                }}
               />
               {canManage && (
                 <Button
@@ -249,7 +275,7 @@ export function SoundboardControl({
           aria-haspopup="dialog"
           aria-controls={open ? "soundboard-panel" : undefined}
           className={cn(
-            "flex items-center justify-center rounded-full",
+            "group flex items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-95 motion-reduce:transition-none motion-reduce:transform-none",
             size,
             open
               ? "bg-signal/20 text-signal"
@@ -257,7 +283,9 @@ export function SoundboardControl({
           )}
           onClick={() => setOpen((next) => !next)}
         >
-          <AudioLines className={iconSize} />
+          <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
+            <AudioLines className={iconSize} />
+          </span>
         </button>
       </Tooltip>
       {panel}
@@ -284,29 +312,42 @@ function SoundTile({
   pressed,
   onPlay,
 }: {
-  icon: LucideIcon;
+  icon: SoundboardIcon;
   name: string;
   pressed: boolean;
   onPlay: () => void;
 }) {
+  const [burst, setBurst] = useState(0);
   return (
     <button
       type="button"
       aria-label={name}
       aria-pressed={pressed}
       className={cn(
-        "flex h-[4.25rem] w-full flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] px-1 py-1.5",
+        "group flex h-[4.25rem] w-full flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] px-1 py-1.5",
+        "transition-[background-color,color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.94]",
+        "motion-reduce:transition-none motion-reduce:transform-none",
         pressed
-          ? "bg-accent-soft text-on-accent-soft"
-          : "bg-surface-3 text-text hover:bg-border",
+          ? "bg-accent-soft text-on-accent-soft shadow-[inset_0_0_0_1px_var(--color-accent)]"
+          : "bg-surface-3 text-text hover:bg-border-strong",
       )}
-      onClick={onPlay}
+      onClick={() => {
+        setBurst((n) => n + 1);
+        onPlay();
+      }}
     >
-      <Icon className="h-5 w-5" aria-hidden="true" />
+      <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:-translate-y-px group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
+        <span key={burst} className={cn("flex", pressed && "animate-sound-pulse")}>
+          <Icon className="h-6 w-6" />
+        </span>
+      </span>
       <span
         className={cn(
-          "w-full text-balance text-center text-[10px] leading-tight",
-          pressed ? "text-on-accent-soft" : "text-text-secondary",
+          "w-full text-balance text-center text-[10px] leading-tight transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+          pressed
+            ? "text-on-accent-soft"
+            : "text-text-secondary group-hover:text-text",
         )}
       >
         {name}

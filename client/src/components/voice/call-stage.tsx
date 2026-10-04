@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   Mic,
   MicOff,
+  MoreHorizontal,
   MousePointer2,
   MousePointerBan,
   ShieldBan,
@@ -218,6 +219,8 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { Menu } from "@/components/ui/menu";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
 import { SoundboardFloat } from "@/components/voice/soundboard-float";
 import { shouldSuppressHints } from "@/lib/hints";
@@ -1833,15 +1836,8 @@ function ActiveCall({
   // member list open is about 450px, far too narrow for one row even though
   // the viewport is `lg`. The tiers are in `CallControls`.
   const dockedBar = (
-    <div
-      data-testid="call-stage-collapsed"
-      className="@container flex flex-col gap-1.5"
-    >
+    <div data-testid="call-stage-collapsed" className="@container">
       {controls}
-      <PttFocusHint
-        show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-        className="px-1"
-      />
     </div>
   );
   const composerDock = dockPublish ? (
@@ -2882,6 +2878,62 @@ export function CallControls({
     ? t("voice.hand.lower")
     : t("voice.hand.raise");
 
+  const showWatchParty =
+    canWatchParty &&
+    !listenOnly &&
+    !noVideo &&
+    Boolean(onStartScreenShare) &&
+    !voiceState.isSharingScreen;
+  const showCursorPref =
+    canShare &&
+    !noVideo &&
+    Boolean(onStartScreenShare) &&
+    (!voiceState.isSharingScreen || cursorLiveControl);
+  const moreItems: ContextMenuItemDef[] = [];
+  if (showWatchParty) {
+    moreItems.push({
+      id: "watch-party",
+      label: t("voice.control.watchParty"),
+      icon: MonitorPlay,
+      disabled: shareCappedOut,
+      onSelect: () => {
+        if (shareCappedOut || !onStartScreenShare) {
+          return;
+        }
+        flushSync(() => {
+          setShareHint(t("voice.control.watchPartyHint"));
+        });
+        void Promise.resolve(
+          onStartScreenShare({ preferBrowserTab: true }),
+        ).finally(() => {
+          setShareHint(null);
+        });
+      },
+    });
+  }
+  if (showCursorPref) {
+    moreItems.push({
+      id: "share-cursor",
+      label:
+        shareCursor === "hide"
+          ? t("voice.control.showCursor")
+          : t("voice.control.hideCursor"),
+      icon: shareCursor === "hide" ? MousePointerBan : MousePointer2,
+      checked: shareCursor === "hide",
+      onSelect: () =>
+        setShareCursor(shareCursor === "hide" ? "show" : "hide"),
+    });
+  }
+  moreItems.push({
+    id: "join-leave-sounds",
+    label: joinLeaveAutoMute
+      ? t("voice.control.enableJoinLeaveSounds")
+      : t("voice.control.disableJoinLeaveSounds"),
+    icon: joinLeaveAutoMute ? Bell : BellOff,
+    checked: joinLeaveAutoMute,
+    onSelect: () => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute),
+  });
+
   const showMute = !collapsed || !pushToTalk;
 
   return (
@@ -2945,6 +2997,10 @@ export function CallControls({
             body={t("featureHint.music.body")}
           />
         </div>
+        <PttFocusHint
+          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+          className="text-center"
+        />
         </div>,
       )}
 
@@ -2970,15 +3026,14 @@ export function CallControls({
           not the window.
 
           - under 35rem: people / pill / tiles, one per line, tiles right.
-          - 35rem and up: the pill sits beside the tiles and takes the space
-            between; the people keep a line of their own. Without a pill the
-            people and the tiles share one line already.
+          - 35rem and up: the pill sits beside the tiles. The people keep a
+            line of their own. Without a pill the people and the tiles share
+            one line already.
           - 48rem and up (`@3xl`): people, pill, tiles on one line.
 
-          35rem is where the pt-BR pill ("Segura pra falar" plus its key
-          chip, ~12rem) still fits beside the full set of tiles (~21.5rem).
-          The pill is capped at 22rem so a 1440px window does not turn it
-          into a slab; what it leaves goes to the people. */}
+          The pill is only as wide as "PTT" and its key. It does not grow
+          into the spare space: that turned it into a slab, and the spare
+          stays empty beside the tiles. */}
       <div
         ref={collapsed ? undefined : rowRef}
         className={cn(
@@ -3237,67 +3292,6 @@ export function CallControls({
           iconClassName={iconSize}
         />
       )}
-      {/* Whether your mouse pointer goes out with the share.
-          THE REPORT (QG, 5 Sep 2026): a film shared from one window while the
-          person plays a game in another, and the pointer drawn over the film
-          every time it moves. Presenting wants the opposite: pointing at
-          things IS the share. So it is a preference, and it is remembered,
-          which a one-off audio opt-in deliberately is not.
-          Armed before the share, like that one, and it stays put mid-share
-          only where the engine can change a live track. Today no engine
-          implements the constraint at all, so what a `hide` actually buys is
-          the line under the share saying this surface carries the pointer and
-          a tab does not. `lib/screen-capture-cursor.ts` has the measurements. */}
-      {canShare &&
-        !noVideo &&
-        onStartScreenShare &&
-        (!voiceState.isSharingScreen || cursorLiveControl) && (
-          <Tooltip
-            label={
-              shareCursor === "hide"
-                ? t("voice.control.showCursor")
-                : t("voice.control.hideCursor")
-            }
-            detail={
-              cursorLiveControl
-                ? undefined
-                : t("voice.control.hideCursorDetail")
-            }
-          >
-            {/* KEEP THE LABEL SHORT AND FREE OF COMMON VERBS. A tooltip label
-                becomes the control's accessible name, and Playwright's
-                `getByRole("button", { name })` matches a name by SUBSTRING, so
-                an English label reading "Leave your mouse out of what you
-                share" made every `name: "Leave"` in the suite ambiguous and
-                took the hang-up button down with it. */}
-            <button
-              type="button"
-              data-testid="share-cursor-toggle"
-              aria-pressed={shareCursor === "hide"}
-              className={cn(
-                "items-center justify-center rounded-full",
-                // Under 22rem the slim bar keeps the tiles a phone can use
-                // (22rem is what the full set of tiles needs). A phone has no
-                // getDisplayMedia, so this one is already gone there; the
-                // rule only bites a squeezed desktop pane.
-                collapsed ? "hidden @min-[22rem]:flex" : "flex",
-                size,
-                shareCursor === "hide"
-                  ? "bg-signal/20 text-signal"
-                  : "bg-ink-3 text-paper hover:bg-ink-4",
-              )}
-              onClick={() =>
-                setShareCursor(shareCursor === "hide" ? "show" : "hide")
-              }
-            >
-              {shareCursor === "hide" ? (
-                <MousePointerBan className={iconSize} />
-              ) : (
-                <MousePointer2 className={iconSize} />
-              )}
-            </button>
-          </Tooltip>
-        )}
       {!canShare && !noVideo && onStartScreenShare && (
         <Tooltip
           label={t("voice.control.shareUnavailable")}
@@ -3396,49 +3390,6 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      {canWatchParty &&
-        !listenOnly &&
-        !noVideo &&
-        onStartScreenShare &&
-        !voiceState.isSharingScreen && (
-          <Tooltip
-            label={t("voice.control.watchParty")}
-            detail={t("voice.control.watchPartyHint")}
-          >
-            <button
-              type="button"
-              aria-label={t("voice.control.watchParty")}
-              aria-disabled={shareCappedOut || undefined}
-              className={cn(
-                "items-center justify-center rounded-full",
-                // Same rule as the cursor toggle: a watch party starts from
-                // a Chrome tab, which no phone can share.
-                collapsed ? "hidden @min-[22rem]:flex" : "flex",
-                size,
-                shareCappedOut && "opacity-40",
-                "bg-ink-3 text-paper hover:bg-ink-4",
-              )}
-              onClick={() => {
-                if (shareCappedOut) {
-                  return;
-                }
-                // Paint the hint in this click, before getDisplayMedia opens
-                // the picker and the rest of the page stops updating. Clear
-                // once the picker settles: cancel, error, or a live share.
-                flushSync(() => {
-                  setShareHint(t("voice.control.watchPartyHint"));
-                });
-                void Promise.resolve(
-                  onStartScreenShare({ preferBrowserTab: true }),
-                ).finally(() => {
-                  setShareHint(null);
-                });
-              }}
-            >
-              <MonitorPlay className={iconSize} />
-            </button>
-          </Tooltip>
-        )}
       <SoundboardControl
         serverId={serverId}
         canUse={voiceState.canUseSoundboard}
@@ -3540,42 +3491,24 @@ export function CallControls({
         container={collapsed}
         className={collapsed ? "my-1" : "my-1.5"}
       />
-      {/* The group hides with its only tile, or its gap would still be
-          spent on a row where six tiles fill the width to the pixel. */}
+      {/* Watch party, the share cursor, and join/leave sounds. They used to
+          be their own tiles and filled the slim bar. A phone still hides
+          this whole control under 22rem, the same width those tiles used. */}
       <CallControlGroup className={collapsed ? "hidden @min-[22rem]:flex" : "hidden sm:flex"}>
-      {/* C2, docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md: a room past
-          `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
-          (`lib/large-room-sounds.ts`); this is the visible way back to the
-          cues for whoever wants them anyway. Always shown, not only in a
-          large room, so the setting is findable before the room gets loud.
-          Hidden below `sm` so a phone still reaches hang-up; on the slim bar
-          the rule is the bar's own width, under 22rem, like the cursor and
-          watch party tiles. */}
-      <Tooltip
-        label={
-          joinLeaveAutoMute
-            ? t("voice.control.enableJoinLeaveSounds")
-            : t("voice.control.disableJoinLeaveSounds")
-        }
-        detail={t("voice.control.joinLeaveAutoMuteHint")}
-      >
-        <button
-          type="button"
-          data-testid="join-leave-auto-mute-toggle"
-          aria-pressed={joinLeaveAutoMute}
-          className={cn(
-            "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-            size,
-          )}
-          onClick={() => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute)}
-        >
-          {joinLeaveAutoMute ? (
-            <Bell className={iconSize} />
-          ) : (
-            <BellOff className={iconSize} />
-          )}
-        </button>
-      </Tooltip>
+        <Menu items={moreItems} side="top" align="end">
+          <button
+            type="button"
+            data-testid="call-dock-more"
+            data-call-more={moreItems.map((item) => item.id).join(" ")}
+            aria-label={t("voice.control.more")}
+            className={cn(
+              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+              size,
+            )}
+          >
+            <MoreHorizontal className={iconSize} />
+          </button>
+        </Menu>
       </CallControlGroup>
       <CallControlDivider
         container={collapsed}
@@ -3594,14 +3527,8 @@ export function CallControls({
           <PhoneOff className={iconSize} />
         </button>
       </Tooltip>
-    </div>
       </div>
-      {!collapsed && (
-        <PttFocusHint
-          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-          className="text-center"
-        />
-      )}
+      </div>
     {shareHint && (
       <p role="status" className="text-center text-[11px] text-paper-muted">
         {shareHint}

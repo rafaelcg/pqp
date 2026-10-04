@@ -5,14 +5,20 @@ import {
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
 import { fetchSoundboard } from "@/lib/api";
-import { decodeAudioBuffer, playAudioBuffer, unlockSounds } from "@/lib/sounds";
+import {
+  decodeAudioBuffer,
+  sharedAudioContext,
+  unlockSounds,
+} from "@/lib/sounds";
 
 const VOLUME_KEY = "pqp:soundboard-volume";
+const MUTE_KEY = "pqp:soundboard-muted";
 const MARK_MS = 2200;
 
 const buffers = new Map<string, AudioBuffer>();
 const loading = new Map<string, Promise<AudioBuffer | null>>();
 const customUrls = new Map<string, { url: string; volume: number }>();
+const customNames = new Map<string, string>();
 
 export interface SoundboardMark {
   userId: string;
@@ -23,8 +29,7 @@ export interface SoundboardMark {
 }
 
 const marks = new Map<string, SoundboardMark>();
-let activeSoundId: string | null = null;
-let activeUntil = 0;
+const activeUntilById = new Map<string, number>();
 const listeners = new Set<() => void>();
 let sender: ((soundId: string) => void) | null = null;
 
@@ -55,6 +60,37 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+export function soundboardMuted(): boolean {
+  if (typeof localStorage === "undefined") {
+    return false;
+  }
+  return localStorage.getItem(MUTE_KEY) === "1";
+}
+
+export function setSoundboardMuted(muted: boolean): void {
+  localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
+  applySoundboardBus();
+  notify();
+}
+
+export function useSoundboardMuted(): [boolean, (muted: boolean) => void] {
+  const [muted, setMuted] = useState(soundboardMuted);
+  useEffect(
+    () =>
+      subscribe(() => {
+        setMuted(soundboardMuted());
+      }),
+    [],
+  );
+  return [
+    muted,
+    (next) => {
+      setSoundboardMuted(next);
+      setMuted(next);
+    },
+  ];
+}
+
 export function soundboardListenerVolume(): number {
   if (typeof localStorage === "undefined") {
     return 0.6;
@@ -70,6 +106,7 @@ export function soundboardListenerVolume(): number {
 export function setSoundboardListenerVolume(volume: number): void {
   const next = Math.min(1, Math.max(0, volume));
   localStorage.setItem(VOLUME_KEY, String(next));
+  applySoundboardBus();
   notify();
 }
 
@@ -97,10 +134,22 @@ export function noteSoundboardCatalog(sounds: readonly SoundboardSound[]): void 
 
 function rememberCustom(sounds: readonly SoundboardSound[]): void {
   for (const sound of sounds) {
+    customNames.set(sound.id, sound.name);
     if (sound.url) {
       customUrls.set(sound.id, { url: sound.url, volume: sound.volume });
     }
   }
+}
+
+/** The name a custom clip was saved under. Builtins use the locale tables. */
+export function soundboardCustomName(soundId: string): string | null {
+  return customNames.get(soundId) ?? null;
+}
+
+/** Test seam. A play's timer would otherwise outlive the assertion. */
+export function resetSoundboardMarksForTests(): void {
+  marks.clear();
+  activeUntilById.clear();
 }
 
 export async function prefetchSoundboard(serverId: string): Promise<void> {
@@ -118,9 +167,14 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
   ]);
 }
 
-async function warm(url: string, id: string): Promise<void> {
-  if (buffers.has(id) || loading.has(id)) {
-    return;
+function warm(url: string, id: string): Promise<AudioBuffer | null> {
+  const cached = buffers.get(id);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+  const pending = loading.get(id);
+  if (pending) {
+    return pending;
   }
   const task = (async () => {
     try {
@@ -128,17 +182,19 @@ async function warm(url: string, id: string): Promise<void> {
       if (!response.ok) {
         return null;
       }
-      return await decodeAudioBuffer(await response.arrayBuffer());
+      const buffer = await decodeAudioBuffer(await response.arrayBuffer());
+      if (buffer) {
+        buffers.set(id, buffer);
+      }
+      return buffer;
     } catch {
       return null;
+    } finally {
+      loading.delete(id);
     }
   })();
   loading.set(id, task);
-  const buffer = await task;
-  loading.delete(id);
-  if (buffer) {
-    buffers.set(id, buffer);
-  }
+  return task;
 }
 
 async function bufferFor(soundId: string): Promise<AudioBuffer | null> {
@@ -148,25 +204,79 @@ async function bufferFor(soundId: string): Promise<AudioBuffer | null> {
   }
   const builtin = soundboardBuiltin(soundId);
   if (builtin) {
-    await warm(`/sounds/soundboard/${builtin.file}`, soundId);
-    return buffers.get(soundId) ?? null;
+    return warm(`/sounds/soundboard/${builtin.file}`, soundId);
   }
   const custom = customUrls.get(soundId);
   if (!custom) {
     return null;
   }
-  await warm(custom.url, soundId);
-  return buffers.get(soundId) ?? null;
+  return warm(custom.url, soundId);
 }
 
-function gainFor(soundId: string, listener: number): number {
-  const sound = customUrls.get(soundId)?.volume ?? 1;
-  return Math.min(1, Math.max(0, listener * sound));
+function clampGain(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * One bus for every clip on this machine. Volume and mute write it live,
+ * so a clip that is already sounding follows the slider. It does not pass
+ * through the cue master: the soundboard slider must not turn message
+ * sounds down with it.
+ */
+let bus: GainNode | null = null;
+let busContext: AudioContext | null = null;
+
+function soundboardLevel(): number {
+  return soundboardMuted() ? 0 : soundboardListenerVolume();
+}
+
+function soundboardBus(): GainNode | null {
+  const ctx = sharedAudioContext();
+  if (!ctx) {
+    return null;
+  }
+  if (!bus || busContext !== ctx) {
+    bus = ctx.createGain();
+    bus.gain.value = soundboardLevel();
+    bus.connect(ctx.destination);
+    busContext = ctx;
+  }
+  return bus;
+}
+
+function applySoundboardBus(): void {
+  const node = soundboardBus();
+  if (!node) {
+    return;
+  }
+  // Assign it. A scheduled ramp leaves the clip at the gain it started with.
+  node.gain.cancelScheduledValues(node.context.currentTime);
+  node.gain.value = soundboardLevel();
+}
+
+function startSoundboardClip(buffer: AudioBuffer, soundVolume: number): AudioBufferSourceNode | null {
+  const ctx = sharedAudioContext();
+  const destination = soundboardBus();
+  if (!ctx || !destination) {
+    return null;
+  }
+  if (ctx.state === "suspended") {
+    void ctx.resume().catch(() => {});
+  }
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  const clip = ctx.createGain();
+  clip.gain.value = clampGain(soundVolume);
+  source.connect(clip);
+  clip.connect(destination);
+  source.start();
+  return source;
 }
 
 /**
  * Play for this machine. A deafened listener passes `hear: false` and still
- * gets the float from `showSoundboardMark`.
+ * gets the float from `showSoundboardMark`. Mute and volume ride the bus,
+ * so they cut a clip that is already playing. Clicks still go out.
  */
 export async function playSoundboardClip(
   soundId: string,
@@ -180,7 +290,7 @@ export async function playSoundboardClip(
   if (!buffer) {
     return;
   }
-  playAudioBuffer(buffer, gainFor(soundId, soundboardListenerVolume()));
+  startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
 }
 
 let previewNode: AudioBufferSourceNode | null = null;
@@ -200,24 +310,24 @@ export function previewSoundboardClip(soundId: string): void {
         // Already finished.
       }
     }
-    previewNode = playAudioBuffer(buffer, gainFor(soundId, soundboardListenerVolume()));
+    previewNode = startSoundboardClip(
+      buffer,
+      customUrls.get(soundId)?.volume ?? 1,
+    );
   })();
 }
 
 export function showSoundboardMark(mark: Omit<SoundboardMark, "until">): void {
   const until = Date.now() + MARK_MS;
   marks.set(mark.userId, { ...mark, until });
-  activeSoundId = mark.soundId;
-  activeUntil = until;
+  lightSound(mark.soundId, until);
   notify();
-  window.setTimeout(() => {
+  globalThis.setTimeout(() => {
     const current = marks.get(mark.userId);
     if (current && current.until === until) {
       marks.delete(mark.userId);
     }
-    if (activeUntil === until) {
-      activeSoundId = null;
-    }
+    clearSound(mark.soundId, until);
     notify();
   }, MARK_MS);
 }
@@ -235,25 +345,39 @@ export function useSoundboardMark(userId: string | undefined): SoundboardMark | 
   return mark;
 }
 
-export function useSoundboardActiveId(): string | null {
+export function useSoundboardActiveIds(): ReadonlySet<string> {
   const [, bump] = useState(0);
   useEffect(() => subscribe(() => bump((n) => n + 1)), []);
-  if (!activeSoundId || activeUntil < Date.now()) {
-    return null;
+  const now = Date.now();
+  const ids = new Set<string>();
+  for (const [id, until] of activeUntilById) {
+    if (until > now) {
+      ids.add(id);
+    }
   }
-  return activeSoundId;
+  return ids;
+}
+
+function lightSound(soundId: string, until: number): void {
+  const current = activeUntilById.get(soundId) ?? 0;
+  if (until > current) {
+    activeUntilById.set(soundId, until);
+  }
+}
+
+function clearSound(soundId: string, until: number): void {
+  if (activeUntilById.get(soundId) === until) {
+    activeUntilById.delete(soundId);
+  }
 }
 
 /** Light up the tile the moment you click, without waiting for the room echo. */
 export function pulseSoundboardActive(soundId: string): void {
   const until = Date.now() + MARK_MS;
-  activeSoundId = soundId;
-  activeUntil = until;
+  lightSound(soundId, until);
   notify();
   window.setTimeout(() => {
-    if (activeUntil === until) {
-      activeSoundId = null;
-      notify();
-    }
+    clearSound(soundId, until);
+    notify();
   }, MARK_MS);
 }

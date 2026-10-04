@@ -48,10 +48,10 @@ function livePlays(channelId: string, now: number): ActivePlay[] {
 }
 
 /**
- * Take a slot for this person in this room.
+ * Take a slot in this room.
  *
- * False when their previous clip is still sounding, or the room already
- * has three. The caller must not fan out a false.
+ * False only when the room is already full. The same person may overlap
+ * their own clips. The caller must not fan out a false.
  */
 export function offerSoundboardPlay(input: {
   channelId: string;
@@ -60,9 +60,6 @@ export function offerSoundboardPlay(input: {
   now: number;
 }): boolean {
   const plays = livePlays(input.channelId, input.now);
-  if (plays.some((play) => play.userId === input.userId)) {
-    return false;
-  }
   if (plays.length >= SOUNDBOARD_ROOM_CONCURRENCY) {
     return false;
   }

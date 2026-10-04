@@ -37,7 +37,7 @@ describe("soundboard play gate", () => {
     ).toBe(false);
   });
 
-  it("holds one clip per person and three for the room", () => {
+  it("lets one person overlap clips until the room is full", () => {
     resetSoundboardPlays();
     const now = 1_000;
     expect(
@@ -55,15 +55,17 @@ describe("soundboard play gate", () => {
         durationMs: 500,
         now: now + 10,
       }),
-    ).toBe(false);
-    expect(
-      offerSoundboardPlay({
-        channelId: "room",
-        userId: "b",
-        durationMs: 500,
-        now,
-      }),
     ).toBe(true);
+    for (let i = 0; i < 10; i += 1) {
+      expect(
+        offerSoundboardPlay({
+          channelId: "room",
+          userId: "b",
+          durationMs: 500,
+          now,
+        }),
+      ).toBe(true);
+    }
     expect(
       offerSoundboardPlay({
         channelId: "room",
@@ -71,19 +73,11 @@ describe("soundboard play gate", () => {
         durationMs: 500,
         now,
       }),
-    ).toBe(true);
-    expect(
-      offerSoundboardPlay({
-        channelId: "room",
-        userId: "d",
-        durationMs: 500,
-        now,
-      }),
     ).toBe(false);
     expect(
       offerSoundboardPlay({
         channelId: "room",
-        userId: "d",
+        userId: "c",
         durationMs: 500,
         now: now + 500,
       }),

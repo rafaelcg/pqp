@@ -907,6 +907,14 @@ if (typeof window !== "undefined") {
 }
 
 /**
+ * The same context the cues use, so `setSinkId` covers a soundboard bus.
+ * Null when this browser has no Web Audio.
+ */
+export function sharedAudioContext(): AudioContext | null {
+  return ensureContext();
+}
+
+/**
  * Play a decoded clip on the same context as the cues, so the chosen
  * output device applies. The gain is this clip's own, not the cue volume:
  * a soundboard slider must not turn message sounds down with it.

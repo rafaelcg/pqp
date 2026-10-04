@@ -23,8 +23,8 @@ export const SOUNDBOARD_MAX_DURATION_MS = 5200;
 /** Custom clips per server. No boost ladder. */
 export const SOUNDBOARD_MAX_SOUNDS = 24;
 
-/** How many clips may be sounding in one room at once. */
-export const SOUNDBOARD_ROOM_CONCURRENCY = 3;
+/** How many clips may be sounding in one room at once. High enough to mash the board. */
+export const SOUNDBOARD_ROOM_CONCURRENCY = 12;
 
 export const SOUNDBOARD_NAME_MIN = 2;
 export const SOUNDBOARD_NAME_MAX = 24;
@@ -40,15 +40,14 @@ export const soundboardContentTypeSchema = z.enum(SOUNDBOARD_CONTENT_TYPES);
  * CC0 or public domain. Trimmed under `SOUNDBOARD_MAX_DURATION_MS`.
  * Sources are listed in `docs/SOUNDBOARD.md`.
  * The id is the wire value. The file name is what the client fetches.
- * Duration is what the server holds the seat for, so a person cannot
- * stack their own clip.
+ * Duration is what the server holds the slot for. A person can overlap
+ * their own clips. The room cap is the only limit.
  */
 export const SOUNDBOARD_BUILTINS = [
   { id: "builtin:palmas", emoji: "👏", file: "palmas.wav", durationMs: 4400 },
   { id: "builtin:risada", emoji: "😄", file: "risada.wav", durationMs: 2200 },
   { id: "builtin:buzina", emoji: "📣", file: "buzina.wav", durationMs: 3100 },
   { id: "builtin:grilo", emoji: "🦗", file: "grilo.wav", durationMs: 2408 },
-  { id: "builtin:vidro", emoji: "🪟", file: "vidro.wav", durationMs: 1850 },
   { id: "builtin:ba-dum-tss", emoji: "🥁", file: "ba-dum-tss.wav", durationMs: 3100 },
   { id: "builtin:trombone", emoji: "🎺", file: "trombone.wav", durationMs: 4600 },
 ] as const;
