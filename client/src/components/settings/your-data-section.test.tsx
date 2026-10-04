@@ -131,6 +131,15 @@ describe("YourDataSection export", () => {
     expect(exportRowText()).not.toContain("Export failed");
   });
 
+  it("shows the localized line for a 429 whose body is not JSON", async () => {
+    respond(429, "Too Many Requests", "text/plain");
+    mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
+    await act(async () => exportButton().click());
+    await settle();
+    expect(exportRowText()).toContain(EXPORT_FAILED);
+    expect(exportRowText()).not.toContain("Export failed");
+  });
+
   it("shows the localized line when the network drops", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
@@ -188,6 +197,16 @@ describe("DeleteAccountDialog", () => {
 
   it("shows the localized line when the network drops", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    mountDialog();
+    await act(async () => confirmButton().click());
+    await settle();
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+      DELETE_FAILED,
+    );
+  });
+
+  it("shows the localized line for a 429 whose body is not JSON", async () => {
+    respond(429, "Too Many Requests", "text/plain");
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();

@@ -25,14 +25,24 @@ import {
 /* --------------------------------------------------------------- your data */
 
 /**
+ * The English stand-ins `exportMyData` and `deleteMyAccount` put on a failure
+ * whose body carried no `error` (a 429 or 413 answered by the proxy as HTML).
+ * They are the client's words, not the server's, so they never reach a reader.
+ */
+const CLIENT_DEFAULT_MESSAGES = new Set(["Export failed", "Could not delete account"]);
+
+/**
  * Both requests here go through `request()` itself, not `apiFetch`, so a
  * dropped network arrives as the browser's own `TypeError` ("Failed to
  * fetch") and a timeout as an `AbortError`, not as an `ApiError`. The kit's
  * `inlineErrorMessage` shows a plain `Error`'s message as is, so anything that
- * is not the server's answer becomes the tab's own sentence first.
+ * is not the server's own sentence becomes the tab's sentence first.
  */
 function localizedFailure(err: unknown, fallback: string): unknown {
-  return err instanceof ApiError ? err : new Error(fallback);
+  if (err instanceof ApiError && !CLIENT_DEFAULT_MESSAGES.has(err.message)) {
+    return err;
+  }
+  return new Error(fallback);
 }
 
 /**
