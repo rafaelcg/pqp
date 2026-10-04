@@ -6,10 +6,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import {
   INLINE_SAVED_MS,
+  inlineErrorMessage,
   useInlineSave,
   type InlineSaveState,
   type UseInlineSaveOptions,
 } from "@/components/settings/kit/use-inline-save";
+import { ApiError } from "@/lib/api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -156,6 +158,33 @@ describe("useInlineSave options", () => {
       await current!.run(() => Promise.reject(new Error("Sem espaço")), "Falhou");
     });
     expect(state()).toEqual({ kind: "error", message: "Sem espaço" });
+  });
+});
+
+describe("inlineErrorMessage", () => {
+  it("shows a server's own 4xx sentence", () => {
+    expect(
+      inlineErrorMessage(new ApiError(409, "That handle is already taken"), "Falhou"),
+    ).toBe("That handle is already taken");
+  });
+
+  it("uses the fallback for a 5xx, a network failure and a bare 4xx", () => {
+    expect(inlineErrorMessage(new ApiError(503, "database_unavailable"), "Falhou")).toBe(
+      "Falhou",
+    );
+    expect(
+      inlineErrorMessage(new ApiError(0, "Network error reaching API."), "Falhou"),
+    ).toBe("Falhou");
+    expect(inlineErrorMessage(new ApiError(400, "Request failed"), "Falhou")).toBe(
+      "Falhou",
+    );
+  });
+
+  it("keeps a plain Error's message and falls back for anything else", () => {
+    expect(inlineErrorMessage(new Error("Arquivo grande demais"), "Falhou")).toBe(
+      "Arquivo grande demais",
+    );
+    expect(inlineErrorMessage("boom", "Falhou")).toBe("Falhou");
   });
 });
 

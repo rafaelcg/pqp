@@ -63,6 +63,7 @@ export {
 } from "@/components/settings/kit/unsaved-bar";
 export {
   INLINE_SAVED_MS,
+  inlineErrorMessage,
   useInlineSave,
   type InlineSaveState,
   type UseInlineSaveOptions,
