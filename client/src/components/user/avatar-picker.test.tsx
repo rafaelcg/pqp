@@ -119,6 +119,20 @@ describe("AvatarPicker presets", () => {
   });
 });
 
+describe("AvatarPicker on a phone", () => {
+  it("makes every target 44px and lays the eight presets out four by two", async () => {
+    await mount(AVATAR_PRESETS[0]);
+    expect(host!.querySelector('[role="radiogroup"]')?.className).toContain("max-sm:grid-cols-4");
+    for (const radio of radios()) {
+      expect(radio.className).toContain("max-sm:h-11");
+      expect(radio.className).toContain("max-sm:w-11");
+    }
+    for (const button of host!.querySelectorAll<HTMLButtonElement>("button:not([role])")) {
+      expect(button.className).toContain("max-sm:h-11");
+    }
+  });
+});
+
 describe("AvatarPicker link field", () => {
   const openLink = async () => {
     const button = Array.from(host!.querySelectorAll("button")).find(

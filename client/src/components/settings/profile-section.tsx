@@ -345,7 +345,7 @@ export function ProfileSection({
                     .filter(Boolean)
                     .join(" ") || undefined
                 }
-                className={cn(nameError && "border-danger")}
+                className={cn("max-sm:h-11", nameError && "border-danger")}
                 onChange={(event) => {
                   setNameLeftEmpty(false);
                   onDisplayName(event.target.value);
@@ -489,7 +489,7 @@ export function ProfileSection({
                     .join(" ")}
                   onChange={(event) => onHandle(normalizeHandle(event.target.value))}
                   onKeyDown={saveOnEnter}
-                  className="font-mono"
+                  className="font-mono max-sm:h-11"
                 />
                 {renameAvailableAt === null ? (
                   // The rule is always there; the answer sits beside it. The
@@ -526,8 +526,9 @@ export function ProfileSection({
                     text={`https://${publicProfileDisplayUrl(ownedHandle)}`}
                     label={t("settings.profile.publicHandle.copy")}
                     copiedLabel={t("settings.profile.publicHandle.copied")}
+                    className="max-sm:h-11"
                   />
-                  <Button asChild variant="ghost" size="sm">
+                  <Button asChild variant="ghost" size="sm" className="max-sm:h-11">
                     <a
                       href={publicProfilePath(ownedHandle)}
                       target="_blank"
@@ -564,6 +565,7 @@ export function ProfileSection({
                 }
                 onKeyDown={saveOnEnter}
                 placeholder={t("settings.profile.usernamePlaceholder")}
+                className="max-sm:h-11"
               />
               {/* The tag is how somebody adds you inside the app. It is the
                   saved one, not the draft: the number is the server's. */}
@@ -571,13 +573,13 @@ export function ProfileSection({
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-tertiary">
                   <span>{t("settings.profile.handle")}</span>
                   <span className="min-w-0 break-all font-mono text-text">{tag}</span>
-                  {/* 40px on a phone, where it is a thumb target beside small
+                  {/* 44px on a phone, where it is a thumb target beside small
                       text; the kit's 32px from `sm` up. */}
                   <SettingsCopyButton
                     text={tag}
                     label={t("settings.profile.tag.copy")}
                     copiedLabel={t("settings.profile.tag.copied")}
-                    className="max-sm:h-[var(--control-lg)] max-sm:w-[var(--control-lg)]"
+                    className="max-sm:h-11 max-sm:w-11"
                   />
                 </div>
               ) : null}
@@ -828,6 +830,7 @@ function BannerRow({
               type="button"
               variant="secondary"
               size="sm"
+              className="max-sm:h-11"
               disabled={busy}
               onClick={() => fileRef.current?.click()}
             >
@@ -841,6 +844,7 @@ function BannerRow({
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="max-sm:h-11"
                 disabled={busy}
                 onClick={handleRemove}
               >
