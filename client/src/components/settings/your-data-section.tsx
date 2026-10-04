@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { deleteConfirmationMatches, expectedDeleteConfirmation, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -170,6 +170,9 @@ export function DeleteAccountDialog({
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The answer to "Apagar conta" sits under the long explanation; bring it
+  // into view, or on a short screen it lands below the dialog's fold.
+  const outcomeRef = useRef<HTMLDivElement>(null);
   const [blockingServers, setBlockingServers] = useState<
     BlockingOwnedServer[] | null
   >(null);
@@ -181,6 +184,12 @@ export function DeleteAccountDialog({
       setBlockingServers(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (error || (blockingServers && blockingServers.length > 0)) {
+      outcomeRef.current?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [error, blockingServers]);
 
   const expected = expectedDeleteConfirmation(user?.tag);
   const confirmed = deleteConfirmationMatches(typed, user?.tag);
@@ -201,7 +210,13 @@ export function DeleteAccountDialog({
         setError(null);
       } else {
         const failed = t("settings.delete.failed");
-        setError(inlineErrorMessage(localizedFailure(err, failed), failed));
+        setError(
+          inlineErrorMessage(
+            localizedFailure(err, failed),
+            failed,
+            t("settings.status.rateLimited"),
+          ),
+        );
       }
     } finally {
       setBusy(false);
@@ -263,6 +278,7 @@ export function DeleteAccountDialog({
           </p>
         </div>
 
+        <div ref={outcomeRef} className="space-y-4 empty:hidden">
         {blockingServers && blockingServers.length > 0 && (
           // The list inherits the notice's own foreground: that pair is the
           // one the bench measures on the warning fill. An alert, because it
@@ -287,6 +303,12 @@ export function DeleteAccountDialog({
             </ul>
           </SettingsNotice>
         )}
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+        </div>
 
         <label className="block">
           <span className="mb-1 block text-xs text-text-secondary">
@@ -304,11 +326,6 @@ export function DeleteAccountDialog({
           />
         </label>
 
-        {error && (
-          <p role="alert" className="text-sm text-danger">
-            {error}
-          </p>
-        )}
       </div>
     </Dialog>
   );

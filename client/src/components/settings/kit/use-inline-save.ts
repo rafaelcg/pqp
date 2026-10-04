@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 export type InlineSaveState =
   | { kind: "idle" }
@@ -13,25 +14,31 @@ export const INLINE_SAVED_MS = 2000;
 
 const IDLE: InlineSaveState = { kind: "idle" };
 
-/** The sentence `apiFetch` uses when a failure body carried no `error`. */
-const GENERIC_API_MESSAGE = "Request failed";
-
 /**
  * What to say under a row when a write failed.
  *
- * A server's own refusal (a 4xx with a sentence in it) is shown as is: it
- * names what was wrong with this request. Everything else gets the tab's
- * localized fallback: a 5xx (the breaker's `database_unavailable` is a code,
- * not a sentence), a network failure (status 0, which carries a client-built
- * English line), and a 4xx with no sentence ("Request failed"). Any other
- * `Error` keeps its message, so a tab can throw its own localized one.
+ * The server answers in English (its messages are written for logs and other
+ * clients, not for a reader in Settings), and a network failure carries a
+ * client-built English line, so no `ApiError` text is ever shown: a refused
+ * request gets the tab's own localized `fallback`, and a 429 gets the
+ * `rateLimited` sentence when one is given (trying again at once would only
+ * fail again). Any other `Error` keeps its message, so a tab can throw its own
+ * localized sentence.
  */
-export function inlineErrorMessage(error: unknown, fallback: string): string {
+export function inlineErrorMessage(
+  error: unknown,
+  fallback: string,
+  rateLimited?: string,
+): string {
   if (error instanceof ApiError) {
-    const refused = error.status >= 400 && error.status < 500;
-    return refused && error.message && error.message !== GENERIC_API_MESSAGE
-      ? error.message
-      : fallback;
+    return error.status === 429 && rateLimited ? rateLimited : fallback;
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return fallback;
+  }
+  // A dropped network outside `apiFetch` is the browser's own TypeError.
+  if (error instanceof TypeError) {
+    return fallback;
   }
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -69,6 +76,9 @@ export function useInlineSave({
   state: InlineSaveState;
   run: (fn: () => Promise<unknown>, fallbackError: string) => Promise<void>;
 } {
+  const { t } = useTranslation();
+  const rateLimited = useRef("");
+  rateLimited.current = t("settings.status.rateLimited");
   const [state, setState] = useState<InlineSaveState>(IDLE);
   const latest = useRef(0);
   const mounted = useRef(true);
@@ -131,7 +141,10 @@ export function useInlineSave({
         }, INLINE_SAVED_MS);
       } catch (error) {
         if (!mounted.current || ticket !== latest.current) return;
-        setState({ kind: "error", message: inlineErrorMessage(error, fallbackError) });
+        setState({
+          kind: "error",
+          message: inlineErrorMessage(error, fallbackError, rateLimited.current),
+        });
       }
     },
     [],

@@ -396,7 +396,8 @@ function DirectMessagesGroup({
         label={t("settings.notifications.dm.previewInApp")}
         description={t("settings.notifications.dm.previewInAppHint")}
         checked={state.previewInApp}
-        disabled={!state.arrivalToast}
+        // Not tied to the corner notice: the same setting hides message text
+        // in the conversation list, so it stays usable with the notice off.
         onCheckedChange={setPreviewInAppEnabled}
       />
       <SettingsSwitchRow

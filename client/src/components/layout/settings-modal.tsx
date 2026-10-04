@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
-import { type BlockedUser, type User } from "@pqp/shared";
+import { type BlockedUser, type User, HANDLE_PATTERN } from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
@@ -10,7 +10,7 @@ import { ConnectionsSection } from "@/components/connections/connections-section
 import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type MediaDeviceOption } from "@/lib/audio-devices";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
-import { updateMe } from "@/lib/api";
+import { ApiError, updateMe } from "@/lib/api";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { HelpSection } from "@/components/layout/help-section";
@@ -35,6 +35,7 @@ import {
   type ProfileDrafts,
 } from "@/components/settings/profile-patch";
 import { flashSettingsRow } from "@/components/settings/kit/flash-row";
+import { inlineErrorMessage } from "@/components/settings/kit/use-inline-save";
 import {
   SettingsBuildLine,
   SettingsPaneHeader,
@@ -58,7 +59,8 @@ interface SettingsModalProps {
   onClose: () => void;
   onLocalSave: (settings: LocalSettings) => void;
   onUserUpdated: (user: User) => void;
-  onUnblockUser: (userId: string) => void;
+  /** Throws when the unblock failed, so the row can say so. */
+  onUnblockUser: (userId: string) => void | Promise<void>;
   onAudioSettingsLive?: (settings: LocalSettings) => void;
   /**
    * A section to land on when the dialog opens — the user menu's "send
@@ -573,6 +575,8 @@ export function SettingsModal({
     if (key === "handle") {
       setHandleError(null);
     }
+    // The bar's error was about the last attempt; an edit starts a new one.
+    setSaveError(null);
   }
 
   function discardProfile() {
@@ -619,7 +623,18 @@ export function SettingsModal({
         setHandleError(message);
         setSaveError(message);
       } else {
-        setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
+        if (err instanceof ApiError && err.status === 400 && typeof patch.handle === "string") {
+          // A link the server will not take (too short, a reserved word, a
+          // character it refuses): said under the field, in Portuguese.
+          const message = t("settings.unsaved.handle.invalid");
+          setSection("profile");
+          setHandleError(message);
+          setSaveError(message);
+        } else {
+          setSaveError(
+            inlineErrorMessage(err, t("settings.saveFailed"), t("settings.status.rateLimited")),
+          );
+        }
       }
     } finally {
       setSaving(false);
@@ -640,6 +655,15 @@ export function SettingsModal({
       return;
     }
     const handleChange = pendingHandleChange(user, drafts);
+    if (handleChange && !HANDLE_PATTERN.test(drafts.handle.trim())) {
+      // Said before the 30-day confirm, not after it: confirming a link the
+      // server will refuse is a step that only leads to an error.
+      const message = t("settings.unsaved.handle.invalid");
+      setSection("profile");
+      setHandleError(message);
+      setSaveError(message);
+      return;
+    }
     if (handleChange) {
       setHandleConfirm(handleChange);
       return;
@@ -948,6 +972,9 @@ export function SettingsModal({
                 error={saveError}
                 onDiscard={discardProfile}
                 onSave={saveProfile}
+                onShowSource={
+                  active.id === "profile" ? undefined : () => setSection("profile")
+                }
               />
             </div>
           </div>

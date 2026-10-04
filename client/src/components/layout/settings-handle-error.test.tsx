@@ -147,7 +147,7 @@ describe("a taken public link", () => {
     expect(handleError()).toBe("");
   });
 
-  it("leaves any other failure to the bar, as the server said it", async () => {
+  it("leaves any other failure to the bar, in the reader's language", async () => {
     updateMe.mockRejectedValueOnce(
       new ApiError(409, "That username has no numbers left. Please pick a different one."),
     );
@@ -156,8 +156,19 @@ describe("a taken public link", () => {
     await save();
 
     expect(handleError()).toBe("");
-    expect(bar()!.querySelector('[role="alert"]')?.textContent).toContain(
-      "no numbers left",
-    );
+    const alert = bar()!.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert.length).toBeGreaterThan(0);
+    expect(alert).not.toContain("no numbers left");
+  });
+
+  it("refuses a link the server would refuse before asking to confirm it", async () => {
+    updateMe.mockClear();
+    mount();
+    type(field("handle"), "a");
+    await save();
+
+    expect(updateMe).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
+    expect(handleError()).toMatch(/3 a 20|3 to 20/);
   });
 });

@@ -215,14 +215,14 @@ describe("DeleteAccountDialog", () => {
     );
   });
 
-  it("shows a server refusal with a sentence as is", async () => {
+  it("says a server refusal in the reader's language, never the server's English", async () => {
     respond(400, JSON.stringify({ error: "Type your own tag to confirm" }));
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
-      "Type your own tag to confirm",
-    );
+    const alert = document.body.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert).not.toContain("Type your own tag");
+    expect(alert.length).toBeGreaterThan(0);
   });
 
   it("names the owned communities in an alert", async () => {

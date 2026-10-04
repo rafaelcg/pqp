@@ -238,7 +238,7 @@ export function RadioGroup<T extends string | number>({
               variant === "segmented" && [
                 "inline-flex items-center justify-center rounded-[var(--radius-control)] whitespace-nowrap",
                 content ? "shrink-0" : "min-w-0",
-                size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-sm",
+                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
                 checked
                   ? "bg-surface-2 font-medium text-text"
                   : "text-text-tertiary",
@@ -247,7 +247,7 @@ export function RadioGroup<T extends string | number>({
               ],
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",
-                size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-sm",
+                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
                 checked
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border text-text-secondary",

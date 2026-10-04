@@ -13,6 +13,13 @@ export interface UnsavedChangesBarProps {
   error?: string | null;
   onDiscard: () => void;
   onSave: () => void;
+  /**
+   * Shown from a tab that is not the edits' own: the message names Perfil and
+   * this jumps there. Every other tab applies changes instantly, so a bare
+   * "alterações não salvas" there reads as if the switch just touched were
+   * the unsaved thing.
+   */
+  onShowSource?: () => void;
 }
 
 /**
@@ -35,6 +42,7 @@ export function UnsavedChangesBar({
   error = null,
   onDiscard,
   onSave,
+  onShowSource,
 }: UnsavedChangesBarProps) {
   const { t } = useTranslation();
   if (!visible) {
@@ -45,7 +53,9 @@ export function UnsavedChangesBar({
     ? t("settings.status.saved")
     : blocked
       ? t("settings.unsaved.blocked")
-      : t("settings.unsaved.message");
+      : onShowSource
+        ? t("settings.unsaved.messageProfile")
+        : t("settings.unsaved.message");
 
   return (
     <div className="safe-pb pointer-events-none absolute inset-x-0 bottom-0 px-4 sm:px-8">
@@ -80,6 +90,11 @@ export function UnsavedChangesBar({
           </div>
           {saved ? null : (
             <div className="flex shrink-0 items-center gap-2">
+              {onShowSource ? (
+                <Button type="button" variant="ghost" size="sm" onClick={onShowSource}>
+                  {t("settings.unsaved.showProfile")}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"

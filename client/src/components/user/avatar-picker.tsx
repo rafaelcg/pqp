@@ -56,8 +56,7 @@ export function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
  * The upload helpers (`lib/avatar-upload.ts`, `lib/banner-upload.ts`) throw
  * English sentences of their own for the crop and the storage PUT. Those are
  * replaced by the caller's localized `fallback`. An `ApiError` is kept, so the
- * kit's `inlineErrorMessage` decides: a 4xx sentence as is, anything else the
- * fallback.
+ * kit's `inlineErrorMessage` can tell a rate limit from any other failure.
  */
 export function localizedUploadFailure(error: unknown, fallback: string): Error {
   return error instanceof ApiError ? error : new Error(fallback);

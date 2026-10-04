@@ -11317,7 +11317,12 @@ function MainAppContent({
           setMembersOpen(false);
         }}
         onBlockUser={(userId) => void handleBlockUser(userId)}
-        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        // Settings says a failed unblock in its own row: the app's banner sits
+        // behind the dialog, where nobody sees it.
+        onUnblockUser={async (userId) => {
+          await unblockUser(userId);
+          await loadBlocks();
+        }}
         onReportUser={(member) =>
           setReportTarget({
             kind: "user",

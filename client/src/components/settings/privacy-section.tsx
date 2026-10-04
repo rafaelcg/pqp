@@ -8,6 +8,7 @@ import {
   SettingsGroup,
   SettingsInlineStatus,
   SettingsRow,
+  inlineErrorMessage,
   useInlineSave,
 } from "@/components/settings/kit";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -63,10 +64,33 @@ export function PrivacySection({
   user: User | null;
   blockedUsers: BlockedUser[];
   onUserUpdated: (user: User) => void;
-  onUnblockUser: (userId: string) => void;
+  onUnblockUser: (userId: string) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
   const save = useInlineSave();
+  const [unblocking, setUnblocking] = useState<string | null>(null);
+  const [unblockError, setUnblockError] = useState<{ id: string; message: string } | null>(
+    null,
+  );
+
+  async function unblock(id: string) {
+    setUnblocking(id);
+    setUnblockError(null);
+    try {
+      await onUnblockUser(id);
+    } catch (err) {
+      setUnblockError({
+        id,
+        message: inlineErrorMessage(
+          err,
+          t("settings.privacy.unblockFailed"),
+          t("settings.status.rateLimited"),
+        ),
+      });
+    } finally {
+      setUnblocking(null);
+    }
+  }
   // One write at a time, as before. A ref rather than the save state, so a
   // second click in the same tick is refused too, and the radios stay enabled
   // (and focused) while the first one is in flight.
@@ -168,10 +192,18 @@ export function PrivacySection({
                   aria-label={t("settings.privacy.unblockNamed", {
                     name: blocked.displayName,
                   })}
-                  onClick={() => onUnblockUser(blocked.id)}
+                  disabled={unblocking === blocked.id}
+                  onClick={() => void unblock(blocked.id)}
                 >
                   {t("settings.privacy.unblock")}
                 </Button>
+              }
+              status={
+                unblockError?.id === blocked.id ? (
+                  <SettingsInlineStatus
+                    state={{ kind: "error", message: unblockError.message }}
+                  />
+                ) : undefined
               }
             />
           ))

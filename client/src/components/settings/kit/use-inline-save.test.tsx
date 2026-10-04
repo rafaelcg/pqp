@@ -162,10 +162,20 @@ describe("useInlineSave options", () => {
 });
 
 describe("inlineErrorMessage", () => {
-  it("shows a server's own 4xx sentence", () => {
+  it("never shows the server's English sentence", () => {
     expect(
       inlineErrorMessage(new ApiError(409, "That handle is already taken"), "Falhou"),
-    ).toBe("That handle is already taken");
+    ).toBe("Falhou");
+    expect(inlineErrorMessage(new ApiError(400, "Invalid request"), "Falhou")).toBe(
+      "Falhou",
+    );
+  });
+
+  it("says a 429 is a rate limit when it has the words for it", () => {
+    expect(
+      inlineErrorMessage(new ApiError(429, "Slow down"), "Falhou", "Espera um pouco"),
+    ).toBe("Espera um pouco");
+    expect(inlineErrorMessage(new ApiError(429, "Slow down"), "Falhou")).toBe("Falhou");
   });
 
   it("uses the fallback for a 5xx, a network failure and a bare 4xx", () => {

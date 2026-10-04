@@ -12,7 +12,7 @@ import {
   SettingsRow,
 } from "@/components/settings/kit";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { sendFeedback } from "@/lib/api";
+import { ApiError, sendFeedback } from "@/lib/api";
 import { buildFeedbackContext, type FeedbackVoiceContext } from "@/lib/feedback-context";
 
 /**
@@ -20,10 +20,25 @@ import { buildFeedbackContext, type FeedbackVoiceContext } from "@/lib/feedback-
  * badge, which is the entire gamification budget of this feature: one fun
  * consequence, no points, no leaderboard.
  */
+/**
+ * The draft outlives the tab. Switching to Ajuda to check something, or
+ * closing Settings by reflex, used to throw away a long bug report; it is kept
+ * for the session and cleared once it is sent.
+ */
+const draft: { kind: FeedbackKind; body: string } = { kind: "bug", body: "" };
+
 export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<FeedbackKind>("bug");
-  const [body, setBody] = useState("");
+  const [kind, setKindState] = useState<FeedbackKind>(draft.kind);
+  const [body, setBodyState] = useState(draft.body);
+  const setKind = (next: FeedbackKind) => {
+    draft.kind = next;
+    setKindState(next);
+  };
+  const setBody = (next: string) => {
+    draft.body = next;
+    setBodyState(next);
+  };
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,10 +105,16 @@ export function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null 
         context: buildFeedbackContext(voice),
       });
       focusAfter.current = "result";
+      draft.body = "";
+      draft.kind = "bug";
       setSent(true);
-    } catch {
+    } catch (err) {
       focusAfter.current = "send";
-      setError(t("settings.feedback.error"));
+      setError(
+        err instanceof ApiError && err.status === 429
+          ? t("settings.status.rateLimited")
+          : t("settings.feedback.error"),
+      );
     } finally {
       setSending(false);
     }
