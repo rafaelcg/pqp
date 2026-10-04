@@ -693,6 +693,31 @@ function useMicLevel({
  * it. `disabled` is the microphone being blocked: an empty bar, no marker, and
  * nothing to operate until the person allows the microphone.
  */
+/**
+ * The meter plus its level source. The level updates every animation frame,
+ * so it lives here: held by `VoiceSection` it re-rendered the whole pane 60
+ * times a second while the tab was open.
+ */
+function LiveMicLevelMeter({
+  deviceId,
+  liveAnalyser,
+  active,
+  ...meter
+}: {
+  deviceId: string;
+  liveAnalyser: AnalyserNode | null;
+  active: boolean;
+} & Omit<Parameters<typeof MicLevelMeter>[0], "level">) {
+  // In a call the meter reads the call's own analyser and opens nothing.
+  const level = useMicLevel({
+    deviceId,
+    inputVolume: meter.inputVolume,
+    liveAnalyser,
+    active,
+  });
+  return <MicLevelMeter level={level} {...meter} />;
+}
+
 function MicLevelMeter({
   level,
   inputVolume,
@@ -1375,13 +1400,6 @@ export function VoiceSection({
       ? t("settings.voice.systemDefaultNamed", { name })
       : t("settings.voice.systemDefault");
 
-  // In a call the meter reads the call's own analyser and opens nothing.
-  const micLevel = useMicLevel({
-    deviceId: draftLocal.inputDeviceId,
-    inputVolume: draftLocal.inputVolume,
-    liveAnalyser: voiceAnalyser,
-    active: metering && !blocked,
-  });
   const voiceActivity = draftLocal.inputMode === "voice-activity";
   // The analyser alone is not the signal: a listen-only join (no mic, or the
   // mic refused) and an audience seat are in the call with no pipeline. The
@@ -1632,8 +1650,10 @@ export function VoiceSection({
             // the captions.
             <SettingsPreview decorative={false}>
               <div className="px-3 py-2">
-                <MicLevelMeter
-                  level={micLevel}
+                <LiveMicLevelMeter
+                  deviceId={draftLocal.inputDeviceId}
+                  liveAnalyser={voiceAnalyser}
+                  active={metering && !blocked}
                   inputVolume={draftLocal.inputVolume}
                   disabled={blocked}
                   threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
@@ -1856,7 +1876,6 @@ export function VoiceSection({
                   size="sm"
                   className="self-start @lg:self-auto"
                   disabled={!metering || inCall}
-                  aria-pressed={cameraTest.on}
                   data-camera-test=""
                   onClick={cameraTest.toggle}
                 >
