@@ -806,6 +806,12 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.
    */
   fastStart?: boolean;
+  /**
+   * `watch_camera_sync` for this server (runtime flag, per server, off by
+   * default): whether the presenter's camera follows the film's clock.
+   * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
+   */
+  cameraSync?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

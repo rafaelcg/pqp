@@ -1242,6 +1242,7 @@
   "voice.hls.cameraLayout.side": "Lado a lado",
   "voice.hls.cameraLayout.stream": "Ocultar cámara",
   "voice.hls.cameraLayout.camera": "Ocultar transmisión",
+  "voice.hls.cameraShow": "Mostrar cámara",
   "voice.hls.startup.connecting": "Conectando con la transmisión…",
   "voice.hls.startup.media": "Cargando los primeros segundos de la imagen…",
   "voice.hls.startup.slow": "Sigue cargando, {seconds}s hasta ahora. Tu conexión puede estar lenta.",

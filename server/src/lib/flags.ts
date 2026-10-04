@@ -307,6 +307,20 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config (fastStart)",
   },
+  watch_camera_sync: {
+    description:
+      "Câmera de quem apresenta no compasso do filme (só cliente: o player da câmera acompanha o relógio do filme, com até 5 % de velocidade ou um salto; o filme nunca é mexido).",
+    env: "WATCH_CAMERA_SYNC",
+    parseEnv: exactTrue,
+    // Off until it has been checked by hand on a real party: measured on the
+    // real player (the PR that added it has the numbers), but turned on one
+    // server at a time from the dashboard, then globally.
+    codeDefault: false,
+    // The only reader is `GET /api/live-hls/config?serverId=`, which knows
+    // the server; the deployment-wide answer is the global value.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config (cameraSync)",
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",

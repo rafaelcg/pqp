@@ -1875,6 +1875,14 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off.
    */
   fastStart: boolean;
+  /**
+   * `watch_camera_sync` (runtime flag, off by default, per server): whether a
+   * viewer's camera player holds itself to the film's wall clock
+   * (`client/src/lib/camera-sync.ts`). Client behaviour only, like
+   * `fastStart`: the stream is untouched. Absent on an older API, which the
+   * client reads as off.
+   */
+  cameraSync: boolean;
 }
 
 /**
@@ -1894,6 +1902,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     cameraHeight: liveHlsCamera480Enabled() ? 480 : 360,
     llSegmentCadenceDecay: liveHlsLLSegmentCadenceDecayEnabled(),
     fastStart: isEnabled("party_fast_start"),
+    cameraSync: isEnabled("watch_camera_sync"),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -1930,6 +1939,9 @@ export async function liveHlsConfigForServer(
     // Per-server override first, so the operator can turn it on for one
     // community (`feature_flag_overrides`) ahead of everybody else.
     fastStart: isEnabled("party_fast_start", { serverId }),
+    // Same shape: the operator turns the camera sync on for one community
+    // first, then for everybody, from the dashboard with no deploy.
+    cameraSync: isEnabled("watch_camera_sync", { serverId }),
     // Independent of `enabled`/`allowlisted` above (those gate the egress
     // itself, `LIVE_HLS_ENABLED` / `live_hls_enabled`): LL-HLS has its own
     // flag and its own allowlist, so a server with ordinary HLS on can still

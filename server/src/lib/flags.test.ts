@@ -74,6 +74,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  watch_camera_sync: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
   share_high_motion_guard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
