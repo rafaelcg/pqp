@@ -845,6 +845,12 @@ export const fetchChannelLive = (channelId: string) =>
      */
     partyLive?: boolean;
     watching: number;
+    /**
+     * The server's count of accounts on the playlist, only while
+     * `watch_party_server_audience` is on for the server. Absent otherwise
+     * and from an older API: `watching` is then the number.
+     */
+    viewers?: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);
 

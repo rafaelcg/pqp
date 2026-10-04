@@ -107,6 +107,23 @@ export function liveStateFromRoster(
 }
 
 /**
+ * The audience without a seat a `channel-live` frame (or `GET /live`) states:
+ * the server's `viewers` (distinct accounts on the playlist, every machine)
+ * when it sent one, otherwise `watching`, the sockets this process counted,
+ * which is all an older API ever said. One place, so the sidebar card, the
+ * stage footer and the activity feed cannot pick different fields.
+ */
+export function watchersWithoutSeat(frame: {
+  watching: number;
+  viewers?: number | null;
+}): number {
+  const viewers = frame.viewers;
+  return typeof viewers === "number" && Number.isFinite(viewers) && viewers >= 0
+    ? Math.floor(viewers)
+    : frame.watching;
+}
+
+/**
  * Live state as a `channel-live` frame tells it. The stream is the truth about
  * whether the channel is live and who is presenting; the audience is everyone
  * in the room besides the presenter (the roster) plus everyone watching the

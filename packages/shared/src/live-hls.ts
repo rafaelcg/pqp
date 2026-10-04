@@ -242,6 +242,17 @@ export const channelLiveMessageSchema = z.object({
   /** Watch-mode viewers without a seat. Room participants are on the roster. */
   watching: z.number().int().nonnegative(),
   /**
+   * Distinct ACCOUNTS watching the playlist without a seat, counted by the
+   * server from the viewer heartbeats of every API machine (so two machines
+   * agree, which `watching`, a count of this process's sockets, never did), and
+   * the number the operator dashboard shows. Present only while the
+   * `watch_party_server_audience` flag is on for the channel's server. A client
+   * that knows the field shows it in place of `watching`; one that does not
+   * ignores it and shows `watching` exactly as before. Still a number, never a
+   * list, so the frame does not grow with the audience.
+   */
+  viewers: z.number().int().nonnegative().optional(),
+  /**
    * With `stream: null`: the server is CERTAIN there is no live session in
    * this channel (it checked its own maps and the session table, or it just
    * ended the session itself). Absent on a null the server could not vouch

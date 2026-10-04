@@ -843,9 +843,11 @@ export interface AdminMetrics {
     /**
      * Who is watching (`voice/hls-viewer-counts.ts`). `live` is every
      * broadcast with a viewer seen in the last few minutes, across both API
-     * machines, read from the shared tables and so up to a minute behind; each
-     * has the count now, the peak so far and the distinct accounts. Null when
-     * the query failed. `here` is this process only: its sightings by source
+     * machines; each has the count now (`liveViewers`: distinct accounts with
+     * a heartbeat in the last 45 s, from the machines' presence rows, so the
+     * same number the app's live card shows with `watch_party_server_audience`
+     * on), the peak so far (stored rows, a flush behind) and the distinct
+     * accounts. Null when the query failed. `here` is this process only: its sightings by source
      * since boot, and whether its once-a-minute flush is landing.
      */
     viewers: {

@@ -5,6 +5,7 @@ import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
+import { watchersWithoutSeat } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import { WatchStage, WatchChannelStage, watchAudienceCount } from "./watch-stage";
 
@@ -291,6 +292,32 @@ describe("watchAudienceCount", () => {
         [seat("host", true), seat("a"), seat("b")],
       ),
     ).toBe(5);
+  });
+
+  it("counts the server's accounts when a frame carries them, and its own sockets when not", () => {
+    // 2026-10-03: this machine counted 49 sockets, the server 73 accounts,
+    // two people are seated beside the presenter. The stage footer, the sidebar
+    // card and the feed all read this one number.
+    const seats = [seat("host", true), seat("a"), seat("b")];
+    const withField = { watching: 49, viewers: 73 };
+    const live = { stream, watching: watchersWithoutSeat(withField) };
+    expect(watchAudienceCount(live, seats)).toBe(75);
+    const html = renderToStaticMarkup(
+      <WatchStage
+        hlsUrl="https://api.example.test/api/voice/hls-playlist/c1/1?t=tok"
+        audienceCount={watchAudienceCount(live, seats)}
+        ended={false}
+        onJoin={() => {}}
+      />,
+    );
+    expect(html).toContain("75 people watching");
+
+    // A frame from a server without the flag: today's number, untouched.
+    const without = { stream, watching: watchersWithoutSeat({ watching: 49 }) };
+    expect(watchAudienceCount(without, seats)).toBe(51);
+    expect(
+      watchersWithoutSeat({ watching: 49, viewers: null as unknown as undefined }),
+    ).toBe(49);
   });
 
   it("is zero with nothing known or nothing live", () => {

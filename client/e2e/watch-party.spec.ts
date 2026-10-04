@@ -377,6 +377,13 @@ function gumCalls(page: Page): Promise<number> {
 async function withFakeLiveStream(
   page: Page,
   channelId: string,
+  /**
+   * `viewers`: what the server's `watch_party_server_audience` flag would add
+   * to both seams. CI's API has the flag off (the answer is honestly absent),
+   * so a test about the number writes it here, constant across both seams like
+   * the stream, and leaves it out to prove the unflagged answer.
+   */
+  extra: { viewers?: number } = {},
 ): Promise<void> {
   const stream = {
     hlsUrl: `/api/voice/hls-playlist/${channelId}/e2e-session?t=e2e`,
@@ -390,7 +397,7 @@ async function withFakeLiveStream(
     const body = (await response.json()) as Record<string, unknown>;
     await route.fulfill({
       response,
-      json: { ...body, stream },
+      json: { ...body, stream, ...extra },
     });
   });
 
@@ -427,7 +434,7 @@ async function withFakeLiveStream(
       try {
         const frame = JSON.parse(message) as Record<string, unknown>;
         if (frame.type === "channel-live" && frame.channelId === channelId) {
-          ws.send(JSON.stringify({ ...frame, stream }));
+          ws.send(JSON.stringify({ ...frame, stream, ...extra }));
           return;
         }
       } catch {
@@ -1384,6 +1391,78 @@ test("opening the options does not move the picture", async ({ page }) => {
  * these two are the client half, so a future regression in the ROUTE is
  * caught here rather than in a browser on the day.
  */
+/**
+ * THE NUMBER THE CARD AND THE STAGE SHOW (`watch_party_server_audience`).
+ * 2026-10-03: the live card said 49 and the operator dashboard 96 for the same
+ * party, because the card added up the sockets one API machine had counted.
+ * With the flag on the frame carries `viewers` (accounts, every machine), and
+ * both surfaces must show it; with it off they show today's number. The server
+ * half is pinned on a real Postgres in `voice-live-cluster.test.ts`; this is
+ * the browser half, with the field written into the frame the way the flag
+ * would (CI's API runs with it off).
+ */
+test("the sidebar card and the stage show the server's viewer count, and today's when the frame has none", async ({
+  browser,
+}) => {
+  const shared = await seedServer("wp-count", "wp-count-guest");
+  const party = await createParty("wp-count", shared.serverId, "Cinemoon");
+  await setPartyState("wp-count", party.partyId, "live");
+  const here = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
+
+  const withField = await secondClient(browser);
+  try {
+    const viewer = withField.page;
+    await withFakeLiveStream(viewer, party.channelId, { viewers: 73 });
+    await openAs(viewer, here, "wp-count-guest");
+    const card = viewer.locator(
+      `[data-live-party-row][data-channel-id="${party.channelId}"]`,
+    );
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    // CI's server has no egress, so it never pushes a `channel-live` for this
+    // party on its own: opening the channel (`watch-live`, answered with the
+    // proxied frame) is what hands the card its number.
+    await card.click();
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(viewer.getByTestId("watch-channel-stage")).toContainText(
+      "73 people watching",
+    );
+    await expect(card.locator("[data-live-party-audience]")).toHaveAttribute(
+      "data-live-party-audience",
+      "73",
+    );
+  } finally {
+    await withField.context.close();
+  }
+
+  // Flag off: the frame has no `viewers`, and the number is whatever the
+  // socket path always said (this one viewer, counted by `watch-live`).
+  const without = await secondClient(browser);
+  try {
+    const viewer = without.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(viewer, here, "wp-count-guest");
+    const card = viewer.locator(
+      `[data-live-party-row][data-channel-id="${party.channelId}"]`,
+    );
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.click();
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(viewer.getByTestId("watch-channel-stage")).not.toContainText(
+      "73 people watching",
+    );
+    await expect(card.locator("[data-live-party-audience]")).not.toHaveAttribute(
+      "data-live-party-audience",
+      "73",
+    );
+  } finally {
+    await without.context.close();
+  }
+});
+
 test("a viewer arrives by link, with no sidebar click anywhere", async ({
   browser,
 }) => {

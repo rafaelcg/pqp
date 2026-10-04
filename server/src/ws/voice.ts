@@ -227,6 +227,10 @@ import {
 } from "./watch-party-live.js";
 import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
+  peekPresentHlsViewers,
+  presentHlsViewers,
+} from "../voice/hls-viewer-counts.js";
+import {
   adoptWatchPartyState,
   applyWatchPartyWrite,
   endWatchParty,
@@ -1961,6 +1965,14 @@ export interface VoiceActivitySnapshot {
     tokenRemintLoops: number;
     /** Fresh viewer tokens handed out by those passes since boot. */
     tokenRemints: number;
+    /**
+     * `watch_party_server_audience`: `channel-live` / `GET /live` answers that
+     * carried the server's `viewers` count, and the ones that could not (the
+     * count was unreadable, so the client was left with `watching`). With the
+     * flag on for a live party `withViewers` climbs and `unavailable` belongs
+     * at zero; both at zero with the flag on is this not running.
+     */
+    audienceViewers: { withViewers: number; unavailable: number };
   };
   /**
    * One entry per room that has somebody in it, largest first.
@@ -2194,6 +2206,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       liveChannels: hlsAudience.liveChannels().length,
       tokenRemintLoops: hlsTokenRemint.loops,
       tokenRemints: hlsTokenRemint.tokens,
+      audienceViewers: { ...hlsAudienceViewerAnswers },
     },
     rooms,
   };
@@ -3825,22 +3838,180 @@ function channelLiveFrameWith(
   userId: string,
   stream: LiveHlsStream | null,
   known: boolean,
+  /** `audienceViewersFor`'s answer; absent leaves the frame as it always was. */
+  viewers?: number,
 ): VoiceSignalingMessage {
   return {
     type: "channel-live",
     channelId,
     stream: stream ? viewerStreamFor(channelId, stream, userId) : null,
     watching: hlsAudience.count(channelId),
+    ...(viewers !== undefined ? { viewers } : {}),
     ...(stream === null && known ? { ended: true } : {}),
   };
 }
+
+/**
+ * THE SERVER'S COUNT OF WHO IS WATCHING A LIVE PARTY, for the `viewers` field
+ * of `channel-live` and `GET /live`. `undefined` is "say nothing", and it is
+ * what a frame carries when the flag is off, nothing is live or the count
+ * cannot be read: the client then shows `watching` exactly as it always did.
+ *
+ * WHY NOT `hlsAudience.count`. That is sockets on THIS process that sent
+ * `watch-live`: half the audience with two machines, none of the people on a
+ * phone or an older tab that never sends it, and a person with three tabs
+ * three times. The count here is distinct ACCOUNTS on the playlist, from every
+ * machine's presence row (`presentHlsViewers`), minus the people holding a seat
+ * (the client adds the roster itself). Nothing local is mixed in, on purpose:
+ * every machine reads the same rows and must say the same number (a floor at
+ * this machine's own socket count made two machines differ again, and counted
+ * a second device of somebody who holds a seat).
+ *
+ * A NUMBER IN A FRAME ALREADY SENT. `channel-live` goes out per socket on the
+ * keyframe regardless; this adds one integer and one cached read per
+ * broadcast (shared for `HLS_PRESENCE_READ_CACHE_MS`, coalesced), not one per
+ * recipient, and the frame does not grow with the audience.
+ *
+ * `cacheOnly` is for the socket-auth catch-up, which runs once per socket in a
+ * reconnect storm and must never reach the database (see its comment): it
+ * answers from the last read, which the 30 s keyframe keeps warm for a live
+ * channel, and says nothing when there is none.
+ */
+async function audienceViewersFor(
+  channelId: string,
+  stream: LiveHlsStream | null,
+  options: { cacheOnly?: boolean } = {},
+): Promise<number | undefined> {
+  if (!stream) {
+    return undefined;
+  }
+  // BOUNDED. The count is an optional field on a frame that carries the stream
+  // itself, so a slow or saturated database must not hold the fan-out: past the
+  // deadline the frame goes without it (the client keeps `watching`) and the
+  // read finishes in the background into the shared cache for the next frame.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      hlsAudienceViewerAnswers.unavailable += 1;
+      resolve(undefined);
+    }, AUDIENCE_COUNT_WAIT_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([audienceViewersUnbounded(channelId, stream, options), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The longest a frame waits for the optional audience count. */
+const AUDIENCE_COUNT_WAIT_MS = 500;
+
+async function audienceViewersUnbounded(
+  channelId: string,
+  stream: LiveHlsStream,
+  options: { cacheOnly?: boolean },
+): Promise<number | undefined> {
+  try {
+    // A BEST-EFFORT FIELD ON A FRAME THAT MUST GO OUT: nothing in here may
+    // throw into the caller, and nothing in the cache-only path may wait on the
+    // database (a server-id lookup is one, when its own cache is cold).
+    const server = await audienceServerId(channelId, options.cacheOnly === true);
+    if (!server.known) {
+      return undefined;
+    }
+    if (!isEnabled("watch_party_server_audience", { serverId: server.serverId })) {
+      return undefined;
+    }
+    let present: number | null;
+    if (options.cacheOnly) {
+      present = peekPresentHlsViewers(channelId, stream.startedAt);
+      if (present === null) {
+        // A cold cache is warming, not a failure: it says nothing and is not
+        // counted as unavailable (that counter is for reads that failed).
+        // Cold (a fresh process): warm it for the next one, off this path. One
+        // coalesced read per broadcast per `HLS_PRESENCE_READ_CACHE_MS`, however
+        // many sockets arrive, so a reconnect storm still asks once.
+        void presentHlsViewers(channelId, stream.startedAt, {
+          excludeUserIds: getRoomPeers(channelId).map((peer) => peer.userId),
+        });
+        return undefined;
+      }
+    } else {
+      present = await presentHlsViewers(channelId, stream.startedAt, {
+        excludeUserIds: getRoomPeers(channelId).map((peer) => peer.userId),
+      });
+    }
+    if (present === null) {
+      hlsAudienceViewerAnswers.unavailable += 1;
+      return undefined;
+    }
+    hlsAudienceViewerAnswers.withViewers += 1;
+    return present;
+  } catch (error) {
+    hlsAudienceViewerAnswers.unavailable += 1;
+    logEvent("voice.audienceViewersFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+/**
+ * The channel's server id for the flag, remembered for a minute. A channel's
+ * server never changes, and this is asked once per socket in the catch-up and
+ * once per watcher in a token renewal, so it is a map read after the first.
+ * `cacheOnly` never resolves on the spot: a channel not remembered yet is
+ * answered "unknown" and resolved in the background for the next caller.
+ */
+const audienceServerIds = new Map<
+  string,
+  { at: number; serverId: string | null }
+>();
+const AUDIENCE_SERVER_ID_TTL_MS = 60_000;
+
+async function audienceServerId(
+  channelId: string,
+  cacheOnly: boolean,
+): Promise<{ known: true; serverId: string | null } | { known: false }> {
+  const remembered = audienceServerIds.get(channelId);
+  if (remembered && Date.now() - remembered.at < AUDIENCE_SERVER_ID_TTL_MS) {
+    return { known: true, serverId: remembered.serverId };
+  }
+  // SINGLE-FLIGHT: a reconnect wave asks for the same channel once per socket
+  // before the first answer lands, and must share one lookup, not start one each.
+  let pending = audienceServerIdInFlight.get(channelId);
+  if (!pending) {
+    pending = hlsServerIdFor(channelId)
+      .then((serverId) => {
+        if (audienceServerIds.size > 512) {
+          audienceServerIds.clear();
+  audienceServerIdInFlight.clear();
+        }
+        audienceServerIds.set(channelId, { at: Date.now(), serverId });
+        return serverId;
+      })
+      .finally(() => {
+        audienceServerIdInFlight.delete(channelId);
+      });
+    audienceServerIdInFlight.set(channelId, pending);
+  }
+  if (cacheOnly) {
+    pending.catch(() => undefined);
+    return { known: false };
+  }
+  return { known: true, serverId: await pending };
+}
+const audienceServerIdInFlight = new Map<string, Promise<string | null>>();
 
 async function channelLiveFrame(
   channelId: string,
   userId: string,
 ): Promise<VoiceSignalingMessage> {
   const { stream, known } = await resolveChannelStream(channelId);
-  return channelLiveFrameWith(channelId, userId, stream, known);
+  const viewers = await audienceViewersFor(channelId, stream);
+  return channelLiveFrameWith(channelId, userId, stream, known, viewers);
 }
 
 function countMusicListenersFromPeers(channelId: string): number {
@@ -3997,12 +4168,14 @@ async function broadcastChannelLive(
     return 0;
   }
   const { stream, known } = answer ?? (await resolveChannelStream(channelId));
+  // Once for the whole fan-out, never per recipient.
+  const viewers = await audienceViewersFor(channelId, stream);
   let sent = 0;
   forEachAuthenticatedSocket((socket, user) => {
     if (!audience.has(user.id)) {
       return;
     }
-    send(socket, channelLiveFrameWith(channelId, user.id, stream, known));
+    send(socket, channelLiveFrameWith(channelId, user.id, stream, known, viewers));
     hlsAudienceFramesSent.frames += 1;
     sent += 1;
   });
@@ -4271,6 +4444,8 @@ export async function getChannelLiveState(channelId: string): Promise<{
    */
   known: boolean;
   watching: number;
+  /** `audienceViewersFor`: absent with the flag off or the count unreadable. */
+  viewers?: number;
   participants: number;
 }> {
   // Three in-process sources, tried in order, because no single one always
@@ -4300,10 +4475,12 @@ export async function getChannelLiveState(channelId: string): Promise<{
   // empty (which is never the case on the instance actually running the
   // egress -- this read never touches the database there).
   const { stream, known } = await resolveChannelStream(channelId);
+  const viewers = await audienceViewersFor(channelId, stream);
   return {
     stream,
     known,
     watching: hlsAudience.count(channelId),
+    ...(viewers !== undefined ? { viewers } : {}),
     participants: getRoomPeers(channelId).length,
   };
 }
@@ -4311,6 +4488,7 @@ export async function getChannelLiveState(channelId: string): Promise<{
 /** Test hook: forget every watcher and stream, stop every keyframe clock. */
 export function resetHlsAudience(): void {
   hlsAudience.reset();
+  audienceServerIds.clear();
   relayedLiveAt.clear();
   dbStreamMemo.clear();
   dbStreamInFlight.clear();
@@ -4477,6 +4655,9 @@ export const ROSTER_AUDIENCE_KEYFRAME_MS = 30_000;
  * denominator ships with the numerator.
  */
 const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
+
+/** `viewers` answers given and refused (`audienceViewersFor`), since boot. */
+const hlsAudienceViewerAnswers = { withViewers: 0, unavailable: 0 };
 
 /**
  * `channel-live` frames written since boot, per socket. The number that says
@@ -4764,11 +4945,19 @@ async function remintHlsAudienceTokens(
       if (!stream) {
         continue;
       }
+      // From the last read: this loop is one await per watcher, so it must
+      // not put a query per watcher behind each of them.
+      const viewers = await audienceViewersFor(channelId, stream, {
+        cacheOnly: true,
+      });
       send(socket, {
         type: "channel-live",
         channelId,
         stream: viewerStreamFor(channelId, stream, user.id),
         watching: hlsAudience.count(channelId),
+        // The same number the keyframe carries: a token frame without it would
+        // drop the client back to `watching` for a moment every 50 minutes.
+        ...(viewers !== undefined ? { viewers } : {}),
       });
       hlsTokenRemint.tokens += 1;
     } catch (error) {
@@ -4860,6 +5049,8 @@ export function resetRosterSequences(): void {
   hlsAudienceFramesSent.frames = 0;
   hlsAudienceFramesSent.relayed = 0;
   hlsAudienceFramesSent.fromBus = 0;
+  hlsAudienceViewerAnswers.withViewers = 0;
+  hlsAudienceViewerAnswers.unavailable = 0;
   hlsReconcileRelay.published = 0;
   hlsReconcileRelay.applied = 0;
   hlsReconcileRelay.appliedAsSharer = 0;
@@ -7028,6 +7219,7 @@ export async function sendAllVoiceRosters(
           user.id,
           stream,
           stream !== null || moved,
+          await audienceViewersFor(entry.channelId, stream, { cacheOnly: true }),
         ),
       );
     },
