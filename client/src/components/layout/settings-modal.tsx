@@ -652,6 +652,11 @@ export function SettingsModal({
   // `openSection(section, rowId)`: switch, then find the row once the tab has
   // rendered it, bring it to the middle of the pane and flash it once. Tabs
   // that load their rows asynchronously get a second until the row shows.
+  //
+  // A row that is not on screen (Voz draws "ptt" only in push-to-talk mode)
+  // is not an error: the pane lands at the top of the section at once, the
+  // same place a plain tab switch lands, and the late row still flashes if it
+  // turns up within the second.
   const [pendingRow, setPendingRow] = useState<{ id: string; nonce: number } | null>(null);
   const openSection = useCallback((next: SectionId, rowId?: string) => {
     setSection(next);
@@ -666,7 +671,13 @@ export function SettingsModal({
     let stop: (() => void) | null = null;
     const find = () => {
       stop = flashSettingsRow(scrollerRef.current, pendingRow.id);
-      if (!stop && ++attempts < 20) {
+      if (stop) {
+        return;
+      }
+      if (attempts === 0 && scrollerRef.current) {
+        scrollerRef.current.scrollTop = 0;
+      }
+      if (++attempts < 20) {
         retry = window.setTimeout(find, 50);
       }
     };
