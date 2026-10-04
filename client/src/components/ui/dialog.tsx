@@ -267,7 +267,13 @@ export function Dialog({
       if (event.shiftKey && (active === first || !panelRef.current?.contains(active))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && active === last) {
+      } else if (
+        !event.shiftKey &&
+        (active === last || !panelRef.current?.contains(active))
+      ) {
+        // Also when focus fell out of the panel (a focused button that
+        // unmounted leaves it on <body>): Tab must not walk into the app
+        // behind the dialog.
         event.preventDefault();
         first.focus();
       }

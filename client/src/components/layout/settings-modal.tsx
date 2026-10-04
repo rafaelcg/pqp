@@ -256,6 +256,9 @@ export function SettingsModal({
   // half-typed display name.
   const [drafts, setDrafts] = useState<ProfileDrafts>(EMPTY_DRAFTS);
   const seededRef = useRef(false);
+  // The account the drafts were last aligned with, so a change to it while
+  // the dialog is open can tell edited fields from untouched ones.
+  const savedUserRef = useRef<User | null>(null);
   const [draftLocal, setDraftLocal] = useState(localSettings);
   // Mirrors `draftLocal` so `patchLocal` can compose off the latest values
   // without doing its work inside a render-phase state updater.
@@ -392,8 +395,27 @@ export function SettingsModal({
       seededRef.current = false;
       return;
     }
+    if (user && seededRef.current && savedUserRef.current) {
+      // The account changed while open (an upload, or this person editing
+      // their profile on another device). A field nobody touched here follows
+      // the new value; a field edited here keeps the edit. Otherwise an
+      // untouched dialog would read as dirty and Salvar would send the old
+      // values back over the other device's change.
+      const before = profileDraftsFrom(savedUserRef.current);
+      const after = profileDraftsFrom(user);
+      savedUserRef.current = user;
+      setDrafts((current) => ({
+        displayName:
+          current.displayName === before.displayName ? after.displayName : current.displayName,
+        username: current.username === before.username ? after.username : current.username,
+        handle: current.handle === before.handle ? after.handle : current.handle,
+        avatarUrl: current.avatarUrl === before.avatarUrl ? after.avatarUrl : current.avatarUrl,
+      }));
+      return;
+    }
     if (user && !seededRef.current) {
       seededRef.current = true;
+      savedUserRef.current = user;
       setDrafts(profileDraftsFrom(user));
       setSaveError(null);
       setNameError(null);
@@ -404,6 +426,18 @@ export function SettingsModal({
   }, [open, user]);
 
   const profileDirty = isProfileDirty(user, drafts);
+
+  // Descartar or a save hides the bar and unmounts the button that had
+  // focus. Put focus back on the pane so it stays inside the dialog.
+  useEffect(() => {
+    if (profileDirty || !open) {
+      return;
+    }
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) {
+      scrollerRef.current?.focus({ preventScroll: true });
+    }
+  }, [profileDirty]);
 
   // Back to clean by any route (Descartar, a save, retyping the old value):
   // nothing is blocking a close any more.
