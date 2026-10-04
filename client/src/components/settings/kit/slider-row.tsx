@@ -14,6 +14,8 @@ export interface SettingsSliderRowProps {
   onValueChange: (value: number) => void;
   onValueCommit?: (value: number) => void;
   disabled?: boolean;
+  /** `false` keeps the row out of the settings registry (see `SettingsRow`). */
+  searchable?: boolean;
 }
 
 /**
@@ -32,6 +34,7 @@ export function SettingsSliderRow({
   onValueChange,
   onValueCommit,
   disabled,
+  searchable,
 }: SettingsSliderRowProps) {
   const readout = format(value);
   return (
@@ -40,6 +43,7 @@ export function SettingsSliderRow({
       label={label}
       description={description}
       disabled={disabled}
+      searchable={searchable}
       stacked
       control={
         <div className="flex items-center gap-3">
