@@ -44,6 +44,7 @@ export function PttHoldControl({
     <button
       type="button"
       aria-pressed={isTransmitting}
+      aria-label={fullLabel}
       disabled={locked}
       className={cn(
         // Cap the used box. Flex items default to min-height: auto, so the

@@ -477,15 +477,16 @@ test("the channel list collapses to icons while somebody else presents, and come
     await expect(rail.getByLabel("geral")).toBeVisible();
     await expect(rail.locator("[data-channel-rail-expand]")).toBeVisible();
 
-    // Hanging up is one click away from the strip, and the strip still says
-    // the state in words even with no room to print them: the 72px column
-    // drops the sentence to screen-reader text rather than dropping it. Half
-    // the voice suite reads that string to know a call is up.
+    // Hanging up is the dock's Leave while that bar is on screen. The compact
+    // strip drops its own disconnect so the same call does not offer two.
+    await expect(
+      page.getByRole("button", { name: "Leave", exact: true }).first(),
+    ).toBeVisible();
     await expect(
       page.locator("[data-voice-bar-compact]").getByRole("button", {
         name: "Disconnect from voice",
       }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.getByText("Voice connected")).toBeVisible();
 
     // And the call really did get the width it cost — enough of it, on this
