@@ -1,4 +1,5 @@
-import { defaultPushToTalkBinding, formatBinding, type KeyBinding } from "@/components/voice/push-to-talk";
+import { defaultPushToTalkBinding, type KeyBinding } from "@/components/voice/push-to-talk";
+import { bindingKeycaps } from "@/components/voice/key-binding-field";
 import { Dialog } from "@/components/ui/dialog";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -26,9 +27,13 @@ const GROUP_LABEL: Record<(typeof SHORTCUT_GROUPS)[number]["id"], MessageKey> = 
 };
 
 function ShortcutKeys({ binding }: { binding: KeyBinding }) {
-  const parts = formatBinding(binding).split(" + ");
+  const { keys: parts, label } = bindingKeycaps(binding);
   return (
-    <span className="flex flex-wrap items-center justify-end gap-1">
+    <span
+      role="img"
+      aria-label={label}
+      className="flex flex-wrap items-center justify-end gap-1"
+    >
       {parts.map((part, index) => (
         <kbd
           key={`${part}-${index}`}
