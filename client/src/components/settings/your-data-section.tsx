@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Download } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Check, Download, ExternalLink, Info } from "lucide-react";
 import { deleteConfirmationMatches, expectedDeleteConfirmation, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -12,6 +12,7 @@ import {
   SettingsNotice,
   SettingsRow,
   useInlineSave,
+  type InlineSaveState,
 } from "@/components/settings/kit";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -45,6 +46,163 @@ function localizedFailure(err: unknown, fallback: string): unknown {
   return new Error(fallback);
 }
 
+/** How long "Pronto. O arquivo ... foi baixado." stays under the button. */
+export const EXPORT_DONE_MS = 6000;
+
+/**
+ * The file name of a copy. The date is the reader's own calendar day, not
+ * UTC's: `toISOString()` is already tomorrow after 21:00 in Brazil.
+ */
+export function exportFileName(now: Date = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `pqp-my-data-${now.getFullYear()}-${month}-${day}.json`;
+}
+
+/**
+ * "54 s" under a minute, "2 min" above it (rounded up, so the button never
+ * comes back before the server would accept it). Unit symbols, not words: they
+ * are the same in all three languages.
+ */
+export function formatWait(seconds: number): string {
+  return seconds < 60 ? `${seconds} s` : `${Math.ceil(seconds / 60)} min`;
+}
+
+/**
+ * Set when the delete dialog is dismissed. The dialog replaces Settings while
+ * it is open (Settings unmounts), so when Settings comes back its first
+ * control would take focus. The Seus dados tab reads this on mount and puts
+ * focus back on the button the person came from.
+ */
+let deleteFocusReturnAt = 0;
+const DELETE_FOCUS_RETURN_MS = 3000;
+
+/**
+ * Everything the two download buttons share (the row and the shortcut in the
+ * delete dialog): the request, the file, the line under the button, and the
+ * wait after the server's "too many requests".
+ *
+ * A download has no "Salvo": the file appearing is the proof, but the browser's
+ * download UI is easy to miss, so a "Pronto" line names the file for a few
+ * seconds. Without it people click again and hit the limiter.
+ */
+function useDataExport(enabled: boolean) {
+  const { t } = useTranslation();
+  const exp = useInlineSave({
+    savingLabel: t("settings.data.exporting"),
+    showSaved: false,
+  });
+  const exporting = exp.state.kind === "saving";
+  const [doneFile, setDoneFile] = useState<string | null>(null);
+  const doneTimer = useRef<number | null>(null);
+  const [until, setUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(
+    () => () => {
+      if (doneTimer.current !== null) window.clearTimeout(doneTimer.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (until === null) {
+      return;
+    }
+    const tick = window.setInterval(() => {
+      const current = Date.now();
+      if (current >= until) {
+        setUntil(null);
+      }
+      setNow(current);
+    }, 1000);
+    return () => window.clearInterval(tick);
+  }, [until]);
+
+  const waitSeconds =
+    until === null ? 0 : Math.max(0, Math.ceil((until - now) / 1000));
+  const waiting = until !== null && waitSeconds > 0;
+
+  const download = useCallback(() => {
+    const failed = t("settings.data.exportFailed");
+    if (doneTimer.current !== null) {
+      window.clearTimeout(doneTimer.current);
+      doneTimer.current = null;
+    }
+    setDoneFile(null);
+    void exp.run(async () => {
+      let blob: Blob;
+      try {
+        blob = await exportMyData();
+      } catch (err: unknown) {
+        // The limiter says how long to wait: show it on the button instead of
+        // an error the person can only answer by clicking again.
+        if (
+          err instanceof ApiError &&
+          err.status === 429 &&
+          err.retryAfterMs !== null &&
+          err.retryAfterMs > 0
+        ) {
+          const current = Date.now();
+          setNow(current);
+          setUntil(current + err.retryAfterMs);
+          return;
+        }
+        throw localizedFailure(err, failed);
+      }
+      // A Blob has no URL of its own, so one is minted just long enough for the
+      // click to fire. The server export uses the same mechanism.
+      const url = URL.createObjectURL(blob);
+      const name = exportFileName();
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      URL.revokeObjectURL(url);
+      setDoneFile(name);
+      doneTimer.current = window.setTimeout(() => {
+        doneTimer.current = null;
+        setDoneFile(null);
+      }, EXPORT_DONE_MS);
+    }, failed);
+  }, [t, exp.run]);
+
+  const state: InlineSaveState = waiting
+    ? {
+        kind: "error",
+        message: t("settings.data.exportCooldown", { time: formatWait(waitSeconds) }),
+      }
+    : exp.state;
+
+  const status =
+    state.kind === "idle" && doneFile ? (
+      <p
+        role="status"
+        aria-live="polite"
+        className="mt-1.5 flex animate-fade-in items-start gap-1.5 text-xs text-text-secondary"
+      >
+        <Check aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-success" />
+        <span className="min-w-0 text-pretty [overflow-wrap:anywhere]">
+          {t("settings.data.exportDone", { file: doneFile })}
+        </span>
+      </p>
+    ) : (
+      <SettingsInlineStatus state={state} />
+    );
+
+  return {
+    download,
+    status,
+    exporting,
+    waiting,
+    waitLabel: waiting ? formatWait(waitSeconds) : null,
+    disabled: !enabled || exporting || waiting,
+  };
+}
+
+/** Touch targets: 44px on a phone or a touch screen, the kit's `sm` otherwise. */
+const TOUCH = "max-sm:h-11 pointer-coarse:h-11";
+
 /**
  * The two rights the privacy policy promises, as buttons.
  *
@@ -61,49 +219,44 @@ export function YourDataSection({
   onRequestDelete: () => void;
 }) {
   const { t } = useTranslation();
-  // A download has no "Salvo": the file appearing is the proof. The line says
-  // "Preparando…" while the server builds the copy, and the error after.
-  const exp = useInlineSave({
-    savingLabel: t("settings.data.exporting"),
-    showSaved: false,
-  });
-  const exporting = exp.state.kind === "saving";
+  const data = useDataExport(user !== null);
+  const deleteButton = useRef<HTMLButtonElement>(null);
 
-  function download() {
-    const failed = t("settings.data.exportFailed");
-    void exp.run(async () => {
-      const blob = await exportMyData().catch((err: unknown) => {
-        throw localizedFailure(err, failed);
-      });
-      // A Blob has no URL of its own, so one is minted just long enough for the
-      // click to fire. The server export uses the same mechanism.
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `pqp-my-data-${new Date().toISOString().slice(0, 10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-    }, failed);
-  }
+  // Back from the delete dialog: focus the button that opened it.
+  useEffect(() => {
+    if (Date.now() - deleteFocusReturnAt < DELETE_FOCUS_RETURN_MS) {
+      deleteFocusReturnAt = 0;
+      deleteButton.current?.focus();
+    }
+  }, []);
 
   return (
-    <div className="space-y-6">
+    // The control stays at the top of its row: a status line growing under
+    // the text must not push the button down while the person is reading it.
+    <div className="space-y-6 @lg:[&_[data-settings-row]]:items-start">
       <SettingsGroup title={t("settings.data.group.export.title")}>
         <SettingsRow
           id="export"
           label={t("settings.data.row.export.label")}
           description={t("settings.data.exportBody")}
-          status={<SettingsInlineStatus state={exp.state} />}
+          status={data.status}
           control={
             <Button
               variant="secondary"
               size="sm"
-              onClick={download}
-              disabled={exporting || !user}
-              aria-label={t("settings.data.row.export.action")}
+              className={TOUCH}
+              onClick={data.download}
+              disabled={data.disabled}
+              aria-label={
+                data.waitLabel
+                  ? t("settings.data.row.export.waitAction", { time: data.waitLabel })
+                  : t("settings.data.row.export.action")
+              }
             >
               <Download aria-hidden className="h-3.5 w-3.5" />
-              {t("settings.data.export")}
+              {data.waitLabel
+                ? t("settings.data.exportIn", { time: data.waitLabel })
+                : t("settings.data.export")}
             </Button>
           }
         />
@@ -116,8 +269,10 @@ export function YourDataSection({
           description={t("settings.data.deleteHint")}
           control={
             <Button
+              ref={deleteButton}
               variant="danger"
               size="sm"
+              className={TOUCH}
               onClick={onRequestDelete}
               disabled={!user}
               aria-label={t("settings.data.row.delete.action")}
@@ -170,12 +325,12 @@ export function DeleteAccountDialog({
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The answer to "Apagar conta" sits under the long explanation; bring it
-  // into view, or on a short screen it lands below the dialog's fold.
-  const outcomeRef = useRef<HTMLDivElement>(null);
   const [blockingServers, setBlockingServers] = useState<
     BlockingOwnedServer[] | null
   >(null);
+  const data = useDataExport(user !== null);
+  const typeId = useId();
+  const hintId = useId();
 
   useEffect(() => {
     if (open) {
@@ -185,14 +340,25 @@ export function DeleteAccountDialog({
     }
   }, [open]);
 
-  useEffect(() => {
-    if (error || (blockingServers && blockingServers.length > 0)) {
-      outcomeRef.current?.scrollIntoView?.({ block: "nearest" });
-    }
-  }, [error, blockingServers]);
-
   const expected = expectedDeleteConfirmation(user?.tag);
   const confirmed = deleteConfirmationMatches(typed, user?.tag);
+  // The name typed without its number: the one near miss worth naming, because the name
+  // is what the person sees everywhere and the number is what they forget.
+  const hashAt = expected.indexOf("#");
+  const missing =
+    !confirmed && hashAt > 0
+      ? typed.trim().replace(/^@/, "").toLowerCase() ===
+        expected.slice(0, hashAt).toLowerCase()
+        ? expected.slice(hashAt)
+        : null
+      : null;
+
+  // Settings is unmounted while this dialog is open; tell it to put focus back
+  // on "Apagar conta…" when it returns.
+  function cancel() {
+    deleteFocusReturnAt = Date.now();
+    onCancel();
+  }
 
   async function submit() {
     if (!confirmed || busy) {
@@ -228,13 +394,81 @@ export function DeleteAccountDialog({
       open={open}
       title={t("settings.delete.title")}
       size="sm"
-      onClose={onCancel}
+      onClose={cancel}
       // A stray click on the backdrop must not be able to dismiss the one
       // screen in the app whose next action cannot be undone.
       closeOnBackdrop={false}
+      // The long text scrolls; the one thing the person has to do does not.
+      // The typed confirmation and whatever the delete answered sit above the
+      // buttons, so they are on screen however short the window is.
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+          <div className="w-full space-y-3">
+            {blockingServers && blockingServers.length > 0 && (
+              // The list inherits the notice's own foreground: that pair is the
+              // one the bench measures on the warning fill. An alert, because it
+              // answers the button just pressed and focus stays on that button.
+              <div className="max-h-40 overflow-y-auto">
+                <SettingsNotice
+                  tone="warning"
+                  role="alert"
+                  title={t("settings.delete.ownedTitle")}
+                >
+                  <p>{t("settings.delete.ownedBody")}</p>
+                  <ul className="mt-2 space-y-1">
+                    {blockingServers.map((server) => (
+                      <li key={server.id} className="text-sm">
+                        <span className="font-medium">{server.name}</span>{" "}
+                        <span className="text-xs">
+                          {t("settings.delete.ownedMembers", {
+                            count: server.otherMemberCount,
+                          })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </SettingsNotice>
+              </div>
+            )}
+            {error && (
+              <p role="alert" className="text-sm text-danger">
+                {error}
+              </p>
+            )}
+            <div>
+              <label
+                htmlFor={typeId}
+                className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text"
+              >
+                {t("settings.delete.typeLabel")}
+                <span className="select-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-sm">
+                  {expected}
+                </span>
+              </label>
+              <Input
+                id={typeId}
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className="font-mono"
+                aria-label={t("settings.delete.typeAria", { handle: expected })}
+                aria-describedby={missing ? hintId : undefined}
+              />
+              {missing && (
+                <p
+                  id={hintId}
+                  role="status"
+                  className="mt-1.5 flex items-center gap-1.5 text-xs text-text-secondary"
+                >
+                  <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                  {t("settings.delete.typeMissing", { rest: missing })}
+                </p>
+              )}
+            </div>
+          </div>
+          <Button variant="ghost" onClick={cancel} disabled={busy}>
             {t("settings.delete.keep")}
           </Button>
           <Button
@@ -249,6 +483,29 @@ export function DeleteAccountDialog({
     >
       <div className="space-y-4 px-5 py-4 text-sm">
         <p className="text-pretty text-text">{t("settings.delete.lead")}</p>
+
+        <div>
+          <SettingsNotice
+            tone="info"
+            role="note"
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={data.download}
+                disabled={data.disabled}
+              >
+                <Download aria-hidden className="h-3.5 w-3.5" />
+                {data.waitLabel
+                  ? t("settings.data.exportIn", { time: data.waitLabel })
+                  : t("settings.delete.saveCopyAction")}
+              </Button>
+            }
+          >
+            {t("settings.delete.saveCopy")}
+          </SettingsNotice>
+          {data.status}
+        </div>
 
         <div>
           <p className="text-sm font-semibold text-text">
@@ -274,58 +531,18 @@ export function DeleteAccountDialog({
             <li>{t("settings.delete.stays.reports")}</li>
           </ul>
           <p className="mt-2 text-xs text-pretty text-text-tertiary">
-            {t("settings.delete.staysNote")}
+            {t("settings.delete.staysNote")}{" "}
+            <a
+              href="/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-text underline underline-offset-2 hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              {t("settings.delete.staysLink")}
+              <ExternalLink aria-hidden className="h-3 w-3 shrink-0" />
+            </a>
           </p>
         </div>
-
-        <div ref={outcomeRef} className="space-y-4 empty:hidden">
-        {blockingServers && blockingServers.length > 0 && (
-          // The list inherits the notice's own foreground: that pair is the
-          // one the bench measures on the warning fill. An alert, because it
-          // answers the button just pressed and focus stays on that button.
-          <SettingsNotice
-            tone="warning"
-            role="alert"
-            title={t("settings.delete.ownedTitle")}
-          >
-            <p>{t("settings.delete.ownedBody")}</p>
-            <ul className="mt-2 space-y-1">
-              {blockingServers.map((server) => (
-                <li key={server.id} className="text-sm">
-                  <span className="font-medium">{server.name}</span>{" "}
-                  <span className="text-xs">
-                    {t("settings.delete.ownedMembers", {
-                      count: server.otherMemberCount,
-                    })}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </SettingsNotice>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-danger">
-            {error}
-          </p>
-        )}
-        </div>
-
-        <label className="block">
-          <span className="mb-1 block text-xs text-text-secondary">
-            {t("settings.delete.typeLabel")}
-          </span>
-          <span className="mb-1.5 block font-mono text-sm text-text">
-            {expected}
-          </span>
-          <Input
-            value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            aria-label={t("settings.delete.typeAria", { handle: expected })}
-          />
-        </label>
-
       </div>
     </Dialog>
   );
