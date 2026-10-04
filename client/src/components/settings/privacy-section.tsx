@@ -204,8 +204,8 @@ export function PrivacySection({
   ];
 
   // People whose unblock was asked for and has not shown up as a row leaving
-  // yet. The notice waits for the row to go: the app's own unblock handler
-  // reports its failures in a banner behind this dialog and does not throw.
+  // yet. The notice waits for the row to go, which is when the change is
+  // real for the person looking at the list.
   const awaiting = useRef(new Map<string, string>());
   const [notice, setNotice] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -247,9 +247,8 @@ export function PrivacySection({
       if (blockedUsers.some((known) => known.id === person.id)) {
         await onUnblockUser(person.id);
       } else {
-        // A block made from this tab that the app has not heard of: its
-        // unblock handler has nothing to refresh and does not throw, so the
-        // request is sent here, where a failure can reach the row.
+        // A block made from this tab that the app has not heard of yet: send
+        // the request here, where a failure can still reach the row.
         await unblockUserRequest(person.id);
       }
       setAdded((current) => current.filter((one) => one.id !== person.id));

@@ -8146,6 +8146,25 @@ function MainAppContent({
   );
 
   /**
+   * Settings' block (the block-by-name form in Privacidade). The block request
+   * throws back so the row can say it failed; once the server agreed, the same
+   * refreshes as `handleBlockUser` run, so the DM list, unread counts, hidden
+   * messages and the friends list (a block ends a friendship) catch up now
+   * rather than on the next reload. A failed refresh is not a failed block.
+   */
+  const handleSettingsBlock = useCallback(
+    async (userId: string) => {
+      await blockUser(userId);
+      await Promise.allSettled([
+        loadBlocks(),
+        loadConversations({ trustSnapshot: true }),
+        friendsRef.current.refresh(),
+      ]);
+    },
+    [loadBlocks, loadConversations],
+  );
+
+  /**
    * Settings' unblock. Unlike `handleUnblockUser`, a failure is thrown back so
    * the Privacidade row can say it (the app's banner sits behind the dialog).
    * Only the unblock request can fail it: the row is dropped locally once the
@@ -11191,6 +11210,7 @@ function MainAppContent({
           chat.setCurrentUser(updated);
         }}
         onUnblockUser={handleSettingsUnblock}
+        onBlockUser={handleSettingsBlock}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
