@@ -1659,6 +1659,7 @@
   "settings.nav.group.account": "Account",
   "settings.nav.group.app": "App",
   "settings.nav.group.support": "Support",
+  "settings.nav.unsaved": "unsaved changes",
   "settings.saving": "Saving…",
   "settings.saveFailed": "Failed to save",
   "settings.signOut": "Sign out",

@@ -1,13 +1,26 @@
 import {
   Fragment,
   useEffect,
+  useId,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import type { LucideIcon } from "lucide-react";
+import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+/**
+ * How long an arrow key rests on a tab before the tab opens. The arrows move
+ * focus at once; the selection follows when the person stops on a tab.
+ * Flipping through the rail used to mount every tab on the way, and Voz e
+ * vídeo asks for the microphone when it mounts. A click, Enter or Space opens
+ * a tab at once, and leaving the rail opens the focused one.
+ */
+export const RAIL_ARROW_SELECT_DELAY_MS = 300;
 
 export interface SectionRailItem<Id extends string = string> {
   id: Id;
@@ -28,10 +41,18 @@ export interface SectionRailItem<Id extends string = string> {
  * horizontal strip on phones.
  *
  * Group headings and dividers sit inside the tablist as presentation-only
- * elements, hidden from assistive tech: the arrow keys address `[role="tab"]`
- * only, so a heading never takes a keystroke, and a screen reader still counts
- * exactly the tabs. Both are hidden on the phone strip, where they would only
- * push tabs off screen.
+ * elements: the arrow keys address `[role="tab"]` only, so a heading never
+ * takes a keystroke, and a screen reader still counts exactly the tabs. A
+ * tablist may only own tabs, so the group name reaches assistive tech as each
+ * tab's description ("Perfil, Conta") rather than as a `role="group"` wrapper.
+ * Both are hidden on the phone strip, where they would only push tabs off
+ * screen.
+ *
+ * A dirty tab says so in words too: the dot is decoration, and its
+ * description reads "alterações não salvas". A description, not a longer
+ * name, so `getByRole("tab", { name: "Perfil" })` still finds the tab. On the
+ * phone strip a dirty tab that is not the selected one sticks to the start
+ * edge, so the edits stay in sight while the person is three tabs away.
  *
  * `footer` renders after the tablist, outside it, on `sm` and up: a tablist's
  * children are tabs, and anything else in it lies about how many there are.
@@ -62,18 +83,52 @@ export function SectionRail<Id extends string>({
   /** Phone strip: fade the right edge while more tabs are off screen. */
   fadeEnd?: boolean;
 }) {
+  const { t } = useTranslation();
   const railRef = useRef<HTMLDivElement>(null);
   const [moreAfter, setMoreAfter] = useState(false);
+  const vertical = useMediaQuery(SM_UP_QUERY, true);
+  const baseId = useId();
+  const groupId = (group: string) => `${baseId}-group-${group}`;
+  const dirtyId = `${baseId}-dirty`;
+  // The tab an arrow key landed on, waiting to be opened.
+  const pending = useRef<{ timer: number; id: Id } | null>(null);
+
+  function cancelPending() {
+    if (pending.current) {
+      window.clearTimeout(pending.current.timer);
+      pending.current = null;
+    }
+  }
+
+  function commitPending() {
+    const waiting = pending.current;
+    if (!waiting) {
+      return;
+    }
+    cancelPending();
+    if (waiting.id !== active) {
+      onSelect(waiting.id);
+    }
+  }
+
+  // An unmount drops the wait: a closed dialog has nothing left to open.
+  useEffect(() => cancelPending, []);
 
   // The selected tab is always on screen, including the phone strip, where
-  // seven of ten tabs start off the right edge. Optional call: jsdom has no
-  // `scrollIntoView`.
+  // seven of ten tabs start off the right edge. A dirty tab pinned to the
+  // strip's start would cover it, so the scroll leaves that much room.
+  // Optional call: jsdom has no `scrollIntoView`.
   useEffect(() => {
+    const rail = railRef.current;
     const index = sections.findIndex((section) => section.id === active);
-    const tabs =
-      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const tabs = rail?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    if (rail) {
+      const pinned = rail.querySelector<HTMLElement>("[data-rail-pinned]");
+      const room = pinned && !vertical ? pinned.offsetWidth : 0;
+      rail.style.scrollPaddingInlineStart = room ? `${room + 8}px` : "";
+    }
     tabs?.[index]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [active, sections]);
+  }, [active, sections, vertical]);
 
   // The fade says "there is more this way" and goes once the strip is at its
   // end. Measured, not assumed: on a desktop the rail is vertical and never
@@ -99,17 +154,45 @@ export function SectionRail<Id extends string>({
     };
   }, [fadeEnd]);
 
+  function tabElements(): HTMLButtonElement[] {
+    return [
+      ...(railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ??
+        []),
+    ];
+  }
+
   function move(to: number) {
     const index = (to + sections.length) % sections.length;
     const next = sections[index]!;
-    onSelect(next.id);
-    const tabs =
-      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[index]?.focus();
+    tabElements()[index]?.focus();
+    cancelPending();
+    if (next.id === active) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      pending.current = null;
+      onSelect(next.id);
+    }, RAIL_ARROW_SELECT_DELAY_MS);
+    pending.current = { timer, id: next.id };
+  }
+
+  function handleBlur(event: FocusEvent<HTMLDivElement>) {
+    const to = event.relatedTarget as Node | null;
+    if (!to || !railRef.current?.contains(to)) {
+      commitPending();
+    }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = sections.findIndex((section) => section.id === active);
+    // From the focused tab, not the selected one: two quick presses walk two
+    // tabs even though the first has not opened yet.
+    const focused = tabElements().indexOf(
+      document.activeElement as HTMLButtonElement,
+    );
+    const current =
+      focused >= 0
+        ? focused
+        : sections.findIndex((section) => section.id === active);
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":
@@ -139,7 +222,9 @@ export function SectionRail<Id extends string>({
       ref={railRef}
       role="tablist"
       aria-label={label}
+      aria-orientation={vertical ? "vertical" : "horizontal"}
       onKeyDown={handleKeyDown}
+      onBlur={handleBlur}
       data-fade-end={fadeEnd && moreAfter ? "" : undefined}
       className={cn(
         "flex shrink-0 gap-1 overflow-x-auto px-3 py-2",
@@ -161,10 +246,22 @@ export function SectionRail<Id extends string>({
         const startsGroup =
           section.group !== undefined && section.group !== previous?.group;
         const heading = startsGroup ? groupLabels?.[section.group!] : undefined;
+        const groupName =
+          section.group !== undefined ? groupLabels?.[section.group] : undefined;
+        const describedBy =
+          [
+            groupName ? groupId(section.group!) : null,
+            section.dirty ? dirtyId : null,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined;
+        // Only off the selected tab: the selected one is already in view.
+        const pinned = Boolean(section.dirty) && !selected;
         return (
           <Fragment key={section.id}>
             {startsGroup && heading ? (
               <div
+                id={groupId(section.group!)}
                 role="presentation"
                 aria-hidden="true"
                 className="hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block"
@@ -185,14 +282,22 @@ export function SectionRail<Id extends string>({
               role="tab"
               aria-selected={selected}
               aria-controls={panelId}
+              aria-describedby={describedBy}
               tabIndex={selected ? 0 : -1}
-              onClick={() => onSelect(section.id)}
+              data-rail-pinned={pinned ? "" : undefined}
+              onClick={() => {
+                cancelPending();
+                onSelect(section.id);
+              }}
               className={cn(
                 "flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm whitespace-nowrap transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring sm:w-full",
                 selected
                   ? "bg-accent/12 font-medium text-text"
                   : "text-text-tertiary hover:bg-surface-2 hover:text-text",
                 section.danger && !selected && "text-danger/80",
+                // Phone strip: stays at the start edge while the strip scrolls.
+                pinned &&
+                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -208,6 +313,13 @@ export function SectionRail<Id extends string>({
           </Fragment>
         );
       })}
+      {/* What a dirty tab's description reads. `hidden` keeps it out of the
+          layout and the reading order; `aria-describedby` still reads it. */}
+      {sections.some((section) => section.dirty) ? (
+        <span id={dirtyId} hidden>
+          {t("settings.nav.unsaved")}
+        </span>
+      ) : null}
     </div>
   );
 

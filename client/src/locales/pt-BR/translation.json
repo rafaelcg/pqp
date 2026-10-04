@@ -1659,6 +1659,7 @@
   "settings.nav.group.account": "Conta",
   "settings.nav.group.app": "App",
   "settings.nav.group.support": "Suporte",
+  "settings.nav.unsaved": "alterações não salvas",
   "settings.saving": "Salvando…",
   "settings.saveFailed": "Não deu pra salvar",
   "settings.signOut": "Sair da conta",
