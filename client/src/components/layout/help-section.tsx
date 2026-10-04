@@ -1,6 +1,16 @@
-import { Check, Copy, ExternalLink, Mail } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Mail } from "lucide-react";
+import { useMemo } from "react";
+import {
+  SettingsBuildLine,
+  SettingsCopyButton,
+  SettingsGroup,
+  SettingsLinkRow,
+  SettingsNotice,
+  SettingsRow,
+  useSettingsShell,
+} from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
+import { BUILD_ID, BUILD_TIME, DEV_BUILD_ID } from "@/lib/build-info";
 import {
   buildContactMailto,
   collectHelpDiagnostics,
@@ -9,13 +19,18 @@ import {
 } from "@/lib/help-contact";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
-const LINK_CLASS =
-  "inline-flex items-center gap-1 text-signal underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 rounded-sm";
+/**
+ * The commit the mail names: the same seven characters the "Versão do app"
+ * row shows, so a pasted row and the mail's diagnostics agree. "dev" under the
+ * same condition as `formatBuildLine`.
+ */
+const MAIL_APP_VERSION =
+  BUILD_ID === DEV_BUILD_ID || !BUILD_TIME ? DEV_BUILD_ID : BUILD_ID.slice(0, 7);
 
-const LEGAL_LINKS: { href: string; label: MessageKey }[] = [
-  { href: "/terms", label: "settings.data.terms" },
-  { href: "/privacy", label: "settings.data.privacy" },
-  { href: "/cookies", label: "settings.data.cookies" },
+const LEGAL_LINKS: { id: string; href: string; label: MessageKey }[] = [
+  { id: "privacy", href: "/privacy", label: "settings.data.privacy" },
+  { id: "terms", href: "/terms", label: "settings.data.terms" },
+  { id: "cookies", href: "/cookies", label: "settings.data.cookies" },
 ];
 
 /**
@@ -27,21 +42,11 @@ const LEGAL_LINKS: { href: string; label: MessageKey }[] = [
  */
 export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (timer.current) {
-        clearTimeout(timer.current);
-      }
-    },
-    [],
-  );
+  const { openSection } = useSettingsShell();
 
   const mailto = useMemo(
     () =>
-      buildContactMailto(collectHelpDiagnostics(), {
+      buildContactMailto(collectHelpDiagnostics({ appVersion: MAIL_APP_VERSION }), {
         subject: t("help.mail.subject"),
         intro: t("help.mail.intro"),
         diagnosticsHeading: t("help.mail.diagnostics"),
@@ -55,89 +60,62 @@ export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void })
     [t],
   );
 
-  const copy = () => {
-    void navigator.clipboard
-      ?.writeText(CONTACT_EMAIL)
-      .then(() => {
-        setCopied(true);
-        if (timer.current) {
-          clearTimeout(timer.current);
-        }
-        timer.current = setTimeout(() => setCopied(false), 2000);
-      })
-      .catch(() => {});
-  };
-
   return (
     <div className="space-y-6" data-help-section>
-      <p className="text-sm text-paper-muted">{t("help.intro")}</p>
+      <SettingsGroup title={t("help.contact.title")} description={t("help.response")}>
+        <SettingsRow
+          id="email"
+          label={CONTACT_EMAIL}
+          description={t("help.email.attached")}
+          control={
+            <div className="flex items-center gap-2">
+              <SettingsCopyButton
+                text={CONTACT_EMAIL}
+                label={t("help.email.copy")}
+                copiedLabel={t("help.email.copied")}
+              />
+              <Button asChild size="sm">
+                <a href={mailto}>
+                  <Mail aria-hidden className="h-3.5 w-3.5" />
+                  {t("help.email.write")}
+                </a>
+              </Button>
+            </div>
+          }
+        />
+        <SettingsRow
+          id="version"
+          label={t("help.version.label")}
+          description={t("help.version.hint")}
+          control={<SettingsBuildLine variant="row" />}
+        />
+      </SettingsGroup>
 
-      <div className="space-y-3 rounded-md border border-ink-4 p-4">
-        <p className="text-xs uppercase tracking-wide text-paper-muted">{t("help.email.label")}</p>
-        <p className="break-all text-base font-medium text-paper">{CONTACT_EMAIL}</p>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild size="sm">
-            <a href={mailto}>
-              <Mail className="h-3.5 w-3.5" aria-hidden />
-              {t("help.email.write")}
-            </a>
-          </Button>
-          <Button variant="secondary" size="sm" onClick={copy}>
-            {copied ? (
-              <Check className="h-3.5 w-3.5" aria-hidden />
-            ) : (
-              <Copy className="h-3.5 w-3.5" aria-hidden />
-            )}
-            {copied ? t("help.email.copied") : t("help.email.copy")}
-          </Button>
-          <span role="status" className="sr-only">
-            {copied ? t("help.email.copied") : ""}
-          </span>
-        </div>
-        <p className="text-xs text-paper-muted">{t("help.email.attached")}</p>
-      </div>
+      <SettingsGroup title={t("help.bug.title")}>
+        <SettingsLinkRow
+          id="feedback"
+          label={t("help.bug.feedback")}
+          onClick={onOpenFeedback ?? (() => openSection("feedback"))}
+        />
+        <SettingsLinkRow id="github" label={t("help.bug.github")} href={GITHUB_ISSUES_URL} external />
+        <SettingsLinkRow id="status" label={t("help.status")} href="/status" external />
+      </SettingsGroup>
 
-      <p className="text-sm text-paper-muted">{t("help.response")}</p>
+      <SettingsGroup title={t("help.legal.title")}>
+        {LEGAL_LINKS.map((link) => (
+          <SettingsLinkRow
+            key={link.id}
+            id={link.id}
+            label={t(link.label)}
+            href={link.href}
+            external
+          />
+        ))}
+      </SettingsGroup>
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-paper">{t("help.bug.title")}</p>
-        <ul className="flex flex-col gap-1.5 text-sm">
-          {onOpenFeedback && (
-            <li>
-              <button type="button" className={LINK_CLASS} onClick={onOpenFeedback}>
-                {t("help.bug.feedback")}
-              </button>
-            </li>
-          )}
-          <li>
-            <a href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-              {t("help.bug.github")}
-              <ExternalLink className="h-3 w-3" aria-hidden />
-            </a>
-          </li>
-          <li>
-            <a href="/status" target="_blank" rel="noreferrer" className={LINK_CLASS}>
-              {t("help.status")}
-              <ExternalLink className="h-3 w-3" aria-hidden />
-            </a>
-          </li>
-        </ul>
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-paper">{t("help.legal.title")}</p>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
-          {LEGAL_LINKS.map((link) => (
-            <li key={link.href}>
-              <a href={link.href} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-                {t(link.label)}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <p className="text-xs text-paper-muted">{t("help.reports")}</p>
+      <SettingsGroup surface="plain">
+        <SettingsNotice tone="info" role="note">{t("help.reports")}</SettingsNotice>
+      </SettingsGroup>
     </div>
   );
 }
