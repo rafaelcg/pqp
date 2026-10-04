@@ -24,6 +24,8 @@
  *    this binding arrives, the mic closes.
  */
 
+import { isApplePlatform } from "@/lib/composer-formatting";
+
 /** A physical key plus the chord that must be down with it. */
 export interface KeyBinding {
   /**
@@ -373,7 +375,9 @@ export function formatBinding(binding: KeyBinding): string {
   if (binding.ctrl) parts.push("Ctrl");
   if (binding.alt) parts.push("Alt");
   if (binding.shift) parts.push("Shift");
-  if (binding.meta) parts.push("Cmd");
+  // The keycaps say Win off Apple; the sentences that quote a binding must
+  // name the same key.
+  if (binding.meta) parts.push(isApplePlatform() ? "Cmd" : "Win");
   parts.push(binding.label);
   return parts.join(" + ");
 }
