@@ -2062,7 +2062,7 @@
   "settings.delete.ownedTitle": "First, sort out your communities that still have people in them",
   "settings.delete.ownedBody": "Other people are still in these communities, so we will not delete them out from under them. In each community's settings, either hand it to another member or delete the community yourself.",
   "settings.delete.typeLabel": "To confirm, type",
-  "settings.delete.typeAria": "Type {handle} to confirm deletion",
+  "settings.delete.typeAria": "To confirm, type {handle}",
   "settings.data.exportDone": "Done. The file {file} was downloaded.",
   "settings.data.exportIn": "Download in {time}",
   "settings.data.exportCooldown": "Too many downloads in a row. Try again in {time}.",

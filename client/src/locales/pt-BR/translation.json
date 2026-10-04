@@ -2062,7 +2062,7 @@
   "settings.delete.ownedTitle": "Antes, resolva suas comunidades com gente dentro",
   "settings.delete.ownedBody": "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passe ela pra outro membro ou apague você mesmo.",
   "settings.delete.typeLabel": "Pra confirmar, digite",
-  "settings.delete.typeAria": "Digite {handle} pra confirmar a exclusão",
+  "settings.delete.typeAria": "Pra confirmar, digite {handle}",
   "settings.data.exportDone": "Pronto. O arquivo {file} foi baixado.",
   "settings.data.exportIn": "Baixar em {time}",
   "settings.data.exportCooldown": "Muitos downloads seguidos. Tenta de novo em {time}.",

@@ -27,7 +27,10 @@ async function openYourData(page: Page): Promise<void> {
  * Answer `GET /api/me/export` with a canned response. The client and the API
  * are on different origins, so the preflight goes to the real server (it
  * answers it correctly) and the canned reply carries the CORS headers a
- * browser needs, including the one that lets the page read `Retry-After`.
+ * browser needs. The server does not yet list `Retry-After` in its
+ * `Access-Control-Expose-Headers` (only `ETag`), so the stub adds it to stand
+ * in for the one-line server change that makes the countdown work in
+ * production. Until then a cross-origin page cannot read the wait.
  */
 async function stubExport(
   page: Page,
