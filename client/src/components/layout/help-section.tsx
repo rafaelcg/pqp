@@ -10,7 +10,7 @@ import {
   useSettingsShell,
 } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
-import { BUILD_ID, DEV_BUILD_ID } from "@/lib/build-info";
+import { BUILD_ID, BUILD_TIME, DEV_BUILD_ID } from "@/lib/build-info";
 import {
   buildContactMailto,
   collectHelpDiagnostics,
@@ -21,9 +21,11 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 /**
  * The commit the mail names: the same seven characters the "Versão do app"
- * row shows, so a pasted row and the mail's diagnostics agree.
+ * row shows, so a pasted row and the mail's diagnostics agree. "dev" under the
+ * same condition as `formatBuildLine`.
  */
-const MAIL_APP_VERSION = BUILD_ID === DEV_BUILD_ID ? DEV_BUILD_ID : BUILD_ID.slice(0, 7);
+const MAIL_APP_VERSION =
+  BUILD_ID === DEV_BUILD_ID || !BUILD_TIME ? DEV_BUILD_ID : BUILD_ID.slice(0, 7);
 
 const LEGAL_LINKS: { id: string; href: string; label: MessageKey }[] = [
   { id: "privacy", href: "/privacy", label: "settings.data.privacy" },
