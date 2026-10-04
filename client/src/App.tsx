@@ -8145,6 +8145,22 @@ function MainAppContent({
     [loadBlocks],
   );
 
+  /**
+   * Settings' unblock. Unlike `handleUnblockUser`, a failure is thrown back so
+   * the Privacidade row can say it (the app's banner sits behind the dialog).
+   * Only the unblock request can fail it: the row is dropped locally once the
+   * server agreed, and the list refresh after it settles on its own, so a
+   * failed refresh never reads as a failed unblock or invites a retry.
+   */
+  const handleSettingsUnblock = useCallback(
+    async (userId: string) => {
+      await unblockUser(userId);
+      setBlockedUsers((current) => current.filter((one) => one.id !== userId));
+      void loadBlocks().catch(() => undefined);
+    },
+    [loadBlocks],
+  );
+
   const handleHideConversation = useCallback(
     async (channelId: string) => {
       try {
@@ -11174,15 +11190,7 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onUnblockUser={async (userId) => {
-          // Settings says a failed unblock in its own row: the app's banner
-          // sits behind the dialog, where nobody sees it. Only the unblock
-          // itself can fail the row; a failed refresh afterwards is not an
-          // unblock failure and must not invite a retry of something done.
-          await unblockUser(userId);
-          setBlockedUsers((current) => current.filter((one) => one.id !== userId));
-          void loadBlocks().catch(() => undefined);
-        }}
+        onUnblockUser={handleSettingsUnblock}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
