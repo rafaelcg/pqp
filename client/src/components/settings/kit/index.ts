@@ -7,6 +7,12 @@
  */
 export { SettingsBuildLine, formatBuildLine } from "@/components/settings/kit/build-line";
 export {
+  SETTINGS_COPIED_MS,
+  SettingsCopyButton,
+  useCopyText,
+  type SettingsCopyButtonProps,
+} from "@/components/settings/kit/copy-button";
+export {
   SETTINGS_DESCRIPTION,
   SETTINGS_FOCUS,
   SETTINGS_INSET_FOCUS,
