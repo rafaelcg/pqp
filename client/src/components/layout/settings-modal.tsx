@@ -28,6 +28,7 @@ import { ProfileSection } from "@/components/settings/profile-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import {
   buildProfilePatch,
+  isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
   profileDraftsFrom,
@@ -264,6 +265,9 @@ export function SettingsModal({
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  // The public link is somebody else's: said under the link field in Perfil
+  // (through the shell context) and in the bar, in the reader's language.
+  const [handleError, setHandleError] = useState<string | null>(null);
   // A close was refused while the profile was dirty.
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [focusSaveNonce, setFocusSaveNonce] = useState(0);
@@ -390,6 +394,7 @@ export function SettingsModal({
       setDrafts(profileDraftsFrom(user));
       setSaveError(null);
       setNameError(null);
+      setHandleError(null);
       setCloseBlocked(false);
       setSavedFlash(false);
     }
@@ -403,6 +408,7 @@ export function SettingsModal({
     if (!profileDirty) {
       setCloseBlocked(false);
       setSaveError(null);
+      setHandleError(null);
     }
   }, [profileDirty]);
 
@@ -513,6 +519,9 @@ export function SettingsModal({
     if (key === "displayName" && value.trim() !== "") {
       setNameError(null);
     }
+    if (key === "handle") {
+      setHandleError(null);
+    }
   }
 
   function discardProfile() {
@@ -521,6 +530,7 @@ export function SettingsModal({
     }
     setSaveError(null);
     setNameError(null);
+    setHandleError(null);
     setCloseBlocked(false);
   }
 
@@ -535,15 +545,26 @@ export function SettingsModal({
     }
     setSaving(true);
     setSaveError(null);
+    setHandleError(null);
+    const patch = buildProfilePatch(user, drafts);
     try {
-      const updated = await updateMe(buildProfilePatch(user, drafts));
+      const updated = await updateMe(patch);
       onUserUpdated(updated);
       // The one reseed while open: the server may have normalised what was
       // sent (a regenerated tag number), and the bar must read clean.
       setDrafts(profileDraftsFrom(updated));
       setSavedFlash(true);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      if (isHandleTakenError(err, patch)) {
+        // Never the server's English sentence for this one: it is the one
+        // failure a person fixes by typing, so it is said where they type.
+        const message = t("settings.unsaved.handle.taken");
+        setSection("profile");
+        setHandleError(message);
+        setSaveError(message);
+      } else {
+        setSaveError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      }
     } finally {
       setSaving(false);
     }
@@ -661,8 +682,13 @@ export function SettingsModal({
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
 
   const shell = useMemo<SettingsShellValue>(
-    () => ({ profileDirty, openSection, headerActionsSlot }),
-    [profileDirty, openSection, headerActionsSlot],
+    () => ({
+      profileDirty,
+      openSection,
+      headerActionsSlot,
+      profileHandleError: handleError,
+    }),
+    [profileDirty, openSection, headerActionsSlot, handleError],
   );
 
   const railItems = visibleSections.map((entry) => ({

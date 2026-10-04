@@ -1667,6 +1667,7 @@
   "settings.unsaved.handle.claim": "Pegar link",
   "settings.unsaved.handle.change": "Trocar link",
   "settings.unsaved.handle.keep": "Manter",
+  "settings.unsaved.handle.taken": "Esse link já tem dono. Tenta outro.",
   "settings.unsaved.languageLocked": "Salve ou descarte as alterações do perfil antes.",
   "settings.rail.copyBuild": "Copiar versão: {build}",
   "settings.rail.copied": "Copiado",

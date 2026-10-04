@@ -1667,6 +1667,7 @@
   "settings.unsaved.handle.claim": "Claim link",
   "settings.unsaved.handle.change": "Change link",
   "settings.unsaved.handle.keep": "Keep",
+  "settings.unsaved.handle.taken": "That link is already someone's. Try another.",
   "settings.unsaved.languageLocked": "Save or discard your profile changes first.",
   "settings.rail.copyBuild": "Copy version: {build}",
   "settings.rail.copied": "Copied",
