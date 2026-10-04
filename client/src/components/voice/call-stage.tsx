@@ -30,7 +30,9 @@ import {
   VideoOff,
 } from "lucide-react";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -345,6 +347,26 @@ const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
  */
 const TILE_CONTROLS_FADE =
   "transition-opacity duration-200 motion-reduce:transition-none [[data-chrome-hidden=true]_&:not(:has(:focus-visible))]:!opacity-0";
+
+/**
+ * A tile's own panel (audio, fit) is open. The stage cannot see it, because the
+ * panel belongs to the tile, and a panel left open while the pointer wandered
+ * off would otherwise be faded out from under the person using it.
+ */
+const TileMenuHoldContext = createContext<((open: boolean) => void) | null>(
+  null,
+);
+
+function useReportTileMenu(open: boolean): void {
+  const report = useContext(TileMenuHoldContext);
+  useEffect(() => {
+    if (!open || !report) {
+      return;
+    }
+    report(true);
+    return () => report(false);
+  }, [open, report]);
+}
 
 /** Whether a pointer event's element is inside a tile's own corner controls. */
 function isInsideTileControls(target: EventTarget | null): boolean {
@@ -1398,6 +1420,11 @@ function ActiveCall({
   const autoHideSetting = useAutoHideStageControls();
   const [barHovered, setBarHovered] = useState(false);
   const [tileControlsHovered, setTileControlsHovered] = useState(false);
+  const [tileFocused, setTileFocused] = useState(false);
+  const [tileMenusOpen, setTileMenusOpen] = useState(0);
+  const reportTileMenu = useCallback((open: boolean) => {
+    setTileMenusOpen((count) => Math.max(0, count + (open ? 1 : -1)));
+  }, []);
   const [barFocused, setBarFocused] = useState(false);
   const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const pushToTalkHeld =
@@ -1429,10 +1456,10 @@ function ActiveCall({
     ownPictureOnly,
   });
   const chromeHold = stageChromeHold({
-    menuOpen: qualityMenuOpen,
+    menuOpen: qualityMenuOpen || tileMenusOpen > 0,
     sharePickerOpen,
     pointerOverControls: barHovered || tileControlsHovered,
-    keyboardFocusInControls: barFocused,
+    keyboardFocusInControls: barFocused || tileFocused,
     pushToTalkHeld,
     connected: voiceState.status === "connected",
     error: Boolean(voiceState.error),
@@ -1822,6 +1849,7 @@ function ActiveCall({
   }
 
   return (
+    <TileMenuHoldContext.Provider value={reportTileMenu}>
     <div
       ref={stageRef}
       data-testid="call-stage"
@@ -1876,7 +1904,22 @@ function ActiveCall({
         touchDownRef.current = null;
       }}
       onKeyDownCapture={chrome.wake}
-      onFocusCapture={chrome.wake}
+      onFocusCapture={(event) => {
+        chrome.wake();
+        // Keyboard focus on a tile's own control holds the stage like focus on
+        // the bar does; a mouse press on one does not.
+        if (isInsideTileControls(event.target)) {
+          setTileFocused(isKeyboardFocus(event.target));
+        }
+      }}
+      onBlurCapture={(event) => {
+        if (
+          isInsideTileControls(event.target) &&
+          !isInsideTileControls(event.relatedTarget)
+        ) {
+          setTileFocused(false);
+        }
+      }}
       // Read by the strip's reserve and the self-preview's bottom corners.
       style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
     >
@@ -2516,6 +2559,7 @@ function ActiveCall({
         </>
       )}
     </div>
+    </TileMenuHoldContext.Provider>
   );
 }
 
@@ -3633,6 +3677,7 @@ function TileOverlay({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  useReportTileMenu(menu.open);
   const hasAudio = Boolean(audio?.voice || audio?.share);
   if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
     return null;
@@ -4338,6 +4383,7 @@ export function ScreenTileFrame({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  useReportTileMenu(menu.open);
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;

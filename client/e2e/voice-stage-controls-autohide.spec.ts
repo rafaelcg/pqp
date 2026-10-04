@@ -176,44 +176,48 @@ async function joinRoom(
   // One context per account: the dev-user suffix lives in localStorage, which
   // pages of one context share.
   const contexts: BrowserContext[] = [];
-  await page.addInitScript(() => {
-    // @ts-expect-error deleting a platform API is the point
-    delete Element.prototype.requestFullscreen;
-    // @ts-expect-error the prefixed spelling too
-    delete Element.prototype.webkitRequestFullscreen;
-  });
-  if (watcherInit) {
-    await page.addInitScript(watcherInit);
-  }
-  await openApp(page);
   const others: Page[] = [];
-  for (const suffix of suffixes) {
-    const context = await browser.newContext({
-      permissions: ["microphone", "camera"],
-      viewport: { width: 1440, height: 900 },
-    });
-    contexts.push(context);
-    const other = await context.newPage();
-    await openWithSuffix(other, suffix);
-    others.push(other);
-  }
-  await joinLobby(page);
-  for (const other of others) {
-    await joinLobby(other);
-  }
-  return {
-    page,
-    others,
-    close: async () => {
-      await leaveVoiceIfConnected(page).catch(() => {});
-      for (const other of others) {
-        await leaveVoiceIfConnected(other).catch(() => {});
-      }
-      for (const context of contexts) {
-        await context.close().catch(() => {});
-      }
-    },
+  const close = async () => {
+    await leaveVoiceIfConnected(page).catch(() => {});
+    for (const other of others) {
+      await leaveVoiceIfConnected(other).catch(() => {});
+    }
+    for (const context of contexts) {
+      await context.close().catch(() => {});
+    }
   };
+  // A setup that fails half way must not strand the contexts it already made
+  // or the seats it already took: the caller never gets a Room to close.
+  try {
+    await page.addInitScript(() => {
+      // @ts-expect-error deleting a platform API is the point
+      delete Element.prototype.requestFullscreen;
+      // @ts-expect-error the prefixed spelling too
+      delete Element.prototype.webkitRequestFullscreen;
+    });
+    if (watcherInit) {
+      await page.addInitScript(watcherInit);
+    }
+    await openApp(page);
+    for (const suffix of suffixes) {
+      const context = await browser.newContext({
+        permissions: ["microphone", "camera"],
+        viewport: { width: 1440, height: 900 },
+      });
+      contexts.push(context);
+      const other = await context.newPage();
+      await openWithSuffix(other, suffix);
+      others.push(other);
+    }
+    await joinLobby(page);
+    for (const other of others) {
+      await joinLobby(other);
+    }
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  return { page, others, close };
 }
 
 async function turnCameraOn(other: Page): Promise<void> {
@@ -322,6 +326,38 @@ test("one focused stream hides its controls when idle, and only then", async ({
     await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
     await page.waitForTimeout(4_500);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+
+    // --- keyboard focus on a tile's own control holds the bar too -----------
+    let inTile = false;
+    for (let i = 0; i < 25 && !inTile; i += 1) {
+      await page.keyboard.press("Shift+Tab");
+      inTile = await page.evaluate(
+        () =>
+          document.activeElement?.closest('[data-call-chrome="tile"]') !== null,
+      );
+    }
+    expect(inTile).toBe(true);
+    await page.mouse.move(700, 300);
+    await page.waitForTimeout(4_500);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+    await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "true", HIDE_WITHIN);
+
+    // --- a tile's own open panel holds the bar ------------------------------
+    await page.mouse.move(720, 300);
+    const tilePanelButton = tileControls.locator('button[aria-haspopup="dialog"]');
+    await expect(tilePanelButton).toHaveCount(1);
+    await tilePanelButton.click();
+    await expect(tilePanelButton).toHaveAttribute("aria-expanded", "true");
+    await page.mouse.move(700, 300);
+    await page.waitForTimeout(4_500);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+    await expect(tilePanelButton).toHaveAttribute("aria-expanded", "true");
+    await tilePanelButton.click();
+    await expect(tilePanelButton).toHaveAttribute("aria-expanded", "false");
+    await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await page.mouse.move(720, 300);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "true", HIDE_WITHIN);
 
     // --- the way back is still one press, hidden or not ---------------------
     await back.click();
