@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { Check, CircleX, ExternalLink, Loader2, Upload } from "lucide-react";
 import {
   canRenameHandle,
@@ -77,6 +84,21 @@ export function requestProfileSave(): void {
     document.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.click();
   }, 0);
 }
+
+/** Two or more spaces in a row become one. Leading and trailing ones are the save's to trim. */
+function collapseSpaces(value: string): string {
+  return value.replace(/ {2,}/g, " ");
+}
+
+/** Enter in a single-line field saves, unless it is confirming an IME word. */
+function saveOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+    requestProfileSave();
+  }
+}
+
+/** The counter shows from this many characters short of the limit. */
+const NAME_COUNTER_FROM = 8;
 
 /* ------------------------------------------------------------ availability */
 
@@ -239,12 +261,17 @@ export function ProfileSection({
   const { t, locale } = useTranslation();
   const nameId = useId();
   const nameErrorId = useId();
+  const nameCountId = useId();
   const handleId = useId();
   const handleDescriptionId = useId();
   const handleErrorId = useId();
   const handleRuleId = useId();
   const usernameId = useId();
   const storage = useStorageConfig();
+  // The name as it was when the field got focus, and whether it was left
+  // empty. The save says the same later; this says it as you leave the field.
+  const nameAtFocus = useRef("");
+  const [nameLeftEmpty, setNameLeftEmpty] = useState(false);
   // The last save lost the link to somebody else. The shell recognised the
   // 409, said it in the reader's language and clears it when the link changes.
   const { profileHandleError: handleError } = useSettingsShell();
@@ -265,6 +292,14 @@ export function ProfileSection({
   // number after the # is the saved one: a renamed username keeps it unless
   // the name is taken, and only the save can say.
   const previewName = displayName.trim() || user?.displayName || "";
+  // One line for the empty name, wherever it came from: the save's refusal
+  // wins, and the blur says it first.
+  const nameError =
+    displayNameError ??
+    (nameLeftEmpty && !displayName.trim()
+      ? t("settings.profile.displayNameRequired")
+      : null);
+  const nameCounting = displayName.length >= DISPLAY_NAME_MAX_LENGTH - NAME_COUNTER_FROM;
   const previewId = handle.trim()
     ? `@${handle.trim()}`
     : formatUserTag(username.trim() || user?.username, user?.discriminator) ??
@@ -304,16 +339,57 @@ export function ProfileSection({
                 id={nameId}
                 value={displayName}
                 maxLength={DISPLAY_NAME_MAX_LENGTH}
-                aria-invalid={displayNameError ? true : undefined}
-                aria-describedby={displayNameError ? nameErrorId : undefined}
-                className={cn(displayNameError && "border-danger")}
-                onChange={(event) => onDisplayName(event.target.value)}
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={
+                  [nameError ? nameErrorId : null, nameCounting ? nameCountId : null]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                className={cn(nameError && "border-danger")}
+                onChange={(event) => {
+                  setNameLeftEmpty(false);
+                  onDisplayName(event.target.value);
+                }}
+                onFocus={() => {
+                  nameAtFocus.current = displayName;
+                }}
+                onBlur={() => {
+                  // Repeated spaces are collapsed only in a name that was
+                  // edited: an untouched "Ana  QA" must not turn dirty just
+                  // because somebody clicked through the field.
+                  const collapsed = collapseSpaces(displayName);
+                  if (displayName !== nameAtFocus.current && collapsed !== displayName) {
+                    onDisplayName(collapsed);
+                  }
+                  setNameLeftEmpty(!displayName.trim());
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    const collapsed = collapseSpaces(displayName);
+                    if (displayName !== nameAtFocus.current && collapsed !== displayName) {
+                      onDisplayName(collapsed);
+                    }
+                    requestProfileSave();
+                  }
+                }}
               />
-              {displayNameError ? (
-                <div id={nameErrorId}>
-                  <SettingsInlineStatus
-                    state={{ kind: "error", message: displayNameError }}
-                  />
+              {nameError || nameCounting ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div id={nameErrorId} className="min-w-0">
+                    {nameError ? (
+                      <SettingsInlineStatus
+                        state={{ kind: "error", message: nameError }}
+                      />
+                    ) : null}
+                  </div>
+                  {nameCounting ? (
+                    <span
+                      id={nameCountId}
+                      className="mt-1.5 shrink-0 text-xs tabular-nums text-text-tertiary"
+                    >
+                      {displayName.length}/{DISPLAY_NAME_MAX_LENGTH}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </>
@@ -412,6 +488,7 @@ export function ProfileSection({
                     .filter(Boolean)
                     .join(" ")}
                   onChange={(event) => onHandle(normalizeHandle(event.target.value))}
+                  onKeyDown={saveOnEnter}
                   className="font-mono"
                 />
                 {renameAvailableAt === null ? (
@@ -485,6 +562,7 @@ export function ProfileSection({
                     event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
                   )
                 }
+                onKeyDown={saveOnEnter}
                 placeholder={t("settings.profile.usernamePlaceholder")}
               />
               {/* The tag is how somebody adds you inside the app. It is the

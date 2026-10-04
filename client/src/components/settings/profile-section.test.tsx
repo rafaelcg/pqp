@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { User } from "@pqp/shared";
@@ -62,7 +62,16 @@ async function mount(
   {
     handleError = null,
     handle = user?.handle ?? "",
-  }: { handleError?: string | null; handle?: string } = {},
+    displayName = user?.displayName ?? "",
+    nameError = null,
+    spies = {},
+  }: {
+    handleError?: string | null;
+    handle?: string;
+    displayName?: string;
+    nameError?: string | null;
+    spies?: { onDisplayName?: (next: string) => void };
+  } = {},
 ) {
   host = document.createElement("div");
   document.body.append(host);
@@ -80,8 +89,9 @@ async function mount(
         >
           <ProfileSection
             user={user}
-            displayName={user?.displayName ?? ""}
-            onDisplayName={() => {}}
+            displayName={displayName}
+            displayNameError={nameError}
+            onDisplayName={spies.onDisplayName ?? (() => {})}
             username={user?.username ?? ""}
             onUsername={() => {}}
             handle={handle}
@@ -250,6 +260,162 @@ describe("Perfil: the public link while it is typed", () => {
     await settle();
     expect(status().textContent).toBe("");
     expect(row("public-link").querySelectorAll('[role="alert"]')).toHaveLength(1);
+  });
+});
+
+describe("Perfil: Nome de exibição", () => {
+  const nameField = () => row("display-name").querySelector<HTMLInputElement>("input")!;
+  const text = () => row("display-name").textContent ?? "";
+
+  it("counts characters only near the limit", async () => {
+    await mount(USER, { displayName: "x".repeat(23) });
+    expect(text()).not.toMatch(/\/32/);
+    act(() => root?.unmount());
+    host?.remove();
+    await mount(USER, { displayName: "x".repeat(29) });
+    expect(text()).toContain("29/32");
+    expect(describedBy(nameField())).toContain("29/32");
+  });
+
+  it("says an empty name as you leave the field, once, and not before", async () => {
+    await mount(USER, { displayName: "" });
+    expect(row("display-name").querySelector('[role="alert"]')).toBeNull();
+    act(() => nameField().focus());
+    act(() => nameField().blur());
+    const alerts = row("display-name").querySelectorAll('[role="alert"]');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent).toContain("Enter a display name.");
+    expect(nameField().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("draws the save's refusal in the same single place", async () => {
+    await mount(USER, { displayName: "", nameError: "Enter a display name." });
+    act(() => nameField().focus());
+    act(() => nameField().blur());
+    expect(row("display-name").querySelectorAll('[role="alert"]')).toHaveLength(1);
+  });
+
+  /** A parent that holds the name, the way the shell does. */
+  async function mountStateful(initial: string) {
+    function Parent() {
+      const [name, setName] = useState(initial);
+      return (
+        <TooltipProvider>
+          <SettingsShellContext.Provider
+            value={{ profileDirty: false, openSection: () => {}, headerActionsSlot: null }}
+          >
+            <ProfileSection
+              user={USER}
+              displayName={name}
+              onDisplayName={setName}
+              username="rafa"
+              onUsername={() => {}}
+              handle="rafa"
+              onHandle={() => {}}
+              avatarUrl=""
+              onAvatarUrl={() => {}}
+              onUserUpdated={() => {}}
+            />
+          </SettingsShellContext.Provider>
+        </TooltipProvider>
+      );
+    }
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(<Parent />);
+    });
+  }
+
+  function type(input: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it("collapses repeated spaces on leaving an edited name", async () => {
+    await mountStateful("Ana");
+    act(() => nameField().focus());
+    type(nameField(), "Ana  QA   Dev");
+    expect(nameField().value).toBe("Ana  QA   Dev");
+    act(() => nameField().blur());
+    expect(nameField().value).toBe("Ana QA Dev");
+  });
+
+  it("leaves an untouched name alone: clicking through must not stage an edit", async () => {
+    await mountStateful("Ana  QA");
+    act(() => nameField().focus());
+    act(() => nameField().blur());
+    expect(nameField().value).toBe("Ana  QA");
+  });
+
+  it("saves on Enter through the bar's own button, with the spaces already collapsed", async () => {
+    vi.useFakeTimers();
+    try {
+      const save = document.createElement("button");
+      save.setAttribute("data-unsaved-save", "");
+      const clicked = vi.fn();
+      save.addEventListener("click", clicked);
+      document.body.append(save);
+      await mountStateful("Ana");
+      act(() => nameField().focus());
+      type(nameField(), "Ana  QA");
+      act(() => {
+        nameField().dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+      expect(nameField().value).toBe("Ana QA");
+      expect(clicked).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5);
+      });
+      expect(clicked).toHaveBeenCalledTimes(1);
+
+      // An IME word being confirmed is not a save.
+      act(() => {
+        nameField().dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5);
+      });
+      expect(clicked).toHaveBeenCalledTimes(1);
+      save.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Perfil: Enter in the link and username fields", () => {
+  it("saves through the bar's own button", async () => {
+    vi.useFakeTimers();
+    try {
+      const save = document.createElement("button");
+      save.setAttribute("data-unsaved-save", "");
+      const clicked = vi.fn();
+      save.addEventListener("click", clicked);
+      document.body.append(save);
+      await mount(USER);
+      for (const id of ["public-link", "username"]) {
+        const input = row(id).querySelector<HTMLInputElement>("input")!;
+        act(() => {
+          input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        });
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5);
+      });
+      expect(clicked).toHaveBeenCalledTimes(2);
+      save.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
