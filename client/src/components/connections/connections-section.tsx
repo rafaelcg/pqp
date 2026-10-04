@@ -23,6 +23,7 @@ import {
   SettingsSkeletonRows,
   inlineErrorMessage,
   useInlineSave,
+  useSettingsShell,
 } from "@/components/settings/kit";
 import {
   disconnectConnection,
@@ -383,10 +384,17 @@ function ProviderRow({
   // Busy buttons stay focusable (aria-disabled, click ignored) so keyboard
   // focus does not drop to the page while the request runs.
   const buttonsBlocked = busy || saving;
+  const { profileDirty } = useSettingsShell();
 
   async function connect() {
     if (buttonsBlocked) return;
     onAction();
+    if (profileDirty) {
+      // Connecting leaves the page for the provider's, which would drop the
+      // staged profile edits (or stop on the browser's leave prompt).
+      setActionError(t("settings.connections.profileDirty"));
+      return;
+    }
     setActionError(null);
     setBusy(true);
     try {

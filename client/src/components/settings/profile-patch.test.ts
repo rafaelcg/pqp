@@ -104,6 +104,13 @@ describe("isProfileDirty", () => {
     expect(isProfileDirty(user, { ...base, avatarUrl: "x" })).toBe(true);
   });
 
+  it("does not count an emptied username or link as an edit", () => {
+    const user = makeUser({ handle: "rafa" });
+    const base = profileDraftsFrom(user);
+    expect(isProfileDirty(user, { ...base, username: "" })).toBe(false);
+    expect(isProfileDirty(user, { ...base, handle: "" })).toBe(false);
+  });
+
   it("is never dirty without an account", () => {
     expect(
       isProfileDirty(null, {

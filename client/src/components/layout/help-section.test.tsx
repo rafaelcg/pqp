@@ -41,6 +41,10 @@ describe("HelpSection", () => {
     expect(out).toMatch(/contato@pqp\.gg[\s\S]*<span[^>]*>Copy address<\/span>/);
   });
 
+  it("says the prefilled details can be read and removed before sending", () => {
+    expect(html()).toContain("You can read and delete all of it before sending.");
+  });
+
   it("offers Gmail as a way out when the mailto does nothing", () => {
     const out = html();
     expect(out).toMatch(/href="https:\/\/mail\.google\.com\/mail\/\?view=cm&amp;fs=1&amp;to=contato%40pqp\.gg/);

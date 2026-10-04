@@ -16,6 +16,12 @@ interface ConfirmDialogProps {
   onClose: () => void;
   /** Default true. Send confirms are a warning, not a delete. */
   destructive?: boolean;
+  /**
+   * Which button starts focused. Defaults to cancel for a destructive confirm
+   * and to confirm otherwise. A confirm that is hard to undo but not red (the
+   * 30-day link lock) passes "cancel", so a second Enter cannot commit it.
+   */
+  initialFocus?: "confirm" | "cancel";
 }
 
 /**
@@ -33,7 +39,9 @@ export function ConfirmDialog({
   onConfirm,
   onClose,
   destructive = true,
+  initialFocus,
 }: ConfirmDialogProps) {
+  const focusCancel = initialFocus ? initialFocus === "cancel" : destructive;
   const { t } = useTranslation();
 
   return (
@@ -49,7 +57,7 @@ export function ConfirmDialog({
           <Button
             type="button"
             variant="ghost"
-            autoFocus={destructive}
+            autoFocus={focusCancel}
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
             onClick={onClose}
           >
@@ -58,7 +66,7 @@ export function ConfirmDialog({
           <Button
             type="button"
             variant={destructive ? "danger" : "default"}
-            autoFocus={!destructive}
+            autoFocus={!focusCancel}
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
             onClick={() => {
               onConfirm();

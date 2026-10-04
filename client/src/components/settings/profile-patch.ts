@@ -37,8 +37,11 @@ export function isProfileDirty(user: User | null, drafts: ProfileDrafts): boolea
   const saved = profileDraftsFrom(user);
   return (
     drafts.displayName.trim() !== saved.displayName.trim() ||
-    drafts.username.trim() !== saved.username.trim() ||
-    drafts.handle.trim() !== saved.handle.trim() ||
+    // An emptied username or link is not an edit: the save keeps the saved
+    // value for both (there is no way to release either), so treating the
+    // blank as a change would trip the close guard and then "save" nothing.
+    (drafts.username.trim() !== "" && drafts.username.trim() !== saved.username.trim()) ||
+    (drafts.handle.trim() !== "" && drafts.handle.trim() !== saved.handle.trim()) ||
     drafts.avatarUrl.trim() !== saved.avatarUrl.trim()
   );
 }

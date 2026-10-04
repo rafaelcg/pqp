@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
-import { type BlockedUser, type User, HANDLE_PATTERN, HANDLE_RENAME_COOLDOWN_DAYS } from "@pqp/shared";
+import {
+  type BlockedUser,
+  type User,
+  HANDLE_RENAME_COOLDOWN_DAYS,
+  usernameSchema,
+  validateHandle,
+} from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
@@ -65,6 +71,8 @@ interface SettingsModalProps {
   onUserUpdated: (user: User) => void;
   /** Throws when the unblock failed, so the row can say so. */
   onUnblockUser: (userId: string) => void | Promise<void>;
+  /** Settings' own block form; throws when the block failed. */
+  onBlockUser?: (userId: string) => void | Promise<void>;
   onAudioSettingsLive?: (settings: LocalSettings) => void;
   /**
    * A section to land on when the dialog opens — the user menu's "send
@@ -213,7 +221,10 @@ function readStoredSection(): SectionId {
   try {
     const stored = window.sessionStorage.getItem(SETTINGS_SECTION_STORAGE_KEY);
     const known = SECTIONS.find((entry) => entry.id === stored);
-    if (known) {
+    // Never Voz after a reload: it asks for the microphone as it opens, and
+    // a browser that does not remember the grant would prompt the moment
+    // somebody opened Settings to change something else.
+    if (known && known.id !== "voice") {
       return known.id;
     }
   } catch {
@@ -279,6 +290,7 @@ export function SettingsModal({
   onLocalSave,
   onUserUpdated,
   onUnblockUser,
+  onBlockUser,
   onAudioSettingsLive,
   requestedSection = null,
   onShowShortcutOverlay,
@@ -534,7 +546,9 @@ export function SettingsModal({
   // app: Electron cancels the close or reload outright instead of asking,
   // because the shell does not handle `will-prevent-unload`.
   useEffect(() => {
-    if (!open || !profileDirty || isDesktopApp()) {
+    // Not while the delete dialog is up: a deleted account reloads to the
+    // landing page, and that navigation must not stop on a leave prompt.
+    if (!open || !profileDirty || confirmingDelete || isDesktopApp()) {
       return;
     }
     function onBeforeUnload(event: BeforeUnloadEvent) {
@@ -544,7 +558,7 @@ export function SettingsModal({
     }
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [open, profileDirty]);
+  }, [open, profileDirty, confirmingDelete]);
 
   useEffect(() => {
     if (!savedFlash) return;
@@ -761,13 +775,33 @@ export function SettingsModal({
         setHandleError(message);
         setSaveError(message);
       } else {
-        if (err instanceof ApiError && err.status === 400 && typeof patch.handle === "string") {
-          // A link the server will not take (too short, a reserved word, a
-          // character it refuses): said under the field, in Portuguese.
+        const linkChanged = pendingHandleChange(user, submitted) !== null;
+        if (linkChanged && err instanceof ApiError && err.status === 400) {
+          // A link the server will not take: said under the field, in
+          // Portuguese. Only when the link is what changed: the patch re-sends
+          // an unchanged link too, and blaming it for another field's 400
+          // would point at a field that may be locked.
           const message = t("settings.unsaved.handle.invalid");
           setSection("profile");
           setHandleError(message);
           setSaveError(message);
+        } else if (linkChanged && err instanceof ApiError && err.status === 429) {
+          // The 30-day rename cooldown, not a burst of requests.
+          const day = /(\d{4}-\d{2}-\d{2})/.exec(err.message)?.[1];
+          const message = day
+            ? t("settings.profile.publicHandle.cooldown", {
+                date: new Date(`${day}T12:00:00`).toLocaleDateString(intlLocale(locale), {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }),
+              })
+            : t("settings.saveFailed");
+          setSection("profile");
+          setHandleError(message);
+          setSaveError(message);
+        } else if (err instanceof ApiError && err.status === 409 && /username/i.test(err.message)) {
+          setSaveError(t("settings.profile.usernameExhausted"));
         } else {
           setSaveError(
             inlineErrorMessage(err, t("settings.saveFailed"), t("settings.status.rateLimited")),
@@ -791,8 +825,26 @@ export function SettingsModal({
       setNameError(t("settings.profile.displayNameRequired"));
       return;
     }
+    // The other two fields the server checks, checked here first so the
+    // reason is said in Portuguese and nothing is sent that will bounce.
+    const username = drafts.username.trim();
+    if (username !== "" && username !== (user.username ?? "") && !usernameSchema.safeParse(username).success) {
+      setSection("profile");
+      setSaveError(t("settings.profile.usernameInvalid"));
+      return;
+    }
+    const avatar = drafts.avatarUrl.trim();
+    if (
+      avatar !== "" &&
+      avatar !== (user.avatarUrl ?? "") &&
+      !/^(https?:\/\/|\/)/.test(avatar)
+    ) {
+      setSection("profile");
+      setSaveError(t("settings.profile.avatar.urlInvalid"));
+      return;
+    }
     const handleChange = pendingHandleChange(user, drafts);
-    if (handleChange && !HANDLE_PATTERN.test(drafts.handle.trim())) {
+    if (handleChange && validateHandle(drafts.handle.trim()) !== null) {
       // Said before the 30-day confirm, not after it: confirming a link the
       // server will refuse is a step that only leads to an error.
       const message = t("settings.unsaved.handle.invalid");
@@ -846,7 +898,7 @@ export function SettingsModal({
   const saveProfileRef = useRef(saveProfile);
   saveProfileRef.current = saveProfile;
   useEffect(() => {
-    if (!settingsOpen || handleConfirm) {
+    if (!settingsOpen) {
       return;
     }
     const apple = isApplePlatform();
@@ -855,19 +907,21 @@ export function SettingsModal({
       if (!chord || event.altKey || event.shiftKey || event.key.toLowerCase() !== "s") {
         return;
       }
-      // Only while Settings is the top dialog: a confirm stacked over it
-      // (Conexões' disconnect) owns the keyboard.
+      // The browser's "Save page" is never what anyone wants over Settings,
+      // even with a confirm stacked on top.
+      event.preventDefault();
+      // Saving only while Settings is the top dialog: a confirm stacked over
+      // it (the link lock, Conexões' disconnect) owns the decision.
       const layers = document.querySelectorAll("[data-dialog-layer]");
       const top = layers[layers.length - 1];
       if (top && scrollerRef.current && !top.contains(scrollerRef.current)) {
         return;
       }
-      event.preventDefault();
       saveProfileRef.current();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [settingsOpen, handleConfirm]);
+  }, [settingsOpen]);
 
   const barVisible = profileDirty || savedFlash || discarded !== null;
 
@@ -1079,6 +1133,7 @@ export function SettingsModal({
                           blockedUsers={blockedUsers}
                           onUserUpdated={onUserUpdated}
                           onUnblockUser={onUnblockUser}
+                          onBlockUser={onBlockUser}
                         />
                       )}
 
@@ -1163,6 +1218,9 @@ export function SettingsModal({
         )}
         cancelLabel={t("settings.unsaved.handle.keep")}
         destructive={false}
+        // Voltar, not the claim: Enter-to-save in the field could otherwise
+        // run straight through this and lock the link for 30 days.
+        initialFocus="cancel"
         onConfirm={() => void commitProfile()}
         // Runs after `onConfirm` too, so it only closes; Manter keeps the drafts
         // and the bar exactly as they were.

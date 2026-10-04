@@ -135,6 +135,15 @@ describe("Settings section memory", () => {
     expect(selected()).toBe("settings-tab-profile");
   });
 
+  it("never reopens on Voz after a reload, which would ask for the mic", () => {
+    window.sessionStorage.setItem("pqp:settings-section", "voice");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    renderOpen(true);
+    expect(selected()).toBe("settings-tab-profile");
+  });
+
   it("starts on Perfil when storage holds nothing it knows", () => {
     window.sessionStorage.setItem("pqp:settings-section", "nonsense");
     host = document.createElement("div");

@@ -147,7 +147,7 @@ describe("a taken public link", () => {
     expect(handleError()).toBe("");
   });
 
-  it("leaves any other failure to the bar, in the reader's language", async () => {
+  it("says a username out of numbers in the reader's language, in the bar", async () => {
     updateMe.mockRejectedValueOnce(
       new ApiError(409, "That username has no numbers left. Please pick a different one."),
     );
@@ -157,8 +157,9 @@ describe("a taken public link", () => {
 
     expect(handleError()).toBe("");
     const alert = bar()!.querySelector('[role="alert"]')?.textContent ?? "";
-    expect(alert.length).toBeGreaterThan(0);
-    expect(alert).not.toContain("no numbers left");
+    // Our own sentence for this refusal, never the server's.
+    expect(alert).toMatch(/Pick another one|Escolha outro/);
+    expect(alert).not.toContain("Please pick a different one");
   });
 
   it("refuses a link the server would refuse before asking to confirm it", async () => {
@@ -170,5 +171,17 @@ describe("a taken public link", () => {
     expect(updateMe).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
     expect(handleError()).toMatch(/3 a 20|3 to 20/);
+  });
+
+  it("does not blame an unchanged link for another field's 400", async () => {
+    updateMe.mockClear();
+    updateMe.mockRejectedValueOnce(new ApiError(400, "Invalid request"));
+    mount();
+    type(field("name"), "Rafael");
+    await save();
+
+    expect(handleError()).toBe("");
+    const alert = bar()!.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert).not.toMatch(/3 a 20|3 to 20/);
   });
 });
