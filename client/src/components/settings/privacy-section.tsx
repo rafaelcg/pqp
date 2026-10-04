@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type KeyboardEvent } from "react";
 import { UserX } from "lucide-react";
 import { type BlockedUser, type DmPrivacy, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,13 @@ import {
   SettingsRow,
   useInlineSave,
 } from "@/components/settings/kit";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { updateMe } from "@/lib/api";
 
 /* ----------------------------------------------------------------- privacy */
+
+const ROVING_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"]);
 
 const DM_PRIVACY_OPTIONS: {
   value: DmPrivacy;
@@ -76,6 +79,17 @@ export function PrivacySection({
     description: t(option.description),
   }));
 
+  // The radios take arrow keys that move focus AND select. While a write is
+  // in flight `choose` drops the selection, so moving focus anyway would leave
+  // it on an unchecked option while the checked one keeps the tab stop. The
+  // keys wait for the write instead, like a second click does.
+  function holdKeysWhileBusy(event: KeyboardEvent<HTMLDivElement>) {
+    if (busy.current && ROVING_KEYS.has(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
   async function choose(value: DmPrivacy) {
     if (!user || busy.current || value === current) {
       return;
@@ -96,19 +110,17 @@ export function PrivacySection({
         title={t("settings.privacy.group.dm.title")}
         description={t("settings.privacy.dmHint")}
       >
-        <RadioGroup
-          variant="list"
-          label={t("settings.privacy.dmLabel")}
-          value={current}
-          options={options}
-          disabled={!user}
-          onValueChange={(value) => void choose(value)}
-        />
-        {save.state.kind === "idle" ? null : (
-          <div className="px-4 pb-3">
-            <SettingsInlineStatus state={save.state} />
-          </div>
-        )}
+        <div onKeyDownCapture={holdKeysWhileBusy}>
+          <RadioGroup
+            variant="list"
+            label={t("settings.privacy.dmLabel")}
+            value={current}
+            options={options}
+            disabled={!user}
+            onValueChange={(value) => void choose(value)}
+            status={<SettingsInlineStatus state={save.state} />}
+          />
+        </div>
       </SettingsGroup>
 
       <SettingsGroup
@@ -122,6 +134,16 @@ export function PrivacySection({
             <SettingsRow
               key={blocked.id}
               id={`blocked-${blocked.id}`}
+              searchable={false}
+              keepInline
+              leading={
+                <UserAvatar
+                  name={blocked.displayName}
+                  avatarUrl={blocked.avatarUrl}
+                  rounded="full"
+                  className="h-8 w-8"
+                />
+              }
               label={blocked.displayName}
               description={
                 blocked.tag ? (
@@ -132,6 +154,9 @@ export function PrivacySection({
                 <Button
                   size="sm"
                   variant="secondary"
+                  aria-label={t("settings.privacy.unblockNamed", {
+                    name: blocked.displayName,
+                  })}
                   onClick={() => onUnblockUser(blocked.id)}
                 >
                   {t("settings.privacy.unblock")}
