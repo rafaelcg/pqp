@@ -11,12 +11,14 @@ import { Keyboard, Mic, Square, Volume2, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
+  SettingsBadge,
   SettingsChoiceGrid,
   SettingsGroup,
   SettingsHeaderActions,
   SettingsInlineStatus,
   SettingsLinkRow,
   SettingsNotice,
+  SettingsPreview,
   SettingsRow,
   SettingsSelect,
   SettingsSliderRow,
@@ -53,6 +55,7 @@ import {
   type NoiseSuppressionMode,
 } from "../../lib/noise-suppression";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
+import { useInCall } from "@/lib/in-call-state";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
 import { getSoundState, previewPttBeeps, setPttBeepEnabled, subscribeSounds, type SoundState } from "@/lib/sounds";
@@ -109,7 +112,7 @@ export function sliderToVadThreshold(percent: number, volume: number): number {
 
 /* ---------------------------------------------------------- mic loopback */
 
-/** How long "Ouvir meu mic" plays the microphone back before it stops itself. */
+/** How long "Ouvir meu microfone" plays the microphone back before it stops itself. */
 export const MIC_TEST_MS = 5000;
 
 export interface MicLoopbackOptions {
@@ -296,18 +299,26 @@ export function startMicLoopback(
 }
 
 /**
- * The "Ouvir meu mic" state. `active` is whether Voz is on screen: the button
- * cannot open the microphone while it is not, and a running test stops the
- * moment it stops being visible.
+ * The "Ouvir meu microfone" state. `active` is whether the test may hold the
+ * microphone at all: Voz is on screen and this person is not in a call. The
+ * button cannot open the microphone while it is not, and a running test stops
+ * the moment that changes (the tab is hidden, or a call starts).
  */
 function useMicTest(active: boolean) {
   const [playing, setPlaying] = useState(false);
   const [failed, setFailed] = useState(false);
   const handle = useRef<MicLoopback | null>(null);
+  // Loops somebody (or the hook) stopped on purpose. A permission prompt that
+  // rejects after Parar was pressed is not a failure to report.
+  const stoppedOnPurpose = useRef(new WeakSet<MicLoopback>());
 
   const stop = useCallback(() => {
-    handle.current?.stop();
+    const loop = handle.current;
     handle.current = null;
+    if (loop) {
+      stoppedOnPurpose.current.add(loop);
+      loop.stop();
+    }
   }, []);
 
   useEffect(() => {
@@ -334,10 +345,36 @@ function useMicTest(active: boolean) {
       },
     });
     handle.current = loop;
-    loop.ready.catch(() => setFailed(true));
+    loop.ready.catch(() => {
+      if (!stoppedOnPurpose.current.has(loop)) {
+        setFailed(true);
+      }
+    });
   };
 
   return { playing, failed, start, stop };
+}
+
+/* ------------------------------------------------------------ no devices */
+
+/**
+ * How long an empty microphone list has to stay empty before Voz says there
+ * is no microphone. The list starts empty while the shell asks for permission
+ * and enumerates, so an immediate notice would flash on every visit.
+ */
+export const NO_INPUTS_SETTLE_MS = 1500;
+
+function useNoInputsSettled(empty: boolean): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!empty) {
+      setSettled(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSettled(true), NO_INPUTS_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [empty]);
+  return empty && settled;
 }
 
 /* --------------------------------------------------------------- meter */
@@ -528,9 +565,21 @@ const INPUT_MODE_ICON: Record<VoiceInputMode, typeof Mic> = {
   "push-to-talk": Keyboard,
 };
 
-const INPUT_MODES: { value: VoiceInputMode; label: MessageKey }[] = [
-  { value: "voice-activity", label: "settings.voice.mode.activity" },
-  { value: "push-to-talk", label: "settings.voice.mode.ptt" },
+const INPUT_MODES: {
+  value: VoiceInputMode;
+  label: MessageKey;
+  hint: MessageKey;
+}[] = [
+  {
+    value: "voice-activity",
+    label: "settings.voice.mode.activity",
+    hint: "settings.voice.mode.activityHint",
+  },
+  {
+    value: "push-to-talk",
+    label: "settings.voice.mode.ptt",
+    hint: "settings.voice.mode.pttHint",
+  },
 ];
 
 /** Labels for the three suppressors, in the order the select offers them. */
@@ -582,7 +631,9 @@ function PttBeepRow({
  *
  * `PttBindingField` draws its own small label above the button; the row
  * already names it, so that one is hidden visually and kept for the field's
- * own layout.
+ * own layout. Atalhos (feat/settings-keyboard) rebuilds the field with an
+ * sr-only label and the button first, which makes the wrapper's selector
+ * match nothing; delete the wrapper when the two branches meet.
  */
 function PttRows({
   draftLocal,
@@ -649,13 +700,11 @@ function PttRows({
       />
 
       {typesText ? (
-        <div>
-          <SettingsNotice tone="info" inGroup>
-            {t("settings.voice.pttTypingNote", {
-              key: formatBinding(draftLocal.pushToTalkKey),
-            })}
-          </SettingsNotice>
-        </div>
+        <SettingsNotice tone="info" inGroup>
+          {t("settings.voice.pttTypingNote", {
+            key: formatBinding(draftLocal.pushToTalkKey),
+          })}
+        </SettingsNotice>
       ) : null}
 
       {!isDesktop ? (
@@ -714,11 +763,11 @@ function PttRows({
       ) : null}
 
       {isDesktop && releaseStuck ? (
-        <div>
-          <SettingsNotice tone="warning" inGroup>
-            {t("settings.voice.pttGlobalReleaseFailed")}
-          </SettingsNotice>
-        </div>
+        // An alert, as before the redesign: the key may be held down in
+        // another app right now, which is news the moment it happens.
+        <SettingsNotice tone="warning" inGroup role="alert">
+          {t("settings.voice.pttGlobalReleaseFailed")}
+        </SettingsNotice>
       ) : null}
 
       <PttBeepRow
@@ -775,16 +824,25 @@ export function VoiceSection({
   const [obsHintDismissed, setObsHintDismissed] = useState(
     isObsVirtualCameraHintDismissed,
   );
+  // In a call the meter reads the call's own analyser and opens nothing.
   const micLevel = useMicLevel({
     deviceId: draftLocal.inputDeviceId,
     inputVolume: draftLocal.inputVolume,
     liveAnalyser: voiceAnalyser,
     active: metering,
   });
-  const micTest = useMicTest(metering);
   const voiceActivity = draftLocal.inputMode === "voice-activity";
-  // The live pipeline's analyser only exists while this person is in voice.
-  const inCall = voiceAnalyser !== null;
+  // The analyser alone is not the signal: a listen-only join (no mic, or the
+  // mic refused) and an audience seat are in the call with no pipeline. The
+  // voice controller's own status covers both; the analyser covers a test
+  // harness that renders this tab without `App`.
+  const inCall = useInCall() || voiceAnalyser !== null;
+  // Never a second capture during a call, and never the mic played into the
+  // speakers a live call is listening through.
+  const micTest = useMicTest(metering && !inCall);
+  const noInputs = useNoInputsSettled(
+    metering && devicesError === null && inputs.length === 0,
+  );
 
   const onBeepChange = (pttBeep: boolean) => {
     setPttBeepEnabled(pttBeep);
@@ -825,7 +883,12 @@ export function VoiceSection({
         <SettingsRow
           id="input-device"
           label={t("settings.voice.inputDevice")}
-          htmlFor={devicesError ? undefined : inputId}
+          htmlFor={devicesError || noInputs ? undefined : inputId}
+          description={
+            inCall && !devicesError && !noInputs
+              ? t("settings.voice.micTestInCall")
+              : undefined
+          }
           stacked
           status={
             micTest.failed ? (
@@ -837,6 +900,8 @@ export function VoiceSection({
           control={
             devicesError ? (
               <SettingsNotice tone="warning">{devicesError}</SettingsNotice>
+            ) : noInputs ? (
+              <SettingsNotice tone="info">{t("settings.voice.noInputs")}</SettingsNotice>
             ) : (
               <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
                 <SettingsSelect
@@ -857,7 +922,8 @@ export function VoiceSection({
                   variant="secondary"
                   size="sm"
                   className="self-start @lg:self-auto"
-                  disabled={!metering}
+                  disabled={!metering || inCall}
+                  data-mic-test=""
                   onClick={() =>
                     micTest.playing
                       ? micTest.stop()
@@ -877,11 +943,26 @@ export function VoiceSection({
                   ) : (
                     <Volume2 className="h-3.5 w-3.5" aria-hidden />
                   )}
-                  {t(
-                    micTest.playing
-                      ? "settings.voice.micTestStop"
-                      : "settings.voice.micTest",
-                  )}
+                  {/* Both labels share one grid cell, so the button is as wide
+                      as the longer one and the select beside it never resizes
+                      when the test starts or stops. The hidden one is out of
+                      the accessible name. */}
+                  <span className="grid">
+                    <span className="col-start-1 row-start-1">
+                      {t(
+                        micTest.playing
+                          ? "settings.voice.micTestStop"
+                          : "settings.voice.micTest",
+                      )}
+                    </span>
+                    <span aria-hidden className="invisible col-start-1 row-start-1">
+                      {t(
+                        micTest.playing
+                          ? "settings.voice.micTest"
+                          : "settings.voice.micTestStop",
+                      )}
+                    </span>
+                  </span>
                 </Button>
               </div>
             )
@@ -906,16 +987,23 @@ export function VoiceSection({
           description={voiceActivity ? t("settings.voice.sensitivityHint") : undefined}
           stacked
           control={
-            <MicLevelMeter
-              level={micLevel}
-              inputVolume={draftLocal.inputVolume}
-              threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
-              onThresholdChange={
-                voiceActivity
-                  ? (vadThreshold) => patchLocal({ vadThreshold })
-                  : undefined
-              }
-            />
+            // Not decorative: the sensitivity handle is operated in place.
+            // The meter names its progress bar and slider itself and hides
+            // the captions.
+            <SettingsPreview decorative={false}>
+              <div className="px-3 py-2">
+                <MicLevelMeter
+                  level={micLevel}
+                  inputVolume={draftLocal.inputVolume}
+                  threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
+                  onThresholdChange={
+                    voiceActivity
+                      ? (vadThreshold) => patchLocal({ vadThreshold })
+                      : undefined
+                  }
+                />
+              </div>
+            </SettingsPreview>
           }
         />
       </SettingsGroup>
@@ -960,14 +1048,10 @@ export function VoiceSection({
       </SettingsGroup>
 
       <SettingsGroup
+        // Atalhos links to "ptt". With voice activity selected there is no
+        // key row, so the jump lands on the choice that brings it.
+        id={voiceActivity ? "ptt" : undefined}
         title={t("settings.voice.inputMode")}
-        // The choice grid has no slot for a line per card, so the chosen
-        // mode's one-line effect sits under the title instead.
-        description={t(
-          voiceActivity
-            ? "settings.voice.mode.activityHint"
-            : "settings.voice.mode.pttHint",
-        )}
         surface="plain"
       >
         <SettingsChoiceGrid
@@ -980,6 +1064,7 @@ export function VoiceSection({
             return {
               value: mode.value,
               label: t(mode.label),
+              description: t(mode.hint),
               preview: (
                 <Icon
                   className={cn(
@@ -996,7 +1081,12 @@ export function VoiceSection({
       </SettingsGroup>
 
       {draftLocal.inputMode === "push-to-talk" ? (
-        <SettingsGroup title={t("settings.voice.group.ptt.title")}>
+        <SettingsGroup
+          // Without a keyboard there is no key row, so the group is the
+          // target for Atalhos' "ptt" link.
+          id={canBindKey ? undefined : "ptt"}
+          title={t("settings.voice.group.ptt.title")}
+        >
           {canBindKey ? (
             <PttRows
               draftLocal={draftLocal}
@@ -1006,11 +1096,9 @@ export function VoiceSection({
             />
           ) : (
             <>
-              <div>
-                <SettingsNotice tone="info" inGroup>
-                  {t("settings.voice.pttNoKeyboard")}
-                </SettingsNotice>
-              </div>
+              <SettingsNotice tone="info" inGroup role="note">
+                {t("settings.voice.pttNoKeyboard")}
+              </SettingsNotice>
               <PttBeepRow
                 enabled={draftLocal.pttBeep}
                 soundsOn={sounds.enabled}
@@ -1031,9 +1119,7 @@ export function VoiceSection({
           htmlFor={noiseId}
           badge={
             showVoiceCleanBadge ? (
-              <span className="rounded-full bg-accent-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-on-accent-soft">
-                {t("voiceClean.badge")}
-              </span>
+              <SettingsBadge>{t("voiceClean.badge")}</SettingsBadge>
             ) : undefined
           }
           description={t(
@@ -1137,6 +1223,9 @@ export function VoiceSection({
           description={t("settings.voice.videoQuality.hint")}
           // The number beside the control that asks for it. Without this a
           // person can pick 720p, receive 320x240 and have no way to know.
+          // Only in a call (spec): outside one there is nothing to measure.
+          // `inCall` is the controller's status, so a listen-only join that
+          // sends a camera still gets it.
           status={inCall ? <OutboundVideoReadout /> : undefined}
           control={
             <SettingsSelect
