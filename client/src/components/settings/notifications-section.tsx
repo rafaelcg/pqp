@@ -103,6 +103,9 @@ export function NotificationsSection() {
           control={
             <RadioGroup
               variant="segmented"
+              // Cells sized by their text, not equal: three equal cells cut
+              // "Só @menções" short beside the label and on a phone.
+              className="auto-cols-auto"
               label={t("settings.notifications.levelLabel")}
               value={state.default}
               onValueChange={setDefaultLevel}
