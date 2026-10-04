@@ -76,7 +76,12 @@ export function Switch({
         <span
           className={cn(
             "absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-[var(--duration-fast)]",
-            checked ? "translate-x-4 bg-on-accent" : "bg-text-tertiary",
+            // Off: a mid-grey knob in dark. In every light look that grey is a
+            // dark dot on a pale track, so light draws a pale knob with an
+            // outline instead, the way a native light switch does.
+            checked
+              ? "translate-x-4 bg-on-accent"
+              : "bg-text-tertiary [:root[data-theme=light]_&]:bg-surface-0 [:root[data-theme=light]_&]:ring-1 [:root[data-theme=light]_&]:ring-border-strong",
           )}
         />
       </span>
