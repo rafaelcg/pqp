@@ -4196,7 +4196,7 @@
   "help.email.write": "Escrever e-mail",
   "help.email.copy": "Copiar endereço",
   "help.email.copied": "Endereço copiado",
-  "help.email.attached": "O e-mail já vai com versão, sistema, navegador e idioma. Nada da sua conta.",
+  "help.email.attached": "Vai com versão, sistema, navegador e idioma. Nada da sua conta.",
   "help.response": "Somos dois irmãos, fazemos o pqp nas horas vagas e respondemos assim que dá.",
   "help.bug.title": "Achou um bug?",
   "help.bug.feedback": "Enviar feedback pelo app",
@@ -4214,7 +4214,5 @@
   "help.contact.title": "Falar com a gente",
   "help.version.label": "Versão do app",
   "help.version.hint": "Cole no e-mail se a gente pedir.",
-  "help.version.copy": "Copiar versão",
-  "help.version.copied": "Versão copiada",
   "userMenu.help": "Ajuda e contato"
 }

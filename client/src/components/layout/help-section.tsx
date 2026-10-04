@@ -1,15 +1,16 @@
-import { Check, Copy, Mail } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Mail } from "lucide-react";
+import { useMemo } from "react";
 import {
+  SettingsBuildLine,
+  SettingsCopyButton,
   SettingsGroup,
   SettingsLinkRow,
   SettingsNotice,
   SettingsRow,
-  formatBuildLine,
   useSettingsShell,
 } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
-import { Tooltip } from "@/components/ui/tooltip";
+import { BUILD_ID, DEV_BUILD_ID } from "@/lib/build-info";
 import {
   buildContactMailto,
   collectHelpDiagnostics,
@@ -18,66 +19,17 @@ import {
 } from "@/lib/help-contact";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
-/** How long the check mark replaces the copy icon. */
-const COPIED_MS = 2000;
+/**
+ * The commit the mail names: the same seven characters the "Versão do app"
+ * row shows, so a pasted row and the mail's diagnostics agree.
+ */
+const MAIL_APP_VERSION = BUILD_ID === DEV_BUILD_ID ? DEV_BUILD_ID : BUILD_ID.slice(0, 7);
 
 const LEGAL_LINKS: { id: string; href: string; label: MessageKey }[] = [
   { id: "privacy", href: "/privacy", label: "settings.data.privacy" },
   { id: "terms", href: "/terms", label: "settings.data.terms" },
   { id: "cookies", href: "/cookies", label: "settings.data.cookies" },
 ];
-
-/**
- * An icon-only ghost button that copies `text`. The icon turns into a check
- * for two seconds and a live region says so. With no clipboard (plain http, an
- * old webview) the click does nothing and the text beside it stays selectable.
- */
-function CopyButton({
-  text,
-  label,
-  copiedLabel,
-}: {
-  text: string;
-  label: string;
-  copiedLabel: string;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), COPIED_MS);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <>
-      <Tooltip label={label}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-[var(--control-sm)] shrink-0 px-0"
-          onClick={() => {
-            void navigator.clipboard
-              ?.writeText(text)
-              .then(() => setCopied(true))
-              .catch(() => undefined);
-          }}
-        >
-          {copied ? (
-            <Check aria-hidden className="h-3.5 w-3.5 animate-icon-swap text-success" />
-          ) : (
-            <Copy aria-hidden className="h-3.5 w-3.5" />
-          )}
-        </Button>
-      </Tooltip>
-      {/* Always mounted, so the change is announced. */}
-      <span role="status" className="sr-only">
-        {copied ? copiedLabel : ""}
-      </span>
-    </>
-  );
-}
 
 /**
  * "Ajuda e contato": the way to reach the two of us from inside the app.
@@ -89,11 +41,10 @@ function CopyButton({
 export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void }) {
   const { t } = useTranslation();
   const { openSection } = useSettingsShell();
-  const buildLine = formatBuildLine();
 
   const mailto = useMemo(
     () =>
-      buildContactMailto(collectHelpDiagnostics(), {
+      buildContactMailto(collectHelpDiagnostics({ appVersion: MAIL_APP_VERSION }), {
         subject: t("help.mail.subject"),
         intro: t("help.mail.intro"),
         diagnosticsHeading: t("help.mail.diagnostics"),
@@ -116,7 +67,7 @@ export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void })
           description={t("help.email.attached")}
           control={
             <div className="flex items-center gap-2">
-              <CopyButton
+              <SettingsCopyButton
                 text={CONTACT_EMAIL}
                 label={t("help.email.copy")}
                 copiedLabel={t("help.email.copied")}
@@ -134,18 +85,7 @@ export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void })
           id="version"
           label={t("help.version.label")}
           description={t("help.version.hint")}
-          control={
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="min-w-0 break-all font-mono text-xs text-text-secondary">
-                {buildLine}
-              </span>
-              <CopyButton
-                text={buildLine}
-                label={t("help.version.copy")}
-                copiedLabel={t("help.version.copied")}
-              />
-            </div>
-          }
+          control={<SettingsBuildLine variant="row" />}
         />
       </SettingsGroup>
 
@@ -172,7 +112,7 @@ export function HelpSection({ onOpenFeedback }: { onOpenFeedback?: () => void })
       </SettingsGroup>
 
       <SettingsGroup surface="plain">
-        <SettingsNotice tone="info">{t("help.reports")}</SettingsNotice>
+        <SettingsNotice tone="info" role="note">{t("help.reports")}</SettingsNotice>
       </SettingsGroup>
     </div>
   );
