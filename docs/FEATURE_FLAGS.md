@@ -100,6 +100,10 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVE_HLS_CAMERA`, `LIVE_HLS_CAMERA_480`, `LIVE_HLS_VOICE_TRACK`,
 `LIVE_HLS_MIC_ARCHIVE`, `LIVE_HLS_REAP_ORPHANS`, `HLS_SHARER_RESUME_HOLD`,
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
+`SFU_REGION_SCOPED_CALLS` (`sfu_region_scoped_calls`, default **on**: SFU
+moderation asks only the box a room lives on, with a per-region budget and
+circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
+see `docs/plans/SFU_REGIONS.md` §"The control plane"),
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
@@ -108,6 +112,17 @@ default off; automatic translation of Baú posts, which also needs
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+
+Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
+default off, **per server**, client-only), the presenter's camera held to the
+film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),
+served as `cameraSync` on `GET /api/live-hls/config`. Measured on the real
+player (`client/e2e/camera-sync/`, numbers in `docs/WATCH_PARTY.md` §"The camera
+follows the film"), and still off until a person has checked it on a real
+party: turn it on for one test server (the server's override), then globally.
+Off, the camera plays loose exactly as before: nothing writes its rate or its
+position, and nothing reads the film's clock. Only `true` turns the variable
+on. An API older than the flag sends no field, which the client reads as off.
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
@@ -138,6 +153,21 @@ the client behaves exactly as before: no constraint is written, the shell is tol
 nothing. `pqpShareHealth()` in the console works either way. Design, evidence
 and the test steps: `docs/DESKTOP.md` §"A share next to a game at a very high
 frame rate".
+
+Also born as a flag: `SHARE_GAME_CAPTURE_HINT` (`share_game_capture_hint`,
+default off, **per server**), served by the same `GET /api/share/config?serverId=`
+as `shareGameCaptureHint`. On the Windows desktop app, the presenter's client
+samples its own share for the first minute (a 32x18 luma grid every 2 s, nothing
+kept or sent) and, when the picture is black, no frame arrives for 8 s, or the
+capture ends by itself, asks the shell whether Windows sees a Direct3D app in
+exclusive fullscreen (`SHQueryUserNotificationState`). Only a yes shows the
+presenter one card with the fix (the game's "Fullscreen Windowed" or borderless
+mode) and a "não mostrar de novo". It changes nothing about the capture: there is
+no safe code-side fix in Electron 44 (see the doc). Off, the client samples
+nothing and asks the shell nothing. Needs a desktop build that publishes
+`capabilities.fullscreenAppState`; an older shell answers "cannot tell" and the
+card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
+Windowed".
 
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 (`linux_desktop_system_audio`, default off), the computer's sound on a screen

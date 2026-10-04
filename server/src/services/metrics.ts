@@ -42,6 +42,10 @@ import {
   regionCountryMap,
   sfuRegions,
 } from "../voice/regions.js";
+import {
+  sfuControlPlaneReport,
+  type SfuRegionCallStats,
+} from "../voice/sfu-control-plane.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
 import {
   getVoiceActivitySnapshot,
@@ -1914,6 +1918,16 @@ export interface SfuRegionsReport {
   countries: Record<string, string>;
   pinnedRooms: Record<string, number>;
   countryHeader: { with: number; without: number };
+  /**
+   * This process's control-plane calls to each SFU box (`listRooms`,
+   * `listParticipants` and the writes after them), per region: calls,
+   * failures by class, calls skipped by the circuit, p50/p95/p99 of the
+   * answers, the budget a speculative read gets right now and whether the
+   * circuit is open. Per process, like `pinnedRooms`: with two instances read
+   * each one, because the thing measured is that process's path to the box.
+   * Null in single-region mode. `voice/sfu-control-plane.ts`.
+   */
+  controlPlane: Record<string, SfuRegionCallStats> | null;
 }
 
 async function sfuRegionsReport(): Promise<SfuRegionsReport> {
@@ -1925,6 +1939,9 @@ async function sfuRegionsReport(): Promise<SfuRegionsReport> {
     countries: Object.fromEntries(regionCountryMap(configured)),
     pinnedRooms: pinnedRoomRegionCounts(),
     countryHeader: countryHeaderStats(),
+    controlPlane: configured
+      ? sfuControlPlaneReport(configured.map((region) => region.id))
+      : null,
   };
 }
 

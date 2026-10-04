@@ -59,6 +59,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
     const value = (raw ?? "").trim().toLowerCase();
     return value === "true" || value === "1" || value === "on";
   },
+  // New with the flag, so there was no old reader: this is its definition.
+  sfu_region_scoped_calls: offWords,
   voice_mesh_resume_requires_cap: (raw) => raw === "true",
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
@@ -72,8 +74,12 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  watch_camera_sync: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
   share_high_motion_guard: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  share_game_capture_hint: (raw) => raw === "true",
 };
 
 const SAMPLES = [

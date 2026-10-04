@@ -216,6 +216,11 @@
           few frames on purpose, so keep the game moving while it measures.
         </p>
         <p class="muted">
+          Sharing a game? Run it once with the game in <b>Fullscreen</b> and once in <b>Fullscreen Windowed</b> (or borderless),
+          with the screen and then with the game's window. The <b>picture</b> column says what the capture saw each second:
+          moving, still, black, or no frames at all. Copy the report after each run.
+        </p>
+        <p class="muted">
           No game on this computer? <a href="share-diagnostic-game.html" target="_blank" rel="noopener" style="color: var(--accent)">Open the stand-in game</a>:
           a window that keeps the graphics card as busy as an uncapped game. Share that window.
         </p>
@@ -263,6 +268,7 @@
           <div class="stat"><b id="k-size">-</b><span>sent size</span></div>
         </div>
         <p class="muted" id="env" style="margin-top: 8px"></p>
+        <p class="muted" id="backend" style="margin-top: 4px"></p>
       </div>
 
       <div class="panel">
@@ -283,6 +289,7 @@
                 <th>kbps</th>
                 <th>recv fps</th>
                 <th>freezes</th>
+                <th class="l">picture</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
@@ -366,12 +373,69 @@
         return inb;
       }
 
+      // What the picture itself looks like, about once a second: one frame
+      // drawn into a 32x18 canvas, its luma read back. Nothing is kept or sent.
+      // Same thresholds as the app's dead-share check
+      // (client/src/lib/share-picture-check.ts): black is mean <= 4 and the
+      // 98th percentile <= 12 out of 255; still is a mean difference <= 0.75
+      // from the previous sample. A game in exclusive fullscreen tends to show
+      // up here as "black" or as "no frames" while you are in the game.
+      let gridCanvas = null;
+      let gridContext = null;
+      function lumaOf(frame) {
+        try {
+          if (!gridContext) {
+            gridCanvas = new OffscreenCanvas(32, 18);
+            gridContext = gridCanvas.getContext("2d", { willReadFrequently: true });
+            gridContext.imageSmoothingQuality = "high";
+          }
+          gridContext.drawImage(frame, 0, 0, 32, 18);
+          const rgba = gridContext.getImageData(0, 0, 32, 18).data;
+          const luma = new Uint8Array(rgba.length / 4);
+          for (let p = 0, i = 0; p < luma.length; p += 1, i += 4) {
+            luma[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+          }
+          return luma;
+        } catch {
+          return null;
+        }
+      }
+      function lumaStats(luma) {
+        const sorted = Array.from(luma).sort((a, b) => a - b);
+        const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
+        return { mean, p98: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.98))] };
+      }
+      function lumaDiff(a, b) {
+        if (!a || !b || a.length !== b.length) return null;
+        let sum = 0;
+        for (let i = 0; i < a.length; i += 1) sum += Math.abs(a[i] - b[i]);
+        return sum / a.length;
+      }
+      // One word per row: "no frames" (the capturer handed over nothing; also
+      // what a healthy capture of a still picture does, Chromium skips
+      // unchanged frames), "black", "still" or "moving".
+      function pictureWord(framesDelta, luma, previous) {
+        if (framesDelta === 0 || !luma) return framesDelta === 0 ? "no frames" : "-";
+        const s = lumaStats(luma);
+        if (s.mean <= 4 && s.p98 <= 12) return "black";
+        const diff = lumaDiff(luma, previous);
+        return diff !== null && diff <= 0.75 ? "still" : "moving";
+      }
+
       // Counts frames the capturer hands over, independent of the encoder.
       // MediaStreamTrackProcessor reads every frame the source delivers; the
       // gaps between their timestamps are the freezes as the capturer made
       // them, before WebRTC could add or hide anything.
       function startFrameCounter(track) {
-        const state = { frames: 0, lastTs: null, maxGap: 0, bigGaps: 0, stop: () => {} };
+        const state = {
+          frames: 0,
+          lastTs: null,
+          maxGap: 0,
+          bigGaps: 0,
+          luma: null,
+          lumaAt: -Infinity,
+          stop: () => {},
+        };
         if (typeof MediaStreamTrackProcessor !== "function") {
           state.unsupported = true;
           return state;
@@ -398,6 +462,11 @@
             const frame = result.value;
             // Capture timestamp in microseconds on Chromium; fall back to now.
             const ts = typeof frame.timestamp === "number" ? frame.timestamp / 1000 : performance.now();
+            const at = performance.now();
+            if (at - state.lumaAt >= 900) {
+              state.lumaAt = at;
+              state.luma = lumaOf(frame) || state.luma;
+            }
             frame.close();
             state.frames += 1;
             if (state.lastTs !== null) {
@@ -581,7 +650,16 @@
             video.requestVideoFrameCallback(tick);
             video.play().catch(() => {});
           }
-          track.addEventListener("ended", () => stop());
+          // `ended` fires when the SOURCE ends (Chromium gave up on the
+          // capturer), never for this page's own stop().
+          // Bound to THIS run: a late `ended` from an earlier capture must not
+          // stop or relabel the measurement that replaced it.
+          const owner = run;
+          track.addEventListener("ended", () => {
+            if (run !== owner || owner.stopped) return;
+            owner.endedBySourceMs = Math.round(performance.now() - owner.startedAt);
+            stop();
+          });
           // A timeout that re-arms after each sample, not an interval: a slow
           // getStats delays the next reading instead of overlapping it.
           const tick = async () => {
@@ -682,7 +760,29 @@
           powerEfficient: out && typeof out.powerEfficientEncoder === "boolean" ? out.powerEfficientEncoder : null,
           codec: codec ? codec.mimeType : null,
           targetKbps: out && num(out.targetBitrate) !== null ? out.targetBitrate / 1000 : null,
+          picture: c.unsupported ? null : pictureWord(c.frames - run.prevCounter.frames, c.luma, run.prevLuma),
+          lumaMean: c.luma ? Math.round(lumaStats(c.luma).mean * 10) / 10 : null,
+          trackMuted: run.track.muted === true,
+          exclusiveFullscreen: run.exclusiveFullscreen,
         };
+        run.prevLuma = c.luma;
+        // Only inside the pqp desktop app (it answers; Chrome has no such
+        // bridge): does Windows say a Direct3D app holds the display in
+        // exclusive fullscreen? Asked in the background, read on the next row.
+        // The answer lands on the run that asked, never on a later one.
+        const asker = run;
+        if (window.pqpDesktop && typeof window.pqpDesktop.fullscreenAppState === "function" && !asker.askingFullscreen) {
+          asker.askingFullscreen = true;
+          window.pqpDesktop
+            .fullscreenAppState()
+            .then((answer) => {
+              asker.exclusiveFullscreen = answer ? answer.state : null;
+            })
+            .catch(() => {})
+            .finally(() => {
+              asker.askingFullscreen = false;
+            });
+        }
         if (prev && dt > 0) {
           if (!c.unsupported) row.captured = (c.frames - run.prevCounter.frames) / dt;
           if (cur.framesEncoded !== null && prev.framesEncoded !== null) {
@@ -728,6 +828,7 @@
           [fmt(r.kbps), ""],
           [fmt(r.recvFps), ""],
           [fmt(r.freezes), r.freezes > 0 ? "bad" : ""],
+          [r.picture || "-", r.picture === "black" ? "bad l" : r.picture === "no frames" && r.away ? "warn l" : "l"],
         ];
         for (const [text, cls] of cells) {
           const td = document.createElement("td");
@@ -763,6 +864,15 @@
           jbMs: mean(valuesOf(list, "jbMs")),
           previewFps: mean(valuesOf(list, "previewFps")),
           limitedShare: Object.fromEntries(Object.entries(lim).map(([k, v]) => [k, v / list.length])),
+          // Share of seconds by what the picture looked like (null when the
+          // browser cannot read frames, see startFrameCounter).
+          pictureShare: (() => {
+            const words = list.map((r) => r.picture).filter((w) => w && w !== "-");
+            if (!words.length) return null;
+            const out = {};
+            for (const w of words) out[w] = (out[w] || 0) + 1 / words.length;
+            return out;
+          })(),
           minHeight: Math.min(...valuesOf(list, "height")),
         };
       }
@@ -780,6 +890,28 @@
         const cpuLimited = (s.limitedShare.cpu || 0) >= 0.2;
         const encodeSlow = s.encMs !== null && s.encMs > (1000 / fps) * 0.9;
         const encoderBehind = s.sentFps !== null && capturedFps !== null && s.sentFps < capturedFps * 0.75;
+        // Before "starved": a capture that sees nothing of the game is not a
+        // slow capture, and the advice is different (docs/DESKTOP.md,
+        // "Sharing a game: Fullscreen vs Fullscreen Windowed").
+        const pic = s.pictureShare || {};
+        if ((pic.black || 0) >= 0.6) {
+          return [
+            "bad",
+            "The capture sees a black screen",
+            `${Math.round(pic.black * 100)}% of the seconds measured were black. With a game in front, that is almost always the game in ` +
+              "exclusive fullscreen: Windows stops handing its picture to screen capture. Set the game to Fullscreen Windowed (CS2: Settings, " +
+              "Video, Display Mode) or borderless, and run this again.",
+          ];
+        }
+        if ((pic["no frames"] || 0) >= 0.8) {
+          return [
+            "warn",
+            "The capture got no new frames",
+            `${Math.round(pic["no frames"] * 100)}% of the seconds measured brought no frame at all. The browser skips frames that did not ` +
+              "change, so this is normal for a still picture, and wrong for a game in motion: then it is almost always the game in exclusive " +
+              "fullscreen, and viewers see the last picture frozen. Set the game to Fullscreen Windowed or borderless and run this again.",
+          ];
+        }
         if (capturePoor) {
           return [
             "bad",
@@ -823,6 +955,30 @@
         ];
       }
 
+      // The capture facts this page can know, on one line, for the report.
+      // Which Windows capturer is behind it is not visible to a page: Chromium
+      // uses Windows Graphics Capture for a screen from Windows 11 24H2 (build
+      // 26100) and DXGI duplication with GDI behind it before that, and Windows
+      // Graphics Capture for every window. `pqpShareHealth()` in the desktop
+      // app says which one this machine gets.
+      function backendLine(s) {
+        const settings = run.settings || {};
+        const pic = s && s.pictureShare
+          ? Object.entries(s.pictureShare)
+              .sort((a, b) => b[1] - a[1])
+              .map(([k, v]) => `${k} ${Math.round(v * 100)}%`)
+              .join(", ")
+          : "not readable in this browser";
+        const last = rows[rows.length - 1];
+        return (
+          `Capture backend facts: surface ${settings.displaySurface || "?"}, ` +
+          `track frame rate setting ${fmt(num(settings.frameRate))} fps, captured ${fmt(s ? (run.counter.unsupported ? s.srcFps : s.captured) : null)} fps, ` +
+          `picture ${pic}, track ${run.track.muted ? "muted" : "unmuted"} / ${run.track.readyState}` +
+          (last && last.exclusiveFullscreen ? `, Windows says: ${last.exclusiveFullscreen}` : "") +
+          "."
+        );
+      }
+
       function setVerdict(level, title, text) {
         const el = $("verdict");
         el.textContent = "";
@@ -850,6 +1006,7 @@
         $("k-lim").textContent = lim || "-";
         const last = rows[rows.length - 1];
         $("k-size").textContent = last && last.width ? `${last.width}x${last.height}` : "-";
+        $("backend").textContent = backendLine(s);
         if (final) {
           const [level, title, text] = judge(s, run.fps, !!run.counter.unsupported, rows.length ? rows[rows.length - 1].encoder : null);
           const scope = awayRows.length >= 5 ? "" : " (few seconds away from this page, so this uses every second)";
@@ -867,6 +1024,14 @@
         if (run.sampling) await run.sampling;
         await takeSample(true);
         updateSummary(true);
+        if (run.endedBySourceMs !== undefined) {
+          const text =
+            `The browser ended the capture by itself ${fmt(run.endedBySourceMs / 1000, 1)} s after it started. With a game in front that ` +
+            "is the third face of exclusive fullscreen (the other two are a black picture and no frames). Set the game to Fullscreen " +
+            "Windowed or borderless and run this again.";
+          setVerdict("bad", "The capture ended by itself", text);
+          run.verdict = { level: "bad", title: "The capture ended by itself", text };
+        }
         run.counter.stop();
         if (run.preview) run.preview.video.remove();
         for (const layer of run.extraLayers) layer.clone.stop();
@@ -888,11 +1053,13 @@
 
       function report() {
         return {
-          tool: "pqp share diagnostic v1",
+          tool: "pqp share diagnostic v2",
           at: new Date().toISOString(),
           fpsCeiling: run.fps,
           codecWanted: run.codecWanted,
           env: run.env,
+          backend: $("backend").textContent,
+          endedBySourceMs: run.endedBySourceMs ?? null,
           verdict: run.verdict || null,
           summary: run.summary || null,
           rows,

@@ -58,6 +58,10 @@ import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { useInCall } from "@/lib/in-call-state";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
+import {
+  setAutoHideStageControls,
+  useAutoHideStageControls,
+} from "@/lib/stage-controls-pref";
 import { getSoundState, previewPttBeeps, setPttBeepEnabled, subscribeSounds, type SoundState } from "@/lib/sounds";
 import { requestConnectionCheck } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
@@ -815,6 +819,7 @@ export function VoiceSection({
   const ids = useId();
   const musicAutoJoin = useMusicAutoJoin();
   const musicDucking = useMusicDucking();
+  const autoHideControls = useAutoHideStageControls();
   const canSelectOutput = supportsAudioOutputSelection();
   const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
   // Probed once: whether this machine has a keyboard worth binding does not
@@ -1295,6 +1300,13 @@ export function VoiceSection({
           label={t("settings.voice.musicDuck")}
           checked={musicDucking}
           onCheckedChange={setMusicDucking}
+        />
+        <SettingsSwitchRow
+          id="auto-hide-controls"
+          label={t("settings.voice.autoHideControls")}
+          description={t("settings.voice.autoHideControlsHint")}
+          checked={autoHideControls}
+          onCheckedChange={setAutoHideStageControls}
         />
       </SettingsGroup>
     </div>

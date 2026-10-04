@@ -190,6 +190,14 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
   },
+  sfu_region_scoped_calls: {
+    description:
+      "Moderação do SFU pergunta só à região da sala, com limite de tempo e disjuntor por região (desligado: pergunta a todas e espera 5 s).",
+    env: "SFU_REGION_SCOPED_CALLS",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   voice_mesh_resume_requires_cap: {
     description:
       "Só segurar assento mesh por 90 s para quem declarou mesh-resume.",
@@ -280,6 +288,16 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareHighMotionGuard)",
   },
+  share_game_capture_hint: {
+    description:
+      "Aviso de jogo em tela cheia exclusiva: no app desktop do Windows, se o compartilhamento chega preto, sem quadros ou cai sozinho enquanto o Windows diz que um jogo ocupa a tela, quem compartilha vê como trocar pra tela cheia em janela.",
+    env: "SHARE_GAME_CAPTURE_HINT",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Read by `GET /api/share/config` with the call's server, like the guard.
+    perServer: true,
+    clientVia: "GET /api/share/config (shareGameCaptureHint)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
@@ -288,6 +306,20 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: true,
     clientVia: "GET /api/live-hls/config (fastStart)",
+  },
+  watch_camera_sync: {
+    description:
+      "Câmera de quem apresenta no compasso do filme (só cliente: o player da câmera acompanha o relógio do filme, com até 5 % de velocidade ou um salto; o filme nunca é mexido).",
+    env: "WATCH_CAMERA_SYNC",
+    parseEnv: exactTrue,
+    // Off until it has been checked by hand on a real party: measured on the
+    // real player (the PR that added it has the numbers), but turned on one
+    // server at a time from the dashboard, then globally.
+    codeDefault: false,
+    // The only reader is `GET /api/live-hls/config?serverId=`, which knows
+    // the server; the deployment-wide answer is the global value.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config (cameraSync)",
   },
   client_force_update: {
     description:

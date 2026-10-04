@@ -40,6 +40,17 @@ import {
 } from "@/lib/share-guard-runtime";
 import { setShareHealthSource } from "@/lib/share-health";
 import {
+  confirmExclusiveFullscreen,
+  earlyEndIsHint,
+  isShareGameCaptureHintSilenced,
+  shouldWatchSharePicture,
+  type ShareCaptureHint,
+} from "@/lib/share-game-capture-hint";
+import {
+  startSharePictureWatch,
+  type SharePictureWatch,
+} from "@/lib/share-picture-watch";
+import {
   capturesSystemAudio,
   ensureConfirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
@@ -560,6 +571,16 @@ export interface VoiceState {
    * is in `lib/screen-capture-cursor.ts`.
    */
   isShareCursorVisible: boolean;
+  /**
+   * The presenter's own share looks dead (black, no frames) or ended by
+   * itself within its first minute, while Windows says a Direct3D app holds
+   * the display in exclusive fullscreen: on the Windows desktop app, under
+   * `share_game_capture_hint`. Raised by `share-picture-watch.ts` or the
+   * capture's `ended`, read by `ShareGameCaptureNotice`, cleared by the next
+   * share and by leaving the call. Never set in a browser, with the flag off,
+   * or after "não mostrar de novo" (`lib/share-game-capture-hint.ts`).
+   */
+  shareCaptureHint: ShareCaptureHint | null;
   /**
    * True when the last attempt asked for sound and died AFTER the picker
    * closed, which is the one share failure a person cannot act on by reading:
@@ -1754,6 +1775,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingScreenAudio: false,
     isSharingSystemAudio: false,
     isShareCursorVisible: false,
+    shareCaptureHint: null,
     screenShareAudioFailed: false,
     sharePublishRecovering: false,
     incomingCalls: [],
@@ -3138,6 +3160,18 @@ export function createVoiceController(transport: RealtimeTransport) {
     null;
   /** The desktop shell was told a share is live (priority boost), and owes the matching false. */
   let shareShellNotified = false;
+  /** The dead-picture watch for this share (`share_game_capture_hint`), null otherwise. */
+  let sharePictureWatch: SharePictureWatch | null = null;
+  /** `Date.now()` when the running share went out, for "ended by itself this soon". */
+  let shareStartedAt = 0;
+  /** `share_game_capture_hint` was on for the running share. */
+  let shareGameCaptureHintOn = false;
+  /**
+   * Bumped whenever the call this controller is in ends or changes, so a
+   * late answer about a share in an earlier call cannot raise a card in this
+   * one (`maybeHintEarlyCaptureEnd`).
+   */
+  let shareHintCallGeneration = 0;
 
   /**
    * Put a running share under `share_high_motion_guard` (when the flag is on
@@ -3154,6 +3188,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     track: MediaStreamTrack,
     baseFps: 30 | 60,
     guardOn: boolean,
+    pictureHintOn = false,
   ) {
     endShareObservation();
     const readReports = async (): Promise<Array<Iterable<unknown>>> => {
@@ -3197,6 +3232,32 @@ export function createVoiceController(transport: RealtimeTransport) {
         void desktop.setShareLive(true).catch(() => {});
       }
     }
+    // `share_game_capture_hint`. A game in exclusive fullscreen can leave the
+    // capture black or without frames while every number on the sender looks
+    // fine. Watched for the first minute on the Windows desktop app, and only
+    // reported once the shell confirms a Direct3D app holds the display.
+    // docs/DESKTOP.md §"Sharing a game: Fullscreen vs Fullscreen Windowed".
+    if (
+      pictureHintOn &&
+      shouldWatchSharePicture({
+        desktopPlatform: getDesktop()?.platform,
+        silenced: isShareGameCaptureHintSilenced(),
+      })
+    ) {
+      sharePictureWatch = startSharePictureWatch({
+        track,
+        confirm: confirmExclusiveFullscreen,
+        onDead: (kind) => {
+          console.warn("[pqp] share picture looks dead under exclusive fullscreen", {
+            kind,
+            surface: track.getSettings?.().displaySurface ?? null,
+          });
+          state.shareCaptureHint = { kind, at: Date.now() };
+          emit();
+        },
+      });
+    }
+    const pictureWatch = sharePictureWatch;
     setShareHealthSource({
       transport: sfu ? "sfu" : "mesh",
       guardEnabled: guardOn,
@@ -3204,10 +3265,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       readReports,
       guard: () => shareGuard,
       captureCheck: () => shareCaptureCheck,
+      picture: () => pictureWatch?.status() ?? null,
     });
   }
 
   function endShareObservation() {
+    sharePictureWatch?.stop();
+    sharePictureWatch = null;
     const guard = shareGuard;
     shareGuard = null;
     shareCaptureCheck = null;
@@ -3802,6 +3866,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     const video = stream.getVideoTracks()[0];
     if (video) {
       video.onended = () => {
+        // `ended` fires when the SOURCE ends, never for our own `stop()`.
+        // Chromium ends a capture on a permanent capturer error, which is what
+        // Windows Graphics Capture reports when it never gets a frame of an
+        // exclusive-fullscreen game: the third face of the same problem.
+        maybeHintEarlyCaptureEnd(stream, video);
         void stopScreenShareInternal();
         emit();
       };
@@ -3812,6 +3881,48 @@ export function createVoiceController(transport: RealtimeTransport) {
         void dropScreenAudio(audio);
       };
     }
+  }
+
+  /**
+   * The capture ended by itself in its first minute, under
+   * `share_game_capture_hint` on the Windows desktop app. Shown only if the
+   * shell says a Direct3D app holds the display in exclusive fullscreen: a
+   * shared window that was simply closed is not this.
+   */
+  function maybeHintEarlyCaptureEnd(stream: MediaStream, video: MediaStreamTrack) {
+    if (
+      screenCaptureStream !== stream ||
+      !shareGameCaptureHintOn ||
+      !earlyEndIsHint(shareStartedAt, Date.now()) ||
+      !shouldWatchSharePicture({
+        desktopPlatform: getDesktop()?.platform,
+        silenced: isShareGameCaptureHintSilenced(),
+      })
+    ) {
+      return;
+    }
+    const afterMs = Date.now() - shareStartedAt;
+    const surface = video.getSettings?.().displaySurface ?? null;
+    // What this answer is about: THIS share, in THIS call. The shell's
+    // answer is asynchronous, and by the time it lands the person may have
+    // shared again, hung up, or moved to another call; then it is about
+    // nothing anybody is looking at and must not raise a card.
+    const startedAt = shareStartedAt;
+    const callGeneration = shareHintCallGeneration;
+    void confirmExclusiveFullscreen().then((exclusive) => {
+      console.warn("[pqp] share capture ended by itself", { afterMs, surface, exclusive });
+      if (
+        exclusive !== true ||
+        state.isSharingScreen ||
+        shareStartedAt !== startedAt ||
+        shareHintCallGeneration !== callGeneration ||
+        state.status !== "connected"
+      ) {
+        return;
+      }
+      state.shareCaptureHint = { kind: "ended", at: Date.now() };
+      emit();
+    });
   }
 
   /** Full stop while still in-call: releases the capture and tells everyone. */
@@ -4172,6 +4283,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   function leaveCall() {
     const wasInLobby =
       state.status === "connected" || state.status === "joining";
+    // Any answer still on its way about a share in this call is now stale.
+    shareHintCallGeneration += 1;
     stopAllSoundLoops();
     if (wasInLobby) {
       playCue("voiceLeave");
@@ -4267,6 +4380,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isSharingScreenAudio: false,
       isSharingSystemAudio: false,
       isShareCursorVisible: false,
+      shareCaptureHint: null,
       screenShareAudioFailed: false,
       sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
@@ -6234,6 +6348,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;
+      // A new share answers whatever the last one's dead-picture card said.
+      state.shareCaptureHint = null;
+      shareStartedAt = Date.now();
+      shareGameCaptureHintOn = intent.shareGameCaptureHint === true;
       // Decided here, from the surface the picker returned, so the UI can say
       // "this is going out" at the one moment the presenter can still change
       // their mind. `getSettings` is guarded because a track handed over by a
@@ -6287,7 +6405,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         ensureScreenPublishWatchdog();
         // Readable from `pqpShareHealth()` for every share, and under
         // `share_high_motion_guard` for the ones the flag covers.
-        beginShareObservation(track, shareBaseFps, shareGuardOn);
+        beginShareObservation(
+          track,
+          shareBaseFps,
+          shareGuardOn,
+          intent.shareGameCaptureHint === true,
+        );
         shareCaptureCheck = captureCheck;
         if (captureCheck?.enforced) {
           console.warn("[pqp] share capture rate re-applied", captureCheck);

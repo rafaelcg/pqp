@@ -23,6 +23,16 @@ import { isEnabled } from "./flags.js";
  * environment default, per-server override. Nothing else reads it: with it off
  * the client behaves exactly as before.
  *
+ * `shareGameCaptureHint`: on the Windows desktop app, the presenter's client
+ * samples its own share for the first minute and, when the picture is black
+ * or no frames arrive (or the capture ends by itself) while Windows says a
+ * Direct3D app holds the display in exclusive fullscreen, shows one card with
+ * the fix (the game's "Fullscreen Windowed" / borderless mode). Runtime flag
+ * `share_game_capture_hint`, default off, `SHARE_GAME_CAPTURE_HINT` as its
+ * environment default, per-server override. Off, the client samples nothing
+ * and asks the shell nothing. docs/DESKTOP.md §"Sharing a game: Fullscreen vs
+ * Fullscreen Windowed".
+ *
  * `serverId` is the server the call is in, absent for a DM call. A value that
  * is not a uuid is read as absent rather than refused: the answer is one
  * boolean the global flag already gives anybody, and a malformed id must not
@@ -31,6 +41,7 @@ import { isEnabled } from "./flags.js";
 export interface ShareConfig {
   desktopShareAudioNative: boolean;
   shareHighMotionGuard: boolean;
+  shareGameCaptureHint: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -41,5 +52,6 @@ export function shareConfigForServer(rawServerId: string | null): ShareConfig {
   return {
     desktopShareAudioNative: isEnabled("desktop_share_audio_native", { serverId }),
     shareHighMotionGuard: isEnabled("share_high_motion_guard", { serverId }),
+    shareGameCaptureHint: isEnabled("share_game_capture_hint", { serverId }),
   };
 }

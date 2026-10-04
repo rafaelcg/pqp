@@ -66,6 +66,13 @@ export interface PqpDesktop {
    */
   shareHealth?(): Promise<DesktopShareHealth>;
   /**
+   * `share_game_capture_hint`: whether Windows says a Direct3D app holds the
+   * display in exclusive fullscreen right now (`SHQueryUserNotificationState`,
+   * `electron/lib/fullscreen-state.js`). Absent in shells before it, which the
+   * page reads as "cannot tell" and then never shows the card.
+   */
+  fullscreenAppState?(): Promise<DesktopFullscreenAppState>;
+  /**
    * Linux share audio: can this machine build the "everything but pqp" bus?
    * `available: false` off Linux and where `pactl` is missing.
    */
@@ -241,6 +248,8 @@ export interface DesktopShareCapabilities {
    * in every shell before it, and off unless the runtime flag says so.
    */
   linuxShareAudio?: boolean;
+  /** The shell answers `fullscreenAppState()` (Windows). Absent before it. */
+  fullscreenAppState?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }
@@ -252,6 +261,15 @@ export interface DesktopShareLiveResult {
   boost: "raised" | "restored" | "unsupported" | "failed" | "idle";
   /** How many of the shell's processes now sit above normal priority. */
   processes: number;
+}
+
+/** `fullscreenAppState()`: QUERY_USER_NOTIFICATION_STATE, named. */
+export interface DesktopFullscreenAppState {
+  /** `d3d-fullscreen`, `busy`, `accepts-notifications`, ..., `unknown`, `unsupported`. */
+  state: string;
+  raw: number | null;
+  /** True for QUNS_RUNNING_D3D_FULL_SCREEN; null when the shell could not tell. */
+  exclusiveFullscreen: boolean | null;
 }
 
 /** `shareHealth()`: the shell's half of `pqpShareHealth()`. */
@@ -271,6 +289,15 @@ export interface DesktopShareHealth {
     live: boolean;
     boost: DesktopShareLiveResult["boost"];
     processes: number;
+  };
+  /**
+   * Which capturer Chromium uses here, from the shell's reading of Chromium's
+   * source (`electron/lib/capture-backend.js`). Absent in shells before it.
+   */
+  capture?: {
+    build: number | null;
+    screen: "wgc" | "dxgi-gdi" | null;
+    window: "wgc" | null;
   };
 }
 

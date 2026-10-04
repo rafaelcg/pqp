@@ -708,6 +708,12 @@ export interface ShareConfig {
    * (`lib/linux-shell-share-audio.ts`). Absent on an older API: off.
    */
   linuxDesktopSystemAudio?: boolean;
+  /**
+   * The Windows desktop app watches the presenter's share for a dead picture
+   * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
+   * Absent on an older API: off.
+   */
+  shareGameCaptureHint?: boolean;
 }
 
 /** `serverId` is the server the call is in; a DM call asks without one. */
@@ -800,6 +806,12 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.
    */
   fastStart?: boolean;
+  /**
+   * `watch_camera_sync` for this server (runtime flag, per server, off by
+   * default): whether the presenter's camera follows the film's clock.
+   * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
+   */
+  cameraSync?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

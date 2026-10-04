@@ -1325,6 +1325,7 @@
     ws_auth_admission: "Desligado, uma rajada de reconexão (todo deploy) entra de uma vez e espera no pool do banco em vez de na porta do WebSocket. Volta ao comportamento de antes.",
     turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
     voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
+    sfu_region_scoped_calls: "Desligado, kick, ban e mute no SFU perguntam a todas as regiões e esperam a mais lenta (até 5 s): uma região com problema atrasa a moderação de salas de outras regiões. Ligado, só a região da sala é consultada nas repetições.",
     livekit_region_require_cap: "Ligado, apps que não declararam sfu-region só abrem salas em São Paulo.",
     watch_party_waitlist: "Mostra ou esconde o convite da lista de espera nos servidores sem watch party.",
     live_hls_camera: "Vale a partir da próxima transmissão: a câmera do apresentador sobre o filme.",
@@ -1337,7 +1338,9 @@
     community_home_vip: "Mostra ou esconde os posts VIP do Baú (só vale com o Baú ligado).",
     community_home_translation: "Liga ou desliga a tradução automática dos posts do Baú (só vale com o Baú ligado e a chave OPENROUTER_API_KEY na API). Desligado, todo mundo lê o original; as traduções já feitas ficam guardadas.",
     desktop_share_audio_native: "Vale no próximo compartilhamento, só no app desktop do Windows que já tem o suporte: o som vem por processo, sem a chamada, Windows 10 incluso.",
-    share_high_motion_guard: "Vale no próximo compartilhamento: se o encoder não dá conta (jogo em taxa alta), baixa um degrau de resolução e depois a taxa de quadros; no app desktop do Windows sobe a prioridade dos processos enquanto compartilha. Nunca mexe em watch party."
+    share_high_motion_guard: "Vale no próximo compartilhamento: se o encoder não dá conta (jogo em taxa alta), baixa um degrau de resolução e depois a taxa de quadros; no app desktop do Windows sobe a prioridade dos processos enquanto compartilha. Nunca mexe em watch party.",
+    share_game_capture_hint: "Vale no próximo compartilhamento, só no app desktop do Windows que já pergunta ao Windows se um jogo está em tela cheia exclusiva: quem compartilha vê um aviso com o conserto quando a imagem chega preta, trava ou cai sozinha. Não muda a captura.",
+    watch_camera_sync: "Desligado por padrão. Ligado, a câmera de quem apresenta acompanha o filme no player de quem assiste; desligado, ela toca solta como antes (numa watch party de baixa latência, uns 13 s atrás do filme). Ligue primeiro num servidor de teste. Abas abertas mudam no próximo refresh da config."
   };
   function flagName(f) { return String(f.description || f.key).replace(/\s*\([^)]*\)\s*$/, "").replace(/\.$/, ""); }
   function onOff(v) { return v ? "ligado" : "desligado"; }
