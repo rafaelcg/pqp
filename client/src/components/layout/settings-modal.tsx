@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
-import { type BlockedUser, type User, HANDLE_PATTERN } from "@pqp/shared";
+import { type BlockedUser, type User, HANDLE_PATTERN, HANDLE_RENAME_COOLDOWN_DAYS } from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
@@ -9,6 +9,7 @@ import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type MediaDeviceOption } from "@/lib/audio-devices";
+import { intlLocale } from "@/lib/locale";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
 import { ApiError, updateMe } from "@/lib/api";
@@ -283,7 +284,7 @@ export function SettingsModal({
   onShowShortcutOverlay,
   feedbackVoice = null,
 }: SettingsModalProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   // The profile is the only staged state in Settings (spec section C). The
   // four drafts are seeded once per open and never again from `user` while
   // the dialog is up: an avatar upload, a banner or a DM privacy change all
@@ -785,10 +786,9 @@ export function SettingsModal({
     // Checked before anything is sent. A blank name used to be dropped from
     // the request, so the save looked like it worked and kept the old name.
     if (drafts.displayName.trim() === "") {
-      const message = t("settings.profile.displayNameRequired");
+      // Said once, under the field; the bar does not repeat it.
       setSection("profile");
-      setSaveError(message);
-      setNameError(message);
+      setNameError(t("settings.profile.displayNameRequired"));
       return;
     }
     const handleChange = pendingHandleChange(user, drafts);
@@ -1144,11 +1144,22 @@ export function SettingsModal({
           handleConfirm === "claim"
             ? "settings.unsaved.handle.claimBody"
             : "settings.unsaved.handle.body",
+          {
+            // The day the lock ends if this is confirmed now.
+            date: new Date(
+              Date.now() + HANDLE_RENAME_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+            ).toLocaleDateString(intlLocale(locale), {
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            }),
+          },
         )}
         confirmLabel={t(
           handleConfirm === "claim"
             ? "settings.unsaved.handle.claim"
             : "settings.unsaved.handle.change",
+          { handle: drafts.handle.trim() },
         )}
         cancelLabel={t("settings.unsaved.handle.keep")}
         destructive={false}

@@ -294,13 +294,13 @@ describe("Settings profile drafts", () => {
 
     act(() => save().click());
     expect(dialogs().at(-1)!.textContent).toMatch(/pqp\.gg\/@rafa/);
-    act(() => confirmButton(/^(Keep|Manter)$/).click());
+    act(() => confirmButton(/^(Go back|Voltar)$/).click());
     expect(updateMe).not.toHaveBeenCalled();
     expect(handleInput.value).toBe("rafa");
 
     act(() => save().click());
     await act(async () => {
-      confirmButton(/^(Claim link|Pegar link)$/).click();
+      confirmButton(/^(Claim @rafa|Pegar @rafa)$/).click();
       await Promise.resolve();
     });
     expect(updateMe).toHaveBeenCalledTimes(1);
