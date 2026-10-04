@@ -100,6 +100,10 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVE_HLS_CAMERA`, `LIVE_HLS_CAMERA_480`, `LIVE_HLS_VOICE_TRACK`,
 `LIVE_HLS_MIC_ARCHIVE`, `LIVE_HLS_REAP_ORPHANS`, `HLS_SHARER_RESUME_HOLD`,
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
+`SFU_REGION_SCOPED_CALLS` (`sfu_region_scoped_calls`, default **on**: SFU
+moderation asks only the box a room lives on, with a per-region budget and
+circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
+see `docs/plans/SFU_REGIONS.md` §"The control plane"),
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,

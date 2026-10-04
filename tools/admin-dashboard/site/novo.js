@@ -1325,6 +1325,7 @@
     ws_auth_admission: "Desligado, uma rajada de reconexão (todo deploy) entra de uma vez e espera no pool do banco em vez de na porta do WebSocket. Volta ao comportamento de antes.",
     turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
     voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
+    sfu_region_scoped_calls: "Desligado, kick, ban e mute no SFU perguntam a todas as regiões e esperam a mais lenta (até 5 s): uma região com problema atrasa a moderação de salas de outras regiões. Ligado, só a região da sala é consultada nas repetições.",
     livekit_region_require_cap: "Ligado, apps que não declararam sfu-region só abrem salas em São Paulo.",
     watch_party_waitlist: "Mostra ou esconde o convite da lista de espera nos servidores sem watch party.",
     live_hls_camera: "Vale a partir da próxima transmissão: a câmera do apresentador sobre o filme.",

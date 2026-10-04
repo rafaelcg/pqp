@@ -63,6 +63,7 @@ const {
   resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("./voice.js");
+const { pinRoomRegion, resetRoomRegions } = await import("../voice/regions.js");
 const { cancelSfuPrivateResweep, evictSfuRoom, evictSfuUser, evictSfuUsersExcept } =
   await import("../voice/admin.js");
 
@@ -121,6 +122,7 @@ describe("voice eviction pairs mesh with SFU", () => {
     // Peers live in module state; drop anything a previous test left behind.
     sockets.length = 0;
     resetVoicePeers();
+    resetRoomRegions();
     resetVoiceRateLimits();
     vi.mocked(evictSfuRoom).mockClear();
     vi.mocked(evictSfuUser).mockClear();
@@ -179,7 +181,34 @@ describe("voice eviction pairs mesh with SFU", () => {
 
     evictVoiceChannel(VOICE_A);
 
-    expect(evictSfuRoom).toHaveBeenCalledWith(VOICE_A);
+    // No pin in single-region mode, so no region hint.
+    expect(evictSfuRoom).toHaveBeenCalledWith(VOICE_A, null);
+  });
+
+  /**
+   * The re-sweeps run for fifteen minutes after the room's pin is gone (the
+   * last peer leaving forgets it), so the eviction reads the pin first and
+   * hands it over: the sweeps then ask the box the room was on instead of
+   * every box.
+   */
+  it("hands the SFU sweep the room's region, read before the peers leave", async () => {
+    const rec = track(recorder());
+    await join(rec, "user-1", VOICE_A);
+    pinRoomRegion(VOICE_A, "mia");
+
+    evictVoiceChannel(VOICE_A);
+
+    expect(evictSfuRoom).toHaveBeenCalledWith(VOICE_A, "mia");
+  });
+
+  it("hands the channel-private sweep the room's region too", async () => {
+    const outsider = track(recorder());
+    await join(outsider, "outsider", VOICE_A);
+    pinRoomRegion(VOICE_A, "lhr");
+
+    evictVoiceUsersExcept(VOICE_A, new Set(["keeper"]));
+
+    expect(vi.mocked(evictSfuUsersExcept).mock.calls[0]![3]).toBe("lhr");
   });
 
   it("keeps the allowed users when a channel turns private", async () => {

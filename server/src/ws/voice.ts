@@ -5488,6 +5488,9 @@ function removePeer(peerId: string) {
 
 /** Drop every peer of a channel — used when a channel is deleted or made private. */
 export function evictVoiceChannel(voiceChannelId: string) {
+  // Read before the peers go: the last peer leaving forgets the pin, and the
+  // re-sweeps that follow need to know which box the room was on.
+  const regionHint = pinnedRoomRegion(voiceChannelId);
   // A deleted channel has no audience, so no later roster run will drop this
   // for it; a channel merely made private gets one whole roster next, which
   // is always correct.
@@ -5501,11 +5504,11 @@ export function evictVoiceChannel(voiceChannelId: string) {
       listVoicePeersInRoom(voiceChannelId),
       () => true,
       "channel",
-      () => evictSfuRoom(voiceChannelId),
+      () => evictSfuRoom(voiceChannelId, regionHint),
     );
     return;
   }
-  void evictSfuRoom(voiceChannelId);
+  void evictSfuRoom(voiceChannelId, regionHint);
 }
 
 /** Drop everyone from a channel's voice room except the given users. */
@@ -5517,6 +5520,8 @@ export function evictVoiceUsersExcept(
   // participant whose token predates `participantMetadataFor` (a session that
   // survived a rolling deploy), and `removePeer` destroys the mapping.
   const knownIdentities = identityMapFor(getRoomPeers(voiceChannelId));
+  // Same reason as in `evictVoiceChannel`: read before the peers go.
+  const regionHint = pinnedRoomRegion(voiceChannelId);
 
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (!allowedUserIds.has(peer.userId)) {
@@ -5533,12 +5538,18 @@ export function evictVoiceUsersExcept(
       listVoicePeersInRoom(voiceChannelId),
       (row) => !allowedUserIds.has(row.userId),
       "channel-private",
-      (known) => evictSfuUsersExcept(voiceChannelId, allowedUserIds, known),
+      (known) =>
+        evictSfuUsersExcept(voiceChannelId, allowedUserIds, known, regionHint),
       knownIdentities,
     );
     return;
   }
-  void evictSfuUsersExcept(voiceChannelId, allowedUserIds, knownIdentities);
+  void evictSfuUsersExcept(
+    voiceChannelId,
+    allowedUserIds,
+    knownIdentities,
+    regionHint,
+  );
 }
 
 /**
