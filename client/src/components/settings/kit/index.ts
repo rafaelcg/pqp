@@ -5,6 +5,8 @@
  * `docs/plans/SETTINGS_REDESIGN_SPEC.md` section E, and the live sheet is the
  * "Settings kit" section of `/qa/ui`.
  */
+export { SettingsActionRow } from "@/components/settings/kit/action-row";
+export { SettingsBadge } from "@/components/settings/kit/badge";
 export { SettingsBuildLine, formatBuildLine } from "@/components/settings/kit/build-line";
 export {
   SETTINGS_COPIED_MS,
@@ -37,18 +39,31 @@ export { SettingsNotice } from "@/components/settings/kit/notice";
 export { SettingsPaneHeader } from "@/components/settings/kit/pane-header";
 export { SettingsPreview } from "@/components/settings/kit/preview";
 export {
+  SettingsResult,
+  type SettingsResultProps,
+} from "@/components/settings/kit/result";
+export {
   findSettingsRow,
   listSettingsRows,
   registerSettingsRow,
   type SettingsRowEntry,
 } from "@/components/settings/kit/registry";
-export { SettingsRow, type SettingsRowProps } from "@/components/settings/kit/row";
+export {
+  SettingsRow,
+  type SettingsDataAttributes,
+  type SettingsRowProps,
+} from "@/components/settings/kit/row";
 export {
   SettingsSectionContext,
   useSettingsSection,
   type SettingsSectionId,
 } from "@/components/settings/kit/sections";
 export { SettingsSelect } from "@/components/settings/kit/select";
+export {
+  SettingsSkeletonRow,
+  SettingsSkeletonRows,
+  type SettingsSkeletonRowProps,
+} from "@/components/settings/kit/skeleton-row";
 export {
   SettingsHeaderActions,
   SettingsShellContext,
