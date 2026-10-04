@@ -82,6 +82,12 @@ export function KeyBindingField({
   const takenByRef = useRef(takenBy);
   const tRef = useRef(t);
   takenByRef.current = takenBy;
+  // Same for onChange: a parent that re-renders mid-capture (the Voz level
+  // meter does, every frame) hands a new arrow each time, and with it in the
+  // effect's deps the listeners were rebuilt between a lone modifier's keydown
+  // and keyup, which lost the pending modifier and saved nothing.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   tRef.current = t;
 
   useEffect(() => {
@@ -124,7 +130,7 @@ export function KeyBindingField({
       }
       setRefused(null);
       setCapturing(false);
-      onChange(outcome.binding);
+      onChangeRef.current(outcome.binding);
     }
 
     function onKeyUp(event: KeyboardEvent) {
@@ -144,7 +150,7 @@ export function KeyBindingField({
       }
       setRefused(null);
       setCapturing(false);
-      onChange(next);
+      onChangeRef.current(next);
     }
 
     window.addEventListener("keydown", onKeyDown, true);
@@ -153,7 +159,7 @@ export function KeyBindingField({
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [capturing, onChange]);
+  }, [capturing]);
 
   useEffect(() => {
     setRefused(null);
@@ -337,6 +343,12 @@ export function PttBindingField({
   const takenByRef = useRef(takenBy);
   const tRef = useRef(t);
   takenByRef.current = takenBy;
+  // Same for onChange: a parent that re-renders mid-capture (the Voz level
+  // meter does, every frame) hands a new arrow each time, and with it in the
+  // effect's deps the listeners were rebuilt between a lone modifier's keydown
+  // and keyup, which lost the pending modifier and saved nothing.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   tRef.current = t;
 
   useEffect(() => {
@@ -360,7 +372,7 @@ export function PttBindingField({
       }
       setRefused(null);
       setCapturing(false);
-      onChange(outcome.binding);
+      onChangeRef.current(outcome.binding);
     }
 
     function onKeyDown(event: KeyboardEvent) {
@@ -398,7 +410,7 @@ export function PttBindingField({
       }
       setRefused(null);
       setCapturing(false);
-      onChange(next);
+      onChangeRef.current(next);
     }
 
     function onMouseDown(event: MouseEvent) {
@@ -422,7 +434,7 @@ export function PttBindingField({
         window.removeEventListener("mousedown", onMouseDown, true);
       }
     };
-  }, [capturing, onChange, allowMouse]);
+  }, [capturing, allowMouse]);
 
   useEffect(() => {
     setRefused(null);

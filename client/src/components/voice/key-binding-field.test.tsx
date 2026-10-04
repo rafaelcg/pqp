@@ -127,6 +127,40 @@ describe("KeyBindingField", () => {
 });
 
 describe("PttBindingField", () => {
+  it("saves a lone modifier even when the parent re-renders mid-press", () => {
+    // Voz re-renders its pane every meter frame, handing a fresh onChange
+    // each time. That used to rebuild the capture listeners between the
+    // modifier's keydown and keyup and drop the binding.
+    const saved: PttBinding[] = [];
+    const render = () =>
+      act(() =>
+        root!.render(
+          <PttBindingField
+            label="Push-to-talk key"
+            binding={PTT}
+            onChange={(binding) => saved.push(binding)}
+          />,
+        ),
+      );
+    mount(
+      <PttBindingField
+        label="Push-to-talk key"
+        binding={PTT}
+        onChange={(binding) => saved.push(binding)}
+      />,
+    );
+    act(() => field().click());
+    press("ControlRight", "Control", { ctrlKey: true });
+    render();
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keyup", { code: "ControlRight", key: "Control", bubbles: true }),
+      );
+    });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.code).toBe("ControlRight");
+  });
+
   it("keeps its visible label by default", () => {
     mount(<PttBindingField label="Push-to-talk key" binding={PTT} onChange={() => {}} />);
     expect(host!.querySelector('span[aria-hidden="true"]')?.textContent).toBe(
