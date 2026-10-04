@@ -13,10 +13,10 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useNotificationSettings, useNotificationState } from "@/hooks/use-notifications";
-import { desktopContext } from "@/lib/desktop";
+import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { DOWNLOAD_PAGE_PATH } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel } from "@/lib/notifications";
+import { setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel, type NotificationPermissionState } from "@/lib/notifications";
 import { getIncomingRing, getSoundState, playCue, setIncomingRing, setSoundCueEnabled, setSoundEnabled, subscribeSounds, type IncomingRingId, type SoundCue } from "@/lib/sounds";
 import { disablePush, enablePush, getCurrentPushSubscription, getPushAvailability, getPushConfig, setPushDmDetails, type PushAvailability } from "@/lib/push";
 
@@ -84,13 +84,12 @@ export function NotificationsSection() {
             ) : null
           }
         />
-        <PushRow push={push} />
+        <PushRow push={push} permission={permission} />
         {push.availability === "needs-install" ? (
           <SettingsLinkRow
             id="push-install"
             label={t("settings.push.howToInstall")}
             href={DOWNLOAD_PAGE_PATH}
-            external
           />
         ) : null}
       </SettingsGroup>
@@ -100,12 +99,14 @@ export function NotificationsSection() {
           id="default-level"
           label={t("settings.notifications.levelLabel")}
           description={t("settings.notifications.levelHint")}
+          // Cells sized by their text, not equal: three equal cells cut
+          // "Só @menções" short beside the label and on a phone. The wide
+          // control keeps them inline where they fit.
+          wideControl
           control={
             <RadioGroup
               variant="segmented"
-              // Cells sized by their text, not equal: three equal cells cut
-              // "Só @menções" short beside the label and on a phone.
-              className="auto-cols-auto"
+              fit="content"
               label={t("settings.notifications.levelLabel")}
               value={state.default}
               onValueChange={setDefaultLevel}
@@ -118,7 +119,7 @@ export function NotificationsSection() {
         />
       </SettingsGroup>
 
-      <DirectMessagesGroup pushOn={push.subscribed} />
+      <DirectMessagesGroup push={push} permission={permission} />
 
       <SoundsGroup />
     </div>
@@ -132,7 +133,13 @@ interface PushDevice {
   /** Null while the server's push config is loading. */
   serverEnabled: boolean | null;
   loadFailed: boolean;
-  subscribed: boolean;
+  /**
+   * The browser and the server both answered and push can work here. A stale
+   * subscription on a server that now says no does not count.
+   */
+  ready: boolean;
+  /** Push is on for this device: `ready` and subscribed. The one value both rows read. */
+  on: boolean;
   busy: boolean;
   error: string | null;
   toggle: () => Promise<void>;
@@ -162,7 +169,10 @@ function usePushDevice(): PushDevice {
 
   useEffect(() => {
     let cancelled = false;
-    const availability = getPushAvailability();
+    // The desktop shell raises its own notifications and never uses Web Push
+    // (electron/lib/web-cache.js), though Chromium still exposes PushManager
+    // there: a switch would only ever fail, so the app says it has no push.
+    const availability = isDesktopApp() ? "unsupported" : getPushAvailability();
     setAvailability(availability);
     if (availability !== "available") {
       return;
@@ -192,6 +202,11 @@ function usePushDevice(): PushDevice {
   }, []);
 
   const toggle = async () => {
+    // A second press while one is in flight is dropped here rather than by
+    // disabling the switch, which would drop keyboard focus to the page.
+    if (busy) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -215,15 +230,30 @@ function usePushDevice(): PushDevice {
     }
   };
 
-  return { availability, serverEnabled, loadFailed, subscribed, busy, error, toggle };
-}
-
-function PushRow({ push }: { push: PushDevice }) {
-  const { t } = useTranslation();
-  const { availability, serverEnabled, loadFailed, subscribed, busy, error } = push;
-
   const ready =
     availability === "available" && serverEnabled === true && !loadFailed;
+
+  return {
+    availability,
+    serverEnabled,
+    loadFailed,
+    ready,
+    on: ready && subscribed,
+    busy,
+    error,
+    toggle,
+  };
+}
+
+function PushRow({
+  push,
+  permission,
+}: {
+  push: PushDevice;
+  permission: NotificationPermissionState;
+}) {
+  const { t } = useTranslation();
+  const { availability, serverEnabled, loadFailed, ready, on, busy, error } = push;
 
   let notice = null;
   if (availability === "unsupported") {
@@ -255,8 +285,10 @@ function PushRow({ push }: { push: PushDevice }) {
           ? t("settings.push.needsInstall")
           : t("settings.push.description")
       }
-      checked={ready && subscribed}
-      disabled={!ready || busy}
+      checked={on}
+      // Blocked: the warning on the row above says why, and a switch that can
+      // only fail would add a second message about the same block.
+      disabled={!ready || permission === "denied"}
       onCheckedChange={() => void push.toggle()}
       status={
         notice ?? (status ? <SettingsInlineStatus state={status} /> : null)
@@ -271,12 +303,31 @@ function PushRow({ push }: { push: PushDevice }) {
  * The three DM privacy choices, adjacent: the corner toast, its message
  * preview, and whether a phone notification may name the sender. `dmDetails`
  * is a stored account preference, not a fact about this browser's
- * subscription, so it is read whatever this device's push state is; it is
- * only switchable once push is on here, because its effect is invisible
- * until then.
+ * subscription, so it is read whatever this device's push state is.
+ *
+ * It is locked while push is off here and could be turned on here, because
+ * its effect is invisible until then and "Liga o push primeiro." is a step the
+ * person can take. Where this device can never have push (the desktop app, a
+ * browser without it, Safari before install) it stays switchable: the
+ * preference is for their other devices, and locking it here would leave no
+ * way to change it from this one.
  */
-function DirectMessagesGroup({ pushOn }: { pushOn: boolean }) {
+function DirectMessagesGroup({
+  push,
+  permission,
+}: {
+  push: PushDevice;
+  permission: NotificationPermissionState;
+}) {
   const { t } = useTranslation();
+  // Off here while this browser can host push: locked, as the spec asks.
+  const locked =
+    !push.on &&
+    (push.availability === null || push.availability === "available");
+  // Locked for a reason "Liga o push primeiro." cannot fix: the row above
+  // already says why, so this one keeps its ordinary hint.
+  const pushBlockedHere =
+    push.serverEnabled === false || push.loadFailed || permission === "denied";
   const state = useNotificationState();
   const [dmDetails, setDmDetails] = useState(false);
   // Set the moment a person touches the switch, so the initial config fetch
@@ -331,12 +382,12 @@ function DirectMessagesGroup({ pushOn }: { pushOn: boolean }) {
         id="dm-push-details"
         label={t("settings.push.dmDetails")}
         description={
-          pushOn
-            ? t("settings.push.dmDetailsHint")
-            : t("settings.push.dmDetailsNeedsPush")
+          locked && !pushBlockedHere
+            ? t("settings.push.dmDetailsNeedsPush")
+            : t("settings.push.dmDetailsHint")
         }
         checked={dmDetails}
-        disabled={!pushOn}
+        disabled={locked}
         onCheckedChange={toggleDmDetails}
       />
     </SettingsGroup>
@@ -389,7 +440,8 @@ function SoundsGroup() {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  // 40px on a phone, where it is a thumb target.
+                  className="h-10 w-10 sm:h-8 sm:w-8"
                   disabled={!sounds.enabled || !sounds[option.cue]}
                   onClick={() => playCue(option.cue)}
                 >
