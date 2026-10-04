@@ -133,8 +133,12 @@ export function AvatarPicker({
   // A dropped folder is refused on the spot, before any upload starts.
   const [dropError, setDropError] = useState<string | null>(null);
 
+  // Keyed on whether uploads are offered, not on the callback: callers pass a
+  // fresh arrow each render, and while the config read is failing (it is
+  // forgotten so the next open retries) every keystroke would ask again.
+  const uploadable = onUploaded !== undefined;
   useEffect(() => {
-    if (!onUploaded) {
+    if (!uploadable) {
       return;
     }
     let cancelled = false;
@@ -146,7 +150,7 @@ export function AvatarPicker({
     return () => {
       cancelled = true;
     };
-  }, [onUploaded]);
+  }, [uploadable]);
 
   function handleFile(file: File) {
     setDropError(null);

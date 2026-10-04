@@ -133,12 +133,14 @@ describe("messageFromCompleteFailure", () => {
     expect(
       messageFromCompleteFailure(new ApiError(400, "Connection was cancelled"), messages),
     ).toBe("CANCELLED");
+    // The provider's own failure (server_error, temporarily_unavailable) is
+    // not a cancel the person made.
     expect(
       messageFromCompleteFailure(
         new ApiError(400, "The provider refused the connection"),
         messages,
       ),
-    ).toBe("CANCELLED");
+    ).toBe("FALLBACK");
   });
 
   it("falls back for anything else", () => {

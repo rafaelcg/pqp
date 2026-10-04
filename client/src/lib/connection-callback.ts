@@ -165,7 +165,9 @@ export function messageFromCompleteFailure(
     if (caught.status === 409) {
       return messages.alreadyLinked;
     }
-    if (caught.status === 400 && /cancel|refused/i.test(caught.message)) {
+    // Only a cancel the person made. "The provider refused the connection"
+    // covers the provider's own failures too, so it gets the fallback.
+    if (caught.status === 400 && /cancelled/i.test(caught.message)) {
       return messages.cancelled;
     }
     if (caught.status === 400 && /expired|already used/i.test(caught.message)) {
