@@ -89,6 +89,9 @@ export const HLS_PRESENCE_PUBLISH_INTERVAL_MS = 10_000;
  */
 export const HLS_PRESENCE_MAX_AGE_MS = 25_000;
 
+/** Broadcasts one presence tick writes at the same time. */
+const PRESENCE_PUBLISH_CONCURRENCY = 8;
+
 /** One read of a broadcast's count is shared for this long, per process. */
 export const HLS_PRESENCE_READ_CACHE_MS = 5_000;
 
@@ -549,53 +552,67 @@ export function createHlsViewerCounter(
 
   async function publishPresence(): Promise<number> {
     const at = now();
+    const pending = [...sessions.values()];
     let written = 0;
-    for (const session of [...sessions.values()]) {
-      if (session.publishing) {
-        continue;
-      }
-      const ids: string[] = [];
-      for (const [userId, seen] of session.viewers) {
-        if (at - seen.last <= presentToleranceMs) {
-          ids.push(userId);
-          if (ids.length >= MAX_PRESENCE_IDS) {
-            break;
-          }
-        }
-      }
-      // Nobody now and nothing of ours to retract: no write.
-      if (ids.length === 0 && session.presencePublished === 0) {
-        continue;
-      }
-      session.publishing = true;
-      try {
-        // The DATABASE's clock for `sampled_at`, so two machines whose clocks
-        // disagree still agree on which row is fresh. Who counts as present
-        // is this process's own judgement, from its own heartbeats.
-        await pool().query(
-          `INSERT INTO hls_session_presence
-             (channel_id, started_at_ms, instance_id, user_ids, sampled_at)
-           VALUES ($1, $2, $3, $4::uuid[], NOW())
-           ON CONFLICT (channel_id, started_at_ms, instance_id) DO UPDATE
-             SET user_ids = EXCLUDED.user_ids,
-                 sampled_at = EXCLUDED.sampled_at`,
-          [session.channelId, session.startedAt, instanceId, ids],
-        );
-        session.presencePublished = ids.length;
-        presenceWrites += 1;
-        written += 1;
-      } catch (error) {
-        presenceFailures += 1;
-        logEvent("voice.hlsPresenceFailed", {
-          channelId: session.channelId,
-          startedAt: session.startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        session.publishing = false;
-      }
+    // A few broadcasts at a time, not one after another: a tick must not take
+    // longer than its interval however many parties are live, and not all at
+    // once either (it must never hold more than a handful of pooled connections).
+    for (let from = 0; from < pending.length; from += PRESENCE_PUBLISH_CONCURRENCY) {
+      const results = await Promise.all(
+        pending
+          .slice(from, from + PRESENCE_PUBLISH_CONCURRENCY)
+          .map((session) => publishOne(session, at)),
+      );
+      written += results.filter(Boolean).length;
     }
     return written;
+  }
+
+  async function publishOne(session: TrackedSession, at: number): Promise<boolean> {
+    if (session.publishing) {
+      return false;
+    }
+    const ids: string[] = [];
+    for (const [userId, seen] of session.viewers) {
+      if (at - seen.last <= presentToleranceMs) {
+        ids.push(userId);
+        if (ids.length >= MAX_PRESENCE_IDS) {
+          break;
+        }
+      }
+    }
+    // Nobody now and nothing of ours to retract: no write.
+    if (ids.length === 0 && session.presencePublished === 0) {
+      return false;
+    }
+    session.publishing = true;
+    try {
+      // The DATABASE's clock for `sampled_at`, so two machines whose clocks
+      // disagree still agree on which row is fresh. Who counts as present
+      // is this process's own judgement, from its own heartbeats.
+      await pool().query(
+        `INSERT INTO hls_session_presence
+           (channel_id, started_at_ms, instance_id, user_ids, sampled_at)
+         VALUES ($1, $2, $3, $4::uuid[], NOW())
+         ON CONFLICT (channel_id, started_at_ms, instance_id) DO UPDATE
+           SET user_ids = EXCLUDED.user_ids,
+               sampled_at = EXCLUDED.sampled_at`,
+        [session.channelId, session.startedAt, instanceId, ids],
+      );
+      session.presencePublished = ids.length;
+      presenceWrites += 1;
+      return true;
+    } catch (error) {
+      presenceFailures += 1;
+      logEvent("voice.hlsPresenceFailed", {
+        channelId: session.channelId,
+        startedAt: session.startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      session.publishing = false;
+    }
   }
 
   function stats(): HlsViewerCounterStats {

@@ -84,6 +84,8 @@ const presence = vi.hoisted(() => ({
   excluded: [] as string[][],
   /** The next read throws, once. */
   throwNext: false,
+  /** Reads never answer (a saturated pool). */
+  hang: false,
 }));
 
 vi.mock("../voice/hls-viewer-counts.js", () => ({
@@ -94,6 +96,9 @@ vi.mock("../voice/hls-viewer-counts.js", () => ({
   ) => {
     presence.reads += 1;
     presence.excluded.push([...(options?.excludeUserIds ?? [])]);
+    if (presence.hang) {
+      return new Promise<number | null>(() => {});
+    }
     if (presence.throwNext) {
       presence.throwNext = false;
       throw new Error("pool exhausted");
@@ -947,6 +952,7 @@ describe("the server's audience count in channel-live (watch_party_server_audien
     presence.peeks = 0;
     presence.excluded = [];
     presence.throwNext = false;
+    presence.hang = false;
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
     process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -1048,6 +1054,24 @@ describe("the server's audience count in channel-live (watch_party_server_audien
       watching: 3,
       viewers: 1,
     });
+  });
+
+  it("a count that never answers holds the frame for the deadline at most, then it goes without the field", async () => {
+    process.env.WATCH_PARTY_SERVER_AUDIENCE = "true";
+    presence.present = 5;
+    const ana = viewer("ana");
+    await goLive();
+    presence.hang = true;
+    const started = Date.now();
+    await watchLive(ana, "ana", true);
+    const waited = Date.now() - started;
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(reply.type).toBe("channel-live");
+    expect("viewers" in reply).toBe(false);
+    expect(reply.stream).not.toBeNull();
+    expect(waited).toBeLessThan(1500);
+    const snapshot = await getVoiceActivitySnapshot();
+    expect(snapshot.liveHls.audienceViewers.unavailable).toBeGreaterThan(0);
   });
 
   it("a failing server lookup never costs the frame its delivery", async () => {

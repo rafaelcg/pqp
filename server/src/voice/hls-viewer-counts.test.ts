@@ -647,6 +647,32 @@ describeDb("watch party viewer counts", () => {
       expect(counter.stats().presenceWrites).toBe(2);
     });
 
+    it("publishes many broadcasts together, not one after another", async () => {
+      const now = T0;
+      let inFlight = 0;
+      let peak = 0;
+      const pool = () => ({
+        query: (async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          inFlight -= 1;
+          return { rows: [], rowCount: 1 };
+        }) as unknown as ReturnType<typeof getPool>["query"],
+      });
+      const counter = createHlsViewerCounter({ now: () => now, pool });
+      for (let party = 0; party < 20; party += 1) {
+        counter.note(channelId, STARTED_AT + party, userId(1), "presence");
+      }
+      const began = Date.now();
+      expect(await counter.publishPresence()).toBe(20);
+      // 20 x 30 ms in a row is 600 ms; eight at a time is about 90 ms, and never
+      // more than eight pooled connections at once.
+      expect(Date.now() - began).toBeLessThan(400);
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(8);
+    });
+
     it("retracts once when the last viewer goes quiet, then writes nothing", async () => {
       let now = T0;
       const { calls, pool } = countingPool();

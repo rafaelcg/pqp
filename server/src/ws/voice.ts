@@ -3885,6 +3885,33 @@ async function audienceViewersFor(
   if (!stream) {
     return undefined;
   }
+  // BOUNDED. The count is an optional field on a frame that carries the stream
+  // itself, so a slow or saturated database must not hold the fan-out: past the
+  // deadline the frame goes without it (the client keeps `watching`) and the
+  // read finishes in the background into the shared cache for the next frame.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      hlsAudienceViewerAnswers.unavailable += 1;
+      resolve(undefined);
+    }, AUDIENCE_COUNT_WAIT_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([audienceViewersUnbounded(channelId, stream, options), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The longest a frame waits for the optional audience count. */
+const AUDIENCE_COUNT_WAIT_MS = 500;
+
+async function audienceViewersUnbounded(
+  channelId: string,
+  stream: LiveHlsStream,
+  options: { cacheOnly?: boolean },
+): Promise<number | undefined> {
   try {
     // A BEST-EFFORT FIELD ON A FRAME THAT MUST GO OUT: nothing in here may
     // throw into the caller, and nothing in the cache-only path may wait on the
