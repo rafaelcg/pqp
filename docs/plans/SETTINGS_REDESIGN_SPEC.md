@@ -1,9 +1,8 @@
 # Settings redesign spec
 
 Written October 3, 2026 against `feat/settings-redesign` (commit `65a93c07`,
-which split the dialog into one file per section). The kit agent and the ten tab
-agents follow this one document. If a tab brief and a general rule disagree, the
-general rule wins. Ask the lead.
+which split the dialog into one file per section). Every tab follows this one document. If a tab brief and a general rule disagree,
+the general rule wins.
 
 Scope: the account Settings dialog ("Configurações"). Server and channel
 settings are out of scope, except where a shared primitive changes
@@ -18,7 +17,7 @@ apply the moment they are touched.
 | Save model (C) | Decided: option 1, instant controls plus a sticky unsaved bar for the profile. |
 | Open questions (J) | All five decided by André, October 3, 2026. |
 | Design review | Applied in full. Review date October 3, 2026, approved by André. |
-| Everything else | Decided here. Changes go through the lead. |
+| Everything else | Decided here. |
 
 ---
 
@@ -181,7 +180,7 @@ Close with unsaved edits (Escape, X, backdrop):
   says "Salve ou descarte as alterações do perfil antes." It reads
   `profileDirty` from `SettingsShellContext` (E).
 
-Shell logic (kit agent):
+Shell logic:
 
 1. Seed the four drafts only on the open transition, through a ref, like
    `draftLocal`. Never reseed from `user` while open, with one exception:
@@ -215,7 +214,7 @@ Keys to delete (grepped: used only in `settings-modal.tsx`): `settings.save`,
 
 ## D. Shell spec
 
-Owner: kit agent. Files: `layout/settings-modal.tsx`, `ui/section-rail.tsx`.
+Files: `layout/settings-modal.tsx`, `ui/section-rail.tsx`.
 
 ### Dialog and layout
 
@@ -224,7 +223,7 @@ Owner: kit agent. Files: `layout/settings-modal.tsx`, `ui/section-rail.tsx`.
 - The title band is 56px tall, down from 74px. It stays on desktop; it is not
   dropped. Measure it after the eyebrow is gone. If `Dialog` cannot reach 56px,
   add an optional header-class prop to `Dialog` (other dialogs unchanged). That
-  makes `ui/dialog.tsx` a phase 0 file.
+  touches `ui/dialog.tsx`.
 
 ```
 Dialog body (fill, overflow hidden)
@@ -324,8 +323,8 @@ today (`settings-modal.tsx` 2, 93-163).
 
 - The h3 text is the tab label. `actions` takes secondary or ghost buttons only.
 - `settings-sections.spec.ts` finds `heading` by tab name without `exact`, which
-  also matches any h4 that contains the name. The kit agent changes the
-  assertion to `{ name, level: 3 }`. Rule for tab agents: no group title
+  also matches any h4 that contains the name. The spec asserts
+  `{ name, level: 3 }`. Rule for every tab: no group title
   contains its tab's label in any language.
 
 ### Phone (below `sm`, 640px)
@@ -356,8 +355,8 @@ moderation gate and its bounce to Perfil, `voiceVisible` gating the mic, and
 
 ## E. Page grammar (the kit)
 
-Owner: kit agent. Tabs compose these blocks and nothing else. A missing block
-goes to the lead; no local copies.
+Tabs compose these blocks and nothing else. A missing block is added to the
+kit; no local copies.
 
 ### Where things live
 
@@ -366,8 +365,8 @@ goes to the lead; no local copies.
 | `ui/radio-group.tsx` | New generic primitive (DESIGN.md "Planned: Radio group") |
 | `ui/textarea.tsx` | New generic primitive (DESIGN.md "Planned: Textarea") |
 | `settings/kit/*.tsx` and `settings/kit/index.ts` | New settings composition |
-| `settings/ui.tsx` | Keep `messageOf`. `Field`, `SettingBlock`, `SwitchRow`, `chipClass`, `segmentClass` are deleted by the lead after the last tab merges. |
-| `docs/DESIGN.md` | Kit agent moves Radio group and Textarea from Planned to Components |
+| `settings/ui.tsx` | Deleted. Its helpers are replaced by the kit. |
+| `docs/DESIGN.md` | Radio group and Textarea move from Planned to Components |
 
 `ui/` is gated by the bench (`uiAliases` and `uiStatics` at 0). Do not copy
 `segmentClass` there: it uses `rounded-md` and `shadow-sm`.
@@ -395,7 +394,7 @@ Add a role token, never a hard-coded colour:
 - `SettingsGroup` draws `elevation-1 bg-surface-card` (DESIGN.md allows a
   different background written after the level). Group hover stays
   `hover:bg-surface-2`.
-- The kit agent adds `surface-card` to the DESIGN.md surfaces table. The token
+- `surface-card` is added to the DESIGN.md surfaces table. The token
   always equals `surface-0` or `surface-1`, which the bench already measures text
   on, so it needs no new pair.
 
@@ -574,7 +573,7 @@ interface SettingsRowProps {
 used in `friends/friends-view.tsx`. A narrow desktop window and a phone stack
 the same way.
 
-Recipes for the options (added after phase 1):
+Recipes for the options:
 
 - `leading`: `flex items-center gap-3` around the slot and the text column, so
   an avatar or tile is centred on the label and description. It is inside the
@@ -602,7 +601,7 @@ within its tab (`ptt`, `input-device`). It renders as `data-settings-row`.
 The kit keeps a module-level registry of `{ id, section, label }`. A row
 registers itself on render; the section comes from a `SettingsSectionContext`
 that the shell sets around each tab. `searchable={false}` on `SettingsRow`,
-`SettingsSwitchRow`, `SettingsSliderRow` or `SettingsLinkRow` keeps a row out. The registry exists in phase 0 so no tab
+`SettingsSwitchRow`, `SettingsSliderRow` or `SettingsLinkRow` keeps a row out. The registry exists now so no tab
 ships rows without ids. It feeds `openSection` (below) and, in phase 2, search.
 
 ### `SettingsSwitchRow`
@@ -945,7 +944,7 @@ An `Input` at the top of the rail, above "Conta". It filters the registry to a
 flat list of matching rows across tabs (label and section name). Enter opens the
 first match through `openSection(section, rowId)`. The registry only holds tabs
 that have rendered, so phase 2 either mounts every panel hidden once or adds a
-static manifest per tab. Decide then. Phase 0 only guarantees the ids and the
+static manifest per tab. Decide then. The first build only guarantees the ids and the
 registry.
 
 ---
@@ -1012,7 +1011,7 @@ Keys:
   `client/e2e`. The e2e specs match English accessible names ("Compact peer
   list", "Copy link", /Push to talk/, the theme options). If you reword an
   English string a spec uses, update the spec in the same commit.
-- Frozen keys (used outside the owning tab; ask the lead before touching):
+- Frozen keys (used outside the owning tab; change them only together with their other users):
   `settings.appearance.language.*`, `settings.connections.completing`,
   `settings.connections.completeFailed`, `settings.voice.obsVirtualCameraHint*`,
   `settings.voice.videoQuality.*` option and readout keys,
@@ -1023,14 +1022,14 @@ Keys:
 - What CI catches: `i18n:check` fails on keys missing or stale in pt-BR and es
   relative to en, and on placeholder mismatch. `typecheck` fails on a code
   reference to a key missing from en (`MessageKey`). Nothing catches an unused
-  en key. Deleting orphans is the agent's job and a review item.
+  en key. Deleting orphans is part of every change and a review item.
 
-Locale placement (all ten agents touch the same three files):
+Locale placement (every tab touches the same three files):
 
 - Keys are not sorted. Add a key directly after the last existing key with your
   prefix, at the same position in `en`, `pt-BR` and `es`.
 - Do not reorder, reformat or re-indent. 2-space JSON, trailing newline kept.
-- The lead merges one branch at a time and runs `i18n:check` after each.
+- Run `i18n:check` after every merge that touches the locale files.
 
 ---
 
@@ -1135,7 +1134,7 @@ key (F).
      - Device (`SettingsSelect`).
      - "Ouvir meu microfone": a secondary sm button beside the select. It
        loops the processed mic to the output for 5s, then stops by itself.
-       Client-only WebAudio. In scope for phase 1 (decided in J6).
+       Client-only WebAudio. In scope (decided in J6).
      - Volume de entrada (`SettingsSliderRow`, 0 to 200%).
      - Sensibilidade: the level meter as a stacked `SettingsPreview` (voice
        activity only). The meter is 12px tall. The sensitivity handle is a 2px
@@ -1212,7 +1211,7 @@ key (F).
 - Edge states: no keyboard (info notice), recording, conflict, reserved key,
   Apple modifiers, the confirm open.
 - Files: `settings/keyboard-section.tsx`, `voice/key-binding-field.tsx` (owned
-  here, consumed by Voz; styling changes only unless the lead agrees). Keys
+  here, consumed by Voz; styling changes only unless Voz changes with it). Keys
   `settings.keyboard.*`.
 
 ### 5. Notificações (`notifications`)
@@ -1226,8 +1225,8 @@ key (F).
        (the permission is per browser or device, never per account). Denied and unsupported become a `SettingsNotice`
        inside the row.
      - Push com o app fechado (same pattern). The iOS needs-install text becomes
-       a short notice plus a "Como instalar" link row; the tab agent finds the
-       existing install page and asks the lead if there is none.
+       a short notice plus a "Como instalar" link row; it points at the
+       existing download page.
   2. Group "Comunidades": row "Nível padrão" (`RadioGroup` segmented, "Tudo",
      "Só @menções", "Nada"). Description, exactly: "Vale onde a comunidade ou o
      canal não tiver ajuste próprio. Botão direito numa comunidade muda só ela."
@@ -1285,7 +1284,7 @@ key (F).
   disabled while the profile is dirty, chat display at default (no reset),
   desktop IPC failure.
 - Files: `settings/appearance-section.tsx`. The `appearance-preview*` and
-  `accent-hue-*` CSS in `index.css` is read only unless the lead agrees. Keys
+  `accent-hue-*` CSS in `index.css` is read only unless the change covers its other users. Keys
   `settings.appearance.*` minus `language.*`.
 
 ### 7. Privacidade (`privacy`)
@@ -1380,7 +1379,7 @@ one edits `all-reports-section.tsx`.
 
 ---
 
-## H. Definition of done (every tab agent)
+## H. Definition of done (every tab)
 
 Copy this into the report and tick it.
 
@@ -1450,7 +1449,7 @@ Checks (paste the tail of each)
 Scope
 
 - [ ] Only the brief's files plus locale lines under the tab's prefix. Changes to
-      `ui/`, `settings/kit/`, the shell or another tab went through the lead.
+      `ui/`, `settings/kit/`, the shell or another tab were made in the kit, not locally.
 
 ### Tests that pin Settings today
 
@@ -1466,93 +1465,6 @@ Scope
 | `ui/dialog-body.test.ts` | `FULL_BLEED` path `layout/settings-modal.tsx` | Kit |
 | `layout/all-reports-gate.test.tsx` | mounts without `onAudioSettingsLive`; `settings-tab-moderation` | Kit |
 | `layout/settings-local.test.ts` | re-exports from `settings-modal` | Kit keeps them |
-
----
-
-## I. Execution plan
-
-### Phase 0: kit and shell (one agent, first)
-
-Owns `layout/settings-modal.tsx`, `ui/section-rail.tsx`, `ui/radio-group.tsx`,
-`ui/textarea.tsx`, `ui/dialog.tsx` (only the optional header prop), `settings/kit/*`, `settings/profile-patch.ts` and its test,
-`docs/DESIGN.md`, the `surface-card` token in `index.css`, the shell keys
-(`settings.title`, `settings.nav.*`, `settings.unsaved.*`, `settings.status.*`,
-`settings.rail.*`, the deletions in C), and the test rows marked Kit above.
-
-1. Build `RadioGroup` (segmented, chips and list), `Textarea`, the kit, the
-   `surface-card` token, the keycaps and the row registry, with unit tests for
-   `useRovingRadio` and `useInlineSave`. Ship a kit section on `/qa/ui` that
-   renders every block in light and dark, with screenshots, before any tab agent
-   starts. The light-theme group separation and the keycap contrast are kit
-   problems, and ten agents would each find them otherwise.
-2. Adopt `ui/SectionRail` with groups, footer and scroll-into-view. Pane
-   surface, max width, scroll reset, header, `level: 3` in the spec.
-3. The save model (C): remove the footer, add the unsaved bar, the close guard,
-   Cmd/Ctrl+S, the rail footer (account card and build line) and the phone
-   strip fade.
-4. Commit to `feat/settings-redesign`. Tab agents start from that commit.
-
-Gate for the five risky tabs: Voz, Notificações, Perfil, Atalhos and Feedback do
-not start until the canvas estados column draws their hidden states. They are
-push to talk expanded on desktop and on web; permission denied and iOS
-needs-install; storage off, cooldown and handle taken; key recording and
-conflict; feedback sent. These are the states most people hit, and the canvas
-shows the happy path first.
-
-Phase 2, after the tabs: settings search (E).
-
-Visual reference for every tab agent: the design canvas
-(https://claude.ai/artifact/4ySSV4YCkh6SFgp1kEGa3Q) has a hoje, novo and estados
-column per tab. The spec wins where the two disagree.
-
-### Phase 1: ten tabs in parallel
-
-| Agent | Files (plus its own locale lines) |
-|---|---|
-| Perfil | `settings/profile-section.tsx`, `user/avatar-picker.tsx` |
-| Conexões | `connections/connections-section.tsx` |
-| Voz e vídeo | `settings/voice-section.tsx` |
-| Atalhos | `settings/keyboard-section.tsx`, `voice/key-binding-field.tsx` |
-| Notificações | `settings/notifications-section.tsx` |
-| Aparência e idioma | `settings/appearance-section.tsx` |
-| Privacidade | `settings/privacy-section.tsx` |
-| Seus dados | `settings/your-data-section.tsx` |
-| Feedback | `settings/feedback-section.tsx` |
-| Ajuda e contato | `layout/help-section.tsx` |
-
-Rules:
-
-- Each agent works in its own worktree and branch off the phase 0 commit
-  (`feat/settings-<tab>`). One commit per logical change. No push, no PR unless
-  the lead asks.
-- Props contracts with the shell do not change. Cross-tab needs go through
-  `useSettingsShell()`.
-- Kit gaps: stop and ask. The lead patches the kit on the base branch; agents
-  rebase.
-- If Atalhos changes `KeyBindingField`'s props, Voz waits for that merge.
-  Prefer styling-only changes.
-- Merge order (least conflict first): Privacidade, Seus dados, Feedback, Ajuda,
-  Conexões, Atalhos, Notificações, Aparência, Voz, Perfil (last, it depends on
-  the shell's unsaved bar). `i18n:check` after each merge.
-- After the last merge the lead deletes the dead helpers in `settings/ui.tsx`
-  and runs every check once on the integrated branch.
-
-### Review rubric (lead, per tab)
-
-Score 0 to 2 each. Ship at 14 of 16 or more with no zero.
-
-1. Grammar: kit blocks only; groups and rows match E.
-2. One primary at most; no Save button outside the bar.
-3. Same job, same control (B3).
-4. Copy: natural pt-BR, limits met, nothing explains the UI.
-5. States: loading, empty, error, disabled and capability states designed and
-   screenshotted.
-6. Behavior parity: side effects and persistence identical; changes listed.
-7. Accessibility: keyboard walk, names, live regions.
-8. Phone: clean 390 screenshots, no page scroll, readable without zoom.
-
-Then a cross-tab pass: walk all ten tabs in both brightnesses and look for any
-spacing, title or control that differs from its siblings.
 
 ---
 
@@ -1579,4 +1491,4 @@ October 3, 2026.
 6. Follow-ups decided the same day: the copy rule is "the button never repeats a
    noun" (F); the first-claim handle confirm uses "Pegar seu link pra
    pqp.gg/@{handle}?" and "Pegar link" (C); the "Ouvir meu microfone" mic test
-   ships in phase 1 with the Voz tab (G3).
+   ships with the Voz tab (G3).
