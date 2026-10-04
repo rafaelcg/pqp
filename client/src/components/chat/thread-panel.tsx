@@ -14,6 +14,7 @@ import { useRef, useState } from "react";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
+import { chatDropVerdict } from "@/lib/chat-file-drop";
 import type { DroppedItems } from "@/lib/file-drop";
 import {
   MessageComposer,
@@ -63,6 +64,12 @@ interface ThreadPanelProps {
   /** Swap the right column to the roster, keeping this thread one tap away. */
   onShowMembers?: (() => void) | null;
   canModerate: boolean;
+  /**
+   * False only when this reader is positively known to lack SEND_MESSAGES in
+   * the thread: the drop zone then refuses instead of staging uploads that
+   * could never be sent. Unknown is true.
+   */
+  canSend?: boolean;
   blockedAuthorIds: ReadonlySet<string>;
   mentionCandidates: MentionCandidate[];
   isLoading: boolean;
@@ -96,6 +103,7 @@ export function ThreadPanel({
   parentChannelName,
   onShowMembers = null,
   canModerate,
+  canSend = true,
   blockedAuthorIds,
   mentionCandidates,
   isLoading,
@@ -121,13 +129,16 @@ export function ThreadPanel({
   // the parent channel belongs to the parent, one dropped here to the thread.
   const attachmentsEnabled = useAttachmentsEnabled();
   const [droppedItems, setDroppedItems] = useState<DroppedItems | null>(null);
+  // The same verdict as the channel the thread hangs off, so a thread never
+  // takes a file its composer could not send.
+  const dropVerdict = chatDropVerdict({
+    attachmentsEnabled,
+    channelType: "text",
+    streamChat: false,
+    canSend,
+  });
   const drop = useFileDropZone({
-    mode:
-      attachmentsEnabled === null
-        ? "off"
-        : attachmentsEnabled
-          ? "accept"
-          : "refuse",
+    mode: dropVerdict.mode,
     onDrop: setDroppedItems,
   });
 
@@ -195,11 +206,14 @@ export function ThreadPanel({
     >
       {drop.active && (
         <FileDropOverlay
-          tone={attachmentsEnabled ? "accept" : "refuse"}
+          tone={dropVerdict.mode === "accept" ? "accept" : "refuse"}
           label={
-            attachmentsEnabled
+            dropVerdict.mode === "accept"
               ? t("chrome.dropToAttach")
-              : t("chrome.dropAttachmentsOff")
+              : dropVerdict.mode === "refuse" &&
+                  dropVerdict.reason === "cannotSend"
+                ? t("chrome.dropCannotSend")
+                : t("chrome.dropAttachmentsOff")
           }
         />
       )}

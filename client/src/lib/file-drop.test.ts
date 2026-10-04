@@ -288,6 +288,25 @@ describe("installFileDropGuard", () => {
     expect(isExternalFileDrag(data)).toBe(true);
   });
 
+  it("recovers when the drag's source was removed and dragend never arrived", () => {
+    // The source row unmounts mid-drag, so `dragend` never reaches the window.
+    const data = transfer({});
+    dragEvent("dragstart", data);
+    expect(isInternalDrag()).toBe(true);
+    // Nothing else can happen during a native drag, so each of these proves
+    // the drag is over, and the next OS file drop is guarded again.
+    for (const type of ["pointermove", "pointerdown", "mousemove", "mousedown", "keydown", "blur"]) {
+      dragEvent("dragstart", data);
+      expect(isInternalDrag()).toBe(true);
+      window.dispatchEvent(new Event(type));
+      expect(isInternalDrag(), type).toBe(false);
+      const over = { ...transfer({}), dropEffect: "copy" } as unknown as DataTransfer;
+      expect(dragEvent("dragover", over).defaultPrevented).toBe(true);
+      expect(over.dropEffect).toBe("none");
+      expect(dragEvent("drop", transfer({})).defaultPrevented).toBe(true);
+    }
+  });
+
   it("is installed once, however many times it is asked", () => {
     const again = installFileDropGuard(window);
     const data = transfer({});

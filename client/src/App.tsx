@@ -11027,6 +11027,10 @@ function MainAppContent({
           }
           onShowMembers={memberSidebarAvailable ? stashThreadForMembers : null}
           canModerate={canManageMessages}
+          canSend={
+            perms.serverBits === 0n ||
+            perms.can(Permission.SEND_MESSAGES, openThread.thread.parentChannelId)
+          }
           blockedAuthorIds={blockedUserIds}
           mentionCandidates={mentionCandidates}
           isLoading={threadLoading}

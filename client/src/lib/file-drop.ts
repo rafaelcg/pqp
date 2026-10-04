@@ -159,6 +159,16 @@ function isNativeFileInput(target: EventTarget | null): boolean {
 
 let guardInstalled = false;
 
+/** Events that cannot happen during a native drag: see `onNoDragInProgress`. */
+const STALE_FLAG_EVENTS = [
+  "pointermove",
+  "pointerdown",
+  "mousemove",
+  "mousedown",
+  "keydown",
+  "blur",
+] as const;
+
 /**
  * Page-wide net under every drop zone.
  *
@@ -187,6 +197,16 @@ export function installFileDropGuard(win: Window = window): () => void {
     internalDrag = true;
   };
   const onDragEnd = () => {
+    internalDrag = false;
+  };
+  // `dragend` fires on the drag's SOURCE and bubbles from there, so a source
+  // that is removed before the drag ends (a re-render, a row that unmounts)
+  // never reports it, and the flag would stay up and wave the NEXT file drop
+  // through as "internal", unguarded. While a native drag runs the page gets
+  // no pointer, mouse or key events, and the window loses focus when the next
+  // file comes from another app, so any of these means no drag of ours is in
+  // progress and the flag is stale.
+  const onNoDragInProgress = () => {
     internalDrag = false;
   };
   const onDragOver = (event: DragEvent) => {
@@ -220,6 +240,9 @@ export function installFileDropGuard(win: Window = window): () => void {
 
   win.addEventListener("dragstart", onDragStart, true);
   win.addEventListener("dragend", onDragEnd, true);
+  for (const type of STALE_FLAG_EVENTS) {
+    win.addEventListener(type, onNoDragInProgress, true);
+  }
   win.addEventListener("dragover", onDragOver);
   win.addEventListener("drop", onDrop);
 
@@ -228,6 +251,9 @@ export function installFileDropGuard(win: Window = window): () => void {
     internalDrag = false;
     win.removeEventListener("dragstart", onDragStart, true);
     win.removeEventListener("dragend", onDragEnd, true);
+    for (const type of STALE_FLAG_EVENTS) {
+      win.removeEventListener(type, onNoDragInProgress, true);
+    }
     win.removeEventListener("dragover", onDragOver);
     win.removeEventListener("drop", onDrop);
   };
