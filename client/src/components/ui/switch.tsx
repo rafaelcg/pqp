@@ -15,6 +15,7 @@ export function Switch({
   title,
   className,
   hideLabel = false,
+  dimRowWhenDisabled = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
@@ -28,7 +29,14 @@ export function Switch({
    * sits beside a row that already names the setting.
    */
   hideLabel?: boolean;
+  /**
+   * Disabled dims the whole row (label, description and track together)
+   * instead of the track alone. For a settings row, where a full-contrast
+   * label beside a dimmed track reads as a setting that still works.
+   */
+  dimRowWhenDisabled?: boolean;
 }) {
+  const dimRow = Boolean(disabled) && dimRowWhenDisabled;
   const control = (
     <button
       type="button"
@@ -41,6 +49,7 @@ export function Switch({
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
+        dimRow && "opacity-60",
         className,
       )}
     >
@@ -61,7 +70,7 @@ export function Switch({
           "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-[var(--duration-fast)]",
           description && "mt-0.5",
           checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
-          disabled && "opacity-50",
+          disabled && !dimRow && "opacity-50",
         )}
       >
         <span
