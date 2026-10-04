@@ -1850,6 +1850,8 @@
   "settings.voice.musicAutoJoinHint": "Desligado: quando alguém coloca música, você escolhe se quer ouvir.",
   "settings.voice.musicDuck": "Abaixar a música quando alguém fala",
   "settings.voice.musicDuckHint": "Quando alguém tá falando na call, a música baixa sozinha neste app.",
+  "settings.voice.autoHideControls": "Ocultar controles automaticamente",
+  "settings.voice.autoHideControlsHint": "Com uma transmissão ocupando a tela, os controles da call somem depois de alguns segundos. Mexe o mouse, aperta uma tecla ou toca na tela pra eles voltarem.",
   "settings.notifications.description": "O que chega até você, e onde. O que estiver definido por comunidade ou por canal ganha destas.",
   "settings.notifications.unsupported": "Este navegador não mostra notificações do sistema.",
   "settings.notifications.denied": "Bloqueado neste site. Libere as notificações nas configurações do site no seu navegador pra ligar de novo, a página não tem como perguntar outra vez.",
