@@ -7,22 +7,60 @@ import {
 } from "@/components/settings/kit";
 import {
   captureBinding,
-  captureModifier,
   capturePttKeyboardBinding,
   capturePttModifierBinding,
   captureMouseBinding,
-  formatBinding,
   isModifierCode,
   type KeyBinding,
   type PttBinding,
 } from "@/components/voice/push-to-talk";
+import { isApplePlatform } from "@/lib/composer-formatting";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+/**
+ * A binding as one label per keycap, plus the words a screen reader says for
+ * the whole combo.
+ *
+ * Apple keyboards print their modifiers as glyphs, in the order the system
+ * menus use: control, option, shift, command (so Shift + Cmd + M is ⇧⌘M).
+ * Everywhere else it reads Ctrl, Alt, Shift, in that order, and the fourth
+ * modifier is the Windows key. `apple` is a parameter so a test can ask for
+ * both without faking the browser.
+ */
+export function bindingKeycaps(
+  binding: KeyBinding,
+  apple: boolean = isApplePlatform(),
+): { keys: string[]; label: string } {
+  const modifiers: Array<[boolean, string, string]> = apple
+    ? [
+        [binding.ctrl, "⌃", "Control"],
+        [binding.alt, "⌥", "Option"],
+        [binding.shift, "⇧", "Shift"],
+        [binding.meta, "⌘", "Command"],
+      ]
+    : [
+        [binding.ctrl, "Ctrl", "Ctrl"],
+        [binding.alt, "Alt", "Alt"],
+        [binding.shift, "Shift", "Shift"],
+        [binding.meta, "Win", "Win"],
+      ];
+  const held = modifiers.filter(([on]) => on);
+  return {
+    keys: [...held.map(([, glyph]) => glyph), binding.label],
+    label: [...held.map(([, , word]) => word), binding.label].join(" + "),
+  };
+}
 
 /** A refusal the field reports instead of drawing, and the id to draw it under. */
 export interface KeyBindingRefusal {
   message: string;
   id: string;
+  /**
+   * Set when the chord was refused because another action owns it: the chord
+   * that was pressed. The field stays armed, so the caller can offer to swap.
+   */
+  attempted?: KeyBinding;
 }
 
 interface BindingFieldDisplayProps {
@@ -48,6 +86,207 @@ interface KeyBindingFieldProps extends BindingFieldDisplayProps {
   label: string;
   /** Label of the row that already owns this chord, if any. */
   takenBy?: (binding: KeyBinding) => string | null;
+  /**
+   * Makes Enter take the chord that was just refused as "in use", for a
+   * caller that offers to swap it with the other action. Enter is a reserved
+   * key everywhere else, so it is free for this while a conflict shows.
+   */
+  onSwap?: (binding: KeyBinding) => void;
+}
+
+type CaptureResult<B> = { ok: true; binding: B } | { ok: false };
+
+/** Two bindings that press the same keys, whatever object they live in. */
+function bindingId(binding: KeyBinding): string {
+  return [
+    binding.code,
+    binding.ctrl ? 1 : 0,
+    binding.alt ? 1 : 0,
+    binding.shift ? 1 : 0,
+    binding.meta ? 1 : 0,
+  ].join("|");
+}
+
+interface CaptureOptions<B extends KeyBinding> {
+  binding: B;
+  onChange: (binding: B) => void;
+  takenBy?: (binding: B) => string | null;
+  /** A keydown that is not a modifier, as a binding, or refused. */
+  fromKey: (event: KeyboardEvent) => CaptureResult<B>;
+  /**
+   * A modifier released on its own. Without it a lone modifier is refused,
+   * which is right for an action that fires once (Ctrl alone is not a shortcut
+   * anybody means) and wrong for push-to-talk, where holding Ctrl is a fine key.
+   */
+  fromModifier?: (event: KeyboardEvent) => B;
+  /** A mousedown, for a field that takes mouse buttons. */
+  fromMouse?: (button: number) => CaptureResult<B>;
+  onSwap?: (binding: B) => void;
+}
+
+/**
+ * The "press something to bind it" state machine both fields share.
+ *
+ * Capture runs on the window in the capture phase so the keystroke never
+ * reaches the app underneath while binding. Whatever is refused (a reserved
+ * key, a lone modifier, a chord another action owns) is said and the field
+ * stays armed, so the next press is a second try and the field never reads as
+ * half-changed. Esc or leaving the field ends it.
+ */
+function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
+  const { t } = useTranslation();
+  const [capturing, setCapturing] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  // The chord that was refused because another action owns it. Never saved;
+  // handed up so the row can offer to swap, and Enter takes it.
+  const [attempted, setAttempted] = useState<B | null>(null);
+  // The listeners read everything through refs. A parent that re-renders
+  // mid-capture (the Voz level meter does, every frame) hands new arrows each
+  // time, and with them in the effect's deps the listeners were rebuilt between
+  // a lone modifier's keydown and keyup, which lost the pending modifier and
+  // saved nothing.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const attemptedRef = useRef(attempted);
+  attemptedRef.current = attempted;
+  const mouse = options.fromMouse !== undefined;
+
+  useEffect(() => {
+    if (!capturing) {
+      return;
+    }
+
+    // A modifier is only a binding if it is released without anything else
+    // being pressed, otherwise "Ctrl" would swallow every chord starting with
+    // it and "Ctrl + Q" could never be bound.
+    let pendingModifier: KeyboardEvent | null = null;
+
+    function end() {
+      setCapturing(false);
+      setRefused(null);
+      setAttempted(null);
+    }
+
+    function refuse(message: string) {
+      setRefused(message);
+      setAttempted(null);
+    }
+
+    function offer(next: B) {
+      const taken = optionsRef.current.takenBy?.(next);
+      if (taken) {
+        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
+        setAttempted(next);
+        return;
+      }
+      end();
+      optionsRef.current.onChange(next);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.code === "Escape") {
+        end();
+        return;
+      }
+
+      const pending = attemptedRef.current;
+      if (event.code === "Enter" && pending && optionsRef.current.onSwap) {
+        end();
+        optionsRef.current.onSwap(pending);
+        return;
+      }
+
+      if (isModifierCode(event.code)) {
+        pendingModifier = event;
+        return;
+      }
+      pendingModifier = null;
+
+      const outcome = optionsRef.current.fromKey(event);
+      if (!outcome.ok) {
+        refuse(tRef.current("keyBinding.refused"));
+        return;
+      }
+      offer(outcome.binding);
+    }
+
+    function onKeyUp(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!pendingModifier || pendingModifier.code !== event.code) {
+        return;
+      }
+      pendingModifier = null;
+      const fromModifier = optionsRef.current.fromModifier;
+      if (!fromModifier) {
+        refuse(tRef.current("keyBinding.loneModifier"));
+        return;
+      }
+      offer(fromModifier(event));
+    }
+
+    function onMouseDown(event: MouseEvent) {
+      const fromMouse = optionsRef.current.fromMouse;
+      if (!fromMouse) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const outcome = fromMouse(event.button);
+      if (!outcome.ok) {
+        refuse(tRef.current("keyBinding.refused"));
+        return;
+      }
+      offer(outcome.binding);
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    if (mouse) {
+      window.addEventListener("mousedown", onMouseDown, true);
+    }
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      if (mouse) {
+        window.removeEventListener("mousedown", onMouseDown, true);
+      }
+    };
+  }, [capturing, mouse]);
+
+  // A new binding (saved here, swapped from the row, reset to default) ends
+  // the capture. Compared by the keys it presses, so a parent that rebuilds
+  // an equal object each render does not cancel a capture in progress.
+  const current = bindingId(options.binding);
+  useEffect(() => {
+    setCapturing(false);
+    setRefused(null);
+    setAttempted(null);
+  }, [current]);
+
+  return {
+    capturing,
+    refused,
+    attempted,
+    toggle: () => {
+      setRefused(null);
+      setAttempted(null);
+      setCapturing((prev) => !prev);
+    },
+    // Leaving the field ends capture, rather than leaving the window silently
+    // eating every keystroke, and drops what was refused: it was never saved,
+    // and a message left on the row reads as if it were.
+    blur: () => {
+      setCapturing(false);
+      setRefused(null);
+      setAttempted(null);
+    },
+  };
 }
 
 /**
@@ -59,134 +298,40 @@ interface KeyBindingFieldProps extends BindingFieldDisplayProps {
  * and the only way to record a `code` — see the binding type for why `code` is
  * what gets stored.
  *
- * Capture runs on the window in the capture phase so the keystroke never
- * reaches the app underneath while binding, and every key is `preventDefault`ed
- * for the same reason: binding "S" should not open the browser's save dialog on
- * the way past.
+ * Every key is `preventDefault`ed while armed, so binding "S" does not open
+ * the browser's save dialog on the way past. A modifier on its own is refused
+ * here: this field is for actions that fire once.
  */
 export function KeyBindingField({
   binding,
   onChange,
   label,
   takenBy,
+  onSwap,
   hideLabel = false,
   onRefusedChange,
 }: KeyBindingFieldProps) {
   const { t } = useTranslation();
-  const [capturing, setCapturing] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
-  // The chord that was refused because another action owns it. The field
-  // draws it inside the red border, so the conflict reads as "this key is
-  // taken", not as if the current binding were the problem. Never saved.
-  const [attempted, setAttempted] = useState<KeyBinding | null>(null);
-  const takenByRef = useRef(takenBy);
-  const tRef = useRef(t);
-  takenByRef.current = takenBy;
-  // Same for onChange: a parent that re-renders mid-capture (the Voz level
-  // meter does, every frame) hands a new arrow each time, and with it in the
-  // effect's deps the listeners were rebuilt between a lone modifier's keydown
-  // and keyup, which lost the pending modifier and saved nothing.
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  tRef.current = t;
-
-  useEffect(() => {
-    if (!capturing) {
-      return;
-    }
-
-    // A modifier is only a binding if it is released without anything else
-    // being pressed — otherwise "Ctrl" would swallow every chord starting with
-    // it and "Ctrl + Q" could never be bound.
-    let pendingModifier: KeyboardEvent | null = null;
-
-    function onKeyDown(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.code === "Escape") {
-        setCapturing(false);
-        setRefused(null);
-        return;
-      }
-
-      if (isModifierCode(event.code)) {
-        pendingModifier = event;
-        return;
-      }
-      pendingModifier = null;
-
-      const outcome = captureBinding(event);
-      if (!outcome.ok) {
-        setRefused(tRef.current("keyBinding.refused"));
-        return;
-      }
-      const taken = takenByRef.current?.(outcome.binding);
-      if (taken) {
-        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
-        setAttempted(outcome.binding);
-        setCapturing(false);
-        return;
-      }
-      setRefused(null);
-      setCapturing(false);
-      onChangeRef.current(outcome.binding);
-    }
-
-    function onKeyUp(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!pendingModifier || pendingModifier.code !== event.code) {
-        return;
-      }
-      pendingModifier = null;
-      const next = captureModifier(event);
-      const taken = takenByRef.current?.(next);
-      if (taken) {
-        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
-        setAttempted(next);
-        setCapturing(false);
-        return;
-      }
-      setRefused(null);
-      setCapturing(false);
-      onChangeRef.current(next);
-    }
-
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
-    };
-  }, [capturing]);
-
-  useEffect(() => {
-    setRefused(null);
-    setAttempted(null);
-  }, [binding]);
+  const capture = useBindingCapture<KeyBinding>({
+    binding,
+    onChange,
+    takenBy,
+    onSwap,
+    fromKey: captureBinding,
+  });
 
   return (
     <BindingControl
       label={label}
-      binding={attempted ?? binding}
-      capturing={capturing}
+      binding={binding}
+      capturing={capture.capturing}
       prompt={t("keyBinding.press")}
-      refused={refused}
+      refused={capture.refused}
+      attempted={capture.attempted}
       hideLabel={hideLabel}
       onRefusedChange={onRefusedChange}
-      onToggle={() => {
-        setRefused(null);
-        setAttempted(null);
-        setCapturing((prev) => !prev);
-      }}
-      // Leaving the field drops a refused combo: it was never saved, and a
-      // red key left on the row reads as if it were.
-      onBlur={() => {
-        setCapturing(false);
-        setRefused(null);
-        setAttempted(null);
-      }}
+      onToggle={capture.toggle}
+      onBlur={capture.blur}
     />
   );
 }
@@ -194,6 +339,10 @@ export function KeyBindingField({
 /**
  * What both fields draw: the binding as keycaps in one well, which is itself
  * the button that arms capture, and the refusal under it.
+ *
+ * Armed, the well keeps showing the current binding, dimmed, beside the
+ * prompt: nothing has changed until a valid chord is accepted, and a refusal
+ * must not read as if it had.
  *
  * With `hideLabel` the label is for a screen reader only, because the settings
  * row the field sits in shows the visible one beside it. Without it the label
@@ -206,6 +355,7 @@ function BindingControl({
   capturing,
   prompt,
   refused,
+  attempted,
   hideLabel,
   onRefusedChange,
   onToggle,
@@ -216,20 +366,25 @@ function BindingControl({
   capturing: boolean;
   prompt: string;
   refused: string | null;
+  attempted: KeyBinding | null;
   hideLabel: boolean;
   onRefusedChange?: (refusal: KeyBindingRefusal | null) => void;
   onToggle: () => void;
   onBlur: () => void;
 }) {
   const refusedId = useId();
-  const combo = formatBinding(binding);
+  const combo = bindingKeycaps(binding);
   const reportRef = useRef(onRefusedChange);
   reportRef.current = onRefusedChange;
   const reports = onRefusedChange !== undefined;
 
   useEffect(() => {
-    reportRef.current?.(refused ? { message: refused, id: refusedId } : null);
-  }, [refused, refusedId]);
+    reportRef.current?.(
+      refused
+        ? { message: refused, id: refusedId, attempted: attempted ?? undefined }
+        : null,
+    );
+  }, [refused, attempted, refusedId]);
 
   useEffect(
     () => () => {
@@ -282,11 +437,17 @@ function BindingControl({
       >
         <span className="sr-only">{`${label}: `}</span>
         {capturing ? (
-          <span className="px-2.5 py-1.5 text-xs text-pretty text-text-secondary">
-            {prompt}
+          <span className="flex min-w-0 items-center gap-2 pr-2.5">
+            <SettingsKeyCombo
+              keys={combo.keys}
+              className="shrink-0 opacity-50"
+            />
+            <span className="py-1.5 text-xs text-pretty text-text-secondary">
+              {prompt}
+            </span>
           </span>
         ) : (
-          <SettingsKeyCombo keys={combo.split(" + ")} label={combo} />
+          <SettingsKeyCombo keys={combo.keys} label={combo.label} />
         )}
       </button>
       {refused && !reports ? (
@@ -343,131 +504,27 @@ export function PttBindingField({
   onRefusedChange,
 }: PttBindingFieldProps) {
   const { t } = useTranslation();
-  const [capturing, setCapturing] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
-  const [attempted, setAttempted] = useState<PttBinding | null>(null);
-  const takenByRef = useRef(takenBy);
-  const tRef = useRef(t);
-  takenByRef.current = takenBy;
-  // Same for onChange: a parent that re-renders mid-capture (the Voz level
-  // meter does, every frame) hands a new arrow each time, and with it in the
-  // effect's deps the listeners were rebuilt between a lone modifier's keydown
-  // and keyup, which lost the pending modifier and saved nothing.
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  tRef.current = t;
-
-  useEffect(() => {
-    if (!capturing) {
-      return;
-    }
-
-    let pendingModifier: KeyboardEvent | null = null;
-
-    function commit(outcome: { ok: true; binding: PttBinding } | { ok: false; reason: "refused" }) {
-      if (!outcome.ok) {
-        setRefused(tRef.current("keyBinding.refused"));
-        return;
-      }
-      const taken = takenByRef.current?.(outcome.binding);
-      if (taken) {
-        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
-        setAttempted(outcome.binding);
-        setCapturing(false);
-        return;
-      }
-      setRefused(null);
-      setCapturing(false);
-      onChangeRef.current(outcome.binding);
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.code === "Escape") {
-        setCapturing(false);
-        setRefused(null);
-        return;
-      }
-
-      if (isModifierCode(event.code)) {
-        pendingModifier = event;
-        return;
-      }
-      pendingModifier = null;
-      commit(capturePttKeyboardBinding(event));
-    }
-
-    function onKeyUp(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!pendingModifier || pendingModifier.code !== event.code) {
-        return;
-      }
-      pendingModifier = null;
-      const next = capturePttModifierBinding(event);
-      const taken = takenByRef.current?.(next);
-      if (taken) {
-        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
-        setAttempted(next);
-        setCapturing(false);
-        return;
-      }
-      setRefused(null);
-      setCapturing(false);
-      onChangeRef.current(next);
-    }
-
-    function onMouseDown(event: MouseEvent) {
-      if (!allowMouse) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      commit(captureMouseBinding(event.button));
-    }
-
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
-    if (allowMouse) {
-      window.addEventListener("mousedown", onMouseDown, true);
-    }
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
-      if (allowMouse) {
-        window.removeEventListener("mousedown", onMouseDown, true);
-      }
-    };
-  }, [capturing, allowMouse]);
-
-  useEffect(() => {
-    setRefused(null);
-    setAttempted(null);
-  }, [binding]);
+  const capture = useBindingCapture<PttBinding>({
+    binding,
+    onChange,
+    takenBy,
+    fromKey: capturePttKeyboardBinding,
+    fromModifier: capturePttModifierBinding,
+    fromMouse: allowMouse ? captureMouseBinding : undefined,
+  });
 
   return (
     <BindingControl
       label={label}
-      binding={attempted ?? binding}
-      capturing={capturing}
+      binding={binding}
+      capturing={capture.capturing}
       prompt={t(allowMouse ? "keyBinding.pressOrClick" : "keyBinding.press")}
-      refused={refused}
+      refused={capture.refused}
+      attempted={capture.attempted}
       hideLabel={hideLabel}
       onRefusedChange={onRefusedChange}
-      onToggle={() => {
-        setRefused(null);
-        setAttempted(null);
-        setCapturing((prev) => !prev);
-      }}
-      // Leaving the field drops a refused combo: it was never saved, and a
-      // red key left on the row reads as if it were.
-      onBlur={() => {
-        setCapturing(false);
-        setRefused(null);
-        setAttempted(null);
-      }}
+      onToggle={capture.toggle}
+      onBlur={capture.blur}
     />
   );
 }
