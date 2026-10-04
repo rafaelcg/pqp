@@ -112,17 +112,31 @@ export function startHlsServer({
     }
     if (url.pathname === "/control") {
       if (req.method === "POST") {
+        // The knobs are for the spec (Node, no Origin header), never for a
+        // page: a browser's cross-origin POST is refused outright, so no tab
+        // that happens to be open on this machine can stall the rig.
+        if (req.headers.origin) {
+          res.writeHead(403).end();
+          return;
+        }
         let body = "";
         req.on("data", (chunk) => (body += chunk));
         req.on("end", () => {
-          const input = body ? JSON.parse(body) : {};
-          if (input.stall === "cam" || input.stall === "film") {
+          let input;
+          try {
+            input = body ? JSON.parse(body) : {};
+          } catch {
+            res.writeHead(400).end();
+            return;
+          }
+          const finite = (value) => typeof value === "number" && Number.isFinite(value);
+          if ((input.stall === "cam" || input.stall === "film") && finite(Number(input.ms ?? 0))) {
             state.stallUntil[input.stall] = Date.now() + Number(input.ms ?? 0);
           }
-          if (typeof input.camPdtErrorMs === "number") {
+          if (finite(input.camPdtErrorMs)) {
             state.camPdtErrorMs = input.camPdtErrorMs;
           }
-          if (typeof input.camDelayMs === "number") {
+          if (finite(input.camDelayMs)) {
             state.camDelayMs = input.camDelayMs;
           }
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -158,8 +172,15 @@ export function startHlsServer({
       }
       state.requests[track] += 1;
       const send = () => {
+        if (res.destroyed) {
+          // The player gave up on a held request; nothing to answer.
+          return;
+        }
         res.writeHead(200, { "Content-Type": "video/mp2t", "Content-Length": size });
-        createReadStream(file).pipe(res);
+        const stream = createReadStream(file);
+        // A read that fails ends this one response, never the rig.
+        stream.on("error", () => res.destroy());
+        stream.pipe(res);
       };
       const holdMs = state.stallUntil[track] - Date.now();
       if (holdMs > 0) {

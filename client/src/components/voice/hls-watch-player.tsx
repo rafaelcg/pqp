@@ -3122,8 +3122,10 @@ export function HlsWatchPlayer({
    * takes its whole corner away, so for a few seconds a small chip sits in
    * that corner with the way back on it; after that the way back is the
    * layout menu, the same as before. Shown on any switch to "Ocultar câmera"
-   * this viewer makes, and when a camera comes on while it is hidden, so a
-   * viewer who hid it at the last party learns the host's camera is on.
+   * this viewer makes, and when a camera is there but hidden by a choice
+   * remembered from before (a camera coming on mid-party, or the player
+   * opening on one), so a viewer who hid it at the last party learns the
+   * host's camera is on, and how to get it back.
    */
   const [showChip, setShowChip] = useState(false);
   useEffect(() => {
@@ -3134,7 +3136,9 @@ export function HlsWatchPlayer({
     return () => window.clearTimeout(timer);
   }, [showChip]);
   const cameraHidden = layoutOffered && cameraLayout === "stream";
-  const hadHiddenCameraRef = useRef(cameraHidden);
+  // False at mount on purpose: a player that OPENS on a hidden camera shows
+  // the chip too (Farol, PR 947).
+  const hadHiddenCameraRef = useRef(false);
   useEffect(() => {
     if (cameraHidden && !hadHiddenCameraRef.current) {
       setShowChip(true);

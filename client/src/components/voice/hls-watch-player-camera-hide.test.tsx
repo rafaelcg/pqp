@@ -216,6 +216,41 @@ describe("hiding the presenter's camera", { timeout: 30_000 }, () => {
     });
   });
 
+  it("a player that opens on a camera hidden last time shows the chip, then lets it go", async () => {
+    store.set(
+      "pqp:watch-camera-pip",
+      JSON.stringify({ corner: "bottom-right", layout: "stream", restore: "side" }),
+    );
+    await act(async () => {
+      root.render(
+        <TooltipProvider>
+          <HlsWatchPlayer src={SRC} cameraSrc={CAMERA} layout="cinema" />
+        </TooltipProvider>,
+      );
+    });
+    await settle();
+    expect(q("watch-camera-pip")).toBeNull();
+    expect(q("watch-camera-show-chip")).not.toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(CAMERA_SHOW_CHIP_MS + 50);
+    });
+    await settle();
+    expect(q("watch-camera-show-chip")).toBeNull();
+  });
+
+  it("no chip for a party with no camera, hidden or not", async () => {
+    store.set("pqp:watch-camera-pip", JSON.stringify({ corner: "bottom-right", layout: "stream" }));
+    await act(async () => {
+      root.render(
+        <TooltipProvider>
+          <HlsWatchPlayer src={SRC} layout="cinema" />
+        </TooltipProvider>,
+      );
+    });
+    await settle();
+    expect(q("watch-camera-show-chip")).toBeNull();
+  });
+
   it("the quick cluster toggles it with no menu", async () => {
     await mount();
     const toggle = q("watch-quick-camera-toggle")!;

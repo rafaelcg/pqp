@@ -2144,7 +2144,8 @@ the picture. So:
   under a resting pointer and the button must not go with it), and ALWAYS on
   a touch screen (`pointer-coarse:`), where there is no hover.
 - **"Mostrar câmera" where the camera was**, for `CAMERA_SHOW_CHIP_MS` (6 s)
-  after it is hidden, and when a camera comes on while it is hidden. After
+  after it is hidden, and when the player finds a camera hidden by a choice
+  remembered from before (opening on a party, or a camera coming on). After
   that, the layout menu is the way back, as before.
 - **In the quick cluster** (mute and layout, the controls shown while the bar
   is faded): a one-tap toggle beside the layout picker.
