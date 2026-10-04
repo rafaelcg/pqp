@@ -71,6 +71,7 @@ describe("useSettingsShell", () => {
     }
     mount(<Probe />);
     expect(value!.profileDirty).toBe(false);
+    expect(value!.profileHandleError).toBeNull();
     expect(() => value!.openSection("voice", "ptt")).not.toThrow();
   });
 });

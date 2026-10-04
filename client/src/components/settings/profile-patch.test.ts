@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { User } from "@pqp/shared";
+import { ApiError } from "@/lib/api";
 import {
   buildProfilePatch,
+  isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
   profileDraftsFrom,
@@ -135,5 +137,33 @@ describe("pendingHandleChange", () => {
     expect(
       pendingHandleChange(user, { ...profileDraftsFrom(user), handle: "" }),
     ).toBeNull();
+  });
+});
+
+describe("isHandleTakenError", () => {
+  const withHandle = { handle: "rafa" };
+
+  it("recognises the handle claim's 409", () => {
+    expect(
+      isHandleTakenError(new ApiError(409, "That handle is already taken"), withHandle),
+    ).toBe(true);
+  });
+
+  it("ignores a username 409, a 409 without a handle in the patch, and other failures", () => {
+    expect(
+      isHandleTakenError(
+        new ApiError(409, "That username has no numbers left. Please pick a different one."),
+        withHandle,
+      ),
+    ).toBe(false);
+    expect(
+      isHandleTakenError(new ApiError(409, "That handle is already taken"), {}),
+    ).toBe(false);
+    expect(
+      isHandleTakenError(new ApiError(429, "You can change your handle again on 2026-11-01"), withHandle),
+    ).toBe(false);
+    expect(isHandleTakenError(new Error("That handle is already taken"), withHandle)).toBe(
+      false,
+    );
   });
 });

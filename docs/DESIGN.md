@@ -346,6 +346,8 @@ so a variant and a size are props, not class strings.
 - **States.** Hover, `active:scale-[0.98]`, `focus-visible` ring,
   `disabled:opacity-40` with pointer events off.
 - **`asChild`.** Renders a Radix `Slot`, so a link can wear a button.
+- **Ref.** `forwardRef` to the `<button>`, so a caller can move focus to a
+  button it just revealed.
 - **Use it** for anything that performs an action. **Do not** use it for
   navigation between routes without `asChild` and a real `<a>`, and do not use
   `default` twice on the same surface.
@@ -359,6 +361,12 @@ so a variant and a size are props, not class strings.
 
 - One variant, one size (h-10). Error state is the caller's: pass
   `aria-invalid` and a `border-danger` class.
+- **`prefix`.** Fixed text drawn inside the field before the value
+  (`pqp.gg/@`), not part of the value. With a prefix the field is a box around
+  an unstyled input: the focus ring is on the box (`focus-within`), so the
+  prefix is ringed too, `className` goes on the box (`font-mono`,
+  `border-danger`), and `aria-invalid="true"` on the input turns the box's
+  border red by itself. Without a prefix the markup is the bare input.
 - **States.** Placeholder at `text-text-tertiary/70`, focus ring, disabled at 50%
   with `cursor-not-allowed`.
 - **Use it** for every single-line text field. A multi-line value is a
@@ -375,7 +383,11 @@ so a variant and a size are props, not class strings.
   assistive tech and paints only the track, for a switch that sits beside a
   row that already names the setting.
 - **States.** Track goes accent when on, surface with an inset ring when off.
-  Disabled dims the track and blocks the pointer.
+  The off knob is `text-tertiary` in dark; in every light look it is a pale
+  `surface-0` knob with a `border-strong` ring, because the grey there reads
+  as a dark dot. Disabled dims the track and blocks the pointer.
+  `dimRowWhenDisabled` dims the whole row instead (label, description and
+  track at 60%, the track not dimmed twice); the settings switch row uses it.
 - **Use it** for a list of independent settings. **Do not** use it for one of
   many; that is a `RadioGroup`.
 - **Accessibility.** `role="switch"` with `aria-checked`. A `title` is rendered
@@ -498,7 +510,11 @@ scrollbar would draw OS chrome over the design.
   (h-7, 12px text) for `segmented` and `chips`.
 - **Props.** `value`, `onValueChange`, `options` (`value`, `label`, optional
   `description` and `disabled`), `label` (required, the group's accessible
-  name), `variant`, `size`, `disabled`.
+  name), `variant`, `size`, `disabled`, plus `status` (list only: drawn under
+  the checked option, for the write it started), `activation` (`auto`, or
+  `manual` where the arrows only move focus and Enter or Space selects, for an
+  expensive change like a language reload) and `fit` (segmented only: `equal`
+  cells that truncate, or `content` cells sized to their labels that wrap).
 - **States.** Selected is `bg-surface-2 font-medium text-text` on the segmented
   track and `border-accent bg-accent-soft text-on-accent-soft` as a chip.
   Disabled is `opacity-40` with `cursor-not-allowed`.
@@ -512,7 +528,9 @@ scrollbar would draw OS chrome over the design.
 
 ### Slider
 
-`slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Two variants.
+`slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Four
+variants: `scrub`, `volume`, `edge` (the compact player's fill on a panel's
+bottom border) and `hue`.
 
 - **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
@@ -520,6 +538,10 @@ scrollbar would draw OS chrome over the design.
   without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,
   used while duration is still unknown.
 - **`volume`.** A slightly thicker track with the thumb always visible.
+- **`hue`.** A colour wheel: the `--accent-track` gradient is the whole
+  track, there is no fill, and the thumb wears the current accent with an
+  `on-accent` rim. For the accent picker; it replaces the old native range
+  and its `.accent-hue-slider` CSS once Aparência moves to it.
 - **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
   Disabled is 40% opacity.
 - **Use it** for playback position and volume. **Do not** use a native
