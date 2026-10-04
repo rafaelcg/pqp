@@ -83,11 +83,23 @@ describe("SettingsCopyButton", () => {
     expect(liveText()).toBe("");
   });
 
-  it("does nothing without a clipboard", async () => {
+  it("says so when nothing can copy, instead of doing nothing", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     mount(<SettingsCopyButton text="x" label="Copiar" copiedLabel="Copiado" />);
     await click();
-    expect(liveText()).toBe("");
+    expect(liveText()).toMatch(/Não deu pra copiar|Couldn't copy/);
+    expect(button().querySelector(".lucide-circle-x")).not.toBeNull();
+  });
+
+  it("falls back to the old copy when the clipboard refuses", async () => {
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+    mount(<SettingsCopyButton text="x" label="Copiar" copiedLabel="Copiado" />);
+    await click();
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(liveText()).toBe("Copiado");
+    Reflect.deleteProperty(document, "execCommand");
   });
 
   it("shows its label as text with showLabel, and swaps it after a copy", async () => {
@@ -106,13 +118,32 @@ describe("SettingsCopyButton", () => {
 });
 
 describe("SettingsBuildLine", () => {
-  it("copies the line through the same hook, in both variants", async () => {
+  it("shows the row's line as selectable text next to a copy button", async () => {
     mount(<SettingsBuildLine variant="row" />);
-    expect(button().className).toContain("font-mono");
+    const text = host!.querySelector("[data-build-line]")!;
+    expect(text.className).toContain("font-mono");
+    expect(text.className).toContain("select-all");
+    expect(button().getAttribute("aria-label")).toMatch(/^(Copiar versão|Copy version): pqp /);
     await click();
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(String(writeText.mock.calls[0]![0])).toMatch(/^pqp (web|desktop) · /);
     act(() => vi.advanceTimersByTime(SETTINGS_COPIED_MS));
     expect(liveText()).toBe("");
+  });
+});
+
+describe("SettingsBuildLine without a clipboard", () => {
+  it("says it could not copy and selects the line for the person", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    for (const variant of ["rail", "row"] as const) {
+      mount(<SettingsBuildLine variant={variant} />);
+      await click();
+      const message = host!.querySelector("[data-copy-failed]");
+      expect(message?.textContent).toMatch(/Não deu pra copiar|Couldn't copy/);
+      expect(window.getSelection()?.toString()).toMatch(/^pqp (web|desktop) · /);
+      act(() => root?.unmount());
+      host?.remove();
+      root = null;
+    }
   });
 });
