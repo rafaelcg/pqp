@@ -26,13 +26,18 @@ import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
 import { useTranslation } from "@/lib/i18n";
 import { LocalSettings } from "@/components/settings/local-settings";
 
+/**
+ * Every key that is in use, to check a new binding against. Push-to-talk owns
+ * its key only while the input mode is push-to-talk: on voice activity that
+ * key does nothing, so a shortcut may take it.
+ */
 export function bindableMap(
   settings: LocalSettings,
-): Record<BindableId, KeyBinding> {
-  return {
-    ...resolveShortcutBindings(settings.shortcuts, isApplePlatform()),
-    pushToTalk: settings.pushToTalkKey,
-  };
+): Partial<Record<BindableId, KeyBinding>> {
+  const shortcuts = resolveShortcutBindings(settings.shortcuts, isApplePlatform());
+  return settings.inputMode === "push-to-talk"
+    ? { ...shortcuts, pushToTalk: settings.pushToTalkKey }
+    : shortcuts;
 }
 
 /**
@@ -170,7 +175,7 @@ export function KeyboardSection({
       shortcuts: {
         ...draftLocal.shortcuts,
         [action]: binding,
-        [other]: owned[action],
+        [other]: bindings[action],
       },
     });
   }
@@ -292,7 +297,11 @@ export function KeyboardSection({
                         binding={binding}
                         takenBy={takenBy(action)}
                         onChange={(next) => remap(action, next)}
-                        onSwap={swappable ? (next) => swap(action, next) : undefined}
+                        onSwap={(next) => swap(action, next)}
+                        // Push-to-talk is set in Voz e vídeo, never swapped.
+                        canSwap={(next) =>
+                          findBindingConflict(owned, action, next) !== "pushToTalk"
+                        }
                         onRefusedChange={reportRefusal(action)}
                       />
                     }

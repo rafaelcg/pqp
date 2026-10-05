@@ -10,6 +10,8 @@ import {
   defaultPttBinding,
   defaultPushToTalkBinding,
   formatBinding,
+  keyDisplayLabel,
+  modifierName,
   isBindableMouseCode,
   isTextEntryTarget,
   matchesBinding,
@@ -512,5 +514,33 @@ describe("parsePttBinding", () => {
     expect(parsePttBinding(null)).toBeNull();
     expect(parsePttBinding("nope")).toBeNull();
     expect(parsePttBinding({})).toBeNull();
+  });
+});
+
+describe("keyDisplayLabel", () => {
+  const key = (code: string, label: string) =>
+    ({ ...captureModifier(keyEvent({ code })), label });
+
+  it("names the fourth modifier for the keyboard in front of the person", () => {
+    // Saved on a Mac as "Left Cmd", opened on Windows: the Windows key.
+    expect(keyDisplayLabel(key("MetaLeft", "Left Cmd"), undefined, false)).toBe("Left Win");
+    expect(keyDisplayLabel(key("MetaLeft", "Left Win"), undefined, true)).toBe("Left Cmd");
+    expect(modifierName("meta", false)).toBe("Win");
+    expect(modifierName("meta", true)).toBe("Cmd");
+  });
+
+  it("puts the side in the person's language when it can", () => {
+    const say = (id: string, vars?: Record<string, unknown>) =>
+      `${id}:${String(vars?.key)}`;
+    expect(keyDisplayLabel(key("ShiftRight", "Right Shift"), say as never, false)).toBe(
+      "keyBinding.modifierRight:Shift",
+    );
+    expect(keyDisplayLabel(key("ControlLeft", "Left Ctrl"), say as never, false)).toBe(
+      "keyBinding.modifierLeft:Ctrl",
+    );
+  });
+
+  it("keeps the saved label of any other key", () => {
+    expect(keyDisplayLabel({ ...defaultPushToTalkBinding, code: "F9", label: "F9" })).toBe("F9");
   });
 });

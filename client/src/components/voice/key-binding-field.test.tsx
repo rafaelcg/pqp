@@ -305,3 +305,74 @@ describe("PttBindingField", () => {
     );
   });
 });
+
+describe("modifier keycaps", () => {
+  const lone = (code: string, label: string): PttBinding => ({
+    ...PTT,
+    code,
+    label,
+  });
+  const say = (key: string, vars?: Record<string, unknown>) =>
+    key === "keyBinding.modifierLeft"
+      ? `${vars?.key} esquerdo`
+      : key === "keyBinding.modifierRight"
+        ? `${vars?.key} direito`
+        : key;
+
+  it("calls the Windows key Win off Apple, even if it was saved as Cmd", () => {
+    expect(bindingKeycaps(lone("MetaLeft", "Left Cmd"), false).keys).toEqual(["Left Win"]);
+    expect(bindingKeycaps(lone("MetaRight", "Right Cmd"), true).keys).toEqual(["Right Cmd"]);
+  });
+
+  it("says the side in the person's language when it has a translator", () => {
+    expect(
+      bindingKeycaps(lone("ShiftLeft", "Left Shift"), false, say as never).keys,
+    ).toEqual(["Shift esquerdo"]);
+    expect(
+      bindingKeycaps(lone("ControlRight", "Right Ctrl"), false, say as never).label,
+    ).toBe("Ctrl direito");
+  });
+
+  it("leaves every other key as it was saved", () => {
+    expect(bindingKeycaps(lone("F9", "F9"), false, say as never).keys).toEqual(["F9"]);
+  });
+});
+
+describe("refusal wording", () => {
+  it("keeps Esc as the way out when a reserved key is refused", () => {
+    mount(<KeyBindingField label="Mute" binding={MUTE} onChange={() => {}} />);
+    act(() => field().click());
+    press("Tab", "Tab");
+    const message = host!.querySelector('[role="alert"]')!.textContent!;
+    expect(message).toMatch(/Esc to cancel/);
+    expect(message).not.toMatch(/Escape/);
+    expect(field().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("says Enter swaps when the field can swap, and not when it cannot", () => {
+    const taken = (next: KeyBinding) => (next.code === "KeyD" ? "Deafen" : null);
+    mount(
+      <KeyBindingField
+        label="Mute"
+        binding={MUTE}
+        takenBy={taken}
+        onSwap={() => {}}
+        onChange={() => {}}
+      />,
+    );
+    act(() => field().click());
+    press("KeyD", "D");
+    expect(host!.querySelector('[role="alert"]')!.textContent).toMatch(/Enter to swap/);
+    act(() => root!.unmount());
+    host!.remove();
+
+    mount(
+      <KeyBindingField label="Mute" binding={MUTE} takenBy={taken} onChange={() => {}} />,
+    );
+    act(() => field().click());
+    press("KeyD", "D");
+    const message = host!.querySelector('[role="alert"]')!.textContent!;
+    expect(message).not.toMatch(/Enter/);
+    expect(message).toMatch(/Esc to cancel/);
+  });
+});

@@ -11,7 +11,9 @@ import {
   capturePttModifierBinding,
   captureMouseBinding,
   isModifierCode,
+  keyDisplayLabel,
   type KeyBinding,
+  type KeyNameTranslator,
   type PttBinding,
 } from "@/components/voice/push-to-talk";
 import { isApplePlatform } from "@/lib/composer-formatting";
@@ -26,11 +28,13 @@ import { cn } from "@/lib/utils";
  * menus use: control, option, shift, command (so Shift + Cmd + M is ⇧⌘M).
  * Everywhere else it reads Ctrl, Alt, Shift, in that order, and the fourth
  * modifier is the Windows key. `apple` is a parameter so a test can ask for
- * both without faking the browser.
+ * both without faking the browser. A key that is a modifier is named for this
+ * platform, and in the person's language when `translate` is given.
  */
 export function bindingKeycaps(
   binding: KeyBinding,
   apple: boolean = isApplePlatform(),
+  translate?: KeyNameTranslator,
 ): { keys: string[]; label: string } {
   const modifiers: Array<[boolean, string, string]> = apple
     ? [
@@ -46,9 +50,10 @@ export function bindingKeycaps(
         [binding.meta, "Win", "Win"],
       ];
   const held = modifiers.filter(([on]) => on);
+  const key = keyDisplayLabel(binding, translate, apple);
   return {
-    keys: [...held.map(([, glyph]) => glyph), binding.label],
-    label: [...held.map(([, , word]) => word), binding.label].join(" + "),
+    keys: [...held.map(([, glyph]) => glyph), key],
+    label: [...held.map(([, , word]) => word), key].join(" + "),
   };
 }
 
@@ -92,6 +97,11 @@ interface KeyBindingFieldProps extends BindingFieldDisplayProps {
    * key everywhere else, so it is free for this while a conflict shows.
    */
   onSwap?: (binding: KeyBinding) => void;
+  /**
+   * Which chords `onSwap` can take. Without it every chord the field refuses
+   * as in use is offered the swap, and the message says Enter does it.
+   */
+  canSwap?: (binding: KeyBinding) => boolean;
 }
 
 type CaptureResult<B> = { ok: true; binding: B } | { ok: false };
@@ -122,7 +132,14 @@ interface CaptureOptions<B extends KeyBinding> {
   /** A mousedown, for a field that takes mouse buttons. */
   fromMouse?: (button: number) => CaptureResult<B>;
   onSwap?: (binding: B) => void;
+  /** Whether Enter may swap this chord. Defaults to yes when `onSwap` is set. */
+  canSwap?: (binding: B) => boolean;
 }
+
+/** What the field refused, kept as data so the words follow the language. */
+type Refusal =
+  | { kind: "message"; message: string }
+  | { kind: "conflict"; action: string; swap: boolean };
 
 /**
  * The "press something to bind it" state machine both fields share.
@@ -136,7 +153,7 @@ interface CaptureOptions<B extends KeyBinding> {
 function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
   const { t } = useTranslation();
   const [capturing, setCapturing] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   // The chord that was refused because another action owns it. Never saved;
   // handed up so the row can offer to swap, and Enter takes it.
   const [attempted, setAttempted] = useState<B | null>(null);
@@ -165,19 +182,24 @@ function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
 
     function end() {
       setCapturing(false);
-      setRefused(null);
+      setRefusal(null);
       setAttempted(null);
     }
 
     function refuse(message: string) {
-      setRefused(message);
+      setRefusal({ kind: "message", message });
       setAttempted(null);
+    }
+
+    function swapOffered(next: B): boolean {
+      const { onSwap, canSwap } = optionsRef.current;
+      return onSwap !== undefined && (canSwap ? canSwap(next) : true);
     }
 
     function offer(next: B) {
       const taken = optionsRef.current.takenBy?.(next);
       if (taken) {
-        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
+        setRefusal({ kind: "conflict", action: taken, swap: swapOffered(next) });
         setAttempted(next);
         return;
       }
@@ -195,9 +217,9 @@ function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
       }
 
       const pending = attemptedRef.current;
-      if (event.code === "Enter" && pending && optionsRef.current.onSwap) {
+      if (event.code === "Enter" && pending && swapOffered(pending)) {
         end();
-        optionsRef.current.onSwap(pending);
+        optionsRef.current.onSwap?.(pending);
         return;
       }
 
@@ -265,16 +287,25 @@ function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
   const current = bindingId(options.binding);
   useEffect(() => {
     setCapturing(false);
-    setRefused(null);
+    setRefusal(null);
     setAttempted(null);
   }, [current]);
+
+  const refused =
+    refusal === null
+      ? null
+      : refusal.kind === "message"
+        ? refusal.message
+        : t(refusal.swap ? "keyBinding.conflictSwap" : "keyBinding.conflict", {
+            action: refusal.action,
+          });
 
   return {
     capturing,
     refused,
     attempted,
     toggle: () => {
-      setRefused(null);
+      setRefusal(null);
       setAttempted(null);
       setCapturing((prev) => !prev);
     },
@@ -283,7 +314,7 @@ function useBindingCapture<B extends KeyBinding>(options: CaptureOptions<B>) {
     // and a message left on the row reads as if it were.
     blur: () => {
       setCapturing(false);
-      setRefused(null);
+      setRefusal(null);
       setAttempted(null);
     },
   };
@@ -308,6 +339,7 @@ export function KeyBindingField({
   label,
   takenBy,
   onSwap,
+  canSwap,
   hideLabel = false,
   onRefusedChange,
 }: KeyBindingFieldProps) {
@@ -317,6 +349,7 @@ export function KeyBindingField({
     onChange,
     takenBy,
     onSwap,
+    canSwap,
     fromKey: captureBinding,
   });
 
@@ -373,7 +406,8 @@ function BindingControl({
   onBlur: () => void;
 }) {
   const refusedId = useId();
-  const combo = bindingKeycaps(binding);
+  const { t } = useTranslation();
+  const combo = bindingKeycaps(binding, undefined, t);
   const reportRef = useRef(onRefusedChange);
   reportRef.current = onRefusedChange;
   const reports = onRefusedChange !== undefined;

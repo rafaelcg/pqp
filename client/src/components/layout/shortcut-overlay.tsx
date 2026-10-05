@@ -27,7 +27,8 @@ const GROUP_LABEL: Record<(typeof SHORTCUT_GROUPS)[number]["id"], MessageKey> = 
 };
 
 function ShortcutKeys({ binding }: { binding: KeyBinding }) {
-  const { keys: parts, label } = bindingKeycaps(binding);
+  const { t } = useTranslation();
+  const { keys: parts, label } = bindingKeycaps(binding, undefined, t);
   return (
     <span
       role="img"
@@ -49,14 +50,24 @@ function ShortcutKeys({ binding }: { binding: KeyBinding }) {
 function ShortcutRow({
   label,
   binding,
+  off = false,
 }: {
   label: string;
   binding: KeyBinding;
+  /** The key does nothing right now, so it is not drawn as if it did. */
+  off?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-3 py-1.5">
       <span className="min-w-0 text-sm text-paper">{label}</span>
-      <ShortcutKeys binding={binding} />
+      {off ? (
+        <span className="rounded-full border border-ink-4 px-2.5 py-0.5 text-xs text-paper-muted">
+          {t("settings.keyboard.pttOff")}
+        </span>
+      ) : (
+        <ShortcutKeys binding={binding} />
+      )}
     </div>
   );
 }
@@ -65,6 +76,11 @@ interface ShortcutOverlayProps {
   open: boolean;
   bindings: Record<ShortcutAction, KeyBinding>;
   pushToTalkKey?: KeyBinding;
+  /**
+   * Whether the input mode is push-to-talk. On voice activity the key does
+   * nothing, so the map says "Off" instead of listing it as a shortcut.
+   */
+  pushToTalkOn?: boolean;
   onClose: () => void;
 }
 
@@ -72,54 +88,73 @@ export function ShortcutOverlay({
   open,
   bindings,
   pushToTalkKey = defaultPushToTalkBinding,
+  pushToTalkOn = true,
   onClose,
 }: ShortcutOverlayProps) {
   const { t } = useTranslation();
 
   return (
-    <Dialog
-      open={open}
-      eyebrow={t("shortcuts.overlay.eyebrow")}
-      title={t("shortcuts.overlay.title")}
-      description={t("shortcuts.overlay.description")}
-      size="lg"
-      onClose={onClose}
+    // Dismissing the map with a click on its backdrop closes it on the
+    // mousedown, and the browser then moves focus off whatever the dialog
+    // handed it back to ("Ver o mapa" in Atalhos), onto the page. Cancelling
+    // that default keeps the focus where the dialog put it. The wrapper draws
+    // nothing: the dialog is portalled, and React bubbles its events here.
+    <div
+      className="contents"
+      onMouseDown={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.hasAttribute("data-dialog-layer")
+        ) {
+          event.preventDefault();
+        }
+      }}
     >
-      <div className="grid gap-6 px-5 py-5 sm:grid-cols-2">
-        {SHORTCUT_GROUPS.map((group) => (
-          <section key={group.id}>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
-              {t(GROUP_LABEL[group.id])}
-            </h3>
-            <div className="divide-y divide-ink-4/70">
-              {group.id === "voice" && (
-                <>
-                  {group.actions.map((action) => (
+      <Dialog
+        open={open}
+        eyebrow={t("shortcuts.overlay.eyebrow")}
+        title={t("shortcuts.overlay.title")}
+        description={t("shortcuts.overlay.description")}
+        size="lg"
+        onClose={onClose}
+      >
+        <div className="grid gap-6 px-5 py-5 sm:grid-cols-2">
+          {SHORTCUT_GROUPS.map((group) => (
+            <section key={group.id}>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                {t(GROUP_LABEL[group.id])}
+              </h3>
+              <div className="divide-y divide-ink-4/70">
+                {group.id === "voice" && (
+                  <>
+                    {group.actions.map((action) => (
+                      <ShortcutRow
+                        key={action}
+                        label={t(ACTION_LABEL[action])}
+                        binding={bindings[action]}
+                      />
+                    ))}
+                    <ShortcutRow
+                      label={t(ACTION_LABEL.pushToTalk)}
+                      binding={pushToTalkKey}
+                      off={!pushToTalkOn}
+                    />
+                  </>
+                )}
+                {group.id !== "voice" &&
+                  group.actions.map((action) => (
                     <ShortcutRow
                       key={action}
                       label={t(ACTION_LABEL[action])}
                       binding={bindings[action]}
                     />
                   ))}
-                  <ShortcutRow
-                    label={t(ACTION_LABEL.pushToTalk)}
-                    binding={pushToTalkKey}
-                  />
-                </>
-              )}
-              {group.id !== "voice" &&
-                group.actions.map((action) => (
-                  <ShortcutRow
-                    key={action}
-                    label={t(ACTION_LABEL[action])}
-                    binding={bindings[action]}
-                  />
-                ))}
-            </div>
-          </section>
-        ))}
-      </div>
-    </Dialog>
+              </div>
+            </section>
+          ))}
+        </div>
+      </Dialog>
+    </div>
   );
 }
 

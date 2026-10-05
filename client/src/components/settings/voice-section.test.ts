@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MIC_TEST_MS,
+  maxSensitivityPercent,
+  sliderToVadThreshold,
   startMicLoopback,
   type MicLoopbackDeps,
   type MicLoopbackOptions,
@@ -372,7 +374,12 @@ describe("loneModifierName", () => {
     expect(loneModifierName(key("ControlLeft"))).toBe("Ctrl");
     expect(loneModifierName(key("ShiftRight"))).toBe("Shift");
     expect(loneModifierName(key("AltLeft"))).toBe("Alt");
-    expect(loneModifierName(key("MetaLeft"))).toBe("Cmd");
+    expect(loneModifierName(key("MetaLeft"), true)).toBe("Cmd");
+  });
+
+  it("calls the fourth modifier the Windows key off Apple, whatever label it was saved with", () => {
+    expect(loneModifierName(key("MetaLeft", { label: "Left Cmd" }), false)).toBe("Win");
+    expect(loneModifierName(key("MetaRight", { label: "Right Cmd" }), false)).toBe("Win");
   });
 
   it("leaves ordinary keys, F keys, mouse buttons and AltGr alone", () => {
@@ -404,5 +411,69 @@ describe("relabelStockBinding", () => {
     expect(relabelStockBinding(own, abnt2)).toBe(own);
     const chord: PttBinding = { ...defaultPttBinding(), ctrl: true };
     expect(relabelStockBinding(chord, abnt2)).toBe(chord);
+  });
+});
+
+describe("startMicLoopback live volumes", () => {
+  it("applies the input and output volume to the running loop", async () => {
+    const fake = fakeAudio();
+    const { deps: d } = deps(fake);
+    const loop = startMicLoopback(options(), d);
+    await loop.ready;
+    expect(fake.gain.gain.value).toBe(1.5);
+    expect(fake.element.volume).toBe(0.4);
+
+    loop.setInputVolume(0.5);
+    loop.setOutputVolume(0.9);
+    expect(fake.gain.gain.value).toBe(0.5);
+    expect(fake.element.volume).toBe(0.9);
+
+    // The same ceilings the call uses.
+    loop.setInputVolume(5);
+    loop.setOutputVolume(5);
+    expect(fake.gain.gain.value).toBe(2);
+    expect(fake.element.volume).toBe(1);
+  });
+
+  it("keeps a volume set before the microphone opened, and uses it", async () => {
+    const fake = fakeAudio();
+    const { deps: d } = deps(fake);
+    const loop = startMicLoopback(options(), d);
+    loop.setInputVolume(0.25);
+    loop.setOutputVolume(0.75);
+    await loop.ready;
+    expect(fake.gain.gain.value).toBe(0.25);
+    expect(fake.element.volume).toBe(0.75);
+  });
+
+  it("ignores a volume after it ended", async () => {
+    const fake = fakeAudio();
+    const { deps: d } = deps(fake);
+    const loop = startMicLoopback(options(), d);
+    await loop.ready;
+    loop.stop();
+    expect(() => loop.setInputVolume(0.1)).not.toThrow();
+    expect(() => loop.setOutputVolume(0.1)).not.toThrow();
+  });
+});
+
+describe("maxSensitivityPercent", () => {
+  it("is as far right as the bar reaches at that input volume", () => {
+    expect(maxSensitivityPercent(0.3)).toBe(54);
+    expect(maxSensitivityPercent(1)).toBe(100);
+    expect(maxSensitivityPercent(2)).toBe(100);
+    // The volume floor keeps the line from pinning to the left edge.
+    expect(maxSensitivityPercent(0)).toBe(27);
+  });
+
+  it("is the largest percent that still maps to a threshold the gate can use", () => {
+    for (const volume of [0.1, 0.3, 0.5, 0.9, 1.5]) {
+      const max = maxSensitivityPercent(volume);
+      expect(sliderToVadThreshold(max, volume)).toBeLessThanOrEqual(1);
+      // One step past it would clamp, which is the dead stretch the slider had.
+      if (max < 100) {
+        expect(sliderToVadThreshold(max + 2, volume)).toBe(1);
+      }
+    }
   });
 });
