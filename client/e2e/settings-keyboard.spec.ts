@@ -50,14 +50,20 @@ test.describe("settings keyboard tab", () => {
     await field.click();
     await expect(field).toHaveAttribute("aria-pressed", "true");
 
-    // Deafen's own chord.
+    // Deafen's own chord. Inside Settings the refusal is plain text under the
+    // row, and the dialog's announcer says it.
     await page.keyboard.press("ControlOrMeta+Shift+D");
-    const alert = page.getByRole("tabpanel").getByRole("alert");
-    await expect(alert).toContainText("already belongs to Deafen / undeafen");
+    const refusal = page
+      .getByRole("tabpanel")
+      .getByText("already belongs to Deafen / undeafen", { exact: false });
+    await expect(refusal).toBeVisible();
+    await expect(page.locator("[data-settings-announcer]")).toContainText(
+      "already belongs to Deafen / undeafen",
+    );
     await expect(field).toHaveAttribute("aria-pressed", "true");
 
     await page.keyboard.press("Escape");
-    await expect(alert).toHaveCount(0);
+    await expect(refusal).toHaveCount(0);
     await expect(field).toHaveAttribute("aria-pressed", "false");
     // The dialog is still open: Escape belonged to the field.
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -68,9 +74,9 @@ test.describe("settings keyboard tab", () => {
     const field = muteField(page);
     await field.click();
     await page.keyboard.press("Shift");
-    await expect(page.getByRole("tabpanel").getByRole("alert")).toContainText(
-      "A modifier alone does not work",
-    );
+    await expect(
+      page.getByRole("tabpanel").getByText("A modifier alone does not work", { exact: false }),
+    ).toBeVisible();
     await expect(field).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -83,7 +89,9 @@ test.describe("settings keyboard tab", () => {
       .getByRole("button", { name: "Swap with Deafen / undeafen" })
       .click();
 
-    await expect(page.getByRole("tabpanel").getByRole("alert")).toHaveCount(0);
+    await expect(
+      page.getByRole("tabpanel").getByText("already belongs to", { exact: false }),
+    ).toHaveCount(0);
     await expect(field).toHaveAttribute("aria-pressed", "false");
     await expect(field.locator("kbd").last()).toHaveText("D");
     const deafen = page.getByRole("button", { name: /^Deafen \/ undeafen:/ });
