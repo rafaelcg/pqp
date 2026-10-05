@@ -163,10 +163,14 @@ server to hold an override).
 An invite link lands a person in the server's channel. The existing arrival
 strip says "say oi in #general". When a stream is live the strip is the wrong
 instruction (same reasoning as the live party, which already suppresses it), so
-`arrivalVariant` yields to the banner: **one strip, not two**.
+`renderArrivalBanner` yields to the banner: **one strip, not two**. The campaign
+corner cards (QG, phone app, What's new, cargos, shortcuts) yield too
+(`campaignsYield`, the rule a live party already has), because the first thing
+a stranger is told must not be "join the QG".
 
-The one-time hint is a `FeatureHint` (`watchNow`) in the attached queue, first
-in `ATTACHED_FEATURE_HINT_ORDER` because it is a moment, not a state. Copy:
+The one-time hint is a `FeatureHint` (`watchNow`) in the attached queue, right
+after the call dock in `ATTACHED_FEATURE_HINT_ORDER` because it is a moment, not
+a state. Copy:
 "Tem uma transmissão ao vivo, toque em Assistir". Shown at most once ever
 (`lib/hints.ts`, key `pqp:feature-hint-watch-now-2026-10`), only to somebody
 whose arrival into this server is the open one (`arrivalServerId`) or whose
@@ -209,6 +213,9 @@ count and one bounded query per stream start and tells no one who did not ask.
 - The start must be **stable for 20 s** (`STREAM_START_STABLE_MS`). A share that
   stops inside that window notifies nobody and is counted as `debounced`.
 - At most **one notice per channel per 30 min** (`STREAM_START_CHANNEL_COOLDOWN_MS`).
+  The slot is spent by the claim, so a notice that found nobody to tell (a large
+  server where nobody opted in, everybody already in the room) still uses its 30
+  minutes: the cap is a cap on interrupting, not on trying.
 - A plain voice channel triggers on the false-to-true change of a peer's
   `sharingScreen` (a re-declare of a share already running is not a start). A
   `watch_party` channel triggers when its party goes `live`, not when somebody
