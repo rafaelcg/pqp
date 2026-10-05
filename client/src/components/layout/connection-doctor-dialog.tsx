@@ -1,6 +1,7 @@
 import { CircleCheck, CircleX, Copy, Loader2, Minus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SETTINGS_BUSY } from "@/components/settings/kit";
 import { Dialog } from "@/components/ui/dialog";
 import {
   formatReport,
@@ -60,6 +61,13 @@ export function ConnectionDoctorDialog({
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
   const [run, setRun] = useState(0);
+  // Read when a run starts, not watched. A parent that hands in a new arrow on
+  // every render used to restart the checks on each one, and a run is a few
+  // seconds of probing the network, announced from the top every time.
+  const transportRef = useRef(transport);
+  transportRef.current = transport;
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
 
   useEffect(() => {
     if (!open) {
@@ -71,8 +79,8 @@ export function ConnectionDoctorDialog({
     setLanded([]);
     setCopied(false);
     void runConnectionChecks({
-      transport,
-      getToken,
+      transport: transportRef.current,
+      getToken: () => getTokenRef.current(),
       onResult: (result) => {
         if (!cancelled) {
           setLanded((list) => [...list, result]);
@@ -87,7 +95,7 @@ export function ConnectionDoctorDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, run, transport, getToken]);
+  }, [open, run]);
 
   if (!open) {
     return null;
@@ -128,7 +136,17 @@ export function ConnectionDoctorDialog({
             <Copy className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             {copied ? t("connection.doctor.copied") : t("connection.doctor.copy")}
           </Button>
-          <Button disabled={running} onClick={() => setRun((n) => n + 1)}>
+          <Button
+            // Busy but focusable: a disabled button drops the keyboard on the
+            // page the moment it is pressed.
+            aria-disabled={running || undefined}
+            className={running ? SETTINGS_BUSY : undefined}
+            onClick={() => {
+              if (!running) {
+                setRun((n) => n + 1);
+              }
+            }}
+          >
             {running ? t("connection.doctor.running") : t("connection.doctor.run")}
           </Button>
         </>

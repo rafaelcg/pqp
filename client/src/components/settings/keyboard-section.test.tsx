@@ -191,6 +191,7 @@ describe("KeyboardSection conflicts", () => {
     mount(
       {
         shortcuts: { toggleMute: J },
+        inputMode: "push-to-talk",
         pushToTalkKey: {
           ...J,
           code: "KeyK",
@@ -210,6 +211,57 @@ describe("KeyboardSection conflicts", () => {
     ).toBe(false);
     press("Enter", "Enter");
     expect(patches).toHaveLength(0);
+  });
+
+  it("says Enter swaps and Esc cancels, and does not say Enter when the owner is push-to-talk", () => {
+    stubPointer(true);
+    mount({
+      shortcuts: { toggleMute: J },
+      inputMode: "push-to-talk",
+      pushToTalkKey: { ...J, code: "KeyK", label: "K", device: "keyboard" },
+    });
+    act(() => fieldIn("toggle-mute").click());
+    press("KeyD", "D", { ctrlKey: true, shiftKey: true });
+    const swapMessage = row("toggle-mute")!.querySelector('[role="alert"]')!.textContent;
+    expect(swapMessage).toMatch(/Press Enter to swap/);
+    expect(swapMessage).toMatch(/Esc to cancel/);
+
+    press("KeyK", "K");
+    const taken = row("toggle-mute")!.querySelector('[role="alert"]')!.textContent;
+    expect(taken).not.toMatch(/Enter/);
+    expect(taken).toMatch(/Esc to cancel/);
+  });
+
+  it("lets a shortcut take the push-to-talk key while the mode is voice activity", () => {
+    stubPointer(true);
+    const patches: Array<Partial<LocalSettings>> = [];
+    mount(
+      {
+        inputMode: "voice-activity",
+        pushToTalkKey: { ...J, code: "KeyK", label: "K", device: "keyboard" },
+      },
+      { onPatch: (partial) => patches.push(partial) },
+    );
+    act(() => fieldIn("toggle-mute").click());
+    press("KeyK", "K");
+    expect(row("toggle-mute")!.querySelector('[role="alert"]')).toBeNull();
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.shortcuts!.toggleMute?.code).toBe("KeyK");
+  });
+});
+
+describe("KeyboardSection reserved keys", () => {
+  it("refuses Tab in words that keep Escape as the way out", () => {
+    stubPointer(true);
+    mount({});
+    act(() => fieldIn("toggle-mute").click());
+    press("Tab", "Tab");
+    const message = row("toggle-mute")!.querySelector('[role="alert"]')!.textContent!;
+    expect(message).toContain("Tab");
+    // Escape is not in the list of refused keys: it is what cancels.
+    expect(message).not.toMatch(/Escape/);
+    expect(message).toMatch(/Esc to cancel/);
+    expect(fieldIn("toggle-mute").getAttribute("aria-pressed")).toBe("true");
   });
 });
 

@@ -34,7 +34,8 @@ import { parseScreenFrameRate, SCREEN_FRAME_RATES, type ScreenFrameRate } from "
 import {
   bindingTypesText,
   formatBinding,
-  isModifierCode,
+  modifierName,
+  modifierOfCode,
   supportsKeyBinding,
   type PttBinding,
 } from "@/components/voice/push-to-talk";
@@ -47,8 +48,9 @@ import { parseVadThreshold } from "@/lib/voice-audio";
 import {
   applyAudioOutputDevice,
   buildAudioConstraints,
-  ensureMediaPermission,
   listAudioDevices,
+  probeMicrophone,
+  setMicTestRunning,
   supportsAudioOutputSelection,
   type MediaDeviceOption,
   type MicProcessing,
@@ -73,6 +75,7 @@ import {
 } from "@/lib/stage-controls-pref";
 import { getSoundState, previewPttBeeps, setPttBeepEnabled, subscribeSounds, type SoundState } from "@/lib/sounds";
 import { requestConnectionCheck } from "@/lib/settings-request";
+import { isApplePlatform } from "@/lib/composer-formatting";
 import { cn } from "@/lib/utils";
 import { LocalSettings } from "@/components/settings/local-settings";
 import { bindableMap } from "@/components/settings/keyboard-section";
@@ -190,27 +193,22 @@ export function recallDeviceLabel(kind: DeviceKind, id: string): string | null {
 
 /* ------------------------------------------------------------ push-to-talk key */
 
-const MODIFIER_NAMES: Record<string, string> = {
-  ControlLeft: "Ctrl",
-  ControlRight: "Ctrl",
-  ShiftLeft: "Shift",
-  ShiftRight: "Shift",
-  AltLeft: "Alt",
-  MetaLeft: "Cmd",
-  MetaRight: "Cmd",
-};
-
 /**
  * The short name of a key that is bound on its own and is a modifier, or null.
  * Holding Ctrl for Ctrl+C holds the push-to-talk key too, so every shortcut
  * opens the microphone. Right Alt is left out: it is AltGr, and the typing
- * note already covers it.
+ * note already covers it. The fourth modifier is Cmd on Apple and the Windows
+ * key elsewhere, whichever name the binding was saved with.
  */
-export function loneModifierName(binding: PttBinding): string | null {
-  if (binding.device !== "keyboard" || !isModifierCode(binding.code)) {
+export function loneModifierName(
+  binding: PttBinding,
+  apple: boolean = isApplePlatform(),
+): string | null {
+  if (binding.device !== "keyboard" || binding.code === "AltRight") {
     return null;
   }
-  return MODIFIER_NAMES[binding.code] ?? null;
+  const modifier = modifierOfCode(binding.code);
+  return modifier ? modifierName(modifier, apple) : null;
 }
 
 /** Enough of `navigator.keyboard.getLayoutMap()` for a key name. */
@@ -315,6 +313,16 @@ export function displayMicLevel(raw: number, volume: number): number {
   );
 }
 
+/**
+ * The furthest right the sensitivity line can sit, as a percent of the bar.
+ * The threshold stops at 1, and on this scale 1 is only as far as the bar
+ * reaches at the current input volume (54% at 30%). The slider ends there, so
+ * what a screen reader is told and where the line stops agree.
+ */
+export function maxSensitivityPercent(volume: number): number {
+  return Math.round(displayMicLevel(1, volume) * 100);
+}
+
 export function sliderToVadThreshold(percent: number, volume: number): number {
   const scale =
     MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume);
@@ -379,6 +387,13 @@ export interface MicLoopback {
    * meter reads this during the test instead of opening a second capture.
    */
   analyser: () => AnalyserNode | null;
+  /**
+   * The volumes apply to the running loop. Before it is playing they are kept
+   * and used when it starts, so a slider moved during the permission prompt is
+   * not lost.
+   */
+  setInputVolume: (volume: number) => void;
+  setOutputVolume: (volume: number) => void;
 }
 
 /**
@@ -401,9 +416,13 @@ export function startMicLoopback(
   let suppressor: (AudioNode & { destroy(): void }) | null = null;
   let audio: HTMLAudioElement | null = null;
   let analyser: AnalyserNode | null = null;
+  let gainNode: GainNode | null = null;
+  let inputVolume = options.inputVolume;
+  let outputVolume = options.outputVolume;
 
   const release = () => {
     analyser = null;
+    gainNode = null;
     if (timer !== null) {
       deps.clearTimer(timer);
       timer = null;
@@ -499,7 +518,8 @@ export function startMicLoopback(
       analyser = null;
     }
     const gain = context.createGain();
-    gain.gain.value = Math.min(2, Math.max(0, options.inputVolume));
+    gain.gain.value = Math.min(2, Math.max(0, inputVolume));
+    gainNode = gain;
     const destination = context.createMediaStreamDestination();
     connectMicChain({ source, suppressor, gain });
     gain.connect(destination);
@@ -507,7 +527,7 @@ export function startMicLoopback(
     const element = deps.createAudio();
     audio = element;
     element.srcObject = destination.stream;
-    element.volume = Math.min(1, Math.max(0, options.outputVolume));
+    element.volume = Math.min(1, Math.max(0, outputVolume));
     await deps.setSink(element, options.outputDeviceId);
     if (stopped) {
       release();
@@ -522,7 +542,23 @@ export function startMicLoopback(
     throw err;
   });
 
-  return { stop, ready, analyser: () => analyser };
+  return {
+    stop,
+    ready,
+    analyser: () => analyser,
+    setInputVolume: (volume) => {
+      inputVolume = volume;
+      if (gainNode) {
+        gainNode.gain.value = Math.min(2, Math.max(0, volume));
+      }
+    },
+    setOutputVolume: (volume) => {
+      outputVolume = volume;
+      if (audio) {
+        audio.volume = Math.min(1, Math.max(0, volume));
+      }
+    },
+  };
 }
 
 /**
@@ -576,12 +612,14 @@ function useMicTest(active: boolean) {
     }
     setFailed(false);
     setPlaying(true);
+    setMicTestRunning(true);
     const loop = startMicLoopback({
       ...options,
       onEnd: () => {
         if (handle.current === loop) {
           handle.current = null;
         }
+        setMicTestRunning(false);
         clearTicker();
         setAnalyser(null);
         setPlaying(false);
@@ -607,7 +645,26 @@ function useMicTest(active: boolean) {
     );
   };
 
-  return { playing, failed, secondsLeft, analyser, start, stop };
+  // Volumes are read by the running loop. Processing and devices are not:
+  // they are chosen when the microphone opens, so a change restarts the test.
+  const setVolumes = useCallback((inputVolume: number, outputVolume: number) => {
+    handle.current?.setInputVolume(inputVolume);
+    handle.current?.setOutputVolume(outputVolume);
+  }, []);
+  const startRef = useRef(start);
+  startRef.current = start;
+  const restart = useCallback(
+    (options: Omit<MicLoopbackOptions, "onEnd">) => {
+      if (!handle.current) {
+        return;
+      }
+      stop();
+      startRef.current(options);
+    },
+    [stop],
+  );
+
+  return { playing, failed, secondsLeft, analyser, start, stop, setVolumes, restart };
 }
 
 /* --------------------------------------------------------------- meter */
@@ -760,6 +817,7 @@ function MicLevelMeter({
     threshold !== undefined
       ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
       : 0;
+  const maxPct = maxSensitivityPercent(inputVolume);
 
   return (
     <div className={cn("space-y-2", disabled && "opacity-45")}>
@@ -798,12 +856,15 @@ function MicLevelMeter({
                 <span className="h-1.5 w-0.5 rounded-sm bg-surface-card" />
               </div>
             </div>
+            {/* As wide as the part of the bar the line can reach, so the
+                pointer and the line stay on the same spot. */}
             <Slider
               variant="volume"
-              className="absolute inset-0 h-7 cursor-ew-resize opacity-0"
+              className="absolute inset-y-0 left-0 h-7 cursor-ew-resize opacity-0"
+              style={{ width: `${maxPct}%` }}
               value={thresholdPct}
               min={0}
-              max={100}
+              max={maxPct}
               step={1}
               aria-label={t("settings.voice.sensitivity")}
               aria-valuetext={t("settings.voice.sensitivityValueText", {
@@ -980,7 +1041,11 @@ function PttBeepRow({
     <SettingsSwitchRow
       id="ptt-beep"
       label={t("settings.voice.pttBeep")}
-      description={t("settings.voice.pttBeepHint")}
+      // The switch keeps its value, so the beep is back as it was when sounds
+      // are; the line says why the test button does nothing meanwhile.
+      description={t(
+        soundsOn ? "settings.voice.pttBeepHint" : "settings.voice.pttBeepSoundsOff",
+      )}
       checked={enabled}
       onCheckedChange={onEnabledChange}
       trailing={
@@ -1038,12 +1103,6 @@ function PttRows({
     isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey",
   );
   const [refusal, setRefusal] = useState<KeyBindingRefusal | null>(null);
-  // A combo another shortcut already owns. Kept here rather than in the field
-  // so the button keeps showing the key that is really bound, and the message
-  // can name the combo that was refused.
-  const [conflict, setConflict] = useState<{ combo: string; action: string } | null>(
-    null,
-  );
   const layout = useKeyboardLayout();
   // Stable between frames: the field forgets its refusal whenever the binding
   // it is handed changes identity, and the level meter re-renders Voz every
@@ -1057,25 +1116,17 @@ function PttRows({
     bindingTypesText(draftLocal.pushToTalkKey);
   const modifierName = loneModifierName(draftLocal.pushToTalkKey);
 
-  const onKeyChange = (pushToTalkKey: PttBinding) => {
-    if (pushToTalkKey.device !== "mouse") {
+  // A combo another shortcut already owns. The field says so and stays armed
+  // for another try, as the Atalhos fields do, and the button keeps showing
+  // the key that is really bound.
+  const takenBy = (binding: PttBinding) => {
+    if (binding.device === "mouse") {
       // A mouse button cannot collide with a keyboard-only app shortcut. See
       // the note on `PttBinding` in push-to-talk.ts.
-      const taken = findBindingConflict(
-        bindableMap(draftLocal),
-        "pushToTalk",
-        pushToTalkKey,
-      );
-      if (taken) {
-        setConflict({
-          combo: formatBinding(pushToTalkKey),
-          action: t(ACTION_LABEL[taken]),
-        });
-        return;
-      }
+      return null;
     }
-    setConflict(null);
-    patchLocal({ pushToTalkKey });
+    const taken = findBindingConflict(bindableMap(draftLocal), "pushToTalk", binding);
+    return taken ? t(ACTION_LABEL[taken]) : null;
   };
 
   return (
@@ -1083,39 +1134,28 @@ function PttRows({
       <SettingsRow
         id="ptt"
         label={keyLabel}
-        description={`${t(hintKey, { key: formatBinding(shownBinding) })} ${t(
+        description={`${t(hintKey, { key: formatBinding(shownBinding, t) })} ${t(
           isDesktop
             ? "settings.voice.pttRecommendDesktop"
             : "settings.voice.pttRecommend",
         )}`}
         status={
-          conflict ? (
-            <SettingsInlineStatus
-              state={{
-                kind: "error",
-                message: t("settings.voice.pttConflict", conflict),
-              }}
-            />
-          ) : refusal ? (
+          refusal ? (
             <div id={refusal.id}>
               <KeyBindingRefusalStatus message={refusal.message} />
             </div>
           ) : undefined
         }
         control={
-          <div
-            onClick={() => setConflict(null)}
-            onBlur={() => setConflict(null)}
-          >
-            <PttBindingField
-              label={keyLabel}
-              hideLabel
-              onRefusedChange={setRefusal}
-              binding={shownBinding}
-              allowMouse={isDesktop}
-              onChange={onKeyChange}
-            />
-          </div>
+          <PttBindingField
+            label={keyLabel}
+            hideLabel
+            onRefusedChange={setRefusal}
+            binding={shownBinding}
+            allowMouse={isDesktop}
+            takenBy={takenBy}
+            onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+          />
         }
       />
 
@@ -1133,7 +1173,7 @@ function PttRows({
       {typesText ? (
         <SettingsNotice tone="info" inGroup>
           {t("settings.voice.pttTypingNote", {
-            key: formatBinding(draftLocal.pushToTalkKey),
+            key: formatBinding(draftLocal.pushToTalkKey, t),
           })}
         </SettingsNotice>
       ) : null}
@@ -1424,6 +1464,9 @@ export function VoiceSection({
     ReturnType<typeof listAudioDevices>
   > | null>(null);
   const [asking, setAsking] = useState(false);
+  // Set once the lists are read; the effect that sees the select on the page
+  // takes it and moves focus there.
+  const focusInputOnceShown = useRef(false);
   useEffect(() => {
     if (devicesError === null) {
       setAllowed(null);
@@ -1437,16 +1480,14 @@ export function VoiceSection({
     }
     setAsking(true);
     try {
-      if (await ensureMediaPermission()) {
+      // A machine with no microphone is answered too: the list comes back
+      // empty and the row says so, which is the news the person asked for.
+      if ((await probeMicrophone()) !== "denied") {
         setAllowed(await listAudioDevices());
-        // The notice holding the pressed button goes away: hand the keyboard
-        // to the microphone select that took its place.
-        window.setTimeout(() => {
-          const active = document.activeElement;
-          if (!active || active === document.body) {
-            document.getElementById(inputId)?.focus();
-          }
-        }, 0);
+        // The notice holding the pressed button goes away: the effect below
+        // hands the keyboard to the select that takes its place, once it is
+        // on the page.
+        focusInputOnceShown.current = true;
       }
     } finally {
       setAsking(false);
@@ -1501,6 +1542,33 @@ export function VoiceSection({
     onRevealCameras(true),
   );
 
+  const micTestOptions = (): Omit<MicLoopbackOptions, "onEnd"> => ({
+    deviceId: inputInUse,
+    processing: draftLocal.micProcessing,
+    inputVolume: draftLocal.inputVolume,
+    outputDeviceId: canSelectOutput ? outputInUse : "",
+    outputVolume: draftLocal.outputVolume,
+  });
+  // The running test follows the volume sliders as they move. It cannot follow
+  // the sound processing, which is chosen when the microphone opens, so a
+  // change there starts the test again with the new settings.
+  const { setVolumes, restart: restartMicTest } = micTest;
+  useEffect(() => {
+    setVolumes(draftLocal.inputVolume, draftLocal.outputVolume);
+  }, [setVolumes, draftLocal.inputVolume, draftLocal.outputVolume]);
+  const { noiseSuppression, echoCancellation, autoGainControl } = draftLocal.micProcessing;
+  const processingKey = `${noiseSuppression}|${echoCancellation}|${autoGainControl}`;
+  const lastProcessingKey = useRef(processingKey);
+  const micTestOptionsRef = useRef(micTestOptions);
+  micTestOptionsRef.current = micTestOptions;
+  useEffect(() => {
+    if (lastProcessingKey.current === processingKey) {
+      return;
+    }
+    lastProcessingKey.current = processingKey;
+    restartMicTest(micTestOptionsRef.current());
+  }, [processingKey, restartMicTest]);
+
   const onBeepChange = (pttBeep: boolean) => {
     setPttBeepEnabled(pttBeep);
     patchLocal({ pttBeep });
@@ -1514,6 +1582,16 @@ export function VoiceSection({
     );
 
   const inputId = `${ids}-input`;
+  useEffect(() => {
+    if (!focusInputOnceShown.current || blocked) {
+      return;
+    }
+    focusInputOnceShown.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) {
+      document.getElementById(inputId)?.focus();
+    }
+  }, [allowed, blocked, inputId]);
   const outputId = `${ids}-output`;
   const noiseId = `${ids}-noise`;
   const cameraId = `${ids}-camera`;
@@ -1598,20 +1676,25 @@ export function VoiceSection({
                     type="button"
                     variant="secondary"
                     size="sm"
-                    className="self-start @lg:self-auto"
-                    disabled={!metering || inCall}
+                    className={cn(
+                      "self-start @lg:self-auto",
+                      inCall && SETTINGS_BUSY,
+                    )}
+                    disabled={!metering}
+                    // Busy but focusable: a call starting while this has focus
+                    // must not drop the keyboard on the page.
+                    aria-disabled={inCall || undefined}
                     data-mic-test=""
-                    onClick={() =>
-                      micTest.playing
-                        ? micTest.stop()
-                        : micTest.start({
-                            deviceId: inputInUse,
-                            processing: draftLocal.micProcessing,
-                            inputVolume: draftLocal.inputVolume,
-                            outputDeviceId: canSelectOutput ? outputInUse : "",
-                            outputVolume: draftLocal.outputVolume,
-                          })
-                    }
+                    onClick={() => {
+                      if (inCall) {
+                        return;
+                      }
+                      if (micTest.playing) {
+                        micTest.stop();
+                      } else {
+                        micTest.start(micTestOptions());
+                      }
+                    }}
                   >
                     {micTest.playing ? (
                       <Square className="h-3.5 w-3.5" aria-hidden />
@@ -1708,7 +1791,9 @@ export function VoiceSection({
               ? t(
                   blocked
                     ? "settings.voice.sensitivityBlocked"
-                    : "settings.voice.sensitivityHint",
+                    : noInputs
+                      ? "settings.voice.sensitivityNoMic"
+                      : "settings.voice.sensitivityHint",
                 )
               : undefined
           }
@@ -1726,10 +1811,13 @@ export function VoiceSection({
                   // Safari, so the meter's preview is closed meanwhile.
                   liveAnalyser={voiceAnalyser ?? micTest.analyser}
                   active={
-                    metering && !blocked && (!micTest.playing || micTest.analyser !== null)
+                    metering &&
+                    !blocked &&
+                    !noInputs &&
+                    (!micTest.playing || micTest.analyser !== null)
                   }
                   inputVolume={draftLocal.inputVolume}
-                  disabled={blocked}
+                  disabled={blocked || noInputs}
                   threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
                   onThresholdChange={
                     voiceActivity
@@ -1956,10 +2044,16 @@ export function VoiceSection({
                   type="button"
                   variant="secondary"
                   size="sm"
-                  className="self-start @lg:self-auto"
-                  disabled={!metering || inCall}
+                  className={cn("self-start @lg:self-auto", inCall && SETTINGS_BUSY)}
+                  disabled={!metering}
+                  // Same as the mic test: stays focusable when a call starts.
+                  aria-disabled={inCall || undefined}
                   data-camera-test=""
-                  onClick={cameraTest.toggle}
+                  onClick={() => {
+                    if (!inCall) {
+                      cameraTest.toggle();
+                    }
+                  }}
                 >
                   <Video className="h-3.5 w-3.5" aria-hidden />
                   {t(

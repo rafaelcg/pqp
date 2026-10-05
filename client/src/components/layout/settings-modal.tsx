@@ -14,7 +14,15 @@ import { SectionRail } from "@/components/ui/section-rail";
 import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
-import { ensureCameraPermission, ensureMediaPermission, listAudioDevices, type MediaDeviceOption } from "@/lib/audio-devices";
+import {
+  ensureCameraPermission,
+  isMicTestRunning,
+  listAudioDevices,
+  microphoneLabelsReadable,
+  probeMicrophone,
+  type MediaDeviceOption,
+} from "@/lib/audio-devices";
+import { isInCall } from "@/lib/in-call-state";
 import { intlLocale } from "@/lib/locale";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
@@ -587,6 +595,10 @@ export function SettingsModal({
     }
   }, [open]);
 
+  // Read when the list is loaded, which can be long after the effect ran.
+  const voiceAnalyserRef = useRef(voiceAnalyser);
+  voiceAnalyserRef.current = voiceAnalyser;
+
   useEffect(() => {
     if (!voiceVisible) {
       return;
@@ -598,12 +610,29 @@ export function SettingsModal({
 
     async function loadDevices() {
       setDevicesError(null);
-      const granted = await ensureMediaPermission();
-      if (!granted) {
-        if (!cancelled) {
-          setDevicesError(t("settings.voice.permissionNeeded"));
+      // The probe is a capture of the default microphone. It is only there to
+      // unlock the names in the list, so it is not made when a call or the mic
+      // test already holds the microphone (a second capture can mute the first
+      // on Safari) or when the names are readable already.
+      const holdsMicrophone =
+        isInCall() || isMicTestRunning() || voiceAnalyserRef.current !== null;
+      if (!holdsMicrophone && !(await microphoneLabelsReadable())) {
+        const probe = await probeMicrophone();
+        // No microphone is not a refusal: the list below comes back without
+        // one and Voz says so. A busy one gets a retry, which is what the
+        // permission button does.
+        if (probe === "denied" || probe === "busy") {
+          if (!cancelled) {
+            setDevicesError(
+              t(
+                probe === "busy"
+                  ? "settings.voice.micBusy"
+                  : "settings.voice.permissionNeeded",
+              ),
+            );
+          }
+          return;
         }
-        return;
       }
       const { inputs: nextInputs, outputs: nextOutputs, cameras: nextCameras } =
         await listAudioDevices();

@@ -2354,6 +2354,8 @@ function MainAppContent({
 
   const resolveTokenRef = useRef(resolveToken);
   resolveTokenRef.current = resolveToken;
+  // Stable, because the connection check restarts when its token getter changes.
+  const doctorGetToken = useCallback(() => resolveTokenRef.current(), []);
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
   /**
@@ -10484,7 +10486,7 @@ function MainAppContent({
         open={doctorOpen}
         onClose={() => setDoctorOpen(false)}
         transport={transport}
-        getToken={() => resolveTokenRef.current()}
+        getToken={doctorGetToken}
         onSignInAgain={signInAgain}
         appVersion="web"
       />
@@ -11748,6 +11750,7 @@ function MainAppContent({
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
+        pushToTalkOn={localSettings.inputMode === "push-to-talk"}
         onClose={() => setShortcutOverlayOpen(false)}
       />
 

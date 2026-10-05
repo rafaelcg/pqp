@@ -9,6 +9,7 @@ import {
 } from "@/components/settings/local-settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { setInCall } from "@/lib/in-call-state";
+import { setSoundEnabled } from "@/lib/sounds";
 
 /**
  * Voz rendered for real, for the two things a static render cannot show.
@@ -65,30 +66,45 @@ async function mount({
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => {
-    root!.render(
-      <TooltipProvider>
-        <VoiceSection
-          draftLocal={settings}
-          patchLocal={patchLocal}
-          inputs={inputs}
-          outputs={outputs}
-          cameras={cameras}
-          onRevealCameras={onRevealCameras}
-          devicesError={devicesError}
-          devicesLoaded={devicesLoaded}
-          voiceAnalyser={voiceAnalyser}
-          metering
-          showVoiceCleanBadge={false}
-        />
-      </TooltipProvider>,
-    );
-  });
+  const ui = (draft: LocalSettings) => (
+    <TooltipProvider>
+      <VoiceSection
+        draftLocal={draft}
+        patchLocal={patchLocal}
+        inputs={inputs}
+        outputs={outputs}
+        cameras={cameras}
+        onRevealCameras={onRevealCameras}
+        devicesError={devicesError}
+        devicesLoaded={devicesLoaded}
+        voiceAnalyser={voiceAnalyser}
+        metering
+        showVoiceCleanBadge={false}
+      />
+    </TooltipProvider>
+  );
+  rerender = async (draft) => {
+    await act(async () => {
+      root!.render(ui(draft));
+    });
+  };
+  await rerender(settings);
   return host;
 }
 
+/** Renders the section again with new settings, as the shell does on a patch. */
+let rerender: (settings: LocalSettings) => Promise<void>;
+
 function micTestButton(): HTMLButtonElement {
   return host!.querySelector<HTMLButtonElement>("[data-mic-test]")!;
+}
+
+/**
+ * A button that does nothing right now but keeps its place in the tab order,
+ * so a keyboard user who has it focused is not dropped onto the page.
+ */
+function isInert(button: HTMLButtonElement): boolean {
+  return button.getAttribute("aria-disabled") === "true" && !button.disabled;
 }
 
 // Radix's Slider measures its thumb; jsdom has no layout to observe.
@@ -125,7 +141,7 @@ describe("VoiceSection mic test", () => {
     setInCall(true);
     await mount({ voiceAnalyser: fakeAnalyser() });
     const button = micTestButton();
-    expect(button.disabled).toBe(true);
+    expect(isInert(button)).toBe(true);
     const row = button.closest("[data-settings-row]")!;
     expect(row.textContent).toMatch(/fora da call|outside a call|fuera de una llamada/);
   });
@@ -142,7 +158,7 @@ describe("VoiceSection mic test", () => {
   it("is disabled for a listen-only join, which has a call and no analyser", async () => {
     setInCall(true);
     await mount();
-    expect(micTestButton().disabled).toBe(true);
+    expect(isInert(micTestButton())).toBe(true);
   });
 
   it("stops a running test when a call starts", async () => {
@@ -159,7 +175,7 @@ describe("VoiceSection mic test", () => {
     await act(async () => {
       setInCall(true);
     });
-    expect(micTestButton().disabled).toBe(true);
+    expect(isInert(micTestButton())).toBe(true);
     expect(label()).toBe(idle);
     // Stopped by the call, not failed: no error status under the row.
     expect(host!.querySelector('[role="alert"]')).toBeNull();
@@ -638,7 +654,6 @@ describe("VoiceSection push-to-talk key", () => {
   it("names the refused combo, and leaves the old key on the button", async () => {
     const patch = vi.fn();
     await mount({ settings: ptt({}), patchLocal: patch });
-    const before = keyButton().textContent;
     await act(async () => {
       keyButton().click();
     });
@@ -648,14 +663,47 @@ describe("VoiceSection push-to-talk key", () => {
       );
     });
     expect(patch).not.toHaveBeenCalled();
-    expect(keyButton().textContent).toBe(before);
+    // The old key stays drawn, dimmed, beside the prompt.
+    expect(keyButton().textContent).toContain("`");
     const alert = host!.querySelector('[data-settings-row="ptt"] [role="alert"]');
-    expect(alert?.textContent).toMatch(/Alt \+ ArrowUp.*(already|já é|ya es)/);
-    // Clicking the key again starts over with no stale message.
+    expect(alert?.textContent).toMatch(/(already|já é|ya es)/);
+    // Clicking the key again disarms it with no stale message.
     await act(async () => {
       keyButton().click();
     });
+    expect(keyButton().getAttribute("aria-pressed")).toBe("false");
     expect(host!.querySelector('[data-settings-row="ptt"] [role="alert"]')).toBeNull();
+  });
+
+  it("stays armed after a conflict, as the Atalhos fields do, and binds the next free key", async () => {
+    const patch = vi.fn();
+    await mount({ settings: ptt({}), patchLocal: patch });
+    await act(async () => {
+      keyButton().click();
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { code: "ArrowUp", key: "ArrowUp", altKey: true }),
+      );
+    });
+    expect(keyButton().getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "F9", key: "F9" }));
+    });
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pushToTalkKey: expect.objectContaining({ code: "F9" }),
+      }),
+    );
+  });
+
+  it("names a lone modifier for this keyboard and language, whatever label was saved", async () => {
+    await mount({ settings: ptt({ code: "MetaLeft", label: "Left Cmd" }) });
+    // jsdom is not an Apple platform: the Windows key, not Cmd.
+    expect(keyButton().textContent).not.toContain("Cmd");
+    expect(keyButton().textContent).toMatch(/Win/);
+    expect(keyButton().textContent).toMatch(/Left Win|Win esquerdo|Win izquierdo/);
   });
 
   it("binds a free key", async () => {
@@ -712,7 +760,7 @@ describe("VoiceSection camera test", () => {
     setInCall(true);
     await mount({ voiceAnalyser: fakeAnalyser() });
     const button = host!.querySelector<HTMLButtonElement>("[data-camera-test]")!;
-    expect(button.disabled).toBe(true);
+    expect(isInert(button)).toBe(true);
     expect(
       host!.querySelector('[data-settings-row="camera"]')!.textContent,
     ).toMatch(/outside a call|fora da call|fuera de una llamada/);
@@ -762,5 +810,168 @@ describe("VoiceSection copy", () => {
     expect(says("compact-peers")).toMatch(/avatar/i);
     expect(says("music-auto-join")).toMatch(/whether to listen|se quer ouvir|si quieres escuchar/);
     expect(says("music-duck")).toMatch(/drops while|baixa enquanto|baja mientras/);
+  });
+});
+
+/* ---------------------------------------------------- QA round 3, Voz e vídeo */
+
+describe("VoiceSection allowing the microphone", () => {
+  const blockedProps = {
+    inputs: [],
+    devicesLoaded: false,
+    devicesError: "Needs the microphone to list devices.",
+  };
+
+  it("moves focus to the select as soon as it is on the page, not on a timer", async () => {
+    // Timers never fire here. The old refocus waited for a zero-delay timer
+    // that could run before React had drawn the select.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    installWorkingMedia();
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", {
+      configurable: true,
+      value: async () => [{ kind: "audioinput", deviceId: "mic-9", label: "Yeti Nano" }],
+    });
+    await mount(blockedProps);
+    const allow = host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!;
+    allow.focus();
+    await act(async () => {
+      allow.click();
+    });
+    expect(host!.querySelector("[data-allow-microphone]")).toBeNull();
+    expect(document.activeElement).toBe(
+      host!.querySelector('[data-settings-row="input-device"] select'),
+    );
+  });
+
+  it("says there is no microphone, instead of asking again, when the machine has none", async () => {
+    getUserMedia = vi.fn(async () => {
+      throw new DOMException("Requested device not found", "NotFoundError");
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices: async () => [] },
+    });
+    await mount(blockedProps);
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!.click();
+    });
+    expect(host!.querySelector("[data-allow-microphone]")).toBeNull();
+    expect(
+      host!.querySelector('[data-settings-row="input-device"]')!.textContent,
+    ).toMatch(/No microphone found|Nenhum microfone encontrado|No se encontró/);
+  });
+});
+
+describe("VoiceSection with no microphone", () => {
+  it("greys the sensitivity meter out and says to plug one in", async () => {
+    await mount({ inputs: [] });
+    expect(
+      host!.querySelector('[role="slider"][aria-label="Sensitivity"]'),
+    ).toBeNull();
+    expect(host!.querySelector("[data-sensitivity-grabber]")).toBeNull();
+    expect(
+      host!.querySelector('[data-settings-row="sensitivity"]')!.textContent,
+    ).toMatch(/Plug in a microphone|Conecte um microfone|Conecta un micrófono/);
+  });
+});
+
+describe("VoiceSection sensitivity range", () => {
+  const thumb = () =>
+    host!.querySelector('[role="slider"][aria-label="Sensitivity"]')!;
+
+  it("ends where the line can really go: 54 at 30% input volume", async () => {
+    await mount({ settings: { ...defaultLocalSettings, inputVolume: 0.3 } });
+    expect(thumb().getAttribute("aria-valuemax")).toBe("54");
+  });
+
+  it("reaches 100 once the volume is high enough to fill the bar", async () => {
+    await mount({ settings: { ...defaultLocalSettings, inputVolume: 1 } });
+    expect(thumb().getAttribute("aria-valuemax")).toBe("100");
+  });
+});
+
+describe("VoiceSection beep row", () => {
+  it("says why the test button does nothing while app sounds are off", async () => {
+    setSoundEnabled(false);
+    try {
+      await mount({
+        settings: { ...defaultLocalSettings, inputMode: "push-to-talk", pttBeep: true },
+      });
+      const row = host!.querySelector('[data-settings-row="ptt-beep"]')!;
+      expect(row.textContent).toMatch(/sounds are off|sons do app estão desligados|sonidos de la app/);
+      expect(buttonByText(/Hear the beep|Ouvir o bipe|Escuchar el pitido/)!.disabled).toBe(true);
+    } finally {
+      setSoundEnabled(true);
+    }
+  });
+});
+
+describe("VoiceSection tests when a call starts", () => {
+  it("keeps focus on the mic test button", async () => {
+    await mount();
+    micTestButton().focus();
+    await act(async () => {
+      setInCall(true);
+    });
+    expect(document.activeElement).toBe(micTestButton());
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus on the camera test button, and opens no camera", async () => {
+    await mount();
+    const button = host!.querySelector<HTMLButtonElement>("[data-camera-test]")!;
+    button.focus();
+    await act(async () => {
+      setInCall(true);
+    });
+    expect(document.activeElement).toBe(button);
+    await act(async () => {
+      button.click();
+    });
+    expect(host!.querySelector("video")).toBeNull();
+  });
+});
+
+describe("VoiceSection mic test follows the settings", () => {
+  it("opens the microphone again when the sound processing changes mid-test", async () => {
+    const { open } = installWorkingMedia();
+    await mount();
+    await act(async () => {
+      micTestButton().click();
+    });
+    // The meter's preview, then the test's own capture.
+    expect(open).toHaveBeenCalledTimes(2);
+    await rerender({
+      ...defaultLocalSettings,
+      micProcessing: { ...defaultLocalSettings.micProcessing, echoCancellation: false },
+    });
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(open.mock.calls[2]![0]).toMatchObject({
+      audio: { echoCancellation: false },
+    });
+  });
+
+  it("does not restart for a volume change, which the running loop takes live", async () => {
+    const { open } = installWorkingMedia();
+    await mount();
+    await act(async () => {
+      micTestButton().click();
+    });
+    await rerender({ ...defaultLocalSettings, inputVolume: 0.5, outputVolume: 0.2 });
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not open a capture for a processing change when nothing is playing", async () => {
+    const { open } = installWorkingMedia();
+    await mount();
+    const before = open.mock.calls.length;
+    await rerender({
+      ...defaultLocalSettings,
+      micProcessing: { ...defaultLocalSettings.micProcessing, autoGainControl: false },
+    });
+    expect(open.mock.calls.length).toBe(before);
   });
 });

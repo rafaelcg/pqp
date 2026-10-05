@@ -25,6 +25,7 @@
  */
 
 import { isApplePlatform } from "@/lib/composer-formatting";
+import type { MessageKey, MessageVars } from "@/lib/i18n";
 
 /** A physical key plus the chord that must be down with it. */
 export interface KeyBinding {
@@ -87,6 +88,71 @@ const MODIFIER_LABELS: Record<string, string> = {
 
 export function isModifierCode(code: string): boolean {
   return Object.prototype.hasOwnProperty.call(MODIFIER_LABELS, code);
+}
+
+export type Modifier = "ctrl" | "alt" | "shift" | "meta";
+
+const MODIFIER_KEYS: Record<string, { side: "left" | "right"; modifier: Modifier }> = {
+  ControlLeft: { side: "left", modifier: "ctrl" },
+  ControlRight: { side: "right", modifier: "ctrl" },
+  ShiftLeft: { side: "left", modifier: "shift" },
+  ShiftRight: { side: "right", modifier: "shift" },
+  AltLeft: { side: "left", modifier: "alt" },
+  AltRight: { side: "right", modifier: "alt" },
+  MetaLeft: { side: "left", modifier: "meta" },
+  MetaRight: { side: "right", modifier: "meta" },
+};
+
+/** Which modifier a key code is, if it is one. */
+export function modifierOfCode(code: string): Modifier | null {
+  return MODIFIER_KEYS[code]?.modifier ?? null;
+}
+
+/**
+ * What a modifier is called in a sentence. Ctrl, Alt and Shift read the same
+ * everywhere; the fourth is Cmd on Apple and the Windows key elsewhere, which
+ * is what `formatBinding` already says for a chord.
+ */
+export function modifierName(modifier: Modifier, apple: boolean): string {
+  switch (modifier) {
+    case "ctrl":
+      return "Ctrl";
+    case "alt":
+      return "Alt";
+    case "shift":
+      return "Shift";
+    case "meta":
+      return apple ? "Cmd" : "Win";
+  }
+}
+
+/** Translates `keyBinding.modifierLeft` and `keyBinding.modifierRight`. */
+export type KeyNameTranslator = (key: MessageKey, vars?: MessageVars) => string;
+
+/**
+ * The name to draw for a key. A modifier is named from its code, for this
+ * platform and in the person's language, whatever label was saved with the
+ * binding: the label is the English name the key had on the machine that
+ * bound it ("Left Cmd", even on Windows). Any other key keeps its label.
+ * Without a translator the side is spelled in English.
+ */
+export function keyDisplayLabel(
+  binding: KeyBinding,
+  translate?: KeyNameTranslator,
+  apple: boolean = isApplePlatform(),
+): string {
+  const key = MODIFIER_KEYS[binding.code];
+  if (!key) {
+    return binding.label;
+  }
+  const name = modifierName(key.modifier, apple);
+  if (!translate) {
+    return `${key.side === "left" ? "Left" : "Right"} ${name}`;
+  }
+  return translate(
+    key.side === "left" ? "keyBinding.modifierLeft" : "keyBinding.modifierRight",
+    { key: name },
+  );
 }
 
 /**
@@ -370,7 +436,10 @@ export function captureModifier(event: KeyEventLike): KeyBinding {
   };
 }
 
-export function formatBinding(binding: KeyBinding): string {
+export function formatBinding(
+  binding: KeyBinding,
+  translate?: KeyNameTranslator,
+): string {
   const parts: string[] = [];
   if (binding.ctrl) parts.push("Ctrl");
   if (binding.alt) parts.push("Alt");
@@ -378,7 +447,7 @@ export function formatBinding(binding: KeyBinding): string {
   // The keycaps say Win off Apple; the sentences that quote a binding must
   // name the same key.
   if (binding.meta) parts.push(isApplePlatform() ? "Cmd" : "Win");
-  parts.push(binding.label);
+  parts.push(keyDisplayLabel(binding, translate));
   return parts.join(" + ");
 }
 
