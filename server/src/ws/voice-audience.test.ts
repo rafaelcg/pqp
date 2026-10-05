@@ -606,6 +606,33 @@ describe("when the media server does not cooperate", () => {
     });
   });
 
+  it("a restore that fails on the way OFF is retried by the sweep until it lands", async () => {
+    const { member } = await room("host", "member");
+    await setVoiceAudienceMode(ROOM, true, "host");
+    sfu.failUpdateFor.add(member!.peerId);
+    const off = await setVoiceAudienceMode(ROOM, false, "host");
+    expect(off.enforcement.pendingUserIds).toEqual(["member"]);
+    // The room, the roster and the client all say they may talk; the SFU
+    // still says no. Nothing has a row to find any more.
+    expect(tryToSpeak(member!)).toBe(false);
+    sfu.failUpdateFor.clear();
+    await sweepAudienceModes();
+    expect(tryToSpeak(member!)).toBe(true);
+    // Clean now: the next sweep asks nothing.
+    const before = sfu.calls.list;
+    await sweepAudienceModes();
+    expect(sfu.calls.list).toBe(before);
+  });
+
+  it("an invitation is refused once the operator's flag is off, even before the sweep", async () => {
+    await room("host", "member");
+    await setVoiceAudienceMode(ROOM, true, "host");
+    process.env.AUDIENCE_MODE = "false";
+    await expect(setVoiceAudienceSpeaker(ROOM, "member", true, "host")).rejects.toMatchObject({
+      code: "off",
+    });
+  });
+
   it("says the media server is unreachable when it cannot list the room", async () => {
     await room("host", "member");
     sfu.failList = true;

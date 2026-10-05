@@ -127,6 +127,15 @@ cannot strand a room:
   wrong, so a repeat is cheap. A pass that succeeds clears the warning for
   everybody. `voice.audienceMode.enforceFailed` logs which box and why;
   `voice.audienceMode.enforceFailures` counts it.
+- **The OFF direction has a backstop too.** Turning it off leaves no row for
+  the sweep to find, so a restore the SFU refused is remembered per room
+  (`audienceRestorePending`) and retried on every sweep until a pass comes back
+  clean (given up, and logged as `voice.audienceMode.restoreAbandoned`, after
+  10 minutes). Without it, a box blip during the off would leave people
+  revoked at the SFU while everything else says they may talk.
+- **A slow pass cannot overwrite a newer change.** Every change bumps a
+  per-room generation; a pass that started before it stops rewriting anybody
+  it resolves afterwards, and the newer change's own passes do the work.
 - **Honest receivers silence anyone whose roster says they cannot speak**, on
   both transports, so an SFU update that has not landed yet is still not heard
   by any client on this bundle.

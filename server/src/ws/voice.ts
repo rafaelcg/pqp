@@ -10567,6 +10567,18 @@ const audienceLastSent = new Map<string, string>();
  */
 const audienceGenerations = new Map<string, number>();
 
+/**
+ * Rooms whose audience mode went OFF and whose SFU restore is not yet known
+ * good, with when to give up (ms). The ON direction has its own backstop
+ * (the sweep walks every room whose row is on); the OFF direction has no row
+ * left to find, so without this a box that failed every restore pass would
+ * leave people revoked at the SFU while the room, the roster and their own
+ * client all say they may talk. The sweep runs a pass for each until one
+ * comes back clean.
+ */
+const audienceRestorePending = new Map<string, number>();
+const AUDIENCE_RESTORE_GIVE_UP_MS = 10 * 60_000;
+
 function bumpAudienceGeneration(channelId: string): void {
   audienceGenerations.set(channelId, (audienceGenerations.get(channelId) ?? 0) + 1);
 }
@@ -10729,6 +10741,17 @@ async function runAudiencePass(
       failed: result.failedUserIds.length,
       unreachable: result.unreachable,
     });
+  }
+  if (!audience) {
+    if (result.failedUserIds.length > 0 || result.unreachable) {
+      if (!audienceRestorePending.has(channelId)) {
+        audienceRestorePending.set(channelId, Date.now() + AUDIENCE_RESTORE_GIVE_UP_MS);
+      }
+    } else if (!result.skipped) {
+      audienceRestorePending.delete(channelId);
+    }
+  } else {
+    audienceRestorePending.delete(channelId);
   }
   if (audience) {
     const before = [...audience.unenforced].sort().join(",");
@@ -10894,6 +10917,11 @@ export async function setVoiceAudienceSpeaker(
   actorId: string,
 ): Promise<AudienceModeResult> {
   const channel = await getChannel(channelId);
+  // The rows outlive the flag by up to one sweep; an invitation must not act
+  // on a session the operator has already switched off.
+  if (!audienceModeApplies(channel) || !audienceModeEnabledFor(channel?.server_id)) {
+    throw new AudienceModeError("off", "Audience mode is not on in this call");
+  }
   let changed: boolean;
   let state: AudienceRoom | null;
   if (registryOn()) {
@@ -11102,6 +11130,7 @@ async function noteAudienceDeparture(
  * cache entry is dropped here, since nothing on this machine would refresh it.
  */
 export async function sweepAudienceModes(): Promise<void> {
+  await retryAudienceRestores();
   if (!audienceModeMayBeOnAnywhere() && cachedAudienceRooms().length === 0) {
     return;
   }
@@ -11176,6 +11205,36 @@ export async function sweepAudienceModes(): Promise<void> {
   }
 }
 
+/**
+ * The OFF direction's backstop: rooms whose restore at the SFU has not come
+ * back clean yet get another pass. A room whose row is ON again is left to
+ * the main sweep; one past its deadline is logged and dropped.
+ */
+async function retryAudienceRestores(): Promise<void> {
+  const now = Date.now();
+  for (const [channelId, giveUpAt] of [...audienceRestorePending]) {
+    if (now > giveUpAt) {
+      audienceRestorePending.delete(channelId);
+      logEvent("voice.audienceMode.restoreAbandoned", { channelId });
+      continue;
+    }
+    try {
+      const channel = await getChannel(channelId);
+      if (await loadAudience(channel, channelId)) {
+        audienceRestorePending.delete(channelId);
+        continue;
+      }
+      if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
+        await runAudiencePass(channelId, channel, false);
+      } else {
+        audienceRestorePending.delete(channelId);
+      }
+    } catch (error) {
+      console.error("[voice] audience restore retry failed:", error);
+    }
+  }
+}
+
 /** Test hook: forget every audience timer and what was last sent. */
 export function resetAudienceTimersForTests(): void {
   for (const timers of audienceFollowUps.values()) {
@@ -11190,6 +11249,7 @@ export function resetAudienceTimersForTests(): void {
   audienceHostChecks.clear();
   audienceLastSent.clear();
   audienceGenerations.clear();
+  audienceRestorePending.clear();
 }
 
 // --- end audience mode -------------------------------------------------------
