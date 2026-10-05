@@ -144,7 +144,7 @@ as "blocked or cancelled" rather than as a failure.
 | Windows 11 (NT build ≥ 22000) | The machine's own output, minus pqp's | `{ video: source, audio: "loopback" }` when the page asked for audio **and** the picker's box was ticked. Electron 43.4+ remaps that to `loopbackWithoutChrome` when the page sent `restrictOwnAudio: true`. `os.release()` is still `10.0.22631` on Windows 11; parse the build, never `major === 11` |
 | Windows 10 | Video only | Chromium cannot exclude this app from the mixer. The handler returns no loopback, the picker hides the audio box, and the page asks for no audio |
 | macOS | Video only | Chromium's loopback device is WASAPI and exists nowhere else. The client asks for no audio track at all, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa") |
-| Linux | Video only | Same reason; best effort, and Wayland may hand back one pre-picked surface |
+| Linux | Video only, or with `linux_desktop_system_audio` on (0.2.3+) the computer's sound minus pqp's | Chromium's loopback carries the call on Linux, so the shell builds its own bus (`electron/lib/linux-share-audio.js`); see "Linux share audio: what is captured and what is not" below. Wayland may hand back one pre-picked surface |
 
 `loopbackWithMute` is deliberately never used. It taps the same output and
 silences the machine while it does, so the presenter stops hearing both the call
@@ -183,6 +183,114 @@ rollback if that grant turns out to be the bigger problem.
 and the watch party lowers the capture's height with `applyConstraints` while it
 runs. A capture that refuses a constraint keeps running unchanged; nothing in
 that path stops a track.
+
+### Linux share audio: what is captured and what is not
+
+Behind `linux_desktop_system_audio` (global, default off) and a shell that
+publishes `capabilities.linuxShareAudio`. The page arms the shell right before a
+share the person said yes to sound for; nothing runs, and no process is spawned,
+without both. The capture is a remap source, `pqp-share-audio`, over the monitor
+of a null sink, `pqp_share_audio` (the "bus"). pqp's own streams (the call, its
+sounds, a film it plays) never reach the bus: that is the whole point.
+
+**How the bus is fed, since 0.2.4.** The first report from real hardware (a
+CachyOS desktop, PipeWire with pipewire-pulse) said browsers and one game reached
+viewers while Spotify from Flathub and Helldivers 2 did not. Up to 0.2.3 the
+shell MOVED each app's stream into the bus (`pactl move-sink-input`) and looped
+the bus back to the speakers. Reproduced in a container on PipeWire 1.4.2 /
+WirePlumber 0.5.8 and on PulseAudio 17, two kinds of stream cannot be moved:
+
+| Stream | What `pactl` shows | Moved (0.2.3) | Why |
+|---|---|---|---|
+| Opened with `PA_STREAM_DONT_MOVE` | a sink input with `node.dont-reconnect = "true"` | No: `Failure: Invalid argument`, retried silently every 2 s | Wine's winepulse sets that flag whenever a game opens a NAMED endpoint instead of the default one (`pulse_stream_connect` in `dlls/winepulse.drv/pulse.c`), so this is the Proton game case |
+| Native PipeWire (Spotify since 1.2.86, `pw-play`, SDL3, GStreamer) | a sink input with NO `application.process.id` (it lives on the client object) | No: skipped, because a stream with no process cannot be proven not to be the call | Spotify community threads and PCPanel issue #92 (June 2026): from 1.2.86 the Linux client opens a native stream named `audio-src` with an `aux0,aux1` map, and the Flathub build's sink input carries only `media.name` and `pipewire.access.portal.app_id` |
+
+Moving also wrote `"target": "pqp_share_audio"` into WirePlumber's
+`~/.local/state/wireplumber/stream-properties` for every app it moved, for good.
+
+So on PipeWire, when `pw-dump` and `pw-link` are on PATH (they normally come with
+PipeWire itself; Debian and Ubuntu put them in `pipewire-bin`), the
+shell LINKS instead: every playback stream that is not pqp's and is playing to
+the default output gets a second link from its output ports to the bus. The link
+to the speakers is untouched, so the person hears exactly what they heard before,
+nothing is remembered, and there is no loopback and none of its latency.
+WirePlumber leaves links it did not make alone, across a default-device switch
+too, and unloading the bus takes every link into it along. PulseAudio, and
+PipeWire without those two tools, keep the move path, which now traces a native
+stream to its client's process, asks a refused stream once instead of every two
+seconds, and says why in the report.
+
+**Which streams are pqp's.** Process ids only: the stream's own
+`application.process.id`, its client's, and its client's `pipewire.sec.pid` (the
+socket peer as the kernel reports it, which a Flatpak cannot choose; inside its
+sandbox Spotify calls itself pid 2), plus the shell's own executable name. Any
+one in pqp's process list makes the stream pqp's. Names are never used, so an
+app called "pqp" or another Electron app is shared like anything else. A stream
+with no process id at all is never shared.
+
+**What is never shared, on purpose:** pqp's streams; streams playing to another
+device than the default output (an app sent to a headset); the sound server's own
+streams (loopbacks, filter chains, `node.link-group`); and the output of an app
+that relays other sound (it owns a sink, like EasyEffects, or records a sink's
+monitor), because that sound can contain the call. Known limit: two separate
+processes that record the speakers and play them back (`parec | pacat`) look
+like an ordinary player and would be shared, call included; the person would
+hear their own feedback loop first.
+
+**The report.** While a share runs and when it ends, the shell writes
+`~/.config/pqp/logs/linux-share-audio.json` (Electron's `app.getPath("logs")`):
+the mode (`link` or `move`), the output, and one row per playback stream with
+its app name, binary, process ids, Flatpak id, whether it is pqp's, and the
+outcome (`linked`, `moved`, `refused` with the sound server's words,
+`pqp-kept-out`, `other-output`, `skipped-relay`, ...). Inside the desktop app,
+`share-diagnostic.html` shows the same report with a copy button
+(`pqpDesktop.linuxShareAudioDiagnostics()`).
+
+**Manual test matrix.** Flag on, share a screen with "share this computer's
+audio" ticked, and from a second account listen to the share. "Bad" for every
+row: the app is heard locally but not by the viewer, or the viewer hears the
+call (a voice from the call coming back with a delay).
+
+| Server | App | Expect (0.2.4) | Report row |
+|---|---|---|---|
+| PipeWire + pw tools | A browser tab with a video | Heard | `linked` |
+| PipeWire + pw tools | Spotify from Flathub (`com.spotify.Client`) | Heard | `linked`, `flatpak: com.spotify.Client`, app `audio-src` |
+| PipeWire + pw tools | A Proton game that picks its device by name (DONT_MOVE) | Heard | `linked`, `pinned: true` |
+| PipeWire + pw tools | Another Proton/Wine game on the default device | Heard | `linked` |
+| PipeWire + pw tools | A native PipeWire player (`pw-play file.wav`, an SDL3 game) | Heard | `linked` |
+| PipeWire + pw tools | The call itself, a second pqp stream (soundboard, a film in pqp) | NOT heard | `pqp-kept-out` |
+| PipeWire + pw tools | An app sent to a second device in pavucontrol | NOT heard (by design) | `other-output` |
+| PipeWire, no pw tools | Same rows | Browser and native players heard; DONT_MOVE games not | `moved` / `refused (Failure: Invalid argument)` |
+| PulseAudio | Browser, a Wine game on the default device | Heard | `moved` |
+| PulseAudio | A DONT_MOVE game | NOT heard (cannot be moved; nothing else isolates one stream on PulseAudio) | `refused` |
+| Any | Ending the share | Every app still on the speakers, `pactl list short modules` shows no `pqp_share`, `pw-link -l` shows nothing into `pqp_share_audio` | report `endedReason` |
+
+Commands to confirm a report from a user (run while the apps play and the
+share is live):
+
+```bash
+cat ~/.config/pqp/logs/linux-share-audio.json
+pactl list sink-inputs | grep -E 'Sink Input|Sink:|application.name|application.process.id|media.name|node.dont-reconnect|portal.app_id'
+pw-link -l | grep -B1 -A3 pqp_share_audio
+```
+
+Reproduced with a container rig (Debian trixie, PipeWire 1.4.2 / WirePlumber
+0.5.8, and PulseAudio 17): a libpulse tone generator with and without
+`PA_STREAM_DONT_MOVE`, `pw-play` with and without `node.dont-reconnect`, a
+`pw-play` inside `bwrap` with a `/.flatpak-info` (what PipeWire reads to decide a
+client is a Flatpak) and an `AUX0,AUX1` map, and pqp's own stream, each on its
+own frequency, measured on the capture with a Goertzel filter. Before: only the
+plain app reached the capture. After: every stream but pqp's, with pqp's at
+-119 dB or lower, through a hand-made link into the bus, a hand-made move into
+it, the bus made the default, a relay, a late stream and a device switch. Then
+end to end in real Electron 44 on PipeWire 1.0.5 / WirePlumber 0.4.17 (the
+September rig): a pinned native stream captured at -24 dB, the call and a second
+pqp stream at -136 dB or lower across a new app and a device switch. Making the
+bus the default output by hand still lets the call through for about 200 ms
+until the watcher puts the default back and moves the call out, the same known
+gap as 0.2.3; destroying the session manager's link instead of moving the
+stream made that gap last seconds on WirePlumber 0.4, which is why a ROUTED
+stream is moved and only an extra link is cut.
 
 ### A share next to a game at a very high frame rate (`share_high_motion_guard`)
 

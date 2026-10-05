@@ -351,6 +351,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return ipcRenderer.invoke("pqp:linux-share-audio-claim");
   },
 
+  /**
+   * What the live (or last) Linux share did with every playback stream it
+   * saw: app name, binary, process ids, whether it is pqp's, and the outcome
+   * (linked, moved, refused with the sound server's words, kept out). Null off
+   * Linux and before any share. Reads nothing from the sound server.
+   */
+  linuxShareAudioDiagnostics() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-diagnostics");
+  },
+
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {
     if (typeof callback !== "function") {

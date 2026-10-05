@@ -253,6 +253,22 @@
         <canvas id="pattern" width="960" height="240"></canvas>
       </div>
 
+      <div class="panel" id="linux-audio" hidden>
+        <b>Linux desktop app: the computer's sound</b>
+        <p class="muted">
+          Share with "share this computer's audio" ticked, play the apps you want heard, then press
+          <b>Load sound report</b>. Each row is an app that was playing and what pqp did with it:
+          <b>linked</b> or <b>moved</b> means viewers hear it, <b>pqp</b> rows are the call (kept out on purpose),
+          anything else says why it was not shared. The same report is saved in
+          <code>~/.config/pqp/logs/linux-share-audio.json</code>.
+        </p>
+        <div class="row">
+          <button id="linux-audio-load">Load sound report</button>
+          <button id="linux-audio-copy" disabled>Copy sound report</button>
+        </div>
+        <pre id="linux-audio-out" class="muted" style="white-space: pre-wrap; margin-top: 8px"></pre>
+      </div>
+
       <div class="panel" id="verdict">
         <span class="tag warn">Not run yet</span>
         <span class="muted">Press Start.</span>
@@ -1062,8 +1078,81 @@
           endedBySourceMs: run.endedBySourceMs ?? null,
           verdict: run.verdict || null,
           summary: run.summary || null,
+          linuxShareAudio: linuxAudioReport,
           rows,
         };
+      }
+
+      // The Linux desktop app's sound report (electron/lib/linux-share-audio.js):
+      // what the last share did with every app that was playing. Only inside a
+      // desktop build that has it; reads memory in the shell, nothing else.
+      let linuxAudioReport = null;
+      const linuxAudioWords = {
+        linked: "shared (linked)",
+        moved: "shared (moved)",
+        refused: "NOT shared: the app pinned its sound to one device",
+        "move-failed": "NOT shared yet: the move failed",
+        "link-failed": "NOT shared: the link failed",
+        pending: "not shared yet",
+        "pqp-kept-out": "pqp (the call): kept out",
+        "pqp-pulled-out": "pqp (the call): pulled back out",
+        "moved-back": "was routed into the share bus, sent back to the speakers",
+        "other-output": "NOT shared: plays to another device",
+        "not-playing": "not playing",
+        "skipped-module": "NOT shared: part of the sound server",
+        "skipped-relay": "NOT shared: relays other sound (could carry the call)",
+        "skipped-no-process": "NOT shared: no process behind it",
+      };
+      function linuxAudioText(r) {
+        // No session yet: null, or only the sound server probe the app ran
+        // before offering the sound.
+        if (!r || !Array.isArray(r.streams)) {
+          const p = r && r.probe;
+          return (
+            "No share with sound since the app started." +
+            (p ? ` Sound server: ${p.server || "none found"}${p.mode ? `, would ${p.mode === "link" ? "link" : "move"} apps` : ""}.` : "")
+          );
+        }
+        const head =
+          `mode: ${r.mode || "?"} on ${r.server || (r.probe && r.probe.server) || "?"}, output ${r.output || "?"}` +
+          (r.active ? ", sharing now" : `, ended (${r.endedReason || "?"})`) +
+          (r.lastReadAt ? "" : ", the capture was never read");
+        const lines = (r.streams || []).map(
+          (s) =>
+            `${s.own ? "*" : " "} ${s.app}${s.binary ? ` [${s.binary}]` : ""}${s.flatpak ? ` {${s.flatpak}}` : ""}${s.pinned ? " (pinned)" : ""}: ` +
+            `${linuxAudioWords[s.outcome] || s.outcome}${s.detail ? ` (${s.detail})` : ""}`,
+        );
+        return [head, ...lines].join("\n");
+      }
+      // Only in a Linux desktop build: every shell exposes the function, and
+      // only the Linux one can ever answer anything but null.
+      if (
+        window.pqpDesktop &&
+        typeof window.pqpDesktop.linuxShareAudioDiagnostics === "function" &&
+        window.pqpDesktop.capabilities &&
+        window.pqpDesktop.capabilities.linuxShareAudio === true
+      ) {
+        $("linux-audio").hidden = false;
+        $("linux-audio-load").addEventListener("click", async () => {
+          try {
+            linuxAudioReport = await window.pqpDesktop.linuxShareAudioDiagnostics();
+          } catch (err) {
+            linuxAudioReport = { error: String((err && err.message) || err) };
+          }
+          $("linux-audio-out").textContent = linuxAudioReport && linuxAudioReport.error ? linuxAudioReport.error : linuxAudioText(linuxAudioReport);
+          $("linux-audio-copy").disabled = false;
+        });
+        $("linux-audio-copy").addEventListener("click", async () => {
+          const text = JSON.stringify(linuxAudioReport, null, 1);
+          try {
+            await navigator.clipboard.writeText(text);
+            $("linux-audio-copy").textContent = "Copied";
+          } catch {
+            const w = window.open("", "_blank");
+            if (w) w.document.body.textContent = text;
+          }
+          setTimeout(() => ($("linux-audio-copy").textContent = "Copy sound report"), 2000);
+        });
       }
 
       $("start").addEventListener("click", start);

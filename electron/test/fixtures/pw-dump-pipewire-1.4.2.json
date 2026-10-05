@@ -1,0 +1,490 @@
+[
+ {
+  "id": 39,
+  "type": "PipeWire:Interface:Metadata",
+  "props": {
+   "metadata.name": "default"
+  },
+  "metadata": [
+   {
+    "subject": 0,
+    "key": "default.audio.sink",
+    "type": "Spa:String:JSON",
+    "value": {
+     "name": "hw"
+    }
+   }
+  ]
+ },
+ {
+  "id": 47,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "pipewire",
+    "application.process.binary": "pipewire",
+    "application.process.id": 22,
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 48,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "client.id": 47,
+    "media.class": "Audio/Sink",
+    "node.name": "hw",
+    "object.serial": 49,
+    "pulse.module.id": 536870916
+   }
+  }
+ },
+ {
+  "id": 46,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 48,
+    "port.name": "playback_FL"
+   }
+  }
+ },
+ {
+  "id": 45,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 48,
+    "port.name": "playback_FR"
+   }
+  }
+ },
+ {
+  "id": 42,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "pipewire",
+    "application.process.binary": "pipewire",
+    "application.process.id": 22,
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 49,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "client.id": 42,
+    "media.class": "Audio/Sink",
+    "node.name": "pqp_share_audio",
+    "object.serial": 59,
+    "pulse.module.id": 536870917
+   }
+  }
+ },
+ {
+  "id": 44,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 49,
+    "port.name": "playback_FL"
+   }
+  }
+ },
+ {
+  "id": 51,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 49,
+    "port.name": "playback_FR"
+   }
+  }
+ },
+ {
+  "id": 54,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "pipewire",
+    "application.process.binary": "pipewire",
+    "application.process.id": 22,
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 55,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "client.id": 54,
+    "media.class": "Audio/Source",
+    "media.name": "pqp-share-audio output",
+    "node.link-group": "loopback-22-12",
+    "node.name": "pqp_share_audio_capture",
+    "object.serial": 66,
+    "pulse.module.id": 536870918
+   }
+  }
+ },
+ {
+  "id": 53,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 55,
+    "port.name": "capture_FL"
+   }
+  }
+ },
+ {
+  "id": 57,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 55,
+    "port.name": "capture_FR"
+   }
+  }
+ },
+ {
+  "id": 64,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "plain-app",
+    "application.process.binary": "tone",
+    "application.process.id": 47,
+    "client.api": "pipewire-pulse",
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 65,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "dontmove-game",
+    "application.process.binary": "tone",
+    "application.process.id": 48,
+    "client.api": "pipewire-pulse",
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 71,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.language": "C",
+    "application.name": "plain-app",
+    "application.process.binary": "tone",
+    "application.process.id": 47,
+    "client.id": 64,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "plain-app",
+    "node.name": "plain-app",
+    "object.serial": 83
+   }
+  }
+ },
+ {
+  "id": 72,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.language": "C",
+    "application.name": "dontmove-game",
+    "application.process.binary": "tone",
+    "application.process.id": 48,
+    "client.id": 65,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "dontmove-game",
+    "node.dont-reconnect": true,
+    "node.name": "dontmove-game",
+    "object.serial": 84
+   }
+  }
+ },
+ {
+  "id": 74,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "pw-cat",
+    "application.process.binary": "pw-cat",
+    "application.process.id": 2,
+    "pipewire.access": "flatpak",
+    "pipewire.access.effective": "flatpak",
+    "pipewire.access.portal.app_id": "com.spotify.Client",
+    "pipewire.sec.pid": 55
+   }
+  }
+ },
+ {
+  "id": 77,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.name": "pw-play",
+    "client.id": 74,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "audio-src",
+    "node.name": "audio-src",
+    "object.serial": 89
+   }
+  }
+ },
+ {
+  "id": 80,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "AUX0",
+    "node.id": 77,
+    "port.name": "output_AUX0"
+   }
+  }
+ },
+ {
+  "id": 81,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "AUX1",
+    "node.id": 77,
+    "port.name": "output_AUX1"
+   }
+  }
+ },
+ {
+  "id": 86,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 71,
+    "port.name": "output_FL"
+   }
+  }
+ },
+ {
+  "id": 87,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 71,
+    "port.name": "output_FR"
+   }
+  }
+ },
+ {
+  "id": 88,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 71,
+   "output-port-id": 86,
+   "input-node-id": 48,
+   "input-port-id": 46
+  }
+ },
+ {
+  "id": 89,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 71,
+   "output-port-id": 87,
+   "input-node-id": 48,
+   "input-port-id": 45
+  }
+ },
+ {
+  "id": 90,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 72,
+    "port.name": "output_FL"
+   }
+  }
+ },
+ {
+  "id": 91,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "output",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 72,
+    "port.name": "output_FR"
+   }
+  }
+ },
+ {
+  "id": 92,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 72,
+   "output-port-id": 90,
+   "input-node-id": 48,
+   "input-port-id": 46
+  }
+ },
+ {
+  "id": 93,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 72,
+   "output-port-id": 91,
+   "input-node-id": 48,
+   "input-port-id": 45
+  }
+ },
+ {
+  "id": 98,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 77,
+   "output-port-id": 80,
+   "input-node-id": 48,
+   "input-port-id": 46
+  }
+ },
+ {
+  "id": 99,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 77,
+   "output-port-id": 81,
+   "input-node-id": 48,
+   "input-port-id": 45
+  }
+ },
+ {
+  "id": 100,
+  "type": "PipeWire:Interface:Client",
+  "info": {
+   "props": {
+    "application.name": "parec",
+    "application.process.binary": "pacat",
+    "application.process.id": 57,
+    "client.api": "pipewire-pulse",
+    "pipewire.access": "unrestricted",
+    "pipewire.sec.pid": 22
+   }
+  }
+ },
+ {
+  "id": 101,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.language": "C",
+    "application.name": "parec",
+    "application.process.binary": "pacat",
+    "application.process.id": 57,
+    "client.id": 100,
+    "media.class": "Stream/Input/Audio",
+    "media.name": "parec",
+    "node.name": "parec",
+    "object.serial": 113
+   }
+  }
+ },
+ {
+  "id": 102,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FL",
+    "node.id": 101,
+    "port.name": "input_FL"
+   }
+  }
+ },
+ {
+  "id": 104,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "direction": "input",
+   "props": {
+    "audio.channel": "FR",
+    "node.id": 101,
+    "port.name": "input_FR"
+   }
+  }
+ },
+ {
+  "id": 106,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 55,
+   "output-port-id": 53,
+   "input-node-id": 101,
+   "input-port-id": 102
+  }
+ },
+ {
+  "id": 107,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 55,
+   "output-port-id": 57,
+   "input-node-id": 101,
+   "input-port-id": 104
+  }
+ },
+ {
+  "id": 109,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 71,
+   "output-port-id": 86,
+   "input-node-id": 49,
+   "input-port-id": 44
+  }
+ },
+ {
+  "id": 110,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "output-node-id": 77,
+   "output-port-id": 80,
+   "input-node-id": 49,
+   "input-port-id": 44
+  }
+ }
+]

@@ -183,7 +183,12 @@ Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 sound on a screen share from the Linux desktop app, served to the client by
 `GET /api/share/config` as `linuxDesktopSystemAudio`. It only does anything in a
 desktop build whose preload publishes `capabilities.linuxShareAudio`; see
-`electron/lib/linux-share-audio.js`. Global on purpose: the client asks the
+`electron/lib/linux-share-audio.js`. From desktop 0.2.4 the shell feeds the bus
+by LINKING each app's stream on PipeWire (pinned Proton games and native
+PipeWire apps such as Flathub Spotify included, which 0.2.3 could not move) and
+writes what it did per stream to `~/.config/pqp/logs/linux-share-audio.json`;
+`docs/DESKTOP.md` §"Linux share audio: what is captured and what is not".
+Global on purpose: the client asks the
 config without a server and keeps one answer per page, so a per-server override
 would be accepted and never read; the registry refuses one. Turn it on from
 controles → interruptores; the page asks again before every share, so there is
