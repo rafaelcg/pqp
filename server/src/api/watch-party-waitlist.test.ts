@@ -345,6 +345,26 @@ describeDb("the watch party waitlist", () => {
       expect(state.body).toMatchObject({ campaign: false });
     });
 
+    it("keeps the streamers page's marker, and an edit without one does not erase it", async () => {
+      const first = await join(owner, {
+        serverId,
+        audienceBucket: "150-500",
+        streamChannel: "twitch.tv/sodtz",
+        source: "streamers",
+      });
+      expect(first.status).toBe(200);
+      const edited = await join(owner, { serverId, audienceBucket: "500-plus" });
+      expect(edited.status).toBe(200);
+      const serverless = await join(stranger, { serverId: null, source: "streamers" });
+      expect(serverless.status).toBe(200);
+      const rows = await getPool().query<{ user_id: string; source: string | null }>(
+        `SELECT user_id, source FROM watch_party_waitlist ORDER BY created_at`,
+      );
+      expect(rows.rows.map((row) => row.source)).toEqual(["streamers", "streamers"]);
+      // A name the list does not have is refused, not stored.
+      expect((await join(admin, { serverId, audienceBucket: "under-20", source: "ads" })).status).toBe(400);
+    });
+
     it("rate limits a script", async () => {
       const statuses: number[] = [];
       for (let i = 0; i < 7; i += 1) {
@@ -395,6 +415,41 @@ describeDb("the watch party waitlist", () => {
       });
       // Interest is a count: the member's name is not on the page.
       expect(JSON.stringify(list.body)).not.toContain("Bia");
+    });
+
+    it("tags a streamer's request and names the serverless ones the streamers page sent", async () => {
+      await join(owner, {
+        serverId,
+        audienceBucket: "150-500",
+        streamChannel: "twitch.tv/sodtz",
+        source: "streamers",
+      });
+      await join(admin, { serverId, audienceBucket: "20-50" });
+      await join(stranger, {
+        serverId: null,
+        audienceBucket: "50-150",
+        streamChannel: "kick.com/zeh",
+        source: "streamers",
+      });
+      await join(member, { serverId: null });
+
+      const list = await call<{
+        servers: { requests: { username: string; source: string | null }[] }[];
+        serverless: number;
+        serverlessCampaign: Record<string, unknown>[];
+      }>("machine", "GET", "/api/admin/watch-party-waitlist");
+      expect(list.status).toBe(200);
+      const sources = list.body.servers[0]!.requests.map((request) => request.source).sort();
+      expect(sources).toEqual([null, "streamers"].sort());
+      // Two people with no server; only the one the page sent is named.
+      expect(list.body.serverless).toBe(2);
+      expect(list.body.serverlessCampaign).toHaveLength(1);
+      expect(list.body.serverlessCampaign[0]).toMatchObject({
+        audienceBucket: "50-150",
+        streamChannel: "kick.com/zeh",
+        source: "streamers",
+      });
+      expect(JSON.stringify(list.body.serverlessCampaign)).not.toContain("Bia");
     });
 
     it("is not reachable with no token, nor by a member's session", async () => {

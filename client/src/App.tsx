@@ -38,6 +38,7 @@ import {
   withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
+  type WatchPartyWaitlistSource,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -378,7 +379,10 @@ import {
   takeJoinIntent,
   peekJoinIntent,
   takeWaitlistIntent,
+  takeWaitlistIntentWithSource,
+  WAITLIST_SOURCE_PARAM,
   waitlistIntentFromSearch,
+  waitlistSourceFromSearch,
   type CreateIntent,
 } from "@/lib/handle-intent";
 import {
@@ -1895,6 +1899,14 @@ function MainAppContent({
    */
   const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
   const [pendingWaitlist, setPendingWaitlist] = useState(false);
+  /**
+   * The page whose button opened the dialog (`from=streamers`), sent with the
+   * row so the operator can tell a streamer's request apart. Only for the
+   * dialog the intent opens: closing it clears this, so the sidebar teaser
+   * opened later sends no marker.
+   */
+  const [waitlistSource, setWaitlistSource] =
+    useState<WatchPartyWaitlistSource | null>(null);
   const [waitlistApprovals, setWaitlistApprovals] = useState<
     WatchPartyApprovedCard[]
   >([]);
@@ -7895,7 +7907,7 @@ function MainAppContent({
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
     const stashedCreate = takeCreateIntent(storage);
-    const stashedWaitlist = takeWaitlistIntent(storage);
+    const stashedWaitlist = takeWaitlistIntentWithSource(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     // Read, not consumed: cleared only once the server has answered (below),
@@ -7919,11 +7931,16 @@ function MainAppContent({
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
     const waitlistIntent =
-      waitlistIntentFromSearch(location.search) || stashedWaitlist;
+      waitlistIntentFromSearch(location.search) || stashedWaitlist !== null;
     if (waitlistIntent) {
+      const source =
+        waitlistSourceFromSearch(location.search) ??
+        stashedWaitlist?.source ??
+        null;
       setPendingWaitlist(true);
+      setWaitlistSource(source);
       // Kept until the dialog opens, like the create intent above.
-      stashWaitlistIntent(storage);
+      stashWaitlistIntent(storage, Date.now(), source);
     }
     /**
      * Create community, for somebody who came to make one (a `/vem` CTA, a
@@ -7951,6 +7968,7 @@ function MainAppContent({
       params.delete("join");
       if (waitlistIntentFromSearch(location.search)) {
         params.delete(INTENT_PARAM);
+        params.delete(WAITLIST_SOURCE_PARAM);
       }
       for (const name of CREATE_INTENT_PARAMS) {
         params.delete(name);
@@ -10496,7 +10514,11 @@ function MainAppContent({
           wherever the person lands, including with no server open. */}
       <WatchPartyWaitlistDialog
         open={waitlistDialogOpen}
-        onClose={() => setWaitlistDialogOpen(false)}
+        onClose={() => {
+          setWaitlistDialogOpen(false);
+          setWaitlistSource(null);
+        }}
+        source={waitlistSource}
         servers={servers.map((server) => ({ id: server.id, name: server.name }))}
         initialServerId={selectedServerId}
       />

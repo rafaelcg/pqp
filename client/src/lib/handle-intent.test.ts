@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   rememberWaitlistIntentFromLocation,
   stashWaitlistIntent,
+  STREAMERS_WAITLIST_HREF,
   takeWaitlistIntent,
+  takeWaitlistIntentWithSource,
   waitlistIntentFromSearch,
+  waitlistSourceFromSearch,
   WATCH_PARTY_WAITLIST_HREF,
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
@@ -409,5 +412,36 @@ describe("the watch party waitlist intent", () => {
     const storage = memory();
     rememberWaitlistIntentFromLocation(storage, { search: "?import=discord" });
     expect(takeWaitlistIntent(storage)).toBe(false);
+  });
+
+  it("carries the streamers page's marker through the sign-up, and only a name the list knows", () => {
+    expect(STREAMERS_WAITLIST_HREF).toBe("/app?intent=watch-party-waitlist&from=streamers");
+    const search = STREAMERS_WAITLIST_HREF.slice("/app".length);
+    expect(waitlistIntentFromSearch(search)).toBe(true);
+    expect(waitlistSourceFromSearch(search)).toBe("streamers");
+    expect(waitlistSourceFromSearch("?intent=watch-party-waitlist&from=ads")).toBeNull();
+    // A marker with no intent is nothing at all.
+    expect(waitlistSourceFromSearch("?from=streamers")).toBeNull();
+
+    const storage = memory();
+    rememberWaitlistIntentFromLocation(storage, { search }, 1000);
+    expect(takeWaitlistIntentWithSource(storage, 2000)).toEqual({ source: "streamers" });
+    expect(takeWaitlistIntentWithSource(storage, 2000)).toBeNull();
+
+    // The plain intent still reads as it always did, with no marker.
+    stashWaitlistIntent(storage, 1000);
+    expect(takeWaitlistIntentWithSource(storage, 2000)).toEqual({ source: null });
+    // And the boolean reader says yes to the marked one too.
+    stashWaitlistIntent(storage, 1000, "streamers");
+    expect(takeWaitlistIntent(storage, 2000)).toBe(true);
+  });
+
+  it("opens the dialog without a marker when the stored one is unknown", () => {
+    const storage = memory();
+    storage.setItem(
+      "pqp:pending-watch-party-waitlist",
+      JSON.stringify({ handle: "watch-party-waitlist:ads", at: 1000 }),
+    );
+    expect(takeWaitlistIntentWithSource(storage, 2000)).toEqual({ source: null });
   });
 });

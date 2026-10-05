@@ -4854,6 +4854,15 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
 CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
   ON watch_party_waitlist (user_id);
 
+-- Which campaign page sent the row, when one did: `streamers` is the button on
+-- `pqp.gg/streamers`. NULL is every other door (the sidebar teaser, the
+-- `/watch-party` page), which is every row written before this column. Shown
+-- on the dashboard as a tag; the API accepts only the names in
+-- `WATCH_PARTY_WAITLIST_SOURCES` and keeps an existing value when an edit
+-- sends none.
+ALTER TABLE watch_party_waitlist ADD COLUMN IF NOT EXISTS source TEXT
+  CHECK (source ~ '^[a-z0-9-]{1,32}$');
+
 -- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
 -- A flag is only a row here once an operator has decided something about it:
 -- no row, or `enabled` NULL, means "follow the environment variable, then the

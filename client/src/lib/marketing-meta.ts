@@ -30,7 +30,8 @@
  * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
  * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
- * `tela.faq.*`, `landing.faq.*`, and
+ * `tela.faq.*`, `landing.faq.*`, `streamersPage.seo.*`,
+ * `streamersPage.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
  */
@@ -50,6 +51,8 @@ export type MarketingPage =
   | "/claim"
   | "/watch-party"
   | "/watchparty"
+  | "/streamers"
+  | "/criadores"
   | "/privacy"
   | "/terms"
   | "/cookies"
@@ -80,6 +83,8 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/claim",
   "/watch-party",
   "/watchparty",
+  "/streamers",
+  "/criadores",
   "/privacy",
   "/terms",
   "/cookies",
@@ -127,6 +132,12 @@ interface PageCopy {
    * `/vem` is the only page with its own art, one card per language.
    */
   image?: LocalizedText;
+  /**
+   * Size and alt text of `image`, for a card drawn at the product card's own
+   * 1200 x 630 (`client/scripts/og-image/`). Without it a custom card says
+   * nothing about its size, which is right for `/vem`'s art.
+   */
+  imageMeta?: { width: number; height: number; alt: LocalizedText };
 }
 
 /**
@@ -151,6 +162,43 @@ const WATCH_PARTY_COPY: PageCopy = {
       en: "Share your screen and let hundreds watch in the browser, with low latency, your camera on stage and the chat beside it. Join the early access waitlist.",
       es: "Comparte tu pantalla y deja que cientos miren en el navegador, con baja latencia, tu cámara en el escenario y el chat al lado. Entra a la lista de acceso anticipado.",
     },
+};
+
+/**
+ * `/streamers` and `/criadores`: one page under two names, canonical
+ * `/streamers`, the `/watch-party` arrangement. "Streamer" is the word a
+ * Brazilian streamer uses too, so the English one is the address; the
+ * Portuguese one exists for whoever types it. Duplicates of
+ * `streamersPage.seo.*`, pinned by `marketing-meta.test.ts`. The card is the
+ * product card's template with its own words (`scripts/og-image/`).
+ */
+const STREAMERS_COPY: PageCopy = {
+  canonicalPath: "/streamers",
+  title: {
+    "pt-BR": "pqp pra streamers | Sua comunidade assistindo junto",
+    en: "pqp for streamers | Your community watching together",
+    es: "pqp para streamers | Tu comunidad viendo junta",
+  },
+  description: {
+    "pt-BR":
+      "Compartilhe a tela numa sala do pqp e a sua comunidade assiste no navegador, sem instalar nada e sem o teto de 50 pessoas. A reação continua na sua live. Peça acesso.",
+    en: "Share your screen in a pqp room and your community watches in the browser, with nothing to install and no 50-person cap. Your reaction stays on your stream. Ask for access.",
+    es: "Comparte tu pantalla en una sala de pqp y tu comunidad la ve en el navegador, sin instalar nada y sin el tope de 50 personas. Tu reacción sigue en tu stream. Pide acceso.",
+  },
+  image: {
+    "pt-BR": "/images/og-streamers.jpg",
+    en: "/images/og-streamers-en.jpg",
+    es: "/images/og-streamers-es.jpg",
+  },
+  imageMeta: {
+    width: 1200,
+    height: 630,
+    alt: {
+      "pt-BR": "pqp pra streamers: sua comunidade assistindo junto, no navegador",
+      en: "pqp for streamers: your community watching together, in the browser",
+      es: "pqp para streamers: tu comunidad viendo junta, en el navegador",
+    },
+  },
 };
 
 const PAGE_COPY: Record<MarketingPage, PageCopy> = {
@@ -297,6 +345,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   },
   "/watch-party": WATCH_PARTY_COPY,
   "/watchparty": WATCH_PARTY_COPY,
+  "/streamers": STREAMERS_COPY,
+  "/criadores": STREAMERS_COPY,
   "/privacy": {
     canonicalPath: "/privacy",
     title: {
@@ -811,6 +861,131 @@ export const VEM_FAQ: Record<
   ],
 };
 
+/**
+ * The `/streamers` FAQ, duplicated from `streamersPage.faq.*` in the JSON
+ * catalogues and served as FAQPage JSON-LD, in the page's own order
+ * (`STREAMERS_FAQ_IDS` in `pages/streamers-page.tsx`). The answers say what is
+ * true today, and about what a person shows they say only "what you have the
+ * right to": the presenter is responsible for it, as the terms say. The suite
+ * pins every string here against its twin.
+ */
+export const STREAMERS_FAQ: Record<
+  MarketingLocale,
+  { question: string; answer: string }[]
+> = {
+  "pt-BR": [
+    {
+      question: "O que eu posso mostrar?",
+      answer:
+        "O que você tem direito de mostrar. Quem apresenta é responsável pelo que compartilha, como está nos termos de uso.",
+    },
+    {
+      question: "Como o que eu vou mostrar entra na sessão?",
+      answer:
+        "Pelo compartilhamento de tela, como numa call. No Chrome ou no Edge, compartilha uma aba e marca a opção de compartilhar o áudio da aba, que é o que leva o som pra quem assiste. No Mac, só a aba leva o som.",
+    },
+    {
+      question: "Faço live na Twitch ao mesmo tempo. Como acerto o OBS?",
+      answer:
+        "A imagem no pqp chega uns segundos depois do que você vê, e a sua live também tem atraso. Pra sua reação não chegar antes da cena, coloca um atraso no OBS, em Configurações, Avançado, Atraso da transmissão. Começa com uns 9 segundos e pede pra alguém da moderação olhar a live e a sala lado a lado nos primeiros minutos. Esse atraso só muda com o OBS fora do ar. Se quiser a sala do pqp na cena, adiciona a janela do navegador como Captura de janela.",
+    },
+    {
+      question: "Quanta gente aguenta?",
+      answer:
+        "Quem assiste não ocupa lugar na call, então o tamanho da sala não é o limite. A maior sessão até agora passou de cem pessoas assistindo junto.",
+    },
+    {
+      question: "Quanto custa?",
+      answer:
+        "Nada. O pqp é de graça e de código aberto, sem plano pago. Dá pra apoiar o projeto com uma doação, e doar não libera nada, nem a watch party.",
+    },
+    {
+      question: "Do que eu preciso pra apresentar?",
+      answer:
+        "De um computador com Chrome ou Edge. Quem assiste pode estar no celular.",
+    },
+    {
+      question: "Como eu peço ajuda?",
+      answer:
+        "Manda um e-mail pra contato@pqp.gg. Respondemos por lá, e se for a sua primeira sessão dá pra combinar um ensaio antes.",
+    },
+  ],
+  en: [
+    {
+      question: "What can I show?",
+      answer:
+        "What you have the right to show. Whoever presents is responsible for what they share, as the terms of service say.",
+    },
+    {
+      question: "How does what I show get into the session?",
+      answer:
+        "Through screen sharing, the same as in a call. In Chrome or Edge, share a tab and tick the option to share the tab's audio, which is what carries the sound to the people watching. On a Mac, only a tab carries sound.",
+    },
+    {
+      question: "I stream on Twitch at the same time. How do I set up OBS?",
+      answer:
+        "The picture on pqp arrives a few seconds after you see it, and your stream has its own delay too. So your reaction does not land before the scene, add a delay in OBS under Settings, Advanced, Stream Delay. Start with about 9 seconds and ask one of your mods to watch the stream and the room side by side for the first few minutes. That delay only changes while OBS is not live. If you want the pqp room in your scene, add the browser window as a Window Capture.",
+    },
+    {
+      question: "How many people can watch?",
+      answer:
+        "People watching do not take a seat in the call, so the size of the room is not the limit. The biggest session so far went past a hundred people watching together.",
+    },
+    {
+      question: "What does it cost?",
+      answer:
+        "Nothing. pqp is free and open source, with no paid plan. You can support the project with a donation, and donating unlocks nothing, watch parties included.",
+    },
+    {
+      question: "What do I need to present?",
+      answer:
+        "A computer with Chrome or Edge. The people watching can be on a phone.",
+    },
+    {
+      question: "How do I get help?",
+      answer:
+        "Email contato@pqp.gg. We answer there, and if it is your first session we can set up a rehearsal before it.",
+    },
+  ],
+  es: [
+    {
+      question: "¿Qué puedo mostrar?",
+      answer:
+        "Lo que tengas derecho a mostrar. Quien presenta es responsable de lo que comparte, como dicen los términos de uso.",
+    },
+    {
+      question: "¿Cómo entra a la sesión lo que voy a mostrar?",
+      answer:
+        "Con compartir pantalla, igual que en una llamada. En Chrome o en Edge, comparte una pestaña y activa la opción de compartir el audio de la pestaña, que es lo que lleva el sonido a quien mira. En Mac, solo la pestaña lleva el sonido.",
+    },
+    {
+      question: "Hago stream en Twitch al mismo tiempo. ¿Cómo configuro OBS?",
+      answer:
+        "La imagen en pqp llega unos segundos después de lo que tú ves, y tu stream también tiene retraso. Para que tu reacción no llegue antes de la escena, pon un retraso en OBS, en Configuración, Avanzado, Retraso de la transmisión. Empieza con unos 9 segundos y pídele a alguien de tu moderación que mire el stream y la sala lado a lado los primeros minutos. Ese retraso solo cambia con OBS fuera del aire. Si quieres la sala de pqp en tu escena, agrega la ventana del navegador como Captura de ventana.",
+    },
+    {
+      question: "¿Cuánta gente aguanta?",
+      answer:
+        "Quien mira no ocupa lugar en la llamada, así que el tamaño de la sala no es el límite. La sesión más grande hasta ahora pasó de cien personas viendo juntas.",
+    },
+    {
+      question: "¿Cuánto cuesta?",
+      answer:
+        "Nada. pqp es gratis y de código abierto, sin plan de pago. Puedes apoyar el proyecto con una donación, y donar no desbloquea nada, tampoco la watch party.",
+    },
+    {
+      question: "¿Qué necesito para presentar?",
+      answer:
+        "Una computadora con Chrome o Edge. Quien mira puede estar en el celular.",
+    },
+    {
+      question: "¿Cómo pido ayuda?",
+      answer:
+        "Escribe a contato@pqp.gg. Te respondemos por ahí, y si es tu primera sesión podemos hacer un ensayo antes.",
+    },
+  ],
+};
+
 /** `&`, `<`, `>` and `"` — everything that can escape an attribute. */
 export function escapeHtml(value: string): string {
   return value
@@ -890,7 +1065,9 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
           ? TELA_FAQ[locale]
           : page === "/vem"
             ? VEM_FAQ[locale]
-            : null;
+            : page === "/streamers" || page === "/criadores"
+              ? STREAMERS_FAQ[locale]
+              : null;
   if (faq) {
     graph.push({
       "@type": "FAQPage",
@@ -982,6 +1159,11 @@ export function renderMarketingHead(
     ? pick(copy.ogDescription, locale)
     : description;
   const image = `${CANONICAL_ORIGIN}${copy.image ? pick(copy.image, locale) : "/images/og-image.jpg"}`;
+  // The size and alt a card can honestly state: the product card's, a custom
+  // card's own when it declares them, or nothing at all.
+  const imageMeta = copy.image
+    ? copy.imageMeta
+    : { width: 1200, height: 630, alt: PRODUCT_CARD_ALT };
   const e = escapeHtml;
 
   return [
@@ -1001,22 +1183,22 @@ export function renderMarketingHead(
     // The product card is exactly 1200 x 630 (1.91:1, what X and Facebook
     // crop to). The per-locale `/vem` art has its own size, so it says
     // nothing rather than something wrong.
-    ...(copy.image
-      ? []
-      : [
-          `<meta property="og:image:width" content="1200" />`,
-          `<meta property="og:image:height" content="630" />`,
-          `<meta property="og:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
-        ]),
+    ...(imageMeta
+      ? [
+          `<meta property="og:image:width" content="${imageMeta.width}" />`,
+          `<meta property="og:image:height" content="${imageMeta.height}" />`,
+          `<meta property="og:image:alt" content="${e(pick(imageMeta.alt, locale))}" />`,
+        ]
+      : []),
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${e(ogTitle)}" />`,
     `<meta name="twitter:description" content="${e(ogDescription)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
-    ...(copy.image
-      ? []
-      : [
-          `<meta name="twitter:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
-        ]),
+    ...(imageMeta
+      ? [
+          `<meta name="twitter:image:alt" content="${e(pick(imageMeta.alt, locale))}" />`,
+        ]
+      : []),
     `<meta name="robots" content="index, follow" />`,
     // The locale this document was negotiated in, for the client bundle to
     // read back. `detectLocale()` prefers it over `navigator.languages`,

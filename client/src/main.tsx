@@ -100,6 +100,11 @@ const WatchPartyPage = lazy(() =>
     default: m.WatchPartyPage,
   })),
 );
+const StreamersPage = lazy(() =>
+  import("./pages/streamers-page").then((m) => ({
+    default: m.StreamersPage,
+  })),
+);
 const ApoieRoute = lazy(() =>
   import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
 );
@@ -285,6 +290,13 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             separate pt-BR path to guess. */}
         <Route path="/watch-party" element={<WatchPartyPage />} />
         <Route path="/watchparty" element={<WatchPartyPage />} />
+        {/* `/streamers`: where outreach sends a streamer, and the button that
+            asks for watch party access with `from=streamers` on it. Same
+            arrangement as `/watch-party`: role tokens, follows the theme, and
+            `/criadores` is the same page canonicalised to `/streamers`
+            (`marketing-meta.ts`). Both words are in RESERVED_HANDLES. */}
+        <Route path="/streamers" element={<StreamersPage />} />
+        <Route path="/criadores" element={<StreamersPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}

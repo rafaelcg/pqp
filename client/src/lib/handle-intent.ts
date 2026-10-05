@@ -1,4 +1,9 @@
-import { normalizeJoinRef, parseDiscordTemplateCode } from "@pqp/shared";
+import {
+  normalizeJoinRef,
+  parseDiscordTemplateCode,
+  WATCH_PARTY_WAITLIST_SOURCES,
+  type WatchPartyWaitlistSource,
+} from "@pqp/shared";
 import { parseAppRoute } from "./app-route";
 
 /**
@@ -472,24 +477,80 @@ const WAITLIST_KEY = "pqp:pending-watch-party-waitlist";
 /** The `/app` URL every waitlist CTA points at. */
 export const WATCH_PARTY_WAITLIST_HREF = `/app?${INTENT_PARAM}=${WATCH_PARTY_WAITLIST_INTENT}`;
 
+/**
+ * WHICH PAGE SENT IT. `pqp.gg/streamers` uses the same intent with one more
+ * parameter, `&from=streamers`, so the row it ends in carries `source:
+ * "streamers"` and the operator can tell a streamer's request from the
+ * sidebar teaser's (`WATCH_PARTY_WAITLIST_SOURCES`). Not `src` or `ref`: those
+ * name the link that brought somebody to the SITE (`lib/acquisition.ts`, an
+ * outreach link's `?ref=`), and this names the page whose button they pressed.
+ * A value the list does not name is no marker, never an error: the intent
+ * still opens the dialog.
+ */
+export const WAITLIST_SOURCE_PARAM = "from";
+
+/** The `/app` URL the streamers page's button points at. */
+export const STREAMERS_WAITLIST_HREF = `${WATCH_PARTY_WAITLIST_HREF}&${WAITLIST_SOURCE_PARAM}=streamers`;
+
+function waitlistSourceFrom(raw: string | null | undefined): WatchPartyWaitlistSource | null {
+  return (WATCH_PARTY_WAITLIST_SOURCES as readonly string[]).includes(raw ?? "")
+    ? (raw as WatchPartyWaitlistSource)
+    : null;
+}
+
 export function waitlistIntentFromSearch(search: string): boolean {
   return (
     new URLSearchParams(search).get(INTENT_PARAM) === WATCH_PARTY_WAITLIST_INTENT
   );
 }
 
+/** The page marker on a waitlist intent URL, or null (also with no intent). */
+export function waitlistSourceFromSearch(search: string): WatchPartyWaitlistSource | null {
+  if (!waitlistIntentFromSearch(search)) {
+    return null;
+  }
+  return waitlistSourceFrom(new URLSearchParams(search).get(WAITLIST_SOURCE_PARAM));
+}
+
+/**
+ * Stored as the intent's own value, with the marker after a colon when there
+ * is one (`watch-party-waitlist:streamers`), so one key carries both and an
+ * old stash with no marker reads exactly as it always did.
+ */
 export function stashWaitlistIntent(
   storage: WritableStorage | null,
   now: number = Date.now(),
+  source: WatchPartyWaitlistSource | null = null,
 ): void {
-  write(storage, WAITLIST_KEY, WATCH_PARTY_WAITLIST_INTENT, now);
+  write(
+    storage,
+    WAITLIST_KEY,
+    source ? `${WATCH_PARTY_WAITLIST_INTENT}:${source}` : WATCH_PARTY_WAITLIST_INTENT,
+    now,
+  );
+}
+
+/** The waiting intent and its marker, consumed; null when there is none. */
+export function takeWaitlistIntentWithSource(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): { source: WatchPartyWaitlistSource | null } | null {
+  const stored = take(storage, WAITLIST_KEY, now);
+  if (stored === WATCH_PARTY_WAITLIST_INTENT) {
+    return { source: null };
+  }
+  const prefix = `${WATCH_PARTY_WAITLIST_INTENT}:`;
+  if (stored?.startsWith(prefix)) {
+    return { source: waitlistSourceFrom(stored.slice(prefix.length)) };
+  }
+  return null;
 }
 
 export function takeWaitlistIntent(
   storage: WritableStorage | null,
   now: number = Date.now(),
 ): boolean {
-  return take(storage, WAITLIST_KEY, now) === WATCH_PARTY_WAITLIST_INTENT;
+  return takeWaitlistIntentWithSource(storage, now) !== null;
 }
 
 /** At boot, before routing: the sign-in redirect keeps the path, drops the query. */
@@ -499,6 +560,6 @@ export function rememberWaitlistIntentFromLocation(
   now: number = Date.now(),
 ): void {
   if (waitlistIntentFromSearch(location.search)) {
-    stashWaitlistIntent(storage, now);
+    stashWaitlistIntent(storage, now, waitlistSourceFromSearch(location.search));
   }
 }

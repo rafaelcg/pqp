@@ -82,6 +82,9 @@ export function MarketingFooter() {
             <Link to="/tela" className={FOOTER_LINK}>
               {t("footer.tela")}
             </Link>
+            <Link to="/streamers" className={FOOTER_LINK}>
+              {t("footer.streamers")}
+            </Link>
             {/* The footer drives to the /beta landing, not straight to
                 TestFlight: the page sells the beta and carries the honest
                 framing before the external hop. */}

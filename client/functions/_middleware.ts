@@ -19,6 +19,7 @@ import {
   injectMarketingHead,
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
+import { injectMarketingBody } from "../src/lib/marketing-prerender";
 import {
   markdownTwinFor,
   prefersMarkdown,
@@ -408,8 +409,17 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     // No API involved: the copy is constant per page and locale, so the only
     // failure mode left is a document with no <head>, and the injector answers
     // that by returning the html unchanged.
+    // A page that carries a no-JS body (`marketing-prerender.ts`) gets it in
+    // the same language; every other marketing page comes back unchanged.
     const html = await response.text();
-    return rewritten(response, injectMarketingHead(html, marketing, locale));
+    return rewritten(
+      response,
+      injectMarketingBody(
+        injectMarketingHead(html, marketing, locale),
+        marketing,
+        locale,
+      ),
+    );
   }
 
   if (blog) {

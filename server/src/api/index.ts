@@ -3035,6 +3035,7 @@ router.post("/api/watch-party/waitlist", async ({ req, res, user }) => {
     audienceBucket: body.audienceBucket ?? null,
     note: body.note,
     streamChannel: body.streamChannel,
+    source: body.source ?? null,
   });
   return { entry };
 });

@@ -11,6 +11,7 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 - [Screen share](https://pqp.gg/tela): sharing a screen from the browser (sound comes with a Chrome or Edge tab)
 - [Claim your @](https://pqp.gg/garanta): how a public handle works
 - [Watch party](https://pqp.gg/watch-party): streaming to hundreds in the browser; early access waitlist
+- [For streamers](https://pqp.gg/streamers): a room where a streamer's community watches their shared screen in the browser; asks for watch party access
 - [Blog and release notes](https://pqp.gg/blog): what shipped, week by week
 - [iOS beta](https://pqp.gg/beta): TestFlight
 - [Android](https://pqp.gg/android): Google Play, and the direct APK still available
