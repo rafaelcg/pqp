@@ -24,7 +24,7 @@ import { ACCENT_SWATCHES, effectiveAccentHue, type AccentHuePreference } from "@
 import type { AppearancePreference } from "@/lib/appearance";
 import type { ContrastPreference } from "@/lib/contrast";
 import type { ThemePreference } from "@/lib/theme";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { queuePreferenceSync, usePreferenceSyncFailed } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 import {
   SETTINGS_FOCUS,
@@ -32,10 +32,14 @@ import {
   SettingsChoiceGrid,
   SettingsGroup,
   SettingsInlineStatus,
+  SettingsNotice,
   SettingsRow,
   SettingsSwitchRow,
   useSettingsShell,
 } from "@/components/settings/kit";
+
+/** The account preferences this tab writes: the notice reads their sync. */
+const SYNCED_KEYS = ["theme", "appearance", "accentHue", "contrast", "chatDisplay"] as const;
 
 /**
  * Aparência e idioma. Every control here applies and persists on the spot:
@@ -51,8 +55,19 @@ export function AppearanceSection({
   showLinkEmbeds: boolean;
   onShowLinkEmbeds: (next: boolean) => void;
 }) {
+  const { t } = useTranslation();
+  const syncFailed = usePreferenceSyncFailed(SYNCED_KEYS);
   return (
     <div className="space-y-6">
+      {syncFailed ? (
+        // Sticky: the choice that failed is usually further down the tab,
+        // and a line above the fold would never be seen.
+        <div className="sticky top-2 z-10">
+          <SettingsNotice tone="warning" role="alert">
+            {t("settings.syncFailed")}
+          </SettingsNotice>
+        </div>
+      ) : null}
       <ThemeGroup />
       <ChatGroup
         showLinkEmbeds={showLinkEmbeds}
@@ -365,6 +380,18 @@ function LookRow() {
 }
 
 /**
+ * A look's own accent, as the stylesheet would paint it in a mode: the dark
+ * swatch, or that swatch mixed toward black for light. For the places that
+ * must show it while a custom accent is overriding `--color-accent`.
+ */
+function lookAccent(look: AppearancePreference, mode: "light" | "dark"): string {
+  const swatch = `var(--swatch-${look}-accent)`;
+  return mode === "light" && look !== "night"
+    ? `color-mix(in oklch, ${swatch} 62%, black)`
+    : swatch;
+}
+
+/**
  * Miniature app chrome in the look's own swatches. The drawing is the
  * `appearance-preview*` recipe in `index.css`; only the colours vary.
  *
@@ -391,9 +418,7 @@ function LookMiniature({
   const accent =
     customAccent && (light ? "light" : "dark") === mode
       ? "var(--color-accent)"
-      : light
-        ? `color-mix(in oklch, ${swatch("accent")} 62%, black)`
-        : swatch("accent");
+      : lookAccent(look, mode);
   const style = (
     light
       ? ({
@@ -459,6 +484,7 @@ const ACCENT_CHOICES: readonly (AccentHuePreference)[] = [
 function AccentRow() {
   const { t } = useTranslation();
   const { appearance } = useAppearance();
+  const { resolved } = useTheme();
   const { preference, setPreference } = useAccentHue();
   const sliderHue = Math.min(
     ACCENT_SLIDER_MAX,
@@ -546,7 +572,17 @@ function AccentRow() {
                     : "border-border text-text-secondary hover:bg-surface-2 hover:text-text",
                 )}
               >
-                <span aria-hidden className="h-4 w-4 rounded-full bg-accent" />
+                {/* The look's own accent, whatever custom one is set: the chip
+                    names the option, and the option is "the look's colour". */}
+                <span
+                  aria-hidden
+                  className={cn("h-4 w-4 rounded-full", !isCustom && "bg-accent")}
+                  style={
+                    isCustom
+                      ? { backgroundColor: lookAccent(appearance, resolved) }
+                      : undefined
+                  }
+                />
                 {t("settings.appearance.accentFromLook")}
               </button>
               {ACCENT_SWATCHES.map((hue) => {
@@ -621,6 +657,7 @@ function ContrastRow() {
       control={
         <RadioGroup
           label={t("settings.appearance.contrast")}
+          fit="content"
           value={preference}
           onValueChange={setPreference}
           className={PHONE_TARGETS}
@@ -697,6 +734,9 @@ function ChatOptionRow<T extends string | number>({
         <RadioGroup
           label={label}
           size="sm"
+          // Cells as wide as their labels: Spanish "Predeterminado" and
+          // "Más grande" are longer than an equal share of the track.
+          fit="content"
           value={value}
           onValueChange={onChange}
           reselect={between}

@@ -17,10 +17,16 @@ import { getAppearance, setAppearancePreference } from "@/lib/appearance";
 import { getThemeState, setThemePreference } from "@/lib/theme";
 import { DEFAULT_CHAT_DISPLAY, getChatDisplay, setChatDisplay } from "@/lib/chat-display";
 
-// The account sync is somebody else's test; here it only has to not go out.
+// The account sync is tested in preferences.test.ts; here it only has to not
+// go out, except in the one test that wants to see a refusal reach the tab.
 vi.mock("@/lib/preferences", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/preferences")>()),
   queuePreferenceSync: vi.fn(),
+}));
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  updatePreferences: vi.fn(),
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -245,6 +251,20 @@ describe("Cor de destaque", () => {
     expect(host!.textContent).not.toContain("Back to the look's color");
   });
 
+  it("keeps the From look dot on the look's own accent when a custom one is set", () => {
+    const dot = () =>
+      radio(group("Accent color"), "From look").querySelector<HTMLElement>("span")!;
+    mount();
+    // No custom accent: the live accent IS the look's, so the dot wears it.
+    expect(dot().className).toContain("bg-accent");
+    click(radio(group("Accent color"), "Cyan"));
+    // A custom accent overrides the live token; the dot must not follow it.
+    expect(dot().className).not.toContain("bg-accent");
+    expect(dot().getAttribute("style")).toContain("--swatch-signal-accent");
+    click(radio(host!, /^Hearth/));
+    expect(dot().getAttribute("style")).toContain("--swatch-hearth-accent");
+  });
+
   it("calls a hue that is not a swatch by its tone", () => {
     setAccentHuePreference(40);
     mount();
@@ -266,10 +286,69 @@ describe("Contraste", () => {
   });
 });
 
+describe("Segmented controls", () => {
+  it("never cut a label short: cells grow with their text and wrap", () => {
+    // Spanish "Predeterminado" and "Más grande" did not fit an equal share of
+    // the track and were truncated. jsdom has no layout, so this pins the
+    // mode that cannot truncate.
+    mount();
+    for (const name of ["Contrast", "Density", "Text size", "Space between groups"]) {
+      const radios = group(name);
+      expect(radios.className).toContain("flex-wrap");
+      expect(radios.querySelector(".truncate")).toBeNull();
+    }
+  });
+});
+
+describe("Account sync", () => {
+  it("tells the tab when a theme choice did not reach the account", async () => {
+    const api = await import("@/lib/api");
+    const actual = await vi.importActual<typeof import("@/lib/preferences")>(
+      "@/lib/preferences",
+    );
+    vi.mocked(api.updatePreferences).mockRejectedValueOnce(new Error("offline"));
+    mount();
+    expect(host!.textContent).not.toContain("Could not save to your account");
+    await act(async () => {
+      actual.queuePreferenceSync({ theme: "dark" }, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(host!.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not save to your account",
+    );
+    // A later change sends it again; once that lands the line goes.
+    vi.mocked(api.updatePreferences).mockResolvedValueOnce({ preferences: {} });
+    await act(async () => {
+      actual.queuePreferenceSync({ contrast: "more" }, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(host!.textContent).not.toContain("Could not save to your account");
+  });
+
+  it("stays quiet about a failure in a preference this tab does not own", async () => {
+    const api = await import("@/lib/api");
+    const actual = await vi.importActual<typeof import("@/lib/preferences")>(
+      "@/lib/preferences",
+    );
+    vi.mocked(api.updatePreferences).mockRejectedValueOnce(new Error("offline"));
+    mount();
+    await act(async () => {
+      actual.queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(host!.textContent).not.toContain("Could not save to your account");
+    vi.mocked(api.updatePreferences).mockResolvedValueOnce({ preferences: {} });
+    await act(async () => {
+      actual.queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+      await Promise.resolve();
+    });
+  });
+});
+
 describe("Chat", () => {
   const resetButton = () =>
     [...host!.querySelectorAll<HTMLButtonElement>("button")].find(
-      (el) => el.textContent === "Restore size and spacing",
+      (el) => el.textContent === "Restore density, size and spacing",
     )!;
 
   it("keeps the restore button in view, inert while everything is at the default", () => {
@@ -277,6 +356,14 @@ describe("Chat", () => {
     expect(resetButton().disabled).toBe(true);
     click(radio(group("Density"), "Compact"));
     expect(resetButton().disabled).toBe(false);
+  });
+
+  it("names density on the restore button, since it restores density too", () => {
+    mount();
+    click(radio(group("Density"), "Compact"));
+    expect(resetButton().textContent).toContain("density");
+    click(resetButton());
+    expect(getChatDisplay().density).toBe("cozy");
   });
 
   it("restores density, text size and spacing, and leaves link previews alone", () => {
