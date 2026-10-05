@@ -20,6 +20,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 const { ConnectionsSection } = await import("./connections-section");
+const { SettingsShellContext } = await import("@/components/settings/kit");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -384,5 +385,61 @@ describe("ConnectionsSection", () => {
     expect(el.querySelector('[role="status"]')?.textContent).toBe(
       "Connection cancelled",
     );
+  });
+
+  it("keeps focus on Tentar de novo through a retry that fails, and lands on the list after one that works", async () => {
+    api.fetchConnectionConfig.mockRejectedValue(new ApiError(500, "boom"));
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    const el = await render();
+    const retry = () =>
+      [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        /Try again|Tentar de novo/.test(b.textContent ?? ""),
+      );
+    const first = retry()!;
+    act(() => first.focus());
+    let answer!: (config: unknown) => void;
+    api.fetchConnectionConfig.mockReturnValueOnce(new Promise((_, reject) => (answer = reject)));
+    await act(async () => first.click());
+    // Busy in place: no skeleton swapped in under the focused button.
+    expect(retry()).toBe(first);
+    expect(first.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(first);
+    await act(async () => answer(new ApiError(500, "boom")));
+    expect(retry()).toBe(first);
+    expect(first.getAttribute("aria-disabled")).toBeNull();
+    expect(document.activeElement).toBe(first);
+
+    api.fetchConnectionConfig.mockResolvedValueOnce({ twitch: true });
+    await act(async () => first.click());
+    expect(retry()).toBeUndefined();
+    expect(document.activeElement).toBe(
+      el.querySelector('[data-settings-row="twitch"] button'),
+    );
+  });
+
+  it("drops the save-the-profile-first line once the profile is saved or discarded", async () => {
+    api.fetchConnectionConfig.mockResolvedValue({ twitch: true });
+    api.fetchMyConnections.mockResolvedValue({ connections: [] });
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const draw = async (profileDirty: boolean) => {
+      await act(async () => {
+        root!.render(
+          <SettingsShellContext.Provider
+            value={{ profileDirty, openSection: () => {}, headerActionsSlot: null }}
+          >
+            <ConnectionsSection />
+          </SettingsShellContext.Provider>,
+        );
+      });
+    };
+    await draw(true);
+    const connect = host.querySelector<HTMLButtonElement>('[data-settings-row="twitch"] button')!;
+    await act(async () => connect.click());
+    expect(api.startConnection).not.toHaveBeenCalled();
+    expect(host.textContent).toMatch(/Save or discard|Salve ou descarte/);
+    await draw(false);
+    expect(host.textContent).not.toMatch(/Save or discard|Salve ou descarte/);
   });
 });

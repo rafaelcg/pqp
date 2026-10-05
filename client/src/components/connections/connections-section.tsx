@@ -108,7 +108,8 @@ function takePendingConnection(): ConnectionProvider | null {
 
 type Load =
   | { kind: "loading" }
-  | { kind: "failed"; message: string }
+  /** `retrying`: Tentar de novo is running, and keeps its place and focus. */
+  | { kind: "failed"; message: string; retrying?: boolean }
   | { kind: "ready"; config: ConnectionConfig; connections: OwnConnection[] };
 
 export function ConnectionsSection() {
@@ -120,6 +121,7 @@ export function ConnectionsSection() {
   // undefined until /api/me answers; null means the account has no @ yet.
   const [handle, setHandle] = useState<string | null | undefined>(undefined);
   const pendingRef = useRef<ConnectionProvider | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const linkedTitle = t("settings.connections.group.linked.title");
   const linkedDescription = t("settings.connections.group.linked.description");
 
@@ -162,7 +164,11 @@ export function ConnectionsSection() {
 
   const reload = useCallback(
     async (isAlive: () => boolean = () => true) => {
-      setLoad({ kind: "loading" });
+      // A retry keeps the failed notice up with its button busy, so the
+      // button that has focus is not swapped for a skeleton under it.
+      setLoad((current) =>
+        current.kind === "failed" ? { ...current, retrying: true } : { kind: "loading" },
+      );
       try {
         const [config, mine] = await Promise.all([
           fetchConnectionConfig(),
@@ -190,6 +196,19 @@ export function ConnectionsSection() {
       alive = false;
     };
   }, [reload]);
+
+  // A retry that worked takes its notice away. If focus went with it, it
+  // lands on the first control of the list, or on the tab's panel.
+  const retried = useRef(false);
+  useEffect(() => {
+    if (load.kind !== "ready" || !retried.current) return;
+    retried.current = false;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && focused.isConnected) return;
+    const root = rootRef.current;
+    const first = root?.querySelector<HTMLElement>("button, select, a[href]");
+    (first ?? root?.closest<HTMLElement>('[role="tabpanel"]'))?.focus();
+  }, [load]);
 
   // The trip to the provider ended and the account is still not linked, with
   // no reason from the API: the person cancelled there. A linked account is a
@@ -256,7 +275,7 @@ export function ConnectionsSection() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div ref={rootRef} className="space-y-6">
       <SettingsGroup title={linkedTitle} description={linkedDescription}>
         {callbackNotice}
         {load.kind === "loading" ? (
@@ -275,11 +294,17 @@ export function ConnectionsSection() {
                 type="button"
                 variant="secondary"
                 size="sm"
+                aria-disabled={load.retrying || undefined}
+                aria-busy={load.retrying || undefined}
+                className={load.retrying ? BLOCKED_BUTTON : undefined}
                 onClick={() => {
+                  if (load.retrying) return;
                   clearCallbackError();
+                  retried.current = true;
                   void reload();
                 }}
               >
+                {load.retrying ? <Spinner /> : null}
                 {t("settings.connections.retry")}
               </Button>
             }
@@ -351,6 +376,9 @@ function ProviderRow({
   const visibility = useInlineSave();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // `actionError` is the "save or discard the profile first" refusal, which
+  // goes once the profile is saved or discarded.
+  const [refusedForProfile, setRefusedForProfile] = useState(false);
   const [confirming, setConfirming] = useState(false);
   // The option just picked, shown while its write runs, so the select does
   // not snap back to the old value under "Salvando…".
@@ -386,6 +414,13 @@ function ProviderRow({
   const buttonsBlocked = busy || saving;
   const { profileDirty } = useSettingsShell();
 
+  useEffect(() => {
+    if (!profileDirty && refusedForProfile) {
+      setRefusedForProfile(false);
+      setActionError(null);
+    }
+  }, [profileDirty, refusedForProfile]);
+
   async function connect() {
     if (buttonsBlocked) return;
     onAction();
@@ -393,9 +428,11 @@ function ProviderRow({
       // Connecting leaves the page for the provider's, which would drop the
       // staged profile edits (or stop on the browser's leave prompt).
       setActionError(t("settings.connections.profileDirty"));
+      setRefusedForProfile(true);
       return;
     }
     setActionError(null);
+    setRefusedForProfile(false);
     setBusy(true);
     try {
       const { url } = await startConnection(provider);
@@ -410,6 +447,7 @@ function ProviderRow({
   function changeVisibility(next: ConnectionVisibility) {
     onAction();
     setActionError(null);
+    setRefusedForProfile(false);
     setPending(next);
     const save = ++latestSave.current;
     void visibility.run(async () => {
@@ -430,6 +468,7 @@ function ProviderRow({
   async function disconnect() {
     onAction();
     setActionError(null);
+    setRefusedForProfile(false);
     setBusy(true);
     try {
       await disconnectConnection(provider);
