@@ -826,7 +826,10 @@ export async function connectLiveKit({
         // that was asked for early (`share_fast_start_quality`) already
         // carries a ceiling at or under this one; it gets the real one once
         // the stage has measured its element (`releaseEarlyShareRequest`).
-        if (!earlyShareRequests.has(pub)) {
+        // Unless the viewer has since chosen a smaller ceiling by hand: that
+        // one goes on now, since it can only be at or under the early ask.
+        if (!earlyShareRequests.has(pub) || receiveQuality !== "auto") {
+          earlyShareRequests.delete(pub);
           applyReceiveQuality(pub);
         }
         if (pub.source === Track.Source.ScreenShare) {
@@ -2906,6 +2909,12 @@ export async function connectLiveKit({
       receiveQuality = quality;
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
+          if (!publication.isSubscribed && earlyShareRequests.has(publication)) {
+            // Asked for early under the old ceiling and not bound yet: ask
+            // again under this one, so the first picture already obeys it.
+            requestShareQualityBeforeSubscribe(publication);
+            continue;
+          }
           if (publication.isSubscribed) {
             // A choice made by hand is the ceiling from now on, early
             // request or not.

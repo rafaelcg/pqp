@@ -142,7 +142,7 @@ function b64url(value) {
     .replace(/\//g, "_");
 }
 
-export function token(room, identity) {
+export function token(room, identity, video) {
   const nowS = Math.floor(Date.now() / 1000);
   const head = b64url({ alg: "HS256", typ: "JWT" });
   const body = b64url({
@@ -151,11 +151,38 @@ export function token(room, identity) {
     name: identity,
     nbf: nowS - 10,
     exp: nowS + 6 * 3600,
-    video: { room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true },
+    video: video ?? { room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true },
   });
   const sig = createHmac("sha256", SECRET).update(`${head}.${body}`).digest("base64")
     .replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
   return `${head}.${body}.${sig}`;
+}
+
+/** Who the media server says is in `room` right now (its RoomService API). */
+export async function participantCount(room) {
+  const res = await fetch(`http://127.0.0.1:7880/twirp/livekit.RoomService/ListParticipants`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token(room, "rig-admin", { room, roomAdmin: true })}`,
+    },
+    body: JSON.stringify({ room }),
+  });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return Array.isArray(body.participants) ? body.participants.length : 0;
+}
+
+/** Wait until the room holds at least `want` participants, or throw. */
+export async function waitForParticipants(room, want, timeoutMs = 20_000) {
+  const until = Date.now() + timeoutMs;
+  let seen = null;
+  while (Date.now() < until) {
+    seen = await participantCount(room).catch(() => null);
+    if (seen !== null && seen >= want) return seen;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`room ${room} reached ${seen ?? "no answer"} of ${want} participants`);
 }
 
 export function harnessUrl(base, query) {

@@ -40,7 +40,9 @@ import {
   startSfu,
   stopSfu,
   summarise,
+  participantCount,
   token,
+  waitForParticipants,
 } from "./rig.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -91,15 +93,15 @@ async function reachable(url) {
   }
 }
 
-async function ensureVite() {
-  if (await reachable(`${opts.base}/e2e/share-fast-start/harness.html`)) return null;
-  const port = new URL(opts.base).port;
+async function ensureVite(baseUrl) {
+  if (await reachable(`${baseUrl}/e2e/share-fast-start/harness.html`)) return null;
+  const port = new URL(baseUrl).port;
   const child = spawn("pnpm", ["exec", "vite", "--port", port, "--strictPort"], {
     cwd: CLIENT,
     stdio: "ignore",
   });
   for (let i = 0; i < 120; i++) {
-    if (await reachable(`${opts.base}/e2e/share-fast-start/harness.html`)) return child;
+    if (await reachable(`${baseUrl}/e2e/share-fast-start/harness.html`)) return child;
     await new Promise((r) => setTimeout(r, 500));
   }
   child.kill();
@@ -139,9 +141,6 @@ async function openJoined(page, url, attempts = 3) {
 
 export async function runScenario(o = opts) {
   ensureMedia();
-  const vite = await ensureVite();
-  startSfu();
-  await sleep(2500);
   const since = Math.floor(Date.now() / 1000) - 1;
   const room = `sfs-${Date.now()}`;
   const launch = () =>
@@ -156,8 +155,13 @@ export async function runScenario(o = opts) {
         "--auto-select-desktop-capture-source=Entire screen",
       ],
     });
-  const presenterBrowser = await launch();
-  const viewerBrowser = await launch();
+  // Everything below is acquired inside the try, and the finally releases
+  // only what was actually acquired: a failed launch must not leave the
+  // media server or Vite running into the next run.
+  let vite = null;
+  let sfuStarted = false;
+  let presenterBrowser = null;
+  let viewerBrowser = null;
   let filler = null;
   let grower = null;
   const idlers = [];
@@ -173,6 +177,12 @@ export async function runScenario(o = opts) {
     );
   const result = { opts: o, room, viewers: [], presenter: null };
   try {
+    vite = await ensureVite(o.base);
+    startSfu();
+    sfuStarted = true;
+    await sleep(2500);
+    presenterBrowser = await launch();
+    viewerBrowser = await launch();
     if (o.shape || o.shapePresenter) {
       shape({
         viewer: o.shape ? { rate: o.shape, impair: o.impair || undefined } : undefined,
@@ -196,7 +206,11 @@ export async function runScenario(o = opts) {
         ),
       );
     }
-    if (o.idle > 0) await sleep(3000);
+    // Joined, not just spawned: a room that never got past twenty would let
+    // the crossing scenario pass without crossing anything.
+    if (o.idle + o.fill > 0) {
+      result.participantsBeforeShare = await waitForParticipants(room, o.idle + o.fill);
+    }
     const presenter = await (await presenterBrowser.newContext()).newPage();
     if (process.env.DEBUG) {
       presenter.on("console", (m) => console.log("[presenter]", m.text()));
@@ -238,11 +252,16 @@ export async function runScenario(o = opts) {
         ...(o.src ? { src: o.src } : {}),
       }),
     );
+    result.participantsBeforeViewers = await participantCount(room);
     if (!o.together) {
       await sleep(o.warm * 1000);
       await Promise.all(Array.from({ length: o.viewers }, (_, i) => openViewer(i)));
     }
     const joinedAt = Date.now();
+    result.participantsAfterViewers = await waitForParticipants(
+      room,
+      (result.participantsBeforeViewers ?? 0) + (o.together ? 0 : o.viewers),
+    );
     if (o.grow > 0) {
       await sleep(o.growAfter * 1000);
       grower = loadTest(o.grow);
@@ -259,13 +278,17 @@ export async function runScenario(o = opts) {
     filler?.kill();
     grower?.kill();
     for (const p of idlers) p.kill();
-    await presenterBrowser.close();
-    await viewerBrowser.close();
-    result.sfuLog = sfuLogs(since).filter((l) =>
-      /allocat|probe|layer|quality|keyframe|PLI|stream state|congest|deficient|bandwidth|estimate/i.test(l.msg ?? ""),
-    );
+    await presenterBrowser?.close().catch(() => undefined);
+    await viewerBrowser?.close().catch(() => undefined);
+    if (sfuStarted) {
+      result.sfuLog = sfuLogs(since).filter((l) =>
+        /allocat|probe|layer|quality|keyframe|PLI|stream state|congest|deficient|bandwidth|estimate/i.test(l.msg ?? ""),
+      );
+    }
+    // Stopped even when it never answered: `startSfu` may have created the
+    // container before failing.
     if (!o.keepSfu) stopSfu();
-    if (vite) vite.kill();
+    vite?.kill();
   }
   return result;
 }

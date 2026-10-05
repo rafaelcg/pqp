@@ -28,7 +28,21 @@ interface Viewer {
     heights: { t: number; h: number }[];
     steadyKbps: number | null;
   };
-  raw: { events: { t: number; name: string }[] };
+  raw: { events: { t: number; name: string; data?: { h?: number } }[] };
+}
+
+/**
+ * Every picture height the viewer had: the stats loop's (four times a second)
+ * and the element's own (`size` events, also four a second), so a drop and a
+ * recovery between two samples of one of them still shows in the other.
+ */
+function heightsSeen(viewer: Viewer): number[] {
+  return [
+    ...viewer.summary.heights.map((step) => step.h),
+    ...viewer.raw.events
+      .filter((event) => event.name === "size" && typeof event.data?.h === "number")
+      .map((event) => event.data!.h!),
+  ];
 }
 
 const chrome = spawnSync("test", ["-d", "/Applications/Google Chrome.app"]).status === 0 ||
@@ -41,13 +55,15 @@ test.describe("share_fast_start_quality", () => {
     const result = await runScenario(
       scenario({ idle: 22, viewers: 3, warm: 10, watch: 15, fast: true }),
     );
+    // The presenter's plan is the large-room one only above twenty.
+    expect(result.participantsBeforeViewers).toBeGreaterThan(20);
     expect(result.viewers).toHaveLength(3);
     for (const viewer of result.viewers as Viewer[]) {
       const { firstFrame, heights, steadyKbps } = viewer.summary;
       expect(firstFrame, "first frame decoded").not.toBeNull();
       expect(firstFrame!).toBeLessThan(2_500);
       expect(heights[0]?.h, "first picture is the 720p layer, not the 360p copy").toBe(720);
-      expect(heights.every((step) => step.h >= 720)).toBe(true);
+      expect(heightsSeen(viewer).every((h) => h >= 720)).toBe(true);
       // The same layer as before the flag: about 1.5 Mbit/s, never the top of
       // a bigger ladder.
       expect(steadyKbps!).toBeLessThan(1_800);
@@ -58,11 +74,14 @@ test.describe("share_fast_start_quality", () => {
     const result = await runScenario(
       scenario({ src: "display", idle: 16, viewers: 6, warm: 15, watch: 30, fast: true }),
     );
+    // It has to have crossed, or "nobody lost the picture" proves nothing.
+    expect(result.participantsBeforeViewers).toBeLessThanOrEqual(20);
+    expect(result.participantsAfterViewers).toBeGreaterThan(20);
     expect(result.viewers).toHaveLength(6);
     for (const viewer of result.viewers as Viewer[]) {
       expect(viewer.summary.firstFrame).not.toBeNull();
       expect(viewer.raw.events.some((event) => event.name === "screenGone")).toBe(false);
-      expect(viewer.summary.heights.some((step) => step.h <= 2)).toBe(false);
+      expect(heightsSeen(viewer).some((h) => h <= 2)).toBe(false);
     }
   });
 });

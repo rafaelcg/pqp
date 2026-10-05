@@ -364,6 +364,23 @@ describe("viewer: the share is asked for before it is bound", () => {
     expect(share.requested).toEqual([MEDIUM, HIGH]);
   });
 
+  it("flag on: a smaller choice made between the early ask and the subscription is obeyed from the first picture", async () => {
+    flagOn();
+    const { room, session } = await connect();
+    const host = room.participant("host");
+    const share = remotePublication(Track.Source.ScreenShare, [360, 720, 1080]);
+    host.trackPublications.set("share", share);
+    host.videoTrackPublications.set("share", share);
+    room.emit(RoomEvent.SignalConnected);
+    expect(share.requested).toEqual([MEDIUM]);
+    // Not bound yet: asked again under the new ceiling.
+    await session.setReceiveQuality("360p");
+    expect(share.requested).toEqual([MEDIUM, LOW]);
+    // Bound: the explicit ceiling goes on at once, never a bare HIGH.
+    subscribe(room, host, share);
+    expect(share.requested).toEqual([MEDIUM, LOW, LOW]);
+  });
+
   it("flag on: the viewer's own smaller choice is the early ask too", async () => {
     flagOn();
     const { room, session } = await connect();
