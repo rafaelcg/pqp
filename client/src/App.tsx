@@ -7071,8 +7071,13 @@ function MainAppContent({
   // which the strip shows until the room's own state says otherwise.
   const voiceConfig = useVoiceConfig(selectedServerId);
   const [audienceBusy, setAudienceBusy] = useState(false);
-  const [audienceEnforcement, setAudienceEnforcement] =
-    useState<VoiceAudienceEnforcement | null>(null);
+  // Tied to the call and the session it answered for, so a warning from one
+  // call is never drawn over the next one.
+  const [audienceEnforcement, setAudienceEnforcement] = useState<{
+    channelId: string;
+    since: number | null;
+    enforcement: VoiceAudienceEnforcement;
+  } | null>(null);
 
   async function handleToggleAudienceMode() {
     const channelId = voice.getState().voiceChannelId;
@@ -7085,7 +7090,11 @@ function MainAppContent({
         channelId,
         voice.getState().audience === null,
       );
-      setAudienceEnforcement(answer.enforcement);
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
     } catch (err) {
       setAppError(voiceModerationError(err, t("voice.audience.failed")));
     } finally {
@@ -7101,7 +7110,11 @@ function MainAppContent({
     setAudienceBusy(true);
     try {
       const answer = await setVoiceAudienceSpeaker(channelId, userId, allowed);
-      setAudienceEnforcement(answer.enforcement);
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
     } catch (err) {
       setAppError(voiceModerationError(err, t("voice.audience.speakerFailed")));
     } finally {
@@ -7132,7 +7145,12 @@ function MainAppContent({
       onToggle: () => void handleToggleAudienceMode(),
       onAllow: (userId) => void handleAudienceSpeaker(userId, true),
       onSilence: (userId) => void handleAudienceSpeaker(userId, false),
-      enforcement: voiceState.audience ? audienceEnforcement : null,
+      enforcement:
+        voiceState.audience &&
+        audienceEnforcement?.channelId === channel.id &&
+        audienceEnforcement.since === voiceState.audience.since
+          ? audienceEnforcement.enforcement
+          : null,
     };
   }
 

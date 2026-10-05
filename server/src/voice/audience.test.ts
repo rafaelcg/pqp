@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Permission, PERMISSION_DEFAULT_EVERYONE } from "@pqp/shared";
+const db = vi.hoisted(() => ({ fail: false }));
+vi.mock("../db.js", () => ({
+  getPool: () => ({
+    query: async () => {
+      if (db.fail) {
+        throw new Error("connect ECONNREFUSED");
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  }),
+}));
+
 import {
   applyAudienceMode,
   audienceModeApplies,
   audienceWireState,
   cacheAudience,
   isAudienceStage,
+  loadAudience,
   logPerRoom,
   resetAudienceForTests,
   resetAudienceLogLimiterForTests,
@@ -171,5 +184,38 @@ describe("the per-room line limiter", () => {
       "[pqp] voice.speakDenied voiceChannelId=room-2 reason=permission",
       "[pqp] voice.speakDenied voiceChannelId=room-1 reason=audience suppressed=4",
     ]);
+  });
+});
+
+describe("reading the room's state when the database will not answer", () => {
+  const channel = { kind: "server", server_id: "server-1", type: "voice" };
+  beforeEach(() => {
+    resetAudienceForTests();
+    process.env.VOICE_REGISTRY = "postgres";
+    process.env.AUDIENCE_MODE = "true";
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    db.fail = false;
+    delete process.env.VOICE_REGISTRY;
+    delete process.env.AUDIENCE_MODE;
+    vi.restoreAllMocks();
+  });
+
+  it("refuses rather than guess 'off' when this process has nothing cached", async () => {
+    db.fail = true;
+    await expect(loadAudience(channel, "room-1")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("answers from what this process last knew when it knew something", async () => {
+    cacheAudience("room-1", { since: 5, byUserId: "host", speakers: [] });
+    db.fail = true;
+    expect(await loadAudience(channel, "room-1")).toMatchObject({ since: 5 });
+  });
+
+  it("never reads at all where the flag is off", async () => {
+    process.env.AUDIENCE_MODE = "false";
+    db.fail = true;
+    expect(await loadAudience(channel, "room-1")).toBeNull();
   });
 });

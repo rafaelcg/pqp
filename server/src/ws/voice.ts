@@ -111,7 +111,7 @@ import {
   setSfuUserCanPublish,
   tickSfuResweeps,
 } from "../voice/admin.js";
-import { resolveVoicePublish } from "../voice/speak.js";
+import { resolveVoicePublish, type VoicePublishGrant } from "../voice/speak.js";
 import {
   applyAudienceMode,
   audienceModeApplies,
@@ -130,6 +130,7 @@ import {
   noteAudienceCounter,
   noteAudienceEnded,
   noteSpeakDenied,
+  pruneDepartedAudienceSpeakers,
   readAudienceRow,
   removeAudienceSpeakerRow,
   resetAudienceForTests,
@@ -10436,7 +10437,15 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
     // Once per room, not once per person: a role edit while audience mode is
     // on must not hand the audience its microphones back, and forty reads of
     // the same row would say the same thing forty times.
-    const audience = await loadAudience(channel, voiceChannelId);
+    let audience: AudienceRoom | null;
+    try {
+      audience = await loadAudience(channel, voiceChannelId);
+    } catch (error) {
+      // Unknown, so nothing in this room is relabelled on a guess; the
+      // audience sweep and the next permissions bump come back to it.
+      console.error("[voice] speak re-check: audience read failed:", error);
+      continue;
+    }
     for (const [userId, userPeers] of byUser) {
       let next;
       try {
@@ -10568,16 +10577,70 @@ const audienceLastSent = new Map<string, string>();
 const audienceGenerations = new Map<string, number>();
 
 /**
- * Rooms whose audience mode went OFF and whose SFU restore is not yet known
- * good, with when to give up (ms). The ON direction has its own backstop
- * (the sweep walks every room whose row is on); the OFF direction has no row
- * left to find, so without this a box that failed every restore pass would
- * leave people revoked at the SFU while the room, the roster and their own
- * client all say they may talk. The sweep runs a pass for each until one
- * comes back clean.
+ * Rooms whose audience mode went OFF and whose restore is not yet known good.
+ * The ON direction has its own backstop (the sweep walks every room whose row
+ * is on); the OFF direction has no row left to find, so without this a box
+ * that failed every restore pass would leave people revoked while the room,
+ * the roster and their own client all say they may talk. Marked BEFORE the
+ * first restore is attempted, so a pass that throws is still retried, and
+ * cleared only by a pass that comes back clean (an empty room is clean). No
+ * deadline: an unreachable box costs one call per sweep, and giving up would
+ * be choosing to leave people silenced.
  */
-const audienceRestorePending = new Map<string, number>();
-const AUDIENCE_RESTORE_GIVE_UP_MS = 10 * 60_000;
+const audienceRestorePending = new Set<string>();
+
+/**
+ * Permission resolutions per room, shared by the seat pass and the SFU pass
+ * of one sweep or change, for `AUDIENCE_GRANT_MEMO_MS`. Keyed on the room's
+ * generation and the state it was resolved against, and dropped on any
+ * permissions change, so a memo never outlives what it was computed from. A
+ * 40-person room swept every 15 s resolves each person once, not twice.
+ */
+const AUDIENCE_GRANT_MEMO_MS = 20_000;
+const audienceGrantMemo = new Map<
+  string,
+  { key: string; at: number; byUser: Map<string, Promise<VoicePublishGrant>> }
+>();
+
+function audienceStateKey(channelId: string, audience: AudienceRoom | null): string {
+  const generation = audienceGenerations.get(channelId) ?? 0;
+  if (!audience) {
+    return `${generation}:off`;
+  }
+  return `${generation}:${audience.since}:${[...audience.speakers].sort().join(",")}`;
+}
+
+function audienceGrant(
+  channel: Awaited<ReturnType<typeof getChannel>>,
+  channelId: string,
+  userId: string,
+  audience: AudienceRoom | null,
+): Promise<VoicePublishGrant> {
+  const key = audienceStateKey(channelId, audience);
+  const now = Date.now();
+  let memo = audienceGrantMemo.get(channelId);
+  if (!memo || memo.key !== key || now - memo.at > AUDIENCE_GRANT_MEMO_MS) {
+    memo = { key, at: now, byUser: new Map() };
+    audienceGrantMemo.set(channelId, memo);
+  }
+  let pending = memo.byUser.get(userId);
+  if (!pending) {
+    const byUser = memo.byUser;
+    pending = resolveVoicePublish(channel, channelId, userId, { audience });
+    // A failure is not remembered: the next asker tries again.
+    pending.catch(() => {
+      if (byUser.get(userId) === pending) {
+        byUser.delete(userId);
+      }
+    });
+    byUser.set(userId, pending);
+  }
+  return pending;
+}
+
+onPermissionsUpdate(() => {
+  audienceGrantMemo.clear();
+});
 
 function bumpAudienceGeneration(channelId: string): void {
   audienceGenerations.set(channelId, (audienceGenerations.get(channelId) ?? 0) + 1);
@@ -10622,6 +10685,11 @@ async function applyAudienceLocally(
   if (local.length === 0) {
     return;
   }
+  // Overtaken while resolving: a newer change (here or from the bus) has
+  // its own application running, and this one must not write the older
+  // state on top of it.
+  const generation = audienceGenerations.get(channelId) ?? 0;
+  const overtaken = () => (audienceGenerations.get(channelId) ?? 0) !== generation;
   const byUser = new Map<string, VoicePeer[]>();
   for (const peer of local) {
     const list = byUser.get(peer.userId) ?? [];
@@ -10630,12 +10698,26 @@ async function applyAudienceLocally(
   }
   const relabelled: VoicePeer[] = [];
   for (const [userId, userPeers] of byUser) {
-    let next;
+    let next: Pick<VoicePublishGrant, "canSpeak" | "canStream" | "speakReason">;
     try {
-      next = await resolveVoicePublish(channel, channelId, userId, { audience });
+      next = await audienceGrant(channel, channelId, userId, audience);
     } catch (error) {
       console.error("[voice] audience re-check failed:", error);
-      continue;
+      if (audience) {
+        // FAIL CLOSED while the mode is on: a seat whose permissions could
+        // not be read is locked as audience until the next pass reads them
+        // (the follow-ups and the sweep re-run this). On a mesh room nothing
+        // else would stop it. A host caught by this gets their mic back on
+        // that next pass.
+        next = { canSpeak: false, canStream: false, speakReason: "audience" };
+      } else {
+        // Off: leave it, and make sure somebody comes back to restore it.
+        audienceRestorePending.add(channelId);
+        continue;
+      }
+    }
+    if (overtaken()) {
+      return;
     }
     const changed = userPeers.filter(
       (peer) =>
@@ -10667,6 +10749,9 @@ async function applyAudienceLocally(
       relabelled.push(peer);
     }
   }
+  if (overtaken()) {
+    return;
+  }
   const wire = audienceWireState(audience);
   const signature = JSON.stringify(wire);
   if (change || audienceLastSent.get(channelId) !== signature) {
@@ -10678,15 +10763,18 @@ async function applyAudienceLocally(
       ...(change ? { change } : {}),
     });
   }
-  let announced: Promise<void> | null = null;
-  for (const peer of relabelled) {
-    announced = broadcastRoster(channelId, {
-      kind: "updated",
-      peer: toParticipant(peer),
-    });
-  }
-  if (announced) {
-    await announced;
+  // One `updated` event per peer, coalesced by the roster queue into one
+  // frame per room (`broadcastRoster` -> `rosterCoalescer`). Every promise is
+  // settled, so a rejection is logged rather than unhandled.
+  const announced = await Promise.allSettled(
+    relabelled.map((peer) =>
+      broadcastRoster(channelId, { kind: "updated", peer: toParticipant(peer) }),
+    ),
+  );
+  for (const outcome of announced) {
+    if (outcome.status === "rejected") {
+      console.error("[voice] audience roster update failed:", outcome.reason);
+    }
   }
 }
 
@@ -10712,6 +10800,8 @@ async function runAudiencePass(
   channelId: string,
   channel: Awaited<ReturnType<typeof getChannel>>,
   wide: boolean,
+  /** A speaker change: only this person's grant moved, so only they are touched. */
+  onlyUserId?: string,
 ): Promise<{ pending: string[]; unreachable: boolean }> {
   const generation = audienceGenerations.get(channelId) ?? 0;
   const audience = await loadAudience(channel, channelId);
@@ -10719,7 +10809,10 @@ async function runAudiencePass(
   const result = await reconcileSfuRoomPublishGrants(
     channelId,
     async (userId) => {
-      const grant = await resolveVoicePublish(channel, channelId, userId, { audience });
+      if (onlyUserId !== undefined && userId !== onlyUserId) {
+        return null;
+      }
+      const grant = await audienceGrant(channel, channelId, userId, audience);
       // Overtaken by a newer change: leave this person to that change's pass.
       return (audienceGenerations.get(channelId) ?? 0) === generation ? grant : null;
     },
@@ -10744,26 +10837,34 @@ async function runAudiencePass(
   }
   if (!audience) {
     if (result.failedUserIds.length > 0 || result.unreachable) {
-      if (!audienceRestorePending.has(channelId)) {
-        audienceRestorePending.set(channelId, Date.now() + AUDIENCE_RESTORE_GIVE_UP_MS);
-      }
-    } else if (!result.skipped) {
+      audienceRestorePending.add(channelId);
+    } else if (onlyUserId === undefined) {
       audienceRestorePending.delete(channelId);
     }
   } else {
     audienceRestorePending.delete(channelId);
   }
   if (audience) {
+    const failed = new Set(result.failedUserIds);
+    // A pass about one person says nothing about anybody else's standing.
+    const next =
+      onlyUserId === undefined
+        ? failed
+        : new Set(
+            [...audience.unenforced].filter((userId) => userId !== onlyUserId).concat(
+              failed.has(onlyUserId) ? [onlyUserId] : [],
+            ),
+          );
     const before = [...audience.unenforced].sort().join(",");
-    const after = result.failedUserIds.join(",");
+    const after = [...next].sort().join(",");
     if (before !== after) {
-      audience.unenforced = new Set(result.failedUserIds);
+      audience.unenforced = next;
       await applyAudienceLocally(channelId, channel, audience);
       if (registryOn() && clusterOn()) {
         publishVoice(VOICE_AUDIENCE_TOPIC, {
           channelId,
           since: audience.since,
-          unenforcedUserIds: result.failedUserIds,
+          unenforcedUserIds: [...next].sort(),
         } satisfies VoiceAudienceFrame);
       }
     }
@@ -10771,14 +10872,17 @@ async function runAudiencePass(
   return { pending: result.failedUserIds, unreachable: result.unreachable };
 }
 
-function scheduleAudienceFollowUps(channelId: string): void {
-  for (const timer of audienceFollowUps.get(channelId) ?? []) {
+function scheduleAudienceFollowUps(channelId: string, onlyUserId?: string): void {
+  // A room-wide change and a one-person change keep separate timers, so an
+  // invitation right after "on" does not cancel the room's own follow-ups.
+  const key = onlyUserId === undefined ? channelId : `${channelId}#${onlyUserId}`;
+  for (const timer of audienceFollowUps.get(key) ?? []) {
     clearTimeout(timer);
   }
   const timers = AUDIENCE_FOLLOW_UP_MS.map((delay, index) => {
     const timer = setTimeout(() => {
       if (index === AUDIENCE_FOLLOW_UP_MS.length - 1) {
-        audienceFollowUps.delete(channelId);
+        audienceFollowUps.delete(key);
       }
       void (async () => {
         const channel = await getChannel(channelId);
@@ -10788,7 +10892,7 @@ function scheduleAudienceFollowUps(channelId: string): void {
           await loadAudience(channel, channelId),
         );
         if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
-          await runAudiencePass(channelId, channel, false);
+          await runAudiencePass(channelId, channel, false, onlyUserId);
         }
       })().catch((error: unknown) => {
         console.error("[voice] audience follow-up failed:", error);
@@ -10797,7 +10901,7 @@ function scheduleAudienceFollowUps(channelId: string): void {
     timer.unref?.();
     return timer;
   });
-  audienceFollowUps.set(channelId, timers);
+  audienceFollowUps.set(key, timers);
 }
 
 /** The media half of a change, and what the host is told about it. */
@@ -10805,18 +10909,31 @@ async function enforceAudienceChange(
   channelId: string,
   channel: Awaited<ReturnType<typeof getChannel>>,
   wide: boolean,
+  options: { restoring?: boolean; onlyUserId?: string } = {},
 ): Promise<VoiceAudienceEnforcement> {
   const transport = await audienceRoomTransport(channelId);
   if (transport !== "livekit" || !isLiveKitConfigured()) {
     return { transport: "mesh", pendingUserIds: [], unreachable: false };
   }
-  const first = await runAudiencePass(channelId, channel, wide);
-  scheduleAudienceFollowUps(channelId);
-  return {
-    transport: "livekit",
-    pendingUserIds: first.pending,
-    unreachable: first.unreachable,
-  };
+  // Before the first pass, so a pass that throws is still followed up, and
+  // a restore that throws is still retried by the sweep.
+  if (options.restoring) {
+    audienceRestorePending.add(channelId);
+  }
+  scheduleAudienceFollowUps(channelId, options.onlyUserId);
+  try {
+    const first = await runAudiencePass(channelId, channel, wide, options.onlyUserId);
+    return {
+      transport: "livekit",
+      pendingUserIds: first.pending,
+      unreachable: first.unreachable,
+    };
+  } catch (error) {
+    // The state already changed; the host is told the media server's half
+    // is not confirmed, and the follow-ups (and the sweep) keep trying.
+    console.error("[voice] audience pass failed:", error);
+    return { transport: "livekit", pendingUserIds: [], unreachable: true };
+  }
 }
 
 /**
@@ -10843,7 +10960,27 @@ export async function setVoiceAudienceMode(
         throw new AudienceModeError("no-room", "Nobody is in this call");
       }
       changed = outcome === "created";
-      state = cacheAudience(channelId, await readAudienceRow(channelId));
+      let row: Awaited<ReturnType<typeof readAudienceRow>> = null;
+      try {
+        row = await readAudienceRow(channelId);
+      } catch (error) {
+        // The insert committed: the room IS in audience mode. Enforce it now
+        // from what we know rather than leave it to the sweep; the row's own
+        // instant replaces this one on the next read.
+        logEvent("voice.registryReadFailed", {
+          op: "audienceAfterInsert",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      state = cacheAudience(
+        channelId,
+        row ??
+          cachedAudience(channelId) ?? {
+            since: Date.now(),
+            byUserId: actorId ?? "",
+            speakers: [],
+          },
+      );
     } else {
       changed = await deleteAudienceRow(channelId);
       state = cacheAudience(channelId, null);
@@ -10901,7 +11038,9 @@ export async function setVoiceAudienceMode(
   }
   await applyAudienceLocally(channelId, channel, state, change);
   // A revoke's first pass asks every box; a restore asks the room's box.
-  const enforcement = await enforceAudienceChange(channelId, channel, enabled);
+  const enforcement = await enforceAudienceChange(channelId, channel, enabled, {
+    restoring: !enabled,
+  });
   const audience = audienceWireState(cachedAudience(channelId) ?? state);
   return { audience: enabled ? audience : null, enforcement, changed };
 }
@@ -10973,7 +11112,11 @@ export async function setVoiceAudienceSpeaker(
     await setVoiceUserHandRaised(channelId, userId, false);
   }
   await applyAudienceLocally(channelId, channel, state, change);
-  const enforcement = await enforceAudienceChange(channelId, channel, !allowed);
+  // Only this person's grant moved, so only they are reconciled (a revoke
+  // still asks every box for them).
+  const enforcement = await enforceAudienceChange(channelId, channel, !allowed, {
+    onlyUserId: userId,
+  });
   return {
     audience: audienceWireState(cachedAudience(channelId) ?? state),
     enforcement,
@@ -11191,6 +11334,14 @@ export async function sweepAudienceModes(): Promise<void> {
         await setVoiceAudienceMode(channelId, false, null, "no-host");
         continue;
       }
+      // An invitation whose holder has no seat left (a departure delete
+      // that failed) goes now, so it cannot come back with them later.
+      if (registryOn() && (await pruneDepartedAudienceSpeakers(channelId)) > 0) {
+        bumpAudienceGeneration(channelId);
+        if (clusterOn()) {
+          publishVoice(VOICE_AUDIENCE_TOPIC, { channelId } satisfies VoiceAudienceFrame);
+        }
+      }
       await applyAudienceLocally(
         channelId,
         channel,
@@ -11211,25 +11362,23 @@ export async function sweepAudienceModes(): Promise<void> {
  * the main sweep; one past its deadline is logged and dropped.
  */
 async function retryAudienceRestores(): Promise<void> {
-  const now = Date.now();
-  for (const [channelId, giveUpAt] of [...audienceRestorePending]) {
-    if (now > giveUpAt) {
-      audienceRestorePending.delete(channelId);
-      logEvent("voice.audienceMode.restoreAbandoned", { channelId });
-      continue;
-    }
+  for (const channelId of [...audienceRestorePending]) {
     try {
       const channel = await getChannel(channelId);
       if (await loadAudience(channel, channelId)) {
+        // On again: the main sweep owns the room now.
         audienceRestorePending.delete(channelId);
         continue;
       }
+      // Seats first (a resolution that failed while restoring left one
+      // locked), then the media server. Either failing keeps it pending.
+      audienceRestorePending.delete(channelId);
+      await applyAudienceLocally(channelId, channel, null);
       if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
         await runAudiencePass(channelId, channel, false);
-      } else {
-        audienceRestorePending.delete(channelId);
       }
     } catch (error) {
+      audienceRestorePending.add(channelId);
       console.error("[voice] audience restore retry failed:", error);
     }
   }
@@ -11250,6 +11399,7 @@ export function resetAudienceTimersForTests(): void {
   audienceLastSent.clear();
   audienceGenerations.clear();
   audienceRestorePending.clear();
+  audienceGrantMemo.clear();
 }
 
 // --- end audience mode -------------------------------------------------------
@@ -12259,7 +12409,8 @@ subscribeToCluster(VOICE_AUDIENCE_TOPIC, (data) => {
     return;
   }
   noteClusterFrameReceived();
-  if (frame.change) {
+  // Every frame but a pure enforcement report says the rows moved.
+  if (frame.change || frame.unenforcedUserIds === undefined) {
     bumpAudienceGeneration(frame.channelId);
   }
   void (async () => {

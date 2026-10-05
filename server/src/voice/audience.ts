@@ -330,6 +330,25 @@ export async function removeAudienceSpeakerRow(
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * Invitations held by people with no seat left in the room. The departure
+ * path drops them as the person leaves; this is the sweep's backstop for a
+ * delete that failed, so an invitation can never outlive its holder's seat by
+ * more than a sweep and come back with them on a later rejoin.
+ */
+export async function pruneDepartedAudienceSpeakers(channelId: string): Promise<number> {
+  const result = await getPool().query(
+    `DELETE FROM voice_audience_speakers s
+      WHERE s.channel_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM voice_peers p
+           WHERE p.channel_id = s.channel_id AND p.user_id = s.user_id
+        )`,
+    [channelId],
+  );
+  return result.rowCount ?? 0;
+}
+
 /** Which of these rooms have audience mode on, per the rows. One query for the sweep. */
 export async function listAudienceRooms(channelIds: readonly string[]): Promise<string[]> {
   if (channelIds.length === 0) {
@@ -350,9 +369,9 @@ export async function listAudienceRooms(channelIds: readonly string[]): Promise<
  *   null, without touching the database. The flag is off everywhere by
  *   default, so this costs nothing until an operator turns it on.
  * - Registry on: the rows, which the cache then follows. A read that fails
- *   falls back to the cache and logs: a missed read can at worst leave one
- *   mic open until the sweep corrects it, and must never mute a room nobody
- *   chose to mute.
+ *   falls back to the cache when this process holds one, and THROWS when it
+ *   does not: the caller refuses (503, a retried join) rather than issue a
+ *   grant on a guess.
  * - Registry off: the cache, which is the state.
  */
 export async function loadAudience(
@@ -376,7 +395,17 @@ export async function loadAudience(
       op: "audience",
       error: error instanceof Error ? error.message : String(error),
     });
-    return cachedAudience(channelId);
+    // What this process last knew, when it knew anything. With nothing
+    // cached it cannot tell "off" from "on and not heard about", so it does
+    // not guess: the error goes to the caller, which refuses the way it
+    // already refuses when the permission read beside this one fails (the
+    // token mint answers 503, a join is retried). Answering "off" here would
+    // hand a microphone to somebody the room silenced.
+    const cached = cachedAudience(channelId);
+    if (cached) {
+      return cached;
+    }
+    throw error;
   }
 }
 
@@ -458,6 +487,7 @@ export function audienceModeMetrics(): AudienceModeMetrics {
 
 const LINE_WINDOW_MS = 60_000;
 const lines = new Map<string, { at: number; suppressed: number }>();
+let linesPrunedAt = 0;
 
 /**
  * One line per (event, room) per minute, with `suppressed=N` on the next one.
@@ -478,7 +508,10 @@ export function logPerRoom(
   }
   const suppressed = entry?.suppressed ?? 0;
   lines.set(key, { at: now, suppressed: 0 });
-  if (lines.size > 5_000) {
+  // Pruned at most once a window, so a burst of new rooms costs one scan a
+  // minute rather than one per insert.
+  if (lines.size > 5_000 && now - linesPrunedAt >= LINE_WINDOW_MS) {
+    linesPrunedAt = now;
     for (const [stale, value] of lines) {
       if (now - value.at >= LINE_WINDOW_MS) {
         lines.delete(stale);
@@ -491,4 +524,5 @@ export function logPerRoom(
 /** Test seam for the per-room limiter. */
 export function resetAudienceLogLimiterForTests(): void {
   lines.clear();
+  linesPrunedAt = 0;
 }

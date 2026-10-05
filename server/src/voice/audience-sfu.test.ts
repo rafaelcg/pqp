@@ -249,6 +249,45 @@ describe("reconcileSfuRoomPublishGrants", () => {
       ).toBe(true);
     });
 
+    it("a person whose grant could not be resolved is reported as failed, never as enforced", async () => {
+      const home = boxes.get(HOME)!;
+      home.listParticipants.mockResolvedValue([
+        talking("peer-a", "alice"),
+        talking("peer-b", "bob"),
+      ]);
+      const result = await reconcileSfuRoomPublishGrants(
+        "room",
+        async (userId) => {
+          if (userId === "alice") {
+            throw new Error("permission read failed");
+          }
+          return AUDIENCE;
+        },
+        new Map(),
+      );
+      expect(result.failedUserIds).toEqual(["alice"]);
+      expect(result.updated).toBe(1);
+      expect(home.updateParticipant).toHaveBeenCalledTimes(1);
+    });
+
+    it("works a big room a few participants at a time", async () => {
+      const home = boxes.get(HOME)!;
+      home.listParticipants.mockResolvedValue(
+        Array.from({ length: 40 }, (_, i) => talking(`peer-${i}`, `user-${i}`)),
+      );
+      let inFlight = 0;
+      let peak = 0;
+      home.updateParticipant.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight -= 1;
+      });
+      const result = await reconcileSfuRoomPublishGrants("room", grantFor, new Map());
+      expect(result.updated).toBe(40);
+      expect(peak).toBeLessThanOrEqual(8);
+    });
+
     it("says the box is unreachable when it cannot even list the room", async () => {
       boxes
         .get(HOME)!

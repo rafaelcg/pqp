@@ -8,6 +8,7 @@ import {
 } from "livekit-server-sdk";
 import { z } from "zod";
 import { logEvent } from "../lib/log.js";
+import { mapWithConcurrency } from "../lib/admission.js";
 import {
   isLiveKitConfigured,
   liveKitPublishGrant,
@@ -1571,21 +1572,24 @@ export async function reconcileSfuRoomPublishGrants(
     return empty;
   }
   // One resolution per person however many seats or boxes they appear on.
-  const grants = new Map<
-    string,
-    Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>
-  >();
+  // A resolution that FAILED is not a skip: the person keeps whatever the SFU
+  // already lets them publish, so they are reported as failed and retried,
+  // never counted as enforced.
+  const grants = new Map<string, Promise<GrantOutcome>>();
   const grantOf = (userId: string) => {
     let pending = grants.get(userId);
     if (!pending) {
-      pending = grantFor(userId).catch((error: unknown) => {
-        logEvent("voice.audienceMode.grantResolveFailed", {
-          room,
-          userId,
-          error: describeError(error),
-        });
-        return null;
-      });
+      pending = grantFor(userId).then(
+        (grant): GrantOutcome => ({ grant }),
+        (error: unknown): GrantOutcome => {
+          logEvent("voice.audienceMode.grantResolveFailed", {
+            room,
+            userId,
+            error: describeError(error),
+          });
+          return { failed: true };
+        },
+      );
       grants.set(userId, pending);
     }
     return pending;
@@ -1626,6 +1630,17 @@ export async function reconcileSfuRoomPublishGrants(
   };
 }
 
+type GrantOutcome =
+  | { grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null }
+  | { failed: true };
+
+/**
+ * How many participants of one room a pass works on at once: each may cost a
+ * permission resolution and up to a few RPCs to the box, and forty at once is
+ * a burst neither the pool nor the box needs.
+ */
+const ROOM_GRANT_CONCURRENCY = 8;
+
 function sameSources(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
   const left = [...(a ?? [])].sort();
   const right = [...(b ?? [])].sort();
@@ -1635,9 +1650,7 @@ function sameSources(a: readonly number[] | undefined, b: readonly number[] | un
 async function roomGrantsOn(
   target: RegionTarget,
   room: string,
-  grantOf: (
-    userId: string,
-  ) => Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>,
+  grantOf: (userId: string) => Promise<GrantOutcome>,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<{ checked: number; updated: number; failed: string[]; outcome: RegionOutcome }> {
   const { client } = target;
@@ -1663,8 +1676,7 @@ async function roomGrantsOn(
   let checked = 0;
   let updated = 0;
   const failed: string[] = [];
-  await Promise.all(
-    participants.map(async (participant) => {
+  await mapWithConcurrency(participants, ROOM_GRANT_CONCURRENCY, async (participant) => {
       const identity = participant.identity;
       const userId =
         userIdFromParticipantMetadata(participant.metadata) ??
@@ -1673,7 +1685,12 @@ async function roomGrantsOn(
       if (!userId) {
         return;
       }
-      const grant = await grantOf(userId);
+      const outcome = await grantOf(userId);
+      if ("failed" in outcome) {
+        failed.push(userId);
+        return;
+      }
+      const grant = outcome.grant;
       if (!grant) {
         return;
       }
@@ -1741,8 +1758,7 @@ async function roomGrantsOn(
       } else {
         failed.push(userId);
       }
-    }),
-  );
+  });
   return { checked, updated, failed, outcome: "ok" };
 }
 

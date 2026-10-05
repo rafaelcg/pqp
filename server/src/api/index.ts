@@ -8712,16 +8712,29 @@ router.put(
       audienceModeHttpError(error);
     }
     if (result.changed) {
-      await logAudit({
-        serverId: channel.server_id,
-        actorId: user.id,
-        action: body.enabled
-          ? "channel.voice_audience_on"
-          : "channel.voice_audience_off",
-        targetType: "channel",
-        targetId: channelId!,
-        changes: [{ key: "audienceMode", old: !body.enabled, new: body.enabled }],
-      });
+      // After the change, and never able to undo it or fail the answer: the
+      // room has already changed, and telling the host it did not (so they
+      // press again, find nothing to change, and no audit is ever written)
+      // is worse than a missing row. The failure is logged loudly instead.
+      try {
+        await logAudit({
+          serverId: channel.server_id,
+          actorId: user.id,
+          action: body.enabled
+            ? "channel.voice_audience_on"
+            : "channel.voice_audience_off",
+          targetType: "channel",
+          targetId: channelId!,
+          changes: [{ key: "audienceMode", old: !body.enabled, new: body.enabled }],
+        });
+      } catch (error) {
+        logEvent("voice.audienceMode.auditFailed", {
+          channelId: channelId!,
+          actorId: user.id,
+          enabled: body.enabled,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     return { audience: result.audience, enforcement: result.enforcement };
   },

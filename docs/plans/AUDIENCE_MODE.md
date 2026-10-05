@@ -114,10 +114,16 @@ cannot strand a room:
 
 - **The toggle's write fails** (database down): 503, nothing changes, the host
   sees an error on the control. No half state.
-- **A read fails** (join, token mint): falls back to this process's cached
-  state, logs `voice.registryReadFailed op=audience`. A missed read can at
-  worst leave one mic open until the sweep, never mute a room nobody chose to
-  mute.
+- **A read fails** (join, token mint): this process's cached state answers
+  when it holds one; with nothing cached it does not guess "off", the read's
+  error goes to the caller, which refuses the same way it refuses when the
+  permission read beside it fails (the token mint answers 503, a join is
+  retried). Logged as `voice.registryReadFailed op=audience`. Only reached
+  where the flag is on for the server.
+- **A permission resolution fails for one seat while it is on**: that seat is
+  locked as audience until the next pass (+3 s, +10 s, the sweep) resolves
+  it; on a mesh room nothing else would stop it. At the SFU the same person
+  is reported as failed and retried, never counted as enforced.
 - **The SFU update fails or times out for somebody**: the HTTP answer carries
   `enforcement: { pending: [userIds], unreachable }`, the room state carries
   `unenforcedUserIds`, and the host's control shows "N microfones ainda
@@ -130,8 +136,8 @@ cannot strand a room:
 - **The OFF direction has a backstop too.** Turning it off leaves no row for
   the sweep to find, so a restore the SFU refused is remembered per room
   (`audienceRestorePending`) and retried on every sweep until a pass comes back
-  clean (given up, and logged as `voice.audienceMode.restoreAbandoned`, after
-  10 minutes). Without it, a box blip during the off would leave people
+  clean, with no deadline (an unreachable box costs one call per sweep;
+  giving up would be choosing to leave people silenced). Without it, a box blip during the off would leave people
   revoked at the SFU while everything else says they may talk.
 - **A slow pass cannot overwrite a newer change.** Every change bumps a
   per-room generation; a pass that started before it stops rewriting anybody
@@ -268,8 +274,8 @@ publish anyway), so the enforcement reaches them today. What they need:
   bus frame or, if it missed it, from the sweep and the next join.
 - The room is region-pinned to Miami or London: the pass goes to that box (and
   on a revoke's first pass to every box).
-- Database blip while it is on: reads fall back to the cache (nothing reopens
-  that was closed on this process, nothing closes that was open); the SFU
+- Database blip while it is on: reads answer from the cache where there is
+  one and refuse where there is not (no grant is issued on a guess); the SFU
   permission already written stays written.
 - Flag turned off mid-session: the sweep turns the session off within 15 s.
 

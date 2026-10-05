@@ -25,11 +25,20 @@ const ROOM = randomUUID();
 const MESH_ROOM = randomUUID();
 
 /** userId -> resolved bits. Absent: @everyone (SPEAK on). */
-const bits = vi.hoisted(() => ({ byUser: new Map<string, bigint>() }));
+const bits = vi.hoisted(() => ({
+  byUser: new Map<string, bigint>(),
+  /** Users whose permission read throws, as during a database blip. */
+  failFor: new Set<string>(),
+}));
 
 vi.mock("../services/permissions.js", async () => {
   const { PERMISSION_DEFAULT_EVERYONE } = await import("@pqp/shared");
-  const forUser = (userId: string) => bits.byUser.get(userId) ?? PERMISSION_DEFAULT_EVERYONE;
+  const forUser = (userId: string) => {
+    if (bits.failFor.has(userId)) {
+      throw new Error("permission read failed");
+    }
+    return bits.byUser.get(userId) ?? PERMISSION_DEFAULT_EVERYONE;
+  };
   return {
     computeMemberPermissions: async (_serverId: string, userId: string) => forUser(userId),
     resolveMemberChannelPermissions: async (_serverId: string, userId: string) => ({
@@ -328,6 +337,7 @@ beforeEach(() => {
     voice_transport: "mesh",
   });
   bits.byUser.clear();
+  bits.failFor.clear();
   bits.byUser.set("host", OWNER_BITS);
   sfu.rooms.clear();
   sfu.failUpdateFor.clear();
@@ -721,6 +731,23 @@ describe("the operator's flag", () => {
     process.env.AUDIENCE_MODE = "false";
     const late = await join("late");
     expect(late.frames.find((f) => f.type === "welcome")).toMatchObject({ canSpeak: true });
+  });
+});
+
+describe("a permission read that fails while it is on", () => {
+  it("locks that seat (a mesh room has nothing else to stop it), and the next pass gives a moderator their mic back", async () => {
+    bits.byUser.set("mod", PERMISSION_DEFAULT_EVERYONE | Permission.MUTE_MEMBERS);
+    await join("host", MESH_ROOM);
+    const mod = await join("mod", MESH_ROOM);
+    bits.failFor.add("mod");
+    await setVoiceAudienceMode(MESH_ROOM, true, "host");
+    expect(last(mod, "voice-speak-changed")).toMatchObject({
+      canSpeak: false,
+      speakReason: "audience",
+    });
+    bits.failFor.clear();
+    await sweepAudienceModes();
+    expect(last(mod, "voice-speak-changed")).toMatchObject({ canSpeak: true });
   });
 });
 
