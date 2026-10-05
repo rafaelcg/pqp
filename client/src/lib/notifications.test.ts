@@ -5,11 +5,15 @@ import {
   formatBadge,
   notifyChannelActivity,
   notifyIncomingCall,
+  notifyStreamStarted,
   rememberActivityChannel,
   rememberChannels,
   rememberServers,
   resolveNotificationLevel,
   setDesktopNotificationsEnabled,
+  setDoNotDisturb,
+  setServerNotificationLevel,
+  setServerStreamAlerts,
   setUnreadBadge,
   shouldNotify,
   unreadByServer,
@@ -27,6 +31,7 @@ function stateWith(overrides: Partial<NotificationState> = {}): NotificationStat
     channels: {},
     arrivalToast: true,
     previewInApp: true,
+    streamAlerts: {},
     ...overrides,
   };
 }
@@ -424,6 +429,110 @@ describe("notifyIncomingCall", () => {
     setDesktopNotificationsEnabled(true);
     const { notify } = withFakeNotification("denied");
     notifyIncomingCall(call, { windowFocused: false });
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifyStreamStarted", () => {
+  const frame = {
+    serverId: SERVER,
+    channelId: CHANNEL,
+    channelName: "filminho",
+    serverName: "Filminho",
+    sharerName: "Alberto",
+    kind: "voice" as const,
+  };
+
+  beforeEach(() => {
+    setDesktopNotificationsEnabled(true);
+    setServerStreamAlerts(SERVER, null);
+    setServerNotificationLevel(SERVER, null);
+    setDoNotDisturb(false);
+  });
+
+  afterEach(() => {
+    setDoNotDisturb(false);
+    setServerStreamAlerts(SERVER, null);
+    setServerNotificationLevel(SERVER, null);
+    vi.unstubAllGlobals();
+  });
+
+  it("raises one OS notice that names the person, the channel and the server", () => {
+    const { notify } = withFakeNotification();
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(true);
+    expect(notify).toHaveBeenCalledTimes(1);
+    const [title, options] = notify.mock.calls[0] as [
+      string,
+      { body?: string; tag?: string },
+    ];
+    expect(title).toBe("Alberto started streaming in #filminho");
+    expect(options).toMatchObject({
+      body: "Filminho · Watch",
+      // One live notice per channel: a later one replaces it in place.
+      tag: `stream:${CHANNEL}`,
+    });
+  });
+
+  it("names a watch party by its own name", () => {
+    const { notify } = withFakeNotification();
+    notifyStreamStarted(
+      { ...frame, kind: "party", channelName: "Cinemoon" },
+      { windowFocused: false },
+    );
+    expect(notify.mock.calls[0]?.[0]).toBe("Alberto opened the watch party Cinemoon");
+  });
+
+  it("goes through the shell when there is one, never both", () => {
+    const { notify } = withFakeNotification();
+    const desktopNotify = vi.fn();
+    (window as unknown as { pqpDesktop: unknown }).pqpDesktop = {
+      notify: desktopNotify,
+    };
+    notifyStreamStarted(frame, { windowFocused: false });
+    expect(desktopNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tag: `stream:${CHANNEL}`,
+        path: expect.stringContaining(CHANNEL),
+      }),
+    );
+    expect(notify).not.toHaveBeenCalled();
+    delete (window as unknown as { pqpDesktop?: unknown }).pqpDesktop;
+  });
+
+  it("is silent in a focused window: the strip is already on screen", () => {
+    const { notify } = withFakeNotification();
+    expect(notifyStreamStarted(frame, { windowFocused: true })).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("is silent on Do Not Disturb", () => {
+    const { notify } = withFakeNotification();
+    setDoNotDisturb(true);
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("is silent for a server the person turned the alert off for, and for a muted or mentions-only one", () => {
+    const { notify } = withFakeNotification();
+    setServerStreamAlerts(SERVER, false);
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    setServerStreamAlerts(SERVER, null);
+    setServerNotificationLevel(SERVER, "none");
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    setServerNotificationLevel(SERVER, "mentions");
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("never asks for permission: without the opt-in or a grant it says nothing", () => {
+    const { notify } = withFakeNotification("default");
+    const request = vi.fn();
+    (Notification as unknown as { requestPermission: unknown }).requestPermission = request;
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    setDesktopNotificationsEnabled(false);
+    withFakeNotification("granted");
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(false);
+    expect(request).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
 });

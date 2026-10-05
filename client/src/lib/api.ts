@@ -1,6 +1,7 @@
 import type {
   VoiceAudienceResponse,
   ChannelType,
+  StreamAlertSetting,
   MusicResolved,
   AcquisitionInput,
   AgeCheckResponse,
@@ -723,6 +724,17 @@ export interface ShareConfig {
   shareFastStartQuality?: boolean;
 }
 
+/**
+ * What `stream_start_notifications` means for this person in this server: is
+ * the flag on, what they get by default (on for a small server, off for a large
+ * one or a community) and the member count behind that. The choice itself is
+ * `notifications.streamAlerts` in the preferences the client already syncs.
+ */
+export const fetchStreamAlertSetting = (serverId: string) =>
+  apiFetch<StreamAlertSetting>(
+    `/api/servers/${encodeURIComponent(serverId)}/stream-alerts`,
+  );
+
 /** `serverId` is the server the call is in; a DM call asks without one. */
 export const fetchShareConfig = (serverId?: string | null) =>
   apiFetch<ShareConfig>(
@@ -852,6 +864,22 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
    */
   cameraSync?: boolean;
+  /**
+   * `watch_now_banner` (runtime flag, off by default, per server): the strip
+   * above the conversation that says somebody is sharing their screen in a
+   * voice channel, or a watch party is live, with one tap to watch. The
+   * deployment-wide answer carries the global value, which is what a
+   * conversation (no server) reads. Absent on an older API, which reads as
+   * off. See `lib/watch-now.ts` and `docs/plans/WATCH_NOW.md`.
+   */
+  watchNowBanner?: boolean;
+  /**
+   * `stream_start_notifications` (runtime flag, off by default, per server):
+   * the server may tell members a stream started. The client shows the
+   * per-server switch only where this is true. Absent on an older API, which
+   * reads as off.
+   */
+  streamStartNotifications?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

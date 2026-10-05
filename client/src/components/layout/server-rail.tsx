@@ -5,6 +5,7 @@ import {
   LogOut,
   MessageCircle,
   PinOff,
+  Radio,
   Plus,
   RefreshCw,
   Settings,
@@ -32,6 +33,7 @@ import {
   useNotificationState,
 } from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
+import { setServerStreamAlerts } from "@/lib/notifications";
 import { conversationTitle } from "@/lib/conversations";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
@@ -132,6 +134,13 @@ interface ServerRailProps {
    * ever appear on anybody's card. See `offersProfileVisibility`.
    */
   onToggleProfileVisibility?: (serverId: string, showOnProfile: boolean) => void;
+  /**
+   * `stream_start_notifications` per server, as far as the menus have asked
+   * (`useStreamAlertSettings`). The switch is offered only where `flag` is on.
+   */
+  streamAlertInfo?: Record<string, { flag: boolean; default: boolean }>;
+  /** A server's menu opened: ask whether it has the switch. */
+  onServerMenuOpen?: (serverId: string) => void;
 }
 
 export function ServerRail({
@@ -163,6 +172,8 @@ export function ServerRail({
   onOpenSettings,
   onLeaveServer,
   onToggleProfileVisibility,
+  streamAlertInfo,
+  onServerMenuOpen,
   phoneHidden = false,
   mobileNavOpen = false,
 }: ServerRailProps) {
@@ -301,6 +312,20 @@ export function ServerRail({
         items.push(
           ...notificationLevelItems("notify", levels, "account"),
         );
+        const alerts = streamAlertInfo?.[server.id];
+        if (alerts?.flag) {
+          // Only where an operator turned `stream_start_notifications` on. The
+          // tick is what this person gets: their own choice, else the server's
+          // default (on for a small server, off for a large one).
+          const alertsOn = notifications.streamAlerts[server.id] ?? alerts.default;
+          items.push({
+            id: "stream-alerts",
+            label: t("notify.menu.streamAlerts"),
+            icon: Radio,
+            checked: alertsOn,
+            onSelect: () => setServerStreamAlerts(server.id, !alertsOn),
+          });
+        }
         if (server.role !== "owner") {
           items.push(
             { id: "sep", label: "", separator: true },
@@ -320,7 +345,18 @@ export function ServerRail({
           // neither forwards through the other.
           <Tooltip key={server.id} label={server.name} side="right" tone="rail">
             <span className="relative inline-flex">
-          <ContextMenu items={items}>
+          <ContextMenu
+            items={items}
+            onOpenChange={
+              onServerMenuOpen
+                ? (open) => {
+                    if (open) {
+                      onServerMenuOpen(server.id);
+                    }
+                  }
+                : undefined
+            }
+          >
             <button
               type="button"
               onClick={() => onSelectServer(server.id)}

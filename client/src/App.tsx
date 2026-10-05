@@ -133,6 +133,7 @@ import {
   shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
+  shouldOfferWatchNowHint,
   useFeatureHintsSpent,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -517,6 +518,7 @@ import {
   describeActivity,
   getNotificationState,
   notifyChannelActivity,
+  notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
   unreadByServer,
@@ -548,6 +550,14 @@ import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
+import { useWatchNow, useWatchNowFlag } from "@/hooks/use-watch-now";
+import { useStreamAlertSettings } from "@/hooks/use-stream-alert-settings";
+import { WatchNowBanner } from "@/components/watch-now/watch-now-banner";
+import {
+  dismissWatchNow,
+  type WatchNowScope,
+  type WatchNowStream,
+} from "@/lib/watch-now";
 import {
   preloadHlsEngine,
   setPartyFastStart,
@@ -632,6 +642,10 @@ const HEADER_ACTION_TILE =
  * `scheduleReconnectMessagesRefetch` below.
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
+
+/** The watch-now strip's inputs when nothing is open to attach it to. */
+const WATCH_NOW_NO_SCOPE: WatchNowScope = { kind: "server", channels: [] };
+const WATCH_NOW_ALWAYS = () => true;
 
 /** A stable empty array, so "no favorites" is the same reference every
  * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
@@ -1472,6 +1486,7 @@ function MainAppContent({
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
   );
+  const [wantsWatchNowHint] = useState(() => featureHintEligible("watchNow"));
   const [wantsBringFriendsHint] = useState(() =>
     featureHintEligible("bringFriends"),
   );
@@ -4517,6 +4532,15 @@ function MainAppContent({
             );
             return;
           }
+          if (message.type === "stream-started") {
+            // The server already chose who hears about it; the window decides
+            // whether the OS does. A visible, focused window has the strip.
+            notifyStreamStarted(message, {
+              windowFocused:
+                document.visibilityState === "visible" && document.hasFocus(),
+            });
+            return;
+          }
           if (message.type === "channel-session-reminder") {
             emitChannelSessionReminderToast({
               sessionId: message.sessionId,
@@ -7040,6 +7064,38 @@ function MainAppContent({
     guardVoiceJoin(channelId, () => handleJoinVoice(channelId));
   }
 
+  /**
+   * The watch-now strip's one button. `docs/plans/WATCH_NOW.md` §"The button".
+   *
+   * A watch party is watched by OPENING it, which takes no seat. A share in a
+   * voice channel is opened and joined as an audience seat: no microphone and
+   * no permission prompt (an invited stranger's first sentence in the app
+   * should not be a browser dialog), the camera off as it always starts.
+   * Already seated, the button is a way back and joins nothing. Nobody is ever
+   * joined without this tap.
+   */
+  function handleWatchNowWatch(stream: WatchNowStream) {
+    setWatchNowFailure(null);
+    watchNowSawJoin.current = false;
+    if (stream.kind === "party") {
+      void handleWatchLiveParty(stream.channelId);
+      return;
+    }
+    if (stream.kind === "call") {
+      setWatchNowJoining(stream.channelId);
+      void handleConversationCall(stream.channelId, false, false, true);
+      return;
+    }
+    void selectChannel(stream.channelId);
+    if (stream.inRoom) {
+      return;
+    }
+    setWatchNowJoining(stream.channelId);
+    guardVoiceJoin(stream.channelId, () =>
+      joinWatchPartyAsAudience(stream.channelId),
+    );
+  }
+
   function voiceModerationError(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
   }
@@ -7254,6 +7310,12 @@ function MainAppContent({
     channelId: string,
     ring: boolean,
     withVideo = false,
+    /**
+     * Join to WATCH a share (the watch-now strip): an audience seat, so no
+     * microphone is opened and nothing is asked of the person. Pressing the
+     * mic later is how they start talking, as on any audience seat.
+     */
+    watchOnly = false,
   ) {
     voiceServerIdRef.current = null;
     pendingVideoCallRef.current = withVideo ? channelId : null;
@@ -7266,6 +7328,7 @@ function MainAppContent({
       inputMode: localSettings.inputMode,
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
+      ...(watchOnly ? { audienceOnly: true } : {}),
     };
     if (ring) {
       await voice.joinConversationCall(channelId, options);
@@ -8309,6 +8372,116 @@ function MainAppContent({
     [blockedUsers],
   );
 
+  // --- watch now: the strip that says a stream is live ----------------------
+  // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this
+  // client already holds (rosters, `channel-live`, the watch party map): no
+  // request, no frame, no write per viewer. Off, `useWatchNow` answers an
+  // empty list and the banner draws nothing.
+  const watchNowFlag = useWatchNowFlag(
+    selection.kind === "server" ? selectedServerId : null,
+  );
+  const watchNowScope = useMemo<WatchNowScope | null>(() => {
+    if (selection.kind === "server" && selectedServerId) {
+      return {
+        kind: "server",
+        // A switch leaves the old server's list in place for a beat.
+        channels: channels.filter(
+          (channel) => channel.serverId === selectedServerId,
+        ),
+      };
+    }
+    if (selection.kind === "dm" && selectedChannelId) {
+      return { kind: "conversation", channelId: selectedChannelId };
+    }
+    return null;
+  }, [selection.kind, selectedServerId, selectedChannelId, channels]);
+  const watchNowStreams = useWatchNow({
+    enabled: watchNowFlag && watchNowScope !== null,
+    viewerId: user?.id ?? null,
+    scope: watchNowScope ?? WATCH_NOW_NO_SCOPE,
+    occupancy: voiceState.occupancy,
+    parties: watchParties.byChannel,
+    channelLive: voiceState.channelLive,
+    blocked: blockedUserIds,
+    // CONNECT is the one gate the roster's own audience (VIEW) does not
+    // cover: a button that can only fail is worse than none. A conversation
+    // has no roles to lack.
+    canConnect:
+      watchNowScope?.kind === "conversation"
+        ? WATCH_NOW_ALWAYS
+        : stableCanConnectIn,
+    seatedChannelId:
+      voiceState.status !== "idle" ? voiceState.voiceChannelId : null,
+    connected: connection === "online",
+    openChannelId: selectedChannelId,
+  });
+  // "Avisar quando alguém transmitir": asked when a server's menu opens, so a
+  // deployment with the flag off pays nothing for it.
+  const streamAlerts = useStreamAlertSettings();
+  // The open server's `stream_start_notifications` answer arrives with the
+  // config this client already asks for; when it is on, fetch what the menu
+  // needs (the default for a person who never chose) before it is opened.
+  const streamAlertsOn = liveHlsConfig?.streamStartNotifications === true;
+  const ensureStreamAlerts = streamAlerts.ensure;
+  useEffect(() => {
+    if (streamAlertsOn && selectedServerId) {
+      ensureStreamAlerts(selectedServerId);
+    }
+  }, [streamAlertsOn, selectedServerId, ensureStreamAlerts]);
+  /** The join in flight from the strip, and why the last one failed. */
+  const [watchNowJoining, setWatchNowJoining] = useState<string | null>(null);
+  const [watchNowFailure, setWatchNowFailure] = useState<string | null>(null);
+  const watchNowSawJoin = useRef(false);
+  useEffect(() => {
+    if (!watchNowJoining) {
+      return;
+    }
+    if (voiceState.status !== "idle") {
+      watchNowSawJoin.current = true;
+    }
+    if (
+      voiceState.status === "connected" &&
+      voiceState.voiceChannelId === watchNowJoining
+    ) {
+      setWatchNowJoining(null);
+      setWatchNowFailure(null);
+      return;
+    }
+    // Only a join that STARTED and came back counts: an error left over from
+    // an earlier call must not read as this tap's answer.
+    if (
+      voiceState.status === "idle" &&
+      voiceState.error &&
+      watchNowSawJoin.current
+    ) {
+      // The join came back refused (a full room, a locked channel): say so
+      // under the strip, in the words the voice layer already chose.
+      setWatchNowFailure(voiceState.error);
+      setWatchNowJoining(null);
+    }
+  }, [
+    watchNowJoining,
+    voiceState.status,
+    voiceState.voiceChannelId,
+    voiceState.error,
+  ]);
+  useEffect(() => {
+    if (!watchNowFailure) {
+      return;
+    }
+    const timer = window.setTimeout(() => setWatchNowFailure(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [watchNowFailure]);
+  useEffect(() => {
+    if (!watchNowJoining) {
+      return;
+    }
+    // A join the guard parked behind a confirmation, or one that never
+    // answered, must not leave the button saying "Entrando" for good.
+    const timer = window.setTimeout(() => setWatchNowJoining(null), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [watchNowJoining]);
+
   // --- threads ---
   // Channel ids with unread activity, as a set for the chips. Thread unreads
   // live in the same `unread` map as everything else, keyed by the thread's
@@ -8735,6 +8908,12 @@ function MainAppContent({
     channelName: string | null,
     inCall: boolean,
   ) {
+    // A live stream is the welcome: its strip says where to go, and "say oi in
+    // #general" over it is two instructions for one screen. Same call the
+    // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
+    if (surface !== "home" && watchNowStreams.length > 0) {
+      return null;
+    }
     if (
       !arrivalServerId ||
       arrivalServerId !== selectedServerId ||
@@ -8925,7 +9104,25 @@ function MainAppContent({
     voiceServerId !== null &&
     voiceServerId === selectedServerId &&
     perms.can(Permission.CREATE_INVITE);
+  /**
+   * Whose first minutes these are, for the one-time hint under the watch-now
+   * strip: they arrived in this very server in this session (an invite, a
+   * community link), or their account finished first-run in the last day.
+   * Somebody who has seen a hundred of these strips does not need it
+   * explained.
+   */
+  const watchNowNewcomer =
+    (arrivalServerId !== null && arrivalServerId === selectedServerId) ||
+    justOnboarded ||
+    isNewcomerAccount(user?.preferences?.onboardedAt);
   const attachedFeatureHint = winningFeatureHint({
+    // Under the watch-now strip, once ever, for somebody who just arrived.
+    watchNow: shouldOfferWatchNowHint({
+      seen: !wantsWatchNowHint,
+      automated: false,
+      bannerVisible: watchNowStreams.length > 0,
+      newcomer: watchNowNewcomer,
+    }),
     // Rendered by `CallControls` in the dock's hint slot; dismissed by
     // Entendi or by pressing any control in the dock.
     callDock: shouldOfferCallDockHint({
@@ -9017,6 +9214,9 @@ function MainAppContent({
         voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
       isDesktopViewport: voiceCleanDesktopViewport,
     });
+  /** A live party, or the watch-now strip: no campaign card takes the corner. */
+  const campaignsYield =
+    Boolean(selectedPartyLive) || watchNowStreams.length > 0;
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -9030,19 +9230,26 @@ function MainAppContent({
     // went to /android instead of the party. Holding only that one would hand
     // the corner to the next card in line, so the whole tail yields. The
     // update notice, a Baú post and the voice nudge are not campaigns.
-    qg: qgHintWanted && !selectedPartyLive,
+    //
+    // THE WATCH-NOW STRIP IS THE SAME CASE. While it is on screen a stream is
+    // live in this server and the strip is the one thing the newcomer is
+    // being asked to do; a corner card beside it is a second request, and the
+    // first thing a stranger is told must not be "join the QG" (2026-10-04,
+    // Filminho). It also keeps its own one-time hint, an attached card, from
+    // yielding to a campaign for the whole film.
+    qg: qgHintWanted && !campaignsYield,
     voiceClean: wantsVoiceCleanHint,
-    mobileBeta: wantsMobileBeta && !selectedPartyLive,
-    whatsNew: wantsWhatsNew && !selectedPartyLive,
+    mobileBeta: wantsMobileBeta && !campaignsYield,
+    whatsNew: wantsWhatsNew && !campaignsYield,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
-      !selectedPartyLive &&
+      !campaignsYield &&
       Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
-      !selectedPartyLive &&
+      !campaignsYield &&
       attachedFeatureHint === null,
   });
   // A DM arrival card and the bottom-right onboarding queue would collide on
@@ -9562,6 +9769,18 @@ function MainAppContent({
             }
           />
         )}
+      {/* A stream is live somewhere the person is not looking: the one strip
+          that answers "cadê o filme?". Above the arrival strip, which yields
+          to it (a live stream is the welcome). Mounted whether or not there
+          is one, so its exit can play. */}
+      <WatchNowBanner
+        streams={watchNowStreams}
+        onWatch={handleWatchNowWatch}
+        onDismiss={(stream) => dismissWatchNow(stream.key)}
+        joiningChannelId={watchNowJoining}
+        failure={watchNowFailure}
+        hintAllowed={watchNowNewcomer}
+      />
       {renderArrivalBanner(
         // A live party first, whatever kind of room it is running in.
         selectedPartyLive
@@ -10680,6 +10899,8 @@ function MainAppContent({
       )}
 
       <ServerRail
+        streamAlertInfo={streamAlerts.byServer}
+        onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
         phoneHidden={partyPhoneLayout}
         mobileNavOpen={mobileNavOpen}
