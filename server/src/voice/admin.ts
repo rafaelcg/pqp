@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import { logEvent } from "../lib/log.js";
 import { mapWithConcurrency } from "../lib/admission.js";
+import { logPerRoom } from "./audience.js";
 import {
   isLiveKitConfigured,
   liveKitPublishGrant,
@@ -1582,8 +1583,7 @@ export async function reconcileSfuRoomPublishGrants(
       pending = grantFor(userId).then(
         (grant): GrantOutcome => ({ grant }),
         (error: unknown): GrantOutcome => {
-          logEvent("voice.audienceMode.grantResolveFailed", {
-            room,
+          logPerRoom("voice.audienceMode.grantResolveFailed", room, {
             userId,
             error: describeError(error),
           });
@@ -1663,8 +1663,7 @@ async function roomGrantsOn(
     }
     const outcome = outcomeOf(error);
     if (outcome === "failed") {
-      logEvent("voice.audienceMode.enforceFailed", {
-        room,
+      logPerRoom("voice.audienceMode.enforceFailed:list", room, {
         region: target.regional ? target.id : undefined,
         mode: target.mode,
         stage: "list",
@@ -1717,8 +1716,7 @@ async function roomGrantsOn(
           await client.mutePublishedTrack(room, identity, track.sid, true);
         } catch (error) {
           ok = false;
-          logEvent("voice.audienceMode.enforceFailed", {
-            room,
+          logPerRoom("voice.audienceMode.enforceFailed:mute", room, {
             identity,
             userId,
             region: target.regional ? target.id : undefined,
@@ -1742,8 +1740,7 @@ async function roomGrantsOn(
           });
         } catch (error) {
           ok = false;
-          logEvent("voice.audienceMode.enforceFailed", {
-            room,
+          logPerRoom("voice.audienceMode.enforceFailed:update", room, {
             identity,
             userId,
             region: target.regional ? target.id : undefined,

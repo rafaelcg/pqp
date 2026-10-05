@@ -500,7 +500,24 @@ export function logPerRoom(
   fields: Record<string, unknown>,
   now = Date.now(),
 ): void {
-  const key = `${event}:${channelId}`;
+  // `event:reason` keys the limiter per reason and logs as `event` with
+  // `reason=...`, so each kind of failure gets its own line a minute.
+  const split = event.indexOf(":");
+  if (split > 0) {
+    const name = event.slice(0, split);
+    const reason = event.slice(split + 1);
+    return logPerRoomKeyed(name, `${event}:${channelId}`, channelId, { reason, ...fields }, now);
+  }
+  return logPerRoomKeyed(event, `${event}:${channelId}`, channelId, fields, now);
+}
+
+function logPerRoomKeyed(
+  event: string,
+  key: string,
+  channelId: string,
+  fields: Record<string, unknown>,
+  now: number,
+): void {
   const entry = lines.get(key);
   if (entry && now - entry.at < LINE_WINDOW_MS) {
     entry.suppressed += 1;

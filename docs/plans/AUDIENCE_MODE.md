@@ -264,8 +264,19 @@ publish anyway), so the enforcement reaches them today. What they need:
   before the row was written. The +3 s and +10 s passes and the 15 s sweep
   list the SFU's participants again and fix it; receivers silence them from
   the roster meanwhile.
-- A replayed old token (minted with a mic, before the mode): the participant
-  is in the SFU's list, so the next pass rewrites its permission.
+- A replayed old token (minted with a mic before the mode went on, or before
+  a "Silenciar"): an SFU token lives `TOKEN_TTL_SECONDS` (15 minutes), and a
+  modified client can reconnect to LiveKit with it. The participant is then in
+  the SFU's list, so the next pass rewrites its permission: the bound is about
+  15 s per reconnect (the sweep), repeatable until the token expires. Web
+  receivers on this bundle do not play it meanwhile, because the roster still
+  says `canSpeak: false` for that seat; older tabs and native receivers do.
+  Closing it fully needs a LiveKit `participant_joined` webhook, which this
+  repo does not receive today; not added here.
+- A moderator who is only on a phone keeps the room "staffed" (the stage
+  check counts them), but the phones have no audience mode control yet, so
+  they cannot turn it off from there. The web or desktop app can, and so can
+  the operator's flag.
 - Two hosts toggling at once: the row is the arbiter (insert on conflict does
   nothing; delete is idempotent), and each pass computes the grant from the
   row, so both converge.
@@ -278,6 +289,13 @@ publish anyway), so the enforcement reaches them today. What they need:
   one and refuse where there is not (no grant is issued on a guess); the SFU
   permission already written stays written.
 - Flag turned off mid-session: the sweep turns the session off within 15 s.
+  With the registry on, a process holding seats reads the rows even when the
+  flag is off everywhere, so rows left from before a restart are deleted
+  rather than coming back live the day the flag is turned on again.
+- A restart that forgot the mode (registry off) while the SFU kept a revoke:
+  the first sweep after boot runs one restore check for every LiveKit room it
+  seats in a flagged server, and a seat still marked as audience in a room
+  with no row is restored by every sweep after that.
 
 ## Tests
 

@@ -231,6 +231,16 @@ describeDb("audience mode routes", () => {
     await joinVoice(owner.id, voiceChannelId);
     const path = `/api/channels/${voiceChannelId}/voice-audience/speakers/${member.id}`;
 
+    // A target that is not a member id at all never reaches Postgres: the
+    // router refuses any `*Id` param that is not a UUID (lib/router.ts), as
+    // a 404 like every other route, never a 500.
+    expect(
+      (
+        await call(owner, "PUT", `/api/channels/${voiceChannelId}/voice-audience/speakers/not-a-uuid`, {
+          allowed: true,
+        })
+      ).status,
+    ).toBe(404);
     // Not in the call yet.
     expect((await call(owner, "PUT", path, { allowed: true })).status).toBe(404);
     await joinVoice(member.id, voiceChannelId);

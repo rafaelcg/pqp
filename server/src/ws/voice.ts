@@ -10588,6 +10588,8 @@ const audienceGenerations = new Map<string, number>();
  * be choosing to leave people silenced.
  */
 const audienceRestorePending = new Set<string>();
+/** Whether this process has run its one post-boot restore check. */
+let audienceBootCheckDone = false;
 
 /**
  * Permission resolutions per room, shared by the seat pass and the SFU pass
@@ -10680,16 +10682,24 @@ async function applyAudienceLocally(
   channel: Awaited<ReturnType<typeof getChannel>>,
   audience: AudienceRoom | null,
   change?: VoiceAudienceChange,
+  /**
+   * The room's generation when `audience` was READ. A caller that awaited a
+   * read before calling passes it, so a change that landed during that read
+   * is caught too; absent means "now" (the caller just made the change).
+   */
+  expectedGeneration?: number,
 ): Promise<void> {
   const local = getRoomPeers(channelId);
   if (local.length === 0) {
     return;
   }
-  // Overtaken while resolving: a newer change (here or from the bus) has
-  // its own application running, and this one must not write the older
-  // state on top of it.
-  const generation = audienceGenerations.get(channelId) ?? 0;
+  // Overtaken: a newer change (here or from the bus) has its own application
+  // running, and this one must not write the older state on top of it.
+  const generation = expectedGeneration ?? audienceGenerations.get(channelId) ?? 0;
   const overtaken = () => (audienceGenerations.get(channelId) ?? 0) !== generation;
+  if (overtaken()) {
+    return;
+  }
   const byUser = new Map<string, VoicePeer[]>();
   for (const peer of local) {
     const list = byUser.get(peer.userId) ?? [];
@@ -10752,6 +10762,8 @@ async function applyAudienceLocally(
   if (overtaken()) {
     return;
   }
+  // Checked before anything is sent, not only after resolutions: a caller
+  // whose state was read before a newer change must not even announce it.
   const wire = audienceWireState(audience);
   const signature = JSON.stringify(wire);
   if (change || audienceLastSent.get(channelId) !== signature) {
@@ -10835,6 +10847,12 @@ async function runAudiencePass(
       unreachable: result.unreachable,
     });
   }
+  // Overtaken while the SFU answered: the state this pass read is no longer
+  // the room's, so it must not touch the bookkeeping (restore pending, who is
+  // unenforced) or re-announce that state. The newer change runs its own.
+  if ((audienceGenerations.get(channelId) ?? 0) !== generation) {
+    return { pending: result.failedUserIds, unreachable: result.unreachable };
+  }
   if (!audience) {
     if (result.failedUserIds.length > 0 || result.unreachable) {
       audienceRestorePending.add(channelId);
@@ -10859,7 +10877,7 @@ async function runAudiencePass(
     const after = [...next].sort().join(",");
     if (before !== after) {
       audience.unenforced = next;
-      await applyAudienceLocally(channelId, channel, audience);
+      await applyAudienceLocally(channelId, channel, audience, undefined, generation);
       if (registryOn() && clusterOn()) {
         publishVoice(VOICE_AUDIENCE_TOPIC, {
           channelId,
@@ -10886,10 +10904,13 @@ function scheduleAudienceFollowUps(channelId: string, onlyUserId?: string): void
       }
       void (async () => {
         const channel = await getChannel(channelId);
+        const generation = audienceGenerations.get(channelId) ?? 0;
         await applyAudienceLocally(
           channelId,
           channel,
           await loadAudience(channel, channelId),
+          undefined,
+          generation,
         );
         if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
           await runAudiencePass(channelId, channel, false, onlyUserId);
@@ -11273,13 +11294,42 @@ async function noteAudienceDeparture(
  * cache entry is dropped here, since nothing on this machine would refresh it.
  */
 export async function sweepAudienceModes(): Promise<void> {
-  await retryAudienceRestores();
-  if (!audienceModeMayBeOnAnywhere() && cachedAudienceRooms().length === 0) {
-    return;
-  }
   const localRooms = new Set<string>();
   for (const peer of peers.values()) {
     localRooms.add(peer.voiceChannelId);
+  }
+  // ONCE AFTER BOOT: this process may have died holding a revoke at the SFU
+  // that it no longer remembers (the restore list lives in memory, and with
+  // the registry off so does the mode). Every LiveKit room it seats in a
+  // server where the flag is on gets one restore check; a room that is
+  // genuinely on is left to the sweep below.
+  if (!audienceBootCheckDone && localRooms.size > 0) {
+    audienceBootCheckDone = true;
+    for (const channelId of localRooms) {
+      if (getRoomTransport(channelId) !== "livekit") {
+        continue;
+      }
+      try {
+        const channel = await getChannel(channelId);
+        if (audienceModeApplies(channel) && audienceModeEnabledFor(channel?.server_id)) {
+          audienceRestorePending.add(channelId);
+        }
+      } catch {
+        // The next sweep's checks cover it.
+      }
+    }
+  }
+  await retryAudienceRestores();
+  // Nothing can be on and nothing is cached: no query, unless rows may be
+  // left over from before the flag went off (registry on, seats here). Those
+  // are read so the flag-off branch below deletes them rather than letting
+  // them come back live the day the flag is turned on again.
+  if (
+    !audienceModeMayBeOnAnywhere() &&
+    cachedAudienceRooms().length === 0 &&
+    !(registryOn() && localRooms.size > 0)
+  ) {
+    return;
   }
   let audienceRooms: string[];
   if (registryOn()) {
@@ -11342,10 +11392,13 @@ export async function sweepAudienceModes(): Promise<void> {
           publishVoice(VOICE_AUDIENCE_TOPIC, { channelId } satisfies VoiceAudienceFrame);
         }
       }
+      const generation = audienceGenerations.get(channelId) ?? 0;
       await applyAudienceLocally(
         channelId,
         channel,
         await loadAudience(channel, channelId),
+        undefined,
+        generation,
       );
       if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
         await runAudiencePass(channelId, channel, false);
@@ -11353,6 +11406,23 @@ export async function sweepAudienceModes(): Promise<void> {
     } catch (error) {
       console.error("[voice] audience sweep failed for a room:", error);
     }
+  }
+  // THE BACKSTOP FOR "OFF": a room this process holds whose rows say audience
+  // mode is NOT on, but whose seats here are still locked by it (an
+  // application lost to a race, a restart that forgot the mode). Brought back
+  // to "off", which also restores them at the SFU.
+  const on = new Set(audienceRooms);
+  for (const channelId of localRooms) {
+    if (on.has(channelId) || audienceRestorePending.has(channelId)) {
+      continue;
+    }
+    if (!getRoomPeers(channelId).some((peer) => peer.speakReason === "audience")) {
+      continue;
+    }
+    audienceRestorePending.add(channelId);
+  }
+  if (audienceRestorePending.size > 0) {
+    await retryAudienceRestores();
   }
 }
 
@@ -11400,6 +11470,7 @@ export function resetAudienceTimersForTests(): void {
   audienceGenerations.clear();
   audienceRestorePending.clear();
   audienceGrantMemo.clear();
+  audienceBootCheckDone = false;
 }
 
 // --- end audience mode -------------------------------------------------------
@@ -12413,13 +12484,14 @@ subscribeToCluster(VOICE_AUDIENCE_TOPIC, (data) => {
   if (frame.change || frame.unenforcedUserIds === undefined) {
     bumpAudienceGeneration(frame.channelId);
   }
+  const generation = audienceGenerations.get(frame.channelId) ?? 0;
   void (async () => {
     const channel = await getChannel(frame.channelId);
     const audience = await loadAudience(channel, frame.channelId);
     if (audience && frame.unenforcedUserIds && frame.since === audience.since) {
       audience.unenforced = new Set(frame.unenforcedUserIds);
     }
-    await applyAudienceLocally(frame.channelId, channel, audience, frame.change);
+    await applyAudienceLocally(frame.channelId, channel, audience, frame.change, generation);
   })().catch((error: unknown) => {
     console.error("[voice] audience frame failed:", error);
   });

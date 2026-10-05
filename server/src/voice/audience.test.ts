@@ -185,6 +185,18 @@ describe("the per-room line limiter", () => {
       "[pqp] voice.speakDenied voiceChannelId=room-1 reason=audience suppressed=4",
     ]);
   });
+
+  it("keys `event:reason` per reason and logs it as the event with that reason", () => {
+    for (let i = 0; i < 3; i++) {
+      logPerRoom("voice.audienceMode.enforceFailed:update", "room-1", { userId: `u${i}` }, 1_000);
+      logPerRoom("voice.audienceMode.enforceFailed:list", "room-1", {}, 1_000);
+    }
+    const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
+    expect(lines).toEqual([
+      "[pqp] voice.audienceMode.enforceFailed voiceChannelId=room-1 reason=update userId=u0",
+      "[pqp] voice.audienceMode.enforceFailed voiceChannelId=room-1 reason=list",
+    ]);
+  });
 });
 
 describe("reading the room's state when the database will not answer", () => {

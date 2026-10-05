@@ -667,6 +667,53 @@ describe("when the media server does not cooperate", () => {
     expect(audible(member!)).toBe(true);
   });
 
+  it("a pass still waiting on the SFU when the host turns it OFF cannot lock the room again", async () => {
+    const { host, member } = await room("host", "member");
+    sfu.failUpdateFor.add(member!.peerId);
+    await setVoiceAudienceMode(ROOM, true, "host");
+    sfu.failUpdateFor.clear();
+    let release!: () => void;
+    sfu.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const before = sfu.calls.list;
+    // A sweep pass (unenforced = {member}) stalls on the media server...
+    const sweep = sweepAudienceModes();
+    await vi.waitFor(() => expect(sfu.calls.list).toBe(before + 1));
+    // ...the host turns it off meanwhile...
+    await setVoiceAudienceMode(ROOM, false, "host");
+    release();
+    await sweep;
+    // ...and the stale pass must not re-announce the old state or relock,
+    // not even for the one sweep it would take the backstop to undo it.
+    expect(last(member!, "voice-speak-changed")).toMatchObject({ canSpeak: true });
+    expect(last(host!, "voice-audience")!.audience).toBeNull();
+    await sweepAudienceModes();
+    await sweepAudienceModes();
+    expect(last(member!, "voice-speak-changed")).toMatchObject({ canSpeak: true });
+    expect(last(host!, "voice-audience")!.audience).toBeNull();
+    expect(last(member!, "voice-audience")!.audience).toBeNull();
+    expect(tryToSpeak(member!)).toBe(true);
+  });
+
+  it("after a restart that forgot the mode (registry off), the first sweep restores a revoke the SFU kept", async () => {
+    const { member } = await room("host", "member");
+    await setVoiceAudienceMode(ROOM, true, "host");
+    expect(tryToSpeak(member!)).toBe(false);
+    // The process dies: the peer map, the pins and the audience state go.
+    // The LiveKit participant keeps its revoked permission.
+    resetVoicePeers();
+    resetVoiceRoomTransports();
+    const back = await join("member", ROOM, {
+      resumePeerId: member!.peerId,
+      resumeToken: member!.resumeToken,
+    });
+    expect(back.frames.find((f) => f.type === "welcome")).toMatchObject({ canSpeak: true });
+    expect(tryToSpeak(member!)).toBe(false);
+    await sweepAudienceModes();
+    expect(tryToSpeak(member!)).toBe(true);
+  });
+
   it("the follow-up passes run by themselves", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
