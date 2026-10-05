@@ -179,11 +179,19 @@ card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
 Windowed".
 
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
-(`linux_desktop_system_audio`, default off), the computer's sound on a screen
-share from the Linux desktop app, served to the client by
-`GET /api/share/config`. It only does anything in a desktop build whose
-preload publishes `capabilities.linuxShareAudio`; see
-`electron/lib/linux-share-audio.js`.
+(`linux_desktop_system_audio`, default off, **global only**), the computer's
+sound on a screen share from the Linux desktop app, served to the client by
+`GET /api/share/config` as `linuxDesktopSystemAudio`. It only does anything in a
+desktop build whose preload publishes `capabilities.linuxShareAudio`; see
+`electron/lib/linux-share-audio.js`. Global on purpose: the client asks the
+config without a server and keeps one answer per page, so a per-server override
+would be accepted and never read; the registry refuses one. Turn it on from
+controles → interruptores; the page asks again before every share, so there is
+no reload and no desktop update. The server half once went missing from
+the merge that shipped the client (#866 into desktop 0.2.3);
+`server/src/lib/flag-client-contract.test.ts` now fails when a field the client
+reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
+server.
 
 Staying environment-only, on purpose:
 
