@@ -98,6 +98,7 @@ export default tseslint.config(
       "client/e2e/bandwidth/**/*.mjs",
       "client/e2e/share-audio-echo/**/*.mjs",
       "client/e2e/camera-sync/**/*.mjs",
+      "client/e2e/share-fast-start/**/*.mjs",
       "electron/**/*.mjs",
       "tools/**/*.{js,mjs}",
       "*.mjs",

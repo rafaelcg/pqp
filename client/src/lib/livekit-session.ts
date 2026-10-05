@@ -8,6 +8,11 @@ import type { ReceiveQuality } from "./receive-quality";
 import { drainJitterMs } from "./reconnect-jitter";
 import { emitNetworkHint } from "./network-hints";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
+import { screenCaptureCeiling } from "./screen-capture-ceiling";
+import {
+  earlyShareQuality,
+  shareFastStartQualityActive,
+} from "./share-fast-start";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
   createRemoteAudioDelivery,
@@ -721,6 +726,7 @@ export async function connectLiveKit({
       attach(element: HTMLVideoElement) {
         track.attach(element);
         delivery.attached(publication);
+        releaseEarlyShareRequest(publication);
       },
       detach(element: HTMLVideoElement) {
         const stop = (
@@ -816,8 +822,13 @@ export async function connectLiveKit({
         delivery.register(pub);
         // The viewer's ceiling rides on every subscription, including the
         // ones that arrive after the choice: a share that starts mid-call
-        // must not come in at 1080p on a phone that asked for 720p.
-        applyReceiveQuality(pub);
+        // must not come in at 1080p on a phone that asked for 720p. A share
+        // that was asked for early (`share_fast_start_quality`) already
+        // carries a ceiling at or under this one; it gets the real one once
+        // the stage has measured its element (`releaseEarlyShareRequest`).
+        if (!earlyShareRequests.has(pub)) {
+          applyReceiveQuality(pub);
+        }
         if (pub.source === Track.Source.ScreenShare) {
           screenStreams.set(participant.identity, stream);
           snapshot();
@@ -900,7 +911,7 @@ export async function connectLiveKit({
       snapshot();
       // The room just grew. If it crossed the large-room line the top layer
       // comes down to 720p; see `reconcileScreenPlan`.
-      void reconcileScreenPlan();
+      void reconcileScreenPlan("room");
     })
     .on(RoomEvent.ParticipantDisconnected, (participant) => {
       streams.delete(participant.identity);
@@ -909,7 +920,7 @@ export async function connectLiveKit({
       screenAudioStreams.delete(participant.identity);
       qualities.delete(participant.identity);
       snapshot();
-      void reconcileScreenPlan();
+      void reconcileScreenPlan("room");
     })
     .on(RoomEvent.Disconnected, () => {
       streams.clear();
@@ -954,7 +965,101 @@ export async function connectLiveKit({
     })
     .on(RoomEvent.MediaDevicesError, (err: Error) => {
       onError(err.message);
+    })
+    // `share_fast_start_quality`: see `requestShareQualityBeforeSubscribe`.
+    .on(RoomEvent.SignalConnected, () => {
+      for (const participant of room.remoteParticipants.values()) {
+        for (const publication of participant.trackPublications.values()) {
+          requestShareQualityBeforeSubscribe(publication);
+        }
+      }
+    })
+    .on(RoomEvent.TrackPublished, (publication) => {
+      requestShareQualityBeforeSubscribe(publication);
     });
+
+  /**
+   * ASK FOR THE SHARE'S LAYER BEFORE THE SFU BINDS IT (`share_fast_start_quality`).
+   *
+   * Measured with `client/e2e/share-fast-start/`: LiveKit 1.13.6 binds an
+   * adaptive-stream subscriber at the LOW layer until the subscriber's first
+   * `UpdateTrackSettings` arrives (`SubscribedTrack.Bound`), and the forwarder
+   * latches onto the first keyframe at or under that target. This session
+   * used to send its first settings from `TrackSubscribed`, which is after the
+   * bind, so about half of all joins drew the 360p copy first and only moved
+   * to the 720p one a second or so later, once a keyframe of the higher layer
+   * and its sender report had arrived (PLI throttle 1 s). The same happens on
+   * every republish and every reconnect.
+   *
+   * The publication exists as soon as the join response (or the participant
+   * update for a share that starts later) is in, well before the subscriber
+   * connection is negotiated, and LiveKit stores settings sent for a track
+   * that is not bound yet and applies them on bind. So the viewer's ceiling
+   * is sent then, at the layer a 720-line stage would ask for
+   * (`earlyShareQuality`): asking for the top made the first picture wait
+   * about a second for a 1080p copy dynacast had paused. Only for screen
+   * shares: a camera is usually a thumbnail. Once an element is attached the
+   * session's usual ceiling and adaptive stream take over, so this changes
+   * how the subscription starts, never where it settles.
+   */
+  /** Shares asked for early whose real ceiling waits for the stage. */
+  const earlyShareRequests = new WeakSet<object>();
+
+  /**
+   * How long after an element is attached the ceiling is handed back. The
+   * library measures a newly attached element on a 100 ms debounce
+   * (`REACTION_DELAY` in `RemoteVideoTrack`), and a ceiling sent before that
+   * measurement goes out as a bare "HIGH" with no size, which binds the
+   * subscription to the top layer for a second: the overshoot the early
+   * request exists to avoid (rig: 1080 first, 720 a second later). After it,
+   * the library sends the smaller of the element and the ceiling.
+   */
+  const EARLY_SHARE_RELEASE_MS = 250;
+
+  function releaseEarlyShareRequest(publication: object) {
+    if (!earlyShareRequests.has(publication)) {
+      return;
+    }
+    setTimeout(() => {
+      if (!earlyShareRequests.delete(publication)) {
+        return;
+      }
+      applyReceiveQuality(
+        publication as { setVideoQuality?: (quality: number) => void },
+      );
+    }, EARLY_SHARE_RELEASE_MS);
+  }
+
+  function requestShareQualityBeforeSubscribe(publication: {
+    kind?: unknown;
+    source?: unknown;
+    track?: unknown;
+    trackInfo?: { layers?: readonly { quality: number; height: number }[] };
+    setVideoQuality?: (quality: number) => void;
+  }) {
+    if (!shareFastStartQualityActive()) {
+      return;
+    }
+    if (
+      publication.kind !== Track.Kind.Video ||
+      publication.source !== Track.Source.ScreenShare ||
+      publication.track ||
+      typeof publication.setVideoQuality !== "function"
+    ) {
+      return;
+    }
+    try {
+      publication.setVideoQuality(
+        earlyShareQuality(
+          publication.trackInfo?.layers,
+          layerQualityFor(receiveQuality),
+        ),
+      );
+      earlyShareRequests.add(publication);
+    } catch (err) {
+      console.warn("[pqp] early share quality rejected; the subscription asks later", err);
+    }
+  }
 
   /**
    * OUR RELAYS, NOT THE MEDIA BOX'S. `rtcConfig` is a connect option in
@@ -1738,19 +1843,37 @@ export async function connectLiveKit({
     }
     const previousHeight = screenCaptureConstraints.height;
     const guard = screenGuardCeiling;
+    const heightMax =
+      guard?.maxHeight != null ? Math.min(height, guard.maxHeight) : height;
+    // `share_fast_start_quality`, ordinary shares only: the width ceiling the
+    // share was opened with silently cancels this height (measured, see
+    // `screen-capture-ceiling.ts`), so it is scaled to the height instead. A
+    // watch party's source is left exactly as it was: its ladder and its
+    // remux were tuned against what it publishes today.
+    const scaleWidth =
+      shareFastStartQualityActive() &&
+      (hlsSource === null || hlsSource.ladderTopHeight === null) &&
+      screenHlsPublishHeight === null;
     try {
       await track.applyConstraints({
-        ...screenCaptureConstraints,
+        ...(scaleWidth
+          ? screenCaptureCeiling(
+              screenCaptureConstraints,
+              heightMax,
+              typeof track.getSettings === "function" ? track.getSettings() : null,
+            )
+          : {
+              ...screenCaptureConstraints,
+              height: {
+                ...(typeof previousHeight === "object" ? previousHeight : {}),
+                max: heightMax,
+              },
+            }),
         // The guard's step wins over the snapshot taken before it: without
         // this the next plan change would hand the frame rate back.
         ...(guard
           ? { frameRate: { ideal: guard.maxFps, max: guard.maxFps } }
           : {}),
-        height: {
-          ...(typeof previousHeight === "object" ? previousHeight : {}),
-          max:
-            guard?.maxHeight != null ? Math.min(height, guard.maxHeight) : height,
-        },
       });
       return true;
     } catch (err) {
@@ -1883,7 +2006,25 @@ export async function connectLiveKit({
     return publishedScreenPlan;
   }
 
-  function reconcileScreenPlan(): Promise<void> {
+  /**
+   * `trigger` is why the plan is being looked at again. "room" is somebody
+   * joining or leaving, which is what moves the large-room cap
+   * (`LARGE_ROOM_PARTICIPANTS`) and therefore the top layer's height.
+   *
+   * WITH `share_fast_start_quality` A ROOM CHANGE NEVER REPUBLISHES. Measured
+   * with `client/e2e/share-fast-start/` (six viewers joining a room of 17):
+   * the moment the room passed 20 the share was unpublished and published
+   * again under a new track sid, and every viewer's picture went out (a 2x2
+   * blank frame) and came back on a brand new subscription, which starts like
+   * a join does, and the encoder starts over. A film night crosses that line
+   * as people arrive, and again every time somebody drops and rejoins around
+   * twenty. With the flag the layer set stays and only the top layer's
+   * ceiling moves, in place, to what the plan for the new size says: the same
+   * per-viewer ceiling the republish would have given (1.5 Mbit/s above
+   * twenty), with nothing torn down. A quality chosen by name still
+   * republishes, as before.
+   */
+  function reconcileScreenPlan(trigger: "room" | "other" = "other"): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
       const published = publishedScreenPlan;
@@ -2002,7 +2143,9 @@ export async function connectLiveKit({
         }
         return;
       }
-      if (heightChanged) {
+      const inPlace =
+        trigger === "room" && shareFastStartQualityActive();
+      if (heightChanged && !inPlace) {
         await constrainScreenCapture(track, plan.topHeight);
         if (!screenShareStill(track, epoch)) {
           return;
@@ -2764,6 +2907,9 @@ export async function connectLiveKit({
       for (const participant of room.remoteParticipants.values()) {
         for (const publication of participant.videoTrackPublications.values()) {
           if (publication.isSubscribed) {
+            // A choice made by hand is the ceiling from now on, early
+            // request or not.
+            earlyShareRequests.delete(publication);
             applyReceiveQuality(publication);
           }
         }

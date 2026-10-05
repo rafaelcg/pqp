@@ -297,6 +297,17 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareHighMotionGuard)",
   },
+  share_fast_start_quality: {
+    description:
+      "Compartilhamento de tela nítido desde o começo: quem entra na call pede a camada do palco antes da assinatura (sem os primeiros segundos em 360p), e o compartilhamento não é republicado quando a sala passa de 20 pessoas (só o teto da camada de cima muda, sem a imagem sumir pra todo mundo).",
+    env: "SHARE_FAST_START_QUALITY",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Read by `GET /api/share/config` with the call's server, like the guard:
+    // the viewer's and the presenter's clients both ask with it.
+    perServer: true,
+    clientVia: "GET /api/share/config (shareFastStartQuality)",
+  },
   share_game_capture_hint: {
     description:
       "Aviso de jogo em tela cheia exclusiva: no app desktop do Windows, se o compartilhamento chega preto, sem quadros ou cai sozinho enquanto o Windows diz que um jogo ocupa a tela, quem compartilha vê como trocar pra tela cheia em janela.",

@@ -82,6 +82,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   share_game_capture_hint: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  share_fast_start_quality: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   linux_desktop_system_audio: (raw) => raw === "true",
 };
 

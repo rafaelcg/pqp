@@ -545,6 +545,7 @@ import {
   shouldPreloadHlsEngine,
 } from "@/lib/party-fast-start";
 import { cameraSyncFromConfig, setWatchCameraSync } from "@/lib/camera-sync";
+import { setShareFastStartServer } from "@/lib/share-fast-start";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -6070,11 +6071,24 @@ function MainAppContent({
       });
   }
 
+  /**
+   * The server a call is about to be in, for everything that is decided per
+   * server before the media connects. `share_fast_start_quality` is read the
+   * moment the SFU's join response lands, so its answer is asked for here,
+   * before the token request, rather than once the seat exists; a server
+   * already asked about in the last ten minutes answers from the cache.
+   */
+  function noteCallServer(serverId: string | null) {
+    voiceServerIdRef.current = serverId;
+    setShareFastStartServer(serverId);
+    prefetchShareGuardFlag(serverId);
+  }
+
   async function handleJoinVoice(
     channelId: string,
     joinOptions?: { startMuted?: boolean },
   ) {
-    voiceServerIdRef.current = selectedServerId;
+    noteCallServer(selectedServerId);
     refreshIceServers();
     // The funnel's "first thing a new account did": inert unless the wizard
     // finished in this tab, and once.
@@ -6728,7 +6742,7 @@ function MainAppContent({
   }
 
   async function joinWatchPartyAsAudience(channelId: string) {
-    voiceServerIdRef.current = selectedServerId;
+    noteCallServer(selectedServerId);
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
@@ -6815,7 +6829,7 @@ function MainAppContent({
   async function handleWatchPartyGuestGoOnAir(channelId: string) {
     await handleWatchPartyGuestAction({ action: "join" }, channelId);
     try {
-      voiceServerIdRef.current = selectedServerId;
+      noteCallServer(selectedServerId);
       await voice.join(channelId, {
         inputDeviceId: localSettings.inputDeviceId,
         inputVolume: localSettings.inputVolume,
