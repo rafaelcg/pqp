@@ -11305,19 +11305,22 @@ export async function sweepAudienceModes(): Promise<void> {
   // genuinely on is left to the sweep below.
   if (!audienceBootCheckDone && localRooms.size > 0) {
     audienceBootCheckDone = true;
-    for (const channelId of localRooms) {
-      if (getRoomTransport(channelId) !== "livekit") {
-        continue;
-      }
+    const livekitRooms = [...localRooms].filter(
+      (channelId) => getRoomTransport(channelId) === "livekit",
+    );
+    await mapWithConcurrency(livekitRooms, 4, async (channelId) => {
       try {
         const channel = await getChannel(channelId);
         if (audienceModeApplies(channel) && audienceModeEnabledFor(channel?.server_id)) {
           audienceRestorePending.add(channelId);
         }
       } catch {
-        // The next sweep's checks cover it.
+        // Could not tell: check it anyway. A restore on a room that was never
+        // in audience mode rewrites nothing (only mismatches are touched),
+        // and a skipped room here would never be looked at again.
+        audienceRestorePending.add(channelId);
       }
-    }
+    });
   }
   await retryAudienceRestores();
   // Nothing can be on and nothing is cached: no query, unless rows may be
