@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Bell, Mic, UserRound } from "lucide-react";
@@ -142,6 +142,89 @@ describe("SectionRail", () => {
     act(() => outside.focus());
     expect(onSelect).toHaveBeenCalledWith("notifications");
     outside.remove();
+  });
+
+  it("opens the arrowed-to tab before Tab leaves it, so focus and selection agree", () => {
+    function Harness() {
+      const [active, setActive] = useState<Id>("notifications");
+      return (
+        <SectionRail
+          sections={items()}
+          active={active}
+          onSelect={(id) => {
+            onSelect(id);
+            setActive(id);
+          }}
+          idFor={(id) => `tab-${id}`}
+          panelId="panel"
+          label="Seções"
+        />
+      );
+    }
+    act(() => root!.render(<Harness />));
+    act(() => tab("notifications").focus());
+    press("ArrowUp");
+    press("ArrowUp");
+    expect(document.activeElement).toBe(tab("profile"));
+    // Tab right away: the browser picks the next stop from the tabindexes as
+    // they are when the keydown ends, so they must already say Perfil.
+    press("Tab");
+    expect(onSelect).toHaveBeenCalledWith("profile");
+    expect(tab("profile").tabIndex).toBe(0);
+    expect(tab("notifications").tabIndex).toBe(-1);
+    act(() => vi.advanceTimersByTime(RAIL_ARROW_SELECT_DELAY_MS));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("never opens a manual tab from the arrows or from leaving the rail", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    act(() =>
+      root!.render(
+        <SectionRail
+          sections={items().map((item) => ({ ...item, manual: item.id === "voice" }))}
+          active="profile"
+          onSelect={onSelect}
+          idFor={(id) => `tab-${id}`}
+          panelId="panel"
+          label="Seções"
+        />,
+      ),
+    );
+    act(() => tab("profile").focus());
+    press("ArrowDown");
+    expect(document.activeElement).toBe(tab("voice"));
+    act(() => vi.advanceTimersByTime(RAIL_ARROW_SELECT_DELAY_MS));
+    press("Tab");
+    act(() => outside.focus());
+    expect(onSelect).not.toHaveBeenCalled();
+    // A click still opens it.
+    act(() => tab("voice").click());
+    expect(onSelect).toHaveBeenCalledWith("voice");
+    outside.remove();
+  });
+
+  it("leaves a manual tab that was not opened from the selected tab, so Tab leaves the rail", () => {
+    act(() =>
+      root!.render(
+        <SectionRail
+          sections={items().map((item) => ({ ...item, manual: item.id === "voice" }))}
+          active="notifications"
+          onSelect={onSelect}
+          idFor={(id) => `tab-${id}`}
+          panelId="panel"
+          label="Seções"
+        />,
+      ),
+    );
+    act(() => tab("notifications").focus());
+    press("ArrowUp");
+    expect(document.activeElement).toBe(tab("voice"));
+    // The browser moves on from wherever focus is when the keydown ends: the
+    // selected tab, whose next stop is past the rail.
+    press("Tab");
+    expect(document.activeElement).toBe(tab("notifications"));
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

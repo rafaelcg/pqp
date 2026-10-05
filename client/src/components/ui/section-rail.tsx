@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
 import { useTranslation } from "@/lib/i18n";
@@ -18,7 +19,8 @@ import { cn } from "@/lib/utils";
  * focus at once; the selection follows when the person stops on a tab.
  * Flipping through the rail used to mount every tab on the way, and Voz e
  * vídeo asks for the microphone when it mounts. A click, Enter or Space opens
- * a tab at once, and leaving the rail opens the focused one.
+ * a tab at once, and leaving the rail opens the focused one. A `manual` tab
+ * is never opened by the arrows or by leaving: only a click, Enter or Space.
  */
 export const RAIL_ARROW_SELECT_DELAY_MS = 300;
 
@@ -28,6 +30,12 @@ export interface SectionRailItem<Id extends string = string> {
   icon: LucideIcon;
   danger?: boolean;
   dirty?: boolean;
+  /**
+   * Opens only on a click, Enter or Space, never by resting an arrow on it or
+   * leaving the rail from it: for a tab that does something as it opens (Voz
+   * asks for the microphone).
+   */
+  manual?: boolean;
   /**
    * Key into `groupLabels`. Items of one group must be adjacent. A group with
    * no label is drawn as a divider instead of a heading.
@@ -172,14 +180,20 @@ export function SectionRail<Id extends string>({
   function move(to: number) {
     const index = (to + sections.length) % sections.length;
     const next = sections[index]!;
-    tabElements()[index]?.focus();
+    const tab = tabElements()[index];
+    tab?.focus();
     cancelPending();
-    if (next.id === active) {
+    if (next.id === active || next.manual) {
       return;
     }
     const timer = window.setTimeout(() => {
       pending.current = null;
-      onSelect(next.id);
+      // Focus moved on without a blur reaching the rail (the tab was taken
+      // away, or a script moved it): opening a tab nobody is on would leave
+      // focus and selection on two different tabs.
+      if (document.activeElement === tab) {
+        onSelect(next.id);
+      }
     }, RAIL_ARROW_SELECT_DELAY_MS);
     pending.current = { timer, id: next.id };
   }
@@ -202,6 +216,19 @@ export function SectionRail<Id extends string>({
         ? focused
         : sections.findIndex((section) => section.id === active);
     switch (event.key) {
+      case "Tab":
+        // Opened before the browser picks the next stop, so the tab Tab
+        // leaves from is the selected one (tabindex 0) and the still-selected
+        // tab further down is no longer a stop. Without this, Tab right after
+        // an arrow landed on the old tab while the timer opened the new one.
+        if (pending.current) {
+          flushSync(commitPending);
+        } else if (focused >= 0 && sections[focused]?.id !== active) {
+          // On a tab that was not opened (a manual one): Tab leaves from the
+          // selected tab, the rail's one stop, rather than stopping on it.
+          tabElements()[sections.findIndex((section) => section.id === active)]?.focus();
+        }
+        break;
       case "ArrowRight":
       case "ArrowDown":
         event.preventDefault();
