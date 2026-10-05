@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { User } from "@pqp/shared";
+import { updateProfileSchema, type User } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 import {
+  AVATAR_URL_MAX_LENGTH,
+  avatarLinkProblem,
   buildProfilePatch,
+  hasBidiControl,
   isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
@@ -172,5 +175,34 @@ describe("isHandleTakenError", () => {
     expect(isHandleTakenError(new Error("That handle is already taken"), withHandle)).toBe(
       false,
     );
+  });
+});
+
+describe("avatarLinkProblem", () => {
+  it("takes https links with a host and nothing else", () => {
+    expect(avatarLinkProblem("https://example.com/a.png")).toBeNull();
+    expect(avatarLinkProblem("http://example.com/a.png")).toBe("format");
+    expect(avatarLinkProblem("//example.com/a.png")).toBe("format");
+    expect(avatarLinkProblem("/api/avatars/1")).toBe("format");
+    expect(avatarLinkProblem("https://")).toBe("format");
+  });
+
+  it("names the server's own length limit", () => {
+    const at = `https://e.co/${"a".repeat(AVATAR_URL_MAX_LENGTH - 13)}`;
+    expect(at.length).toBe(AVATAR_URL_MAX_LENGTH);
+    expect(avatarLinkProblem(at)).toBeNull();
+    expect(updateProfileSchema.safeParse({ avatarUrl: at }).success).toBe(true);
+    expect(avatarLinkProblem(`${at}a`)).toBe("length");
+    expect(updateProfileSchema.safeParse({ avatarUrl: `${at}a` }).success).toBe(false);
+  });
+});
+
+describe("hasBidiControl", () => {
+  it("finds the overrides, isolates and marks, and nothing in an ordinary name", () => {
+    for (const ch of ["‪", "‮", "⁦", "⁩", "‎", "‏", "؜"]) {
+      expect(hasBidiControl(`Rafa${ch}x`)).toBe(true);
+    }
+    expect(hasBidiControl("João da Silva ✨")).toBe(false);
+    expect(hasBidiControl("محمد")).toBe(false);
   });
 });

@@ -29,11 +29,13 @@ vi.mock("@/components/settings/profile-section", async () => {
       onDisplayName,
       handle,
       onHandle,
+      onHandleAvailability,
     }: {
       displayName: string;
       onDisplayName: (next: string) => void;
       handle: string;
       onHandle: (next: string) => void;
+      onHandleAvailability?: (handle: string, availability: string) => void;
     }) => {
       const { profileHandleError } = useSettingsShell();
       return (
@@ -49,6 +51,12 @@ vi.mock("@/components/settings/profile-section", async () => {
             onChange={(event) => onHandle(event.target.value)}
           />
           <p data-handle-error="">{profileHandleError ?? ""}</p>
+          {/* What Perfil's availability check reports for the typed link. */}
+          <button
+            type="button"
+            data-report-taken=""
+            onClick={() => onHandleAvailability?.(handle.trim(), "taken")}
+          />
         </div>
       );
     },
@@ -208,6 +216,23 @@ describe("a taken public link", () => {
 
     expect(fetchMe).toHaveBeenCalledTimes(1);
     expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ handle: "rafa2" }));
+  });
+
+  it("refuses a link the field already showed as taken, before the 30-day confirm", async () => {
+    updateMe.mockClear();
+    mount();
+    type(field("handle"), "rafa2");
+    act(() => document.querySelector<HTMLButtonElement>("[data-report-taken]")!.click());
+    await save();
+
+    expect(updateMe).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
+    expect(handleError()).toMatch(/Esse link já tem dono|already someone's/);
+
+    // An answer for another link does not count for this one.
+    type(field("handle"), "rafa3");
+    await save();
+    expect(document.querySelectorAll('[role="dialog"]').length).toBe(2);
   });
 
   it("says the request limiter's 429 in the bar, without blaming the new link", async () => {

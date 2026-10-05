@@ -102,3 +102,44 @@ export function isHandleTakenError(error: unknown, patch: ProfilePatch): boolean
     !/\busername\b/i.test(error.message)
   );
 }
+
+/**
+ * Characters that reorder the text around them without drawing anything: the
+ * bidi embeddings and overrides (U+202A to U+202E), the isolates (U+2066 to
+ * U+2069) and the three directional marks. In a display name, U+202E turns
+ * "Rafa" plus "gpj.exe" into something that reads as another name, and nobody
+ * typing an ordinary name needs any of them.
+ */
+const BIDI_CONTROL = /[‪-‮⁦-⁩‎‏؜]/;
+
+export function hasBidiControl(value: string): boolean {
+  return BIDI_CONTROL.test(value);
+}
+
+/**
+ * The longest avatar link the server takes: `avatarUrl` in `updateProfileSchema`
+ * (`packages/shared/src/api.ts`) is `.max(500)`. A test pins the two together.
+ */
+export const AVATAR_URL_MAX_LENGTH = 500;
+
+/**
+ * Why a pasted avatar link will not do, or null when it will. Only `https://`
+ * with a host. The server also takes `http://` and anything starting with "/",
+ * but the browser upgrades or blocks a plain-http image on an https page,
+ * "//host" is a protocol-relative link nobody means to paste, and a path is
+ * what an upload stores, never something typed.
+ */
+export function avatarLinkProblem(value: string): "length" | "format" | null {
+  if (value.length > AVATAR_URL_MAX_LENGTH) {
+    return "length";
+  }
+  if (!/^https:\/\//i.test(value)) {
+    return "format";
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname !== "" ? null : "format";
+  } catch {
+    return "format";
+  }
+}

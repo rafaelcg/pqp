@@ -445,3 +445,200 @@ describe("Settings profile drafts", () => {
     expect(unload()).toBe(false);
   });
 });
+
+describe("Settings profile save, QA round 3", () => {
+  const usernameInput = () =>
+    document.querySelector<HTMLInputElement>('[data-settings-row="username"] input')!;
+  const panel = () => document.getElementById("settings-panel")!;
+  const barRegion = () =>
+    [...document.querySelectorAll<HTMLElement>('p.sr-only[role="status"]')].find(
+      (node) => !node.hasAttribute("data-settings-announcer"),
+    )!;
+  const buttonNamed = (name: RegExp) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      name.test(b.textContent?.trim() ?? ""),
+    )!;
+
+  it("keeps focus on Salvar while the save runs and after it fails, and says both", async () => {
+    updateMe.mockReset();
+    let fail!: (error: unknown) => void;
+    updateMe.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    mount(makeUser());
+    type(displayNameInput(), "Rafael");
+    const save = barButton("save")!;
+    act(() => save.focus());
+    await act(async () => {
+      save.click();
+      await Promise.resolve();
+    });
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(barButton("discard")!.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(save);
+    expect(barRegion().textContent).toMatch(/Saving|Salvando/);
+    // Descartar is ignored while the request is out.
+    act(() => barButton("discard")!.click());
+    expect(displayNameInput().value).toBe("Rafael");
+
+    await act(async () => {
+      fail(new Error("offline"));
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(barButton("save"));
+    const error = bar()!.querySelector("[data-unsaved-error]")!.textContent;
+    expect(error).toBeTruthy();
+    expect(barRegion().textContent).toBe(error);
+  });
+
+  it("brings a blank name into view and focuses it, from Perfil or from another tab", () => {
+    vi.useFakeTimers();
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      updateMe.mockReset();
+      mount(makeUser());
+      type(displayNameInput(), "");
+      act(() => barButton("save")!.focus());
+      act(() => barButton("save")!.click());
+      act(() => vi.advanceTimersByTime(0));
+      expect(updateMe).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(displayNameInput());
+      expect(scroll).toHaveBeenCalled();
+
+      // Ctrl+S from another tab lands on the field too.
+      act(() => document.querySelector<HTMLButtonElement>("#settings-tab-notifications")!.click());
+      act(() => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }),
+        );
+      });
+      act(() => vi.advanceTimersByTime(0));
+      expect(document.activeElement).toBe(displayNameInput());
+    } finally {
+      vi.useRealTimers();
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("refuses a name with a right-to-left override, under the field", () => {
+    updateMe.mockReset();
+    mount(makeUser());
+    type(displayNameInput(), "Rafa‮gpj.exe");
+    const row = document.querySelector('[data-settings-row="display-name"]')!;
+    expect(row.textContent).toMatch(/invisible character|caractere invisível/);
+    act(() => barButton("save")!.click());
+    expect(updateMe).not.toHaveBeenCalled();
+  });
+
+  it("keeps Salvo up for the whole moment after a second save", async () => {
+    vi.useFakeTimers();
+    try {
+      updateMe.mockReset();
+      updateMe.mockImplementation(async (patch: { displayName?: string }) =>
+        makeUser({ displayName: patch.displayName ?? "Rafa" }),
+      );
+      mount(makeUser());
+      type(displayNameInput(), "Rafael");
+      await act(async () => {
+        barButton("save")!.click();
+        await Promise.resolve();
+      });
+      render(makeUser({ displayName: "Rafael" }));
+      expect(bar()?.textContent).toMatch(/Saved|Salvo/);
+
+      act(() => vi.advanceTimersByTime(1000));
+      type(displayNameInput(), "Rafaela");
+      await act(async () => {
+        barButton("save")!.click();
+        await Promise.resolve();
+      });
+      render(makeUser({ displayName: "Rafaela" }));
+      // 1.6s after the first save, 0.6s after the second.
+      act(() => vi.advanceTimersByTime(600));
+      expect(bar()?.textContent).toMatch(/Saved|Salvo/);
+      act(() => vi.advanceTimersByTime(1000));
+      expect(bar()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses an avatar link that is not https, and names the length limit", () => {
+    updateMe.mockReset();
+    mount(makeUser());
+    act(() => buttonNamed(/^(Use a link|Usar um link)$/).click());
+    const link = () =>
+      document.querySelector<HTMLInputElement>('[data-settings-row="avatar"] input:not([type=file])')!;
+    for (const value of ["http://example.com/a.png", "//example.com/a.png", "/api/x.png"]) {
+      type(link(), value);
+      // What was typed stays in the field, a leading "/" included.
+      expect(link().value).toBe(value);
+      act(() => barButton("save")!.click());
+      expect(bar()!.querySelector("[data-unsaved-error]")?.textContent).toMatch(/https:\/\//);
+    }
+    type(link(), `https://example.com/${"a".repeat(500)}.png`);
+    act(() => barButton("save")!.click());
+    expect(bar()!.querySelector("[data-unsaved-error]")?.textContent).toMatch(/500/);
+    expect(updateMe).not.toHaveBeenCalled();
+  });
+
+  it("still saves a rename for an account whose saved avatar is http", async () => {
+    updateMe.mockReset();
+    updateMe.mockResolvedValue(makeUser({ displayName: "Rafael" }));
+    mount(makeUser({ avatarUrl: "http://old.example/a.png" }));
+    type(displayNameInput(), "Rafael");
+    await act(async () => {
+      barButton("save")!.click();
+      await Promise.resolve();
+    });
+    expect(updateMe).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands on Perfil's panel after Ver no Perfil, not on the page", () => {
+    mount(makeUser());
+    type(displayNameInput(), "Rafael");
+    act(() => document.querySelector<HTMLButtonElement>("#settings-tab-notifications")!.click());
+    const show = buttonNamed(/^(Show in Profile|Ver no Perfil)$/);
+    act(() => show.focus());
+    act(() => show.click());
+    expect(
+      document.querySelector("#settings-tab-profile")!.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(panel());
+  });
+
+  it("transliterates the username and explains an emptied one", () => {
+    mount(makeUser());
+    type(usernameInput(), "João Silva");
+    expect(usernameInput().value).toBe("joao_silva");
+    type(usernameInput(), "");
+    const row = document.querySelector('[data-settings-row="username"]')!;
+    expect(row.textContent).toMatch(/can't be empty.*rafa|não pode ficar vazio.*rafa/);
+    expect(bar()).toBeNull();
+  });
+
+  it("raises buttons and selects to a 44px target on a phone, from one rule", () => {
+    mount(makeUser());
+    const wrapper = document.getElementById("settings-panel")!.closest(".sm\\:flex-row")!;
+    expect(wrapper.className).toContain("max-sm:[&_button:not([role])]:min-h-11");
+    expect(wrapper.className).toContain("max-sm:[&_select]:min-h-11");
+  });
+
+  it("pads the pane by the bar's real height when its buttons wrap", () => {
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const height = this.hasAttribute("data-unsaved-bar-frame") ? 170 : 0;
+        return { height, width: 0, top: 0, left: 0, right: 0, bottom: height, x: 0, y: 0, toJSON() {} } as DOMRect;
+      });
+    try {
+      mount(makeUser());
+      type(displayNameInput(), "Rafael");
+      const content = panel().firstElementChild as HTMLElement;
+      expect(content.style.paddingBottom).toBe("186px");
+      expect(panel().style.scrollPaddingBottom).toBe("186px");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+});

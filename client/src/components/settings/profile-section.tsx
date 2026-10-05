@@ -24,7 +24,9 @@ import {
   type User,
   type UserBannerConfig,
 } from "@pqp/shared";
+import { hasBidiControl } from "@/components/settings/profile-patch";
 import {
+  SETTINGS_BUSY,
   SettingsCopyButton,
   SettingsGroup,
   SettingsInlineStatus,
@@ -77,7 +79,8 @@ const PRESET_NAME_KEYS = [
  * shell's own button, so its checks and the 30-day link confirm run exactly as
  * they do for a click. Asked after the render, so a value the handler just
  * staged (the name with its spaces collapsed) is the one that is saved. A
- * save bar that is not up (nothing staged) or is busy is a click on nothing.
+ * save bar that is not up (nothing staged) is a click on nothing, and a busy
+ * one (only `aria-disabled`, so it keeps focus) ignores the click itself.
  */
 export function requestProfileSave(): void {
   window.setTimeout(() => {
@@ -95,6 +98,35 @@ function saveOnEnter(event: KeyboardEvent<HTMLInputElement>) {
   if (event.key === "Enter" && !event.nativeEvent.isComposing) {
     requestProfileSave();
   }
+}
+
+/**
+ * What the username field keeps of a keystroke or a paste: lowercase, accents
+ * taken off the way the link field does it ("João" is "joao", not "joo"),
+ * spaces as "_", and nothing else outside a to z, 0 to 9 and "_".
+ */
+export function usernameFromInput(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+}
+
+/**
+ * What the link field keeps of a paste. A whole address ("https://pqp.gg/@rafa",
+ * "pqp.gg/@rafa/", with a query or not) is cut down to its last path segment
+ * first, so it gives "rafa" rather than "httpspqp.ggrafa". Only when there is
+ * a "/": a handle may hold a dot, so "pqp.gg" on its own is a handle.
+ */
+export function handleFromInput(raw: string): string {
+  let value = raw;
+  if (value.includes("/")) {
+    const path = value.split(/[?#]/)[0]!.replace(/\/+\s*$/, "");
+    value = path.slice(path.lastIndexOf("/") + 1);
+  }
+  return normalizeHandle(value);
 }
 
 /** The counter shows from this many characters short of the limit. */
@@ -129,9 +161,16 @@ export function useHandleAvailability(
   ownedHandle: string | null,
   enabled: boolean,
 ): HandleAvailability {
-  const [availability, setAvailability] = useState<HandleAvailability>("idle");
+  // Kept with the link it answers, so the render after an edit never shows
+  // (or hands the save) the previous link's answer for the new one.
+  const [answer, setAnswer] = useState<{ handle: string; value: HandleAvailability }>({
+    handle: "",
+    value: "idle",
+  });
   useEffect(() => {
     const candidate = handle.trim();
+    const setAvailability = (value: HandleAvailability) =>
+      setAnswer({ handle: candidate, value });
     if (!enabled || !candidate || candidate === (ownedHandle ?? "")) {
       setAvailability("idle");
       return;
@@ -162,7 +201,7 @@ export function useHandleAvailability(
       window.clearTimeout(timer);
     };
   }, [handle, ownedHandle, enabled]);
-  return availability;
+  return answer.handle === handle.trim() ? answer.value : "idle";
 }
 
 /**
@@ -244,6 +283,7 @@ export function ProfileSection({
   avatarUrl,
   onAvatarUrl,
   onUserUpdated,
+  onHandleAvailability,
 }: {
   user: User | null;
   displayName: string;
@@ -257,6 +297,12 @@ export function ProfileSection({
   avatarUrl: string;
   onAvatarUrl: (next: string) => void;
   onUserUpdated: (user: User) => void;
+  /**
+   * The live answer for the link being typed, with the link it is for. The
+   * shell refuses a save the field already showed as taken, before the
+   * 30-day confirm.
+   */
+  onHandleAvailability?: (handle: string, availability: HandleAvailability) => void;
 }) {
   const { t, locale } = useTranslation();
   const nameId = useId();
@@ -267,6 +313,8 @@ export function ProfileSection({
   const handleErrorId = useId();
   const handleRuleId = useId();
   const usernameId = useId();
+  const usernameKeptId = useId();
+  const handleKeptId = useId();
   const storage = useStorageConfig();
   // The name as it was when the field got focus, and whether it was left
   // empty. The save says the same later; this says it as you leave the field.
@@ -287,6 +335,16 @@ export function ProfileSection({
     ownedHandle,
     renameAvailableAt === null,
   );
+  const reportAvailability = useRef(onHandleAvailability);
+  reportAvailability.current = onHandleAvailability;
+  useEffect(() => {
+    reportAvailability.current?.(handle.trim(), availability);
+  }, [handle, availability]);
+  // Neither the link nor the username can be given up, so an emptied field
+  // saves nothing. Said under it, with what stays.
+  const savedUsername = user?.username ?? "";
+  const usernameKept = username.trim() === "" && savedUsername !== "";
+  const handleKept = handle.trim() === "" && ownedHandle !== null;
   const tag = user?.tag ?? null;
   // The preview follows the drafts, so it changes while somebody types. The
   // number after the # is the saved one: a renamed username keeps it unless
@@ -296,6 +354,7 @@ export function ProfileSection({
   // wins, and the blur says it first.
   const nameError =
     displayNameError ??
+    (hasBidiControl(displayName) ? t("settings.profile.displayNameControls") : null) ??
     (nameLeftEmpty && !displayName.trim()
       ? t("settings.profile.displayNameRequired")
       : null);
@@ -484,10 +543,11 @@ export function ProfileSection({
                     handleDescriptionId,
                     renameAvailableAt === null ? handleRuleId : null,
                     handleError ? handleErrorId : null,
+                    handleKept ? handleKeptId : null,
                   ]
                     .filter(Boolean)
                     .join(" ")}
-                  onChange={(event) => onHandle(normalizeHandle(event.target.value))}
+                  onChange={(event) => onHandle(handleFromInput(event.target.value))}
                   onKeyDown={saveOnEnter}
                   className="font-mono max-sm:h-11"
                 />
@@ -508,6 +568,11 @@ export function ProfileSection({
                   <div id={handleErrorId}>
                     <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
                   </div>
+                ) : null}
+                {handleKept ? (
+                  <p id={handleKeptId} className="mt-1.5 text-xs text-pretty text-text-tertiary">
+                    {t("settings.profile.publicHandle.kept", { handle: ownedHandle })}
+                  </p>
                 ) : null}
               </div>
 
@@ -558,15 +623,17 @@ export function ProfileSection({
                 autoComplete="off"
                 autoCapitalize="none"
                 spellCheck={false}
-                onChange={(event) =>
-                  onUsername(
-                    event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
-                  )
-                }
+                aria-describedby={usernameKept ? usernameKeptId : undefined}
+                onChange={(event) => onUsername(usernameFromInput(event.target.value))}
                 onKeyDown={saveOnEnter}
                 placeholder={t("settings.profile.usernamePlaceholder")}
                 className="max-sm:h-11"
               />
+              {usernameKept ? (
+                <p id={usernameKeptId} className="text-xs text-pretty text-text-tertiary">
+                  {t("settings.profile.usernameKept", { username: savedUsername })}
+                </p>
+              ) : null}
               {/* The tag is how somebody adds you inside the app. It is the
                   saved one, not the draft: the number is the server's. */}
               {tag ? (
@@ -743,6 +810,7 @@ function BannerRow({
 }) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLButtonElement>(null);
   const write = useInlineSave();
   // One status line for both writes: "Enviando…" for an upload, the kit's
   // "Salvando…" for a removal.
@@ -752,6 +820,7 @@ function BannerRow({
   const enabled = storage?.banner ?? false;
 
   function handleFile(file: File) {
+    if (busy) return;
     const failed = t("settings.profile.banner.failed");
     setAction("upload");
     void write.run(async () => {
@@ -778,12 +847,26 @@ function BannerRow({
   }
 
   function handleRemove() {
+    if (busy) return;
     setAction("remove");
     void write.run(async () => {
       const res = await deleteUserBanner();
       onUserUpdated(res.user);
     }, t("settings.profile.banner.removeFailed"));
   }
+
+  // A removal takes Remover away with it: focus moves to the upload button
+  // beside it rather than to the page.
+  const hadBanner = useRef(hasBanner);
+  useEffect(() => {
+    const removed = hadBanner.current && !hasBanner;
+    hadBanner.current = hasBanner;
+    if (!removed) return;
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.isConnected) {
+      uploadRef.current?.focus();
+    }
+  }, [hasBanner]);
 
   // This server takes no images at all (or no banner). There is nothing to
   // do in a row, so there is no row: one quiet line says what does work. It
@@ -826,13 +909,18 @@ function BannerRow({
       control={
         enabled ? (
           <div className="flex flex-wrap items-center gap-2">
+            {/* Busy, not disabled, while a write runs: a disabled button drops
+                keyboard focus on the page. */}
             <Button
+              ref={uploadRef}
               type="button"
               variant="secondary"
               size="sm"
-              className="max-sm:h-11"
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
+              aria-disabled={busy || undefined}
+              className={cn("max-sm:h-11", busy && SETTINGS_BUSY)}
+              onClick={() => {
+                if (!busy) fileRef.current?.click();
+              }}
             >
               <Upload aria-hidden className="h-3.5 w-3.5" />
               {hasBanner
@@ -844,8 +932,8 @@ function BannerRow({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="max-sm:h-11"
-                disabled={busy}
+                aria-disabled={busy || undefined}
+                className={cn("max-sm:h-11", busy && SETTINGS_BUSY)}
                 onClick={handleRemove}
               >
                 {t("settings.profile.banner.remove")}

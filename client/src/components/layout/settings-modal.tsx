@@ -33,10 +33,13 @@ import { AppearanceSection } from "@/components/settings/appearance-section";
 import { NotificationsSection } from "@/components/settings/notifications-section";
 import { PrivacySection } from "@/components/settings/privacy-section";
 import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
-import { ProfileSection } from "@/components/settings/profile-section";
+import { ProfileSection, type HandleAvailability } from "@/components/settings/profile-section";
 import { endFeedbackVisit, FeedbackSection } from "@/components/settings/feedback-section";
 import {
+  AVATAR_URL_MAX_LENGTH,
+  avatarLinkProblem,
   buildProfilePatch,
+  hasBidiControl,
   isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
@@ -318,8 +321,10 @@ export function SettingsModal({
   // without doing its work inside a render-phase state updater.
   const draftRef = useRef(draftLocal);
   const [saving, setSaving] = useState(false);
-  // "Salvo" in the bar for a moment after a save, then the bar goes.
+  // "Salvo" in the bar for a moment after a save, then the bar goes. The
+  // count restarts the moment on a second save while the first is showing.
   const [savedFlash, setSavedFlash] = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   // The public link is somebody else's: said under the link field in Perfil
@@ -334,6 +339,11 @@ export function SettingsModal({
   const [focusGuardNonce, setFocusGuardNonce] = useState(0);
   // The 30-day handle lock asks before a save claims or changes the link.
   const [handleConfirm, setHandleConfirm] = useState<"claim" | "change" | null>(null);
+  // Perfil's live answer for the link being typed, with the link it is for.
+  const handleCheckRef = useRef<{ handle: string; availability: HandleAvailability }>({
+    handle: "",
+    availability: "idle",
+  });
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
   const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
@@ -576,7 +586,7 @@ export function SettingsModal({
     if (!savedFlash) return;
     const timer = window.setTimeout(() => setSavedFlash(false), 1500);
     return () => window.clearTimeout(timer);
-  }, [savedFlash]);
+  }, [savedFlash, savedCount]);
 
   // Seeded from a ref so live audio edits, which flow back in as a new
   // `localSettings` prop, do not restart the draft mid-session.
@@ -717,6 +727,10 @@ export function SettingsModal({
    * stay behind Desfazer for `DISCARD_UNDO_MS`.
    */
   function discardProfile() {
+    // The bar ignores it while a save runs; Cmd+S and Enter never reach here.
+    if (saving) {
+      return;
+    }
     if (user) {
       setDiscarded(drafts);
       setDrafts(profileDraftsFrom(user));
@@ -784,6 +798,7 @@ export function SettingsModal({
         sameDrafts(current, submitted) ? profileDraftsFrom(updated) : current,
       );
       setSavedFlash(true);
+      setSavedCount((n) => n + 1);
     } catch (err) {
       if (isHandleTakenError(err, patch)) {
         // Never the server's English sentence for this one: it is the one
@@ -848,6 +863,22 @@ export function SettingsModal({
     }
   }
 
+  /**
+   * A refused save points at the field it is about: Perfil comes up, the field
+   * scrolls clear of the bar and takes focus, so its error line is read with
+   * it. The line used to sit out of sight while the bar said nothing.
+   */
+  function focusProfileField(rowId: "display-name" | "public-link") {
+    window.setTimeout(() => {
+      const field = scrollerRef.current?.querySelector<HTMLInputElement>(
+        `[data-settings-row="${rowId}"] input`,
+      );
+      if (!field) return;
+      field.scrollIntoView?.({ block: "center" });
+      field.focus({ preventScroll: true });
+    }, 0);
+  }
+
   function saveProfile() {
     if (!user || saving || !profileDirty) {
       return;
@@ -858,6 +889,13 @@ export function SettingsModal({
       // Said once, under the field; the bar does not repeat it.
       setSection("profile");
       setNameError(t("settings.profile.displayNameRequired"));
+      focusProfileField("display-name");
+      return;
+    }
+    if (hasBidiControl(drafts.displayName)) {
+      setSection("profile");
+      setNameError(t("settings.profile.displayNameControls"));
+      focusProfileField("display-name");
       return;
     }
     // The other two fields the server checks, checked here first so the
@@ -868,14 +906,18 @@ export function SettingsModal({
       setSaveError(t("settings.profile.usernameInvalid"));
       return;
     }
+    // Only a link that changed: an account whose saved picture predates the
+    // rule must still be able to rename, and every save re-sends it.
     const avatar = drafts.avatarUrl.trim();
-    if (
-      avatar !== "" &&
-      avatar !== (user.avatarUrl ?? "") &&
-      !/^(https?:\/\/|\/)/.test(avatar)
-    ) {
+    const avatarProblem =
+      avatar !== "" && avatar !== (user.avatarUrl ?? "") ? avatarLinkProblem(avatar) : null;
+    if (avatarProblem) {
       setSection("profile");
-      setSaveError(t("settings.profile.avatar.urlInvalid"));
+      setSaveError(
+        avatarProblem === "length"
+          ? t("settings.profile.avatar.urlTooLong", { max: AVATAR_URL_MAX_LENGTH })
+          : t("settings.profile.avatar.urlInvalid"),
+      );
       return;
     }
     const handleChange = pendingHandleChange(user, drafts);
@@ -894,6 +936,23 @@ export function SettingsModal({
       setSection("profile");
       setHandleError(message);
       setSaveError(message);
+      focusProfileField("public-link");
+      return;
+    }
+    // The field already said this link has an owner: the 30-day confirm
+    // would only lead to the server's 409. An answer still on its way lets
+    // the confirm through, and the save's own check catches it.
+    const checked = handleCheckRef.current;
+    if (
+      handleChange &&
+      checked.availability === "taken" &&
+      checked.handle === drafts.handle.trim()
+    ) {
+      const message = t("settings.unsaved.handle.taken");
+      setSection("profile");
+      setHandleError(message);
+      setSaveError(message);
+      focusProfileField("public-link");
       return;
     }
     if (handleChange) {
@@ -979,6 +1038,28 @@ export function SettingsModal({
 
   const barVisible = profileDirty || savedFlash || discarded !== null;
 
+  // How much of the pane the floating bar covers. On a phone its buttons
+  // wrap to a second or third row, so a fixed allowance left the last group
+  // (and a focused field) under it. Measured, with the old 96px as the floor.
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [barCover, setBarCover] = useState(0);
+  useLayoutEffect(() => {
+    const frame = barVisible
+      ? paneRef.current?.querySelector<HTMLElement>("[data-unsaved-bar-frame]")
+      : null;
+    if (!frame) {
+      setBarCover(0);
+      return;
+    }
+    const measure = () => setBarCover(Math.ceil(frame.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [barVisible]);
+  const barRoom = barVisible ? Math.max(96, barCover + 16) : undefined;
+
   // The pane is the only scroller. A section always opens at its top: the
   // pane used to keep the previous section's offset, so Voz opened 136px down
   // because Perfil had been scrolled 100px.
@@ -1031,6 +1112,28 @@ export function SettingsModal({
     };
   }, [pendingRow]);
 
+  // A switch that took the focused control away with it ("Ver no Perfil" in
+  // the bar, Ajuda's "Enviar feedback pelo app") lands on the new tab's
+  // panel instead of the page. A rail click keeps focus on its tab, and a
+  // jump to a row focuses the row (above). Not on the open itself: the dialog
+  // places its own first focus.
+  const focusedSectionRef = useRef<SectionId | null>(null);
+  useEffect(() => {
+    if (!settingsOpen) {
+      focusedSectionRef.current = null;
+      return;
+    }
+    const previous = focusedSectionRef.current;
+    focusedSectionRef.current = active.id;
+    if (previous === null || previous === active.id || pendingRow) {
+      return;
+    }
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.isConnected) {
+      scrollerRef.current?.focus({ preventScroll: true });
+    }
+  }, [settingsOpen, active.id, pendingRow]);
+
   // Where a tab's `SettingsHeaderActions` land. State, not a ref, so the
   // context updates once the header has mounted.
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
@@ -1065,6 +1168,9 @@ export function SettingsModal({
         // The dot that says Perfil has edits the bar is waiting on, so the
         // unsaved state is visible from any tab, not only from the bar.
         dirty: entry.id === "profile" && profileDirty,
+        // Voz asks for the microphone as it opens, so arrowing past it must
+        // not open it: Enter, Space or a click does.
+        manual: entry.id === "voice",
       })),
     [visibleSections, t, profileDirty],
   );
@@ -1087,7 +1193,10 @@ export function SettingsModal({
       >
         <SettingsShellContext.Provider value={shell}>
           <SettingsAnnouncer>
-            <div className="flex h-full min-h-0 flex-col sm:flex-row">
+            {/* On a phone every button, button-styled link and select in the
+                dialog is at least a 44px touch target. Buttons with a role
+                (the rail's tabs, switches, swatches) draw their own size. */}
+            <div className="flex h-full min-h-0 flex-col sm:flex-row max-sm:[&_button:not([role])]:min-h-11 max-sm:[&_a.inline-flex.justify-center]:min-h-11 max-sm:[&_select]:min-h-11">
               <SectionRail
                 sections={railItems}
                 active={active.id}
@@ -1101,7 +1210,10 @@ export function SettingsModal({
                 fadeEnd
               />
 
-              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1">
+              <div
+                ref={paneRef}
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1"
+              >
                 <div
                   ref={scrollerRef}
                   id={panelId}
@@ -1115,6 +1227,7 @@ export function SettingsModal({
                     // With the bar up, a focused field scrolls clear of it.
                     barVisible ? "scroll-pb-24" : "safe-pb",
                   )}
+                  style={barRoom ? { scrollPaddingBottom: barRoom } : undefined}
                 >
                   <div
                     className={cn(
@@ -1123,6 +1236,7 @@ export function SettingsModal({
                       barVisible ? "pb-24" : "pb-5 sm:pb-8",
                       active.wide ? "max-w-none" : "max-w-[40rem]",
                     )}
+                    style={barRoom ? { paddingBottom: barRoom } : undefined}
                   >
                     <SettingsPaneHeader
                       title={t(active.label)}
@@ -1148,6 +1262,9 @@ export function SettingsModal({
                             avatarUrl={drafts.avatarUrl}
                             onAvatarUrl={(next) => setDraft("avatarUrl", next)}
                             onUserUpdated={onUserUpdated}
+                            onHandleAvailability={(handle, availability) => {
+                              handleCheckRef.current = { handle, availability };
+                            }}
                           />
                         )}
 

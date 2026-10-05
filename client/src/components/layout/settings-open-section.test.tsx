@@ -27,6 +27,9 @@ vi.mock("@/components/settings/profile-section", async () => {
           <button type="button" data-go-present="" onClick={() => openSection("profile", "present")}>
             present
           </button>
+          <button type="button" data-go-help="" onClick={() => openSection("help")}>
+            help
+          </button>
         </div>
       );
     },
@@ -95,6 +98,15 @@ describe("openSection with a row id", () => {
     expect(scroller().scrollTop).toBe(0);
     expect(document.querySelector(`.${ROW_FLASH_CLASSES[0]}`)).toBeNull();
     expect(errors).not.toHaveBeenCalled();
+  });
+
+  it("lands on the new tab's panel when the switch took the focused button away", () => {
+    mount();
+    const go = document.querySelector<HTMLButtonElement>("[data-go-help]")!;
+    act(() => go.focus());
+    act(() => go.click());
+    expect(go.isConnected).toBe(false);
+    expect(document.activeElement).toBe(scroller());
   });
 
   it("still flashes a row that is there", () => {

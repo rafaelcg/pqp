@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link2, Upload } from "lucide-react";
 import { AVATAR_MIME_ALLOWLIST, type User } from "@pqp/shared";
 import {
+  SETTINGS_BUSY,
   SETTINGS_FOCUS,
   SETTINGS_TRANSITION,
   SettingsInlineStatus,
@@ -123,7 +124,14 @@ export function AvatarPicker({
 }: AvatarPickerProps) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLButtonElement>(null);
+  const linkButtonRef = useRef<HTMLButtonElement>(null);
   const linkId = useId();
+  // What was typed in the link field, shown as typed even when it starts
+  // with "/" (which an upload's own path also does, and is never shown).
+  const [typedLink, setTypedLink] = useState("");
+  // Remover takes itself away: focus goes to the button beside it.
+  const refocusAfterRemove = useRef(false);
   const [canUpload, setCanUpload] = useState(false);
   // The pasted link is the rare path, so it starts folded away.
   const [linkOpen, setLinkOpen] = useState(false);
@@ -152,7 +160,14 @@ export function AvatarPicker({
     };
   }, [uploadable]);
 
+  useEffect(() => {
+    if (!refocusAfterRemove.current || value) return;
+    refocusAfterRemove.current = false;
+    (uploadRef.current ?? linkButtonRef.current)?.focus();
+  }, [value]);
+
   function handleFile(file: File) {
+    if (uploading) return;
     setDropError(null);
     void upload.run(async () => {
       let user: User;
@@ -179,7 +194,11 @@ export function AvatarPicker({
   // The field shows a link somebody typed, never one they did not: a preset
   // is a link too, and so is an uploaded picture, but neither was typed here.
   const customLink =
-    value && !AVATAR_PRESETS.includes(value) && !value.startsWith("/") ? value : "";
+    value && value === typedLink
+      ? value
+      : value && !AVATAR_PRESETS.includes(value) && !value.startsWith("/")
+        ? value
+        : "";
   const presetIndex = AVATAR_PRESETS.indexOf(value);
 
   /**
@@ -234,13 +253,18 @@ export function AvatarPicker({
         />
         {canUpload ? (
           <>
+            {/* Busy, not disabled, while the upload runs: a disabled button
+                drops keyboard focus on the page. */}
             <Button
+              ref={uploadRef}
               type="button"
               variant="secondary"
               size="sm"
-              className="max-sm:h-11"
-              disabled={uploading}
-              onClick={() => fileRef.current?.click()}
+              aria-disabled={uploading || undefined}
+              className={cn("max-sm:h-11", uploading && SETTINGS_BUSY)}
+              onClick={() => {
+                if (!uploading) fileRef.current?.click();
+              }}
             >
               <Upload aria-hidden className="h-3.5 w-3.5" />
               {labels.upload}
@@ -274,12 +298,16 @@ export function AvatarPicker({
             variant="ghost"
             size="sm"
             className="max-sm:h-11"
-            onClick={() => onChange("")}
+            onClick={() => {
+              refocusAfterRemove.current = true;
+              onChange("");
+            }}
           >
             {labels.remove}
           </Button>
         ) : null}
         <Button
+          ref={linkButtonRef}
           type="button"
           variant="ghost"
           size="sm"
@@ -304,7 +332,10 @@ export function AvatarPicker({
           <Input
             id={linkId}
             value={customLink}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={(event) => {
+              setTypedLink(event.target.value);
+              onChange(event.target.value);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 onSubmit?.();
