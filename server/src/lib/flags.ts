@@ -307,6 +307,21 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareGameCaptureHint)",
   },
+  linux_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Linux (sem a chamada; precisa de PulseAudio ou PipeWire).",
+    env: "LINUX_DESKTOP_SYSTEM_AUDIO",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Global on purpose. The client's three readers
+    // (`lib/linux-shell-share-audio.ts`, the call-stage hint, `use-voice`) ask
+    // `GET /api/share/config` without a server and keep one answer for the
+    // whole page, so a per-server override would be accepted by the dashboard
+    // and never read: a switch that looks on and does nothing. Make it
+    // per-server together with a client that asks with the call's server.
+    perServer: false,
+    clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
