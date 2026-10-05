@@ -538,16 +538,16 @@ describe("desktop presenter guidance (electron cannot share a tab)", () => {
     (globalThis as { window?: unknown }).window = realWindow;
   });
 
-  it("tells a desktop presenter to pick the window playing the film, not a tab", () => {
+  it("tells a desktop presenter to pick the window, not a tab", () => {
     const html = render(draft);
-    expect(html).toContain("browser window playing the film");
-    expect(html).not.toContain("browser tab with the film");
+    expect(html).toContain("browser window with what you will show");
+    expect(html).not.toContain("browser tab with what you will show");
   });
 
   it("still tells an ordinary browser host to pick a tab", () => {
     (globalThis as { window?: unknown }).window = realWindow;
     const html = render(draft);
-    expect(html).toContain("browser tab with the film");
+    expect(html).toContain("browser tab with what you will show");
   });
 });
 
