@@ -116,6 +116,16 @@ export const AUDIT_ACTIONS = [
   "member.voice_move",
   "member.voice_mute",
   "member.voice_unmute",
+  /**
+   * Audience mode switched on or off in a running call by a person
+   * (`docs/plans/AUDIENCE_MODE.md`). Target is the voice channel. It silences
+   * a whole room, so who did it and when is worth keeping; an automatic off
+   * (the call ended, nobody running it was left, the operator's flag) has no
+   * actor and is not written. Letting one person speak is not audited either,
+   * for the reason lowering a hand is not: it is running the room.
+   */
+  "channel.voice_audience_on",
+  "channel.voice_audience_off",
   "role.create",
   "role.update",
   "role.delete",

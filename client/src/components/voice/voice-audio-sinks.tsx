@@ -123,6 +123,15 @@ interface VoiceAudioSinksProps {
    * presentation is not a microphone.
    */
   serverMutedPeerIds?: string[];
+  /**
+   * peerIds the roster says may not speak (`canSpeak: false`): the channel's
+   * SPEAK, or audience mode. Their VOICE sink plays at zero, exactly as for a
+   * server mute and for the same reason: on a mesh room their packets still
+   * arrive, and the roster, not the sender, decides who is heard
+   * (`docs/plans/AUDIENCE_MODE.md`). Screen audio is untouched; a person who
+   * may not present has no share to play.
+   */
+  speakLockedPeerIds?: string[];
 }
 
 /**
@@ -140,6 +149,7 @@ export function VoiceAudioSinks({
   audibleScreenPeerIds = [],
   screenVolumes = {},
   serverMutedPeerIds = [],
+  speakLockedPeerIds = [],
 }: VoiceAudioSinksProps) {
   return (
     <>
@@ -151,7 +161,8 @@ export function VoiceAudioSinks({
           outputVolume={outputVolume}
           peerVolume={resolvePeerPlaybackVolume(
             peerVolumes[peer.userId ?? peer.peerId],
-            serverMutedPeerIds.includes(peer.peerId),
+            serverMutedPeerIds.includes(peer.peerId) ||
+              speakLockedPeerIds.includes(peer.peerId),
           )}
           isDeafened={isDeafened}
         />

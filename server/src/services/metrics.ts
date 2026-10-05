@@ -48,6 +48,10 @@ import {
 } from "../voice/sfu-control-plane.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
 import {
+  audienceModeMetrics,
+  type AudienceModeMetrics,
+} from "../voice/audience.js";
+import {
   getVoiceActivitySnapshot,
   localVoicePeerCount,
 } from "../ws/voice.js";
@@ -565,6 +569,14 @@ export interface AdminMetrics {
      * distinguishes "the optimisation is running" from "no client negotiated
      * it and every frame is still a whole roster".
      */
+    /**
+     * AUDIENCE MODE (`docs/plans/AUDIENCE_MODE.md`), on the instance that
+     * answered, since its last deploy. `enforceFailures` belongs at zero: it
+     * counts participants (or whole boxes) the SFU would not update, each of
+     * which a host was shown as a mic still open. `speakDenied` is the
+     * per-reason count behind the rate-limited `voice.speakDenied` line.
+     */
+    audienceMode: AudienceModeMetrics;
     roster: {
       deltas: number;
       snapshots: number;
@@ -1621,6 +1633,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       registry: voice.registry,
       seats: voice.seats,
       roster: voice.roster,
+      audienceMode: audienceModeMetrics(),
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);
         return {

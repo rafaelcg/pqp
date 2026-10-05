@@ -1501,6 +1501,251 @@ async function publishGrantOn(
   return { changed, outcome: failed ? "failed" : "ok" };
 }
 
+/** What one room-wide grant pass found and did. */
+export interface RoomPublishReconcile {
+  /** Participants we could identify and compared. */
+  checked: number;
+  /** Participants whose permission was rewritten (or whose tracks were muted). */
+  updated: number;
+  /** Users whose rewrite failed on some box: their mic may still be open. */
+  failedUserIds: string[];
+  /** A box the room is (or may be) on did not answer at all. */
+  unreachable: boolean;
+  /** LiveKit is not configured: nothing was asked. */
+  skipped: boolean;
+}
+
+/**
+ * AUDIENCE MODE'S MEDIA HALF (`docs/plans/AUDIENCE_MODE.md`): bring every
+ * participant in one SFU room to the publish grant `grantFor` says they should
+ * have, live, without anybody reconnecting.
+ *
+ * ROOM-WIDE AND ASKS THE SFU, NOT THIS PROCESS. A toggle has to reach the
+ * seat on the other API machine, the orphan inside its resume window and the
+ * participant whose WebSocket died but whose LiveKit connection did not. All
+ * of those are in `listParticipants`, and none of them is in this process's
+ * map (CLAUDE.md pitfall 19), so the room is the authority.
+ *
+ * ONLY WHAT IS WRONG IS TOUCHED. A participant whose permission already
+ * matches, and who publishes nothing they should not, costs one comparison,
+ * which is what makes the repeats (a retry a few seconds later, the 15 s
+ * sweep while the mode is on) cheap enough to run unconditionally.
+ *
+ * REGION-ROUTED like every other call here (`targetsFor`): the room's pinned
+ * box, Miami or London included. `wide` asks every box as well, known ones as
+ * pinned and the rest as one-shots, which is what a REVOKE's first pass does:
+ * a participant whose socket dropped can still be on a box the room is no
+ * longer pinned to (the same reason an eviction's first pass is wide).
+ *
+ * Unidentified participants (no user in the metadata and none in
+ * `knownIdentities`: an egress, a recorder) are left alone, the way every
+ * moderation call here fails open on a participant it cannot name.
+ *
+ * Never rejects. A box that fails its list is `unreachable`; a participant
+ * whose rewrite fails is in `failedUserIds`. The caller shows both to the
+ * host instead of claiming it worked, and retries.
+ */
+export async function reconcileSfuRoomPublishGrants(
+  room: string,
+  grantFor: (
+    userId: string,
+  ) => Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>,
+  knownIdentities: ReadonlyMap<string, string>,
+  options: { wide?: boolean } = {},
+): Promise<RoomPublishReconcile> {
+  const empty: RoomPublishReconcile = {
+    checked: 0,
+    updated: 0,
+    failedUserIds: [],
+    unreachable: false,
+    skipped: true,
+  };
+  const targets = await targetsFor(
+    "audience-grant",
+    [room],
+    [],
+    false,
+    options.wide === true,
+  );
+  if (targets.length === 0) {
+    return empty;
+  }
+  // One resolution per person however many seats or boxes they appear on.
+  const grants = new Map<
+    string,
+    Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>
+  >();
+  const grantOf = (userId: string) => {
+    let pending = grants.get(userId);
+    if (!pending) {
+      pending = grantFor(userId).catch((error: unknown) => {
+        logEvent("voice.audienceMode.grantResolveFailed", {
+          room,
+          userId,
+          error: describeError(error),
+        });
+        return null;
+      });
+      grants.set(userId, pending);
+    }
+    return pending;
+  };
+  const results = await Promise.all(
+    targets.map((target) => roomGrantsOn(target, room, grantOf, knownIdentities)),
+  );
+  if (targets.length > 1 || targets[0]!.mode !== "pinned") {
+    noteCoverage(
+      "audience-grant",
+      "listParticipants",
+      room,
+      results.map((result, index) => ({ id: targets[index]!.id, outcome: result.outcome })),
+    );
+  }
+  const failed = new Set<string>();
+  let checked = 0;
+  let updated = 0;
+  let unreachable = false;
+  results.forEach((result, index) => {
+    checked += result.checked;
+    updated += result.updated;
+    for (const userId of result.failed) {
+      failed.add(userId);
+    }
+    // A one-shot to a box the room is not known to be on is a precaution:
+    // its silence is not evidence that somebody is unreachable there.
+    if (result.outcome !== "ok" && targets[index]!.mode === "pinned") {
+      unreachable = true;
+    }
+  });
+  return {
+    checked,
+    updated,
+    failedUserIds: [...failed].sort(),
+    unreachable,
+    skipped: false,
+  };
+}
+
+function sameSources(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
+  const left = [...(a ?? [])].sort();
+  const right = [...(b ?? [])].sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function roomGrantsOn(
+  target: RegionTarget,
+  room: string,
+  grantOf: (
+    userId: string,
+  ) => Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<{ checked: number; updated: number; failed: string[]; outcome: RegionOutcome }> {
+  const { client } = target;
+  let participants: ParticipantInfo[];
+  try {
+    participants = await client.listParticipants(room);
+  } catch (error) {
+    if (target.regional && isNotFound(error)) {
+      return { checked: 0, updated: 0, failed: [], outcome: "ok" };
+    }
+    const outcome = outcomeOf(error);
+    if (outcome === "failed") {
+      logEvent("voice.audienceMode.enforceFailed", {
+        room,
+        region: target.regional ? target.id : undefined,
+        mode: target.mode,
+        stage: "list",
+        error: describeError(error),
+      });
+    }
+    return { checked: 0, updated: 0, failed: [], outcome };
+  }
+  let checked = 0;
+  let updated = 0;
+  const failed: string[] = [];
+  await Promise.all(
+    participants.map(async (participant) => {
+      const identity = participant.identity;
+      const userId =
+        userIdFromParticipantMetadata(participant.metadata) ??
+        knownIdentities.get(identity) ??
+        null;
+      if (!userId) {
+        return;
+      }
+      const grant = await grantOf(userId);
+      if (!grant) {
+        return;
+      }
+      checked += 1;
+      const publish = liveKitPublishGrant(grant);
+      const current = participant.permission;
+      const permissionMatches =
+        current !== undefined &&
+        current.canPublish === (publish.canPublish ?? false) &&
+        sameSources(
+          current.canPublishSources as unknown as number[] | undefined,
+          publish.canPublishSources as unknown as number[] | undefined,
+        );
+      const toMute = (participant.tracks ?? []).filter(
+        (track) => !track.muted && shouldMutePublishedTrack(track, grant),
+      );
+      if (permissionMatches && toMute.length === 0) {
+        return;
+      }
+      let ok = true;
+      // Mute first, so a build that unpublishes lazily is quiet at once.
+      for (const track of toMute) {
+        try {
+          await client.mutePublishedTrack(room, identity, track.sid, true);
+        } catch (error) {
+          ok = false;
+          logEvent("voice.audienceMode.enforceFailed", {
+            room,
+            identity,
+            userId,
+            region: target.regional ? target.id : undefined,
+            stage: "mute",
+            trackSid: track.sid,
+            error: describeError(error),
+          });
+        }
+      }
+      if (!permissionMatches) {
+        try {
+          await client.updateParticipant(room, identity, {
+            permission: {
+              canPublish: publish.canPublish ?? false,
+              canSubscribe: true,
+              canPublishData: false,
+              ...(publish.canPublishSources
+                ? { canPublishSources: publish.canPublishSources }
+                : {}),
+            },
+          });
+        } catch (error) {
+          ok = false;
+          logEvent("voice.audienceMode.enforceFailed", {
+            room,
+            identity,
+            userId,
+            region: target.regional ? target.id : undefined,
+            stage: "update",
+            canSpeak: grant.canSpeak,
+            error: describeError(error),
+          });
+        }
+      }
+      if (ok) {
+        updated += 1;
+      } else {
+        failed.push(userId);
+      }
+    }),
+  );
+  return { checked, updated, failed, outcome: "ok" };
+}
+
 function shouldMutePublishedTrack(
   track: { source?: TrackSource; type?: TrackType },
   grant: { canSpeak: boolean; canStream: boolean },
