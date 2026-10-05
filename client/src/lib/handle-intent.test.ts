@@ -6,6 +6,7 @@ import {
   takeWaitlistIntent,
   takeWaitlistIntentWithSource,
   waitlistIntentFromSearch,
+  waitlistSourceFor,
   waitlistSourceFromSearch,
   WATCH_PARTY_WAITLIST_HREF,
   addIntentFromSearch,
@@ -434,6 +435,18 @@ describe("the watch party waitlist intent", () => {
     // And the boolean reader says yes to the marked one too.
     stashWaitlistIntent(storage, 1000, "streamers");
     expect(takeWaitlistIntent(storage, 2000)).toBe(true);
+  });
+
+  it("lets the URL decide the marker, and the stash only when the URL lost the intent", () => {
+    const streamer = { source: "streamers" as const };
+    // A plain /watch-party press after a streamers visit within the hour.
+    expect(waitlistSourceFor("?intent=watch-party-waitlist", streamer)).toBeNull();
+    expect(
+      waitlistSourceFor("?intent=watch-party-waitlist&from=streamers", { source: null }),
+    ).toBe("streamers");
+    // The sign-in redirect kept the path and dropped the query.
+    expect(waitlistSourceFor("", streamer)).toBe("streamers");
+    expect(waitlistSourceFor("", null)).toBeNull();
   });
 
   it("opens the dialog without a marker when the stored one is unknown", () => {

@@ -382,7 +382,7 @@ import {
   takeWaitlistIntentWithSource,
   WAITLIST_SOURCE_PARAM,
   waitlistIntentFromSearch,
-  waitlistSourceFromSearch,
+  waitlistSourceFor,
   type CreateIntent,
 } from "@/lib/handle-intent";
 import {
@@ -7933,10 +7933,7 @@ function MainAppContent({
     const waitlistIntent =
       waitlistIntentFromSearch(location.search) || stashedWaitlist !== null;
     if (waitlistIntent) {
-      const source =
-        waitlistSourceFromSearch(location.search) ??
-        stashedWaitlist?.source ??
-        null;
+      const source = waitlistSourceFor(location.search, stashedWaitlist);
       setPendingWaitlist(true);
       setWaitlistSource(source);
       // Kept until the dialog opens, like the create intent above.

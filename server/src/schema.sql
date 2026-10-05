@@ -4863,6 +4863,13 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
 ALTER TABLE watch_party_waitlist ADD COLUMN IF NOT EXISTS source TEXT
   CHECK (source ~ '^[a-z0-9-]{1,32}$');
 
+-- The dashboard's newest campaign rows with no server
+-- (`serverlessCampaign`, at most 20), read on every load of the list: walked
+-- newest first and stopped at the limit, instead of sorting every match.
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_campaign
+  ON watch_party_waitlist (created_at DESC)
+  WHERE server_id IS NULL AND source IS NOT NULL;
+
 -- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
 -- A flag is only a row here once an operator has decided something about it:
 -- no row, or `enabled` NULL, means "follow the environment variable, then the

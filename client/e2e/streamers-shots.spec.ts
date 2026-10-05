@@ -171,18 +171,25 @@ async function say(suffix: string, channelId: string, body: string): Promise<voi
   });
   socket.send(JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }));
   await ready;
-  const echoed = new Promise<void>((resolve) => {
+  // A picture of a chat that silently lost a line is a wrong picture: a
+  // refusal, or no echo at all, stops the recording.
+  const echoed = new Promise<void>((resolve, reject) => {
     socket.addEventListener("message", (event) => {
-      const frame = JSON.parse(String(event.data)) as { type?: string };
-      if (frame.type === "message-broadcast" || frame.type === "message-rejected") {
+      const frame = JSON.parse(String(event.data)) as { type?: string; reason?: string };
+      if (frame.type === "message-broadcast") {
         resolve();
+      } else if (frame.type === "message-rejected") {
+        reject(new Error(`message refused: ${frame.reason ?? "unknown"}`));
       }
     });
-    setTimeout(resolve, 3000);
+    setTimeout(() => reject(new Error("message never echoed")), 5000);
   });
   socket.send(JSON.stringify({ type: "message-create", channelId, body }));
-  await echoed;
-  socket.close();
+  try {
+    await echoed;
+  } finally {
+    socket.close();
+  }
 }
 
 /**

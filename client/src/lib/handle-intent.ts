@@ -513,6 +513,22 @@ export function waitlistSourceFromSearch(search: string): WatchPartyWaitlistSour
 }
 
 /**
+ * The marker to send, once the app has both the URL and the stash in hand.
+ * The URL, when it carries the intent, is the whole answer: a plain
+ * `/watch-party` button must not inherit a streamer marker an earlier visit
+ * left in the stash within the hour. Only a URL with no intent at all (the
+ * sign-in redirect dropped the query) falls back to the stash.
+ */
+export function waitlistSourceFor(
+  search: string,
+  stashed: { source: WatchPartyWaitlistSource | null } | null,
+): WatchPartyWaitlistSource | null {
+  return waitlistIntentFromSearch(search)
+    ? waitlistSourceFromSearch(search)
+    : (stashed?.source ?? null);
+}
+
+/**
  * Stored as the intent's own value, with the marker after a colon when there
  * is one (`watch-party-waitlist:streamers`), so one key carries both and an
  * old stash with no marker reads exactly as it always did.
