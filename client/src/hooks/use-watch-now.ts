@@ -3,6 +3,7 @@ import {
   loadLiveHlsConfig,
   settledDeploymentLiveHlsConfig,
   useLiveHlsConfig,
+  watchLiveHlsConfig,
 } from "@/hooks/use-live-hls-config";
 import {
   collectWatchNowStreams,
@@ -41,8 +42,14 @@ export function useWatchNowFlag(serverId: string | null): boolean {
       .catch(() => {
         // Unknown stays off.
       });
+    // The refresh pass re-asks this answer too (key ""), so a flag flipped
+    // while somebody sits in a conversation follows without a reload.
+    const release = watchLiveHlsConfig("", () =>
+      setDeployment(settledDeploymentLiveHlsConfig()?.watchNowBanner === true),
+    );
     return () => {
       cancelled = true;
+      release();
     };
   }, [serverId]);
   return serverId ? perServer?.watchNowBanner === true : deployment;
