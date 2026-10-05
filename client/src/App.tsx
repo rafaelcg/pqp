@@ -2857,6 +2857,9 @@ function MainAppContent({
   const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
     void handleLowerOccupantHand(userId),
   );
+  const stableOnAudienceSpeaker = useStableCallback(
+    (userId: string, allowed: boolean) => void handleAudienceSpeaker(userId, allowed),
+  );
   const stableOnKickOccupant = useStableCallback(
     (userId: string, name: string) => void handleKickOccupant(userId, name),
   );
@@ -10824,6 +10827,15 @@ function MainAppContent({
           onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
           onServerMuteOccupant={stableOnServerMuteOccupant}
           onLowerOccupantHand={stableOnLowerOccupantHand}
+          audienceSpeakerUserIds={
+            voiceState.audience &&
+            voiceState.voiceChannelId &&
+            (perms.can(Permission.MUTE_MEMBERS, voiceState.voiceChannelId) ||
+              perms.can(Permission.MANAGE_CHANNELS, voiceState.voiceChannelId))
+              ? voiceState.audience.speakerUserIds
+              : null
+          }
+          onAudienceSpeaker={stableOnAudienceSpeaker}
           onKickOccupant={stableOnKickOccupant}
           onSetPeerVolume={stableOnSetPeerVolume}
           onSetScreenVolume={stableOnSetScreenVolume}
