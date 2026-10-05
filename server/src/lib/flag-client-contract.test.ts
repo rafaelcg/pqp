@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
 import { voiceConfigForServer } from "./voice-config.js";
+import { liveHlsConfig } from "../voice/hls-egress.js";
 
 /**
  * THE TWO HALVES OF A FLAG, COMPARED.
@@ -229,5 +230,88 @@ describe("share_fast_start_quality, every link from the switch to the session", 
     expect(session).toContain("requestShareQualityBeforeSubscribe");
     expect(session).toMatch(/trigger === "room" && shareFastStartQualityActive\(\)/);
     expect(session).toMatch(/shareFastStartQualityActive\(\) &&\s*\(hlsSource === null/);
+  });
+});
+
+/**
+ * THE WATCH NOW FLAGS, `watch_now_banner` and `stream_start_notifications`.
+ *
+ * Same lesson as the share config above, one more time, because this feature
+ * is the one that could ship its client and its server as two halves. Both
+ * flags reach the client as booleans on `GET /api/live-hls/config?serverId=`;
+ * the client reads them off the answer `useLiveHlsConfig` hands the app, and
+ * the start-of-stream notice reaches it as a `stream-started` frame. Each piece
+ * is pinned from BOTH sides: the field the client's type names must be a field
+ * the server sends, the flag the registry names must be the one the answer is
+ * built from, and the frame the server writes must be one the client handles.
+ */
+describe("the watch now flags against the live-hls config the client reads", () => {
+  const FIELDS = [
+    { key: "watch_now_banner", field: "watchNowBanner" },
+    { key: "stream_start_notifications", field: "streamStartNotifications" },
+  ] as const;
+
+  it("the client's LiveHlsConfig type names both fields", () => {
+    const api = readFileSync(path.join(clientSrc, "lib/api.ts"), "utf8");
+    const body = /export interface LiveHlsConfig \{([\s\S]*?)\n\}/.exec(api)?.[1];
+    expect(body, "client LiveHlsConfig interface not found in lib/api.ts").toBeTruthy();
+    for (const { field } of FIELDS) {
+      expect(body, `LiveHlsConfig does not declare ${field}`).toMatch(
+        new RegExp(`^\\s{2}${field}\\??:`, "m"),
+      );
+    }
+  });
+
+  it("the deployment-wide answer carries both, as booleans", () => {
+    const served = liveHlsConfig() as unknown as Record<string, unknown>;
+    for (const { field } of FIELDS) {
+      expect(typeof served[field], `${field} on liveHlsConfig()`).toBe("boolean");
+    }
+  });
+
+  it("the per-server answer reads each flag for THAT server, and the registry says so", () => {
+    const egress = readFileSync(path.join(serverSrc, "voice/hls-egress.ts"), "utf8");
+    const perServer = /export async function liveHlsConfigForServer[\s\S]*?\n\}\n/.exec(egress)?.[0];
+    expect(perServer, "liveHlsConfigForServer not found").toBeTruthy();
+    for (const { key, field } of FIELDS) {
+      expect(perServer, `${field} is not built in liveHlsConfigForServer`).toMatch(
+        new RegExp(`${field}:\\s*isEnabled\\(\\s*"${key}",\\s*\\{\\s*serverId`),
+      );
+      const def = FEATURE_FLAGS[key];
+      expect(def.perServer, `${key} must be per server: the config is asked per server`).toBe(true);
+      expect(def.clientVia).toContain(`(${field})`);
+      expect(def.clientVia).toContain("/api/live-hls/config");
+    }
+  });
+
+  it("the client reads both fields off the config the app holds", () => {
+    const readers = clientFiles.filter(
+      ({ text }) => text.includes("useLiveHlsConfig") || text.includes("fetchLiveHlsConfig"),
+    );
+    expect(readers.length).toBeGreaterThan(0);
+    // Outside the type declaration itself: a field only `lib/api.ts` names is a
+    // field nothing reads.
+    const outsideTheType = clientFiles.filter(
+      ({ file }) => !file.endsWith(path.join("lib", "api.ts")),
+    );
+    for (const { field } of FIELDS) {
+      expect(mentions(outsideTheType, field), `no client source reads ${field}`).toBe(true);
+    }
+  });
+});
+
+describe("the stream-started frame", () => {
+  it("is written by the server and handled by the client", () => {
+    expect(
+      mentions(serverFiles, "stream-started"),
+      "no server source sends a stream-started frame",
+    ).toBe(true);
+    const handlers = clientFiles.filter(({ text }) => /["']stream-started["']/.test(text));
+    expect(handlers.length, "no client source handles a stream-started frame").toBeGreaterThan(0);
+  });
+
+  it("is a type the chat socket's schema knows, so the client parses it", () => {
+    const chat = readFileSync(path.resolve(here, "../../../packages/shared/src/chat.ts"), "utf8");
+    expect(chat).toContain("streamStartedSchema");
   });
 });

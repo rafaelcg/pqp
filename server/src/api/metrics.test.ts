@@ -345,6 +345,39 @@ describeDb("GET /api/admin/metrics", () => {
     expect((await call(null, "/api/me", `Bearer ${TOKEN}`)).status).toBe(401);
   });
 
+  it("carries the start-of-stream counters, every one of them, live", async () => {
+    const { resetStreamAlertsForTests } = await import("../services/stream-alerts.js");
+    resetStreamAlertsForTests();
+    const result = await call<{ streamAlerts: Record<string, unknown> }>(
+      operator,
+      "/api/admin/metrics",
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.streamAlerts).toEqual({
+      starts: 0,
+      flagOff: 0,
+      debounced: 0,
+      cooldown: 0,
+      claimed: 0,
+      recipients: 0,
+      skipped: {
+        sharer: 0,
+        inRoom: 0,
+        dnd: 0,
+        muted: 0,
+        blocked: 0,
+        noAccess: 0,
+        optedOut: 0,
+        overCap: 0,
+      },
+      delivered: 0,
+      relayed: 0,
+      pushed: 0,
+      failures: 0,
+      decisionMsMax: 0,
+    });
+  });
+
   it("answers an instance moderator with counts and no identities", async () => {
     const result = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(result.status).toBe(200);

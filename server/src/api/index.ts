@@ -696,6 +696,7 @@ import {
   listConversations,
   openConversation,
 } from "../services/dms.js";
+import { getStreamAlertSetting } from "../services/stream-alerts.js";
 import {
   canAccessChannel,
   findUserById,
@@ -3024,6 +3025,25 @@ router.post(
     await requireServerMember(serverId!, user.id);
     await acknowledgeHlsHost(user.id, serverId!);
     return { acknowledged: true };
+  },
+);
+
+/**
+ * What this member gets from the start-of-stream notice in this server: the
+ * flag, their effective choice, the server's default and its member count, so
+ * the switch in the server's menu shows the real state without guessing a
+ * count (`services/stream-alerts.ts`). Members only; the choice itself is
+ * written through the preferences the client already syncs.
+ */
+router.get(
+  "/api/servers/:serverId/stream-alerts",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const setting = await getStreamAlertSetting(serverId!, user.id);
+    if (!setting) {
+      throw new NotFound("Server not found");
+    }
+    return setting;
   },
 );
 
