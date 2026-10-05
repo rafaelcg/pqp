@@ -1138,16 +1138,56 @@ function setLinuxShareAudioMarker(active) {
   }
 }
 
+/**
+ * What the last Linux share did with every playback stream it saw (app name,
+ * binary, process ids, whether it is pqp's, and what happened: linked, moved,
+ * refused with the sound server's own words, kept out). Written only while a
+ * share runs or as it ends, so a bug report can be one `cat` instead of a
+ * guessing game. App names only, the same ones the desktop's sound settings
+ * show; nothing from the call.
+ */
+function linuxShareAudioReportPath() {
+  return path.join(app.getPath("logs"), "linux-share-audio.json");
+}
+
+function writeLinuxShareAudioReport(report) {
+  if (!report) {
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(linuxShareAudioReportPath()), { recursive: true });
+    fs.writeFileSync(
+      linuxShareAudioReportPath(),
+      `${JSON.stringify({ shell: app.getVersion(), writtenAt: new Date().toISOString(), ...report }, null, 2)}\n`,
+    );
+  } catch {
+    // A report that cannot be written costs the next bug report its detail.
+  }
+}
+
+/** `execFile` that hands the tool's stderr back on failure ("Failure: Invalid argument"). */
+function runLinuxAudioTool(tool, args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      tool,
+      args,
+      // `pw-dump` of a busy desktop is a few hundred kilobytes of JSON.
+      { env: PACTL_ENV, timeout: 5000, maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout, stderr) =>
+        err ? reject(Object.assign(err, { stderr: String(stderr ?? "") })) : resolve(String(stdout)),
+    );
+  });
+}
+
 const linuxShareAudio =
   process.platform === "linux"
     ? createLinuxShareAudio({
         onActive: setLinuxShareAudioMarker,
-        run: (args) =>
-          new Promise((resolve, reject) => {
-            execFile("pactl", args, { env: PACTL_ENV, timeout: 5000 }, (err, stdout) =>
-              err ? reject(err) : resolve(String(stdout)),
-            );
-          }),
+        onReport: writeLinuxShareAudioReport,
+        run: (args) => runLinuxAudioTool("pactl", args),
+        // PipeWire's own tools, for linking instead of moving. The module asks
+        // for `pw-dump` and `pw-link` only, and only once a share has started.
+        runPw: (tool, args) => runLinuxAudioTool(tool, args),
         subscribe: () => {
           try {
             const child = spawn("pactl", ["subscribe"], {
@@ -1163,6 +1203,9 @@ const linuxShareAudio =
         // Every process of this app, the audio service included: that is the
         // one whose streams carry the call.
         ownPids: () => new Set(app.getAppMetrics().map((m) => String(m.pid))),
+        // Our own executable's name: a second way to recognise the call, for
+        // a stream whose process ids say nothing useful.
+        ownBinaries: () => new Set([path.basename(process.execPath)]),
         log: (...parts) => console.log("[pqp] linux share audio:", ...parts),
       })
     : null;
@@ -2219,6 +2262,16 @@ if (probingShareAudio) {
     }
     const active = linuxShareAudio.isActive();
     return { active, label: active ? LINUX_SHARE_SOURCE_LABEL : null };
+  });
+
+  // What the live (or last) Linux share did with each stream, for the share
+  // diagnostic page. Memory only: reads nothing from the sound server and
+  // spawns nothing.
+  ipcMain.handle("pqp:linux-share-audio-diagnostics", (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return null;
+    }
+    return linuxShareAudio.diagnostics();
   });
 
   ipcMain.handle("pqp:get-pending-desktop-auth-ticket", (event) => {

@@ -87,6 +87,12 @@ export interface PqpDesktop {
    * `enumerateDevices` label is its capture source?
    */
   linuxShareAudioClaim?(): Promise<{ active: boolean; label: string | null }>;
+  /**
+   * What the live (or last) Linux share did with every playback stream it
+   * saw, for the share diagnostic page (`client/public/share-diagnostic.html`).
+   * Null off Linux and before any share; absent in shells before 0.2.4.
+   */
+  linuxShareAudioDiagnostics?(): Promise<LinuxShareAudioDiagnostics | null>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -322,6 +328,37 @@ export interface NativeShareAudioClaim {
   reason?: string;
   stage?: string | null;
   hr?: number | null;
+}
+
+/**
+ * `linuxShareAudioDiagnostics()`: one row per playback stream the Linux share
+ * watcher saw (`electron/lib/linux-share-audio.js`). `outcome` is one of
+ * `linked`, `moved`, `refused`, `move-failed`, `link-failed`, `pending`,
+ * `pqp-kept-out`, `pqp-pulled-out`, `moved-back`, `other-output`,
+ * `not-playing`, `skipped-module`, `skipped-relay`, `skipped-no-process`.
+ */
+export interface LinuxShareAudioDiagnostics {
+  active?: boolean;
+  /** `link` (PipeWire, a second link per stream) or `move` (PulseAudio). */
+  mode?: "link" | "move";
+  server?: string | null;
+  output?: string | null;
+  startedAt?: number;
+  lastReadAt?: number | null;
+  endedReason?: string | null;
+  probe?: { available: boolean; server: string | null; mode?: string | null } | null;
+  streams?: Array<{
+    node: number;
+    app: string;
+    media: string | null;
+    binary: string | null;
+    pids: string[];
+    flatpak: string | null;
+    pinned: boolean;
+    own: boolean;
+    outcome: string;
+    detail: string | null;
+  }>;
 }
 
 export interface DesktopVoiceState {
