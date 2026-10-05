@@ -69,10 +69,16 @@ they would need is at the end.
 A voice channel is a stream when somebody **other than the viewer** is
 `sharingScreen` in it and that somebody is not blocked. A `watch_party` channel
 is a stream only while its party is `live` (a share during setup is the host
-rehearsing, not a show). Streams in other servers are limited to live parties
-(the only thing the client holds a server and a name for off-screen); a plain
-share in a server you are not looking at is not shown, and that is the known gap
-(see "What is left").
+rehearsing, not a show).
+
+**Scope: the open server, and a conversation's own call.** The client holds
+channel names for the server on screen and for nothing else (a roster frame
+names a channel by id), so a stream in a server the person is not looking at is
+not shown, plain share or party alike. That is the known gap (see "What is
+left"), taken on purpose: a banner that has to say "somewhere in another server"
+without a name is worse than none, and the first night's whole problem was one
+server. It also keeps the flag honest: the strip in a server is governed by that
+server's flag, never by another's.
 
 ### Who must not see it
 
@@ -84,7 +90,10 @@ share in a server you are not looking at is not shown, and that is the known gap
   not join is not offered a button that fails.
 - **Blocked sharer**: dropped.
 - **The sharer**: dropped (their own stream is not news to them).
-- **The channel already on screen**: dropped (the stage is right there).
+- **What is on screen already**: a watch party whose channel is open (opening it is
+  watching), a share in a voice channel once the person is SEATED in it, a
+  conversation's call once joined. An open voice channel they have not joined stays
+  on the strip: its lobby's join button asks for a microphone, `Assistir` does not.
 - A party the person cannot see is never in `watchParties` (the server resolves
   visibility per recipient).
 
@@ -94,7 +103,7 @@ share in a server you are not looking at is not shown, and that is the known gap
 |---|---|---|
 | Plain voice channel | `Assistir`: open the channel, take an **audience seat** (`audienceOnly`: no microphone, no permission prompt, no camera), via `guardVoiceJoin` | `Voltar pra transmissão`: open the channel, no join |
 | Watch party | `Assistir`: open the party channel; watching **is** selecting it and takes no seat | same, label `Voltar pra transmissão` while seated |
-| Other server's party | `Assistir`: the route applier switches server and opens it | |
+| A conversation's call | `Assistir`: join the call as an audience seat (no ring) | `Voltar pra transmissão` |
 
 An audience seat can become a speaking seat later by pressing the mic, which is
 how an audience seat already works (`retakeSeatWithMicrophone`). A person who is
@@ -103,13 +112,15 @@ a channel row does already and the banner does not invent a second rule.
 
 A full room or a locked channel: the join comes back as the existing
 `voice-room-full` / refusal state, which the stage and the voice bar already
-word. The banner adds one line under itself while the join is pending ("Entrando
-na transmissão...") and one when it fails ("Não deu pra entrar: a sala está
-cheia."), then returns to the idle button.
+word. The banner shows "Entrando na transmissão" on the button while the join is
+pending (15 s at most) and, when it fails, one line under itself with the reason
+the voice layer already chose ("Não deu pra entrar na transmissão. Este canal de
+voz está cheio (máximo 8)."), for 8 s, then returns to the idle button.
 
 ### Several streams
 
-Ordered: open server first, then by size (people), then start time, then name.
+Ordered by size (people watching), then earliest known start (unknown last), then
+name, so two clients show the same list.
 The first is the headline; the rest collapse to `+2 transmissões` which opens a
 small list (each row: who, where, `Assistir`). The list is a disclosure button
 with `aria-expanded`; nothing else moves.
@@ -143,9 +154,9 @@ Stacks: line one who and where, line two count and age, the button full width,
 ### Placement
 
 Under the channel header, after the schedule card, **before** the arrival strip,
-in text channels, voice channels, threads and conversations. A conversation
-shows only parties of other servers (the open call's own share has the call UI
-around it).
+in text channels, voice channels and conversations. In a conversation it is
+that conversation's own call, gated by the deployment-wide flag (there is no
+server to hold an override).
 
 ## 2. Newcomer landing
 
@@ -241,10 +252,12 @@ joins**. One live notification per channel (`tag`).
 
 `notifications.streamAlerts[serverId]: boolean` in the preferences the client
 already syncs (`NotificationState.streamAlerts`). Absent means the default above.
-A check item in the server's context menu, "Avisar quando alguém transmitir",
-shown only where the flag is on for that server. `GET /api/servers/:id/stream-alerts`
-answers `{ flag, enabled, default, memberCount }` so the menu shows the real
-state without the client guessing a member count.
+A check item in the server rail's context menu, "Avisar quando alguém
+transmitir", shown only where the flag is on for that server.
+`GET /api/servers/:id/stream-alerts` answers `{ flag, enabled, default,
+memberCount }`; it is asked when a server's menu opens (never for every server at
+boot, a deployment with the flag off pays nothing), so the menu shows the real
+default without the client guessing a member count.
 
 ### Counters
 
@@ -286,8 +299,8 @@ separate, off, and capped as above.
 
 ## What is left, and what the native apps need
 
-Not done: plain screen shares in a server the person is not looking at (the client
-has no channel names for it; a small `GET /api/me/live-streams` or a name on the
+Not done: streams in a server the person is not looking at (the client has no
+channel names for it; a small `GET /api/me/live-streams` or a name on the
 roster frame would do it); the banner on the Baú home; a sound.
 
 Native iOS and Android, not touched here:
