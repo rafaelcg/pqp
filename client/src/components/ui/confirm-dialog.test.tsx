@@ -48,3 +48,34 @@ describe("ConfirmDialog initial focus", () => {
     expect(document.activeElement?.textContent).toBe("Voltar");
   });
 });
+
+describe("ConfirmDialog focus on close", () => {
+  it("hands focus back to the button that opened it, not to the page", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const opener = document.createElement("button");
+    opener.textContent = "Restaurar…";
+    document.body.append(opener);
+    opener.focus();
+    const render = (open: boolean) =>
+      act(() =>
+        root!.render(
+          <ConfirmDialog
+            open={open}
+            title="Restaurar?"
+            confirmLabel="Restaurar"
+            cancelLabel="Manter"
+            initialFocus="cancel"
+            onConfirm={() => {}}
+            onClose={() => {}}
+          />,
+        ),
+      );
+    render(true);
+    expect(document.activeElement?.textContent).toBe("Manter");
+    render(false);
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+});

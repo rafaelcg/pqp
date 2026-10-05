@@ -13,8 +13,19 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-const FOCUSABLE =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// A roving group (radios, tabs) parks its other members at `tabindex="-1"`:
+// they are focusable by script but not Tab stops, so they are not the trap's
+// first or last stop either.
+const FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "textarea:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "[tabindex]",
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(", ");
 
 interface ViewportBox {
   left: number;
@@ -175,6 +186,18 @@ export function Dialog({
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // The opener is read while rendering the open dialog, before any child
+  // mounts: a child with `autoFocus` (ConfirmDialog's buttons) takes focus
+  // during commit, and read in the effect the "opener" was that child, gone
+  // on close, so focus fell to the page.
+  const openedRef = useRef(false);
+  if (open && !openedRef.current) {
+    openedRef.current = true;
+    previouslyFocused.current =
+      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+  } else if (!open) {
+    openedRef.current = false;
+  }
   const titleId = useId();
   const descriptionId = useId();
 
@@ -205,7 +228,9 @@ export function Dialog({
       return;
     }
 
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    if (previouslyFocused.current && panelRef.current?.contains(previouslyFocused.current)) {
+      previouslyFocused.current = null;
+    }
 
     // Move focus in without stealing it from an element that autofocused.
     const timer = window.setTimeout(() => {

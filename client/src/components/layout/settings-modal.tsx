@@ -1109,7 +1109,7 @@ export function SettingsModal({
                   aria-labelledby={`${tabIdPrefix}-${active.id}`}
                   tabIndex={0}
                   className={cn(
-                    "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none",
+                    "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
                     // The footer used to carry the home-indicator inset. With the
                     // bar up the bar carries it, and the scroller otherwise.
                     // With the bar up, a focused field scrolls clear of it.
