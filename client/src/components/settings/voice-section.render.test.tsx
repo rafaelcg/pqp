@@ -9,6 +9,7 @@ import {
 } from "@/components/settings/local-settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { setInCall } from "@/lib/in-call-state";
+import { isMicTestRunning } from "@/lib/audio-devices";
 import { setSoundEnabled } from "@/lib/sounds";
 
 /**
@@ -998,5 +999,28 @@ describe("VoiceSection push-to-talk key shared with a shortcut", () => {
     expect(host!.querySelector('[data-settings-row="ptt"]')?.parentElement?.textContent).toMatch(
       /already the shortcut for|já é o atalho de|ya es el atajo de/,
     );
+  });
+});
+
+describe("VoiceSection mic test running flag", () => {
+  it("clears the flag when the test is stopped by hand and when Voz goes away", async () => {
+    installWorkingMedia();
+    await mount();
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(isMicTestRunning()).toBe(true);
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(isMicTestRunning()).toBe(false);
+
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(isMicTestRunning()).toBe(true);
+    act(() => root?.unmount());
+    root = null;
+    expect(isMicTestRunning()).toBe(false);
   });
 });

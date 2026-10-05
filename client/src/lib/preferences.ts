@@ -31,6 +31,12 @@ const unsent: UserPreferences = {};
 const latestRequest = new Map<keyof UserPreferences, number>();
 let requestCounter = 0;
 
+/**
+ * The account the queue belongs to. A retry is replayed through the signed-in
+ * session, so values left from one account must never be sent as another's.
+ */
+let account: string | null = null;
+
 let failedKeys: readonly (keyof UserPreferences)[] = [];
 const listeners = new Set<() => void>();
 
@@ -47,8 +53,30 @@ function setFailedKeys(next: readonly (keyof UserPreferences)[]): void {
   }
 }
 
+/**
+ * Called once the signed-in account is known. A different account drops
+ * everything queued or retained for the previous one, and a request still in
+ * flight for it no longer reports.
+ */
+export function bindPreferenceSyncAccount(id: string): void {
+  if (account !== null && account !== id) {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pending = {};
+    for (const key of Object.keys(unsent) as (keyof UserPreferences)[]) {
+      delete unsent[key];
+    }
+    latestRequest.clear();
+    setFailedKeys([]);
+  }
+  account = id;
+}
+
 function flush(): void {
   timer = null;
+  const owner = account;
   // A key whose last request failed rides along with the next change, under
   // whatever was queued since: the newer value wins.
   const body: UserPreferences = { ...unsent, ...pending };
@@ -67,17 +95,22 @@ function flush(): void {
   // say so, and the next change sends the unsent keys again. Signed-out
   // marketing routes land here too, where no tab is open to say anything.
   void updatePreferences(body).then(
-    () => settle(request, keys, body, true),
-    () => settle(request, keys, body, false),
+    () => settle(owner, request, keys, body, true),
+    () => settle(owner, request, keys, body, false),
   );
 }
 
 function settle(
+  owner: string | null,
   request: number,
   keys: readonly (keyof UserPreferences)[],
   body: UserPreferences,
   ok: boolean,
 ): void {
+  // Sent for an account that is no longer signed in here: nothing to keep.
+  if (owner !== account) {
+    return;
+  }
   let failed = [...failedKeys];
   for (const key of keys) {
     // A newer request carries this key now and answers for it.

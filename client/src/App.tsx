@@ -412,7 +412,7 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -4359,6 +4359,7 @@ function MainAppContent({
         // them. Nothing is sent back: a tab that has been open for hours would
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
+        bindPreferenceSyncAccount(me.id);
         if (me.preferences?.appearance) {
           adoptAppearancePreference(me.preferences.appearance);
         }

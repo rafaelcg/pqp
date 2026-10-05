@@ -4,8 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({ updatePreferences: vi.fn() }));
 vi.mock("@/lib/api", () => ({ updatePreferences: api.updatePreferences }));
 
-const { failedPreferenceKeys, queuePreferenceSync, subscribePreferenceSync } =
-  await import("@/lib/preferences");
+const {
+  bindPreferenceSyncAccount,
+  failedPreferenceKeys,
+  queuePreferenceSync,
+  subscribePreferenceSync,
+} = await import("@/lib/preferences");
 
 /** Let the request's promise settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -79,5 +83,33 @@ describe("preference sync", () => {
     await settle();
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it("never replays one account's unsent values into another", async () => {
+    bindPreferenceSyncAccount("account-a");
+    api.updatePreferences.mockRejectedValueOnce(new Error("offline"));
+    queuePreferenceSync({ theme: "dark" }, { immediate: true });
+    await settle();
+    expect(failedPreferenceKeys()).toEqual(["theme"]);
+
+    bindPreferenceSyncAccount("account-b");
+    expect(failedPreferenceKeys()).toEqual([]);
+    queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+    await settle();
+    expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
+  });
+
+  it("ignores the answer to a request sent for the previous account", async () => {
+    bindPreferenceSyncAccount("account-a");
+    let fail!: (error: unknown) => void;
+    api.updatePreferences.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    queuePreferenceSync({ theme: "dark" }, { immediate: true });
+    bindPreferenceSyncAccount("account-b");
+    fail(new Error("offline"));
+    await settle();
+    expect(failedPreferenceKeys()).toEqual([]);
+    queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+    await settle();
+    expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
   });
 });

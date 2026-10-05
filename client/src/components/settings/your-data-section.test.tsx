@@ -364,6 +364,14 @@ describe("DeleteAccountDialog", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(onCancel).not.toHaveBeenCalled();
+    // Manter conta stays focusable while busy, but pressing it does nothing:
+    // the delete already went out and cannot be called back.
+    const keep = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Keep account",
+    )!;
+    expect(keep.getAttribute("aria-disabled")).toBe("true");
+    act(() => keep.click());
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("shows the localized line for the breaker's 503, never its code", async () => {
