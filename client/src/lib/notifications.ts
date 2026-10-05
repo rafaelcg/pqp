@@ -816,7 +816,10 @@ export function notifyIncomingCall(
  * minutes). What the server cannot see is this window, so the rest of the rules
  * are here, and every one of them is a way to say nothing:
  *
- * - a focused window already shows the watch-now strip, so no banner on top;
+ * - a window in front, looking at THAT server, already sees the stream (the
+ *   strip, and the share on the sidebar's roster), so nothing on top of it. A
+ *   window in front on another server, a conversation or the home is not
+ *   looking at it: that person is exactly who the notice is for;
  * - Do Not Disturb, and a server or channel the person turned down;
  * - their own switch for this server;
  * - the existing desktop-notification opt-in AND a browser permission that is
@@ -834,9 +837,17 @@ export function notifyStreamStarted(
     sharerName: string;
     kind: "voice" | "party";
   },
-  context: { windowFocused: boolean },
+  context: {
+    /** The window is visible and has focus. */
+    windowFocused: boolean;
+    /** The server open in this window, or null on a conversation / the home. */
+    openServerId?: string | null;
+  },
 ): boolean {
-  if (context.windowFocused || doNotDisturb) {
+  if (
+    (context.windowFocused && context.openServerId === frame.serverId) ||
+    doNotDisturb
+  ) {
     return false;
   }
   if (state.streamAlerts[frame.serverId] === false) {

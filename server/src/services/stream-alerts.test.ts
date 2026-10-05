@@ -273,6 +273,26 @@ describeDb("who a start-of-stream notice reaches", () => {
       expect(await decide(s)).toEqual([]);
     });
 
+    it("walks past a first page of people who asked but cannot be told, to the ones behind them", async () => {
+      // 1,200 members all opted in; the first 1,000 by id (a whole page) are on
+      // DND. A bound applied BEFORE the filters would stop at those and tell
+      // nobody; the bound is on people told.
+      const s = await scene(1_200, { community: true });
+      const sorted = [...s.memberIds].sort();
+      await getPool().query(
+        `INSERT INTO user_preferences (user_id, settings)
+         SELECT u, jsonb_build_object(
+                  'status', CASE WHEN u = ANY($3::uuid[]) THEN 'dnd' ELSE 'online' END,
+                  'notifications',
+                  jsonb_build_object('streamAlerts', jsonb_build_object($2::text, true)))
+           FROM unnest($1::uuid[]) AS u`,
+        [s.memberIds, s.serverId, sorted.slice(0, 1_000)],
+      );
+      const told = await decide(s);
+      expect([...told].sort()).toEqual(sorted.slice(1_000));
+      expect(alerts.streamAlertMetrics().skipped.dnd).toBe(1_000);
+    }, 60_000);
+
     it("stops at the cap however many asked", async () => {
       const s = await scene(STREAM_ALERT_MAX_RECIPIENTS + 40, { community: true });
       await getPool().query(
@@ -425,7 +445,9 @@ describeDb("who a start-of-stream notice reaches", () => {
       const s = await scene(3);
       await armed(s);
       await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
-      await settle(() => alerts.streamAlertMetrics().claimed === 1);
+      // The whole first notice, not only its claim: the fake clock below would
+      // otherwise run out the first notice's own database timeouts.
+      await settle(() => alerts.streamAlertMetrics().recipients === 3);
       alerts.noteStreamStarted({
         channelId: s.channelId,
         sharerUserId: s.sharerId,
@@ -487,6 +509,160 @@ describeDb("who a start-of-stream notice reaches", () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(alerts.streamAlertMetrics().claimed).toBe(0);
       expect(alerts.armedStreamAlertCount()).toBe(0);
+    });
+
+    it("a decision that throws after the claim hands the claim back and retries once, so the notice is late and not lost", async () => {
+      const s = await scene(3);
+      const [a] = s.memberIds;
+      const first = listener(a!);
+      await armed(s);
+      const pool = getPool();
+      const real = pool.query.bind(pool);
+      let failuresLeft = 1;
+      const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+        if (
+          failuresLeft > 0 &&
+          typeof text === "string" &&
+          text.includes("FROM server_members sm") &&
+          text.includes("user_preferences")
+        ) {
+          failuresLeft -= 1;
+          return Promise.reject(new Error("connection terminated"));
+        }
+        return (real as (...args: unknown[]) => unknown)(text, ...rest);
+      }) as never);
+      try {
+        await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+        await settle(() => alerts.streamAlertMetrics().failures === 1);
+        expect(first.frames).toEqual([]);
+        // The claim was handed back: the next caller is not told "cooldown".
+        const row = await pool.query<{ released: boolean }>(
+          `SELECT last_notified_at < NOW() - INTERVAL '1 day' AS released
+             FROM stream_alert_channels WHERE channel_id = $1`,
+          [s.channelId],
+        );
+        expect(row.rows[0]?.released).toBe(true);
+        expect(alerts.armedStreamAlertCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(alerts.STREAM_ALERT_RETRY_MS);
+        await settle(() => first.frames.length === 1);
+        expect(alerts.streamAlertMetrics()).toMatchObject({ claimed: 2, failures: 1 });
+        // And only once: a retried notice is not retried again.
+        expect(alerts.armedStreamAlertCount()).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a failure that repeats on the retry gives up, and the third attempt does not exist", async () => {
+      const s = await scene(2);
+      await armed(s);
+      const pool = getPool();
+      const real = pool.query.bind(pool);
+      const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+        if (typeof text === "string" && text.includes("FROM server_members sm") && text.includes("user_preferences")) {
+          return Promise.reject(new Error("still down"));
+        }
+        return (real as (...args: unknown[]) => unknown)(text, ...rest);
+      }) as never);
+      try {
+        await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+        await settle(() => alerts.streamAlertMetrics().failures === 1);
+        await vi.advanceTimersByTimeAsync(alerts.STREAM_ALERT_RETRY_MS);
+        await settle(() => alerts.streamAlertMetrics().failures === 2);
+        await vi.advanceTimersByTimeAsync(alerts.STREAM_ALERT_RETRY_MS * 4);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(alerts.streamAlertMetrics().failures).toBe(2);
+        expect(alerts.armedStreamAlertCount()).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a watch party's notice is not cancelled by a share stopping in its room", async () => {
+      const s = await scene(2);
+      const party = await createChannel(s.serverId, "party", "watch_party");
+      process.env.STREAM_START_NOTIFICATIONS = "true";
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      alerts.noteStreamStarted({
+        channelId: party.id,
+        sharerUserId: s.sharerId,
+        sharerName: "Alberto",
+        kind: "party",
+        startKey: randomUUID(),
+      });
+      // The host's share restarting (or a guest's stopping) is not the party ending.
+      alerts.noteStreamStopped(party.id, s.sharerId);
+      alerts.noteStreamStopped(party.id, s.memberIds[0]!);
+      alerts.noteStreamStopped(party.id);
+      expect(alerts.armedStreamAlertCount()).toBe(1);
+      expect(alerts.streamAlertMetrics().debounced).toBe(0);
+    });
+
+    it("a party whose room cannot be read is not announced to people who might be sitting in it", async () => {
+      const s = await scene(2);
+      const party = await createChannel(s.serverId, "party", "watch_party");
+      const session = await getPool().query<{ id: string }>(
+        `INSERT INTO channel_sessions (channel_id, server_id, title, starts_at, status, created_by, host_user_id)
+         VALUES ($1, $2, 'Cinemoon', NOW(), 'live', $3, $3) RETURNING id`,
+        [party.id, s.serverId, s.sharerId],
+      );
+      process.env.STREAM_START_NOTIFICATIONS = "true";
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const start = () =>
+        alerts.noteStreamStarted({
+          channelId: party.id,
+          sharerUserId: s.sharerId,
+          sharerName: "Alberto",
+          kind: "party",
+          startKey: session.rows[0]!.id,
+        });
+      // No reader at all, then a reader that fails: neither is "an empty room".
+      start();
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+      await settle(() => alerts.streamAlertMetrics().debounced === 1);
+      alerts.setStreamAlertRoomReader(async () => {
+        throw new Error("registry unreachable");
+      });
+      start();
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+      await settle(() => alerts.streamAlertMetrics().debounced === 2);
+      expect(alerts.streamAlertMetrics().claimed).toBe(0);
+    });
+
+    it("tidies old claims at most once an hour, however many notices win", async () => {
+      const s = await scene(2);
+      const second = await createChannel(s.serverId, "outro", "voice");
+      process.env.STREAM_START_NOTIFICATIONS = "true";
+      alerts.setStreamAlertRoomReader(async () => ({
+        userIds: [s.sharerId],
+        sharerUserIds: [s.sharerId],
+      }));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const pool = getPool();
+      const real = pool.query.bind(pool);
+      let deletes = 0;
+      const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+        if (typeof text === "string" && text.includes("DELETE FROM stream_alert_channels")) {
+          deletes += 1;
+        }
+        return (real as (...args: unknown[]) => unknown)(text, ...rest);
+      }) as never);
+      try {
+        for (const channelId of [s.channelId, second.id]) {
+          alerts.noteStreamStarted({
+            channelId,
+            sharerUserId: s.sharerId,
+            sharerName: "Alberto",
+            kind: "voice",
+          });
+        }
+        await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+        await settle(() => alerts.streamAlertMetrics().claimed === 2);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(deletes).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("a party notice carries the party's name and needs the session to be live", async () => {

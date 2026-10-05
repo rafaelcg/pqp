@@ -499,10 +499,24 @@ describe("notifyStreamStarted", () => {
     delete (window as unknown as { pqpDesktop?: unknown }).pqpDesktop;
   });
 
-  it("is silent in a focused window: the strip is already on screen", () => {
+  it("is silent for a window in front that is looking at that very server: the stream is already on screen", () => {
     const { notify } = withFakeNotification();
-    expect(notifyStreamStarted(frame, { windowFocused: true })).toBe(false);
+    expect(
+      notifyStreamStarted(frame, { windowFocused: true, openServerId: SERVER }),
+    ).toBe(false);
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("still tells a window in front that is somewhere else: another server, a conversation, the home", () => {
+    const { notify } = withFakeNotification();
+    expect(
+      notifyStreamStarted(frame, {
+        windowFocused: true,
+        openServerId: "33333333-3333-4333-8333-333333333333",
+      }),
+    ).toBe(true);
+    expect(notifyStreamStarted(frame, { windowFocused: true, openServerId: null })).toBe(true);
+    expect(notify).toHaveBeenCalledTimes(2);
   });
 
   it("is silent on Do Not Disturb", () => {

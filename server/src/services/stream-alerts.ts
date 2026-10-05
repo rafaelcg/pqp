@@ -179,7 +179,17 @@ export interface StreamStart {
 interface Armed extends StreamStart {
   timer: ReturnType<typeof setTimeout>;
   startedAt: number;
+  /** This notice already had its one second attempt (`fire`'s catch). */
+  retried?: boolean;
 }
+
+/**
+ * ONE retry, a few seconds later, for a notice whose decision threw (a pooled
+ * connection that dropped, a statement that timed out). Not a loop: a database
+ * that is down for longer is the breaker's business, and a notice about a
+ * stream that STARTED is wrong a minute later.
+ */
+export const STREAM_ALERT_RETRY_MS = 5_000;
 
 /**
  * Bounded: one entry per channel with a share inside its debounce window. The
@@ -263,7 +273,14 @@ export function noteStreamStopped(channelId: string, sharerUserId?: string): voi
   if (!pending) {
     return;
   }
-  if (sharerUserId && pending.kind === "voice" && pending.sharerUserId !== sharerUserId) {
+  // A watch party's start is its going live, and "still on" for it is the
+  // session's own state (`stillStreaming` asks the table), not a screen share:
+  // the host's share restarting inside the window, or a guest's stopping, is
+  // not the party ending.
+  if (pending.kind === "party") {
+    return;
+  }
+  if (sharerUserId && pending.sharerUserId !== sharerUserId) {
     return;
   }
   clearTimeout(pending.timer);
@@ -280,6 +297,8 @@ export function resetStreamAlertsForTests(): void {
   metrics = emptyMetrics();
   relayedNotices.clear();
   readRoom = null;
+  lastSweepAt = 0;
+  sweeping = false;
 }
 
 export function armedStreamAlertCount(): number {
@@ -343,16 +362,48 @@ export async function claimStreamAlert(
   return result.rows.length > 0;
 }
 
-/** A winning claim also tidies: a row older than a day only records a date. */
-function sweepOldClaims(): void {
+/**
+ * A winning claim also tidies: a row older than a day only records a date. At
+ * most once an hour per process and never two at once, so a busy night of
+ * notices is not a busy night of deletes; the table holds one row per channel
+ * that ever notified, so an hour's delay costs nothing.
+ */
+const SWEEP_EVERY_MS = 60 * 60_000;
+let lastSweepAt = 0;
+let sweeping = false;
+
+function sweepOldClaims(now: number = Date.now()): void {
+  if (sweeping || now - lastSweepAt < SWEEP_EVERY_MS) {
+    return;
+  }
+  sweeping = true;
+  lastSweepAt = now;
   void getPool()
     .query(
       `DELETE FROM stream_alert_channels
         WHERE last_notified_at < NOW() - INTERVAL '1 day'`,
     )
     .catch(() => {
-      // Housekeeping; the next winner tries again.
+      // Housekeeping; an hour from now the next winner tries again.
+    })
+    .finally(() => {
+      sweeping = false;
     });
+}
+
+/**
+ * Hand a claim back when the decision it paid for never finished, so a
+ * transient failure costs the notice one retry and not 30 silent minutes. Safe
+ * against the other machine: while the row is inside its cooldown nobody else
+ * can claim it, so nothing can have been sent for it.
+ */
+export async function releaseStreamAlertClaim(channelId: string): Promise<void> {
+  await getPool().query(
+    `UPDATE stream_alert_channels
+        SET last_notified_at = to_timestamp(0), start_key = NULL
+      WHERE channel_id = $1`,
+    [channelId],
+  );
 }
 
 async function stillStreaming(
@@ -367,7 +418,19 @@ async function stillStreaming(
     if (live.rowCount === 0) {
       return null;
     }
-    const room = await readRoom?.(context.id).catch(() => null);
+    // WHO IS SEATED MUST BE KNOWN, not guessed empty: people already in the
+    // party's room are the ones this notice must never reach. An EMPTY room is
+    // an answer (nobody seated, tell everybody); a reader that is absent or
+    // that failed is not, and then, as everywhere in this file, nothing is sent.
+    if (!readRoom) {
+      return null;
+    }
+    let room: StreamAlertRoom | null;
+    try {
+      room = await readRoom(context.id);
+    } catch {
+      return null;
+    }
     return { seated: room?.userIds ?? [] };
   }
   // A plain share: the sharer must still be in the room and still sharing,
@@ -390,77 +453,117 @@ async function fire(channelId: string): Promise<void> {
   }
   armed.delete(channelId);
 
-  const context = await loadChannelContext(channelId, pending.sharerUserId);
-  if (!context) {
-    return;
-  }
-  const serverId = context.server_id;
-  // Not a share channel at all: a watch party's room is handled as a party, a
-  // voice room as a share, and anything else (a text channel id from a stale
-  // timer) is nothing.
-  if (
-    (pending.kind === "voice" && context.type !== "voice") ||
-    (pending.kind === "party" && context.type !== "watch_party")
-  ) {
-    return;
-  }
-  if (!isEnabled("stream_start_notifications", { serverId })) {
-    metrics.flagOff += 1;
-    return;
-  }
-  const alive = await stillStreaming(pending, context);
-  if (!alive) {
-    metrics.debounced += 1;
-    return;
-  }
-  if (!(await claimStreamAlert(channelId, pending.startKey ?? null))) {
-    metrics.cooldown += 1;
-    return;
-  }
+  // Whether the claim row is ours and nothing has been sent for it yet: the
+  // only window in which a failure may hand the claim back.
+  let claimedUnsent = false;
+  try {
+    const context = await loadChannelContext(channelId, pending.sharerUserId);
+    if (!context) {
+      return;
+    }
+    const serverId = context.server_id;
+    // Not a share channel at all: a watch party's room is handled as a party, a
+    // voice room as a share, and anything else (a text channel id from a stale
+    // timer) is nothing.
+    if (
+      (pending.kind === "voice" && context.type !== "voice") ||
+      (pending.kind === "party" && context.type !== "watch_party")
+    ) {
+      return;
+    }
+    if (!isEnabled("stream_start_notifications", { serverId })) {
+      metrics.flagOff += 1;
+      return;
+    }
+    const alive = await stillStreaming(pending, context);
+    if (!alive) {
+      metrics.debounced += 1;
+      return;
+    }
+    if (!(await claimStreamAlert(channelId, pending.startKey ?? null))) {
+      metrics.cooldown += 1;
+      return;
+    }
+    claimedUnsent = true;
 
-  const began = Date.now();
-  metrics.claimed += 1;
-  sweepOldClaims();
+    const began = Date.now();
+    metrics.claimed += 1;
+    sweepOldClaims();
 
-  const userIds = await decideStreamAlertRecipients({
-    serverId,
-    channel: {
-      id: context.id,
-      type: context.type,
-      parent_id: context.parent_id,
-    },
-    sharerUserId: pending.sharerUserId,
-    seatedUserIds: alive.seated,
-  });
+    const userIds = await decideStreamAlertRecipients({
+      serverId,
+      channel: {
+        id: context.id,
+        type: context.type,
+        parent_id: context.parent_id,
+      },
+      sharerUserId: pending.sharerUserId,
+      seatedUserIds: alive.seated,
+    });
 
-  const event: StreamAlertEvent = {
-    serverId,
-    channelId,
-    channelName:
-      pending.kind === "party" && pending.partyName
-        ? pending.partyName
-        : context.name,
-    serverName: context.server_name,
-    sharerName: context.sharer_name ?? pending.sharerName,
-    kind: pending.kind,
-    startedAt: pending.startedAt,
-    userIds,
-  };
-  metrics.recipients += userIds.length;
-  if (userIds.length > 0) {
-    notifyStreamStarted(event);
+    const event: StreamAlertEvent = {
+      serverId,
+      channelId,
+      channelName:
+        pending.kind === "party" && pending.partyName
+          ? pending.partyName
+          : context.name,
+      serverName: context.server_name,
+      sharerName: context.sharer_name ?? pending.sharerName,
+      kind: pending.kind,
+      startedAt: pending.startedAt,
+      userIds,
+    };
+    metrics.recipients += userIds.length;
+    // From here on something may reach a socket, and handing the claim back
+    // would turn a failure in the middle of delivery into a duplicate.
+    claimedUnsent = false;
+    if (userIds.length > 0) {
+      notifyStreamStarted(event);
+    }
+    const took = Date.now() - began;
+    if (took > metrics.decisionMsMax) {
+      metrics.decisionMsMax = took;
+    }
+    logEvent("streamAlert.sent", {
+      channelId,
+      serverId,
+      kind: pending.kind,
+      recipients: userIds.length,
+      ms: took,
+    });
+  } catch (error) {
+    // The claim goes back BEFORE anything is counted or retried: a retry that
+    // ran first would meet its own cooldown, and a failure that reads as
+    // counted only once the notice is safe to try again is one an operator
+    // can act on.
+    if (claimedUnsent) {
+      await releaseStreamAlertClaim(channelId).catch(() => {
+        // The claim stays spent: the 30 minutes are the price of a database
+        // that cannot even take this write.
+      });
+    }
+    metrics.failures += 1;
+    logEvent("streamAlert.failed", {
+      channelId,
+      retried: pending.retried === true,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (!pending.retried && !armed.has(channelId)) {
+      const timer = setTimeout(() => {
+        void fire(channelId).catch((again: unknown) => {
+          metrics.failures += 1;
+          logEvent("streamAlert.failed", {
+            channelId,
+            retried: true,
+            error: again instanceof Error ? again.message : String(again),
+          });
+        });
+      }, STREAM_ALERT_RETRY_MS);
+      timer.unref?.();
+      armed.set(channelId, { ...pending, retried: true, timer });
+    }
   }
-  const took = Date.now() - began;
-  if (took > metrics.decisionMsMax) {
-    metrics.decisionMsMax = took;
-  }
-  logEvent("streamAlert.sent", {
-    channelId,
-    serverId,
-    kind: pending.kind,
-    recipients: userIds.length,
-    ms: took,
-  });
 }
 
 // ----------------------------------------------------------- the recipients
@@ -500,118 +603,147 @@ export async function decideStreamAlertRecipients(
   }
   const defaultOn = streamAlertDefault(profile);
   const pool = getPool();
+  const seated = new Set(input.seatedUserIds);
 
-  const candidates = defaultOn
-    ? await pool.query<CandidateRow>(
-        // Every member of a small server. The LIMIT is a seat belt against a
-        // count that moved between the two reads, not a rule.
-        `SELECT sm.user_id,
-                up.settings->>'status' AS status,
-                up.settings->'notifications' AS notifications
-           FROM server_members sm
-           LEFT JOIN user_preferences up ON up.user_id = sm.user_id
-          WHERE sm.server_id = $1
-          LIMIT $2`,
-        [serverId, STREAM_ALERT_DEFAULT_MAX_MEMBERS * 2],
-      )
-    : await pool.query<CandidateRow>(
-        // Opted in, and only opted in. One more row than the cap tells us it
-        // was hit.
+  /**
+   * Everything after "who might this be for": the free in-memory filters, then
+   * the three indexed lookups (blocks, timeouts, permissions) on whoever
+   * remains. Run per page of candidates, because the bound on a big server is
+   * on people TOLD, not on people looked at: a page whose members were all in
+   * the room or on DND must not be the end of the list.
+   */
+  const eligible = async (rows: readonly CandidateRow[]): Promise<string[]> => {
+    const kept: string[] = [];
+    for (const row of rows) {
+      const choice = row.notifications?.streamAlerts?.[serverId];
+      if (!streamAlertEnabled(choice, profile)) {
+        metrics.skipped.optedOut += 1;
+        continue;
+      }
+      if (row.user_id === sharerUserId) {
+        metrics.skipped.sharer += 1;
+        continue;
+      }
+      if (seated.has(row.user_id)) {
+        metrics.skipped.inRoom += 1;
+        continue;
+      }
+      if (row.status === "dnd") {
+        metrics.skipped.dnd += 1;
+        continue;
+      }
+      // A server or channel set to mentions-only or muted says "do not
+      // interrupt me for anything but me": a stream starting is not me.
+      const level = resolvePushLevel(
+        { notifications: row.notifications ?? undefined } as UserPreferences,
+        serverId,
+        channel.id,
+      );
+      if (level !== "all") {
+        metrics.skipped.muted += 1;
+        continue;
+      }
+      kept.push(row.user_id);
+    }
+    if (kept.length === 0) {
+      return [];
+    }
+
+    // Blocks, either direction, in two indexed lookups.
+    const blocks = await pool.query<{ other: string }>(
+      `SELECT blocked_user_id AS other FROM user_blocks
+        WHERE user_id = $1 AND blocked_user_id = ANY($2::uuid[])
+       UNION
+       SELECT user_id AS other FROM user_blocks
+        WHERE blocked_user_id = $1 AND user_id = ANY($2::uuid[])`,
+      [sharerUserId, kept],
+    );
+    const blocked = new Set(blocks.rows.map((row) => row.other));
+    const timeouts = await pool.query<{ user_id: string }>(
+      `SELECT user_id FROM member_timeouts
+        WHERE server_id = $1 AND expires_at > NOW() AND user_id = ANY($2::uuid[])`,
+      [serverId, kept],
+    );
+    const timedOut = new Set(timeouts.rows.map((row) => row.user_id));
+
+    const afterBlocks = kept.filter((userId) => {
+      if (blocked.has(userId)) {
+        metrics.skipped.blocked += 1;
+        return false;
+      }
+      return true;
+    });
+    if (afterBlocks.length === 0) {
+      return [];
+    }
+
+    // VIEW and CONNECT come out of one pass over the same pure rule the join
+    // uses, overwrites and private channels included.
+    const permissions = await computeMemberPermissionsBulk(
+      serverId,
+      afterBlocks,
+      channel,
+      { timedOut },
+    );
+    return afterBlocks.filter((userId) => {
+      const bits = permissions.get(userId) ?? 0n;
+      if (
+        hasPermission(bits, Permission.VIEW_CHANNEL) &&
+        hasPermission(bits, Permission.CONNECT)
+      ) {
+        return true;
+      }
+      metrics.skipped.noAccess += 1;
+      return false;
+    });
+  };
+
+  const allowed: string[] = [];
+  if (defaultOn) {
+    // Every member of a small server, in one read. The LIMIT is a seat belt
+    // against a count that moved between the two reads, not a rule.
+    const everyone = await pool.query<CandidateRow>(
+      `SELECT sm.user_id,
+              up.settings->>'status' AS status,
+              up.settings->'notifications' AS notifications
+         FROM server_members sm
+         LEFT JOIN user_preferences up ON up.user_id = sm.user_id
+        WHERE sm.server_id = $1
+        LIMIT $2`,
+      [serverId, STREAM_ALERT_DEFAULT_MAX_MEMBERS * 2],
+    );
+    allowed.push(...(await eligible(everyone.rows)));
+  } else {
+    // Opted in, and only opted in, a page at a time by member id: the bound is
+    // structural (a page is two caps' worth of rows, and the walk stops at the
+    // cap or after `OPT_IN_MAX_PAGES`), so a 4,000 member community with nobody
+    // opted in is one query that returns nothing, and one where the first page
+    // is all DND still reaches the people behind them.
+    let after = "00000000-0000-0000-0000-000000000000";
+    for (let page = 0; page < OPT_IN_MAX_PAGES; page += 1) {
+      const rows = await pool.query<CandidateRow>(
         `SELECT sm.user_id,
                 up.settings->>'status' AS status,
                 up.settings->'notifications' AS notifications
            FROM server_members sm
            JOIN user_preferences up ON up.user_id = sm.user_id
           WHERE sm.server_id = $1
+            AND sm.user_id > $4::uuid
             AND up.settings #>> ARRAY['notifications', 'streamAlerts', $2::text] = 'true'
+          ORDER BY sm.user_id
           LIMIT $3`,
-        [serverId, serverId, STREAM_ALERT_MAX_RECIPIENTS + 1],
+        [serverId, serverId, OPT_IN_PAGE, after],
       );
-
-  const seated = new Set(input.seatedUserIds);
-  const kept: string[] = [];
-  for (const row of candidates.rows) {
-    const choice = row.notifications?.streamAlerts?.[serverId];
-    if (!streamAlertEnabled(choice, profile)) {
-      metrics.skipped.optedOut += 1;
-      continue;
+      if (rows.rows.length === 0) {
+        break;
+      }
+      allowed.push(...(await eligible(rows.rows)));
+      if (allowed.length >= STREAM_ALERT_MAX_RECIPIENTS || rows.rows.length < OPT_IN_PAGE) {
+        break;
+      }
+      after = rows.rows[rows.rows.length - 1]!.user_id;
     }
-    if (row.user_id === sharerUserId) {
-      metrics.skipped.sharer += 1;
-      continue;
-    }
-    if (seated.has(row.user_id)) {
-      metrics.skipped.inRoom += 1;
-      continue;
-    }
-    if (row.status === "dnd") {
-      metrics.skipped.dnd += 1;
-      continue;
-    }
-    // A server or channel set to mentions-only or muted says "do not interrupt
-    // me for anything but me": a stream starting is not me.
-    const level = resolvePushLevel(
-      { notifications: row.notifications ?? undefined } as UserPreferences,
-      serverId,
-      channel.id,
-    );
-    if (level !== "all") {
-      metrics.skipped.muted += 1;
-      continue;
-    }
-    kept.push(row.user_id);
   }
-  if (kept.length === 0) {
-    return [];
-  }
-
-  // Blocks, either direction, in two indexed lookups.
-  const blocks = await pool.query<{ other: string }>(
-    `SELECT blocked_user_id AS other FROM user_blocks
-      WHERE user_id = $1 AND blocked_user_id = ANY($2::uuid[])
-     UNION
-     SELECT user_id AS other FROM user_blocks
-      WHERE blocked_user_id = $1 AND user_id = ANY($2::uuid[])`,
-    [sharerUserId, kept],
-  );
-  const blocked = new Set(blocks.rows.map((row) => row.other));
-  const timeouts = await pool.query<{ user_id: string }>(
-    `SELECT user_id FROM member_timeouts
-      WHERE server_id = $1 AND expires_at > NOW() AND user_id = ANY($2::uuid[])`,
-    [serverId, kept],
-  );
-  const timedOut = new Set(timeouts.rows.map((row) => row.user_id));
-
-  const afterBlocks = kept.filter((userId) => {
-    if (blocked.has(userId)) {
-      metrics.skipped.blocked += 1;
-      return false;
-    }
-    return true;
-  });
-  if (afterBlocks.length === 0) {
-    return [];
-  }
-
-  // VIEW and CONNECT come out of one pass over the same pure rule the join
-  // uses, overwrites and private channels included.
-  const permissions = await computeMemberPermissionsBulk(
-    serverId,
-    afterBlocks,
-    channel,
-    { timedOut },
-  );
-  const allowed = afterBlocks.filter((userId) => {
-    const bits = permissions.get(userId) ?? 0n;
-    if (
-      hasPermission(bits, Permission.VIEW_CHANNEL) &&
-      hasPermission(bits, Permission.CONNECT)
-    ) {
-      return true;
-    }
-    metrics.skipped.noAccess += 1;
-    return false;
-  });
 
   if (allowed.length > STREAM_ALERT_MAX_RECIPIENTS) {
     metrics.skipped.overCap += allowed.length - STREAM_ALERT_MAX_RECIPIENTS;
@@ -619,6 +751,10 @@ export async function decideStreamAlertRecipients(
   }
   return allowed;
 }
+
+/** Opted-in members read per page, and how many pages one notice may walk. */
+const OPT_IN_PAGE = STREAM_ALERT_MAX_RECIPIENTS * 2;
+const OPT_IN_MAX_PAGES = 4;
 
 // ----------------------------------------------------------------- delivery
 
@@ -688,6 +824,9 @@ function notifyStreamStarted(event: StreamAlertEvent): void {
     },
     (pushed) => {
       metrics.pushed += pushed;
+    },
+    () => {
+      metrics.failures += 1;
     },
   );
 }

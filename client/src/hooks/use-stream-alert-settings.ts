@@ -41,10 +41,13 @@ export function useStreamAlertSettings(): {
         }));
       })
       .catch(() => {
-        // An older API has no such route: the switch stays away.
-        setByServer((prev) =>
-          prev[serverId] ? prev : { ...prev, [serverId]: { flag: false, default: false } },
-        );
+        // Nothing is concluded from a failed ask: not "the flag is off" (an
+        // answer this person would then wait ten minutes to correct) but "not
+        // known yet", so the switch stays away and the next time the menu
+        // opens it asks again. An older API with no such route costs one
+        // cheap 404 per menu open, which is nothing next to hiding a switch
+        // from somebody who wanted it.
+        askedAt.current.delete(serverId);
       });
   }, []);
 

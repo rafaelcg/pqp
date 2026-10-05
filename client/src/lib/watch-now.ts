@@ -267,6 +267,11 @@ export class ShareClock {
     return now - this.bootAt >= this.graceMs;
   }
 
+  /** How long until `settled` is true, in ms (0 once it is). */
+  settledInMs(now: number): number {
+    return Math.max(0, this.bootAt + this.graceMs - now);
+  }
+
   constructor(
     private readonly bootAt: number,
     private readonly graceMs: number = SHARE_CLOCK_GRACE_MS,

@@ -4534,10 +4534,14 @@ function MainAppContent({
           }
           if (message.type === "stream-started") {
             // The server already chose who hears about it; the window decides
-            // whether the OS does. A visible, focused window has the strip.
+            // whether the OS does. Somebody looking at that very server in a
+            // window that is in front already sees the stream (the strip, and
+            // the share on the sidebar's roster); anyone else, in the app or
+            // not, is who this is for.
             notifyStreamStarted(message, {
               windowFocused:
                 document.visibilityState === "visible" && document.hasFocus(),
+              openServerId: selectedServerIdRef.current,
             });
             return;
           }
@@ -7082,6 +7086,12 @@ function MainAppContent({
       return;
     }
     if (stream.kind === "call") {
+      if (stream.inRoom) {
+        // Already seated: a way back to the conversation, never a rejoin
+        // (which would rebuild the mesh under everybody in the call).
+        void selectConversation(stream.channelId);
+        return;
+      }
       setWatchNowJoining(stream.channelId);
       void handleConversationCall(stream.channelId, false, false, true);
       return;

@@ -1450,22 +1450,43 @@ export async function sendStreamStartedPush(
   return recipients.length;
 }
 
+/**
+ * ONE retry a few seconds after a failed attempt. The failures that reach here
+ * are the ones before any vendor was called (the subscription or preference
+ * read), so a retry cannot double a push, and the `tag` collapses one on the
+ * device if it ever did. A notice about a stream that STARTED is wrong after a
+ * minute (the TTL says the same), so this is one retry and not a queue.
+ */
+export const STREAM_START_PUSH_RETRY_MS = 5_000;
+
 /** Fire-and-forget, same contract as `pushChannelSessionReminder` (pitfall 9). */
 export function pushStreamStarted(
   event: StreamStartedPush,
   onSent?: (pushed: number) => void,
+  onFailed?: () => void,
 ): void {
   if (!isAnyPushEnabled() || event.userIds.length === 0) {
     return;
   }
-  void sendStreamStartedPush(event)
-    .then((pushed) => onSent?.(pushed))
-    .catch((error: unknown) => {
-      console.error(
-        `[push] stream started fan-out failed for channel ${event.channelId}:`,
-        error,
-      );
-    });
+  const attempt = (retryLeft: boolean): void => {
+    void sendStreamStartedPush(event)
+      .then((pushed) => onSent?.(pushed))
+      .catch((error: unknown) => {
+        console.error(
+          `[push] stream started fan-out failed for channel ${event.channelId}:`,
+          error,
+        );
+        onFailed?.();
+        if (retryLeft) {
+          const timer = setTimeout(
+            () => attempt(false),
+            STREAM_START_PUSH_RETRY_MS,
+          );
+          timer.unref?.();
+        }
+      });
+  };
+  attempt(true);
 }
 
 /**

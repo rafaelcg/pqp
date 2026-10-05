@@ -473,9 +473,13 @@ test("in a DM call a share is on the conversation's strip, and Assistir joins th
     "/api/dms",
     { method: "POST", body: { userIds: [bob.id] } },
   );
-  await setGlobalFlag("watch_now_banner", true);
-  const alice = await newMember(browser, who.alice);
+  // Everything that can throw from here on is inside the try, so the shared
+  // flag is put back whatever fails (a leaked global flip would turn the strip
+  // on for every server of every later spec).
+  let alice: Page | null = null;
   try {
+    await setGlobalFlag("watch_now_banner", true);
+    alice = await newMember(browser, who.alice);
     await openAs(page, who.bob, `/app/dm/${conversation.channelId}?lang=en`);
     await expect(banner(page)).toHaveCount(0);
 
@@ -499,10 +503,15 @@ test("in a DM call a share is on the conversation's strip, and Assistir joins th
     await waitUntilVoiceConnected(page);
     await expect(page.getByRole("button", { name: "Unmute microphone" }).first()).toBeVisible();
   } finally {
-    await leaveVoiceIfConnected(alice).catch(() => {});
-    await leaveVoiceIfConnected(page).catch(() => {});
-    await alice.context().close();
-    await setGlobalFlag("watch_now_banner", null);
+    try {
+      if (alice) {
+        await leaveVoiceIfConnected(alice).catch(() => {});
+        await alice.context().close().catch(() => {});
+      }
+      await leaveVoiceIfConnected(page).catch(() => {});
+    } finally {
+      await setGlobalFlag("watch_now_banner", null);
+    }
   }
 });
 

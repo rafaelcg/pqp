@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The push leg of the start-of-stream notice, at the seams `push.test.ts` uses:
@@ -23,8 +23,10 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { mergePreferences } = await import("./preferences.js");
 const {
+  STREAM_START_PUSH_RETRY_MS,
   STREAM_START_PUSH_TTL_SECONDS,
   buildStreamStartedPayload,
+  pushStreamStarted,
   savePushSubscription,
   sendStreamStartedPush,
   setLiveSocketProbeForTests,
@@ -174,6 +176,93 @@ describeDb("sendStreamStartedPush", () => {
     online.add(ana);
     expect(await sendStreamStartedPush({ ...event(), userIds: [ana] })).toBe(0);
     expect(sent).toEqual([]);
+  });
+
+  it("retries once after a failed attempt, says so, and gives up after that", async () => {
+    await subscribe(ana);
+    const pool = getPool();
+    const real = pool.query.bind(pool);
+    let failuresLeft = 2;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+      if (
+        failuresLeft > 0 &&
+        typeof text === "string" &&
+        text.includes("FROM user_preferences")
+      ) {
+        failuresLeft -= 1;
+        return Promise.reject(new Error("connection terminated"));
+      }
+      return (real as (...args: unknown[]) => unknown)(text, ...rest);
+    }) as never);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const onSent = vi.fn();
+      const onFailed = vi.fn();
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      pushStreamStarted({ ...event(), userIds: [ana] }, onSent, onFailed);
+      const until = async (check: () => boolean) => {
+        const deadline = Date.now() + 3_000;
+        while (!check()) {
+          if (Date.now() > deadline) throw new Error("timed out");
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      };
+      await until(() => onFailed.mock.calls.length === 1);
+      expect(onSent).not.toHaveBeenCalled();
+      // The second attempt fails too: told once more, and there is no third.
+      await vi.advanceTimersByTimeAsync(STREAM_START_PUSH_RETRY_MS);
+      await until(() => onFailed.mock.calls.length === 2);
+      await vi.advanceTimersByTimeAsync(STREAM_START_PUSH_RETRY_MS * 3);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(onFailed).toHaveBeenCalledTimes(2);
+      expect(onSent).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+      quiet.mockRestore();
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it("a failed first attempt followed by a good retry delivers once", async () => {
+    await subscribe(ana);
+    const pool = getPool();
+    const real = pool.query.bind(pool);
+    let failuresLeft = 1;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+      if (
+        failuresLeft > 0 &&
+        typeof text === "string" &&
+        text.includes("FROM user_preferences")
+      ) {
+        failuresLeft -= 1;
+        return Promise.reject(new Error("statement timeout"));
+      }
+      return (real as (...args: unknown[]) => unknown)(text, ...rest);
+    }) as never);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const onSent = vi.fn();
+      const onFailed = vi.fn();
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      pushStreamStarted({ ...event(), userIds: [ana] }, onSent, onFailed);
+      const until = async (check: () => boolean) => {
+        const deadline = Date.now() + 3_000;
+        while (!check()) {
+          if (Date.now() > deadline) throw new Error("timed out");
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      };
+      await until(() => onFailed.mock.calls.length === 1);
+      await vi.advanceTimersByTimeAsync(STREAM_START_PUSH_RETRY_MS);
+      await until(() => onSent.mock.calls.length === 1);
+      expect(onSent).toHaveBeenCalledWith(1);
+      expect(sent).toHaveLength(1);
+      quiet.mockRestore();
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
   });
 
   it("is inert without a push transport", async () => {

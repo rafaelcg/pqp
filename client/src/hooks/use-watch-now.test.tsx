@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dismissWatchNow,
   resetWatchNowDismissedForTests,
@@ -117,6 +117,49 @@ describe("useWatchNow", () => {
     expect(render(args({ occupancy: {}, connected: true }))).toEqual([]);
     // The roster arrives with the same stream: still dismissed.
     expect(render(args())).toEqual([]);
+  });
+
+  it("a strip that is turned off forgets nothing and, turned on again, dates nothing it did not see begin", () => {
+    const [stream] = render(args());
+    act(() => dismissWatchNow(stream!.key));
+    // Off while the share is still live: that is not the share ending.
+    expect(render(args({ enabled: false }))).toEqual([]);
+    expect(render(args())).toEqual([]);
+  });
+
+  it("dates nothing that was already running when the strip came on, however long the tab has been open", () => {
+    vi.useFakeTimers();
+    try {
+      render(args({ enabled: false }));
+      act(() => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      // Long past any grace measured from page load: the strip comes on over a
+      // share that has been going for who knows how long.
+      expect(render(args())[0]!.startedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("looks again when the rosters settle, so a dismissal from before a reload does not hide the next stream", () => {
+    vi.useFakeTimers();
+    try {
+      const [stream] = render(args());
+      act(() => dismissWatchNow(stream!.key));
+      act(() => root.unmount());
+      root = createRoot(host);
+      resetWatchNowDismissedForTests();
+      // Reloaded into a room nobody is sharing in: nothing changes for 20 s.
+      expect(render(args({ occupancy: {} }))).toEqual([]);
+      act(() => {
+        vi.advanceTimersByTime(21_000);
+      });
+      // The old stream is over for good; the same person sharing again is new.
+      expect(render(args())).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dates only a share it saw begin", () => {

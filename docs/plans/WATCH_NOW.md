@@ -200,12 +200,14 @@ thousands of people on every screen share, so the limits are the design.
 | the channel's resolved notification level is `all` (server muted or mentions-only means no) | server (`resolvePushLevel`) |
 | neither blocks the other | server |
 | can VIEW **and** CONNECT the channel (overwrites, private channels) | server, bulk, one pass |
-| not the app focused in the foreground | client (a focused window already shows the banner) |
+| not a window in front that is looking at THAT server (it already sees the stream: the strip, the share on the roster). A window in front on another server, a conversation or the home is who the notice is for | client |
 | OS notification permission already granted and the existing desktop-notification opt-in | client; **nothing prompts on load** |
 
 A server above 200 members, and every community, notifies **nobody by default**:
 only people who turned it on for that server (cap `STREAM_ALERT_MAX_RECIPIENTS`
-= 500, counted when hit). QG do pqp (~4,000 members) therefore costs one indexed
+= 500, counted when hit). The opted-in walk is paged by member id and the bound is
+on people TOLD, not on rows read: a first page that is all on DND does not hide the
+people behind it (at most four pages of 1,000). QG do pqp (~4,000 members) therefore costs one indexed
 count and one bounded query per stream start and tells no one who did not ask.
 
 ### When
@@ -233,6 +235,15 @@ delivers to its own sockets, publishes `{ event, userIds }` on the cluster bus
 (`stream-alert.deliver`, one retry, the shape of `channel-session.reminder`) so
 every other machine delivers to **its** sockets, and sends push for people with no
 live socket **from the originating machine only** (a phone gets one push).
+
+A failure inside the 20 s pipeline costs the notice one retry, not 30 silent
+minutes: a claim whose decision never finished is handed back before anything is
+retried (`releaseStreamAlertClaim`), the retry runs once, 5 s later, and a failed
+push attempt is retried once too (the leg's failures are the ones before any vendor
+was called, and the `tag` collapses a repeat on the device). A watch party's notice
+is not cancelled by a screen share stopping in its room (a party's "still on" is
+the session's state), and a party whose room cannot be read is not announced at
+all, because the people already sitting in it are the ones it must not reach.
 
 Nothing is per socket on the hot path: the `set-sharing-screen` handler reads the
 flag (an in-process snapshot) and arms a timer. The one walk over sockets is the

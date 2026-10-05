@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   loadLiveHlsConfig,
   settledDeploymentLiveHlsConfig,
@@ -81,34 +87,67 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
     dismissedWatchNow,
     dismissedWatchNow,
   );
+  // THE CLOCK LIVES AS LONG AS THE STRIP IS ON AND THE SOCKET IS UP, AND NO
+  // LONGER. A strip that was off watched nothing, so when it comes on every
+  // share already running is unknown to it, and a fresh clock (whose grace
+  // window covers exactly that) is how "há 0 min" is never said about a film
+  // that is an hour in.
+  const active = args.enabled && args.connected;
   const clock = useRef<ShareClock | null>(null);
-  if (args.connected && clock.current === null) {
+  if (active && clock.current === null) {
     clock.current = new ShareClock(Date.now());
+  } else if (!active && clock.current !== null) {
+    clock.current = null;
   }
 
-  // With the flag off this is one boolean, not a walk over every roster the
-  // client holds on every render of the app.
-  const liveKeys = args.enabled
-    ? watchNowLiveKeys(args.occupancy, args.parties)
-    : NO_KEYS;
-  // Idempotent, so safe in render: a second pass over the same keys changes
-  // nothing.
-  clock.current?.observe(liveKeys, Date.now());
+  // Derived once per roster change, not once per render of the app: it walks
+  // every peer of every roster the client holds (the clock and the dismissals
+  // must know about shares in OTHER servers too, or a switch would make an
+  // hour-old share look new). With the strip off it is not computed at all.
+  const liveKeys = useMemo(() => {
+    if (!args.enabled) {
+      return NO_KEYS;
+    }
+    const keys = watchNowLiveKeys(args.occupancy, args.parties);
+    // Idempotent: a second pass over the same keys changes nothing.
+    clock.current?.observe(keys, Date.now());
+    return keys;
+  }, [args.enabled, args.occupancy, args.parties]);
+  const joined = useMemo(() => liveKeys.join("|"), [liveKeys]);
 
   // Keys this tab has seen live, so an end it WITNESSED is forgotten at once
   // while a stale key from storage waits for the rosters to settle.
   const seenLive = useRef(new Set<string>());
-  const joined = liveKeys.join("|");
   useEffect(() => {
+    if (!args.enabled) {
+      // A strip that is off says nothing about streams ending.
+      return;
+    }
     const keys = joined === "" ? [] : joined.split("|");
     for (const key of keys) {
       seenLive.current.add(key);
     }
+    const current = clock.current;
+    const now = Date.now();
     pruneWatchNowDismissed(keys, {
-      settled: clock.current?.settled(Date.now()) ?? false,
+      settled: current?.settled(now) ?? false,
       seenLive: seenLive.current,
     });
-  }, [joined]);
+    if (!current || current.settled(now)) {
+      return;
+    }
+    // Nothing may change by the time the rosters have settled (a reload into a
+    // room that is empty), so settling is its own moment to look again.
+    const timer = window.setTimeout(
+      () =>
+        pruneWatchNowDismissed(keys, {
+          settled: true,
+          seenLive: seenLive.current,
+        }),
+      current.settledInMs(now) + 50,
+    );
+    return () => window.clearTimeout(timer);
+  }, [joined, args.enabled, args.connected]);
 
   let list: WatchNowStream[] = EMPTY;
   if (args.enabled && args.viewerId) {
