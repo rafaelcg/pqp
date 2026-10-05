@@ -17,6 +17,10 @@ const env = vi.hoisted(() => ({
   permission: "default" as NotificationPermissionState,
   desktop: false,
   dmDetails: false,
+  /** What the browser answers when the system switch asks for permission. */
+  requestResult: "granted" as NotificationPermissionState,
+  /** Holds the push config back until called, to look at the loading state. */
+  holdConfig: null as null | { release: () => void },
 }));
 
 const sounds = vi.hoisted(() => ({ playCue: vi.fn() }));
@@ -29,6 +33,9 @@ vi.mock("@/lib/sounds", async (importOriginal) => ({
 vi.mock("@/lib/push", () => ({
   getPushAvailability: () => env.availability,
   getPushConfig: async () => {
+    if (env.holdConfig) {
+      await new Promise<void>((resolve) => (env.holdConfig!.release = resolve));
+    }
     if (env.configFails) {
       throw new Error("Request failed");
     }
@@ -46,7 +53,8 @@ vi.mock("@/lib/desktop", () => ({
   isDesktopApp: () => env.desktop,
 }));
 
-vi.mock("@/hooks/use-notifications", () => {
+vi.mock("@/hooks/use-notifications", async () => {
+  const { useState } = await import("react");
   const state = {
     desktop: false,
     default: "mentions",
@@ -55,15 +63,29 @@ vi.mock("@/hooks/use-notifications", () => {
   };
   return {
     useNotificationState: () => state,
-    useNotificationSettings: () => ({
-      state,
-      permission: env.permission,
-      enable: vi.fn(),
-      disable: vi.fn(),
-      setDefaultLevel: vi.fn(),
-    }),
+    // Holds its own permission the way the real hook does: it only changes
+    // when the switch asks, or when something tells it to read again.
+    useNotificationSettings: () => {
+      const [permission, setPermission] = useState(env.permission);
+      return {
+        state,
+        permission,
+        enable: async () => {
+          env.permission = env.requestResult;
+          setPermission(env.permission);
+        },
+        disable: vi.fn(),
+        refreshPermission: () => setPermission(env.permission),
+        setDefaultLevel: vi.fn(),
+      };
+    },
   };
 });
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  updatePreferences: vi.fn(async () => ({ preferences: {} })),
+}));
 
 const { NotificationsSection } = await import(
   "@/components/settings/notifications-section"
@@ -104,6 +126,8 @@ beforeEach(() => {
     permission: "default",
     desktop: false,
     dmDetails: false,
+    requestResult: "granted",
+    holdConfig: null,
   });
   sounds.playCue.mockClear();
 });
@@ -172,7 +196,85 @@ describe("NotificationsSection push rows", () => {
   it("locks the push switch while notifications are blocked for the site", async () => {
     env.permission = "denied";
     await mount();
-    expect(switchIn("push").disabled).toBe(true);
+    const push = await import("@/lib/push");
+    vi.mocked(push.enablePush).mockClear();
+    // Unavailable to the pointer and to assistive tech, but not `disabled`,
+    // which would drop keyboard focus to the page when the block lands.
+    expect(switchIn("push").getAttribute("aria-disabled")).toBe("true");
+    await act(async () => switchIn("push").click());
+    expect(push.enablePush).not.toHaveBeenCalled();
+  });
+
+  it("keeps focus on the system switch when the browser refuses the permission", async () => {
+    env.requestResult = "denied";
+    await mount();
+    const toggle = switchIn("system-notifications");
+    toggle.focus();
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.disabled).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("keeps focus on the push switch when the push prompt is refused", async () => {
+    const push = await import("@/lib/push");
+    vi.mocked(push.enablePush).mockImplementationOnce(async () => {
+      env.permission = "denied";
+      return "denied";
+    });
+    await mount();
+    const toggle = switchIn("push");
+    toggle.focus();
+    await act(async () => toggle.click());
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("updates the system and sender rows when the push prompt is refused", async () => {
+    const push = await import("@/lib/push");
+    vi.mocked(push.enablePush).mockImplementationOnce(async () => {
+      env.permission = "denied";
+      return "denied";
+    });
+    env.dmDetails = true;
+    await mount();
+    expect(
+      host!.querySelector('[data-settings-row="system-notifications"] [role="status"]'),
+    ).toBeNull();
+    expect(host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent)
+      .toMatch(/turn on push first/i);
+
+    await act(async () => switchIn("push").click());
+
+    expect(
+      host!.querySelector('[data-settings-row="system-notifications"] [role="status"]')
+        ?.textContent,
+    ).toMatch(/padlock/i);
+    expect(switchIn("system-notifications").getAttribute("aria-disabled")).toBe("true");
+    const dm = host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent;
+    expect(dm).toMatch(/not available here/i);
+    expect(dm).not.toMatch(/turn on push first/i);
+  });
+
+  it("says push is loading, and does not tell the person to turn it on first", async () => {
+    env.holdConfig = { release: () => {} };
+    await mount();
+    expect(host!.querySelector('[data-settings-row="push"]')!.textContent).toContain(
+      "Loading push…",
+    );
+    const dm = host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent;
+    expect(dm).toContain("Loading push…");
+    expect(dm).not.toMatch(/turn on push first/i);
+
+    await act(async () => {
+      env.holdConfig!.release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host!.querySelector('[data-settings-row="push"]')!.textContent).not.toContain(
+      "Loading push…",
+    );
+    expect(host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent)
+      .toMatch(/turn on push first/i);
   });
 
   it("keeps the push switch focusable while it saves and drops a second press", async () => {
@@ -286,7 +388,77 @@ describe("NotificationsSection direct message push switch", () => {
   });
 });
 
+describe("NotificationsSection sender hint", () => {
+  const hint = () =>
+    host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent ?? "";
+
+  it("describes the state the switch shows, never the opposite", async () => {
+    env.subscribed = true;
+    await mount();
+    const toggle = switchIn("dm-push-details");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(hint()).toContain("only says a new message arrived");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(hint()).toContain("says who sent the message");
+    expect(hint()).not.toMatch(/\bOff\b/);
+  });
+});
+
+describe("NotificationsSection account sync", () => {
+  it("says so when the sound or level choice did not reach the account, and clears on a retry", async () => {
+    const api = await import("@/lib/api");
+    const { queuePreferenceSync } = await import("@/lib/preferences");
+    const update = vi.mocked(api.updatePreferences);
+    update.mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    expect(host!.textContent).not.toContain("Could not save to your account");
+
+    await act(async () => {
+      queuePreferenceSync({ sounds: { enabled: false } } as never, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(host!.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not save to your account",
+    );
+
+    // The next change sends the unsent key again and, once it lands, the line goes.
+    await act(async () => {
+      queuePreferenceSync({ notifications: { default: "all" } } as never, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(update).toHaveBeenLastCalledWith({
+      sounds: { enabled: false },
+      notifications: { default: "all" },
+    });
+    expect(host!.textContent).not.toContain("Could not save to your account");
+  });
+
+  it("stays quiet about a failure in a preference this tab does not own", async () => {
+    const api = await import("@/lib/api");
+    const { queuePreferenceSync } = await import("@/lib/preferences");
+    vi.mocked(api.updatePreferences).mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    await act(async () => {
+      queuePreferenceSync({ theme: "dark" }, { immediate: true });
+      await Promise.resolve();
+    });
+    expect(host!.textContent).not.toContain("Could not save to your account");
+    // Leave the store clean for whatever runs next.
+    await act(async () => {
+      queuePreferenceSync({ theme: "dark" }, { immediate: true });
+      await Promise.resolve();
+    });
+  });
+});
+
 describe("NotificationsSection sounds", () => {
+  it("says which sounds Do Not Disturb silences, and only those", async () => {
+    await mount();
+    const hint = host!.textContent ?? "";
+    expect(hint).toContain("Do Not Disturb only silences the message and mention sounds.");
+  });
+
   it("puts the ringtones directly under Incoming call", async () => {
     await mount();
     const call = host!.querySelector('[data-settings-row="sound-incoming-call"]')!;

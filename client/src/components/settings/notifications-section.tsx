@@ -18,6 +18,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel, type NotificationPermissionState } from "@/lib/notifications";
 import { getIncomingRing, getSoundState, playCue, setIncomingRing, setSoundCueEnabled, setSoundEnabled, subscribeSounds, type IncomingRingId, type SoundCue } from "@/lib/sounds";
 import { disablePush, enablePush, getCurrentPushSubscription, getPushAvailability, getPushConfig, setPushDmDetails, type PushAvailability } from "@/lib/push";
+import { usePreferenceSyncFailed } from "@/lib/preferences";
 
 /* ----------------------------------------------------------- notifications */
 
@@ -37,6 +38,9 @@ const SOUND_CUE_OPTIONS: { cue: SoundCue; id: string; label: MessageKey }[] = [
   { cue: "incomingCall", id: "sound-incoming-call", label: "settings.notifications.sounds.incomingCall" },
   { cue: "outgoingCall", id: "sound-outgoing-call", label: "settings.notifications.sounds.outgoingCall" },
 ];
+
+/** The account preferences this tab writes: the notice below reads their sync. */
+const SYNCED_KEYS = ["notifications", "sounds"] as const;
 
 const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
   { id: "classic", label: "settings.notifications.sounds.ring.classic" },
@@ -72,20 +76,35 @@ function sharedPushConfig(): ReturnType<typeof getPushConfig> {
 
 export function NotificationsSection() {
   const { t } = useTranslation();
-  const { state, permission, enable, disable, setDefaultLevel } =
+  const { state, permission, enable, disable, refreshPermission, setDefaultLevel } =
     useNotificationSettings();
-  const push = usePushDevice();
+  const push = usePushDevice(refreshPermission);
   const active = state.desktop && permission === "granted";
+  const syncFailed = usePreferenceSyncFailed(SYNCED_KEYS);
 
   return (
     <div className="space-y-6">
+      {syncFailed ? (
+        // Sticky: the choice that failed is usually further down the tab,
+        // and a line above the fold would never be seen.
+        <div className="sticky top-2 z-10">
+          <SettingsNotice tone="warning" role="alert">
+            {t("settings.syncFailed")}
+          </SettingsNotice>
+        </div>
+      ) : null}
       <SettingsGroup title={t("settings.notifications.group.device.title")}>
         <SettingsSwitchRow
           id="system-notifications"
           label={t("settings.notifications.system.label")}
           description={t("settings.notifications.system.where", desktopContext())}
           checked={active}
-          disabled={permission === "unsupported" || permission === "denied"}
+          disabled={permission === "unsupported"}
+          // Blocked is not `disabled`: pressing the switch is what got the
+          // permission refused, and a disabled button drops keyboard focus to
+          // the page. Busy looks and reads as unavailable, ignores presses
+          // and keeps focus (the notice below says why).
+          busy={permission === "denied"}
           onCheckedChange={(next) => (next ? void enable() : disable())}
           status={
             permission === "unsupported" ? (
@@ -172,6 +191,8 @@ interface PushDevice {
   /** Null while the server's push config is loading. */
   serverEnabled: boolean | null;
   loadFailed: boolean;
+  /** The config has been asked for and has not answered yet. */
+  loading: boolean;
   /**
    * The browser and the server both answered and push can work here. A stale
    * subscription on a server that now says no does not count.
@@ -197,7 +218,7 @@ interface PushDevice {
  * On iOS the API only exists inside an installed home-screen app, so a plain
  * Safari tab gets the install pointer instead of a switch that cannot work.
  */
-function usePushDevice(): PushDevice {
+function usePushDevice(onPermissionChange: () => void): PushDevice {
   const { t } = useTranslation();
   const [availability, setAvailability] = useState<PushAvailability | null>(null);
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
@@ -270,6 +291,9 @@ function usePushDevice(): PushDevice {
     } finally {
       busyRef.current = false;
       setBusy(false);
+      // The prompt behind the switch is the same permission the system row
+      // reads; whatever the answer was, the other rows must see it now.
+      onPermissionChange();
     }
   };
 
@@ -280,6 +304,7 @@ function usePushDevice(): PushDevice {
     availability,
     serverEnabled,
     loadFailed,
+    loading: availability === "available" && serverEnabled === null && !loadFailed,
     ready,
     on: ready && subscribed,
     busy,
@@ -296,7 +321,7 @@ function PushRow({
   permission: NotificationPermissionState;
 }) {
   const { t } = useTranslation();
-  const { availability, serverEnabled, loadFailed, ready, on, busy, error } = push;
+  const { availability, serverEnabled, loadFailed, loading, ready, on, busy, error } = push;
 
   let notice = null;
   if (availability === "unsupported") {
@@ -317,7 +342,9 @@ function PushRow({
       ? { kind: "error", message: error }
       : loadFailed
         ? { kind: "error", message: t("settings.push.loadFailed") }
-        : null;
+        : loading
+          ? { kind: "saving", label: t("settings.push.loading") }
+          : null;
 
   return (
     <SettingsSwitchRow
@@ -332,7 +359,10 @@ function PushRow({
       // Blocked: the warning on the row above says why, and a switch that can
       // only fail would add a second message about the same block. Turning an
       // existing subscription off needs no permission, so that stays possible.
-      disabled={!ready || (permission === "denied" && !on)}
+      // Busy rather than disabled: the press that gets the permission refused
+      // is made on this switch, and a disabled button drops focus to the page.
+      disabled={!ready}
+      busy={ready && permission === "denied" && !on}
       onCheckedChange={() => void push.toggle()}
       status={
         notice ?? (status ? <SettingsInlineStatus state={status} /> : null)
@@ -479,10 +509,15 @@ function DirectMessagesGroup({
       <SettingsSwitchRow
         id="dm-push-details"
         label={t("settings.push.dmDetails")}
+        // Describes the state the switch shows, so the line never reads as
+        // the opposite of what is on. While the config loads, push is not "off"
+        // yet, so the order to follow is not "turn it on first".
         description={
-          locked && !pushBlockedHere
+          locked && !pushBlockedHere && !push.loading
             ? t("settings.push.dmDetailsNeedsPush")
-            : t("settings.push.dmDetailsHint")
+            : dmDetails && !unavailable
+              ? t("settings.push.dmDetailsHintOn")
+              : t("settings.push.dmDetailsHint")
         }
         checked={dmDetails && !unavailable}
         disabled={locked}
@@ -496,6 +531,10 @@ function DirectMessagesGroup({
           ) : dmFailed ? (
             <SettingsInlineStatus
               state={{ kind: "error", message: t("settings.push.dmDetailsFailed") }}
+            />
+          ) : push.loading ? (
+            <SettingsInlineStatus
+              state={{ kind: "saving", label: t("settings.push.loading") }}
             />
           ) : null
         }

@@ -129,6 +129,12 @@ export interface NotificationSettings {
   /** Requests the browser permission — only ever call this from a click. */
   enable: () => Promise<void>;
   disable: () => void;
+  /**
+   * Reads the browser permission again. Something other than the system
+   * switch can change it (the push prompt asks for the same permission), and
+   * there is no event for it.
+   */
+  refreshPermission: () => void;
   setDefaultLevel: (level: NotificationLevel) => void;
 }
 
@@ -155,11 +161,16 @@ export function useNotificationSettings(): NotificationSettings {
     setDesktopNotificationsEnabled(false);
   }, []);
 
+  const refreshPermission = useCallback(() => {
+    setPermission(notificationPermission());
+  }, []);
+
   return {
     state,
     permission,
     enable,
     disable,
+    refreshPermission,
     setDefaultLevel: setDefaultNotificationLevel,
   };
 }
