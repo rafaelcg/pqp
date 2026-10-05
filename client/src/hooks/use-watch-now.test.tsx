@@ -162,6 +162,33 @@ describe("useWatchNow", () => {
     }
   });
 
+  it("a reconnect starts a fresh clock that already knows what is live, so the next roster change cannot make a running share look new", () => {
+    vi.useFakeTimers();
+    try {
+      // Offline (or not yet connected) with a share already in the rosters.
+      render(args({ connected: false }));
+      render(args({ connected: true }));
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      // A later roster change, long after the new clock's grace window.
+      const next = render(
+        args({
+          occupancy: {
+            [VOICE]: [
+              { userId: "alberto", displayName: "Alberto", sharingScreen: true },
+              { userId: "bia", displayName: "Bia", sharingScreen: false },
+              { userId: "carlos", displayName: "Carlos", sharingScreen: false },
+            ],
+          },
+        }),
+      );
+      expect(next[0]!.startedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dates only a share it saw begin", () => {
     // Already running when the clock started: no age.
     const [running] = render(args());

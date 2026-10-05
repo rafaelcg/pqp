@@ -109,10 +109,16 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
       return NO_KEYS;
     }
     const keys = watchNowLiveKeys(args.occupancy, args.parties);
-    // Idempotent: a second pass over the same keys changes nothing.
-    clock.current?.observe(keys, Date.now());
+    // Idempotent: a second pass over the same keys changes nothing. `active`
+    // is read (and so a dependency) because the clock is born, and reborn on a
+    // reconnect, outside this memo: it has to be told what is already live the
+    // moment it exists, inside its grace window, or the first roster change
+    // after the grace would find every running share "new".
+    if (active) {
+      clock.current?.observe(keys, Date.now());
+    }
     return keys;
-  }, [args.enabled, args.occupancy, args.parties]);
+  }, [args.enabled, active, args.occupancy, args.parties]);
   const joined = useMemo(() => liveKeys.join("|"), [liveKeys]);
 
   // Keys this tab has seen live, so an end it WITNESSED is forgotten at once
