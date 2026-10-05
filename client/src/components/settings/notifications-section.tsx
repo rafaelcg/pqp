@@ -390,6 +390,9 @@ function DirectMessagesGroup({
   // not to "the opposite of what was clicked", which is only right when the
   // click before it landed.
   const dmConfirmed = useRef(false);
+  // Set by the first confirmed write: from then on a late answer to the
+  // initial config read is older than what the server holds, and is ignored.
+  const dmWriteConfirmed = useRef(false);
   const [dmFailed, setDmFailed] = useState(false);
 
   useEffect(() => {
@@ -397,7 +400,7 @@ function DirectMessagesGroup({
     void sharedPushConfig()
       .then((config) => {
         if (!cancelled) {
-          dmConfirmed.current = config.dmDetails;
+          if (!dmWriteConfirmed.current) dmConfirmed.current = config.dmDetails;
           if (!touchedRef.current) setDmDetails(config.dmDetails);
         }
       })
@@ -426,6 +429,7 @@ function DirectMessagesGroup({
     void write
       .then((saved) => {
         if (!saved) return;
+        dmWriteConfirmed.current = true;
         dmConfirmed.current = saved.dmDetails;
         if (ticket === dmTicket.current) setDmDetails(saved.dmDetails);
       })
