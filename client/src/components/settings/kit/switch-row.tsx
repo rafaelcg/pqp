@@ -11,6 +11,8 @@ export interface SettingsSwitchRowProps {
   checked: boolean;
   onCheckedChange: (next: boolean) => void;
   disabled?: boolean;
+  /** A write is running: unavailable but still focused (see `Switch`). */
+  busy?: boolean;
   /** Under the row, for example a notice or a `SettingsInlineStatus`. */
   status?: ReactNode;
   /** A secondary action beside the switch, for example an icon-only "Ouvir". */
@@ -36,6 +38,7 @@ export function SettingsSwitchRow({
   checked,
   onCheckedChange,
   disabled,
+  busy,
   status,
   trailing,
   searchable,
@@ -48,6 +51,7 @@ export function SettingsSwitchRow({
           checked={checked}
           onCheckedChange={onCheckedChange}
           disabled={disabled}
+          busy={busy}
           label={label}
           description={description}
           dimRowWhenDisabled

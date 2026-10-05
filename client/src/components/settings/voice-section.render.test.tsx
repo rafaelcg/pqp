@@ -297,6 +297,8 @@ describe("VoiceSection mic test timing", () => {
       micTestButton().click();
     });
     expect(meterTrack.stop).toHaveBeenCalled();
+    // The bar reads the test's own loop meanwhile: no third capture.
+    expect(open).toHaveBeenCalledTimes(2);
   });
 
   it("does not count while the permission prompt is still open", async () => {

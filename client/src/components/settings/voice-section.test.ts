@@ -94,6 +94,25 @@ const options = (
 });
 
 describe("startMicLoopback (Ouvir meu mic)", () => {
+  it("taps the raw mic for the meter while it plays, and lets go when it stops", async () => {
+    const fake = fakeAudio();
+    const tap = {
+      name: "analyser",
+      fftSize: 0,
+      connect: () => undefined,
+      disconnect: () => undefined,
+    };
+    Object.assign(fake.context, { createAnalyser: vi.fn(() => tap) });
+    const { deps: d } = deps(fake);
+    const loop = startMicLoopback(options(), d);
+    expect(loop.analyser()).toBeNull();
+    await loop.ready;
+    expect(loop.analyser()).toBe(tap);
+    expect(fake.connections).toContain("source->analyser");
+    loop.stop();
+    expect(loop.analyser()).toBeNull();
+  });
+
   it("opens the chosen mic with the call's processing and plays it to the chosen output", async () => {
     const fake = fakeAudio();
     const { deps: d } = deps(fake);

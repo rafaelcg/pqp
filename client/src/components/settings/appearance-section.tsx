@@ -1105,6 +1105,7 @@ function DesktopGroup() {
         description={t("settings.appearance.startAtLoginHint")}
         checked={enabled}
         onCheckedChange={toggle}
+        busy={pending}
         status={
           failed ? (
             <SettingsInlineStatus

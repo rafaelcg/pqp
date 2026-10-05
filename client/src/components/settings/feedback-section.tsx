@@ -90,14 +90,15 @@ let unseen: { owner: string | null; outcome: SendOutcome; visit: number } | null
  * pane comes back in the same visit, never on a later one: an hour later the
  * form is what the person came for, not an old "Obrigado". A failure is kept
  * until it is seen, whenever that is: the draft is still there and the person
- * must learn it was never sent.
+ * must learn it was never sent. A rate limit is not: it says "wait a minute",
+ * which is wrong by the next visit.
  */
 let visit = 0;
 
 /** Called by the shell when Settings closes. */
 export function endFeedbackVisit(): void {
   visit += 1;
-  if (unseen?.outcome === "sent") unseen = null;
+  if (unseen && unseen.outcome !== "failed") unseen = null;
 }
 
 function startSend(
@@ -177,7 +178,7 @@ export function FeedbackSection({
     outcome:
       inflight === null &&
       unseen?.owner === userId &&
-      (unseen.visit === visit || unseen.outcome !== "sent")
+      (unseen.visit === visit || unseen.outcome === "failed")
         ? unseen.outcome
         : null,
   }));

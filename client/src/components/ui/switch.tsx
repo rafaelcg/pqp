@@ -16,6 +16,7 @@ export function Switch({
   className,
   hideLabel = false,
   dimRowWhenDisabled = false,
+  busy = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
@@ -35,20 +36,30 @@ export function Switch({
    * label beside a dimmed track reads as a setting that still works.
    */
   dimRowWhenDisabled?: boolean;
+  /**
+   * A write is running: looks and reads as unavailable (`aria-disabled`,
+   * `aria-busy`) and ignores clicks, but keeps focus, which `disabled` would
+   * drop on the page.
+   */
+  busy?: boolean;
 }) {
-  const dimRow = Boolean(disabled) && dimRowWhenDisabled;
+  const dimRow = (Boolean(disabled) || busy) && dimRowWhenDisabled;
   const control = (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-disabled={busy || undefined}
+      aria-busy={busy || undefined}
       disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
+      onClick={() => {
+        if (!busy) onCheckedChange(!checked);
+      }}
       className={cn(
         "flex w-full justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-        disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
+        disabled || busy ? "cursor-not-allowed" : "hover:bg-surface-2",
         dimRow && "opacity-60",
         className,
       )}

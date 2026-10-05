@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { SettingsAnnouncer } from "@/components/settings/kit";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { User } from "@pqp/shared";
@@ -212,6 +213,25 @@ describe("YourDataSection export feedback", () => {
 
     await tick(EXPORT_DONE_MS + 10);
     expect(exportRowText()).not.toContain("Done.");
+  });
+
+  it("says Done through the dialog's announcer inside Settings", async () => {
+    stubDownload();
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    mount(
+      <SettingsAnnouncer>
+        <YourDataSection user={USER} onRequestDelete={() => {}} />
+      </SettingsAnnouncer>,
+    );
+    await act(async () => exportButton().click());
+    await tick(0);
+    await tick(0);
+    expect(host!.querySelector("[data-settings-announcer]")?.textContent).toBe(
+      "Done. The file pqp-my-data-2026-10-04.json was downloaded.",
+    );
+    expect(
+      host!.querySelector('[data-settings-row="export"] [role="status"]'),
+    ).toBeNull();
   });
 
   it("drops the done line when a new download starts", async () => {

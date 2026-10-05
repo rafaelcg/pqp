@@ -374,6 +374,11 @@ export interface MicLoopback {
   stop: () => void;
   /** Settles once the loop is playing; rejects when the mic could not open. */
   ready: Promise<void>;
+  /**
+   * The loop's own level, before the input volume, once it is playing: the
+   * meter reads this during the test instead of opening a second capture.
+   */
+  analyser: () => AnalyserNode | null;
 }
 
 /**
@@ -395,8 +400,10 @@ export function startMicLoopback(
   let context: AudioContext | null = null;
   let suppressor: (AudioNode & { destroy(): void }) | null = null;
   let audio: HTMLAudioElement | null = null;
+  let analyser: AnalyserNode | null = null;
 
   const release = () => {
+    analyser = null;
     if (timer !== null) {
       deps.clearTimer(timer);
       timer = null;
@@ -482,6 +489,15 @@ export function startMicLoopback(
     }
 
     const source = context.createMediaStreamSource(opened);
+    try {
+      const tap = context.createAnalyser();
+      tap.fftSize = 256;
+      source.connect(tap);
+      analyser = tap;
+    } catch {
+      // No level to show; the loop itself still plays.
+      analyser = null;
+    }
     const gain = context.createGain();
     gain.gain.value = Math.min(2, Math.max(0, options.inputVolume));
     const destination = context.createMediaStreamDestination();
@@ -506,7 +522,7 @@ export function startMicLoopback(
     throw err;
   });
 
-  return { stop, ready };
+  return { stop, ready, analyser: () => analyser };
 }
 
 /**
@@ -521,6 +537,8 @@ function useMicTest(active: boolean) {
   // Whole seconds until the test stops itself. Null until the microphone is
   // really playing: while the permission prompt is open nothing is counting.
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  // The loop's level while it plays, for the meter.
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const handle = useRef<MicLoopback | null>(null);
   const ticker = useRef<number | null>(null);
   // Loops somebody (or the hook) stopped on purpose. A permission prompt that
@@ -565,6 +583,7 @@ function useMicTest(active: boolean) {
           handle.current = null;
         }
         clearTicker();
+        setAnalyser(null);
         setPlaying(false);
       },
     });
@@ -574,6 +593,7 @@ function useMicTest(active: boolean) {
         if (handle.current !== loop) {
           return;
         }
+        setAnalyser(loop.analyser());
         setSecondsLeft(wholeSeconds(options.durationMs ?? MIC_TEST_MS));
         ticker.current = window.setInterval(() => {
           setSecondsLeft((left) => (left === null ? null : Math.max(0, left - 1)));
@@ -587,7 +607,7 @@ function useMicTest(active: boolean) {
     );
   };
 
-  return { playing, failed, secondsLeft, start, stop };
+  return { playing, failed, secondsLeft, analyser, start, stop };
 }
 
 /* --------------------------------------------------------------- meter */
@@ -1701,10 +1721,13 @@ export function VoiceSection({
               <div className="px-3 py-2">
                 <LiveMicLevelMeter
                   deviceId={inputInUse}
-                  liveAnalyser={voiceAnalyser}
-                  // Not while the mic test runs: two captures of one
-                  // microphone can mute the first on Safari.
-                  active={metering && !blocked && !micTest.playing}
+                  // During the mic test the bar reads the test's own loop:
+                  // a second capture of one microphone can mute the first on
+                  // Safari, so the meter's preview is closed meanwhile.
+                  liveAnalyser={voiceAnalyser ?? micTest.analyser}
+                  active={
+                    metering && !blocked && (!micTest.playing || micTest.analyser !== null)
+                  }
                   inputVolume={draftLocal.inputVolume}
                   disabled={blocked}
                   threshold={voiceActivity ? draftLocal.vadThreshold : undefined}

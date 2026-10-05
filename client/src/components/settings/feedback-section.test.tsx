@@ -363,6 +363,28 @@ describe("FeedbackSection", () => {
     expect(textarea().value).toBe("meu relato");
   });
 
+  it("does not carry a rate limit over to a later visit", async () => {
+    let fail!: (error: unknown) => void;
+    sendFeedback.mockReturnValue(new Promise<void>((_, reject) => (fail = reject)));
+    mount();
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    act(() => root?.unmount());
+    host?.remove();
+    await act(async () => {
+      fail(new ApiError(429, "slow down"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    endFeedbackVisit();
+
+    mount();
+    expect(host!.querySelector('[role="alert"]')).toBeNull();
+    expect(textarea().value).toBe("meu relato");
+  });
+
   it("keeps a draft for the same account and drops it for another", () => {
     mount("user-a");
     type("relato privado da conta A");

@@ -12,6 +12,7 @@ import {
   SettingsNotice,
   SettingsRow,
   useInlineSave,
+  useSettingsAnnounce,
 } from "@/components/settings/kit";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -170,6 +171,16 @@ function useDataExport(enabled: boolean) {
     }, failed);
   }, [t, exp.run]);
 
+  // "Pronto" goes through the dialog's announcer, mounted before it speaks:
+  // a region inserted already holding its text is often not read. Outside
+  // Settings (the delete dialog's shortcut) the line is its own region.
+  const announce = useSettingsAnnounce();
+  const doneText = doneFile ? t("settings.data.exportDone", { file: doneFile }) : null;
+  useEffect(() => {
+    if (announce && doneText) announce(doneText);
+  }, [announce, doneText]);
+  const doneLive = announce ? {} : ({ role: "status", "aria-live": "polite" } as const);
+
   const status = waiting ? (
     <p className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
       <CircleX aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
@@ -182,8 +193,7 @@ function useDataExport(enabled: boolean) {
     </p>
   ) : exp.state.kind === "idle" && doneFile ? (
     <p
-      role="status"
-      aria-live="polite"
+      {...doneLive}
       className="mt-1.5 flex animate-fade-in items-start gap-1.5 text-xs text-text-secondary"
     >
       <Check aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-success" />
