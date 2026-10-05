@@ -1079,7 +1079,9 @@ function DesktopGroup() {
 
   function toggle(next: boolean) {
     const write = desktop?.setStartAtLogin;
-    if (typeof write !== "function") {
+    // A second tap while the first write runs is dropped here, not by
+    // disabling the switch, which would drop keyboard focus on the page.
+    if (typeof write !== "function" || pending) {
       return;
     }
     setPending(true);
@@ -1103,7 +1105,6 @@ function DesktopGroup() {
         description={t("settings.appearance.startAtLoginHint")}
         checked={enabled}
         onCheckedChange={toggle}
-        disabled={pending}
         status={
           failed ? (
             <SettingsInlineStatus

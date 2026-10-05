@@ -331,6 +331,51 @@ describe("PrivacySection", () => {
     expect(host!.textContent).toContain("Fulano unblocked");
   });
 
+  it("keeps focus on Unblock while it runs and after it fails", async () => {
+    let fail!: (error: unknown) => void;
+    const onUnblockUser = vi.fn(
+      () => new Promise<void>((_, reject) => (fail = reject)),
+    );
+    mount({ onUnblockUser });
+    const button = host!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Unblock Fulano"]',
+    )!;
+    button.focus();
+    await act(async () => button.click());
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(button);
+    await act(async () => button.click());
+    expect(onUnblockUser).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fail(new ApiError(503, "x"));
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("keeps focus in the name field while the lookup runs", async () => {
+    let answer!: (value: unknown) => void;
+    lookupUserByTag.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    mount();
+    act(() => buttonByText("Block someone").click());
+    const input = host!.querySelector<HTMLInputElement>("form input")!;
+    type(input, "trolinho#7781");
+    input.focus();
+    await act(async () => {
+      input.form!.requestSubmit();
+    });
+    expect(input.disabled).toBe(false);
+    expect(input.readOnly).toBe(true);
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      answer({ user: null });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(input);
+  });
+
   it("says nothing was unblocked when the request fails", async () => {
     const onUnblockUser = vi
       .fn()

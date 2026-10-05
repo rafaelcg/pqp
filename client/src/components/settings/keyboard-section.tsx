@@ -361,6 +361,9 @@ export function KeyboardSection({
         confirmLabel={t("settings.keyboard.resetConfirm.confirm")}
         cancelLabel={t("settings.keyboard.resetConfirm.cancel")}
         destructive={false}
+        // It cannot be undone and it also clears push-to-talk, set in Voz:
+        // a reflex second Enter must land on Cancel.
+        initialFocus="cancel"
         onConfirm={resetAll}
         onClose={() => setConfirmingReset(false)}
       />

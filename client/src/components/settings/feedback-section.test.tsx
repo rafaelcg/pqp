@@ -338,6 +338,31 @@ describe("FeedbackSection", () => {
     expect(textarea().value).toBe("");
   });
 
+  it("says a send failed on the next open when it failed after Settings closed", async () => {
+    let fail!: (error: unknown) => void;
+    sendFeedback.mockReturnValue(new Promise<void>((_, reject) => (fail = reject)));
+    mount();
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    act(() => root?.unmount());
+    host?.remove();
+    endFeedbackVisit();
+    await act(async () => {
+      fail(new Error("network"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    endFeedbackVisit();
+
+    mount();
+    expect(host!.querySelector('[role="alert"]')?.textContent).toBe(
+      "Couldn't send. Your text is still here, try again in a moment.",
+    );
+    expect(textarea().value).toBe("meu relato");
+  });
+
   it("keeps a draft for the same account and drops it for another", () => {
     mount("user-a");
     type("relato privado da conta A");

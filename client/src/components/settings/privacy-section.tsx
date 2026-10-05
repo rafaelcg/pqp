@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, type RadioOption } from "@/components/ui/radio-group";
 import {
+  SETTINGS_BUSY,
   SettingsEmpty,
   SettingsGroup,
   SettingsInlineStatus,
@@ -240,6 +241,9 @@ export function PrivacySection({
   );
 
   async function unblock(person: BlockedUser) {
+    if (unblocking === person.id) {
+      return;
+    }
     setUnblocking(person.id);
     setUnblockError(null);
     awaiting.current.set(person.id, person.displayName);
@@ -417,7 +421,10 @@ export function PrivacySection({
                   autoCapitalize="none"
                   spellCheck={false}
                   value={query}
-                  disabled={working}
+                  // Read-only, not disabled, while the lookup runs: a disabled
+                  // field drops keyboard focus on the page.
+                  readOnly={working}
+                  aria-busy={working || undefined}
                   placeholder={t("settings.privacy.block.placeholder")}
                   aria-invalid={addError ? true : undefined}
                   aria-describedby={addError ? errorId : undefined}
@@ -431,7 +438,9 @@ export function PrivacySection({
                 type="submit"
                 size="sm"
                 variant="danger"
-                disabled={working || query.trim() === ""}
+                disabled={query.trim() === ""}
+                aria-disabled={working || undefined}
+                className={working ? SETTINGS_BUSY : undefined}
               >
                 {t("settings.privacy.block.confirm")}
               </Button>
@@ -484,7 +493,10 @@ export function PrivacySection({
                   aria-label={t("settings.privacy.unblockNamed", {
                     name: blocked.displayName,
                   })}
-                  disabled={unblocking === blocked.id}
+                  // Busy but focusable: a disabled button drops keyboard
+                  // focus on the page, and a failure keeps the row.
+                  aria-disabled={unblocking === blocked.id || undefined}
+                  className={unblocking === blocked.id ? SETTINGS_BUSY : undefined}
                   onClick={() => void unblock(blocked)}
                 >
                   {t("settings.privacy.unblock")}

@@ -22,3 +22,10 @@ export const SETTINGS_TRANSITION =
 /** A row's label and its quieter second line. */
 export const SETTINGS_LABEL = "text-sm text-text";
 export const SETTINGS_DESCRIPTION = "text-xs text-pretty text-text-tertiary";
+
+/**
+ * A control that is busy but keeps focus: paired with `aria-disabled` and a
+ * guard in its handler instead of `disabled`, which would drop keyboard focus
+ * on the page while the request runs.
+ */
+export const SETTINGS_BUSY = "cursor-not-allowed opacity-40 active:scale-100";

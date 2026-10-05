@@ -43,6 +43,7 @@ import {
   profileDraftsFrom,
   type ProfileDrafts,
 } from "@/components/settings/profile-patch";
+import { SettingsAnnouncer } from "@/components/settings/kit/announcer";
 import { flashSettingsRow } from "@/components/settings/kit/flash-row";
 import { inlineErrorMessage } from "@/components/settings/kit/use-inline-save";
 import {
@@ -633,18 +634,24 @@ export function SettingsModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceVisible]);
 
-  async function revealCameras() {
+  async function revealCameras(alreadyGranted = false) {
     // Labels stay blank until the browser has seen a video permission.
     // Asked on focus of the camera select, not when Voice opens, so a
     // volume tweak does not light the webcam. Once per open session:
     // every Tab through this select used to open a second capture.
-    if (camerasAskedRef.current) {
-      return;
-    }
-    camerasAskedRef.current = true;
-    const granted = await ensureCameraPermission();
-    if (!granted) {
-      camerasAskedRef.current = false;
+    // `alreadyGranted` is the camera test's preview: it holds the camera, so
+    // the list is re-read without a second capture (Safari mutes the first).
+    if (alreadyGranted) {
+      camerasAskedRef.current = true;
+    } else {
+      if (camerasAskedRef.current) {
+        return;
+      }
+      camerasAskedRef.current = true;
+      const granted = await ensureCameraPermission();
+      if (!granted) {
+        camerasAskedRef.current = false;
+      }
     }
     const { cameras: nextCameras } = await listAudioDevices();
     setCameras(nextCameras);
@@ -1079,166 +1086,168 @@ export function SettingsModal({
         onClose={requestClose}
       >
         <SettingsShellContext.Provider value={shell}>
-          <div className="flex h-full min-h-0 flex-col sm:flex-row">
-            <SectionRail
-              sections={railItems}
-              active={active.id}
-              onSelect={setSection}
-              idFor={(id) => `${tabIdPrefix}-${id}`}
-              panelId={panelId}
-              label={t("settings.nav.label")}
-              groupLabels={groupLabels}
-              footer={<RailFooter user={user} />}
-              className="h-14 sm:h-auto sm:w-60"
-              fadeEnd
-            />
+          <SettingsAnnouncer>
+            <div className="flex h-full min-h-0 flex-col sm:flex-row">
+              <SectionRail
+                sections={railItems}
+                active={active.id}
+                onSelect={setSection}
+                idFor={(id) => `${tabIdPrefix}-${id}`}
+                panelId={panelId}
+                label={t("settings.nav.label")}
+                groupLabels={groupLabels}
+                footer={<RailFooter user={user} />}
+                className="h-14 sm:h-auto sm:w-60"
+                fadeEnd
+              />
 
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1">
-              <div
-                ref={scrollerRef}
-                id={panelId}
-                role="tabpanel"
-                aria-labelledby={`${tabIdPrefix}-${active.id}`}
-                tabIndex={0}
-                className={cn(
-                  "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none",
-                  // The footer used to carry the home-indicator inset. With the
-                  // bar up the bar carries it, and the scroller otherwise.
-                  // With the bar up, a focused field scrolls clear of it.
-                  barVisible ? "scroll-pb-24" : "safe-pb",
-                )}
-              >
+              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1">
                 <div
+                  ref={scrollerRef}
+                  id={panelId}
+                  role="tabpanel"
+                  aria-labelledby={`${tabIdPrefix}-${active.id}`}
+                  tabIndex={0}
                   className={cn(
-                    "@container mx-auto w-full px-4 pt-5 sm:px-8 sm:pt-8",
-                    // Room for the last group to scroll clear of the bar.
-                    barVisible ? "pb-24" : "pb-5 sm:pb-8",
-                    active.wide ? "max-w-none" : "max-w-[40rem]",
+                    "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none",
+                    // The footer used to carry the home-indicator inset. With the
+                    // bar up the bar carries it, and the scroller otherwise.
+                    // With the bar up, a focused field scrolls clear of it.
+                    barVisible ? "scroll-pb-24" : "safe-pb",
                   )}
                 >
-                  <SettingsPaneHeader
-                    title={t(active.label)}
-                    description={t(active.description)}
-                    actionsRef={setHeaderActionsSlot}
-                  />
+                  <div
+                    className={cn(
+                      "@container mx-auto w-full px-4 pt-5 sm:px-8 sm:pt-8",
+                      // Room for the last group to scroll clear of the bar.
+                      barVisible ? "pb-24" : "pb-5 sm:pb-8",
+                      active.wide ? "max-w-none" : "max-w-[40rem]",
+                    )}
+                  >
+                    <SettingsPaneHeader
+                      title={t(active.label)}
+                      description={t(active.description)}
+                      actionsRef={setHeaderActionsSlot}
+                    />
 
-                  <SettingsSectionContext.Provider value={active.id}>
-                    <div className="space-y-6">
-                      {closeJumped && active.id === "profile" ? (
-                        <SettingsNotice tone="info">{t("settings.unsaved.jumped")}</SettingsNotice>
-                      ) : null}
-                      {active.id === "profile" && (
-                        <ProfileSection
-                          user={user}
-                          displayName={drafts.displayName}
-                          onDisplayName={(next) => setDraft("displayName", next)}
-                          displayNameError={nameError}
-                          username={drafts.username}
-                          onUsername={(next) => setDraft("username", next)}
-                          handle={drafts.handle}
-                          onHandle={(next) => setDraft("handle", next)}
-                          avatarUrl={drafts.avatarUrl}
-                          onAvatarUrl={(next) => setDraft("avatarUrl", next)}
-                          onUserUpdated={onUserUpdated}
-                        />
-                      )}
+                    <SettingsSectionContext.Provider value={active.id}>
+                      <div className="space-y-6">
+                        {closeJumped && active.id === "profile" ? (
+                          <SettingsNotice tone="info">{t("settings.unsaved.jumped")}</SettingsNotice>
+                        ) : null}
+                        {active.id === "profile" && (
+                          <ProfileSection
+                            user={user}
+                            displayName={drafts.displayName}
+                            onDisplayName={(next) => setDraft("displayName", next)}
+                            displayNameError={nameError}
+                            username={drafts.username}
+                            onUsername={(next) => setDraft("username", next)}
+                            handle={drafts.handle}
+                            onHandle={(next) => setDraft("handle", next)}
+                            avatarUrl={drafts.avatarUrl}
+                            onAvatarUrl={(next) => setDraft("avatarUrl", next)}
+                            onUserUpdated={onUserUpdated}
+                          />
+                        )}
 
-                      {active.id === "connections" && <ConnectionsSection />}
+                        {active.id === "connections" && <ConnectionsSection />}
 
-                      {active.id === "voice" && (
-                        <VoiceSection
-                          draftLocal={draftLocal}
-                          patchLocal={patchLocal}
-                          inputs={inputs}
-                          outputs={outputs}
-                          cameras={cameras}
-                          onRevealCameras={() => {
-                            void revealCameras();
-                          }}
-                          devicesError={devicesError}
-                          devicesLoaded={devicesLoaded}
-                          voiceAnalyser={voiceAnalyser}
-                          metering={voiceVisible}
-                          showVoiceCleanBadge={showVoiceCleanBadge}
-                        />
-                      )}
+                        {active.id === "voice" && (
+                          <VoiceSection
+                            draftLocal={draftLocal}
+                            patchLocal={patchLocal}
+                            inputs={inputs}
+                            outputs={outputs}
+                            cameras={cameras}
+                            onRevealCameras={(alreadyGranted) => {
+                              void revealCameras(alreadyGranted);
+                            }}
+                            devicesError={devicesError}
+                            devicesLoaded={devicesLoaded}
+                            voiceAnalyser={voiceAnalyser}
+                            metering={voiceVisible}
+                            showVoiceCleanBadge={showVoiceCleanBadge}
+                          />
+                        )}
 
-                      {active.id === "keyboard" && (
-                        <KeyboardSection
-                          draftLocal={draftLocal}
-                          patchLocal={patchLocal}
-                          onShowOverlay={() => onShowShortcutOverlay?.()}
-                        />
-                      )}
+                        {active.id === "keyboard" && (
+                          <KeyboardSection
+                            draftLocal={draftLocal}
+                            patchLocal={patchLocal}
+                            onShowOverlay={() => onShowShortcutOverlay?.()}
+                          />
+                        )}
 
-                      {active.id === "notifications" && <NotificationsSection />}
+                        {active.id === "notifications" && <NotificationsSection />}
 
-                      {active.id === "appearance" && (
-                        <AppearanceSection
-                          showLinkEmbeds={draftLocal.showLinkEmbeds}
-                          onShowLinkEmbeds={(showLinkEmbeds) =>
-                            patchLocal({ showLinkEmbeds })
-                          }
-                        />
-                      )}
+                        {active.id === "appearance" && (
+                          <AppearanceSection
+                            showLinkEmbeds={draftLocal.showLinkEmbeds}
+                            onShowLinkEmbeds={(showLinkEmbeds) =>
+                              patchLocal({ showLinkEmbeds })
+                            }
+                          />
+                        )}
 
-                      {active.id === "privacy" && (
-                        <PrivacySection
-                          user={user}
-                          blockedUsers={blockedUsers}
-                          onUserUpdated={onUserUpdated}
-                          onUnblockUser={onUnblockUser}
-                          onBlockUser={onBlockUser}
-                        />
-                      )}
+                        {active.id === "privacy" && (
+                          <PrivacySection
+                            user={user}
+                            blockedUsers={blockedUsers}
+                            onUserUpdated={onUserUpdated}
+                            onUnblockUser={onUnblockUser}
+                            onBlockUser={onBlockUser}
+                          />
+                        )}
 
-                      {active.id === "data" && (
-                        <YourDataSection
-                          user={user}
-                          onRequestDelete={() => setConfirmingDelete(true)}
-                        />
-                      )}
+                        {active.id === "data" && (
+                          <YourDataSection
+                            user={user}
+                            onRequestDelete={() => setConfirmingDelete(true)}
+                          />
+                        )}
 
-                      {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} userId={user?.id ?? null} />}
+                        {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} userId={user?.id ?? null} />}
 
-                      {active.id === "help" && (
-                        <HelpSection onOpenFeedback={() => openSection("feedback")} />
-                      )}
+                        {active.id === "help" && (
+                          <HelpSection onOpenFeedback={() => openSection("feedback")} />
+                        )}
 
-                      {active.id === "moderation" &&
-                        (canModerateInstance ? (
-                          <AllReportsSection />
-                        ) : (
-                          // Only reachable for the one render before the effect above
-                          // bounces off this section — a deep link can land here before
-                          // React has run its effects. The nav entry itself never
-                          // exists for an account the flag says no to.
-                          <p role="status" aria-live="polite" className="text-sm text-text-tertiary">
-                            {t("common.loading")}
-                          </p>
-                        ))}
-                    </div>
-                  </SettingsSectionContext.Provider>
+                        {active.id === "moderation" &&
+                          (canModerateInstance ? (
+                            <AllReportsSection />
+                          ) : (
+                            // Only reachable for the one render before the effect above
+                            // bounces off this section — a deep link can land here before
+                            // React has run its effects. The nav entry itself never
+                            // exists for an account the flag says no to.
+                            <p role="status" aria-live="polite" className="text-sm text-text-tertiary">
+                              {t("common.loading")}
+                            </p>
+                          ))}
+                      </div>
+                    </SettingsSectionContext.Provider>
+                  </div>
                 </div>
-              </div>
 
-              <UnsavedChangesBar
-                visible={barVisible}
-                saving={saving}
-                saved={savedFlash && !profileDirty}
-                blocked={closeBlocked}
-                onKeepEditing={keepEditing}
-                discarded={discarded !== null && !profileDirty}
-                onUndoDiscard={undoDiscard}
-                error={saveError}
-                onDiscard={discardProfile}
-                onSave={saveProfile}
-                onShowSource={
-                  active.id === "profile" ? undefined : () => setSection("profile")
-                }
-              />
+                <UnsavedChangesBar
+                  visible={barVisible}
+                  saving={saving}
+                  saved={savedFlash && !profileDirty}
+                  blocked={closeBlocked}
+                  onKeepEditing={keepEditing}
+                  discarded={discarded !== null && !profileDirty}
+                  onUndoDiscard={undoDiscard}
+                  error={saveError}
+                  onDiscard={discardProfile}
+                  onSave={saveProfile}
+                  onShowSource={
+                    active.id === "profile" ? undefined : () => setSection("profile")
+                  }
+                />
+              </div>
             </div>
-          </div>
+          </SettingsAnnouncer>
         </SettingsShellContext.Provider>
       </Dialog>
 

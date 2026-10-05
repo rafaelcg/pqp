@@ -60,10 +60,6 @@ export function UnsavedChangesBar({
   onShowSource,
 }: UnsavedChangesBarProps) {
   const { t } = useTranslation();
-  if (!visible) {
-    return null;
-  }
-
   // A moment after an action: a check, a line, and at most an undo.
   const settled = saved || discarded;
   const message = saved
@@ -76,92 +72,103 @@ export function UnsavedChangesBar({
         ? t("settings.unsaved.messageProfile")
         : t("settings.unsaved.message");
 
+  // The live region is mounted before the bar and outlives it: a region
+  // inserted already holding its text is often not announced, so the bar's
+  // own line is plain text and this one speaks for it.
+  const announcer = (
+    <p role="status" aria-live="polite" className="sr-only">
+      {visible ? message : ""}
+    </p>
+  );
+  if (!visible) {
+    return announcer;
+  }
+
   return (
-    <div className="safe-pb pointer-events-none absolute inset-x-0 bottom-0 px-4 sm:px-8">
-      <div
-        className={cn(
-          "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
-          blocked && !settled && "border border-danger",
-        )}
-      >
+    <>
+      {announcer}
+      <div className="safe-pb pointer-events-none absolute inset-x-0 bottom-0 px-4 sm:px-8">
         <div
-          data-unsaved-bar=""
-          className="elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3"
+          className={cn(
+            "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
+            blocked && !settled && "border border-danger",
+          )}
         >
-          {/* `min-w-40`: on a phone the buttons wrap under the message rather
-              than squeezing it into a column of single words. */}
-          <div className="min-w-40 flex-1">
-            <p
-              role="status"
-              aria-live="polite"
-              className="flex items-center gap-1.5 text-sm text-text"
-            >
-              {settled ? (
-                <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
-              ) : null}
-              {message}
-            </p>
-            {error && !settled ? (
-              <p role="alert" className="mt-0.5 text-xs text-danger">
-                {error}
+          <div
+            data-unsaved-bar=""
+            className="elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3"
+          >
+            {/* `min-w-40`: on a phone the buttons wrap under the message rather
+                than squeezing it into a column of single words. */}
+            <div className="min-w-40 flex-1">
+              <p className="flex items-center gap-1.5 text-sm text-text">
+                {settled ? (
+                  <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
+                ) : null}
+                {message}
               </p>
-            ) : null}
-          </div>
-          {saved ? null : discarded ? (
-            onUndoDiscard ? (
-              <Button
-                data-unsaved-undo=""
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={onUndoDiscard}
-              >
-                {t("settings.unsaved.undo")}
-              </Button>
-            ) : null
-          ) : (
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {blocked && onKeepEditing ? (
-                // The shell focuses this one when a close is refused, so an
-                // Escape followed by a reflex Enter never saves by accident.
+              {error && !settled ? (
+                <p role="alert" className="mt-0.5 text-xs text-danger">
+                  {error}
+                </p>
+              ) : null}
+            </div>
+            {saved ? null : discarded ? (
+              onUndoDiscard ? (
                 <Button
-                  data-unsaved-continue=""
+                  data-unsaved-undo=""
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={onKeepEditing}
+                  onClick={onUndoDiscard}
                 >
-                  {t("settings.unsaved.keepEditing")}
+                  {t("settings.unsaved.undo")}
                 </Button>
-              ) : null}
-              {onShowSource ? (
-                <Button type="button" variant="ghost" size="sm" onClick={onShowSource}>
-                  {t("settings.unsaved.showProfile")}
+              ) : null
+            ) : (
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {blocked && onKeepEditing ? (
+                  // The shell focuses this one when a close is refused, so an
+                  // Escape followed by a reflex Enter never saves by accident.
+                  <Button
+                    data-unsaved-continue=""
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={onKeepEditing}
+                  >
+                    {t("settings.unsaved.keepEditing")}
+                  </Button>
+                ) : null}
+                {onShowSource ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={onShowSource}>
+                    {t("settings.unsaved.showProfile")}
+                  </Button>
+                ) : null}
+                <Button
+                  data-unsaved-discard=""
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={saving}
+                  onClick={onDiscard}
+                >
+                  {t("settings.unsaved.discard")}
                 </Button>
-              ) : null}
-              <Button
-                data-unsaved-discard=""
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={saving}
-                onClick={onDiscard}
-              >
-                {t("settings.unsaved.discard")}
-              </Button>
-              <Button
-                data-unsaved-save=""
-                type="button"
-                size="sm"
-                disabled={saving}
-                onClick={onSave}
-              >
-                {saving ? t("settings.saving") : t("settings.unsaved.save")}
-              </Button>
-            </div>
-          )}
+                <Button
+                  data-unsaved-save=""
+                  type="button"
+                  size="sm"
+                  disabled={saving}
+                  onClick={onSave}
+                >
+                  {saving ? t("settings.saving") : t("settings.unsaved.save")}
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

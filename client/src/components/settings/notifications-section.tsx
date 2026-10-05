@@ -386,13 +386,19 @@ function DirectMessagesGroup({
   const touchedRef = useRef(false);
   const dmTicket = useRef(0);
   const dmChain = useRef<Promise<unknown>>(Promise.resolve());
+  // The last value the server confirmed. A failed write goes back to this,
+  // not to "the opposite of what was clicked", which is only right when the
+  // click before it landed.
+  const dmConfirmed = useRef(false);
+  const [dmFailed, setDmFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void sharedPushConfig()
       .then((config) => {
-        if (!cancelled && !touchedRef.current) {
-          setDmDetails(config.dmDetails);
+        if (!cancelled) {
+          dmConfirmed.current = config.dmDetails;
+          if (!touchedRef.current) setDmDetails(config.dmDetails);
         }
       })
       .catch(() => {
@@ -408,6 +414,7 @@ function DirectMessagesGroup({
     touchedRef.current = true;
     const next = !dmDetails;
     setDmDetails(next);
+    setDmFailed(false);
     // One write at a time, and only the newest choice reports back: two
     // requests in flight can land in either order, and an older answer (or
     // its rollback) must not overwrite a newer click.
@@ -418,10 +425,15 @@ function DirectMessagesGroup({
     dmChain.current = write.catch(() => undefined);
     void write
       .then((saved) => {
-        if (saved && ticket === dmTicket.current) setDmDetails(saved.dmDetails);
+        if (!saved) return;
+        dmConfirmed.current = saved.dmDetails;
+        if (ticket === dmTicket.current) setDmDetails(saved.dmDetails);
       })
       .catch(() => {
-        if (ticket === dmTicket.current) setDmDetails(!next);
+        if (ticket === dmTicket.current) {
+          setDmDetails(dmConfirmed.current);
+          setDmFailed(true);
+        }
       });
   };
 
@@ -460,6 +472,10 @@ function DirectMessagesGroup({
               <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />
               {t("settings.push.dmDetailsUnavailable")}
             </p>
+          ) : dmFailed ? (
+            <SettingsInlineStatus
+              state={{ kind: "error", message: t("settings.push.dmDetailsFailed") }}
+            />
           ) : null
         }
       />

@@ -143,6 +143,19 @@ describe("Settings profile drafts", () => {
     expect(bar()).toBeNull();
   });
 
+  it("says the bar's line through a region that was mounted before the bar", () => {
+    mount(makeUser());
+    const regions = () =>
+      [...document.querySelectorAll<HTMLElement>('p.sr-only[role="status"]')];
+    const before = regions().find((node) => node.textContent === "");
+    expect(before).toBeDefined();
+    type(displayNameInput(), "Rafael");
+    expect(before!.isConnected).toBe(true);
+    expect(before!.textContent).toMatch(/unsaved|não salvas|sin guardar/i);
+    // The bar's visible line is plain text, so it is not said twice.
+    expect(bar()!.querySelector('[role="status"]')).toBeNull();
+  });
+
   it("keeps a dirty draft when a new user arrives while open", () => {
     mount(makeUser());
     type(displayNameInput(), "Rafael");

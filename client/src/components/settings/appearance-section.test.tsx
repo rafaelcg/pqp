@@ -174,6 +174,23 @@ describe("Modo", () => {
     expect(document.activeElement).toBe(dark);
     expect(getThemeState().preference).toBe("dark");
   });
+
+  it("moves with the arrow keys when nothing is locked", () => {
+    // The case above cannot tell "skipped" from "did nothing": under Night
+    // both neighbours of Dark are locked. Here the next option is open.
+    mount();
+    click(radio(group("Mode"), /Light/));
+    const light = radio(group("Mode"), /Light/);
+    light.focus();
+    act(() => {
+      light.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    const dark = radio(group("Mode"), /Dark/);
+    expect(document.activeElement).toBe(dark);
+    expect(getThemeState().preference).toBe("dark");
+  });
 });
 
 describe("Visual", () => {

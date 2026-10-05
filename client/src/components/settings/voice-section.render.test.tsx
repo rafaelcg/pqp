@@ -60,7 +60,7 @@ async function mount({
   devicesError?: string | null;
   devicesLoaded?: boolean;
   patchLocal?: (partial: Partial<LocalSettings>) => void;
-  onRevealCameras?: () => void;
+  onRevealCameras?: (alreadyGranted?: boolean) => void;
 } = {}) {
   host = document.createElement("div");
   document.body.append(host);
@@ -287,6 +287,18 @@ describe("VoiceSection mic test timing", () => {
     expect(visibleLabel(micTestButton())).toBe(idle);
   });
 
+  it("closes the meter's own capture while the test plays", async () => {
+    const { open, tracks } = installWorkingMedia();
+    await mount();
+    expect(open).toHaveBeenCalledTimes(1);
+    const meterTrack = tracks[0]!;
+    expect(meterTrack.stop).not.toHaveBeenCalled();
+    await act(async () => {
+      micTestButton().click();
+    });
+    expect(meterTrack.stop).toHaveBeenCalled();
+  });
+
   it("does not count while the permission prompt is still open", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
     await mount();
@@ -343,11 +355,22 @@ describe("VoiceSection with the microphone blocked", () => {
     await mount(blockedProps);
     // Blocked: the meter has not opened anything behind the button's back.
     expect(open).not.toHaveBeenCalled();
+    const allow = host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!;
+    allow.focus();
     await act(async () => {
-      host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!.click();
+      allow.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(open).toHaveBeenCalled();
     expect(host!.querySelector("[data-allow-microphone]")).toBeNull();
+    // The pressed button went with its notice: the keyboard lands on the
+    // microphone select, not on the page.
+    expect(document.activeElement).toBe(
+      host!.querySelector('[data-settings-row="input-device"] select'),
+    );
     const options = [...host!.querySelectorAll("option")].map((o) => o.textContent);
     expect(options).toContain("Yeti Nano");
     expect(
@@ -488,6 +511,35 @@ describe("VoiceSection device lists", () => {
     expect(
       host!.querySelector('[data-settings-row="input-device"]')!.textContent,
     ).toMatch(/saved microphone|microfone salvo|micrófono guardado/);
+  });
+
+  it("opens the default microphone for the meter when the saved one is gone", async () => {
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "yeti" },
+    });
+    const asked = getUserMedia.mock.calls.map(
+      (call) => (call as [MediaStreamConstraints])[0],
+    );
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((c) => c.audio === true)).toBe(true);
+  });
+
+  it("keeps the gone device selected, so picking the default is a real change", async () => {
+    const patchLocal = vi.fn();
+    await mount({
+      settings: { ...defaultLocalSettings, inputDeviceId: "yeti" },
+      patchLocal,
+    });
+    const select = host!.querySelector<HTMLSelectElement>(
+      '[data-settings-row="input-device"] select',
+    )!;
+    expect(select.value).toBe("yeti");
+    expect(select.selectedOptions[0]!.disabled).toBe(true);
+    await act(async () => {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(patchLocal).toHaveBeenCalledWith({ inputDeviceId: "" });
   });
 
   it("stays quiet while the list has not been read", async () => {
@@ -641,7 +693,9 @@ describe("VoiceSection camera test", () => {
     expect(asked.some((c) => c.video && c.audio === false)).toBe(true);
     expect(host!.querySelector("video")).not.toBeNull();
     expect(host!.textContent).toMatch(/Only you see this|Só você vê isso|Solo tú ves esto/);
-    expect(reveal).toHaveBeenCalled();
+    // The preview already holds the camera: the list is re-read without a
+    // second capture, which Safari answers by muting the first.
+    expect(reveal).toHaveBeenCalledWith(true);
     const stopsBefore = tracks.filter((t) => t.stop.mock.calls.length > 0).length;
     await act(async () => {
       button.click();

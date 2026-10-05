@@ -12,6 +12,7 @@ import { Keyboard, Lock, Mic, MicOff, Square, Video, Volume2, Wifi } from "lucid
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
+  SETTINGS_BUSY,
   SettingsBadge,
   SettingsChoiceGrid,
   SettingsGroup,
@@ -1317,6 +1318,31 @@ function useSavedDevice(
   return { missing, name };
 }
 
+/**
+ * The saved device that is gone, kept as the selected option so the select
+ * says what is saved and choosing the default is a real change. Without it
+ * the select already showed the default, and picking it fired nothing.
+ */
+function MissingDeviceOption({
+  saved,
+  savedId,
+}: {
+  saved: { missing: boolean; name: string | null };
+  savedId: string;
+}) {
+  const { t } = useTranslation();
+  if (!saved.missing) {
+    return null;
+  }
+  return (
+    <option value={savedId} disabled>
+      {saved.name
+        ? t("settings.voice.deviceGone", { name: saved.name })
+        : t("settings.voice.deviceGoneUnnamed")}
+    </option>
+  );
+}
+
 /* -------------------------------------------------------------- section */
 
 /**
@@ -1343,7 +1369,11 @@ export function VoiceSection({
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
   cameras: MediaDeviceOption[];
-  onRevealCameras: () => void;
+  /**
+   * Re-read the camera list with labels. `true` when the caller already holds
+   * the camera (the preview), so no permission capture is opened.
+   */
+  onRevealCameras: (alreadyGranted?: boolean) => void;
   devicesError: string | null;
   /** The device list has been read this visit (not still waiting on a prompt). */
   devicesLoaded: boolean;
@@ -1382,10 +1412,21 @@ export function VoiceSection({
   const blocked = devicesError !== null && allowed === null;
   const loaded = devicesLoaded || allowed !== null;
   const allowMicrophone = async () => {
+    if (asking) {
+      return;
+    }
     setAsking(true);
     try {
       if (await ensureMediaPermission()) {
         setAllowed(await listAudioDevices());
+        // The notice holding the pressed button goes away: hand the keyboard
+        // to the microphone select that took its place.
+        window.setTimeout(() => {
+          const active = document.activeElement;
+          if (!active || active === document.body) {
+            document.getElementById(inputId)?.focus();
+          }
+        }, 0);
       }
     } finally {
       setAsking(false);
@@ -1409,11 +1450,6 @@ export function VoiceSection({
   // Never a second capture during a call, and never the mic played into the
   // speakers a live call is listening through.
   const micTest = useMicTest(metering && !inCall);
-  const cameraTest = useCameraTest(
-    draftLocal.cameraDeviceId,
-    metering && !inCall,
-    onRevealCameras,
-  );
   // Only after the list was really read: while the permission prompt is up
   // the list is empty too, and that is not "no microphone".
   const noInputs =
@@ -1435,6 +1471,14 @@ export function VoiceSection({
     draftLocal.cameraDeviceId,
     cameraList,
     metering,
+  );
+  // What the previews open. A saved device that is gone falls back to the
+  // default, as the notices under the selects say and as a call does.
+  const inputInUse = inputSaved.missing ? "" : draftLocal.inputDeviceId;
+  const outputInUse = outputSaved.missing ? "" : draftLocal.outputDeviceId;
+  const cameraInUse = cameraSaved.missing ? "" : draftLocal.cameraDeviceId;
+  const cameraTest = useCameraTest(cameraInUse, metering && !inCall, () =>
+    onRevealCameras(true),
   );
 
   const onBeepChange = (pttBeep: boolean) => {
@@ -1520,6 +1564,10 @@ export function VoiceSection({
                     onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
                   >
                     <option value="">{systemDefault(inputList.defaultName)}</option>
+                    <MissingDeviceOption
+                      saved={inputSaved}
+                      savedId={draftLocal.inputDeviceId}
+                    />
                     {inputList.devices.map((device) => (
                       <option key={device.deviceId} value={device.deviceId}>
                         {device.label}
@@ -1537,12 +1585,10 @@ export function VoiceSection({
                       micTest.playing
                         ? micTest.stop()
                         : micTest.start({
-                            deviceId: draftLocal.inputDeviceId,
+                            deviceId: inputInUse,
                             processing: draftLocal.micProcessing,
                             inputVolume: draftLocal.inputVolume,
-                            outputDeviceId: canSelectOutput
-                              ? draftLocal.outputDeviceId
-                              : "",
+                            outputDeviceId: canSelectOutput ? outputInUse : "",
                             outputVolume: draftLocal.outputVolume,
                           })
                     }
@@ -1589,7 +1635,10 @@ export function VoiceSection({
                   type="button"
                   variant="secondary"
                   size="sm"
-                  disabled={asking}
+                  // Busy but focusable: a disabled button drops keyboard
+                  // focus on the page while the browser asks.
+                  aria-disabled={asking || undefined}
+                  className={asking ? SETTINGS_BUSY : undefined}
                   onClick={() => void allowMicrophone()}
                   data-allow-microphone=""
                 >
@@ -1651,9 +1700,11 @@ export function VoiceSection({
             <SettingsPreview decorative={false}>
               <div className="px-3 py-2">
                 <LiveMicLevelMeter
-                  deviceId={draftLocal.inputDeviceId}
+                  deviceId={inputInUse}
                   liveAnalyser={voiceAnalyser}
-                  active={metering && !blocked}
+                  // Not while the mic test runs: two captures of one
+                  // microphone can mute the first on Safari.
+                  active={metering && !blocked && !micTest.playing}
                   inputVolume={draftLocal.inputVolume}
                   disabled={blocked}
                   threshold={voiceActivity ? draftLocal.vadThreshold : undefined}
@@ -1685,6 +1736,10 @@ export function VoiceSection({
                   onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
                 >
                   <option value="">{systemDefault(outputList.defaultName)}</option>
+                  <MissingDeviceOption
+                    saved={outputSaved}
+                    savedId={draftLocal.outputDeviceId}
+                  />
                   {outputList.devices.map((device) => (
                     <option key={device.deviceId} value={device.deviceId}>
                       {device.label}
@@ -1864,6 +1919,10 @@ export function VoiceSection({
                   onFocus={() => onRevealCameras()}
                 >
                   <option value="">{t("settings.voice.systemDefault")}</option>
+                  <MissingDeviceOption
+                    saved={cameraSaved}
+                    savedId={draftLocal.cameraDeviceId}
+                  />
                   {cameraList.map((device) => (
                     <option key={device.deviceId} value={device.deviceId}>
                       {device.label}
@@ -1909,6 +1968,8 @@ export function VoiceSection({
                   onClick={() => {
                     dismissObsVirtualCameraHint();
                     setObsHintDismissed(true);
+                    // The hint and this button go: focus the camera select.
+                    window.setTimeout(() => document.getElementById(cameraId)?.focus(), 0);
                   }}
                 >
                   {t("settings.voice.obsVirtualCameraHint.dismiss")}

@@ -86,16 +86,18 @@ let unseen: { owner: string | null; outcome: SendOutcome; visit: number } | null
   null;
 
 /**
- * Which opening of Settings this is. An outcome nobody saw is shown when the
+ * Which opening of Settings this is. A thanks nobody saw is shown when the
  * pane comes back in the same visit, never on a later one: an hour later the
- * form is what the person came for, not an old "Obrigado".
+ * form is what the person came for, not an old "Obrigado". A failure is kept
+ * until it is seen, whenever that is: the draft is still there and the person
+ * must learn it was never sent.
  */
 let visit = 0;
 
 /** Called by the shell when Settings closes. */
 export function endFeedbackVisit(): void {
   visit += 1;
-  unseen = null;
+  if (unseen?.outcome === "sent") unseen = null;
 }
 
 function startSend(
@@ -173,7 +175,9 @@ export function FeedbackSection({
   const [initial] = useState(() => ({
     pending: inflight !== null && inflight.owner === userId,
     outcome:
-      inflight === null && unseen?.owner === userId && unseen.visit === visit
+      inflight === null &&
+      unseen?.owner === userId &&
+      (unseen.visit === visit || unseen.outcome !== "sent")
         ? unseen.outcome
         : null,
   }));

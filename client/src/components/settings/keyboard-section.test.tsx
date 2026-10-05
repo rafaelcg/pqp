@@ -295,3 +295,18 @@ describe("isBrowserReservedChord", () => {
     }
   });
 });
+
+describe("KeyboardSection reset", () => {
+  it("opens the confirm on Keep shortcuts, so a second Enter resets nothing", async () => {
+    stubPointer(true);
+    mount();
+    const reset = [...host!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Reset…",
+    )!;
+    await act(async () => {
+      reset.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement?.textContent).toBe("Keep shortcuts");
+  });
+});

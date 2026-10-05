@@ -140,6 +140,29 @@ describe("NotificationsSection push rows", () => {
     expect(switchIn("dm-push-details").disabled).toBe(true);
   });
 
+  it("goes back to what the server holds when two quick changes both fail, and says so", async () => {
+    env.subscribed = true;
+    const push = await import("@/lib/push");
+    const write = vi.mocked(push.setPushDmDetails);
+    let failFirst!: (error: unknown) => void;
+    write
+      .mockReturnValueOnce(new Promise((_, reject) => (failFirst = reject)))
+      .mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    const toggle = switchIn("dm-push-details");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle.click());
+    await act(async () => toggle.click());
+    await act(async () => {
+      failFirst(new Error("offline"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(switchIn("dm-push-details").getAttribute("aria-checked")).toBe("false");
+    expect(
+      host!.querySelector('[data-settings-row="dm-push-details"] [role="alert"]')?.textContent,
+    ).toBe("Could not save that setting.");
+  });
+
   it("locks the sender switch while push is off and could be turned on here", async () => {
     await mount();
     expect(switchIn("push").disabled).toBe(false);
