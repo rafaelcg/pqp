@@ -168,6 +168,10 @@ describeDb("one share seen by two API machines", () => {
     vi.useRealTimers();
     delete process.env.STREAM_START_NOTIFICATIONS;
     for (const instance of booted.splice(0)) {
+      // Wait out what the machine still has in flight before its pool goes:
+      // the next case truncates, and a statement left running is a deadlock.
+      instance.alerts.resetStreamAlertsForTests();
+      await instance.alerts.whenStreamAlertsIdle();
       instance.alerts.resetStreamAlertsForTests();
       await instance.bus.closeBus().catch(() => {});
       await instance.db.closePool().catch(() => {});

@@ -130,18 +130,32 @@ describeDb("who a start-of-stream notice reaches", () => {
     await closePool();
   });
 
-  beforeEach(async () => {
-    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
+  /**
+   * Nothing the module started may still be running when tables are truncated:
+   * a case that ends with a notice's pipeline or a claim sweep mid-statement
+   * leaves it holding a lock the next case's TRUNCATE ... CASCADE then waits
+   * on, in the opposite order, which Postgres reports as a deadlock (it did, on
+   * CI). Clear the timers, wait the work out, and clear what that work armed.
+   */
+  async function quiesce(): Promise<void> {
     alerts.resetStreamAlertsForTests();
+    await alerts.whenStreamAlertsIdle();
+    alerts.resetStreamAlertsForTests();
+  }
+
+  beforeEach(async () => {
+    await quiesce();
+    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     pushed.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const socket of created.splice(0)) {
       deleteAuthenticatedSocket(socket);
     }
     delete process.env.STREAM_START_NOTIFICATIONS;
     vi.useRealTimers();
+    await quiesce();
   });
 
   describe("a small server (150 members)", () => {

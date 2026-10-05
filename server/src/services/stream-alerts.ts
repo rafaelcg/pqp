@@ -201,6 +201,31 @@ const MAX_ARMED = 2_000;
 const armed = new Map<string, Armed>();
 
 /**
+ * Work this module has started and not finished (a notice's pipeline, a claim
+ * sweep). Only a test asks for it (`whenStreamAlertsIdle`): a suite that
+ * truncates tables between cases must not do it under a statement the case
+ * before it left running, which is a deadlock and not a failure of anything
+ * here.
+ */
+const inflight = new Set<Promise<unknown>>();
+
+function track<T>(work: Promise<T>): Promise<T> {
+  inflight.add(work);
+  const forget = () => {
+    inflight.delete(work);
+  };
+  work.then(forget, forget);
+  return work;
+}
+
+/** Test seam: resolves once nothing this module started is still running. */
+export async function whenStreamAlertsIdle(): Promise<void> {
+  while (inflight.size > 0) {
+    await Promise.allSettled([...inflight]);
+  }
+}
+
+/**
  * Whether the notice could possibly be on for SOME server: the global answer, or
  * any per-server override set on. The hot path does not know the server (a voice
  * peer carries its channel, not its server), so this is the cheap pre-filter; the
@@ -244,7 +269,7 @@ export function noteStreamStarted(start: StreamStart): void {
       return;
     }
     const timer = setTimeout(() => {
-      void fire(start.channelId).catch((error: unknown) => {
+      void track(fire(start.channelId)).catch((error: unknown) => {
         metrics.failures += 1;
         logEvent("streamAlert.failed", {
           channelId: start.channelId,
@@ -378,17 +403,19 @@ function sweepOldClaims(now: number = Date.now()): void {
   }
   sweeping = true;
   lastSweepAt = now;
-  void getPool()
-    .query(
-      `DELETE FROM stream_alert_channels
-        WHERE last_notified_at < NOW() - INTERVAL '1 day'`,
-    )
-    .catch(() => {
-      // Housekeeping; an hour from now the next winner tries again.
-    })
-    .finally(() => {
-      sweeping = false;
-    });
+  void track(
+    getPool()
+      .query(
+        `DELETE FROM stream_alert_channels
+          WHERE last_notified_at < NOW() - INTERVAL '1 day'`,
+      )
+      .catch(() => {
+        // Housekeeping; an hour from now the next winner tries again.
+      })
+      .finally(() => {
+        sweeping = false;
+      }),
+  );
 }
 
 /**
@@ -551,7 +578,7 @@ async function fire(channelId: string): Promise<void> {
     });
     if (!pending.retried && !armed.has(channelId)) {
       const timer = setTimeout(() => {
-        void fire(channelId).catch((again: unknown) => {
+        void track(fire(channelId)).catch((again: unknown) => {
           metrics.failures += 1;
           logEvent("streamAlert.failed", {
             channelId,
