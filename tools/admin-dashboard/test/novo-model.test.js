@@ -51,6 +51,29 @@ test("once tracked, yesterday's actives and cost per active are real", () => {
   assert.equal(M.costPerActive(a).text, "US$ 0,10");
 });
 
+test("cost per active also says what it costs per person who wrote", () => {
+  const monthly = activity([
+    { day: "2026-10-28", dau: 900, wau: 2000, mau: 3000, postedDau: 190, postedWau: 640, postedMau: 1500 },
+    { day: "2026-10-29", dau: 300, wau: 2000, mau: 3000, postedDau: 90, postedWau: 640, postedMau: 1500 }
+  ]);
+  const m = M.costPerActive(monthly);
+  assert.equal(m.text, "US$ 0,10");
+  assert.match(m.note, /3\.?000 ativos em 30 dias/);
+  assert.match(m.note, /US\$ 0,21 por quem escreveu/);
+  const weekly = activity([
+    { day: "2026-10-01", dau: 500, wau: 1900, mau: null, postedDau: 190, postedWau: 600, postedMau: 1500 },
+    { day: "2026-10-02", dau: 500, wau: 1900, mau: null, postedDau: 90, postedWau: 600, postedMau: 1500 }
+  ]);
+  const w = M.costPerActive(weekly);
+  assert.match(w.note, /ativos em 7 dias/);
+  assert.match(w.note, /por quem escreveu/);
+  const noPosters = activity([
+    { day: "2026-10-28", dau: 900, wau: 2000, mau: 3000, postedDau: 0, postedWau: 0, postedMau: 0 },
+    { day: "2026-10-29", dau: 300, wau: 2000, mau: 3000, postedDau: 0, postedWau: 0, postedMau: 0 }
+  ]);
+  assert.doesNotMatch(M.costPerActive(noPosters).note, /por quem escreveu/, "no posters: no divide by zero, no line");
+});
+
 test("the KPI trend lines come only from real series", () => {
   const k = M.hojeKpis(metrics(), null, null);
   const byKey = Object.fromEntries(k.map((x) => [x.key, x]));
