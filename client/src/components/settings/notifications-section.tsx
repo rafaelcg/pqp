@@ -393,6 +393,12 @@ function DirectMessagesGroup({
   // Set by the first confirmed write: from then on a late answer to the
   // initial config read is older than what the server holds, and is ignored.
   const dmWriteConfirmed = useRef(false);
+  // Whether the server's value is known yet (the config read or a write).
+  const dmKnown = useRef(false);
+  // A failed write rolled back before the server's value was known: the
+  // ticket it happened on. The config read applies its value when it lands,
+  // as long as nothing newer was clicked meanwhile.
+  const dmRolledBackBlind = useRef<number | null>(null);
   const [dmFailed, setDmFailed] = useState(false);
 
   useEffect(() => {
@@ -400,8 +406,17 @@ function DirectMessagesGroup({
     void sharedPushConfig()
       .then((config) => {
         if (!cancelled) {
-          if (!dmWriteConfirmed.current) dmConfirmed.current = config.dmDetails;
-          if (!touchedRef.current) setDmDetails(config.dmDetails);
+          if (!dmWriteConfirmed.current) {
+            dmConfirmed.current = config.dmDetails;
+            dmKnown.current = true;
+          }
+          if (
+            !touchedRef.current ||
+            (!dmWriteConfirmed.current && dmRolledBackBlind.current === dmTicket.current)
+          ) {
+            setDmDetails(config.dmDetails);
+          }
+          dmRolledBackBlind.current = null;
         }
       })
       .catch(() => {
@@ -430,6 +445,7 @@ function DirectMessagesGroup({
       .then((saved) => {
         if (!saved) return;
         dmWriteConfirmed.current = true;
+        dmKnown.current = true;
         dmConfirmed.current = saved.dmDetails;
         if (ticket === dmTicket.current) setDmDetails(saved.dmDetails);
       })
@@ -437,6 +453,7 @@ function DirectMessagesGroup({
         if (ticket === dmTicket.current) {
           setDmDetails(dmConfirmed.current);
           setDmFailed(true);
+          if (!dmKnown.current) dmRolledBackBlind.current = ticket;
         }
       });
   };
