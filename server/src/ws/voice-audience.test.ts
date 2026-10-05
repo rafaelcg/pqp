@@ -87,6 +87,8 @@ const sfu = vi.hoisted(() => ({
   rooms: new Map<string, Map<string, unknown>>(),
   failUpdateFor: new Set<string>(),
   failList: false,
+  /** When set, the next listParticipants waits for it (one call only). */
+  gate: null as Promise<void> | null,
   calls: { list: 0, update: 0, mute: 0 },
 }));
 
@@ -98,6 +100,11 @@ vi.mock("livekit-server-sdk", async (importOriginal) => {
     RoomServiceClient: class {
       async listParticipants(room: string) {
         sfu.calls.list += 1;
+        if (sfu.gate) {
+          const gate = sfu.gate;
+          sfu.gate = null;
+          await gate;
+        }
         if (sfu.failList) {
           throw new Error("connect ETIMEDOUT");
         }
@@ -325,6 +332,7 @@ beforeEach(() => {
   sfu.rooms.clear();
   sfu.failUpdateFor.clear();
   sfu.failList = false;
+  sfu.gate = null;
   sfu.calls = { list: 0, update: 0, mute: 0 };
   resetVoicePeers();
   resetVoiceRateLimits();
@@ -603,6 +611,23 @@ describe("when the media server does not cooperate", () => {
     sfu.failList = true;
     const on = await setVoiceAudienceMode(ROOM, true, "host");
     expect(on.enforcement).toMatchObject({ transport: "livekit", unreachable: true });
+  });
+
+  it("a slow pass for 'on' cannot land on top of an 'off' that overtook it", async () => {
+    const { member } = await room("host", "member");
+    let release!: () => void;
+    sfu.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The 'on' pass stalls on the media server's list...
+    const on = setVoiceAudienceMode(ROOM, true, "host");
+    await vi.waitFor(() => expect(sfu.calls.list).toBe(1));
+    // ...and the host changes their mind before it answers.
+    await setVoiceAudienceMode(ROOM, false, "host");
+    release();
+    await on;
+    expect(tryToSpeak(member!)).toBe(true);
+    expect(audible(member!)).toBe(true);
   });
 
   it("the follow-up passes run by themselves", async () => {

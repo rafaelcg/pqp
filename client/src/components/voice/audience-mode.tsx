@@ -101,7 +101,9 @@ export function audienceChangeLine(
   const by = nameOf(participants, change.byUserId, someone);
   switch (change.kind) {
     case "on":
-      return t("voice.audience.notice.on", { name: by });
+      return change.byUserId && change.byUserId === selfUserId
+        ? t("voice.audience.notice.onSelf")
+        : t("voice.audience.notice.on", { name: by });
     case "off":
       if (change.reason === "no-host") {
         return t("voice.audience.notice.offNoHost");
@@ -109,7 +111,9 @@ export function audienceChangeLine(
       if (change.reason === "flag-off" || !change.byUserId) {
         return t("voice.audience.notice.offAuto");
       }
-      return t("voice.audience.notice.off", { name: by });
+      return change.byUserId === selfUserId
+        ? t("voice.audience.notice.offSelf")
+        : t("voice.audience.notice.off", { name: by });
     case "speaker-added":
       return change.userId === selfUserId
         ? t("voice.audience.notice.speakerAddedSelf")
@@ -198,14 +202,16 @@ export function AudienceModeStrip({
       {audience && (
         <p
           data-audience-line={locked ? "locked" : "open"}
-          className="flex min-w-0 items-center gap-1.5"
+          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5"
         >
           <span className="inline-flex shrink-0 items-center gap-1 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
             <Megaphone className="h-3 w-3" aria-hidden="true" />
             {t("voice.audience.badge")}
           </span>
-          <span className={cn("min-w-0 truncate", locked ? "text-text" : "text-text-tertiary")}>
-            {locked ? t("voice.audience.lockedDetail") : t("voice.audience.hostLine")}
+          {/* Wraps rather than truncates: on a phone the bar is ~240px and
+              this sentence is the whole point of the line. */}
+          <span className={cn("min-w-0", locked ? "text-text" : "text-text-tertiary")}>
+            {locked ? t("voice.audience.lockedLine") : t("voice.audience.hostLine")}
           </span>
         </p>
       )}

@@ -9129,6 +9129,7 @@ function MainAppContent({
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
           listenOnly={!voiceState.canSpeak}
+          audienceLocked={voiceState.speakReason === "audience"}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
           )}

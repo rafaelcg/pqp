@@ -212,7 +212,7 @@ describe("the audience's side", () => {
     expect(view.querySelector("[data-audience-line]")?.getAttribute("data-audience-line")).toBe(
       "locked",
     );
-    expect(view.textContent).toContain("Raise your hand to ask to talk");
+    expect(view.textContent).toContain("Only the presenters talk. Raise your hand to ask.");
     // Nobody but a host gets the toggle or the allow buttons.
     expect(view.querySelector("[data-audience-toggle]")).toBeNull();
     expect(view.querySelector("[data-audience-allow]")).toBeNull();

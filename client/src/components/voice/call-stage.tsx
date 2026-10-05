@@ -3135,6 +3135,7 @@ export function CallControls({
               type="button"
               aria-pressed={voiceState.isMuted}
               disabled={listenOnly || voiceState.self?.serverMuted === true}
+              data-mic-toggle=""
               data-speak-locked={
                 listenOnly ? (voiceState.speakReason ?? "permission") : undefined
               }

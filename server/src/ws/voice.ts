@@ -10557,6 +10557,19 @@ const audienceFollowUps = new Map<string, ReturnType<typeof setTimeout>[]>();
 const audienceHostChecks = new Map<string, ReturnType<typeof setTimeout>>();
 /** The last state frame this process sent per room, so a sweep only speaks on a change. */
 const audienceLastSent = new Map<string, string>();
+/**
+ * Bumped on every change this process makes or hears about in a room. A pass
+ * against the SFU captures it when it starts and stops issuing rewrites for
+ * anybody it resolves after a newer change, so a slow pass computed for "on"
+ * cannot land on top of an "off" that overtook it. A rewrite already in
+ * flight still lands; the newer change's own passes (+3 s, +10 s, the sweep)
+ * set it right, and only touch what is wrong.
+ */
+const audienceGenerations = new Map<string, number>();
+
+function bumpAudienceGeneration(channelId: string): void {
+  audienceGenerations.set(channelId, (audienceGenerations.get(channelId) ?? 0) + 1);
+}
 
 /** A request that cannot be honoured: there is no call, or audience mode is not on. */
 export class AudienceModeError extends Error {
@@ -10688,11 +10701,16 @@ async function runAudiencePass(
   channel: Awaited<ReturnType<typeof getChannel>>,
   wide: boolean,
 ): Promise<{ pending: string[]; unreachable: boolean }> {
+  const generation = audienceGenerations.get(channelId) ?? 0;
   const audience = await loadAudience(channel, channelId);
   noteAudienceCounter("enforcePasses");
   const result = await reconcileSfuRoomPublishGrants(
     channelId,
-    (userId) => resolveVoicePublish(channel, channelId, userId, { audience }),
+    async (userId) => {
+      const grant = await resolveVoicePublish(channel, channelId, userId, { audience });
+      // Overtaken by a newer change: leave this person to that change's pass.
+      return (audienceGenerations.get(channelId) ?? 0) === generation ? grant : null;
+    },
     identityMapFor(getRoomPeers(channelId)),
     { wide },
   );
@@ -10832,6 +10850,7 @@ export async function setVoiceAudienceMode(
       : { kind: "off", byUserId: actorId, reason }
     : undefined;
   if (changed) {
+    bumpAudienceGeneration(channelId);
     if (enabled) {
       noteAudienceCounter("sessionsStarted");
     } else {
@@ -10909,6 +10928,7 @@ export async function setVoiceAudienceSpeaker(
     ? { kind: allowed ? "speaker-added" : "speaker-removed", byUserId: actorId, userId }
     : undefined;
   if (changed) {
+    bumpAudienceGeneration(channelId);
     noteAudienceCounter(allowed ? "speakersGranted" : "speakersRevoked");
     logEvent("voice.audienceMode.speaker", { channelId, userId, actorId, allowed });
     if (registryOn() && clusterOn()) {
@@ -11169,6 +11189,7 @@ export function resetAudienceTimersForTests(): void {
   }
   audienceHostChecks.clear();
   audienceLastSent.clear();
+  audienceGenerations.clear();
 }
 
 // --- end audience mode -------------------------------------------------------
@@ -12178,6 +12199,9 @@ subscribeToCluster(VOICE_AUDIENCE_TOPIC, (data) => {
     return;
   }
   noteClusterFrameReceived();
+  if (frame.change) {
+    bumpAudienceGeneration(frame.channelId);
+  }
   void (async () => {
     const channel = await getChannel(frame.channelId);
     const audience = await loadAudience(channel, frame.channelId);
