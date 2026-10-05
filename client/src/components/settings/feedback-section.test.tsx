@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEEDBACK_BODY_MAX_LENGTH } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 import { resetSettingsRowsForTest } from "@/components/settings/kit/registry";
+import { SettingsAnnouncer } from "@/components/settings/kit/announcer";
 import { SettingsSectionContext } from "@/components/settings/kit/sections";
 import {
   FeedbackSection,
@@ -398,5 +399,130 @@ describe("FeedbackSection", () => {
 
     mount("user-b");
     expect(textarea().value).toBe("");
+  });
+});
+
+describe("FeedbackSection while sending, thanks and announcements", () => {
+  async function startSend(text = "meu relato") {
+    let finish!: () => void;
+    let fail!: (error: unknown) => void;
+    sendFeedback.mockReturnValue(
+      new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      }),
+    );
+    type(text);
+    await act(async () => {
+      sendButton().click();
+      await Promise.resolve();
+    });
+    return { finish, fail };
+  }
+
+  it("makes the message and the kind chips read-only while sending, and keeps focus", async () => {
+    mount();
+    textarea().focus();
+    const { finish } = await startSend();
+    expect(textarea().disabled).toBe(false);
+    expect(textarea().readOnly).toBe(true);
+    expect(document.activeElement).toBe(textarea());
+    // Typing is refused, so nothing typed now can be wiped by the thanks.
+    expect(radios().every((radio) => !radio.disabled)).toBe(true);
+    act(() => radios()[2]!.click());
+    expect(radios()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(radios()[2]!.getAttribute("aria-checked")).toBe("false");
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  });
+
+  it("gives the box back after a failure", async () => {
+    mount();
+    const { fail } = await startSend();
+    await act(async () => {
+      fail(new Error("network"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(textarea().readOnly).toBe(false);
+    expect(textarea().value).toBe("meu relato");
+  });
+
+  it("promises the badge for a bug and not for an idea", async () => {
+    mount();
+    const { finish } = await startSend();
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host!.textContent).toContain("the badge is yours");
+    const again = [...host!.querySelectorAll("button")].find(
+      (button) => button.textContent === "Send another",
+    )!;
+    act(() => again.click());
+
+    act(() => radios()[1]!.click());
+    const second = await startSend("e se tivesse tema claro");
+    await act(async () => {
+      second.finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host!.textContent).toContain("We read everything");
+    expect(host!.textContent).not.toContain("badge");
+  });
+
+  it("keeps the idea's thanks when the pane comes back after the send ended", async () => {
+    mount();
+    act(() => radios()[2]!.click());
+    const { finish } = await startSend("uma dúvida");
+    act(() => root?.unmount());
+    host?.remove();
+    await act(async () => {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    mount();
+    expect(host!.textContent).toContain("We read everything");
+    expect(host!.textContent).not.toContain("badge");
+  });
+
+  it("hides the visible counter from screen readers; the live copy says it", () => {
+    mount();
+    type("abc");
+    expect(counter()).toBeNull();
+    const visible = [...host!.querySelectorAll<HTMLElement>("span.tabular-nums")].find(
+      (node) => node.textContent === "3 / 2000",
+    )!;
+    expect(visible.getAttribute("aria-hidden")).toBe("true");
+    expect(host!.querySelector('.sr-only[aria-live="polite"]')).not.toBeNull();
+  });
+
+  it("says a failed send through the announcer, and the notice is not an alert then", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsSectionContext.Provider value="feedback">
+            <FeedbackSection voice={null} userId={null} />
+          </SettingsSectionContext.Provider>
+        </SettingsAnnouncer>,
+      ),
+    );
+    sendFeedback.mockRejectedValue(new Error("network"));
+    type("meu relato");
+    await act(async () => {
+      sendButton().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const message = "Couldn't send. Your text is still here, try again in a moment.";
+    expect(host!.querySelector('[role="alert"]')).toBeNull();
+    expect(host!.textContent).toContain(message);
+    expect(host!.querySelector("[data-settings-announcer]")!.textContent).toBe(message);
   });
 });

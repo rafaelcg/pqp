@@ -6,6 +6,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   inlineErrorMessage,
+  SETTINGS_BUSY,
   SettingsGroup,
   SettingsInlineStatus,
   SettingsLinkRow,
@@ -14,6 +15,7 @@ import {
   useInlineSave,
   useSettingsAnnounce,
 } from "@/components/settings/kit";
+import { cn } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
 import {
   ApiError,
@@ -126,7 +128,17 @@ function useDataExport(enabled: boolean) {
     until === null ? 0 : Math.max(0, Math.ceil((until - now) / 1000));
   const waiting = until !== null && waitSeconds > 0;
 
+  // Busy, not disabled: a disabled button drops keyboard focus on the page
+  // while the file is built and after every outcome. The button stays focusable
+  // with `aria-disabled`, and this guard refuses the click instead.
+  const busy = exporting || waiting;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+
   const download = useCallback(() => {
+    if (busyRef.current) {
+      return;
+    }
     const failed = t("settings.data.exportFailed");
     if (doneTimer.current !== null) {
       window.clearTimeout(doneTimer.current);
@@ -211,7 +223,8 @@ function useDataExport(enabled: boolean) {
     exporting,
     waiting,
     waitLabel: waiting ? formatWait(waitSeconds) : null,
-    disabled: !enabled || exporting || waiting,
+    disabled: !enabled,
+    busy,
   };
 }
 
@@ -259,9 +272,10 @@ export function YourDataSection({
             <Button
               variant="secondary"
               size="sm"
-              className={TOUCH}
               onClick={data.download}
               disabled={data.disabled}
+              aria-disabled={data.busy || undefined}
+              className={cn(TOUCH, data.busy && SETTINGS_BUSY)}
               aria-label={
                 data.waitLabel
                   ? t("settings.data.row.export.waitAction", { time: data.waitLabel })
@@ -356,14 +370,17 @@ export function DeleteAccountDialog({
   }, [open]);
 
   const expected = expectedDeleteConfirmation(user?.tag);
-  const confirmed = deleteConfirmationMatches(typed, user?.tag);
+  // The hint says "type the rest", and people complete "@name" the way the
+  // handle is written elsewhere, so one leading "@" is not a mismatch. The
+  // server gets the form it accepts, without it.
+  const answer = typed.trim().replace(/^@/, "");
+  const confirmed = deleteConfirmationMatches(answer, user?.tag);
   // The name typed without its number: the one near miss worth naming, because the name
   // is what the person sees everywhere and the number is what they forget.
   const hashAt = expected.indexOf("#");
   const missing =
     !confirmed && hashAt > 0
-      ? typed.trim().replace(/^@/, "").toLowerCase() ===
-        expected.slice(0, hashAt).toLowerCase()
+      ? answer.toLowerCase() === expected.slice(0, hashAt).toLowerCase()
         ? expected.slice(hashAt)
         : null
       : null;
@@ -388,7 +405,7 @@ export function DeleteAccountDialog({
     setError(null);
     setBlockingServers(null);
     try {
-      await deleteMyAccount(typed);
+      await deleteMyAccount(answer);
       onDeleted();
     } catch (err) {
       if (err instanceof OwnedServersError) {
@@ -489,13 +506,22 @@ export function DeleteAccountDialog({
               )}
             </div>
           </div>
-          <Button variant="ghost" onClick={cancel} disabled={busy}>
+          {/* Busy but focusable: `disabled` here would drop keyboard focus on
+              the page while the delete runs, and after a failure. */}
+          <Button
+            variant="ghost"
+            onClick={cancel}
+            aria-disabled={busy || undefined}
+            className={busy ? SETTINGS_BUSY : undefined}
+          >
             {t("settings.delete.keep")}
           </Button>
           <Button
             variant="danger"
             onClick={() => void submit()}
-            disabled={!confirmed || busy}
+            disabled={!confirmed}
+            aria-disabled={busy || undefined}
+            className={busy ? SETTINGS_BUSY : undefined}
           >
             {busy ? t("settings.delete.deleting") : t("settings.delete.confirm")}
           </Button>
@@ -515,6 +541,8 @@ export function DeleteAccountDialog({
                 size="sm"
                 onClick={data.download}
                 disabled={data.disabled}
+                aria-disabled={data.busy || undefined}
+                className={data.busy ? SETTINGS_BUSY : undefined}
               >
                 <Download aria-hidden className="h-3.5 w-3.5" />
                 {data.waitLabel

@@ -10,6 +10,7 @@ import {
   SettingsNotice,
   SettingsResult,
   SettingsRow,
+  useSettingsAnnounce,
 } from "@/components/settings/kit";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,9 @@ let unseen: { owner: string | null; outcome: SendOutcome; visit: number } | null
  */
 let visit = 0;
 
+/** The kind of the last report that went out, for the thanks line. */
+let lastSentKind: FeedbackKind = "bug";
+
 /** Called by the shell when Settings closes. */
 export function endFeedbackVisit(): void {
   visit += 1;
@@ -106,9 +110,11 @@ function startSend(
   payload: Parameters<typeof sendFeedback>[0],
 ): Promise<SendOutcome> {
   const startedIn = visit;
+  const sentKind = payload.kind;
   const promise = sendFeedback(payload)
     .then(
       (): SendOutcome => {
+        lastSentKind = sentKind;
         if (draft.owner === owner) {
           draft.body = "";
           draft.kind = "bug";
@@ -196,6 +202,9 @@ export function FeedbackSection({
   };
   const [sending, setSending] = useState(initial.pending);
   const [sent, setSent] = useState(initial.outcome === "sent");
+  // The kind that was sent, because the form is back on "bug" by then: only a
+  // bug can earn the badge, so only a bug is told so.
+  const [sentKind, setSentKind] = useState<FeedbackKind>(lastSentKind);
   const [error, setError] = useState<string | null>(
     initial.outcome && initial.outcome !== "sent" ? outcomeMessage(initial.outcome) : null,
   );
@@ -205,6 +214,7 @@ export function FeedbackSection({
   const noteId = useId();
   const hintId = useId();
   const apple = isApplePlatform();
+  const announce = useSettingsAnnounce();
   const paneRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
@@ -219,6 +229,7 @@ export function FeedbackSection({
     setSending(false);
     if (outcome === "sent") {
       focusAfter.current = "result";
+      setSentKind(lastSentKind);
       setKindState("bug");
       setBodyState("");
       setSent(true);
@@ -264,6 +275,13 @@ export function FeedbackSection({
     focusAfter.current = null;
   }, [sent, sending]);
 
+  // A failed send is spoken through the dialog's announcer, which exists
+  // before the sentence does; a role="alert" created already holding its text
+  // is often not read. Without an announcer the notice is its own alert.
+  useEffect(() => {
+    if (announce && error) announce(error);
+  }, [announce, error]);
+
   const count = feedbackCount(body);
   const tone = counterTone(count, FEEDBACK_BODY_MAX_LENGTH);
   const empty = body.trim().length === 0;
@@ -300,7 +318,11 @@ export function FeedbackSection({
         <SettingsGroup>
           <SettingsResult
             tone="success"
-            title={t("settings.feedback.done")}
+            title={
+              sentKind === "bug"
+                ? t("settings.feedback.done")
+                : t("settings.feedback.doneNoBadge")
+            }
             description={t("settings.feedback.doneNote")}
             action={
               <Button
@@ -361,10 +383,17 @@ export function FeedbackSection({
               variant="chips"
               label={t("settings.feedback.kind.label")}
               value={kind}
-              onValueChange={setKind}
+              // Locked while sending, but not `disabled`: the chip that has
+              // focus keeps it, and the kind that goes out is the one shown.
+              onValueChange={(next) => {
+                if (!sending) setKind(next);
+              }}
               options={kindOptions}
               // 44px targets on a narrow pane, the chips' usual 32px beside it.
-              className="[&_[role=radio]]:h-11 [&_[role=radio]]:px-4 @lg:[&_[role=radio]]:h-8 @lg:[&_[role=radio]]:px-3"
+              className={cn(
+                sending && "opacity-60",
+                "[&_[role=radio]]:h-11 [&_[role=radio]]:px-4 @lg:[&_[role=radio]]:h-8 @lg:[&_[role=radio]]:px-3",
+              )}
             />
           }
         >
@@ -392,6 +421,11 @@ export function FeedbackSection({
                 id={messageId}
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
+                // Read-only, not disabled, while the report goes out: what is
+                // typed now would be wiped by the thanks, and a disabled box
+                // drops keyboard focus on the page.
+                readOnly={sending}
+                aria-busy={sending || undefined}
                 onKeyDown={onMessageKeyDown}
                 maxLength={FEEDBACK_BODY_MAX_LENGTH}
                 rows={5}
@@ -414,7 +448,9 @@ export function FeedbackSection({
                 ) : (
                   <span />
                 )}
+                {/* Hidden from screen readers: the live copy below says it. */}
                 <span
+                  aria-hidden
                   data-counter-tone={tone || undefined}
                   className={cn(
                     "shrink-0 tabular-nums",
@@ -444,7 +480,7 @@ export function FeedbackSection({
         {/* The action row has no status slot, so a failed send is the row
             right above Enviar: a danger notice (role="alert", CircleX). */}
         {error ? (
-          <SettingsNotice tone="danger" inGroup>
+          <SettingsNotice tone="danger" inGroup role={announce ? "note" : undefined}>
             {error}
           </SettingsNotice>
         ) : null}
