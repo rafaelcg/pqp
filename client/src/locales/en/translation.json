@@ -1709,6 +1709,7 @@
   "settings.feedback.send": "Send",
   "settings.feedback.attached": "Along with your message, we send your username, the app version, your device and browser, the current screen and whether you're in a call.",
   "settings.feedback.done": "Got it. If the bug checks out, the badge is yours.",
+  "settings.feedback.doneNoBadge": "Got it. Thanks for telling us.",
   "settings.feedback.again": "Send another",
   "settings.feedback.error": "Couldn't send. Your text is still here, try again in a moment.",
   "settings.feedback.message": "Message",

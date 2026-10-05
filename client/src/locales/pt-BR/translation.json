@@ -1709,6 +1709,7 @@
   "settings.feedback.send": "Enviar",
   "settings.feedback.attached": "Junto com a mensagem, mandamos seu usuário, a versão do app, seu aparelho e navegador, a tela atual e se você está numa chamada.",
   "settings.feedback.done": "Recebido. Se o bug for real, o selo é seu.",
+  "settings.feedback.doneNoBadge": "Recebido. Valeu por contar.",
   "settings.feedback.again": "Enviar outro",
   "settings.feedback.error": "Não deu pra enviar. Seu texto continua aqui, tenta de novo daqui a pouco.",
   "settings.feedback.message": "Mensagem",

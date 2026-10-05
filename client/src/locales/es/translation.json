@@ -1719,6 +1719,7 @@
   "settings.feedback.send": "Enviar",
   "settings.feedback.attached": "Junto con el mensaje, enviamos tu usuario, la versión de la app, tu dispositivo y navegador, la pantalla actual y si estás en una llamada.",
   "settings.feedback.done": "Recibido. Si el bug se confirma, la insignia es tuya.",
+  "settings.feedback.doneNoBadge": "Recibido. Gracias por contárnoslo.",
   "settings.feedback.again": "Enviar otro",
   "settings.feedback.error": "No se pudo enviar. Tu texto sigue aquí, intenta de nuevo en un momento.",
   "settings.feedback.message": "Mensaje",

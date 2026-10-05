@@ -94,7 +94,9 @@ describe("YourDataSection export", () => {
 
     await act(async () => exportButton().click());
     expect(exportRowText()).toContain("Preparing…");
-    expect(exportButton().disabled).toBe(true);
+    // Busy, not disabled: a disabled button drops keyboard focus on the page.
+    expect(exportButton().getAttribute("aria-disabled")).toBe("true");
+    expect(exportButton().disabled).toBe(false);
 
     await act(async () => finish(new Response("{}", { status: 200 })));
     await settle();
@@ -262,7 +264,8 @@ describe("YourDataSection export feedback", () => {
     mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
     await act(async () => exportButton().click());
     await tick(0);
-    expect(exportButton().disabled).toBe(true);
+    expect(exportButton().getAttribute("aria-disabled")).toBe("true");
+    expect(exportButton().disabled).toBe(false);
     expect(exportButton().textContent).toBe("Download in 54 s");
     expect(exportButton().getAttribute("aria-label")).toBe(
       "Download everything we hold about you, available in 54 s",
@@ -279,6 +282,7 @@ describe("YourDataSection export feedback", () => {
     expect(alert?.parentElement?.textContent).toContain("Try again in 44 s.");
 
     await tick(44_000);
+    expect(exportButton().getAttribute("aria-disabled")).toBeNull();
     expect(exportButton().disabled).toBe(false);
     expect(exportButton().textContent).toBe("Download");
     expect(
@@ -538,5 +542,164 @@ describe("DeleteAccountDialog", () => {
   it("does not steal focus when the tab opens normally", () => {
     mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("focus stays put while a request runs", () => {
+  function typeInto(value: string) {
+    const input = document.body.querySelector("input")!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    act(() => {
+      setter.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  const buttonWithText = (text: string) =>
+    [...document.body.querySelectorAll("button")].find(
+      (button) => button.textContent === text,
+    )!;
+
+  it("keeps Baixar focusable while the copy is built, and refuses a second click", async () => {
+    let finish!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (finish = resolve)));
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:x"), revokeObjectURL: vi.fn() });
+    mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
+    exportButton().focus();
+    await act(async () => exportButton().click());
+    expect(exportButton().disabled).toBe(false);
+    expect(exportButton().getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(exportButton());
+    await act(async () => exportButton().click());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish(new Response("{}", { status: 200 })));
+    await settle();
+    expect(document.activeElement).toBe(exportButton());
+    expect(exportButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("keeps Baixar focusable after a failure", async () => {
+    respond(500, JSON.stringify({ error: "boom" }));
+    mount(<YourDataSection user={USER} onRequestDelete={() => {}} />);
+    exportButton().focus();
+    await act(async () => exportButton().click());
+    await settle();
+    expect(exportRowText()).toContain(EXPORT_FAILED);
+    expect(document.activeElement).toBe(exportButton());
+  });
+
+  it("keeps the dialog's Baixar seus dados focusable while it runs", async () => {
+    let finish!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (finish = resolve)));
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:x"), revokeObjectURL: vi.fn() });
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={() => {}} />,
+    );
+    const save = buttonWithText("Download your data");
+    save.focus();
+    await act(async () => save.click());
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(save);
+    await act(async () => save.click());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => finish(new Response("{}", { status: 200 })));
+    await settle();
+    expect(document.activeElement).toBe(save);
+  });
+
+  it("keeps Apagar conta focusable while it runs and after a failure", async () => {
+    let fail!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (fail = resolve)));
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={() => {}} />,
+    );
+    typeInto("rafa#0001");
+    const confirm = buttonWithText("Delete account");
+    confirm.focus();
+    await act(async () => confirm.click());
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(buttonWithText("Keep account").getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(confirm);
+    // A second click while it runs does not send a second delete.
+    await act(async () => confirm.click());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      fail(new Response(JSON.stringify({ error: "boom" }), { status: 500 })),
+    );
+    await settle();
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(DELETE_FAILED);
+    expect(document.activeElement).toBe(confirm);
+    expect(confirm.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("keeps Apagar conta focusable after the owned-servers refusal", async () => {
+    respond(
+      409,
+      JSON.stringify({
+        error: "Servers you own are in the way",
+        code: "owned_servers",
+        servers: [{ id: "s1", name: "Sandbox", otherMemberCount: 15 }],
+      }),
+    );
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={() => {}} />,
+    );
+    typeInto("rafa#0001");
+    const confirm = buttonWithText("Delete account");
+    confirm.focus();
+    await act(async () => confirm.click());
+    await settle();
+    expect(document.body.textContent).toContain("Sandbox");
+    expect(document.activeElement).toBe(confirm);
+  });
+});
+
+describe("the typed confirmation", () => {
+  function typeInto(value: string) {
+    const input = document.body.querySelector("input")!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    act(() => {
+      setter.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  const confirm = () =>
+    [...document.body.querySelectorAll("button")].find(
+      (button) => button.textContent === "Delete account",
+    )!;
+
+  it("accepts a leading @, and sends the server the form it accepts", async () => {
+    respond(200, "{}");
+    const onDeleted = vi.fn();
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={onDeleted} />,
+    );
+    typeInto("@rafa#0001");
+    expect(confirm().disabled).toBe(false);
+    await act(async () => confirm().click());
+    await settle();
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({
+      confirm: "rafa#0001",
+    });
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses a near miss", () => {
+    mount(
+      <DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={() => {}} />,
+    );
+    typeInto("@rafa#0002");
+    expect(confirm().disabled).toBe(true);
+    typeInto("@@rafa#0001");
+    expect(confirm().disabled).toBe(true);
   });
 });

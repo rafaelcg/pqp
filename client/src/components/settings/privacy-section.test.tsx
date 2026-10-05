@@ -8,6 +8,7 @@ import {
   listSettingsRows,
   resetSettingsRowsForTest,
 } from "@/components/settings/kit/registry";
+import { SettingsAnnouncer } from "@/components/settings/kit/announcer";
 import { SettingsSectionContext } from "@/components/settings/kit/sections";
 import { PrivacySection } from "@/components/settings/privacy-section";
 
@@ -445,5 +446,100 @@ describe("PrivacySection", () => {
     expect(unblockUser).toHaveBeenCalledWith(stranger.id);
     expect(onUnblockUser).not.toHaveBeenCalled();
     expect(host!.textContent).toContain("Trolinho unblocked");
+  });
+});
+
+describe("PrivacySection, later choices and the block form", () => {
+  it("sends the last choice made while a save runs, and skips the ones between", async () => {
+    const answers: Array<(value: User) => void> = [];
+    updateMe.mockImplementation(
+      () => new Promise<User>((resolve) => answers.push(resolve)),
+    );
+    mount();
+    // Current is server_members. nobody starts a write; everyone and then
+    // server_members are picked while it runs.
+    await act(async () => {
+      radios()[2]!.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      radios()[0]!.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      radios()[1]!.click();
+      await Promise.resolve();
+    });
+    expect(updateMe).toHaveBeenCalledTimes(1);
+    // The radios show the newest choice, not the one being written.
+    expect(radios()[1]!.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
+      answers[0]!({ ...user, dmPrivacy: "nobody" } as User);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(updateMe).toHaveBeenCalledTimes(2);
+    expect(updateMe.mock.calls.map((call) => call[0])).toEqual([
+      { dmPrivacy: "nobody" },
+      { dmPrivacy: "server_members" },
+    ]);
+    await act(async () => {
+      answers[1]!({ ...user, dmPrivacy: "server_members" } as User);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host!.textContent).toContain("Saved");
+  });
+
+  it("keeps focus in the name field when Unblock's row goes while the form is open", async () => {
+    const onUnblockUser = vi.fn().mockResolvedValue(undefined);
+    mount({ onUnblockUser });
+    act(() => buttonByText("Block someone").click());
+    const button = host!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Unblock Fulano"]',
+    )!;
+    button.focus();
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+    act(() => render({ onUnblockUser, blockedUsers: [blocked[1]!] }));
+    expect(host!.textContent).toContain("Fulano unblocked");
+    expect(document.activeElement).toBe(host!.querySelector("form input"));
+  });
+
+  it("says Não achei ninguém through the announcer when one exists", async () => {
+    lookupUserByTag.mockRejectedValue(new ApiError(404, "not_found"));
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsSectionContext.Provider value="privacy">
+            <PrivacySection
+              user={user}
+              blockedUsers={blocked}
+              onUserUpdated={() => undefined}
+              onUnblockUser={() => undefined}
+            />
+          </SettingsSectionContext.Provider>
+        </SettingsAnnouncer>,
+      ),
+    );
+    act(() => buttonByText("Block someone").click());
+    type(host!.querySelector<HTMLInputElement>("form input")!, "ghost#0000");
+    await act(async () => {
+      buttonByText("Block").click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The line is plain text; the region that existed first says it.
+    expect(host!.querySelector("form [role='alert']")).toBeNull();
+    expect(host!.querySelector("form")!.textContent).toContain("No one found");
+    expect(host!.querySelector("[data-settings-announcer]")!.textContent).toContain(
+      "No one found",
+    );
   });
 });

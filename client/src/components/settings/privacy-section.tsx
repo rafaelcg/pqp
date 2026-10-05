@@ -25,6 +25,7 @@ import {
   SettingsRow,
   inlineErrorMessage,
   useInlineSave,
+  useSettingsAnnounce,
   type InlineSaveState,
 } from "@/components/settings/kit";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -210,6 +211,14 @@ export function PrivacySection({
   const awaiting = useRef(new Map<string, string>());
   const [notice, setNotice] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
+  const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [working, setWorking] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const fieldId = useId();
+  const errorId = useId();
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const announce = useSettingsAnnounce();
   const noticeTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -225,10 +234,11 @@ export function PrivacySection({
         setNotice(null);
       }, UNBLOCK_NOTICE_MS);
       // The button that was pressed is gone with its row: keep the keyboard
-      // inside the group instead of dropping it on the page.
+      // inside the group instead of dropping it on the page. With the block
+      // form open the add button is not drawn; the form's field is the stop.
       const active = document.activeElement;
       if (!active || active === document.body) {
-        addButton.current?.focus();
+        (adding ? fieldRef.current : addButton.current)?.focus();
       }
     }
   });
@@ -272,12 +282,12 @@ export function PrivacySection({
   }
 
   // Blocking somebody by name.
-  const [adding, setAdding] = useState(false);
-  const [query, setQuery] = useState("");
-  const [working, setWorking] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-  const fieldId = useId();
-  const errorId = useId();
+  // Spoken through the dialog's announcer, which exists before the sentence
+  // does; a role="alert" created already holding its text is often not read.
+  // Without an announcer (onboarding, tests) the line is its own alert.
+  useEffect(() => {
+    if (announce && addError) announce(addError);
+  }, [announce, addError]);
 
   function closeForm() {
     setAdding(false);
@@ -332,14 +342,17 @@ export function PrivacySection({
     }
   }
 
-  // One write at a time, as before. A ref rather than the save state, so a
-  // second click in the same tick is refused too, and the radios stay enabled
-  // (and focused) while the first one is in flight.
-  const busy = useRef(false);
+  // The newest choice, and how many writes are not finished. A choice made
+  // while one is saving is queued behind it by `useInlineSave` (only the last
+  // queued one is sent), so the last click always wins. Refs rather than the
+  // save state, so a second click in the same tick sees the first. The radios
+  // stay enabled (and focused) the whole time.
+  const latest = useRef<DmPrivacy | null>(null);
+  const unfinished = useRef(0);
   // The option just picked, checked while its write is in flight so the save
-  // status sits under the option the user chose. Cleared when the write ends:
-  // on success the account carries the new value, on failure the radio goes
-  // back to the value that is actually stored and the error sits under it.
+  // status sits under the option the user chose. Cleared when the last write
+  // ends: on success the account carries the new value, on failure the radio
+  // goes back to the value that is actually stored and the error sits under it.
   const [pending, setPending] = useState<DmPrivacy | null>(null);
   const current = user?.dmPrivacy ?? "server_members";
 
@@ -350,18 +363,22 @@ export function PrivacySection({
   }));
 
   async function choose(value: DmPrivacy) {
-    if (!user || busy.current || value === current) {
+    if (!user || value === (latest.current ?? current)) {
       return;
     }
-    busy.current = true;
+    latest.current = value;
+    unfinished.current += 1;
     setPending(value);
     try {
       await save.run(async () => {
         onUserUpdated(await updateMe({ dmPrivacy: value }));
       }, t("settings.privacy.saveFailed"));
     } finally {
-      busy.current = false;
-      setPending(null);
+      unfinished.current -= 1;
+      if (unfinished.current === 0) {
+        latest.current = null;
+        setPending(null);
+      }
     }
   }
 
@@ -416,6 +433,7 @@ export function PrivacySection({
                 </label>
                 <Input
                   id={fieldId}
+                  ref={fieldRef}
                   autoFocus
                   autoComplete="off"
                   autoCapitalize="none"
@@ -449,7 +467,11 @@ export function PrivacySection({
               </Button>
             </div>
             {addError ? (
-              <p id={errorId} role="alert" className="text-xs text-danger">
+              <p
+                id={errorId}
+                role={announce ? undefined : "alert"}
+                className="text-xs text-danger"
+              >
                 {addError}
               </p>
             ) : (
