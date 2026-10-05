@@ -158,6 +158,13 @@ export const notificationPreferencesSchema = z.object({
    * show message content. Default true. Off falls both back to a count.
    */
   previewInApp: z.boolean().optional(),
+  /**
+   * Per server: tell me when somebody starts a stream there. Absent means the
+   * server's default (`streamAlertDefault`: on for a small server, off for a
+   * large one or a community). Only honoured while the
+   * `stream_start_notifications` flag is on for that server.
+   */
+  streamAlerts: z.record(z.string().uuid(), z.boolean()).optional(),
 });
 
 export type NotificationPreferences = z.infer<
