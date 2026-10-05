@@ -25,13 +25,17 @@ export function SettingsInlineStatus({
       ? (savingLabel ?? state.label ?? t("settings.saving"))
       : state.kind === "saved"
         ? t("settings.status.saved")
-        : null;
+        : state.kind === "error"
+          ? state.message
+          : null;
   useEffect(() => {
     if (announce && spoken) announce(spoken);
   }, [announce, spoken]);
-  // Inside Settings the dialog's announcer speaks; elsewhere the line is its
-  // own polite region, as before.
+  // Inside Settings the dialog's announcer speaks, errors included: a line
+  // created already holding its text is often not read, even as an alert.
+  // Elsewhere the line is its own region, as before.
   const live = announce ? {} : ({ role: "status", "aria-live": "polite" } as const);
+  const alert = announce ? {} : ({ role: "alert" } as const);
 
   if (state.kind === "idle") {
     return null;
@@ -56,7 +60,7 @@ export function SettingsInlineStatus({
     );
   }
   return (
-    <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
+    <p {...alert} className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
       <CircleX aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 text-pretty">{state.message}</span>
     </p>

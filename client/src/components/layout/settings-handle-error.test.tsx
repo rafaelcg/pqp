@@ -159,7 +159,7 @@ describe("a taken public link", () => {
     await save();
 
     expect(handleError()).toBe("");
-    const alert = bar()!.querySelector('[role="alert"]')?.textContent ?? "";
+    const alert = bar()!.querySelector("[data-unsaved-error]")?.textContent ?? "";
     // Our own sentence for this refusal, never the server's.
     expect(alert).toMatch(/Pick another one|Escolha outro/);
     expect(alert).not.toContain("Please pick a different one");
@@ -227,7 +227,7 @@ describe("a taken public link", () => {
     });
 
     expect(handleError()).toBe("");
-    expect(bar()!.querySelector('[role="alert"]')?.textContent).toMatch(
+    expect(bar()!.querySelector("[data-unsaved-error]")?.textContent).toMatch(
       /Wait a moment|Espera um pouco|Espere um pouco/,
     );
   });
@@ -240,7 +240,7 @@ describe("a taken public link", () => {
     await save();
 
     expect(handleError()).toBe("");
-    const alert = bar()!.querySelector('[role="alert"]')?.textContent ?? "";
+    const alert = bar()!.querySelector("[data-unsaved-error]")?.textContent ?? "";
     expect(alert).not.toMatch(/3 a 20|3 to 20/);
   });
 });

@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { SETTINGS_BUSY } from "@/components/settings/kit/classes";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -74,10 +75,18 @@ export function UnsavedChangesBar({
 
   // The live region is mounted before the bar and outlives it: a region
   // inserted already holding its text is often not announced, so the bar's
-  // own line is plain text and this one speaks for it.
+  // own line is plain text and this one speaks for it. It says the save
+  // starting and a failure too, which the bar draws as plain text as well.
+  const spoken = !visible
+    ? ""
+    : saving
+      ? t("settings.saving")
+      : error && !settled
+        ? error
+        : message;
   const announcer = (
     <p role="status" aria-live="polite" className="sr-only">
-      {visible ? message : ""}
+      {spoken}
     </p>
   );
   if (!visible) {
@@ -87,7 +96,10 @@ export function UnsavedChangesBar({
   return (
     <>
       {announcer}
-      <div className="safe-pb pointer-events-none absolute inset-x-0 bottom-0 px-4 sm:px-8">
+      <div
+        data-unsaved-bar-frame=""
+        className="safe-pb pointer-events-none absolute inset-x-0 bottom-0 px-4 sm:px-8"
+      >
         <div
           className={cn(
             "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
@@ -108,7 +120,7 @@ export function UnsavedChangesBar({
                 {message}
               </p>
               {error && !settled ? (
-                <p role="alert" className="mt-0.5 text-xs text-danger">
+                <p data-unsaved-error="" className="mt-0.5 text-xs text-danger">
                   {error}
                 </p>
               ) : null}
@@ -126,7 +138,9 @@ export function UnsavedChangesBar({
                 </Button>
               ) : null
             ) : (
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
+              // Not `shrink-0`: on a phone the group takes the whole line and
+              // its buttons wrap inside it instead of running off the bar.
+              <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 max-sm:w-full max-sm:justify-end">
                 {blocked && onKeepEditing ? (
                   // The shell focuses this one when a close is refused, so an
                   // Escape followed by a reflex Enter never saves by accident.
@@ -145,13 +159,18 @@ export function UnsavedChangesBar({
                     {t("settings.unsaved.showProfile")}
                   </Button>
                 ) : null}
+                {/* Busy, not disabled, while the save runs: a disabled button
+                    drops keyboard focus on the page. */}
                 <Button
                   data-unsaved-discard=""
                   type="button"
                   variant="ghost"
                   size="sm"
-                  disabled={saving}
-                  onClick={onDiscard}
+                  aria-disabled={saving || undefined}
+                  className={saving ? SETTINGS_BUSY : undefined}
+                  onClick={() => {
+                    if (!saving) onDiscard();
+                  }}
                 >
                   {t("settings.unsaved.discard")}
                 </Button>
@@ -159,8 +178,11 @@ export function UnsavedChangesBar({
                   data-unsaved-save=""
                   type="button"
                   size="sm"
-                  disabled={saving}
-                  onClick={onSave}
+                  aria-disabled={saving || undefined}
+                  className={saving ? SETTINGS_BUSY : undefined}
+                  onClick={() => {
+                    if (!saving) onSave();
+                  }}
                 >
                   {saving ? t("settings.saving") : t("settings.unsaved.save")}
                 </Button>

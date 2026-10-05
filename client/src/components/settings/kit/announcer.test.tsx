@@ -51,6 +51,23 @@ describe("SettingsAnnouncer", () => {
     expect(host!.querySelectorAll('[role="status"]').length).toBe(1);
   });
 
+  it("says an error through the region inside Settings, and keeps the alert outside", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await render({ kind: "idle" });
+    const before = region();
+    await render({ kind: "error", message: "Não deu pra salvar." });
+    expect(region()).toBe(before);
+    expect(before.textContent).toBe("Não deu pra salvar.");
+    // Created with its text, an alert is often not read; the region speaks.
+    expect(host!.querySelector('[role="alert"]')).toBeNull();
+    expect(host!.textContent).toContain("Não deu pra salvar.");
+
+    await render({ kind: "error", message: "Não deu pra salvar." }, false);
+    expect(host!.querySelector('[role="alert"]')?.textContent).toBe("Não deu pra salvar.");
+  });
+
   it("leaves the row's line as its own region outside Settings", async () => {
     host = document.createElement("div");
     document.body.append(host);

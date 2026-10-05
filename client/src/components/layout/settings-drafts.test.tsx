@@ -257,7 +257,7 @@ describe("Settings profile drafts", () => {
       await Promise.resolve();
     });
     expect(updateMe).toHaveBeenCalledTimes(1);
-    const alert = bar()!.querySelector('[role="alert"]');
+    const alert = bar()!.querySelector("[data-unsaved-error]");
     expect(alert?.textContent).toMatch(/Esse link já tem dono|already someone's/);
     expect(bar()!.textContent).not.toContain("That handle is already taken");
   });
