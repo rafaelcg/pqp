@@ -36,3 +36,24 @@ describe("Switch busy", () => {
     expect(document.activeElement).toBe(control);
   });
 });
+
+describe("Switch unavailable", () => {
+  it("ignores presses and keeps focus without saying it is busy", () => {
+    const onChange = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <Switch checked={false} onCheckedChange={onChange} label="Notificações" unavailable />,
+      ),
+    );
+    const control = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    control.focus();
+    act(() => control.click());
+    expect(onChange).not.toHaveBeenCalled();
+    expect(control.getAttribute("aria-disabled")).toBe("true");
+    expect(control.hasAttribute("aria-busy")).toBe(false);
+    expect(document.activeElement).toBe(control);
+  });
+});

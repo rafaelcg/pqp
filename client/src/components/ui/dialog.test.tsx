@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog } from "@/components/ui/dialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -58,5 +58,28 @@ describe("Dialog focus trap", () => {
     });
     expect(close).not.toBe(checked);
     expect(document.activeElement).toBe(checked);
+  });
+});
+
+describe("Dialog backdrop", () => {
+  it("cancels the press's default focus move when it closes the dialog", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onClose = vi.fn();
+    act(() =>
+      root!.render(
+        <Dialog open title="Mapa" onClose={onClose}>
+          <p>conteúdo</p>
+        </Dialog>,
+      ),
+    );
+    const layer = document.querySelector<HTMLElement>("[data-dialog-layer]")!;
+    const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    act(() => {
+      layer.dispatchEvent(press);
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(press.defaultPrevented).toBe(true);
   });
 });

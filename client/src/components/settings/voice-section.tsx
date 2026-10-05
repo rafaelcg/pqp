@@ -1129,6 +1129,17 @@ function PttRows({
     return taken ? t(ACTION_LABEL[taken]) : null;
   };
 
+  // A shortcut may take this key while the mode is voice activity (the key is
+  // off then). Back in push-to-talk both would fire on one press, so say so.
+  const sharedWith =
+    draftLocal.pushToTalkKey.device === "keyboard"
+      ? findBindingConflict(
+          bindableMap({ ...draftLocal, inputMode: "push-to-talk" }),
+          "pushToTalk",
+          draftLocal.pushToTalkKey,
+        )
+      : null;
+
   return (
     <>
       <SettingsRow
@@ -1158,6 +1169,15 @@ function PttRows({
           />
         }
       />
+
+      {sharedWith ? (
+        <SettingsNotice tone="warning" inGroup>
+          {t("settings.voice.pttConflict", {
+            combo: formatBinding(shownBinding, t),
+            action: t(ACTION_LABEL[sharedWith]),
+          })}
+        </SettingsNotice>
+      ) : null}
 
       {modifierName ? (
         <SettingsNotice tone="warning" inGroup>

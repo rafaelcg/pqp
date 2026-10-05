@@ -975,3 +975,28 @@ describe("VoiceSection mic test follows the settings", () => {
     expect(open.mock.calls.length).toBe(before);
   });
 });
+
+describe("VoiceSection push-to-talk key shared with a shortcut", () => {
+  it("warns when a shortcut took the key while push-to-talk was off", async () => {
+    const key = {
+      code: "KeyK",
+      label: "K",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+      device: "keyboard" as const,
+    };
+    await mount({
+      settings: {
+        ...defaultLocalSettings,
+        inputMode: "push-to-talk",
+        pushToTalkKey: key,
+        shortcuts: { ...defaultLocalSettings.shortcuts, toggleMute: key },
+      },
+    });
+    expect(host!.querySelector('[data-settings-row="ptt"]')?.parentElement?.textContent).toMatch(
+      /already the shortcut for|já é o atalho de|ya es el atajo de/,
+    );
+  });
+});

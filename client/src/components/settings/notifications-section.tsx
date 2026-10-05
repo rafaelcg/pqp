@@ -102,9 +102,9 @@ export function NotificationsSection() {
           disabled={permission === "unsupported"}
           // Blocked is not `disabled`: pressing the switch is what got the
           // permission refused, and a disabled button drops keyboard focus to
-          // the page. Busy looks and reads as unavailable, ignores presses
-          // and keeps focus (the notice below says why).
-          busy={permission === "denied"}
+          // the page. Unavailable ignores presses and keeps focus (the
+          // notice below says why).
+          unavailable={permission === "denied"}
           onCheckedChange={(next) => (next ? void enable() : disable())}
           status={
             permission === "unsupported" ? (
@@ -359,10 +359,10 @@ function PushRow({
       // Blocked: the warning on the row above says why, and a switch that can
       // only fail would add a second message about the same block. Turning an
       // existing subscription off needs no permission, so that stays possible.
-      // Busy rather than disabled: the press that gets the permission refused
+      // Unavailable rather than disabled: the press that gets the permission refused
       // is made on this switch, and a disabled button drops focus to the page.
       disabled={!ready}
-      busy={ready && permission === "denied" && !on}
+      unavailable={ready && permission === "denied" && !on}
       onCheckedChange={() => void push.toggle()}
       status={
         notice ?? (status ? <SettingsInlineStatus state={status} /> : null)

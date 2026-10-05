@@ -17,6 +17,7 @@ export function Switch({
   hideLabel = false,
   dimRowWhenDisabled = false,
   busy = false,
+  unavailable = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
@@ -42,24 +43,31 @@ export function Switch({
    * drop on the page.
    */
   busy?: boolean;
+  /**
+   * Cannot be changed right now for a reason said beside it (the browser
+   * blocked the permission): reads and behaves like `busy` but is not
+   * announced as busy, and keeps focus where `disabled` would drop it.
+   */
+  unavailable?: boolean;
 }) {
-  const dimRow = (Boolean(disabled) || busy) && dimRowWhenDisabled;
+  const inert = busy || unavailable;
+  const dimRow = (Boolean(disabled) || inert) && dimRowWhenDisabled;
   const control = (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-disabled={busy || undefined}
+      aria-disabled={inert || undefined}
       aria-busy={busy || undefined}
       disabled={disabled}
       onClick={() => {
-        if (!busy) onCheckedChange(!checked);
+        if (!inert) onCheckedChange(!checked);
       }}
       className={cn(
         "flex w-full justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-        disabled || busy ? "cursor-not-allowed" : "hover:bg-surface-2",
+        disabled || inert ? "cursor-not-allowed" : "hover:bg-surface-2",
         dimRow && "opacity-60",
         className,
       )}

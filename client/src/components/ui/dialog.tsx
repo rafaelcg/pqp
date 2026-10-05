@@ -373,6 +373,9 @@ export function Dialog({
         style={layerStyle}
         onMouseDown={(event) => {
           if (dismissible && closeOnBackdrop && event.target === event.currentTarget) {
+            // The press's default action would move focus to the page after
+            // the close handed it back to the opener.
+            event.preventDefault();
             onClose();
           }
         }}
