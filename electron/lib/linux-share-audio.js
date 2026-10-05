@@ -116,8 +116,19 @@ const TICK_MS = 2_000;
 const EVENT_DEBOUNCE_MS = 120;
 /** Most streams one diagnostic report keeps (the oldest goes first). */
 const REPORT_LIMIT = 48;
-/** How often one failing link is tried again before it is reported and left. */
+/** How often one failing link is tried in a row before it is reported and left. */
 const LINK_ATTEMPTS = 3;
+/** After that, how long it is left before it is tried again (a failure can clear). */
+const LINK_RETRY_MS = 30_000;
+/** `pw-link` processes running at once on a pass. */
+const LINK_CONCURRENCY = 6;
+/**
+ * Passes in a row one of pqp's streams may be found in the bus, after being
+ * moved or cut out each time, before the share's sound is ended instead. The
+ * call reaching viewers is the one outcome this module exists to prevent, so
+ * when it cannot be undone the capture goes, not the guard.
+ */
+const OWN_IN_BUS_PASSES = 3;
 /** Processes that are the sound server itself: their streams are modules. */
 const SERVER_BINARIES = new Set(["pipewire", "pipewire-pulse", "wireplumber", "pulseaudio"]);
 
@@ -717,12 +728,19 @@ function planLinks({ graph, ownPids, ownBinaries = null, outputName, failed = nu
         // is asked to move it. Destroying its link instead was measured on
         // WirePlumber 0.4 with real Electron: it put the link straight back
         // and the call stayed in the capture for seconds.
-        out.moves.push({ index: Number(node.props["object.serial"] ?? node.id), to: outputName });
+        // If the move is refused, the links are cut instead (`fallback`).
+        out.moves.push({
+          index: Number(node.props["object.serial"] ?? node.id),
+          to: outputName,
+          own: true,
+          serial,
+          fallback: intoBus,
+        });
       } else {
         // An EXTRA link into the bus beside its real one: nobody manages it,
         // so it goes.
         for (const link of intoBus) {
-          out.unlinks.push(link.id);
+          out.unlinks.push(link);
         }
       }
       entry.outcome = intoBus.length > 0 ? "pqp-pulled-out" : "pqp-kept-out";
@@ -804,10 +822,26 @@ function graphCaptureInUse(graph) {
   return graph.links.some((l) => l.outNode === capture.id);
 }
 
-/** Link ids into the bus: on teardown every one of them goes. */
+/** Links into the bus (`{ id, outPort, inPort, ... }`): on teardown every one of them goes. */
 function linksIntoBus(graph) {
   const bus = findNode(graph, SHARE_SINK, "Audio/Sink");
-  return bus ? graph.links.filter((l) => l.inNode === bus.id).map((l) => l.id) : [];
+  return bus ? graph.links.filter((l) => l.inNode === bus.id) : [];
+}
+
+/**
+ * `fn` over `items`, at most `limit` at a time, in order of start. Every
+ * `pw-link` is its own short process, so a first pass over a busy desktop
+ * (ten streams, twenty links) must not run them one after another.
+ */
+async function eachLimited(items, limit, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 /** The last line a failed tool wrote, for the report ("Failure: Invalid argument"). */
@@ -960,6 +994,24 @@ function createLinuxShareAudio({
     }
   }
 
+  /**
+   * Destroy one link. `pw-link -d <link-id>` is documented in `pw-link --help`
+   * on PipeWire 1.0.5 and 1.4.2 alike, and was measured to work in the rig;
+   * the port pair (`pw-link -d <out> <in>`, the older form) is the fallback,
+   * so a build that only knows ports still disconnects. Rejects only when
+   * both forms fail.
+   */
+  async function unlinkLink(link) {
+    try {
+      await pw("pw-link", ["-d", String(link.id)]);
+    } catch (byId) {
+      if (!Number.isFinite(link.outPort) || !Number.isFinite(link.inPort)) {
+        throw byId;
+      }
+      await pw("pw-link", ["-d", String(link.outPort), String(link.inPort)]);
+    }
+  }
+
   // --------------------------------------------------------------- modules
 
   /**
@@ -973,8 +1025,8 @@ function createLinuxShareAudio({
     if (runPw) {
       try {
         const graph = parsePwDump(await pw("pw-dump", []));
-        for (const id of graph ? linksIntoBus(graph) : []) {
-          await pw("pw-link", ["-d", String(id)]).catch(() => {});
+        for (const link of graph ? linksIntoBus(graph) : []) {
+          await unlinkLink(link).catch(() => {});
         }
       } catch {
         // No PipeWire tools, or no PipeWire: the unload below is enough.
@@ -1116,6 +1168,26 @@ function createLinuxShareAudio({
         }
       }
     }
+    // The echo guard's last resort, as on the link path: one of ours found on
+    // the bus pass after pass ends the share's sound.
+    const ownOnBus = new Set(
+      state.inputs.filter((i) => i.target === shareIndex && isOwnStream(i, pids, binaries)).map((i) => i.index),
+    );
+    for (const index of [...session.ownInBus.keys()]) {
+      if (!ownOnBus.has(index)) {
+        session.ownInBus.delete(index);
+      }
+    }
+    for (const index of ownOnBus) {
+      const passes = (session.ownInBus.get(index) ?? 0) + 1;
+      session.ownInBus.set(index, passes);
+      if (passes >= OWN_IN_BUS_PASSES) {
+        log("a pqp stream keeps reaching the bus; ending the share's sound");
+        record(moveReport(state, { shareIndex, outputIndex, pids, binaries, moved, refusedNow }));
+        await stopNow("echo-guard");
+        return;
+      }
+    }
     record(moveReport(state, { shareIndex, outputIndex, pids, binaries, moved, refusedNow }));
     if (captureInUse(state.outputs, state.captureIndex)) {
       session.lastReadAt = now();
@@ -1143,6 +1215,13 @@ function createLinuxShareAudio({
     } else if (graph.defaultSink && graph.defaultSink !== session.output) {
       session.output = graph.defaultSink;
     }
+    // A link given up on is tried again once the wait is over: whatever made
+    // it fail (a stream renegotiating, a busy server) may have cleared.
+    for (const [key, failure] of session.linkFailures) {
+      if (failure.count >= LINK_ATTEMPTS && now() - failure.at >= LINK_RETRY_MS) {
+        session.linkFailures.delete(key);
+      }
+    }
     const pids = ownPids();
     const plan = planLinks({
       graph,
@@ -1153,16 +1232,46 @@ function createLinuxShareAudio({
       sticky: session.shared,
     });
     // Ours out of the bus before anything else is added to it.
-    for (const id of plan.unlinks) {
-      await pw("pw-link", ["-d", String(id)]).catch((err) =>
-        log("could not unlink a pqp stream from the bus", errorText(err)),
-      );
+    for (const link of plan.unlinks) {
+      await unlinkLink(link).catch((err) => log("could not unlink a pqp stream from the bus", errorText(err)));
     }
     for (const move of plan.moves) {
-      await run(["move-sink-input", String(move.index), move.to]).catch(() => {});
+      try {
+        await run(["move-sink-input", String(move.index), move.to]);
+      } catch (err) {
+        if (!move.own) {
+          continue;
+        }
+        // The call is in the capture and the server will not move it: cut
+        // its links instead. If that fails too, the pass count below ends
+        // the capture.
+        log("could not move a pqp stream out of the bus; cutting its links", errorText(err));
+        for (const link of move.fallback ?? []) {
+          await unlinkLink(link).catch(() => {});
+        }
+      }
+    }
+    // The echo guard's last resort. A pqp stream found in the bus pass after
+    // pass, whatever was done about it, means the guard is not winning, so
+    // the share's sound ends rather than carry the call to viewers.
+    const ownInBus = new Set(plan.report.filter((e) => e.outcome === "pqp-pulled-out").map((e) => e.serial));
+    for (const serial of [...session.ownInBus.keys()]) {
+      if (!ownInBus.has(serial)) {
+        session.ownInBus.delete(serial);
+      }
+    }
+    for (const serial of ownInBus) {
+      const passes = (session.ownInBus.get(serial) ?? 0) + 1;
+      session.ownInBus.set(serial, passes);
+      if (passes >= OWN_IN_BUS_PASSES) {
+        log("a pqp stream keeps reaching the bus; ending the share's sound");
+        record(plan.report.map((entry) => ({ ...entry, key: `node:${entry.node}` })));
+        await stopNow("echo-guard");
+        return;
+      }
     }
     const failedNodes = new Map();
-    for (const link of plan.links) {
+    await eachLimited(plan.links, LINK_CONCURRENCY, async (link) => {
       const key = `${link.out}>${link.in}`;
       try {
         await pw("pw-link", [String(link.out), String(link.in)]);
@@ -1171,13 +1280,13 @@ function createLinuxShareAudio({
         const text = errorText(err);
         // "File exists": a link we made a moment ago, already there.
         if (/file exists/i.test(text)) {
-          continue;
+          return;
         }
         const failure = session.linkFailures.get(key) ?? { count: 0, error: text };
-        session.linkFailures.set(key, { count: failure.count + 1, error: text });
+        session.linkFailures.set(key, { count: failure.count + 1, error: text, at: now() });
         failedNodes.set(link.node, text);
       }
-    }
+    });
     for (const entry of plan.report) {
       if (entry.outcome === "linked" && !failedNodes.has(entry.node)) {
         session.shared.add(entry.serial);
@@ -1302,6 +1411,7 @@ function createLinuxShareAudio({
       moveFailures: new Map(),
       linkFailures: new Map(),
       shared: new Set(),
+      ownInBus: new Map(),
     };
     try {
       const sinkModule = Number.parseInt(await run(nullSinkArgs()), 10);
@@ -1352,8 +1462,8 @@ function createLinuxShareAudio({
       // effect; then anything routed into the bus goes back to the output.
       try {
         const graph = parsePwDump(await pw("pw-dump", []));
-        for (const id of graph ? linksIntoBus(graph) : []) {
-          await pw("pw-link", ["-d", String(id)]).catch(() => {});
+        for (const link of graph ? linksIntoBus(graph) : []) {
+          await unlinkLink(link).catch(() => {});
         }
       } catch {
         // The unload below takes them with the bus.
@@ -1447,6 +1557,8 @@ module.exports = {
   IDLE_AFTER_READ_MS,
   ARM_TTL_MS,
   LINK_ATTEMPTS,
+  LINK_RETRY_MS,
+  OWN_IN_BUS_PASSES,
   parseInfo,
   parseShort,
   parseNamed,

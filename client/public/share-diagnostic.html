@@ -1104,7 +1104,15 @@
         "skipped-no-process": "NOT shared: no process behind it",
       };
       function linuxAudioText(r) {
-        if (!r) return "No share with sound since the app started.";
+        // No session yet: null, or only the sound server probe the app ran
+        // before offering the sound.
+        if (!r || !Array.isArray(r.streams)) {
+          const p = r && r.probe;
+          return (
+            "No share with sound since the app started." +
+            (p ? ` Sound server: ${p.server || "none found"}${p.mode ? `, would ${p.mode === "link" ? "link" : "move"} apps` : ""}.` : "")
+          );
+        }
         const head =
           `mode: ${r.mode || "?"} on ${r.server || (r.probe && r.probe.server) || "?"}, output ${r.output || "?"}` +
           (r.active ? ", sharing now" : `, ended (${r.endedReason || "?"})`) +
@@ -1116,7 +1124,14 @@
         );
         return [head, ...lines].join("\n");
       }
-      if (window.pqpDesktop && typeof window.pqpDesktop.linuxShareAudioDiagnostics === "function") {
+      // Only in a Linux desktop build: every shell exposes the function, and
+      // only the Linux one can ever answer anything but null.
+      if (
+        window.pqpDesktop &&
+        typeof window.pqpDesktop.linuxShareAudioDiagnostics === "function" &&
+        window.pqpDesktop.capabilities &&
+        window.pqpDesktop.capabilities.linuxShareAudio === true
+      ) {
         $("linux-audio").hidden = false;
         $("linux-audio-load").addEventListener("click", async () => {
           try {

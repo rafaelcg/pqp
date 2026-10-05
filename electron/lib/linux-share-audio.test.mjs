@@ -13,6 +13,8 @@ const {
   IDLE_AFTER_READ_MS,
   ARM_TTL_MS,
   LINK_ATTEMPTS,
+  LINK_RETRY_MS,
+  OWN_IN_BUS_PASSES,
   parseInfo,
   parseModules,
   parseStreams,
@@ -823,6 +825,12 @@ function fakePipeWire({ tools = true } = {}) {
     modules: [],
     nextModule: 536870920,
     linkFail: () => null,
+    refuseMove: new Set(),
+    unlinkById: true,
+    unlinkFails: false,
+    linkDelayMs: 0,
+    inFlight: 0,
+    maxInFlight: 0,
     log: [],
   };
   const id = () => nextId++;
@@ -1034,6 +1042,9 @@ function fakePipeWire({ tools = true } = {}) {
       return "";
     }
     if (cmd === "move-sink-input") {
+      if (state.refuseMove.has(Number(a1))) {
+        throw Object.assign(new Error("Command failed"), { stderr: "Failure: Invalid argument\n" });
+      }
       linkTo(Number(a1), a2);
       return "";
     }
@@ -1051,10 +1062,20 @@ function fakePipeWire({ tools = true } = {}) {
       return dump();
     }
     if (tool === "pw-link" && args[0] === "-d") {
-      state.links = state.links.filter((l) => l.id !== Number(args[1]));
+      if (state.unlinkFails || (args.length === 2 && !state.unlinkById)) {
+        throw Object.assign(new Error("Command failed"), { stderr: "failed to unlink ports: Invalid argument\n" });
+      }
+      state.links =
+        args.length === 2
+          ? state.links.filter((l) => l.id !== Number(args[1]))
+          : state.links.filter((l) => !(l.outPort === Number(args[1]) && l.inPort === Number(args[2])));
       return "";
     }
     if (tool === "pw-link") {
+      state.inFlight += 1;
+      state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, state.linkDelayMs));
+      state.inFlight -= 1;
       const [out, inp] = args.map(Number);
       if (state.links.some((l) => l.outPort === out && l.inPort === inp)) {
         throw Object.assign(new Error("Command failed"), { stderr: "failed to link ports: File exists\n" });
@@ -1402,5 +1423,120 @@ describe("the link path (PipeWire with pw-dump and pw-link)", () => {
     assert.ok(!pw.state.log.some((l) => l.startsWith("pw-link -d")), "WirePlumber 0.4 relinks a link cut from under it");
     assert.ok(pw.hears(call));
     assert.equal(pw.busLinksFrom(call), 0);
+  });
+});
+
+describe("review findings on #959", () => {
+  it("cuts the links of a ROUTED pqp stream the server refuses to move", async () => {
+    const pw = fakePipeWire();
+    const call = pw.pulseApp("pqp", "500");
+    const { shareAudio } = linkHarness(pw);
+    await shareAudio.start();
+    pw.linkTo(call, SHARE_SINK);
+    pw.state.refuseMove.add(call);
+
+    await shareAudio.reconcile();
+
+    assert.equal(pw.busLinksFrom(call), 0, "the call is out of the capture even though the move failed");
+    assert.equal(shareAudio.isActive(), true);
+  });
+
+  it("ends the share's sound when one of pqp's streams cannot be taken out of the bus", async () => {
+    const pw = fakePipeWire();
+    const call = pw.pulseApp("pqp", "500");
+    const { shareAudio } = linkHarness(pw);
+    await shareAudio.start();
+    pw.linkTo(call, SHARE_SINK);
+    pw.state.refuseMove.add(call);
+    pw.state.unlinkFails = true;
+
+    for (let i = 0; i < OWN_IN_BUS_PASSES - 1; i += 1) {
+      await shareAudio.reconcile();
+      assert.equal(shareAudio.isActive(), true, `pass ${i + 1} still tries`);
+    }
+    pw.state.unlinkFails = false; // so teardown can be observed
+    await shareAudio.reconcile();
+
+    assert.equal(shareAudio.isActive(), false, "fails closed");
+    assert.equal(shareAudio.diagnostics().endedReason, "echo-guard");
+    assert.equal(pw.bus(), undefined, "no capture left to carry the call");
+  });
+
+  it("the move path fails closed the same way", async () => {
+    const server = fakeServer();
+    const { shareAudio } = harness(server);
+    await shareAudio.start();
+    server.addApp(7, "500", SHARE_SINK);
+    const realRun = server.run;
+    const stubborn = createLinuxShareAudio({
+      run: (args) =>
+        args[0] === "move-sink-input" && args[1] === "7" ? Promise.reject(new Error("Failure: Invalid argument")) : realRun(args),
+      ownPids: () => new Set(["500"]),
+      now: () => 0,
+      setTimer: () => 0,
+      clearTimer: () => {},
+      setTick: () => 0,
+      clearTick: () => {},
+    });
+    await shareAudio.stop();
+    await stubborn.start();
+    server.state.inputs.find((i) => i.index === 7).target = server.sinkByName(SHARE_SINK).index;
+    for (let i = 0; i < OWN_IN_BUS_PASSES; i += 1) {
+      await stubborn.reconcile();
+    }
+    assert.equal(stubborn.isActive(), false);
+    assert.equal(stubborn.diagnostics().endedReason, "echo-guard");
+  });
+
+  it("disconnects by port pair when pw-link refuses a link id", async () => {
+    const pw = fakePipeWire();
+    const call = pw.pulseApp("pqp", "500");
+    const { shareAudio } = linkHarness(pw);
+    await shareAudio.start();
+    pw.linkIntoBus(call, 9300);
+    pw.state.unlinkById = false;
+    pw.state.log.length = 0;
+
+    await shareAudio.reconcile();
+
+    assert.equal(pw.busLinksFrom(call), 0);
+    assert.ok(pw.state.log.some((l) => /^pw-link -d \d+ \d+$/.test(l)), "fell back to `pw-link -d <out> <in>`");
+  });
+
+  it("tries a given-up link again once LINK_RETRY_MS has passed", async () => {
+    const pw = fakePipeWire();
+    const app = pw.pulseApp("game", "41");
+    pw.state.linkFail = () => "failed to link ports: Device or resource busy\n";
+    const { shareAudio, advance } = linkHarness(pw);
+    await shareAudio.start();
+    for (let i = 0; i < LINK_ATTEMPTS; i += 1) {
+      await shareAudio.reconcile();
+    }
+    assert.equal(pw.busLinksFrom(app), 0);
+
+    pw.state.linkFail = () => null;
+    await shareAudio.reconcile();
+    assert.equal(pw.busLinksFrom(app), 0, "still waiting");
+    pw.read(); // the share is being watched, so the wait does not end it
+    advance(LINK_RETRY_MS);
+    await shareAudio.reconcile();
+
+    assert.equal(pw.busLinksFrom(app), 2);
+    assert.equal(shareAudio.diagnostics().streams.find((s) => s.node === app).outcome, "linked");
+  });
+
+  it("creates a first pass's links several at a time, not one after another", async () => {
+    const pw = fakePipeWire();
+    const apps = Array.from({ length: 8 }, (_, i) => pw.pulseApp(`app${i}`, String(100 + i)));
+    pw.state.linkDelayMs = 5;
+    const { shareAudio } = linkHarness(pw);
+
+    await shareAudio.start();
+
+    for (const app of apps) {
+      assert.equal(pw.busLinksFrom(app), 2);
+    }
+    assert.ok(pw.state.maxInFlight > 1, `ran ${pw.state.maxInFlight} at once`);
+    assert.ok(pw.state.maxInFlight <= 6, `bounded: ${pw.state.maxInFlight}`);
   });
 });

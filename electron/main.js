@@ -1155,11 +1155,15 @@ function writeLinuxShareAudioReport(report) {
     return;
   }
   try {
-    fs.mkdirSync(path.dirname(linuxShareAudioReportPath()), { recursive: true });
+    fs.mkdirSync(path.dirname(linuxShareAudioReportPath()), { recursive: true, mode: 0o700 });
+    // Owner-only: it lists which apps were playing, which is nobody else's
+    // business on a shared machine with a traversable home directory.
     fs.writeFileSync(
       linuxShareAudioReportPath(),
       `${JSON.stringify({ shell: app.getVersion(), writtenAt: new Date().toISOString(), ...report }, null, 2)}\n`,
+      { mode: 0o600 },
     );
+    fs.chmodSync(linuxShareAudioReportPath(), 0o600);
   } catch {
     // A report that cannot be written costs the next bug report its detail.
   }
