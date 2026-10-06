@@ -68,6 +68,12 @@ export interface UseWatchNowArgs extends Omit<WatchNowInput, "viewerId"> {
   connected: boolean;
   /** The channel on screen; its own stage is already in front of the person. */
   openChannelId: string | null;
+  /**
+   * Anything that changes when what the person may CONNECT to changes (the
+   * permissions hook's `can`). `canConnect` itself is a stable wrapper, so the
+   * streams are recomputed on this and not on its identity.
+   */
+  permissionsKey?: unknown;
 }
 
 /**
@@ -94,10 +100,17 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
   // that is an hour in.
   const active = args.enabled && args.connected;
   const clock = useRef<ShareClock | null>(null);
+  // Keys this tab has seen live, so an end it WITNESSED is forgotten at once
+  // while a stale key from storage waits for the rosters to settle. Only an
+  // uninterrupted, connected stretch can witness an end: across a gap (the
+  // strip off, the socket down, rosters cleared) absence proves nothing, so
+  // the set goes with the clock.
+  const seenLive = useRef(new Set<string>());
   if (active && clock.current === null) {
     clock.current = new ShareClock(Date.now());
   } else if (!active && clock.current !== null) {
     clock.current = null;
+    seenLive.current = new Set();
   }
 
   // Derived once per roster change, not once per render of the app: it walks
@@ -121,9 +134,6 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
   }, [args.enabled, active, args.occupancy, args.parties]);
   const joined = useMemo(() => liveKeys.join("|"), [liveKeys]);
 
-  // Keys this tab has seen live, so an end it WITNESSED is forgotten at once
-  // while a stale key from storage waits for the rosters to settle.
-  const seenLive = useRef(new Set<string>());
   useEffect(() => {
     if (!args.enabled) {
       // A strip that is off says nothing about streams ending.
@@ -155,9 +165,14 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
     return () => window.clearTimeout(timer);
   }, [joined, args.enabled, args.connected]);
 
-  let list: WatchNowStream[] = EMPTY;
-  if (args.enabled && args.viewerId) {
-    const collected = collectWatchNowStreams({
+  // The streams, recomputed when something they are made of changes and not on
+  // every render of the app. The clock's dating only moves with `liveKeys`
+  // (and `active`), which are dependencies here too.
+  const collected = useMemo(() => {
+    if (!args.enabled || !args.viewerId) {
+      return EMPTY;
+    }
+    const raw = collectWatchNowStreams({
       viewerId: args.viewerId,
       scope: args.scope,
       occupancy: args.occupancy,
@@ -167,14 +182,28 @@ export function useWatchNow(args: UseWatchNowArgs): WatchNowStream[] {
       canConnect: args.canConnect,
       seatedChannelId: args.seatedChannelId,
     });
-    const dated = clock.current
-      ? withObservedStart(collected, clock.current)
-      : collected;
-    list = visibleWatchNowStreams(dated, {
-      openChannelId: args.openChannelId,
-      dismissed,
-    });
-  }
+    return clock.current ? withObservedStart(raw, clock.current) : raw;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    args.enabled,
+    args.viewerId,
+    args.scope,
+    args.occupancy,
+    args.parties,
+    args.channelLive,
+    args.blocked,
+    args.seatedChannelId,
+    args.permissionsKey,
+    liveKeys,
+    active,
+  ]);
+  const list =
+    collected.length === 0
+      ? EMPTY
+      : visibleWatchNowStreams(collected, {
+          openChannelId: args.openChannelId,
+          dismissed,
+        });
   // The same list, by value, is the same array: the banner keeps what it was
   // showing through every unrelated render of the app.
   const signature = JSON.stringify(list);

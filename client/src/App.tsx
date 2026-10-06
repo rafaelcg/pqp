@@ -8424,6 +8424,7 @@ function MainAppContent({
       voiceState.status !== "idle" ? voiceState.voiceChannelId : null,
     connected: connection === "online",
     openChannelId: selectedChannelId,
+    permissionsKey: perms.can,
   });
   // "Avisar quando alguém transmitir": asked when a server's menu opens, so a
   // deployment with the flag off pays nothing for it.

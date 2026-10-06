@@ -612,7 +612,7 @@ describeDb("who a start-of-stream notice reaches", () => {
       expect(alerts.streamAlertMetrics().debounced).toBe(0);
     });
 
-    it("a party whose room cannot be read is not announced to people who might be sitting in it", async () => {
+    it("a party whose room cannot be read is not announced to people who might be sitting in it, and a failing lookup gets its one retry", async () => {
       const s = await scene(2);
       const party = await createChannel(s.serverId, "party", "watch_party");
       const session = await getPool().query<{ id: string }>(
@@ -630,17 +630,86 @@ describeDb("who a start-of-stream notice reaches", () => {
           kind: "party",
           startKey: session.rows[0]!.id,
         });
-      // No reader at all, then a reader that fails: neither is "an empty room".
+      // No reader at all (a process with no voice layer): nothing can vouch.
       start();
       await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
       await settle(() => alerts.streamAlertMetrics().debounced === 1);
+      // A reader that fails: not "an empty room", and not the end of the notice
+      // either. It is retried once, and gives up after that.
       alerts.setStreamAlertRoomReader(async () => {
         throw new Error("registry unreachable");
       });
       start();
       await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
-      await settle(() => alerts.streamAlertMetrics().debounced === 2);
+      await settle(() => alerts.streamAlertMetrics().failures === 1);
+      await vi.advanceTimersByTimeAsync(alerts.STREAM_ALERT_RETRY_MS);
+      await settle(() => alerts.streamAlertMetrics().failures === 2);
       expect(alerts.streamAlertMetrics().claimed).toBe(0);
+    });
+
+    it("a blip in the party's room lookup costs the notice a few seconds, not the notice", async () => {
+      const s = await scene(2);
+      const [a] = s.memberIds;
+      const first = listener(a!);
+      const party = await createChannel(s.serverId, "party", "watch_party");
+      const session = await getPool().query<{ id: string }>(
+        `INSERT INTO channel_sessions (channel_id, server_id, title, starts_at, status, created_by, host_user_id)
+         VALUES ($1, $2, 'Cinemoon', NOW(), 'live', $3, $3) RETURNING id`,
+        [party.id, s.serverId, s.sharerId],
+      );
+      process.env.STREAM_START_NOTIFICATIONS = "true";
+      let calls = 0;
+      alerts.setStreamAlertRoomReader(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("blip");
+        }
+        return { userIds: [], sharerUserIds: [] };
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      alerts.noteStreamStarted({
+        channelId: party.id,
+        sharerUserId: s.sharerId,
+        sharerName: "Alberto",
+        kind: "party",
+        startKey: session.rows[0]!.id,
+      });
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+      await settle(() => alerts.streamAlertMetrics().failures === 1);
+      await vi.advanceTimersByTimeAsync(alerts.STREAM_ALERT_RETRY_MS);
+      await settle(() => first.frames.length === 1);
+      expect(first.frames[0]).toMatchObject({ kind: "party" });
+    });
+
+    it("a notice that finds nobody to tell gives its slot back, so a later stream is still heard about", async () => {
+      const s = await scene(2, { community: true });
+      await armed(s);
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+      await settle(() => alerts.streamAlertMetrics().emptyAudience === 1);
+      expect(pushed).not.toHaveBeenCalled();
+      // The slot is free: the claim is not "cooldown".
+      expect(await alerts.claimStreamAlert(s.channelId, null)).toBe(true);
+    });
+
+    it("the same person resuming a share inside the window gets a fresh 20 seconds, not what was left", async () => {
+      const s = await scene(3);
+      const first = listener(s.memberIds[0]!);
+      await armed(s);
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS - 5_000);
+      // The socket dropped and came back, and the new peer started sharing.
+      alerts.noteStreamStarted({
+        channelId: s.channelId,
+        sharerUserId: s.sharerId,
+        sharerName: "Alberto",
+        kind: "voice",
+      });
+      expect(alerts.armedStreamAlertCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      // Where the OLD timer would have fired, nothing has.
+      expect(alerts.streamAlertMetrics().claimed).toBe(0);
+      await vi.advanceTimersByTimeAsync(STREAM_START_STABLE_MS);
+      await settle(() => first.frames.length === 1);
+      expect(alerts.streamAlertMetrics().claimed).toBe(1);
     });
 
     it("tidies old claims at most once an hour, however many notices win", async () => {

@@ -499,6 +499,26 @@ describe("notifyStreamStarted", () => {
     delete (window as unknown as { pqpDesktop?: unknown }).pqpDesktop;
   });
 
+  it("falls back to the web notice when the shell throws or rejects, instead of losing it", async () => {
+    const { notify } = withFakeNotification();
+    (window as unknown as { pqpDesktop: unknown }).pqpDesktop = {
+      notify: () => {
+        throw new Error("bridge too old");
+      },
+    };
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(true);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    notify.mockClear();
+    (window as unknown as { pqpDesktop: unknown }).pqpDesktop = {
+      notify: () => Promise.reject(new Error("os refused")),
+    };
+    expect(notifyStreamStarted(frame, { windowFocused: false })).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notify).toHaveBeenCalledTimes(1);
+    delete (window as unknown as { pqpDesktop?: unknown }).pqpDesktop;
+  });
+
   it("is silent for a window in front that is looking at that very server: the stream is already on screen", () => {
     const { notify } = withFakeNotification();
     expect(

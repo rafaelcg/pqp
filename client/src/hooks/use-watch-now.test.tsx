@@ -189,6 +189,15 @@ describe("useWatchNow", () => {
     }
   });
 
+  it("an emptied roster across a disconnect is not the stream ending, so the dismissal survives the reconnect", () => {
+    const [stream] = render(args());
+    act(() => dismissWatchNow(stream!.key));
+    // Seen live, then the socket drops and the rosters are cleared...
+    expect(render(args({ connected: false, occupancy: {} }))).toEqual([]);
+    // ...and the same stream is there again when it comes back.
+    expect(render(args({ connected: true }))).toEqual([]);
+  });
+
   it("dates only a share it saw begin", () => {
     // Already running when the clock started: no age.
     const [running] = render(args());

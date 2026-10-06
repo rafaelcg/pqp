@@ -215,9 +215,11 @@ count and one bounded query per stream start and tells no one who did not ask.
 - The start must be **stable for 20 s** (`STREAM_START_STABLE_MS`). A share that
   stops inside that window notifies nobody and is counted as `debounced`.
 - At most **one notice per channel per 30 min** (`STREAM_START_CHANNEL_COOLDOWN_MS`).
-  The slot is spent by the claim, so a notice that found nobody to tell (a large
-  server where nobody opted in, everybody already in the room) still uses its 30
-  minutes: the cap is a cap on interrupting, not on trying.
+  A notice that found nobody to tell (a large server where nobody opted in, everybody
+  already in the room) gives its slot back (`emptyAudience`), so a stream that starts
+  later in the cooldown is still heard about; the 20 s window bounds how often that
+  cheap decision runs. A share that is resumed by the same person inside the window
+  (a socket that dropped and came back) gets a fresh 20 s.
 - A plain voice channel triggers on the false-to-true change of a peer's
   `sharingScreen` (a re-declare of a share already running is not a start). A
   `watch_party` channel triggers when its party goes `live`, not when somebody

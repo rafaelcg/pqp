@@ -879,9 +879,31 @@ export function notifyStreamStarted(
 
   const desktop = getDesktop();
   if (desktop?.notify) {
-    desktop.notify({ title, body, tag, path });
-    return true;
+    // The shell can refuse (a bridge from an older build, an OS that will not
+    // draw it): that is not the notice being over, so the web path is tried
+    // after it, and a rejected promise is caught rather than left unhandled.
+    try {
+      const sent: unknown = desktop.notify({ title, body, tag, path });
+      if (sent && typeof (sent as Promise<unknown>).catch === "function") {
+        (sent as Promise<unknown>).catch(() => {
+          void showWebStreamNotice(title, body, tag, path);
+        });
+      }
+      return true;
+    } catch {
+      // Fall through to the web notification below.
+    }
   }
+  void showWebStreamNotice(title, body, tag, path);
+  return true;
+}
+
+async function showWebStreamNotice(
+  title: string,
+  body: string,
+  tag: string,
+  path: string,
+): Promise<void> {
   try {
     const notification = new Notification(title, { body, tag, silent: true });
     notification.onclick = () => {
@@ -891,9 +913,8 @@ export function notifyStreamStarted(
     };
   } catch {
     // Android Chrome: see the identical fallback in `deliver`.
-    void deliverViaServiceWorker(title, body, tag, path);
+    await deliverViaServiceWorker(title, body, tag, path);
   }
-  return true;
 }
 
 function flush(channelId: string): void {

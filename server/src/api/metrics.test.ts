@@ -360,6 +360,7 @@ describeDb("GET /api/admin/metrics", () => {
       cooldown: 0,
       claimed: 0,
       recipients: 0,
+      emptyAudience: 0,
       skipped: {
         sharer: 0,
         inRoom: 0,

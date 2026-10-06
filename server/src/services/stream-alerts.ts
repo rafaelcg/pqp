@@ -75,6 +75,8 @@ export interface StreamAlertMetrics {
   claimed: number;
   /** People told, summed over notices. */
   recipients: number;
+  /** Notices that found nobody to tell and gave their slot back. */
+  emptyAudience: number;
   skipped: {
     sharer: number;
     inRoom: number;
@@ -105,6 +107,7 @@ function emptyMetrics(): StreamAlertMetrics {
     cooldown: 0,
     claimed: 0,
     recipients: 0,
+    emptyAudience: 0,
     skipped: {
       sharer: 0,
       inRoom: 0,
@@ -258,7 +261,20 @@ export function noteStreamStarted(start: StreamStart): void {
       // A second person sharing in a room already inside its window changes
       // nothing (one notice per channel is the rule), and a repeated call for
       // the same party is the same start.
-      if (start.kind !== "party" || existing.startKey === start.startKey) {
+      const sameParty =
+        start.kind === "party" && existing.startKey === start.startKey;
+      // The SAME person starting again inside the window is a share that
+      // dropped without saying so (a socket that went and came back) and
+      // resumed: it has not been stable for the time that is left on the old
+      // timer, so it gets a fresh window rather than inheriting one.
+      const resumed =
+        start.kind === "voice" &&
+        existing.kind === "voice" &&
+        existing.sharerUserId === start.sharerUserId;
+      if (!resumed && (start.kind !== "party" || sameParty)) {
+        return;
+      }
+      if (sameParty) {
         return;
       }
       clearTimeout(existing.timer);
@@ -452,12 +468,10 @@ async function stillStreaming(
     if (!readRoom) {
       return null;
     }
-    let room: StreamAlertRoom | null;
-    try {
-      room = await readRoom(context.id);
-    } catch {
-      return null;
-    }
+    // A lookup that FAILS is thrown, not read as "not eligible": `fire`'s catch
+    // is where a failure gets its one retry, and a brief cluster-roster blip
+    // must cost the notice a few seconds, not the notice.
+    const room = await readRoom(context.id);
     return { seated: room?.userIds ?? [] };
   }
   // A plain share: the sharer must still be in the room and still sharing,
@@ -541,13 +555,24 @@ async function fire(channelId: string): Promise<void> {
       startedAt: pending.startedAt,
       userIds,
     };
+    if (userIds.length === 0) {
+      // Nobody to tell is not a notice sent: the slot goes back, so a stream
+      // that starts later in the cooldown, when somebody has left the room or
+      // opted in, is still heard about. (The decision is cheap and the 20 s
+      // stability window still guards how often it runs.)
+      await releaseStreamAlertClaim(channelId).catch(() => {
+        // Spent for the cooldown, as before: the only price of a failed write.
+      });
+      claimedUnsent = false;
+      metrics.emptyAudience += 1;
+      logEvent("streamAlert.nobody", { channelId, serverId, kind: pending.kind });
+      return;
+    }
     metrics.recipients += userIds.length;
     // From here on something may reach a socket, and handing the claim back
     // would turn a failure in the middle of delivery into a duplicate.
     claimedUnsent = false;
-    if (userIds.length > 0) {
-      notifyStreamStarted(event);
-    }
+    notifyStreamStarted(event);
     const took = Date.now() - began;
     if (took > metrics.decisionMsMax) {
       metrics.decisionMsMax = took;
@@ -676,21 +701,24 @@ export async function decideStreamAlertRecipients(
       return [];
     }
 
-    // Blocks, either direction, in two indexed lookups.
-    const blocks = await pool.query<{ other: string }>(
-      `SELECT blocked_user_id AS other FROM user_blocks
-        WHERE user_id = $1 AND blocked_user_id = ANY($2::uuid[])
-       UNION
-       SELECT user_id AS other FROM user_blocks
-        WHERE blocked_user_id = $1 AND user_id = ANY($2::uuid[])`,
-      [sharerUserId, kept],
-    );
+    // Blocks (either direction) and timeouts: two indexed lookups, asked
+    // together because neither needs the other's answer.
+    const [blocks, timeouts] = await Promise.all([
+      pool.query<{ other: string }>(
+        `SELECT blocked_user_id AS other FROM user_blocks
+          WHERE user_id = $1 AND blocked_user_id = ANY($2::uuid[])
+         UNION
+         SELECT user_id AS other FROM user_blocks
+          WHERE blocked_user_id = $1 AND user_id = ANY($2::uuid[])`,
+        [sharerUserId, kept],
+      ),
+      pool.query<{ user_id: string }>(
+        `SELECT user_id FROM member_timeouts
+          WHERE server_id = $1 AND expires_at > NOW() AND user_id = ANY($2::uuid[])`,
+        [serverId, kept],
+      ),
+    ]);
     const blocked = new Set(blocks.rows.map((row) => row.other));
-    const timeouts = await pool.query<{ user_id: string }>(
-      `SELECT user_id FROM member_timeouts
-        WHERE server_id = $1 AND expires_at > NOW() AND user_id = ANY($2::uuid[])`,
-      [serverId, kept],
-    );
     const timedOut = new Set(timeouts.rows.map((row) => row.user_id));
 
     const afterBlocks = kept.filter((userId) => {
