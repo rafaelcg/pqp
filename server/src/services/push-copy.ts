@@ -82,3 +82,59 @@ export function buildConversationPushCopy(
     ? { title: author, body: "Te mandou uma mensagem" }
     : { title: author, body: "Sent you a direct message" };
 }
+
+// ------------------------------------------------------ stream started notice
+
+/**
+ * The start-of-stream notice ("Alberto começou a transmitir em #filminho") is
+ * the one push in three languages, because the client ships three and this
+ * notice is a single sentence read on a lock screen. Anything that is not
+ * Spanish or English is the instance default, as `resolvePushLocale` has it.
+ */
+export type StreamAlertLocale = PushLocale | "es";
+
+export function resolveStreamAlertLocale(value: unknown): StreamAlertLocale {
+  if (value === "en") {
+    return "en";
+  }
+  if (typeof value === "string" && (value === "es" || value.startsWith("es-"))) {
+    return "es";
+  }
+  return DEFAULT_PUSH_LOCALE;
+}
+
+export interface StreamStartedCopyInput {
+  locale: StreamAlertLocale;
+  /** A name the recipient can already see on the sidebar. */
+  sharerName: string;
+  /** `#filminho` for a voice channel, the party's own name for a party. */
+  channelLabel: string;
+  serverName: string;
+}
+
+/**
+ * Fixed pairs, never a template that grows a word in one language only. Names
+ * only: nothing about what is on the screen.
+ */
+export function buildStreamStartedPushCopy(
+  input: StreamStartedCopyInput,
+): PushCopy {
+  const { sharerName, channelLabel, serverName } = input;
+  switch (input.locale) {
+    case "en":
+      return {
+        title: `${sharerName} started streaming in ${channelLabel}`,
+        body: `${serverName} · Watch`,
+      };
+    case "es":
+      return {
+        title: `${sharerName} empezó a transmitir en ${channelLabel}`,
+        body: `${serverName} · Ver`,
+      };
+    default:
+      return {
+        title: `${sharerName} começou a transmitir em ${channelLabel}`,
+        body: `${serverName} · Assistir`,
+      };
+  }
+}

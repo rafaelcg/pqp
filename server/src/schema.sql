@@ -1578,6 +1578,31 @@ CREATE TABLE IF NOT EXISTS voice_raised_hands (
   PRIMARY KEY (channel_id, user_id)
 );
 
+-- Audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md): a running call
+-- turned into a stage. One row while it is on. It belongs to the CALL, so it
+-- cascades with the room row, which goes when the last seat does: a forgotten
+-- audience mode cannot outlive the call it was turned on in. Two tables rather
+-- than columns on `voice_rooms`, so shipping it never takes ACCESS EXCLUSIVE
+-- on the hottest voice table (CLAUDE.md pitfall 22), and so the lifetime is
+-- stated by the cascade chain: the room goes, the mode goes; the mode goes,
+-- every invitation goes.
+CREATE TABLE IF NOT EXISTS voice_audience_mode (
+  channel_id  UUID PRIMARY KEY REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  enabled_by  UUID NOT NULL,
+  enabled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- People a host let speak while audience mode is on. Keyed on the person,
+-- like a raised hand: a socket blip or a refresh inside the resume window
+-- keeps it, leaving the call drops it (`ws/voice.ts`).
+CREATE TABLE IF NOT EXISTS voice_audience_speakers (
+  channel_id  UUID NOT NULL REFERENCES voice_audience_mode(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  granted_by  UUID NOT NULL,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
 -- it for the cluster.
@@ -4854,6 +4879,22 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
 CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
   ON watch_party_waitlist (user_id);
 
+-- Which campaign page sent the row, when one did: `streamers` is the button on
+-- `pqp.gg/streamers`. NULL is every other door (the sidebar teaser, the
+-- `/watch-party` page), which is every row written before this column. Shown
+-- on the dashboard as a tag; the API accepts only the names in
+-- `WATCH_PARTY_WAITLIST_SOURCES` and keeps an existing value when an edit
+-- sends none.
+ALTER TABLE watch_party_waitlist ADD COLUMN IF NOT EXISTS source TEXT
+  CHECK (source ~ '^[a-z0-9-]{1,32}$');
+
+-- The dashboard's newest campaign rows with no server
+-- (`serverlessCampaign`, at most 20), read on every load of the list: walked
+-- newest first and stopped at the limit, instead of sorting every match.
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_campaign
+  ON watch_party_waitlist (created_at DESC)
+  WHERE server_id IS NULL AND source IS NOT NULL;
+
 -- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
 -- A flag is only a row here once an operator has decided something about it:
 -- no row, or `enabled` NULL, means "follow the environment variable, then the
@@ -4951,4 +4992,22 @@ CREATE TABLE IF NOT EXISTS hls_session_presence (
   user_ids       UUID[] NOT NULL DEFAULT '{}',
   sampled_at     TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (channel_id, started_at_ms, instance_id)
+);
+
+-- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
+-- channel: when a share has been stable long enough, every API machine that saw
+-- it races one upsert on this row, and only the one that finds
+-- `last_notified_at` older than the 30 minute cooldown wins and tells people
+-- (`services/stream-alerts.ts`). The row is the arbiter, not an optimisation:
+-- two machines can both see one share when its sharer reconnects to the other
+-- inside the debounce window. Rows older than a day are deleted by the next
+-- winning claim (one tiny delete per notice, never a batch job): a row past its
+-- cooldown is only a reminder of when, and the upsert overwrites it anyway.
+CREATE TABLE IF NOT EXISTS stream_alert_channels (
+  channel_id       UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  last_notified_at TIMESTAMPTZ NOT NULL,
+  -- What the notice was for (a watch party's session id), so a broadcast that
+  -- repeats while a party stays live can never claim a second time after the
+  -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
+  start_key        TEXT
 );

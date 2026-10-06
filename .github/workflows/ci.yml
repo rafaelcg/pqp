@@ -67,7 +67,10 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The server suite alone takes about ten minutes on a normal runner (4,286
+    # tests); at 15 any slow runner hit the limit with every step green and the
+    # job was cancelled, which read as a flake and cost a rerun each time.
+    timeout-minutes: 30
 
     # The authorization matrix is covered by integration tests that run against a
     # real database — a mocked one would not catch a wrong SQL predicate.

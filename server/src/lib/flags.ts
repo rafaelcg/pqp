@@ -297,6 +297,17 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareHighMotionGuard)",
   },
+  share_fast_start_quality: {
+    description:
+      "Compartilhamento de tela nítido desde o começo: quem entra na call pede a camada do palco antes da assinatura (sem os primeiros segundos em 360p), e o compartilhamento não é republicado quando a sala passa de 20 pessoas (só o teto da camada de cima muda, sem a imagem sumir pra todo mundo).",
+    env: "SHARE_FAST_START_QUALITY",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Read by `GET /api/share/config` with the call's server, like the guard:
+    // the viewer's and the presenter's clients both ask with it.
+    perServer: true,
+    clientVia: "GET /api/share/config (shareFastStartQuality)",
+  },
   share_game_capture_hint: {
     description:
       "Aviso de jogo em tela cheia exclusiva: no app desktop do Windows, se o compartilhamento chega preto, sem quadros ou cai sozinho enquanto o Windows diz que um jogo ocupa a tela, quem compartilha vê como trocar pra tela cheia em janela.",
@@ -306,6 +317,21 @@ export const FEATURE_FLAGS = {
     // Read by `GET /api/share/config` with the call's server, like the guard.
     perServer: true,
     clientVia: "GET /api/share/config (shareGameCaptureHint)",
+  },
+  linux_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Linux (sem a chamada; precisa de PulseAudio ou PipeWire).",
+    env: "LINUX_DESKTOP_SYSTEM_AUDIO",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Global on purpose. The client's three readers
+    // (`lib/linux-shell-share-audio.ts`, the call-stage hint, `use-voice`) ask
+    // `GET /api/share/config` without a server and keep one answer for the
+    // whole page, so a per-server override would be accepted by the dashboard
+    // and never read: a switch that looks on and does nothing. Make it
+    // per-server together with a client that asks with the call's server.
+    perServer: false,
+    clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
   party_fast_start: {
     description:
@@ -329,6 +355,50 @@ export const FEATURE_FLAGS = {
     // the server; the deployment-wide answer is the global value.
     perServer: true,
     clientVia: "GET /api/live-hls/config (cameraSync)",
+  },
+  audience_mode: {
+    description:
+      "Modo plateia nas calls: quem modera liga com um toque e só a staff e quem ela liberar falam; o resto vê o motivo no microfone e pede a palavra levantando a mão.",
+    env: "AUDIENCE_MODE",
+    parseEnv: exactTrue,
+    // Off until it has been run on a real call: one server first (its
+    // override), then everybody. See docs/plans/AUDIENCE_MODE.md.
+    codeDefault: false,
+    // Every reader knows the server: the client asks
+    // `GET /api/voice/config?serverId=` with the call's server, and the
+    // server side reads it per room with the channel's server in hand. Off
+    // for a server also switches off a session already running there (the
+    // sweep in ws/voice.ts), so this is the kill switch as well.
+    perServer: true,
+    clientVia: "GET /api/voice/config?serverId= (audienceMode)",
+  },
+  watch_now_banner: {
+    description:
+      "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",
+    env: "WATCH_NOW_BANNER",
+    parseEnv: exactTrue,
+    // Off so it can go on for one server first, then globally. The banner is
+    // derived on the client from frames it already holds, so there is nothing
+    // else to switch.
+    codeDefault: false,
+    // The only reader is `GET /api/live-hls/config?serverId=`, which knows the
+    // server; the deployment-wide answer (what a DM reads) is the global value.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (watchNowBanner)",
+  },
+  stream_start_notifications: {
+    description:
+      "Aviso de início de transmissão (quando alguém começa a compartilhar a tela ou uma watch party entra no ar, avisa quem pediu, com limites: servidor pequeno por padrão, 20 s de estabilidade, 1 aviso por canal a cada 30 min).",
+    env: "STREAM_START_NOTIFICATIONS",
+    parseEnv: exactTrue,
+    // Off: this is the one that can interrupt people, so it is separate from
+    // the banner and turned on one server at a time. Large servers and
+    // communities notify nobody by default even with it on.
+    codeDefault: false,
+    // The decision runs where the share starts and knows the channel, so the
+    // server is always in hand; the client reads it per server too.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
   },
   client_force_update: {
     description:

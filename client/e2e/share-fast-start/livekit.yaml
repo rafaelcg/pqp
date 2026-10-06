@@ -1,0 +1,39 @@
+# The share fast-start rig's media server. The production file is
+# tools/sfu/livekit.yaml.tmpl; this one keeps every setting that shapes how a
+# subscriber's layer is chosen (none: production runs the stock allocator,
+# stock dynacast, stock stream tracker) and changes only what a laptop needs:
+# loopback addresses, one UDP port, a throwaway key, and TURN over plain UDP so
+# a viewer can be forced through a relay whose port the rig can shape.
+port: 7880
+rtc:
+  udp_port: 7882
+  tcp_port: 7881
+  use_external_ip: false
+  # Bind the UDP mux on the container's loopback too: the TURN relay below
+  # reaches the media server there.
+  enable_loopback_candidate: true
+turn:
+  enabled: true
+  domain: localhost
+  udp_port: 3478
+  tls_port: 0
+  relay_range_start: 30000
+  relay_range_end: 30100
+  # The relay and the media server share the container's loopback here, which
+  # the TURN server refuses as a peer unless it is listed.
+  allow_restricted_peer_cidrs: ["127.0.0.0/8"]
+keys:
+  # Local only, never a production key.
+  sfsdevkey: sfs-local-secret-not-a-real-key-0123456789
+limit:
+  num_tracks: -1
+  bytes_per_sec: -1
+room:
+  auto_create: true
+  empty_timeout: 300
+  departure_timeout: 20
+  max_participants: 0
+logging:
+  level: debug
+  json: true
+  pion_level: error

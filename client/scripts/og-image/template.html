@@ -42,6 +42,9 @@
   h1 { position: absolute; left: 66px; top: 190px; font-family: "Gabarito", sans-serif; font-weight: 900;
     font-size: 96px; line-height: 0.98; letter-spacing: -0.025em; }
   h1 span { display: block; }
+  /* The streamers card says more words in the same box. */
+  body.streamers h1 { font-size: 74px; top: 182px; line-height: 1.02; }
+  body.streamers .sub { top: 380px; }
   h1 .a { color: var(--accent); }
   .sub { position: absolute; left: 68px; top: 412px; width: 520px; font-size: 27px; line-height: 1.32; white-space: pre-line;
     font-weight: 500; color: var(--text-secondary); }
@@ -121,6 +124,31 @@
   </div>
 
 <script>
+  const params = new URLSearchParams(location.search);
+  const variant = params.get("variant") === "streamers" ? "streamers" : "product";
+  const STREAMERS = {
+    pt: {
+      lang: "pt-BR",
+      h1a: "Sua comunidade", h1b: "assistindo junto.",
+      sub: "Você compartilha a tela.\nA galera assiste no navegador.",
+      c1: "Pra streamers · de graça",
+      live: "AO VIVO"
+    },
+    en: {
+      lang: "en",
+      h1a: "Your community,", h1b: "watching together.",
+      sub: "You share your screen.\nThey watch in the browser.",
+      c1: "For streamers · free",
+      live: "LIVE"
+    },
+    es: {
+      lang: "es",
+      h1a: "Tu comunidad,", h1b: "viendo junta.",
+      sub: "Tú compartes la pantalla.\nLa banda mira en el navegador.",
+      c1: "Para streamers · gratis",
+      live: "EN VIVO"
+    }
+  };
   const L = {
     pt: {
       lang: "pt-BR",
@@ -137,8 +165,22 @@
       live: "LIVE"
     }
   };
-  const lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "pt";
-  const t = L[lang];
+  const asked = params.get("lang");
+  const lang = asked === "en" ? "en" : asked === "es" && variant === "streamers" ? "es" : "pt";
+  const t = (variant === "streamers" ? STREAMERS : L)[lang];
+  if (variant === "streamers") document.body.classList.add("streamers");
+  // Shrink the headline until its longest line clears the stage (x 640),
+  // measured after the fonts load: languages differ in length.
+  document.fonts.ready.then(() => {
+    if (variant !== "streamers") return;
+    const h1 = document.querySelector("h1");
+    let size = 74;
+    const widest = () => Math.max(...[...h1.children].map((span) => span.getBoundingClientRect().right));
+    while (widest() > 600 && size > 48) {
+      size -= 2;
+      h1.style.fontSize = size + "px";
+    }
+  });
   document.documentElement.lang = t.lang;
   for (const k of ["h1a", "h1b", "sub", "c1", "live"]) document.getElementById(k).textContent = t[k];
 

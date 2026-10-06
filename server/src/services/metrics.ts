@@ -8,6 +8,10 @@ import {
 } from "../voice/hls-viewer-counts.js";
 import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import {
+  streamAlertMetrics,
+  type StreamAlertMetrics,
+} from "./stream-alerts.js";
+import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
 } from "./community-home-translation.js";
@@ -47,6 +51,10 @@ import {
   type SfuRegionCallStats,
 } from "../voice/sfu-control-plane.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
+import {
+  audienceModeMetrics,
+  type AudienceModeMetrics,
+} from "../voice/audience.js";
 import {
   getVoiceActivitySnapshot,
   localVoicePeerCount,
@@ -311,6 +319,15 @@ export interface AdminMetrics {
    */
   communityHomeTranslation: CommunityHomeTranslationMetrics;
   /**
+   * The start-of-stream notice (`services/stream-alerts.ts`), since this
+   * process started: shares that armed a timer, those dropped for the flag, the
+   * 20 s debounce or the cooldown, notices claimed, people told, why people
+   * were skipped, sockets delivered, relays, pushes, failures and the slowest
+   * decision. Per process like the push counters: with two instances read each.
+   * Live, never from the 30 s cache.
+   */
+  streamAlerts: StreamAlertMetrics;
+  /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
    *
@@ -565,6 +582,14 @@ export interface AdminMetrics {
      * distinguishes "the optimisation is running" from "no client negotiated
      * it and every frame is still a whole roster".
      */
+    /**
+     * AUDIENCE MODE (`docs/plans/AUDIENCE_MODE.md`), on the instance that
+     * answered, since its last deploy. `enforceFailures` belongs at zero: it
+     * counts participants (or whole boxes) the SFU would not update, each of
+     * which a host was shown as a mic still open. `speakDenied` is the
+     * per-reason count behind the rate-limited `voice.speakDenied` line.
+     */
+    audienceMode: AudienceModeMetrics;
     roster: {
       deltas: number;
       snapshots: number;
@@ -1127,6 +1152,7 @@ type CachedMetrics = Omit<
   | "cluster"
   | "flags"
   | "communityHomeTranslation"
+  | "streamAlerts"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1621,6 +1647,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       registry: voice.registry,
       seats: voice.seats,
       roster: voice.roster,
+      audienceMode: audienceModeMetrics(),
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);
         return {
@@ -1909,6 +1936,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfuRegions,
     flags,
     communityHomeTranslation,
+    streamAlerts: streamAlertMetrics(),
   };
 }
 

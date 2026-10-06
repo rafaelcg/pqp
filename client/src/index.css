@@ -1537,6 +1537,14 @@ html[data-route="other"] #pre-hero {
   display: none;
 }
 
+/* A marketing page's no-JS body, written into #root by the edge
+   (`lib/marketing-prerender.ts`). It is for readers that run no script: the
+   head script sets `data-route` on every page, so any browser that runs it
+   hides the block before the first paint, and React replaces #root anyway. */
+html[data-route] #pre-page {
+  display: none;
+}
+
 /* Room for the hero's download line, which is one line of text on a computer
    and a store badge or pill (44 to 56 px) on a phone. The phone value is a floor
    under both, so the live page never ends up higher than the static one (see

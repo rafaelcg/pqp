@@ -37,6 +37,17 @@ export const WATCH_PARTY_WAITLIST_STATUSES = [
 export type WatchPartyWaitlistStatus =
   (typeof WATCH_PARTY_WAITLIST_STATUSES)[number];
 
+/**
+ * Which campaign page sent a row, when one did. `streamers` is the button on
+ * `pqp.gg/streamers`, so the operator can tell a streamer's request from the
+ * sidebar teaser's without reading every note. A closed list, not free text:
+ * the value is shown on the dashboard as a tag, and the client never gets to
+ * invent a new one. NULL (absent) is every other door, which is most rows.
+ */
+export const WATCH_PARTY_WAITLIST_SOURCES = ["streamers"] as const;
+export type WatchPartyWaitlistSource =
+  (typeof WATCH_PARTY_WAITLIST_SOURCES)[number];
+
 /** "What do you want to watch", short on purpose: a line, not a pitch. */
 export const WATCH_PARTY_WAITLIST_NOTE_MAX = 140;
 
@@ -99,6 +110,12 @@ export const joinWatchPartyWaitlistSchema = z.object({
       }
       return normalized;
     }),
+  /**
+   * The campaign page the person came from (`WATCH_PARTY_WAITLIST_SOURCES`).
+   * Sticky on the server: an edit that does not send it keeps the one the
+   * row already has, so "Editar pedido" from the sidebar does not erase it.
+   */
+  source: z.enum(WATCH_PARTY_WAITLIST_SOURCES).nullable().optional(),
 });
 export type JoinWatchPartyWaitlistRequest = z.input<
   typeof joinWatchPartyWaitlistSchema

@@ -340,10 +340,19 @@ describe("the server's own clock for the room", () => {
   };
 
   it("starts at zero when a track starts, and runs while it plays", () => {
-    applyMusicWrite(ROOM, playing(), MANAGER);
-    const now = Date.now();
-    expect(musicExpectedPositionMs(ROOM, now)).toBe(0);
-    expect(musicExpectedPositionMs(ROOM, now + 5_000)).toBe(5_000);
+    // A frozen clock: the write stamps the start with Date.now() and the
+    // assertion reads it again, so on a busy runner a real millisecond could
+    // tick in between and the position read 1 instead of 0.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      applyMusicWrite(ROOM, playing(), MANAGER);
+      const now = Date.now();
+      expect(musicExpectedPositionMs(ROOM, now)).toBe(0);
+      expect(musicExpectedPositionMs(ROOM, now + 5_000)).toBe(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clamps a sample from somebody who is not running the music", () => {

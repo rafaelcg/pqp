@@ -95,6 +95,8 @@ export type VoiceOccupantMenuAction =
   | "muteForMe"
   | "unmuteForMe"
   | "lowerHand"
+  | "audienceAllow"
+  | "audienceSilence"
   | "serverMute"
   | "serverUnmute"
   | "disconnect"
@@ -114,6 +116,12 @@ export function voiceOccupantMenuActions(input: {
   serverMuted: boolean;
   /** This person's hand is up: `handRaisedAt` on their roster entry. */
   handRaised?: boolean;
+  /**
+   * Audience mode is on in OUR call and we run its stage
+   * (`docs/plans/AUDIENCE_MODE.md`): `allow` for somebody in the audience,
+   * `silence` for somebody a host already let in, null otherwise.
+   */
+  audience?: "allow" | "silence" | null;
   canDisconnect: boolean;
   canKick: boolean;
 }): VoiceOccupantMenuAction[] {
@@ -128,6 +136,13 @@ export function voiceOccupantMenuActions(input: {
   // people are listed anyway.
   if (!input.isSelf && input.canServerMute && input.handRaised) {
     items.push("lowerHand");
+  }
+  // Audience mode's two actions live here too, for the same reason: most
+  // calls are audio-only and this row is where the room's people are.
+  if (!input.isSelf && input.inSameCall && input.audience === "allow") {
+    items.push("audienceAllow");
+  } else if (!input.isSelf && input.inSameCall && input.audience === "silence") {
+    items.push("audienceSilence");
   }
   if (!input.isSelf && input.canServerMute) {
     items.push(input.serverMuted ? "serverUnmute" : "serverMute");

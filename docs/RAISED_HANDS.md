@@ -115,6 +115,15 @@ announce a twelfth raise, and the person whose hand came down sees it on the
 same roster everybody else is reading, on a button that flips back to
 *Levantar a mão*.
 
+## With audience mode
+
+Audience mode (`docs/plans/AUDIENCE_MODE.md`) makes the hand the audience's
+way to ask: while it is on, a person whose mic is locked by it sees the raise
+button as the primary control ("Pedir pra falar"), and a host sees a one-tap
+**Liberar o microfone** on every hand in the queue (on the compact line too,
+for the first hand). Letting somebody talk lowers their hand through the same
+path a moderator's lower takes, because they have been called on.
+
 ## Two machines
 
 Same path as the moderator mute (PR #355), which is the only path voice state

@@ -88,7 +88,14 @@ const projects: E2EProject[] = [
     use: { ...devices["Desktop Chrome"] },
     // `e2e/stale-bundle/` has its own config (real builds, no API, no
     // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
-    testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC, /stale-bundle[\\/]/],
+    // `e2e/share-fast-start/` too (Docker LiveKit, real Chrome, the `lk`
+    // CLI): `playwright.share-fast-start.config.ts`, `pnpm e2e:share-fast-start`.
+    testIgnore: [
+      /mobile-immersive-stage/,
+      MEDIA_SPEC,
+      /stale-bundle[\\/]/,
+      /share-fast-start[\\/]/,
+    ],
   },
   {
     name: "chromium-media",

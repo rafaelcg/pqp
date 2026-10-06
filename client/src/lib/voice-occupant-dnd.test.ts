@@ -174,6 +174,20 @@ describe("voiceOccupantMenuActions", () => {
     ).not.toContain("lowerHand");
   });
 
+  it("offers audience mode's Liberar / Silenciar only in our own call, never on ourselves", () => {
+    expect(voiceOccupantMenuActions({ ...base, audience: "allow" })).toContain("audienceAllow");
+    expect(voiceOccupantMenuActions({ ...base, audience: "silence" })).toContain(
+      "audienceSilence",
+    );
+    expect(voiceOccupantMenuActions(base)).not.toContain("audienceAllow");
+    expect(
+      voiceOccupantMenuActions({ ...base, audience: "allow", inSameCall: false }),
+    ).not.toContain("audienceAllow");
+    expect(
+      voiceOccupantMenuActions({ ...base, audience: "allow", isSelf: true }),
+    ).not.toContain("audienceAllow");
+  });
+
   it("gates mute-for-me on being in the same call", () => {
     expect(
       voiceOccupantMenuActions({ ...base, inSameCall: false }),

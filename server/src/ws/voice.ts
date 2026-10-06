@@ -37,6 +37,12 @@ import {
   type LiveHlsStream,
   type VoiceSignalingMessage,
   liveHlsStreamSchema,
+  voiceAudienceChangeSchema,
+  type SpeakReason,
+  type VoiceAudienceChange,
+  type VoiceAudienceEndReason,
+  type VoiceAudienceEnforcement,
+  type VoiceAudienceState,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import {
@@ -101,10 +107,37 @@ import {
   evictSfuRoom,
   evictSfuUser,
   evictSfuUsersExcept,
+  reconcileSfuRoomPublishGrants,
   setSfuUserCanPublish,
   tickSfuResweeps,
 } from "../voice/admin.js";
-import { resolveVoicePublish } from "../voice/speak.js";
+import { resolveVoicePublish, type VoicePublishGrant } from "../voice/speak.js";
+import {
+  applyAudienceMode,
+  audienceModeApplies,
+  audienceModeEnabledFor,
+  audienceModeMayBeOnAnywhere,
+  audienceWireState,
+  cacheAudience,
+  cachedAudience,
+  cachedAudienceRooms,
+  deleteAudienceRow,
+  insertAudienceRow,
+  isAudienceStage,
+  listAudienceRooms,
+  loadAudience,
+  logPerRoom,
+  noteAudienceCounter,
+  noteAudienceEnded,
+  noteSpeakDenied,
+  pruneDepartedAudienceSpeakers,
+  readAudienceRow,
+  removeAudienceSpeakerRow,
+  resetAudienceForTests,
+  resetAudienceLogLimiterForTests,
+  setAudienceSpeakerRow,
+  type AudienceRoom,
+} from "../voice/audience.js";
 import {
   getServerVoiceBackend,
   isLiveKitConfigured,
@@ -185,6 +218,7 @@ import {
   readChannelSfuRegion,
   promoteVoiceRoomTransport,
   readMusicWithAnchor,
+  readVoiceRoomTransport,
   readWatchParty,
   reconcileVoiceRegistry,
   otherLeasesTrustworthy,
@@ -225,6 +259,11 @@ import {
   setWatchPartyLiveListener,
   watchPartyKnownOver,
 } from "./watch-party-live.js";
+import {
+  noteStreamStarted,
+  noteStreamStopped,
+  setStreamAlertRoomReader,
+} from "../services/stream-alerts.js";
 import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
   peekPresentHlsViewers,
@@ -305,6 +344,13 @@ interface VoicePeer {
   canStream: boolean;
   /** `Permission.MANAGE_MUSIC` here; always true in a conversation call. */
   canManageMusic: boolean;
+  /**
+   * Why `canSpeak` is false, when it is (`permission` or `audience`, see
+   * `voice/audience.ts`). Told to the person on `welcome` and
+   * `voice-speak-changed` so a locked mic always says why. Absent or null when
+   * the mic is not locked. Never on the roster: it is about this person.
+   */
+  speakReason?: SpeakReason | null;
   /**
    * `channel.kind === "server"`. Resolved once at join, alongside
    * `watchParty`, because it never changes for the life of a channel.
@@ -1151,6 +1197,8 @@ export function resetVoiceRoomTransports(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetAudienceForTests();
+  resetAudienceTimersForTests();
   resetMusicForTests();
   pendingTransportDecisions.clear();
   pendingPinRechecks.clear();
@@ -3321,6 +3369,24 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
 // nobody joins or leaves the room afterwards, which is the ordinary case.
 setWatchPartyLiveListener((channelId) => {
   void pushLiveHls(channelId);
+});
+
+// What the start-of-stream notice needs to know about a room when its 20
+// seconds are up: who is seated, anywhere in the cluster, and whose share is
+// still on. Handed to the notice rather than imported by it, because this file
+// imports that one. `readClusterRoom` is the cluster-aware roster (the rows
+// with the registry on, laid over by this process's own peers either way).
+setStreamAlertRoomReader(async (channelId) => {
+  const room = await readClusterRoom(channelId);
+  if (!room) {
+    return null;
+  }
+  return {
+    userIds: room.participants.map((participant) => participant.userId),
+    sharerUserIds: room.participants
+      .filter((participant) => participant.sharingScreen)
+      .map((participant) => participant.userId),
+  };
 });
 
 // The egress monitor (`hls-egress.ts`) found a dead egress, or gave up on
@@ -5594,6 +5660,9 @@ function removePeer(peerId: string) {
   }
   cancelOrphan(peer);
   const { voiceChannelId } = peer;
+  // Whether the room was in audience mode as this process saw it, read before
+  // the local room can empty and take the cache with it.
+  const audienceBefore = cachedAudience(voiceChannelId);
   peers.delete(peerId);
   if (socketToPeerId.get(peer.socket) === peerId) {
     socketToPeerId.delete(peer.socket);
@@ -5615,6 +5684,17 @@ function removePeer(peerId: string) {
     // whether THIS user's registry row should be deleted is the check below
     // (another instance may still seat them).
     roomRaisedHands.delete(voiceChannelId);
+    // Audience mode: the same lifetime. With the registry on the rows cascade
+    // with the room row; this process's copy goes now either way.
+    cacheAudience(voiceChannelId, null);
+    audienceLastSent.delete(voiceChannelId);
+    if (!registryOn()) {
+      void noteAudienceDeparture(voiceChannelId, peer.userId, audienceBefore, true).catch(
+        (error: unknown) => {
+          console.error("[voice] audience departure failed:", error);
+        },
+      );
+    }
   } else if (
     !registryOn() &&
     !getRoomPeers(voiceChannelId).some((other) => other.userId === peer.userId)
@@ -5623,6 +5703,12 @@ function removePeer(peerId: string) {
     // in the call and is still in the queue) but this person holding no seat
     // in this room at all any more. Registry off: this map is the room.
     void dropRaisedHandForUser(voiceChannelId, peer.userId);
+    // And ends an invitation to speak, and may leave the stage empty.
+    void noteAudienceDeparture(voiceChannelId, peer.userId, audienceBefore, false).catch(
+      (error: unknown) => {
+        console.error("[voice] audience departure failed:", error);
+      },
+    );
   }
   if (registryOn()) {
     // One statement: the row goes, and the room row with it if this was the
@@ -5639,6 +5725,18 @@ function removePeer(peerId: string) {
           const remaining = await listVoicePeersInRoom(voiceChannelId);
           if (!remaining.some((row) => row.userId === userId)) {
             await dropRaisedHandForUser(voiceChannelId, userId);
+            // Not awaited: this runs inside the seat's write chain, and the
+            // audience half may send a roster, which waits for that very
+            // chain to settle. It needs nothing from the chain but the
+            // `remaining` read above.
+            void noteAudienceDeparture(
+              voiceChannelId,
+              userId,
+              audienceBefore,
+              remaining.length === 0,
+            ).catch((error: unknown) => {
+              console.error("[voice] audience departure failed:", error);
+            });
           }
         }),
     );
@@ -6002,6 +6100,8 @@ function dropVoicePeerSilently(peerId: string): void {
     forgetTransportDecision(peer.voiceChannelId);
     roomServerMutes.delete(peer.voiceChannelId);
     roomRaisedHands.delete(peer.voiceChannelId);
+    cacheAudience(peer.voiceChannelId, null);
+    audienceLastSent.delete(peer.voiceChannelId);
   }
   logEvent("voice.seatReleased", {
     peerId,
@@ -6608,6 +6708,9 @@ export function resetVoicePeers(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetAudienceForTests();
+  resetAudienceLogLimiterForTests();
+  resetAudienceTimersForTests();
   rosterAccessInvalidateAll();
   resetMusicForTests();
 }
@@ -7384,6 +7487,12 @@ function adoptMusicFromRow(
 async function welcomeVoicePeer(
   peer: VoicePeer,
   resumed: boolean,
+  /**
+   * The room's audience mode as the join that seated this peer read it.
+   * Undefined (a caller that did not read it) falls back to this process's
+   * cache.
+   */
+  audience?: AudienceRoom | null,
 ): Promise<number> {
   const transport = getRoomTransport(peer.voiceChannelId);
   const resumeToken = mintVoiceResumeToken({
@@ -7480,7 +7589,15 @@ async function welcomeVoicePeer(
     canSpeak: peer.canSpeak,
     canStream: peer.canStream,
     canManageMusic: peer.canManageMusic,
+    ...(peer.speakReason ? { speakReason: peer.speakReason } : {}),
+    audience: audienceWireState(
+      audience !== undefined ? audience : cachedAudience(peer.voiceChannelId),
+    ),
   });
+  if (audience !== undefined) {
+    // What this socket was just told, so the sweep does not repeat it.
+    noteAudienceFrameSent(peer.voiceChannelId, audience);
+  }
 
   // What the room is watching, to this socket alone and only if there is a
   // party. A joiner cannot ask for it: there is no request frame in the
@@ -7529,6 +7646,7 @@ async function reattachVoicePeer(
   peer: VoicePeer,
   socket: WebSocket,
   user: DbUser,
+  audience?: AudienceRoom | null,
 ): Promise<void> {
   const previous = socketToPeerId.get(socket);
   if (previous && previous !== peer.id) {
@@ -7558,7 +7676,7 @@ async function reattachVoicePeer(
     userId: peer.userId,
     voiceChannelId: peer.voiceChannelId,
   });
-  await welcomeVoicePeer(peer, true);
+  await welcomeVoicePeer(peer, true, audience);
 }
 
 export async function handleVoiceMessage(
@@ -7718,6 +7836,12 @@ export async function handleVoiceMessage(
     let canStream = true;
     let canManageMusic = true;
     let nickname: string | null = null;
+    // Why the mic is locked, when it is: told to the person on `welcome`, so
+    // a locked mic is never a silent no-op (2026-10-04: 146 refusals, no
+    // reason anywhere). And the room's audience mode as this join read it,
+    // handed to the welcome so the state and the grant come from one read.
+    let speakReason: SpeakReason | null = null;
+    let joinAudience: AudienceRoom | null = null;
     if (channel.kind === "server" && channel.server_id) {
       const resolved = await resolveMemberChannelPermissions(
         channel.server_id,
@@ -7740,6 +7864,23 @@ export async function handleVoiceMessage(
       });
       canManageMusic = hasPermission(resolved.permissions, Permission.MANAGE_MUSIC);
       nickname = resolved.nickname;
+      // AUDIENCE MODE, applied last and only ever taking away
+      // (`voice/audience.ts`). Read from the rows with the registry on, so a
+      // seat minted on either machine, a resume and a rejoin all come back
+      // with the grant the room has NOW. Nothing is read unless the flag is on
+      // for this server and this is a plain voice channel.
+      joinAudience = await loadAudience(channel, payload.voiceChannelId);
+      const applied = applyAudienceMode(
+        { canSpeak, canStream },
+        {
+          audience: joinAudience,
+          permissions: resolved.permissions,
+          userId: user.id,
+        },
+      );
+      canSpeak = applied.canSpeak;
+      canStream = applied.canStream;
+      speakReason = applied.speakReason;
     }
     // THE ROOM GATE for the egress, read off the same row as the stage gate
     // so the two cannot disagree. See `pickHlsSharer`.
@@ -8400,6 +8541,7 @@ export async function handleVoiceMessage(
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
       resume.peer.canManageMusic = canManageMusic;
+      resume.peer.speakReason = speakReason;
       resume.peer.watchParty = watchParty;
       if (!canSpeak) {
         resume.peer.muted = true;
@@ -8409,7 +8551,7 @@ export async function handleVoiceMessage(
         resume.peer.screenAudioStreamId = null;
         resume.peer.cameraStreamId = null;
       }
-      await reattachVoicePeer(resume.peer, socket, user);
+      await reattachVoicePeer(resume.peer, socket, user, joinAudience);
       return;
     }
 
@@ -8460,6 +8602,7 @@ export async function handleVoiceMessage(
       canSpeak,
       canStream,
       canManageMusic,
+      speakReason,
       watchParty,
       canPromoteTransport,
       canResume: payload.resume === true,
@@ -8498,12 +8641,16 @@ export async function handleVoiceMessage(
     }
     if (!canSpeak) {
       // Once per join, so an operator can see a stage working (or a member
-      // locked out by accident) without a client-side log.
-      logEvent("voice.speakDenied", {
+      // locked out by accident) without a client-side log. WITH A REASON and
+      // at most one line per room per minute (`suppressed=N` on the next):
+      // the movie night of 2026-10-04 wrote 146 of these and none said why.
+      const reason = speakReason ?? "permission";
+      noteSpeakDenied(reason);
+      logPerRoom("voice.speakDenied", payload.voiceChannelId, {
         peerId,
         userId: user.id,
-        voiceChannelId: payload.voiceChannelId,
         transport,
+        reason,
       });
     }
     // Reconstruct pins the transport the token remembered, so a deploy cannot
@@ -8583,6 +8730,7 @@ export async function handleVoiceMessage(
     const othersWelcomed = await welcomeVoicePeer(
       peer,
       resume.kind === "reconstruct" || resume.kind === "adopt",
+      joinAudience,
     );
     // TWO NUMBERS, BECAUSE ONE OF THEM USED TO BE MISREAD. This line said
     // `roomSize=` and counted this process's map, so with two API machines a
@@ -8716,7 +8864,26 @@ export async function handleVoiceMessage(
         }
       }
     }
+    const wasSharing = peer.sharingScreen;
     peer.sharingScreen = payload.sharing;
+    // THE START-OF-STREAM NOTICE'S ONLY HOOK ON THIS PATH, and it is a timer.
+    // A change from not sharing to sharing, in a server's plain voice room: a
+    // re-declare of a share that is already running (an audio id arriving, a
+    // rejoin) is not a start, a watch party's own start is its going live
+    // (`broadcastWatchParty`), and a conversation never notifies (it rings).
+    // Everything that costs anything runs 20 s later, off this handler.
+    if (payload.sharing && !wasSharing) {
+      if (peer.canPromoteTransport && !peer.watchParty) {
+        noteStreamStarted({
+          channelId: peer.voiceChannelId,
+          sharerUserId: peer.userId,
+          sharerName: peer.displayName,
+          kind: "voice",
+        });
+      }
+    } else if (!payload.sharing && wasSharing) {
+      noteStreamStopped(peer.voiceChannelId, peer.userId);
+    }
     // Only a live share can have audio; stopping clears the id in the same
     // frame so no roster can advertise sound for a capture that is gone.
     peer.screenAudioStreamId = payload.sharing
@@ -8768,6 +8935,19 @@ export async function handleVoiceMessage(
     const serverMuted = isVoiceUserServerMuted(peer.voiceChannelId, peer.userId);
     const muted = serverMuted ? true : payload.muted;
     const refusedUnmute = serverMuted && !payload.muted;
+    if (!peer.canSpeak && !payload.muted) {
+      // The mic is locked by a rule (the channel's SPEAK, or audience mode)
+      // and the client asked to open it anyway: an older tab, a patched one,
+      // or a native build that does not lock. Refused below (`muted` stays
+      // true); said here, once per room per minute, WITH the reason.
+      noteAudienceCounter("unmuteRefused");
+      logPerRoom("voice.unmuteRefused", peer.voiceChannelId, {
+        peerId: peer.id,
+        userId: peer.userId,
+        reason: peer.speakReason ?? "permission",
+        transport: getRoomTransport(peer.voiceChannelId),
+      });
+    }
     // No change, no fan-out: the client re-declares its state after every
     // (re)join, and most of those declarations are the defaults the peer
     // already has.
@@ -10296,10 +10476,24 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       byUser.set(peer.userId, list);
     }
     const relabelled: VoicePeer[] = [];
+    // Once per room, not once per person: a role edit while audience mode is
+    // on must not hand the audience its microphones back, and forty reads of
+    // the same row would say the same thing forty times.
+    let audience: AudienceRoom | null;
+    try {
+      audience = await loadAudience(channel, voiceChannelId);
+    } catch (error) {
+      // Unknown, so nothing in this room is relabelled on a guess; the
+      // audience sweep and the next permissions bump come back to it.
+      console.error("[voice] speak re-check: audience read failed:", error);
+      continue;
+    }
     for (const [userId, userPeers] of byUser) {
       let next;
       try {
-        next = await resolveVoicePublish(channel, voiceChannelId, userId);
+        next = await resolveVoicePublish(channel, voiceChannelId, userId, {
+          audience,
+        });
       } catch (error) {
         console.error("[voice] speak re-check failed:", error);
         continue;
@@ -10308,7 +10502,8 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
         (peer) =>
           peer.canSpeak !== next.canSpeak ||
           peer.canStream !== next.canStream ||
-          peer.canManageMusic !== next.canManageMusic,
+          peer.canManageMusic !== next.canManageMusic ||
+          (peer.speakReason ?? null) !== next.speakReason,
       );
       if (changed.length === 0) {
         continue;
@@ -10318,6 +10513,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
         peer.canSpeak = next.canSpeak;
         peer.canStream = next.canStream;
         peer.canManageMusic = next.canManageMusic;
+        peer.speakReason = next.speakReason;
         if (!next.canSpeak) {
           peer.muted = true;
         }
@@ -10332,6 +10528,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           canSpeak: next.canSpeak,
           canStream: next.canStream,
           canManageMusic: next.canManageMusic,
+          ...(next.speakReason ? { speakReason: next.speakReason } : {}),
         });
         writePeerRow(peer);
       }
@@ -10374,6 +10571,954 @@ onPermissionsUpdate((serverId) => {
 });
 
 // --- end speak permission -----------------------------------------------------
+
+// --- audience mode ("Modo plateia") ------------------------------------------
+//
+// `docs/plans/AUDIENCE_MODE.md`. A host turns a running call into a stage:
+// the people running the room speak, everybody else is told why on the mic
+// button and asks with a raised hand. The RULE is `applyAudienceMode`
+// (`voice/audience.ts`), applied inside `resolveVoicePublish` and on the join,
+// so every path that answers "may this person publish" already agrees. What
+// lives here is the change while people are in the room:
+//
+// 1. THE ROW FIRST (`voice_audience_mode`, `voice_audience_speakers`), then
+//    `voice.audience` on the bus, then this process's seats. Every other
+//    instance re-reads the row on the frame and does its own seats; a missed
+//    frame is caught by the 15 s sweep and by the next join, both of which
+//    read the row. Same order as a server mute and a raised hand.
+// 2. THE MEDIA, on a LiveKit room: one room-wide pass against the SFU
+//    (`reconcileSfuRoomPublishGrants`), from the instance that took the
+//    request. The SFU is the authority on who is connected, not this
+//    process's map (pitfall 19): it holds the other machine's seats, the
+//    orphans and the participants whose sockets died. A revoke's first pass
+//    asks every box. Then again at +3 s and +10 s, and on every sweep while
+//    the mode is on, each pass touching only what is still wrong.
+// 3. A MESH ROOM has no media server. The server pins `muted`, the person's
+//    client locks the mic, and every receiving client silences a peer whose
+//    roster says `canSpeak: false`: the server mute's trust boundary.
+// 4. WHAT DID NOT LAND IS SAID. A participant the SFU would not update is in
+//    `unenforcedUserIds`, which every host's control shows, and the answer to
+//    the request says it too. Nothing claims a mic is closed that is not.
+
+export const AUDIENCE_SWEEP_MS = 15_000;
+/** The follow-up passes after a change: a join that raced it, a box that hiccuped. */
+const AUDIENCE_FOLLOW_UP_MS = [3_000, 10_000] as const;
+const AUDIENCE_HOST_CHECK_MS = 2_000;
+const audienceFollowUps = new Map<string, ReturnType<typeof setTimeout>[]>();
+const audienceHostChecks = new Map<string, ReturnType<typeof setTimeout>>();
+/** The last state frame this process sent per room, so a sweep only speaks on a change. */
+const audienceLastSent = new Map<string, string>();
+/**
+ * Bumped on every change this process makes or hears about in a room. A pass
+ * against the SFU captures it when it starts and stops issuing rewrites for
+ * anybody it resolves after a newer change, so a slow pass computed for "on"
+ * cannot land on top of an "off" that overtook it. A rewrite already in
+ * flight still lands; the newer change's own passes (+3 s, +10 s, the sweep)
+ * set it right, and only touch what is wrong.
+ */
+const audienceGenerations = new Map<string, number>();
+
+/**
+ * Rooms whose audience mode went OFF and whose restore is not yet known good.
+ * The ON direction has its own backstop (the sweep walks every room whose row
+ * is on); the OFF direction has no row left to find, so without this a box
+ * that failed every restore pass would leave people revoked while the room,
+ * the roster and their own client all say they may talk. Marked BEFORE the
+ * first restore is attempted, so a pass that throws is still retried, and
+ * cleared only by a pass that comes back clean (an empty room is clean). No
+ * deadline: an unreachable box costs one call per sweep, and giving up would
+ * be choosing to leave people silenced.
+ */
+const audienceRestorePending = new Set<string>();
+/** Whether this process has run its one post-boot restore check. */
+let audienceBootCheckDone = false;
+
+/**
+ * Permission resolutions per room, shared by the seat pass and the SFU pass
+ * of one sweep or change, for `AUDIENCE_GRANT_MEMO_MS`. Keyed on the room's
+ * generation and the state it was resolved against, and dropped on any
+ * permissions change, so a memo never outlives what it was computed from. A
+ * 40-person room swept every 15 s resolves each person once, not twice.
+ */
+const AUDIENCE_GRANT_MEMO_MS = 20_000;
+const audienceGrantMemo = new Map<
+  string,
+  { key: string; at: number; byUser: Map<string, Promise<VoicePublishGrant>> }
+>();
+
+function audienceStateKey(channelId: string, audience: AudienceRoom | null): string {
+  const generation = audienceGenerations.get(channelId) ?? 0;
+  if (!audience) {
+    return `${generation}:off`;
+  }
+  return `${generation}:${audience.since}:${[...audience.speakers].sort().join(",")}`;
+}
+
+function audienceGrant(
+  channel: Awaited<ReturnType<typeof getChannel>>,
+  channelId: string,
+  userId: string,
+  audience: AudienceRoom | null,
+): Promise<VoicePublishGrant> {
+  const key = audienceStateKey(channelId, audience);
+  const now = Date.now();
+  let memo = audienceGrantMemo.get(channelId);
+  if (!memo || memo.key !== key || now - memo.at > AUDIENCE_GRANT_MEMO_MS) {
+    memo = { key, at: now, byUser: new Map() };
+    audienceGrantMemo.set(channelId, memo);
+  }
+  let pending = memo.byUser.get(userId);
+  if (!pending) {
+    const byUser = memo.byUser;
+    pending = resolveVoicePublish(channel, channelId, userId, { audience });
+    // A failure is not remembered: the next asker tries again.
+    pending.catch(() => {
+      if (byUser.get(userId) === pending) {
+        byUser.delete(userId);
+      }
+    });
+    byUser.set(userId, pending);
+  }
+  return pending;
+}
+
+onPermissionsUpdate(() => {
+  audienceGrantMemo.clear();
+});
+
+function bumpAudienceGeneration(channelId: string): void {
+  audienceGenerations.set(channelId, (audienceGenerations.get(channelId) ?? 0) + 1);
+}
+
+/** A request that cannot be honoured: there is no call, or audience mode is not on. */
+export class AudienceModeError extends Error {
+  constructor(
+    readonly code: "no-room" | "off",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export interface AudienceModeResult {
+  audience: VoiceAudienceState | null;
+  enforcement: VoiceAudienceEnforcement;
+  changed: boolean;
+}
+
+function noteAudienceFrameSent(channelId: string, audience: AudienceRoom | null): void {
+  audienceLastSent.set(channelId, JSON.stringify(audienceWireState(audience)));
+}
+
+/**
+ * Bring this process's seats in one room to what the room's audience mode
+ * says, and tell them. The `reevaluateVoiceSpeak` recipe for one room, minus
+ * the per-person SFU call: the room-wide pass does the media, once.
+ *
+ * The state frame goes out with a `change` (the transient notice), or when
+ * what this room was last told differs, so a sweep that finds nothing new
+ * sends nothing.
+ */
+async function applyAudienceLocally(
+  channelId: string,
+  channel: Awaited<ReturnType<typeof getChannel>>,
+  audience: AudienceRoom | null,
+  change?: VoiceAudienceChange,
+  /**
+   * The room's generation when `audience` was READ. A caller that awaited a
+   * read before calling passes it, so a change that landed during that read
+   * is caught too; absent means "now" (the caller just made the change).
+   */
+  expectedGeneration?: number,
+): Promise<void> {
+  const local = getRoomPeers(channelId);
+  if (local.length === 0) {
+    return;
+  }
+  // Overtaken: a newer change (here or from the bus) has its own application
+  // running, and this one must not write the older state on top of it.
+  const generation = expectedGeneration ?? audienceGenerations.get(channelId) ?? 0;
+  const overtaken = () => (audienceGenerations.get(channelId) ?? 0) !== generation;
+  if (overtaken()) {
+    return;
+  }
+  const byUser = new Map<string, VoicePeer[]>();
+  for (const peer of local) {
+    const list = byUser.get(peer.userId) ?? [];
+    list.push(peer);
+    byUser.set(peer.userId, list);
+  }
+  const relabelled: VoicePeer[] = [];
+  for (const [userId, userPeers] of byUser) {
+    let next: Pick<VoicePublishGrant, "canSpeak" | "canStream" | "speakReason">;
+    try {
+      next = await audienceGrant(channel, channelId, userId, audience);
+    } catch (error) {
+      console.error("[voice] audience re-check failed:", error);
+      if (audience) {
+        // FAIL CLOSED while the mode is on: a seat whose permissions could
+        // not be read is locked as audience until the next pass reads them
+        // (the follow-ups and the sweep re-run this). On a mesh room nothing
+        // else would stop it. A host caught by this gets their mic back on
+        // that next pass.
+        next = { canSpeak: false, canStream: false, speakReason: "audience" };
+      } else {
+        // Off: leave it, and make sure somebody comes back to restore it.
+        audienceRestorePending.add(channelId);
+        continue;
+      }
+    }
+    if (overtaken()) {
+      return;
+    }
+    const changed = userPeers.filter(
+      (peer) =>
+        peer.canSpeak !== next.canSpeak ||
+        peer.canStream !== next.canStream ||
+        (peer.speakReason ?? null) !== next.speakReason,
+    );
+    for (const peer of changed) {
+      peer.canSpeak = next.canSpeak;
+      peer.canStream = next.canStream;
+      peer.speakReason = next.speakReason;
+      if (!next.canSpeak) {
+        peer.muted = true;
+      }
+      if (!next.canStream) {
+        peer.sharingScreen = false;
+        peer.screenAudioStreamId = null;
+        peer.cameraStreamId = null;
+      }
+      send(peer.socket, {
+        type: "voice-speak-changed",
+        voiceChannelId: channelId,
+        canSpeak: next.canSpeak,
+        canStream: next.canStream,
+        canManageMusic: peer.canManageMusic,
+        ...(next.speakReason ? { speakReason: next.speakReason } : {}),
+      });
+      writePeerRow(peer);
+      relabelled.push(peer);
+    }
+  }
+  if (overtaken()) {
+    return;
+  }
+  // Checked before anything is sent, not only after resolutions: a caller
+  // whose state was read before a newer change must not even announce it.
+  const wire = audienceWireState(audience);
+  const signature = JSON.stringify(wire);
+  if (change || audienceLastSent.get(channelId) !== signature) {
+    audienceLastSent.set(channelId, signature);
+    broadcastToRoom(channelId, {
+      type: "voice-audience",
+      voiceChannelId: channelId,
+      audience: wire,
+      ...(change ? { change } : {}),
+    });
+  }
+  // One `updated` event per peer, coalesced by the roster queue into one
+  // frame per room (`broadcastRoster` -> `rosterCoalescer`). Every promise is
+  // settled, so a rejection is logged rather than unhandled.
+  const announced = await Promise.allSettled(
+    relabelled.map((peer) =>
+      broadcastRoster(channelId, { kind: "updated", peer: toParticipant(peer) }),
+    ),
+  );
+  for (const outcome of announced) {
+    if (outcome.status === "rejected") {
+      console.error("[voice] audience roster update failed:", outcome.reason);
+    }
+  }
+}
+
+/** The room's transport for the media half: this process's pin, else the row. */
+async function audienceRoomTransport(channelId: string): Promise<VoiceRoomTransport> {
+  if (isRoomPinnedLocally(channelId) || !registryOn()) {
+    return getRoomTransport(channelId);
+  }
+  try {
+    return (await readVoiceRoomTransport(channelId)) ?? getRoomTransport(channelId);
+  } catch {
+    return getRoomTransport(channelId);
+  }
+}
+
+/**
+ * One room-wide pass against the SFU. Reads the room's state fresh (so a
+ * repeat after an off restores, and a repeat after a new invitation
+ * reopens), updates `unenforced`, and tells every host if what is still
+ * pending changed.
+ */
+async function runAudiencePass(
+  channelId: string,
+  channel: Awaited<ReturnType<typeof getChannel>>,
+  wide: boolean,
+  /** A speaker change: only this person's grant moved, so only they are touched. */
+  onlyUserId?: string,
+): Promise<{ pending: string[]; unreachable: boolean }> {
+  const generation = audienceGenerations.get(channelId) ?? 0;
+  const audience = await loadAudience(channel, channelId);
+  noteAudienceCounter("enforcePasses");
+  const result = await reconcileSfuRoomPublishGrants(
+    channelId,
+    async (userId) => {
+      if (onlyUserId !== undefined && userId !== onlyUserId) {
+        return null;
+      }
+      const grant = await audienceGrant(channel, channelId, userId, audience);
+      // Overtaken by a newer change: leave this person to that change's pass.
+      return (audienceGenerations.get(channelId) ?? 0) === generation ? grant : null;
+    },
+    identityMapFor(getRoomPeers(channelId)),
+    { wide },
+  );
+  noteAudienceCounter("enforceUpdates", result.updated);
+  noteAudienceCounter(
+    "enforceFailures",
+    result.failedUserIds.length + (result.unreachable ? 1 : 0),
+  );
+  if (result.updated > 0 || result.failedUserIds.length > 0 || result.unreachable) {
+    logEvent("voice.audienceMode.enforced", {
+      channelId,
+      on: audience !== null,
+      wide,
+      checked: result.checked,
+      updated: result.updated,
+      failed: result.failedUserIds.length,
+      unreachable: result.unreachable,
+    });
+  }
+  // Overtaken while the SFU answered: the state this pass read is no longer
+  // the room's, so it must not touch the bookkeeping (restore pending, who is
+  // unenforced) or re-announce that state. The newer change runs its own.
+  if ((audienceGenerations.get(channelId) ?? 0) !== generation) {
+    return { pending: result.failedUserIds, unreachable: result.unreachable };
+  }
+  if (!audience) {
+    if (result.failedUserIds.length > 0 || result.unreachable) {
+      audienceRestorePending.add(channelId);
+    } else if (onlyUserId === undefined) {
+      audienceRestorePending.delete(channelId);
+    }
+  } else {
+    audienceRestorePending.delete(channelId);
+  }
+  if (audience) {
+    const failed = new Set(result.failedUserIds);
+    // A pass about one person says nothing about anybody else's standing.
+    const next =
+      onlyUserId === undefined
+        ? failed
+        : new Set(
+            [...audience.unenforced].filter((userId) => userId !== onlyUserId).concat(
+              failed.has(onlyUserId) ? [onlyUserId] : [],
+            ),
+          );
+    const before = [...audience.unenforced].sort().join(",");
+    const after = [...next].sort().join(",");
+    if (before !== after) {
+      audience.unenforced = next;
+      await applyAudienceLocally(channelId, channel, audience, undefined, generation);
+      if (registryOn() && clusterOn()) {
+        publishVoice(VOICE_AUDIENCE_TOPIC, {
+          channelId,
+          since: audience.since,
+          unenforcedUserIds: [...next].sort(),
+        } satisfies VoiceAudienceFrame);
+      }
+    }
+  }
+  return { pending: result.failedUserIds, unreachable: result.unreachable };
+}
+
+function scheduleAudienceFollowUps(channelId: string, onlyUserId?: string): void {
+  // A room-wide change and a one-person change keep separate timers, so an
+  // invitation right after "on" does not cancel the room's own follow-ups.
+  const key = onlyUserId === undefined ? channelId : `${channelId}#${onlyUserId}`;
+  for (const timer of audienceFollowUps.get(key) ?? []) {
+    clearTimeout(timer);
+  }
+  const timers = AUDIENCE_FOLLOW_UP_MS.map((delay, index) => {
+    const timer = setTimeout(() => {
+      if (index === AUDIENCE_FOLLOW_UP_MS.length - 1) {
+        audienceFollowUps.delete(key);
+      }
+      void (async () => {
+        const channel = await getChannel(channelId);
+        const generation = audienceGenerations.get(channelId) ?? 0;
+        await applyAudienceLocally(
+          channelId,
+          channel,
+          await loadAudience(channel, channelId),
+          undefined,
+          generation,
+        );
+        if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
+          await runAudiencePass(channelId, channel, false, onlyUserId);
+        }
+      })().catch((error: unknown) => {
+        console.error("[voice] audience follow-up failed:", error);
+      });
+    }, delay);
+    timer.unref?.();
+    return timer;
+  });
+  audienceFollowUps.set(key, timers);
+}
+
+/** The media half of a change, and what the host is told about it. */
+async function enforceAudienceChange(
+  channelId: string,
+  channel: Awaited<ReturnType<typeof getChannel>>,
+  wide: boolean,
+  options: { restoring?: boolean; onlyUserId?: string } = {},
+): Promise<VoiceAudienceEnforcement> {
+  const transport = await audienceRoomTransport(channelId);
+  if (transport !== "livekit" || !isLiveKitConfigured()) {
+    return { transport: "mesh", pendingUserIds: [], unreachable: false };
+  }
+  // Before the first pass, so a pass that throws is still followed up, and
+  // a restore that throws is still retried by the sweep.
+  if (options.restoring) {
+    audienceRestorePending.add(channelId);
+  }
+  scheduleAudienceFollowUps(channelId, options.onlyUserId);
+  try {
+    const first = await runAudiencePass(channelId, channel, wide, options.onlyUserId);
+    return {
+      transport: "livekit",
+      pendingUserIds: first.pending,
+      unreachable: first.unreachable,
+    };
+  } catch (error) {
+    // The state already changed; the host is told the media server's half
+    // is not confirmed, and the follow-ups (and the sweep) keep trying.
+    console.error("[voice] audience pass failed:", error);
+    return { transport: "livekit", pendingUserIds: [], unreachable: true };
+  }
+}
+
+/**
+ * Turn audience mode on or off in a running call. The route has already
+ * checked the flag, the actor's bits and the channel kind; this is the state
+ * change, the fan-out and the media.
+ *
+ * `actorId` is null when the server does it on its own (`reason`: nobody
+ * left who runs the stage, or the operator's flag went off).
+ */
+export async function setVoiceAudienceMode(
+  channelId: string,
+  enabled: boolean,
+  actorId: string | null,
+  reason: VoiceAudienceEndReason = "host",
+): Promise<AudienceModeResult> {
+  const channel = await getChannel(channelId);
+  let changed: boolean;
+  let state: AudienceRoom | null;
+  if (registryOn()) {
+    if (enabled) {
+      const outcome = await insertAudienceRow(channelId, actorId ?? "");
+      if (outcome === "missing") {
+        throw new AudienceModeError("no-room", "Nobody is in this call");
+      }
+      changed = outcome === "created";
+      let row: Awaited<ReturnType<typeof readAudienceRow>> = null;
+      try {
+        row = await readAudienceRow(channelId);
+      } catch (error) {
+        // The insert committed: the room IS in audience mode. Enforce it now
+        // from what we know rather than leave it to the sweep; the row's own
+        // instant replaces this one on the next read.
+        logEvent("voice.registryReadFailed", {
+          op: "audienceAfterInsert",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      state = cacheAudience(
+        channelId,
+        row ??
+          cachedAudience(channelId) ?? {
+            since: Date.now(),
+            byUserId: actorId ?? "",
+            speakers: [],
+          },
+      );
+    } else {
+      changed = await deleteAudienceRow(channelId);
+      state = cacheAudience(channelId, null);
+    }
+  } else {
+    const before = cachedAudience(channelId);
+    if (enabled) {
+      if (getRoomPeers(channelId).length === 0) {
+        throw new AudienceModeError("no-room", "Nobody is in this call");
+      }
+      state =
+        before ??
+        cacheAudience(channelId, {
+          since: Date.now(),
+          byUserId: actorId ?? "",
+          speakers: [],
+        });
+      changed = before === null;
+    } else {
+      changed = before !== null;
+      state = cacheAudience(channelId, null);
+    }
+  }
+  const change: VoiceAudienceChange | undefined = changed
+    ? enabled
+      ? { kind: "on", byUserId: actorId }
+      : { kind: "off", byUserId: actorId, reason }
+    : undefined;
+  if (changed) {
+    bumpAudienceGeneration(channelId);
+    if (enabled) {
+      noteAudienceCounter("sessionsStarted");
+    } else {
+      noteAudienceEnded(reason);
+    }
+    logEvent(enabled ? "voice.audienceMode.on" : "voice.audienceMode.off", {
+      channelId,
+      actorId,
+      ...(enabled ? {} : { reason }),
+      transport: getRoomTransport(channelId),
+    });
+    if (registryOn() && clusterOn()) {
+      publishVoice(VOICE_AUDIENCE_TOPIC, {
+        channelId,
+        change,
+      } satisfies VoiceAudienceFrame);
+    }
+  }
+  if (!enabled) {
+    const pendingCheck = audienceHostChecks.get(channelId);
+    if (pendingCheck) {
+      clearTimeout(pendingCheck);
+      audienceHostChecks.delete(channelId);
+    }
+  }
+  await applyAudienceLocally(channelId, channel, state, change);
+  // A revoke's first pass asks every box; a restore asks the room's box.
+  const enforcement = await enforceAudienceChange(channelId, channel, enabled, {
+    restoring: !enabled,
+  });
+  const audience = audienceWireState(cachedAudience(channelId) ?? state);
+  return { audience: enabled ? audience : null, enforcement, changed };
+}
+
+/**
+ * Let one person in the audience speak, or stop letting them. Granting also
+ * lowers their hand: they have been called on.
+ */
+export async function setVoiceAudienceSpeaker(
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+  actorId: string,
+): Promise<AudienceModeResult> {
+  const channel = await getChannel(channelId);
+  // The rows outlive the flag by up to one sweep; an invitation must not act
+  // on a session the operator has already switched off.
+  if (!audienceModeApplies(channel) || !audienceModeEnabledFor(channel?.server_id)) {
+    throw new AudienceModeError("off", "Audience mode is not on in this call");
+  }
+  let changed: boolean;
+  let state: AudienceRoom | null;
+  if (registryOn()) {
+    const before = await readAudienceRow(channelId);
+    if (!before) {
+      throw new AudienceModeError("off", "Audience mode is not on in this call");
+    }
+    changed = before.speakers.includes(userId) !== allowed;
+    if (changed) {
+      const outcome = await setAudienceSpeakerRow(channelId, userId, allowed, actorId);
+      if (outcome === "off") {
+        throw new AudienceModeError("off", "Audience mode is not on in this call");
+      }
+    }
+    state = cacheAudience(channelId, await readAudienceRow(channelId));
+    if (!state) {
+      throw new AudienceModeError("off", "Audience mode is not on in this call");
+    }
+  } else {
+    state = cachedAudience(channelId);
+    if (!state) {
+      throw new AudienceModeError("off", "Audience mode is not on in this call");
+    }
+    changed = state.speakers.has(userId) !== allowed;
+    if (allowed) {
+      state.speakers.add(userId);
+    } else {
+      state.speakers.delete(userId);
+    }
+  }
+  const change: VoiceAudienceChange | undefined = changed
+    ? { kind: allowed ? "speaker-added" : "speaker-removed", byUserId: actorId, userId }
+    : undefined;
+  if (changed) {
+    bumpAudienceGeneration(channelId);
+    noteAudienceCounter(allowed ? "speakersGranted" : "speakersRevoked");
+    logEvent("voice.audienceMode.speaker", { channelId, userId, actorId, allowed });
+    if (registryOn() && clusterOn()) {
+      publishVoice(VOICE_AUDIENCE_TOPIC, {
+        channelId,
+        change,
+      } satisfies VoiceAudienceFrame);
+    }
+  }
+  // Called on: the hand comes down. Unconditionally with the registry on,
+  // because the hand may have gone up on the other machine and the row, not
+  // this cache, is the queue.
+  if (allowed && (registryOn() || voiceUserHandRaisedAt(channelId, userId) !== null)) {
+    await setVoiceUserHandRaised(channelId, userId, false);
+  }
+  await applyAudienceLocally(channelId, channel, state, change);
+  // Only this person's grant moved, so only they are reconciled (a revoke
+  // still asks every box for them).
+  const enforcement = await enforceAudienceChange(channelId, channel, !allowed, {
+    onlyUserId: userId,
+  });
+  return {
+    audience: audienceWireState(cachedAudience(channelId) ?? state),
+    enforcement,
+    changed,
+  };
+}
+
+/** The room's audience mode as this process knows it, for the API's answer. */
+export function getVoiceAudienceState(channelId: string): VoiceAudienceState | null {
+  return audienceWireState(cachedAudience(channelId));
+}
+
+/**
+ * Whether anybody seated in the room (orphans in their resume window
+ * included) runs the stage. Read from the rows with the registry on: "nobody
+ * on this machine" is not "nobody" (pitfall 19). Null when it cannot say (a
+ * read failed, or the room is empty and its rows are going anyway), which
+ * the callers read as "leave it alone".
+ */
+async function audienceRoomHasStage(
+  channelId: string,
+  channel: Awaited<ReturnType<typeof getChannel>>,
+): Promise<boolean | null> {
+  if (!channel?.server_id) {
+    return null;
+  }
+  let userIds: string[];
+  try {
+    userIds = registryOn()
+      ? [...new Set((await listVoicePeersInRoom(channelId)).map((row) => row.userId))]
+      : [...new Set(getRoomPeers(channelId).map((peer) => peer.userId))];
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "audienceHost",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+  if (userIds.length === 0) {
+    return null;
+  }
+  for (const userId of userIds) {
+    try {
+      const resolved = await resolveMemberChannelPermissions(
+        channel.server_id,
+        userId,
+        channel,
+      );
+      if (isAudienceStage(resolved.permissions)) {
+        return true;
+      }
+    } catch (error) {
+      console.error("[voice] audience host check failed:", error);
+      return null;
+    }
+  }
+  return false;
+}
+
+/**
+ * THE HOST LEFT. Audience mode persists while anybody who runs the stage
+ * holds a seat; when the last of them goes, nobody left can turn it off, so
+ * it turns itself off and the room is told. Debounced per room, because the
+ * end of a film is forty departures in a minute.
+ */
+function scheduleAudienceHostCheck(channelId: string): void {
+  const pending = audienceHostChecks.get(channelId);
+  if (pending) {
+    clearTimeout(pending);
+  }
+  const timer = setTimeout(() => {
+    audienceHostChecks.delete(channelId);
+    void checkAudienceHost(channelId).catch((error: unknown) => {
+      console.error("[voice] audience host check failed:", error);
+    });
+  }, AUDIENCE_HOST_CHECK_MS);
+  timer.unref?.();
+  audienceHostChecks.set(channelId, timer);
+}
+
+async function checkAudienceHost(channelId: string): Promise<void> {
+  const channel = await getChannel(channelId);
+  if (!(await loadAudience(channel, channelId))) {
+    return;
+  }
+  if ((await audienceRoomHasStage(channelId, channel)) === false) {
+    await setVoiceAudienceMode(channelId, false, null, "no-host");
+  }
+}
+
+/** Test hook: run the host check now instead of after the debounce. */
+export async function runAudienceHostCheckForTests(channelId: string): Promise<void> {
+  const pending = audienceHostChecks.get(channelId);
+  if (pending) {
+    clearTimeout(pending);
+    audienceHostChecks.delete(channelId);
+  }
+  await checkAudienceHost(channelId);
+}
+
+/**
+ * Somebody's last seat in this room went (orphans included). Their
+ * invitation goes with them, like a raised hand; and if they ran the stage,
+ * the room may have nobody left who can.
+ *
+ * `audienceBefore` is this process's view from before the seat was removed:
+ * the cache is cleared with the local room, and the question is whether the
+ * room was in audience mode when they left.
+ */
+async function noteAudienceDeparture(
+  channelId: string,
+  userId: string,
+  audienceBefore: AudienceRoom | null,
+  roomEmpty: boolean,
+): Promise<void> {
+  if (!audienceBefore) {
+    return;
+  }
+  if (roomEmpty) {
+    noteAudienceEnded("room-empty");
+    logEvent("voice.audienceMode.off", { channelId, actorId: null, reason: "room-empty" });
+    return;
+  }
+  let dropped = false;
+  if (registryOn()) {
+    dropped = await removeAudienceSpeakerRow(channelId, userId);
+  } else {
+    dropped = audienceBefore.speakers.delete(userId);
+  }
+  if (dropped) {
+    cachedAudience(channelId)?.speakers.delete(userId);
+    if (registryOn() && clusterOn()) {
+      publishVoice(VOICE_AUDIENCE_TOPIC, { channelId } satisfies VoiceAudienceFrame);
+    }
+    const channel = await getChannel(channelId);
+    await applyAudienceLocally(channelId, channel, cachedAudience(channelId));
+  }
+  scheduleAudienceHostCheck(channelId);
+}
+
+/**
+ * THE SWEEP, every `AUDIENCE_SWEEP_MS` on every API process, for the rooms
+ * this process holds a seat in. Four jobs, in order:
+ *
+ * 1. the operator's flag went off for the server: switch it off (the kill
+ *    switch, no deploy);
+ * 2. nobody left runs the stage: switch it off;
+ * 3. re-read the row and bring this process's seats to it (a missed bus
+ *    frame, a join that raced a toggle);
+ * 4. on LiveKit, one pass against the SFU, touching only what is wrong (a
+ *    replayed token, an update that failed earlier).
+ *
+ * Rooms this process holds nobody in are another process's to sweep; their
+ * cache entry is dropped here, since nothing on this machine would refresh it.
+ */
+export async function sweepAudienceModes(): Promise<void> {
+  const localRooms = new Set<string>();
+  for (const peer of peers.values()) {
+    localRooms.add(peer.voiceChannelId);
+  }
+  // ONCE AFTER BOOT: this process may have died holding a revoke at the SFU
+  // that it no longer remembers (the restore list lives in memory, and with
+  // the registry off so does the mode). Every LiveKit room it seats in a
+  // server where the flag is on gets one restore check; a room that is
+  // genuinely on is left to the sweep below.
+  if (!audienceBootCheckDone && localRooms.size > 0) {
+    audienceBootCheckDone = true;
+    const livekitRooms = [...localRooms].filter(
+      (channelId) => getRoomTransport(channelId) === "livekit",
+    );
+    await mapWithConcurrency(livekitRooms, 4, async (channelId) => {
+      try {
+        const channel = await getChannel(channelId);
+        if (audienceModeApplies(channel) && audienceModeEnabledFor(channel?.server_id)) {
+          audienceRestorePending.add(channelId);
+        }
+      } catch {
+        // Could not tell: check it anyway. A restore on a room that was never
+        // in audience mode rewrites nothing (only mismatches are touched),
+        // and a skipped room here would never be looked at again.
+        audienceRestorePending.add(channelId);
+      }
+    });
+  }
+  await retryAudienceRestores();
+  // Nothing can be on and nothing is cached: no query, unless rows may be
+  // left over from before the flag went off (registry on, seats here). Those
+  // are read so the flag-off branch below deletes them rather than letting
+  // them come back live the day the flag is turned on again.
+  if (
+    !audienceModeMayBeOnAnywhere() &&
+    cachedAudienceRooms().length === 0 &&
+    !(registryOn() && localRooms.size > 0)
+  ) {
+    return;
+  }
+  let audienceRooms: string[];
+  if (registryOn()) {
+    const candidates = [...new Set([...localRooms, ...cachedAudienceRooms()])];
+    if (candidates.length === 0) {
+      return;
+    }
+    try {
+      audienceRooms = await listAudienceRooms(candidates);
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "audienceSweep",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const on = new Set(audienceRooms);
+    for (const channelId of cachedAudienceRooms()) {
+      if (on.has(channelId)) {
+        continue;
+      }
+      // The row went and this process missed the frame that said so.
+      cacheAudience(channelId, null);
+      if (localRooms.has(channelId)) {
+        const channel = await getChannel(channelId);
+        await applyAudienceLocally(channelId, channel, null, {
+          kind: "off",
+          byUserId: null,
+        });
+      } else {
+        audienceLastSent.delete(channelId);
+      }
+    }
+  } else {
+    audienceRooms = cachedAudienceRooms();
+  }
+  for (const channelId of audienceRooms) {
+    if (!localRooms.has(channelId)) {
+      if (registryOn()) {
+        cacheAudience(channelId, null);
+        audienceLastSent.delete(channelId);
+      }
+      continue;
+    }
+    try {
+      const channel = await getChannel(channelId);
+      if (!audienceModeApplies(channel) || !audienceModeEnabledFor(channel?.server_id)) {
+        await setVoiceAudienceMode(channelId, false, null, "flag-off");
+        continue;
+      }
+      if ((await audienceRoomHasStage(channelId, channel)) === false) {
+        await setVoiceAudienceMode(channelId, false, null, "no-host");
+        continue;
+      }
+      // An invitation whose holder has no seat left (a departure delete
+      // that failed) goes now, so it cannot come back with them later.
+      if (registryOn() && (await pruneDepartedAudienceSpeakers(channelId)) > 0) {
+        bumpAudienceGeneration(channelId);
+        if (clusterOn()) {
+          publishVoice(VOICE_AUDIENCE_TOPIC, { channelId } satisfies VoiceAudienceFrame);
+        }
+      }
+      const generation = audienceGenerations.get(channelId) ?? 0;
+      await applyAudienceLocally(
+        channelId,
+        channel,
+        await loadAudience(channel, channelId),
+        undefined,
+        generation,
+      );
+      if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
+        await runAudiencePass(channelId, channel, false);
+      }
+    } catch (error) {
+      console.error("[voice] audience sweep failed for a room:", error);
+    }
+  }
+  // THE BACKSTOP FOR "OFF": a room this process holds whose rows say audience
+  // mode is NOT on, but whose seats here are still locked by it (an
+  // application lost to a race, a restart that forgot the mode). Brought back
+  // to "off", which also restores them at the SFU.
+  const on = new Set(audienceRooms);
+  for (const channelId of localRooms) {
+    if (on.has(channelId) || audienceRestorePending.has(channelId)) {
+      continue;
+    }
+    if (!getRoomPeers(channelId).some((peer) => peer.speakReason === "audience")) {
+      continue;
+    }
+    audienceRestorePending.add(channelId);
+  }
+  if (audienceRestorePending.size > 0) {
+    await retryAudienceRestores();
+  }
+}
+
+/**
+ * The OFF direction's backstop: rooms whose restore at the SFU has not come
+ * back clean yet get another pass. A room whose row is ON again is left to
+ * the main sweep; one past its deadline is logged and dropped.
+ */
+async function retryAudienceRestores(): Promise<void> {
+  for (const channelId of [...audienceRestorePending]) {
+    try {
+      const channel = await getChannel(channelId);
+      if (await loadAudience(channel, channelId)) {
+        // On again: the main sweep owns the room now.
+        audienceRestorePending.delete(channelId);
+        continue;
+      }
+      // Seats first (a resolution that failed while restoring left one
+      // locked), then the media server. Either failing keeps it pending.
+      audienceRestorePending.delete(channelId);
+      await applyAudienceLocally(channelId, channel, null);
+      if ((await audienceRoomTransport(channelId)) === "livekit" && isLiveKitConfigured()) {
+        await runAudiencePass(channelId, channel, false);
+      }
+    } catch (error) {
+      audienceRestorePending.add(channelId);
+      console.error("[voice] audience restore retry failed:", error);
+    }
+  }
+}
+
+/** Test hook: forget every audience timer and what was last sent. */
+export function resetAudienceTimersForTests(): void {
+  for (const timers of audienceFollowUps.values()) {
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+  }
+  audienceFollowUps.clear();
+  for (const timer of audienceHostChecks.values()) {
+    clearTimeout(timer);
+  }
+  audienceHostChecks.clear();
+  audienceLastSent.clear();
+  audienceGenerations.clear();
+  audienceRestorePending.clear();
+  audienceGrantMemo.clear();
+  audienceBootCheckDone = false;
+}
+
+// --- end audience mode -------------------------------------------------------
 
 // --- promotion: the one time a live room changes transport ---------------------
 //
@@ -10968,6 +12113,14 @@ export const VOICE_MODERATION_TOPIC = "voice.moderation";
 export const VOICE_REACTIONS_TOPIC = "voice.reactions";
 export const VOICE_SERVER_MUTE_TOPIC = "voice.serverMute";
 export const VOICE_RAISED_HAND_TOPIC = "voice.raisedHand";
+/**
+ * Audience mode changed in a room (`docs/plans/AUDIENCE_MODE.md`). A hint
+ * about the `voice_audience_*` rows: the receiver re-reads them and brings
+ * its own seats to what they say. `unenforcedUserIds` (with the session's
+ * `since`) is the one thing the rows do not hold: what the SFU pass on the
+ * sending machine could not update, so every host sees the same warning.
+ */
+export const VOICE_AUDIENCE_TOPIC = "voice.audience";
 export const VOICE_SIGNAL_TOPIC = "voice.signal";
 export const VOICE_TRANSPORT_TOPIC = "voice.transport";
 /**
@@ -11347,6 +12500,46 @@ subscribeToCluster(VOICE_RAISED_HAND_TOPIC, (data) => {
       console.error("[voice] raised hand frame failed:", error);
     },
   );
+});
+
+const voiceAudienceFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  change: voiceAudienceChangeSchema.optional(),
+  since: z.number().int().nonnegative().optional(),
+  unenforcedUserIds: z.array(z.string()).optional(),
+});
+type VoiceAudienceFrame = z.infer<typeof voiceAudienceFrameSchema>;
+
+subscribeToCluster(VOICE_AUDIENCE_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceAudienceFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const frame = parsed.data;
+  // Nobody here: nothing to tell, and nothing to cache (the rows answer for
+  // this process on its next join).
+  if (getRoomPeers(frame.channelId).length === 0) {
+    return;
+  }
+  noteClusterFrameReceived();
+  // Every frame but a pure enforcement report says the rows moved.
+  if (frame.change || frame.unenforcedUserIds === undefined) {
+    bumpAudienceGeneration(frame.channelId);
+  }
+  const generation = audienceGenerations.get(frame.channelId) ?? 0;
+  void (async () => {
+    const channel = await getChannel(frame.channelId);
+    const audience = await loadAudience(channel, frame.channelId);
+    if (audience && frame.unenforcedUserIds && frame.since === audience.since) {
+      audience.unenforced = new Set(frame.unenforcedUserIds);
+    }
+    await applyAudienceLocally(frame.channelId, channel, audience, frame.change, generation);
+  })().catch((error: unknown) => {
+    console.error("[voice] audience frame failed:", error);
+  });
 });
 
 subscribeToCluster(VOICE_SERVER_MUTE_TOPIC, (data) => {

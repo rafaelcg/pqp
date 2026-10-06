@@ -81,6 +81,14 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   share_high_motion_guard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   share_game_capture_hint: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  share_fast_start_quality: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  linux_desktop_system_audio: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  audience_mode: (raw) => raw === "true",
+  watch_now_banner: (raw) => raw === "true",
+  stream_start_notifications: (raw) => raw === "true",
 };
 
 const SAMPLES = [
@@ -479,5 +487,41 @@ describeDb("runtime flags against Postgres", () => {
     await flags.setGlobalFlag("community_home", true, { kind: "dashboard" });
     expect(isCommunityHomeEnabled()).toBe(true);
     expect(isCommunityHomeVipEnabled()).toBe(true);
+  });
+
+  it("Linux desktop system audio is switched from the dashboard and served by the share config", async () => {
+    const { shareConfigForServer } = await import("./share-config.js");
+    await flags.startFeatureFlags();
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+
+    // The operator's row, with no deploy and no variable.
+    await flags.setGlobalFlag("linux_desktop_system_audio", true, { kind: "dashboard" });
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(true);
+    expect(shareConfigForServer(serverId).linuxDesktopSystemAudio).toBe(true);
+
+    // A row beats a variable that says the opposite.
+    process.env.LINUX_DESKTOP_SYSTEM_AUDIO = "false";
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(true);
+    await flags.setGlobalFlag("linux_desktop_system_audio", false, { kind: "dashboard" });
+    process.env.LINUX_DESKTOP_SYSTEM_AUDIO = "true";
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+
+    // It is on the dashboard's list, with its variable and the field it is served as.
+    const entry = (await flags.listFeatureFlags()).flags.find(
+      (flag) => flag.key === "linux_desktop_system_audio",
+    )!;
+    expect(entry).toMatchObject({
+      env: "LINUX_DESKTOP_SYSTEM_AUDIO",
+      perServer: false,
+      clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
+    });
+
+    // Global only: the client never asks with a server, so an override would
+    // be accepted and never read. It is refused instead.
+    await expect(
+      flags.setServerFlagOverride("linux_desktop_system_audio", serverId, true, {
+        kind: "dashboard",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 });
