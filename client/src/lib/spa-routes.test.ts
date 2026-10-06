@@ -47,6 +47,8 @@ describe("isUnknownSpaPath", () => {
       "/",
       "/vem",
       "/watch-party",
+      "/streamers",
+      "/criadores",
       "/claim",
       "/app",
       "/app/server/123/channel/456",

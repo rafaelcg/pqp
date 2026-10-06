@@ -4457,6 +4457,24 @@ with the dialog open. Open Graph copy comes from `marketing-meta.ts`, pinned
 to `watchPartyPage.seo.*` by its test; the card image is the default one.
 Both words are reserved handles.
 
+`pqp.gg/streamers` (and `/criadores`, canonical `/streamers`) is the page
+outreach sends a streamer to (`pages/streamers-page.tsx`). Same list, no new
+form: its button is the same intent with `&from=streamers`
+(`STREAMERS_WAITLIST_HREF`), which survives sign-up in the same stash
+(`watch-party-waitlist:streamers`) and makes the dialog send `source:
+"streamers"`. The row keeps it in `watch_party_waitlist.source` (a closed
+list, `WATCH_PARTY_WAITLIST_SOURCES`, sticky across an edit that sends none),
+the dashboard tags the request **streamer**, and a streamer who asked before
+having a server is listed by name under the table (`serverlessCampaign` on
+`GET /api/admin/watch-party-waitlist`) instead of disappearing into the
+`serverless` count; that one is also asked for their channel. Tracking one
+outreach link per streamer is the existing acquisition parameter:
+`pqp.gg/streamers?ref=<who>` lands in `users.acquisition_ref` with
+`acquisition_landing = '/streamers'`. A reader with no JavaScript gets the
+hero, the steps and the FAQ as HTML from the edge (`marketing-prerender.ts`).
+The page never names what people watch; its FAQ says the presenter answers
+for what they share and links the terms.
+
 ## Native apps
 
 Both decode `type` as a plain string, so the new type never fails a parse.

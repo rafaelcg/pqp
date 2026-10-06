@@ -5,6 +5,7 @@ import {
   WATCH_PARTY_AUDIENCE_BUCKETS,
   WATCH_PARTY_WAITLIST_NOTE_MAX,
   type WatchPartyAudienceBucket,
+  type WatchPartyWaitlistSource,
   type WatchPartyWaitlistState,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,7 @@ export function WatchPartyWaitlistDialog({
   onClose,
   servers,
   initialServerId,
+  source = null,
   onReload = () => window.location.reload(),
 }: {
   open: boolean;
@@ -115,6 +117,12 @@ export function WatchPartyWaitlistDialog({
   servers: readonly WaitlistServerOption[];
   /** The open server, which the picker starts on. Null with no server open. */
   initialServerId: string | null;
+  /**
+   * The campaign page that opened this (`streamers`), sent with the row. A
+   * streamer with no server yet is also asked for their channel, because
+   * that is how the operator finds them again.
+   */
+  source?: WatchPartyWaitlistSource | null;
   /** Test seam: what "Recarregar" does once a server is switched on. */
   onReload?: () => void;
 }) {
@@ -184,6 +192,7 @@ export function WatchPartyWaitlistDialog({
         audienceBucket: bucket,
         note: note.trim() || null,
         streamChannel: channel.trim() || null,
+        ...(source ? { source } : {}),
       });
       rememberWatchPartyWaitlistEntry(serverId, entry);
       setEditing(false);
@@ -204,6 +213,7 @@ export function WatchPartyWaitlistDialog({
 
   const formView =
     view === "request" || view === "member" || view === "serverless";
+  const askChannelServerless = view === "serverless" && source === "streamers";
 
   const footer = (() => {
     if (formView) {
@@ -307,7 +317,9 @@ export function WatchPartyWaitlistDialog({
               )}
               {view === "serverless" && (
                 <p className="text-pretty text-sm text-text-secondary">
-                  {t("watchParty.waitlist.serverless.body")}
+                  {source === "streamers"
+                    ? t("watchParty.waitlist.serverless.bodyStreamer")
+                    : t("watchParty.waitlist.serverless.body")}
                 </p>
               )}
 
@@ -374,18 +386,20 @@ export function WatchPartyWaitlistDialog({
                 </div>
               )}
 
-              {view === "request" && (
+              {(view === "request" || askChannelServerless) && (
                 <>
-                  <Field label={t("watchParty.waitlist.form.note")} optional htmlFor={ids.note}>
-                    <Input
-                      id={ids.note}
-                      value={note}
-                      maxLength={WATCH_PARTY_WAITLIST_NOTE_MAX}
-                      disabled={busy}
-                      placeholder={t("watchParty.waitlist.form.notePlaceholder")}
-                      onChange={(event) => setNote(event.target.value)}
-                    />
-                  </Field>
+                  {view === "request" && (
+                    <Field label={t("watchParty.waitlist.form.note")} optional htmlFor={ids.note}>
+                      <Input
+                        id={ids.note}
+                        value={note}
+                        maxLength={WATCH_PARTY_WAITLIST_NOTE_MAX}
+                        disabled={busy}
+                        placeholder={t("watchParty.waitlist.form.notePlaceholder")}
+                        onChange={(event) => setNote(event.target.value)}
+                      />
+                    </Field>
+                  )}
                   <Field label={t("watchParty.waitlist.form.channel")} optional htmlFor={ids.channel}>
                     <Input
                       id={ids.channel}

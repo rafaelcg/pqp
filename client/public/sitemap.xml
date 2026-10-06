@@ -47,6 +47,12 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://pqp.gg/streamers</loc>
+    <lastmod>2026-10-05</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://pqp.gg/beta</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>

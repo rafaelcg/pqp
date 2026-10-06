@@ -2166,6 +2166,12 @@
         </table>
       </div>
       <p class="ctl-msg" id="ctlWaitlistMsg" hidden></p>
+      <!-- Streamers who asked from pqp.gg/streamers before having a server:
+           named, because they are somebody to write to. -->
+      <div id="ctlWaitlistServerless" hidden>
+        <p class="note" style="margin-top:12px">pediram pela página de streamers, ainda sem servidor</p>
+        <div id="ctlWaitlistServerlessBody"></div>
+      </div>
       <p class="ctl-caveat">
         <b>ativar</b> é o mesmo interruptor de <b>watch party por servidor</b> abaixo, ligado junto com a
         <b>baixa latência</b>, e aprova e avisa quem estava esperando naquele servidor.
@@ -5731,7 +5737,8 @@
   function ctlWaitlistRequestsCell(requests, total) {
     if (!requests || !requests.length) return '<span class="muted">-</span>';
     var lines = requests.map(function (r) {
-      var parts = ["<b>" + esc(r.username) + "</b>"];
+      var parts = ["<b>" + esc(r.username) + "</b>" +
+        (r.source === "streamers" ? ' <span class="tag accent">streamer</span>' : "")];
       var bucket = window.PQPInsights ? window.PQPInsights.audienceBucketLabel(r.audienceBucket) : "";
       if (bucket) parts.push(esc(bucket));
       if (r.note) parts.push('"' + esc(r.note) + '"');
@@ -5758,6 +5765,18 @@
       ? (fmt(totals.waiting) + " esperando · " + fmt(totals.approved) + " liberado(s) · " +
          fmt(totals.declined) + " recusado(s) · sem servidor: " + fmt(serverless))
       : "carregando");
+
+    var campaign = (payload && payload.serverlessCampaign) || [];
+    var campaignBox = $("ctlWaitlistServerless");
+    if (campaignBox) {
+      campaignBox.hidden = !campaign.length;
+      var campaignBody = $("ctlWaitlistServerlessBody");
+      if (campaignBody) {
+        campaignBody.innerHTML = campaign.length
+          ? ctlWaitlistRequestsCell(campaign, campaign.length)
+          : "";
+      }
+    }
 
     if (!ctlWaitlistServers.length) {
       body.innerHTML = '<tr><td colspan="8" class="muted">ninguém na lista ainda</td></tr>';
