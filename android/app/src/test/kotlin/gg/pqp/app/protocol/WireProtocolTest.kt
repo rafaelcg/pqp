@@ -218,6 +218,12 @@ class WireProtocolTest {
     private val deliberatelyIgnored: Map<String, String> = mapOf(
         // Only ever answers a `set-camera`, which Android does not send.
         "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
+        // Audience mode's room state (docs/plans/AUDIENCE_MODE.md). The grant
+        // that locks the mic arrives on `voice-speak-changed`, which IS
+        // handled, and on LiveKit the SFU refuses the publish anyway; this is
+        // the badge, the notice and the host controls, none of which the phone
+        // draws yet. Listed in the plan doc as Android follow-up work.
+        "voice-audience" to "the mic lock rides voice-speak-changed; no audience badge or host controls on the phone yet",
         // Who is online in the channel. Android draws no member list yet.
         "presence-update" to "no roster surface on the phone to render it in",
         // The incremental form of the same list, and opt-in: the server sends

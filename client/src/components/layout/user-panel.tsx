@@ -29,6 +29,12 @@ interface UserPanelProps {
   isMuted: boolean;
   /** A moderator muted this person for the call: the mute button is inert. */
   serverMuted?: boolean;
+  /**
+   * Why the mic is locked when `canSpeak` is false: audience mode says so in
+   * its own words (`docs/plans/AUDIENCE_MODE.md`); anything else is the
+   * channel's permission.
+   */
+  speakReason?: "permission" | "audience" | null;
   isDeafened: boolean;
   inVoice: boolean;
   /** False while the current channel denies SPEAK: the mute stays locked. */
@@ -149,6 +155,7 @@ export function UserPanel({
   isDeafened,
   inVoice,
   canSpeak = true,
+  speakReason = null,
   showUserButton,
   manualStatus,
   effectiveStatus,
@@ -592,7 +599,9 @@ export function UserPanel({
           !inVoice
             ? t("userPanel.joinToUse")
             : !canSpeak
-              ? t("voice.control.listenOnlyLocked")
+              ? speakReason === "audience"
+                ? t("voice.audience.locked")
+                : t("voice.control.listenOnlyLocked")
               : serverMuted
                 ? t("voice.serverMuted.self")
                 : undefined

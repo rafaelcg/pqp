@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
+import { voiceConfigForServer } from "./voice-config.js";
 
 /**
  * THE TWO HALVES OF A FLAG, COMPARED.
@@ -105,6 +106,75 @@ describe("GET /api/share/config against the client that reads it", () => {
       expect(field, `${key} names no field in clientVia`).toBeTruthy();
       expect(served, `${key} is registered as served by /api/share/config`).toContain(field);
     }
+  });
+});
+
+describe("GET /api/voice/config against the client that reads it", () => {
+  // Audience mode (`audience_mode`), the one field today. Same checks as the
+  // share config above, written the day the flag was born rather than the
+  // day after its server half went missing.
+  const served = Object.keys(voiceConfigForServer(null)).sort();
+
+  it("the client's VoiceConfig type names exactly the fields the server sends", () => {
+    const api = readFileSync(path.join(clientSrc, "lib/api.ts"), "utf8");
+    const body = /export interface VoiceConfig \{([\s\S]*?)\n\}/.exec(api)?.[1];
+    expect(body, "client VoiceConfig interface not found in lib/api.ts").toBeTruthy();
+    const declared = [...body!.matchAll(/^\s{2}([A-Za-z]\w*)\??:/gm)]
+      .map((match) => match[1]!)
+      .sort();
+    expect(declared).toEqual(served);
+  });
+
+  it("the client asks with the call's server and reads audienceMode off the answer", () => {
+    const hook = readFileSync(path.join(clientSrc, "hooks/use-voice-config.ts"), "utf8");
+    expect(hook).toContain("fetchVoiceConfig(serverId)");
+    const api = readFileSync(path.join(clientSrc, "lib/api.ts"), "utf8");
+    expect(api).toMatch(/\/api\/voice\/config\?serverId=/);
+    const readers = clientFiles.filter(({ text }) => text.includes("useVoiceConfig("));
+    expect(readers.length).toBeGreaterThanOrEqual(1);
+    const read = new Set<string>();
+    for (const { text } of readers) {
+      for (const match of text.matchAll(/\bvoiceConfig\??\.([A-Za-z]\w*)/g)) {
+        read.add(match[1]!);
+      }
+    }
+    expect([...read]).toContain("audienceMode");
+    for (const field of read) {
+      expect(served, `client reads \`${field}\` from /api/voice/config`).toContain(field);
+    }
+  });
+
+  it("the route the client calls is mounted and answers with that config, asked per server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/voice\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/voice/config is not mounted").toBeTruthy();
+    expect(route).toContain("voiceConfigForServer(");
+    expect(route).toContain('searchParams.get("serverId")');
+  });
+
+  it("every voice flag the server registers is served under the field its registry entry names", () => {
+    let checked = 0;
+    for (const [key, def] of Object.entries(FEATURE_FLAGS)) {
+      const clientVia = "clientVia" in def ? def.clientVia : undefined;
+      if (!clientVia?.startsWith("GET /api/voice/config")) {
+        continue;
+      }
+      const field = /\((\w+)\)/.exec(clientVia)?.[1];
+      expect(field, `${key} names no field in clientVia`).toBeTruthy();
+      expect(served, `${key} is registered as served by /api/voice/config`).toContain(field);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThanOrEqual(1);
+  });
+
+  it("audience_mode is per server, off by default, and the dashboard has a note for it", () => {
+    expect(FEATURE_FLAGS.audience_mode.perServer).toBe(true);
+    expect(FEATURE_FLAGS.audience_mode.codeDefault).toBe(false);
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\baudience_mode:\s*"/);
   });
 });
 

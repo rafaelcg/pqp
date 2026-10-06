@@ -356,6 +356,22 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config (cameraSync)",
   },
+  audience_mode: {
+    description:
+      "Modo plateia nas calls: quem modera liga com um toque e só a staff e quem ela liberar falam; o resto vê o motivo no microfone e pede a palavra levantando a mão.",
+    env: "AUDIENCE_MODE",
+    parseEnv: exactTrue,
+    // Off until it has been run on a real call: one server first (its
+    // override), then everybody. See docs/plans/AUDIENCE_MODE.md.
+    codeDefault: false,
+    // Every reader knows the server: the client asks
+    // `GET /api/voice/config?serverId=` with the call's server, and the
+    // server side reads it per room with the channel's server in hand. Off
+    // for a server also switches off a session already running there (the
+    // sweep in ws/voice.ts), so this is the kill switch as well.
+    perServer: true,
+    clientVia: "GET /api/voice/config?serverId= (audienceMode)",
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",

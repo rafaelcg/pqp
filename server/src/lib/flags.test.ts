@@ -85,6 +85,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   share_fast_start_quality: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   linux_desktop_system_audio: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  audience_mode: (raw) => raw === "true",
 };
 
 const SAMPLES = [

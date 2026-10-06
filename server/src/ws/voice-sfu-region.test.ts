@@ -249,7 +249,7 @@ describeDb("voice room SFU region", () => {
     resetVoiceRateLimits();
     vi.spyOn(console, "log").mockImplementation(() => {});
     await getPool().query(
-      `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
+      `TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
     );
   });
 

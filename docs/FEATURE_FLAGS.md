@@ -226,6 +226,21 @@ the merge that shipped the client (#866 into desktop 0.2.3);
 reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
 server.
 
+Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
+**per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):
+somebody holding `MUTE_MEMBERS` or `MANAGE_CHANNELS` turns a running call into
+a stage where only the staff and the people they let in can talk, enforced on
+the SFU grant and the WebSocket. Served to the client by
+`GET /api/voice/config?serverId=` as `audienceMode`, which only gates turning it
+ON: a room already in audience mode shows its state and its off switch from the
+room's own frames whatever the flag says. Off for a server is also the kill
+switch: the 15 s audience sweep in `ws/voice.ts` switches off every session
+still running there. Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "audience_mode", serverId, enabled: true }` or from controles →
+interruptores; open tabs show the control on the next config refresh (focus or
+10 min). `server/src/lib/flag-client-contract.test.ts` checks the served field,
+the client reader and the dashboard note.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

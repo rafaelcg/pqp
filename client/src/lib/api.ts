@@ -1,4 +1,5 @@
 import type {
+  VoiceAudienceResponse,
   ChannelType,
   MusicResolved,
   AcquisitionInput,
@@ -728,6 +729,39 @@ export const fetchShareConfig = (serverId?: string | null) =>
     serverId
       ? `/api/share/config?serverId=${encodeURIComponent(serverId)}`
       : "/api/share/config",
+  );
+
+/**
+ * What a voice call's controls may offer in this server, decided by the
+ * operator without a deploy (`GET /api/voice/config?serverId=`,
+ * `voiceConfigForServer` on the server). Every field optional: an older API
+ * answers 404 or omits it, and absent is off.
+ */
+export interface VoiceConfig {
+  /**
+   * A host here may turn audience mode on (`docs/plans/AUDIENCE_MODE.md`).
+   * Only gates turning it ON: a room already in audience mode shows its
+   * state and its off switch whatever this says.
+   */
+  audienceMode?: boolean;
+}
+
+export const fetchVoiceConfig = (serverId: string) =>
+  apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** Turn audience mode on or off in the call running in this voice channel. */
+export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
+  put<VoiceAudienceResponse>(`/api/channels/${channelId}/voice-audience`, { enabled });
+
+/** "Liberar o microfone" / "Silenciar" for one person while audience mode is on. */
+export const setVoiceAudienceSpeaker = (
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+) =>
+  put<VoiceAudienceResponse>(
+    `/api/channels/${channelId}/voice-audience/speakers/${userId}`,
+    { allowed },
   );
 
 /**

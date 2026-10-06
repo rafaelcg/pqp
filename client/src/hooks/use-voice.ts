@@ -12,6 +12,9 @@ import {
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
   type WatchPartyGuestsMode,
+  type SpeakReason,
+  type VoiceAudienceChange,
+  type VoiceAudienceState,
   watchersWithoutSeat,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
@@ -401,6 +404,37 @@ export interface VoiceState {
    * moderator lowering it reaches us: nothing else can change it.
    */
   handRaisedAt: number | null;
+  /**
+   * Why `canSpeak` is false, when it is: `permission` (the channel does not
+   * give this person SPEAK) or `audience` (audience mode is on and they are
+   * not on the stage; raising a hand is how to ask). Null when the mic is not
+   * locked, and when an older server did not say. From `welcome` and
+   * `voice-speak-changed`. `docs/plans/AUDIENCE_MODE.md`.
+   */
+  speakReason: SpeakReason | null;
+  /**
+   * The room's audience mode, from `welcome` and `voice-audience`; null is
+   * off. Everybody in the call holds it: the audience draws the badge, a host
+   * draws the controls and `unenforcedUserIds` (a mic the media server has
+   * not confirmed closed yet).
+   */
+  audience: VoiceAudienceState | null;
+  /**
+   * The last audience mode change, for the transient notice in the call
+   * ("Fulano ligou o modo plateia"). `at` is this client's clock, so the
+   * notice can age out; null until something changes during the call.
+   */
+  audienceChange: (VoiceAudienceChange & { at: number }) | null;
+  /**
+   * peerIds in OUR room whose roster entry says `canSpeak: false`: the room's
+   * rule (a channel's SPEAK, or audience mode) says they may not talk. Their
+   * VOICE sink plays at zero and their speaking ring never lights, exactly as
+   * for `serverMutedPeerIds`. On LiveKit the media server already refuses
+   * their microphone; on a mesh room this IS the enforcement, which is the
+   * server mute's trust boundary (a modified sender is heard only by a
+   * modified receiver). Never includes our own peer id.
+   */
+  speakLockedPeerIds: string[];
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
@@ -1751,6 +1785,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     speakingPeerIds: [],
     serverMutedPeerIds: [],
     handRaisedAt: null,
+    speakReason: null,
+    audience: null,
+    audienceChange: null,
+    speakLockedPeerIds: [],
     occupancy: {},
     peerVolumes: {},
     screenVolumes: {},
@@ -2009,6 +2047,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
     state.serverMutedPeerIds = [];
+    state.speakLockedPeerIds = [];
+    state.audience = null;
+    state.audienceChange = null;
+    state.speakReason = null;
     discardPendingHand();
     state.handRaisedAt = null;
     state.transportFailure = failure;
@@ -2036,6 +2078,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       remotePeers: [...state.remotePeers],
       speakingPeerIds: [...state.speakingPeerIds],
       serverMutedPeerIds: [...state.serverMutedPeerIds],
+      speakLockedPeerIds: [...state.speakLockedPeerIds],
       occupancy: { ...occupancy },
       peerVolumes: { ...state.peerVolumes },
       screenVolumes: { ...state.screenVolumes },
@@ -2266,11 +2309,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     canSpeak: boolean,
     canStream: boolean,
     source: "welcome" | "change",
+    speakReason: SpeakReason | null = null,
   ) {
     const wasSpeak = state.canSpeak;
     const wasStream = state.canStream;
+    const wasReason = state.speakReason;
     state.canSpeak = canSpeak;
     state.canStream = canStream;
+    state.speakReason = canSpeak ? null : speakReason;
     if (!canSpeak) {
       state.isMuted = true;
       applyMute();
@@ -2283,22 +2329,33 @@ export function createVoiceController(transport: RealtimeTransport) {
         void stopCameraInternal();
       }
     }
+    // Audience mode says what happened on its own line in the call (the
+    // `voice-audience` notice and the badge), so the generic SPEAK notices
+    // below stay out of its way: one sentence per event, not two.
+    const byAudience = speakReason === "audience" || wasReason === "audience";
     if (source === "welcome") {
-      if (!canSpeak) {
+      if (!canSpeak && speakReason !== "audience") {
         state.notice = translateMessage("voice.notice.speakDenied");
-      } else if (!canStream) {
+      } else if (!canStream && canSpeak) {
         state.notice = translateMessage("voice.notice.streamDenied");
       }
       return;
     }
     if (wasSpeak && !canSpeak) {
-      state.notice = translateMessage("voice.notice.speakDenied");
+      if (!byAudience) {
+        state.notice = translateMessage("voice.notice.speakDenied");
+      }
       return;
     }
     if (!wasSpeak && canSpeak) {
       applyMute();
-      state.notice = translateMessage("voice.notice.speakGranted");
+      if (!byAudience) {
+        state.notice = translateMessage("voice.notice.speakGranted");
+      }
       void publishMicWhenAllowed();
+      return;
+    }
+    if (byAudience) {
       return;
     }
     if (wasStream && !canStream) {
@@ -2807,7 +2864,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // always is), and the analyser still reads a level. Nobody hears it,
         // so nothing may light up: a speaking ring on a person the room
         // muted would be the panel contradicting the moderator.
-        if (state.serverMutedPeerIds.includes(peerId)) {
+        if (
+          state.serverMutedPeerIds.includes(peerId) ||
+          state.speakLockedPeerIds.includes(peerId)
+        ) {
           speakingTracker.update(peerId, 0, false);
           continue;
         }
@@ -2846,6 +2906,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       .sort();
     if (!sameSpeaking(state.serverMutedPeerIds, next)) {
       state.serverMutedPeerIds = next;
+    }
+    const locked = participants
+      .filter((p) => p.canSpeak === false && p.peerId !== state.peerId)
+      .map((p) => p.peerId)
+      .sort();
+    if (!sameSpeaking(state.speakLockedPeerIds, locked)) {
+      state.speakLockedPeerIds = locked;
     }
     const me = participants.find((p) => p.peerId === state.peerId);
     if (me) {
@@ -3004,6 +3071,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.serverMutedPeerIds = [...state.serverMutedPeerIds, peer.peerId].sort();
     } else if (!peer.serverMuted && listed) {
       state.serverMutedPeerIds = state.serverMutedPeerIds.filter(
+        (id) => id !== peer.peerId,
+      );
+    }
+    const locked = state.speakLockedPeerIds.includes(peer.peerId);
+    if (peer.canSpeak === false && !locked) {
+      state.speakLockedPeerIds = [...state.speakLockedPeerIds, peer.peerId].sort();
+    } else if (peer.canSpeak !== false && locked) {
+      state.speakLockedPeerIds = state.speakLockedPeerIds.filter(
         (id) => id !== peer.peerId,
       );
     }
@@ -4354,6 +4429,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Leaving lowers your hand, on the server and here. The queue is the
       // room's, and we are not in it any more.
       handRaisedAt: null,
+      // Audience mode is the call's, and we are not in it any more either.
+      speakReason: null,
+      audience: null,
+      audienceChange: null,
+      speakLockedPeerIds: [],
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
       screenVolumes: state.screenVolumes,
@@ -4703,10 +4783,12 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
           state.status = "connected";
+          state.audience = message.audience ?? null;
           applyPublishRules(
             publishFlagsFrom(message).canSpeak,
             publishFlagsFrom(message).canStream,
             "change",
+            message.speakReason ?? null,
           );
           applyPreservedSelfVoice();
           state.self = overlayLocalSelfVoice(message.self);
@@ -4786,10 +4868,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.capacityRoseFrom = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
+        state.audience = message.audience ?? null;
+        state.audienceChange = null;
         applyPublishRules(
           publishFlagsFrom(message).canSpeak,
           publishFlagsFrom(message).canStream,
           "welcome",
+          message.speakReason ?? null,
         );
         applyPreservedSelfVoice();
         state.self = overlayLocalSelfVoice(message.self);
@@ -5014,9 +5099,27 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.canSpeak,
           message.canStream ?? message.canSpeak,
           "change",
+          message.speakReason ?? null,
         );
         if (message.canManageMusic !== undefined) {
           state.canManageMusic = message.canManageMusic;
+        }
+        emit();
+        break;
+      case "voice-audience":
+        // Audience mode changed in our room (`docs/plans/AUDIENCE_MODE.md`).
+        // The state is what every screen draws; the grant that locks or
+        // unlocks OUR mic is `voice-speak-changed`, which the server sends
+        // beside this, so nothing here touches the microphone.
+        if (
+          state.status === "idle" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        state.audience = message.audience;
+        if (message.change) {
+          state.audienceChange = { ...message.change, at: Date.now() };
         }
         emit();
         break;
@@ -5073,6 +5176,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         identities.delete(message.peerId);
         if (state.serverMutedPeerIds.includes(message.peerId)) {
           state.serverMutedPeerIds = state.serverMutedPeerIds.filter(
+            (id) => id !== message.peerId,
+          );
+        }
+        if (state.speakLockedPeerIds.includes(message.peerId)) {
+          state.speakLockedPeerIds = state.speakLockedPeerIds.filter(
             (id) => id !== message.peerId,
           );
         }

@@ -1578,6 +1578,31 @@ CREATE TABLE IF NOT EXISTS voice_raised_hands (
   PRIMARY KEY (channel_id, user_id)
 );
 
+-- Audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md): a running call
+-- turned into a stage. One row while it is on. It belongs to the CALL, so it
+-- cascades with the room row, which goes when the last seat does: a forgotten
+-- audience mode cannot outlive the call it was turned on in. Two tables rather
+-- than columns on `voice_rooms`, so shipping it never takes ACCESS EXCLUSIVE
+-- on the hottest voice table (CLAUDE.md pitfall 22), and so the lifetime is
+-- stated by the cascade chain: the room goes, the mode goes; the mode goes,
+-- every invitation goes.
+CREATE TABLE IF NOT EXISTS voice_audience_mode (
+  channel_id  UUID PRIMARY KEY REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  enabled_by  UUID NOT NULL,
+  enabled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- People a host let speak while audience mode is on. Keyed on the person,
+-- like a raised hand: a socket blip or a refresh inside the resume window
+-- keeps it, leaving the call drops it (`ws/voice.ts`).
+CREATE TABLE IF NOT EXISTS voice_audience_speakers (
+  channel_id  UUID NOT NULL REFERENCES voice_audience_mode(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  granted_by  UUID NOT NULL,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
 -- it for the cluster.

@@ -36,6 +36,7 @@ import {
   isVoiceRoomChannelType,
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
+  type VoiceAudienceEnforcement,
   type WatchParty,
   type WatchPartyOptions,
   type WatchPartyWaitlistSource,
@@ -191,6 +192,8 @@ import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions
 import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
+import type { AudienceModeHostControls } from "@/components/voice/audience-mode";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
@@ -343,6 +346,8 @@ import {
   disconnectMemberVoice,
   lowerMemberVoiceHand,
   setMemberVoiceMuted,
+  setVoiceAudienceMode,
+  setVoiceAudienceSpeaker,
   kickMember,
   setAuthTokenProvider,
   unblockUser,
@@ -2864,6 +2869,9 @@ function MainAppContent({
   );
   const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
     void handleLowerOccupantHand(userId),
+  );
+  const stableOnAudienceSpeaker = useStableCallback(
+    (userId: string, allowed: boolean) => void handleAudienceSpeaker(userId, allowed),
   );
   const stableOnKickOccupant = useStableCallback(
     (userId: string, name: string) => void handleKickOccupant(userId, name),
@@ -7083,6 +7091,95 @@ function MainAppContent({
    * `Permission.MUTE_MEMBERS` in that channel, the same bit the other voice
    * moderation actions use, and the server checks it again.
    */
+  // --- audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md) ---
+  // The operator's flag for the open server, the request in flight, and what
+  // the media server did with the host's last change (who is still audible),
+  // which the strip shows until the room's own state says otherwise.
+  const voiceConfig = useVoiceConfig(selectedServerId);
+  const [audienceBusy, setAudienceBusy] = useState(false);
+  // Tied to the call and the session it answered for, so a warning from one
+  // call is never drawn over the next one.
+  const [audienceEnforcement, setAudienceEnforcement] = useState<{
+    channelId: string;
+    since: number | null;
+    enforcement: VoiceAudienceEnforcement;
+  } | null>(null);
+
+  async function handleToggleAudienceMode() {
+    const channelId = voice.getState().voiceChannelId;
+    if (!channelId || audienceBusy) {
+      return;
+    }
+    setAudienceBusy(true);
+    try {
+      const answer = await setVoiceAudienceMode(
+        channelId,
+        voice.getState().audience === null,
+      );
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("voice.audience.failed")));
+    } finally {
+      setAudienceBusy(false);
+    }
+  }
+
+  async function handleAudienceSpeaker(userId: string, allowed: boolean) {
+    const channelId = voice.getState().voiceChannelId;
+    if (!channelId || audienceBusy) {
+      return;
+    }
+    setAudienceBusy(true);
+    try {
+      const answer = await setVoiceAudienceSpeaker(channelId, userId, allowed);
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("voice.audience.speakerFailed")));
+    } finally {
+      setAudienceBusy(false);
+    }
+  }
+
+  /**
+   * The host's half of audience mode for the call in this voice channel, or
+   * null for anybody who does not run the stage (`MUTE_MEMBERS` or
+   * `MANAGE_CHANNELS` here; the server checks the same bits). Never in a
+   * watch party or a conversation call.
+   */
+  function audienceHostFor(channel: { id: string; type: string }): AudienceModeHostControls | null {
+    if (
+      channel.type !== "voice" ||
+      voiceState.voiceChannelId !== channel.id ||
+      !(
+        perms.can(Permission.MUTE_MEMBERS, channel.id) ||
+        perms.can(Permission.MANAGE_CHANNELS, channel.id)
+      )
+    ) {
+      return null;
+    }
+    return {
+      available: voiceConfig.audienceMode === true,
+      busy: audienceBusy,
+      onToggle: () => void handleToggleAudienceMode(),
+      onAllow: (userId) => void handleAudienceSpeaker(userId, true),
+      onSilence: (userId) => void handleAudienceSpeaker(userId, false),
+      enforcement:
+        voiceState.audience &&
+        audienceEnforcement?.channelId === channel.id &&
+        audienceEnforcement.since === voiceState.audience.since
+          ? audienceEnforcement.enforcement
+          : null,
+    };
+  }
+
   async function handleLowerOccupantHand(userId: string) {
     if (!selectedServerId) {
       return;
@@ -9082,6 +9179,7 @@ function MainAppContent({
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
           listenOnly={!voiceState.canSpeak}
+          audienceLocked={voiceState.speakReason === "audience"}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
           )}
@@ -9159,6 +9257,7 @@ function MainAppContent({
         isDeafened={voiceState.isDeafened}
         inVoice={voiceState.status !== "idle"}
         canSpeak={voiceState.canSpeak}
+        speakReason={voiceState.speakReason}
         showUserButton={showUserButton}
         manualStatus={status.manual}
         effectiveStatus={status.effective}
@@ -10073,6 +10172,7 @@ function MainAppContent({
               selectedChannel.id,
             )}
             onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
+            audienceHost={audienceHostFor(selectedChannel)}
             compactPeers={localSettings.compactPeers}
           />
         )}
@@ -10434,6 +10534,7 @@ function MainAppContent({
         outputVolume={localSettings.outputVolume}
         audibleScreenPeerIds={voiceState.audibleScreenPeerIds}
         serverMutedPeerIds={voiceState.serverMutedPeerIds}
+        speakLockedPeerIds={voiceState.speakLockedPeerIds}
       />
 
       {/* At the root and over everything, because the directory is a mode
@@ -10777,6 +10878,15 @@ function MainAppContent({
           onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
           onServerMuteOccupant={stableOnServerMuteOccupant}
           onLowerOccupantHand={stableOnLowerOccupantHand}
+          audienceSpeakerUserIds={
+            voiceState.audience &&
+            voiceState.voiceChannelId &&
+            (perms.can(Permission.MUTE_MEMBERS, voiceState.voiceChannelId) ||
+              perms.can(Permission.MANAGE_CHANNELS, voiceState.voiceChannelId))
+              ? voiceState.audience.speakerUserIds
+              : null
+          }
+          onAudienceSpeaker={stableOnAudienceSpeaker}
           onKickOccupant={stableOnKickOccupant}
           onSetPeerVolume={stableOnSetPeerVolume}
           onSetScreenVolume={stableOnSetScreenVolume}
