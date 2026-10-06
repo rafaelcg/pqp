@@ -262,6 +262,12 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
+        // "Alberto started streaming in #filminho", sent only to people the
+        // server chose (flag `stream_start_notifications`, off by default).
+        // The same notice reaches a phone with no socket as a push, whose tap
+        // opens the channel; an open phone app draws no notice for it yet.
+        // docs/plans/WATCH_NOW.md lists what a phone would need.
+        "stream-started" to "the push covers a closed app; an open one has no start-of-stream surface yet",
         // The one-minute-before-hangup notice for the idle-alone timeout
         // (VOICE_IDLE_ALONE_MINUTES). The hangup itself still works correctly
         // without this: it arrives as an ordinary `voice-moderation` frame

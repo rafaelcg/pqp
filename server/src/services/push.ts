@@ -5,8 +5,11 @@ import { getPool } from "../db.js";
 import { getPreferences, mergePreferences } from "./preferences.js";
 import {
   buildConversationPushCopy,
+  buildStreamStartedPushCopy,
   resolvePushLocale,
+  resolveStreamAlertLocale,
   type PushLocale,
+  type StreamAlertLocale,
 } from "./push-copy.js";
 import { isInvisible, resolveStatus } from "../ws/status.js";
 import { logEvent } from "../lib/log.js";
@@ -1351,6 +1354,139 @@ export async function sendChannelSessionReminderPush(
     transports,
     SESSION_REMINDER_DELIVERY,
   );
+}
+
+// ------------------------------------------------------------ stream started
+
+/**
+ * A start-of-stream notice, as `services/stream-alerts.ts` concluded it. WHO
+ * is told is not decided here: `userIds` is that module's answer (opted in,
+ * not the sharer, not in the room, not on DND, may view and connect). What is
+ * narrowed here is the push-only half: nobody with a live socket anywhere in
+ * the cluster (they got the frame, and a phone buzzing for something the open
+ * tab already showed is the double notification this module exists to avoid),
+ * and a stored DND, re-read because a status can change inside the 20 second
+ * debounce.
+ *
+ * A short TTL, because a notice about a stream that STARTED is wrong an hour
+ * later: delivered then it would send somebody to a room that has moved on.
+ */
+export interface StreamStartedPush {
+  userIds: readonly string[];
+  serverId: string;
+  channelId: string;
+  serverName: string;
+  /** `#filminho`, or a party's own name. */
+  channelLabel: string;
+  sharerName: string;
+}
+
+export const STREAM_START_PUSH_TTL_SECONDS = 60;
+
+const STREAM_START_DELIVERY: PushDeliveryOptions = {
+  ttlSeconds: STREAM_START_PUSH_TTL_SECONDS,
+  urgency: "normal",
+};
+
+export function buildStreamStartedPayload(
+  event: StreamStartedPush,
+  locale: StreamAlertLocale,
+): PushPayload {
+  const copy = buildStreamStartedPushCopy({
+    locale,
+    sharerName: truncateLabel(event.sharerName),
+    channelLabel: truncateLabel(event.channelLabel),
+    serverName: truncateLabel(event.serverName),
+  });
+  return {
+    title: copy.title,
+    body: copy.body,
+    path: `/app/server/${event.serverId}/channel/${event.channelId}`,
+    tag: `stream:${event.channelId}`,
+  };
+}
+
+/**
+ * The awaitable pipeline. Returns how many people it tried to push, so the
+ * caller can count it; zero is the common case (everybody was connected).
+ */
+export async function sendStreamStartedPush(
+  event: StreamStartedPush,
+): Promise<number> {
+  const transports = readTransports();
+  if (!transports) {
+    return 0;
+  }
+  const offline = event.userIds.filter((userId) => !hasLiveSocket(userId));
+  if (offline.length === 0) {
+    return 0;
+  }
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences
+     WHERE user_id = ANY($1::uuid[])`,
+    [offline],
+  );
+  const preferences = new Map<string, UserPreferences>(
+    preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  const recipients = offline.filter(
+    (userId) => preferences.get(userId)?.status !== "dnd",
+  );
+  if (recipients.length === 0) {
+    return 0;
+  }
+  await deliverToUsers(
+    recipients,
+    (userId) =>
+      buildStreamStartedPayload(
+        event,
+        resolveStreamAlertLocale(
+          (preferences.get(userId) as { locale?: unknown } | undefined)?.locale,
+        ),
+      ),
+    transports,
+    STREAM_START_DELIVERY,
+  );
+  return recipients.length;
+}
+
+/**
+ * ONE retry a few seconds after a failed attempt. The failures that reach here
+ * are the ones before any vendor was called (the subscription or preference
+ * read), so a retry cannot double a push, and the `tag` collapses one on the
+ * device if it ever did. A notice about a stream that STARTED is wrong after a
+ * minute (the TTL says the same), so this is one retry and not a queue.
+ */
+export const STREAM_START_PUSH_RETRY_MS = 5_000;
+
+/** Fire-and-forget, same contract as `pushChannelSessionReminder` (pitfall 9). */
+export function pushStreamStarted(
+  event: StreamStartedPush,
+  onSent?: (pushed: number) => void,
+  onFailed?: () => void,
+): void {
+  if (!isAnyPushEnabled() || event.userIds.length === 0) {
+    return;
+  }
+  const attempt = (retryLeft: boolean): void => {
+    void sendStreamStartedPush(event)
+      .then((pushed) => onSent?.(pushed))
+      .catch((error: unknown) => {
+        console.error(
+          `[push] stream started fan-out failed for channel ${event.channelId}:`,
+          error,
+        );
+        onFailed?.();
+        if (retryLeft) {
+          const timer = setTimeout(
+            () => attempt(false),
+            STREAM_START_PUSH_RETRY_MS,
+          );
+          timer.unref?.();
+        }
+      });
+  };
+  attempt(true);
 }
 
 /**

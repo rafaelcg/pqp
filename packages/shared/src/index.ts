@@ -35,6 +35,7 @@ export * from "./server-images.js";
 export * from "./signaling.js";
 export * from "./sso.js";
 export * from "./status.js";
+export * from "./stream-alerts.js";
 export * from "./stream-quality-telemetry.js";
 export * from "./threads.js";
 export * from "./user-banners.js";

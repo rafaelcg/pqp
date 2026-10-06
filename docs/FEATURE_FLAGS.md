@@ -241,6 +241,29 @@ interruptores; open tabs show the control on the next config refresh (focus or
 10 min). `server/src/lib/flag-client-contract.test.ts` checks the served field,
 the client reader and the dashboard note.
 
+Born as flags (no old reader), both **off** and **per server**, for the "Watch
+now" feature (`docs/plans/WATCH_NOW.md`):
+
+- `WATCH_NOW_BANNER` (`watch_now_banner`): the "Assistir" banner over a text
+  channel while somebody in the server shares a screen or a watch party is
+  live. Client-only (the roster and `watch-party-update` frames it reads are
+  sent either way). Served as `watchNowBanner` on `GET
+  /api/live-hls/config?serverId=` (the deployment-wide answer, which a
+  conversation reads, is the global value). Turn it on for one server:
+  `PUT /api/admin/flag-overrides { key: "watch_now_banner", serverId, enabled: true }`;
+  `enabled: null` returns to the default. Open tabs follow on the next config
+  refresh (focus or 10 min).
+- `STREAM_START_NOTIFICATIONS` (`stream_start_notifications`): the start-of-stream
+  notice. The one that can interrupt people, so it is separate from the banner.
+  Served as `streamStartNotifications` on the same config answer. Turn it on for
+  one server: `PUT /api/admin/flag-overrides { key: "stream_start_notifications",
+  serverId, enabled: true }`. Limits that hold with it on: the share must be
+  stable for 20 s, one notice per channel per 30 min, a server above 200 members
+  and every community notify only people who opted in for that server
+  (`notifications.streamAlerts[serverId]`), at most 500 recipients per notice.
+  `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
+  reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

@@ -8,6 +8,10 @@ import {
 } from "../voice/hls-viewer-counts.js";
 import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import {
+  streamAlertMetrics,
+  type StreamAlertMetrics,
+} from "./stream-alerts.js";
+import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
 } from "./community-home-translation.js";
@@ -314,6 +318,15 @@ export interface AdminMetrics {
    * answers is "is it translating, and why not".
    */
   communityHomeTranslation: CommunityHomeTranslationMetrics;
+  /**
+   * The start-of-stream notice (`services/stream-alerts.ts`), since this
+   * process started: shares that armed a timer, those dropped for the flag, the
+   * 20 s debounce or the cooldown, notices claimed, people told, why people
+   * were skipped, sockets delivered, relays, pushes, failures and the slowest
+   * decision. Per process like the push counters: with two instances read each.
+   * Live, never from the 30 s cache.
+   */
+  streamAlerts: StreamAlertMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1139,6 +1152,7 @@ type CachedMetrics = Omit<
   | "cluster"
   | "flags"
   | "communityHomeTranslation"
+  | "streamAlerts"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1922,6 +1936,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfuRegions,
     flags,
     communityHomeTranslation,
+    streamAlerts: streamAlertMetrics(),
   };
 }
 

@@ -259,6 +259,11 @@ import {
   setWatchPartyLiveListener,
   watchPartyKnownOver,
 } from "./watch-party-live.js";
+import {
+  noteStreamStarted,
+  noteStreamStopped,
+  setStreamAlertRoomReader,
+} from "../services/stream-alerts.js";
 import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
   peekPresentHlsViewers,
@@ -3364,6 +3369,24 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
 // nobody joins or leaves the room afterwards, which is the ordinary case.
 setWatchPartyLiveListener((channelId) => {
   void pushLiveHls(channelId);
+});
+
+// What the start-of-stream notice needs to know about a room when its 20
+// seconds are up: who is seated, anywhere in the cluster, and whose share is
+// still on. Handed to the notice rather than imported by it, because this file
+// imports that one. `readClusterRoom` is the cluster-aware roster (the rows
+// with the registry on, laid over by this process's own peers either way).
+setStreamAlertRoomReader(async (channelId) => {
+  const room = await readClusterRoom(channelId);
+  if (!room) {
+    return null;
+  }
+  return {
+    userIds: room.participants.map((participant) => participant.userId),
+    sharerUserIds: room.participants
+      .filter((participant) => participant.sharingScreen)
+      .map((participant) => participant.userId),
+  };
 });
 
 // The egress monitor (`hls-egress.ts`) found a dead egress, or gave up on
@@ -8841,7 +8864,26 @@ export async function handleVoiceMessage(
         }
       }
     }
+    const wasSharing = peer.sharingScreen;
     peer.sharingScreen = payload.sharing;
+    // THE START-OF-STREAM NOTICE'S ONLY HOOK ON THIS PATH, and it is a timer.
+    // A change from not sharing to sharing, in a server's plain voice room: a
+    // re-declare of a share that is already running (an audio id arriving, a
+    // rejoin) is not a start, a watch party's own start is its going live
+    // (`broadcastWatchParty`), and a conversation never notifies (it rings).
+    // Everything that costs anything runs 20 s later, off this handler.
+    if (payload.sharing && !wasSharing) {
+      if (peer.canPromoteTransport && !peer.watchParty) {
+        noteStreamStarted({
+          channelId: peer.voiceChannelId,
+          sharerUserId: peer.userId,
+          sharerName: peer.displayName,
+          kind: "voice",
+        });
+      }
+    } else if (!payload.sharing && wasSharing) {
+      noteStreamStopped(peer.voiceChannelId, peer.userId);
+    }
     // Only a live share can have audio; stopping clears the id in the same
     // frame so no roster can advertise sound for a capture that is gone.
     peer.screenAudioStreamId = payload.sharing

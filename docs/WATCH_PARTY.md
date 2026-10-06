@@ -789,6 +789,21 @@ host's LiveKit publish is an invisible pipe while the show is live. Encerrar
 leaves that pipe so leave-voice chrome does not linger. Friends who want to
 talk use a normal voice channel.
 
+### The strip that sends people here (2026-10-05)
+
+The sidebar block is the only way the app told a member a party was live, and the
+night a brand-new server ran its first film in a plain voice channel
+(2026-10-04, Filminho) forty people sat in the call while the rest of 86 members
+asked in `#general` where the movie was. Behind the runtime flag
+`watch_now_banner` (per server, off by default) a live party, and a share in any
+voice channel, is now a strip above the conversation: who, where, how many, one
+`Assistir`. For a party the tap is `handleWatchLiveParty`, which is the sidebar
+block's own path: selecting the channel IS watching, no seat and no microphone.
+The strip reads `watchParties.byChannel` (live only) and the `channel-live`
+`watching` count, so it shows the same number as the stage and, with
+`watch_party_server_audience` on, the server's. A party the person cannot view is
+never in that map. `docs/plans/WATCH_NOW.md`, `client/src/lib/watch-now.ts`.
+
 ### One surface owns the pane
 
 A watch party channel mounts three stages into the same slot: `WatchPartyPanel`'s

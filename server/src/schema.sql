@@ -4993,3 +4993,21 @@ CREATE TABLE IF NOT EXISTS hls_session_presence (
   sampled_at     TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (channel_id, started_at_ms, instance_id)
 );
+
+-- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
+-- channel: when a share has been stable long enough, every API machine that saw
+-- it races one upsert on this row, and only the one that finds
+-- `last_notified_at` older than the 30 minute cooldown wins and tells people
+-- (`services/stream-alerts.ts`). The row is the arbiter, not an optimisation:
+-- two machines can both see one share when its sharer reconnects to the other
+-- inside the debounce window. Rows older than a day are deleted by the next
+-- winning claim (one tiny delete per notice, never a batch job): a row past its
+-- cooldown is only a reminder of when, and the upsert overwrites it anyway.
+CREATE TABLE IF NOT EXISTS stream_alert_channels (
+  channel_id       UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  last_notified_at TIMESTAMPTZ NOT NULL,
+  -- What the notice was for (a watch party's session id), so a broadcast that
+  -- repeats while a party stays live can never claim a second time after the
+  -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
+  start_key        TEXT
+);

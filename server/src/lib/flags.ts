@@ -372,6 +372,34 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
   },
+  watch_now_banner: {
+    description:
+      "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",
+    env: "WATCH_NOW_BANNER",
+    parseEnv: exactTrue,
+    // Off so it can go on for one server first, then globally. The banner is
+    // derived on the client from frames it already holds, so there is nothing
+    // else to switch.
+    codeDefault: false,
+    // The only reader is `GET /api/live-hls/config?serverId=`, which knows the
+    // server; the deployment-wide answer (what a DM reads) is the global value.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (watchNowBanner)",
+  },
+  stream_start_notifications: {
+    description:
+      "Aviso de início de transmissão (quando alguém começa a compartilhar a tela ou uma watch party entra no ar, avisa quem pediu, com limites: servidor pequeno por padrão, 20 s de estabilidade, 1 aviso por canal a cada 30 min).",
+    env: "STREAM_START_NOTIFICATIONS",
+    parseEnv: exactTrue,
+    // Off: this is the one that can interrupt people, so it is separate from
+    // the banner and turned on one server at a time. Large servers and
+    // communities notify nobody by default even with it on.
+    codeDefault: false,
+    // The decision runs where the share starts and knows the channel, so the
+    // server is always in hand; the client reads it per server too.
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",

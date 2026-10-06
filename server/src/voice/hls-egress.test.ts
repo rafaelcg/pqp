@@ -172,6 +172,8 @@ describe("live HLS egress", () => {
       llSegmentCadenceDecay: false,
       fastStart: false,
       cameraSync: false,
+      watchNowBanner: false,
+      streamStartNotifications: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -614,6 +616,8 @@ describe("live HLS egress", () => {
         llSegmentCadenceDecay: false,
         fastStart: false,
         cameraSync: false,
+        watchNowBanner: false,
+        streamStartNotifications: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -628,6 +632,8 @@ describe("live HLS egress", () => {
         llSegmentCadenceDecay: false,
         fastStart: false,
         cameraSync: false,
+        watchNowBanner: false,
+        streamStartNotifications: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -641,6 +647,8 @@ describe("live HLS egress", () => {
         llSegmentCadenceDecay: false,
         fastStart: false,
         cameraSync: false,
+        watchNowBanner: false,
+        streamStartNotifications: false,
       });
     });
 
