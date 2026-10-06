@@ -178,6 +178,34 @@ nothing and asks the shell nothing. Needs a desktop build that publishes
 card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
 Windowed".
 
+Born as a flag (no old reader): `SHARE_FAST_START_QUALITY`
+(`share_fast_start_quality`, default off, **per server**), served to the client
+by `GET /api/share/config?serverId=` as `shareFastStartQuality`. How a screen
+share's picture starts in an SFU call, client only (`client/src/lib/share-fast-start.ts`):
+
+- **Viewer:** the share's layer is asked for as soon as the publication is
+  known (the join response, or the moment the share is published), before the
+  subscription is bound, at the layer a 720-line stage wants. LiveKit binds an
+  adaptive-stream subscriber at the 360p copy until the first settings arrive,
+  and the client used to send them only after the bind.
+- **Presenter:** crossing twenty people (`LARGE_ROOM_PARTICIPANTS`) no longer
+  unpublishes and republishes the share, which blanked every viewer and
+  restarted every subscription; the top layer's ceiling moves in place.
+- **Presenter:** the capture really comes down to the planned height. Chrome
+  ignores `height: { max: 720 }` while the share's opening `width: { max: 1920 }`
+  is still in the constraints, so the large-room cap never reached the
+  capture; the width ceiling is now scaled to the height. Never applied to a
+  watch party's source.
+
+No new copy, no bandwidth change per viewer (the same layers and ceilings, see
+`client/e2e/share-fast-start/README.md` for the measurements). Off, the
+session behaves exactly as before. The viewer half reads the call's server
+answer when the media connects, so it is asked for at join
+(`noteCallServer` in `App.tsx`) and cached ten minutes; an answer that arrives
+late only means that one join starts the old way. Turn it on for one server
+from controles → interruptores (the server's override); the next join and the
+next share pick it up.
+
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 (`linux_desktop_system_audio`, default off, **global only**), the computer's
 sound on a screen share from the Linux desktop app, served to the client by

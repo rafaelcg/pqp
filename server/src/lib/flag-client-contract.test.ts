@@ -78,6 +78,7 @@ describe("GET /api/share/config against the client that reads it", () => {
         "desktopShareAudioNative",
         "shareHighMotionGuard",
         "shareGameCaptureHint",
+        "shareFastStartQuality",
         "linuxDesktopSystemAudio",
       ]),
     );
@@ -123,5 +124,40 @@ describe("every flag that says it reaches the client", () => {
       true,
     );
     expect(mentions(clientFiles, field), `no client source mentions ${field}`).toBe(true);
+  });
+});
+
+describe("share_fast_start_quality, every link from the switch to the session", () => {
+  // The flag acts in two places the share config never reaches directly: the
+  // viewer's subscription and the presenter's publish, both inside the LiveKit
+  // session. A field served and read but never handed on would pass every test
+  // above and still do nothing, so the chain is checked link by link.
+  const read = (file: string) => readFileSync(path.join(clientSrc, file), "utf8");
+
+  it("is registered per server and served under the field the client reads", () => {
+    const def = FEATURE_FLAGS.share_fast_start_quality;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/share/config (shareFastStartQuality)");
+    expect(Object.keys(shareConfigForServer(null))).toContain("shareFastStartQuality");
+  });
+
+  it("the share config's answer is handed to the store the session reads", () => {
+    expect(read("lib/share-guard-flag.ts")).toMatch(
+      /recordShareFastStartQuality\(\s*serverId,\s*config\.shareFastStartQuality === true/,
+    );
+  });
+
+  it("the call names its server before the media connects", () => {
+    const app = read("App.tsx");
+    expect(app).toMatch(/setShareFastStartServer\(serverId\)/);
+    expect(app).toMatch(/noteCallServer\(selectedServerId\)/);
+  });
+
+  it("the LiveKit session reads it on both sides", () => {
+    const session = read("lib/livekit-session.ts");
+    expect(session).toContain("requestShareQualityBeforeSubscribe");
+    expect(session).toMatch(/trigger === "room" && shareFastStartQualityActive\(\)/);
+    expect(session).toMatch(/shareFastStartQualityActive\(\) &&\s*\(hlsSource === null/);
   });
 });

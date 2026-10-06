@@ -714,6 +714,12 @@ export interface ShareConfig {
    * Absent on an older API: off.
    */
   shareGameCaptureHint?: boolean;
+  /**
+   * A share's picture starts at the stage's layer, and a presenter's share is
+   * not republished when the room crosses twenty
+   * (`lib/share-fast-start.ts`). Absent on an older API: off.
+   */
+  shareFastStartQuality?: boolean;
 }
 
 /** `serverId` is the server the call is in; a DM call asks without one. */
