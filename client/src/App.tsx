@@ -8415,11 +8415,15 @@ function MainAppContent({
     blocked: blockedUserIds,
     // CONNECT is the one gate the roster's own audience (VIEW) does not
     // cover: a button that can only fail is worse than none. A conversation
-    // has no roles to lack.
+    // has no roles to lack. Read from THIS render's permissions, not through
+    // `stableCanConnectIn`: that one is refreshed after the render, so the
+    // render in which a newcomer's permissions arrive would still be asked
+    // with the empty ones, and the streams are only recomputed when
+    // `permissionsKey` changes (which is exactly that render).
     canConnect:
       watchNowScope?.kind === "conversation"
         ? WATCH_NOW_ALWAYS
-        : stableCanConnectIn,
+        : (channelId: string) => perms.can(Permission.CONNECT, channelId),
     seatedChannelId:
       voiceState.status !== "idle" ? voiceState.voiceChannelId : null,
     connected: connection === "online",
