@@ -12,6 +12,7 @@ import {
   captureMouseBinding,
   isModifierCode,
   keyDisplayLabel,
+  metaKeyName,
   type KeyBinding,
   type KeyNameTranslator,
   type PttBinding,
@@ -47,7 +48,7 @@ export function bindingKeycaps(
         [binding.ctrl, "Ctrl", "Ctrl"],
         [binding.alt, "Alt", "Alt"],
         [binding.shift, "Shift", "Shift"],
-        [binding.meta, "Win", "Win"],
+        [binding.meta, metaKeyName(false), metaKeyName(false)],
       ];
   const held = modifiers.filter(([on]) => on);
   const key = keyDisplayLabel(binding, translate, apple);

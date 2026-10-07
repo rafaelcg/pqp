@@ -544,3 +544,12 @@ describe("keyDisplayLabel", () => {
     expect(keyDisplayLabel({ ...defaultPushToTalkBinding, code: "F9", label: "F9" })).toBe("F9");
   });
 });
+
+describe("metaKeyName", () => {
+  it("names the fourth modifier per platform", async () => {
+    const { metaKeyName } = await import("@/components/voice/push-to-talk");
+    expect(metaKeyName(true, false)).toBe("Cmd");
+    expect(metaKeyName(false, true)).toBe("Super");
+    expect(metaKeyName(false, false)).toBe("Win");
+  });
+});

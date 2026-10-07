@@ -526,7 +526,13 @@ function DirectMessagesGroup({
           unavailable ? (
             <p className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
               <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />
-              {t("settings.push.dmDetailsUnavailable")}
+              {t(
+                // Refused is not the same as unsupported: the person can
+                // undo a block, and the row above says how.
+                permission === "denied"
+                  ? "settings.push.dmDetailsBlocked"
+                  : "settings.push.dmDetailsUnavailable",
+              )}
             </p>
           ) : dmFailed ? (
             <SettingsInlineStatus

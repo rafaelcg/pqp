@@ -2466,6 +2466,7 @@
   "settings.notifications.group.messages.title": "Messages and mentions",
   "settings.notifications.reload": "Reload",
   "settings.push.dmDetailsUnavailable": "Push is not available here.",
+  "settings.push.dmDetailsBlocked": "Notifications are blocked in this browser.",
   "settings.push.dmDetailsFailed": "Could not save that setting.",
   "settings.push.dmDetailsHintOn": "A DM push says who sent the message. The text is never included.",
   "settings.push.loading": "Loading push…",

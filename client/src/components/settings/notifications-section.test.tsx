@@ -252,7 +252,7 @@ describe("NotificationsSection push rows", () => {
     ).toMatch(/padlock/i);
     expect(switchIn("system-notifications").getAttribute("aria-disabled")).toBe("true");
     const dm = host!.querySelector('[data-settings-row="dm-push-details"]')!.textContent;
-    expect(dm).toMatch(/not available here/i);
+    expect(dm).toMatch(/blocked in this browser/i);
     expect(dm).not.toMatch(/turn on push first/i);
   });
 
@@ -373,7 +373,7 @@ describe("NotificationsSection direct message push switch", () => {
     expect(switchIn("dm-push-details").getAttribute("aria-checked")).toBe(
       "false",
     );
-    expect(unavailableLine()).toMatch(/not available here/i);
+    expect(unavailableLine()).toMatch(/blocked in this browser/i);
   });
 
   it("keeps the order to turn push on, with the stored choice, when that is possible", async () => {

@@ -2464,6 +2464,7 @@
   "settings.notifications.group.messages.title": "Mensagens e menções",
   "settings.notifications.reload": "Recarregar",
   "settings.push.dmDetailsUnavailable": "Push indisponível aqui.",
+  "settings.push.dmDetailsBlocked": "As notificações estão bloqueadas neste navegador.",
   "settings.push.dmDetailsFailed": "Não deu para salvar isso.",
   "settings.push.dmDetailsHintOn": "O push de DM diz quem mandou a mensagem. O texto nunca vai junto.",
   "settings.push.loading": "Carregando o push…",

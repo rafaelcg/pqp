@@ -183,6 +183,8 @@ describe("Perfil uploads and focus", () => {
     const field = row("public-link").querySelector<HTMLInputElement>("input")!;
     type(field, "https://pqp.gg/@Rafa_2/?ref=x");
     expect(field.value).toBe("rafa_2");
+    // No `maxLength` on the field: the browser would cut the paste first.
+    expect(field.hasAttribute("maxlength")).toBe(false);
   });
 
   it("says an emptied link stays, under the field and in its description", async () => {
@@ -205,6 +207,11 @@ describe("handleFromInput", () => {
     ["@rafa", "rafa"],
     ["pqp.gg", "pqp.gg"],
     ["João", "joao"],
+    // Longer than the 20-character cap as typed, whole once the address is
+    // taken off: the cap is applied to the handle, not to the paste.
+    ["https://pqp.gg/@joaozinho", "joaozinho"],
+    ["https://pqp.gg/@qa4_cfree?utm=1", "qa4_cfree"],
+    ["a".repeat(30), "a".repeat(20)],
   ])("%s gives %s", (raw, expected) => {
     expect(handleFromInput(raw)).toBe(expected);
   });

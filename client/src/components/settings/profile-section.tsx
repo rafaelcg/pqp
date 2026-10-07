@@ -126,7 +126,10 @@ export function handleFromInput(raw: string): string {
     const path = value.split(/[?#]/)[0]!.replace(/\/+\s*$/, "");
     value = path.slice(path.lastIndexOf("/") + 1);
   }
-  return normalizeHandle(value);
+  // The length cap lives here, not on the input: a `maxLength` there cuts a
+  // pasted address to 20 characters before this sees it, and
+  // "https://pqp.gg/@" alone is 16 of them.
+  return normalizeHandle(value).slice(0, HANDLE_MAX_LENGTH);
 }
 
 /** The counter shows from this many characters short of the limit. */
@@ -532,7 +535,6 @@ export function ProfileSection({
                   id={handleId}
                   prefix="pqp.gg/@"
                   value={handle}
-                  maxLength={HANDLE_MAX_LENGTH}
                   autoComplete="off"
                   autoCapitalize="none"
                   spellCheck={false}

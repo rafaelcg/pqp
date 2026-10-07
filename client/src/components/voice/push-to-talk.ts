@@ -108,10 +108,23 @@ export function modifierOfCode(code: string): Modifier | null {
   return MODIFIER_KEYS[code]?.modifier ?? null;
 }
 
+/** A Linux desktop, where the fourth modifier is called Super. Not Android. */
+function isLinuxDesktop(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent);
+}
+
+/** The fourth modifier's name: Cmd on Apple, Super on Linux, Win elsewhere. */
+export function metaKeyName(apple: boolean, linux: boolean = isLinuxDesktop()): string {
+  return apple ? "Cmd" : linux ? "Super" : "Win";
+}
+
 /**
  * What a modifier is called in a sentence. Ctrl, Alt and Shift read the same
- * everywhere; the fourth is Cmd on Apple and the Windows key elsewhere, which
- * is what `formatBinding` already says for a chord.
+ * everywhere; the fourth is Cmd on Apple, Super on Linux and the Windows key
+ * elsewhere, which is what `formatBinding` already says for a chord.
  */
 export function modifierName(modifier: Modifier, apple: boolean): string {
   switch (modifier) {
@@ -122,7 +135,7 @@ export function modifierName(modifier: Modifier, apple: boolean): string {
     case "shift":
       return "Shift";
     case "meta":
-      return apple ? "Cmd" : "Win";
+      return metaKeyName(apple);
   }
 }
 
@@ -444,9 +457,9 @@ export function formatBinding(
   if (binding.ctrl) parts.push("Ctrl");
   if (binding.alt) parts.push("Alt");
   if (binding.shift) parts.push("Shift");
-  // The keycaps say Win off Apple; the sentences that quote a binding must
-  // name the same key.
-  if (binding.meta) parts.push(isApplePlatform() ? "Cmd" : "Win");
+  // The keycaps name the fourth modifier per platform; the sentences that
+  // quote a binding must name the same key.
+  if (binding.meta) parts.push(metaKeyName(isApplePlatform()));
   parts.push(keyDisplayLabel(binding, translate));
   return parts.join(" + ");
 }
