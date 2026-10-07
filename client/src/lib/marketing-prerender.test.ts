@@ -8,7 +8,13 @@ import es from "../locales/es/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import { STREAMERS_WAITLIST_HREF } from "./handle-intent";
 import { injectMarketingHead, STREAMERS_FAQ } from "./marketing-meta";
+import { CONTACT_EMAIL } from "./help-contact";
+import { SOURCE_REPO_URL } from "./downloads";
 import {
+  CONTACT_PRERENDER_COPY,
+  CONTACT_PRERENDER_EMAIL,
+  CONTACT_PRERENDER_KEYS,
+  CONTACT_PRERENDER_SOURCE_URL,
   injectMarketingBody,
   STREAMERS_PRERENDER_COPY,
   STREAMERS_PRERENDER_CTA_HREF,
@@ -34,7 +40,7 @@ const CSS = readFileSync(
 );
 
 /** What a crawler with no script reads: the edge's rewrite, then its strip. */
-function served(page: "/streamers" | "/criadores" | "/vem", locale: "en" | "pt-BR" | "es") {
+function served(page: "/streamers" | "/criadores" | "/vem" | "/contact" | "/contato", locale: "en" | "pt-BR" | "es") {
   return stripPrerenderHero(
     injectMarketingBody(injectMarketingHead(INDEX_HTML, page, locale), page, locale),
   );
@@ -113,5 +119,47 @@ describe("the /streamers no-JS body", () => {
     for (const locale of ["pt-BR", "en", "es"] as const) {
       expect(rootOf(served("/streamers", locale))).not.toMatch(banned);
     }
+  });
+});
+
+describe("the /contact no-JS body", () => {
+  it("duplicates the catalogue exactly, in all three languages", () => {
+    for (const [locale, catalogue] of Object.entries(CATALOGUES)) {
+      for (const key of CONTACT_PRERENDER_KEYS) {
+        const value = (catalogue as Record<string, string>)[key];
+        expect(value, `${locale} ${key}`).toBeTruthy();
+        expect(
+          CONTACT_PRERENDER_COPY[locale as keyof typeof CATALOGUES][key],
+          `${locale} ${key}`,
+        ).toBe(value);
+      }
+    }
+  });
+
+  it("gives the same address and repository as the live page", () => {
+    expect(CONTACT_PRERENDER_EMAIL).toBe(CONTACT_EMAIL);
+    expect(CONTACT_PRERENDER_SOURCE_URL).toBe(SOURCE_REPO_URL);
+  });
+
+  it("writes who makes pqp, the address and the independence statement into #root", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const html = served("/contact", locale);
+      const root = rootOf(html);
+      const copy = CONTACT_PRERENDER_COPY[locale];
+      expect(root).toContain('id="pre-page"');
+      expect(root).toContain(`lang="${locale}"`);
+      expect(root).toContain(copy["contactPage.title"]);
+      expect(root).toContain(copy["contactPage.who.body"]);
+      expect(root).toContain(copy["contactPage.independent.body"]);
+      expect(root).toContain('href="mailto:contato@pqp.gg"');
+      expect(root).toContain('href="/privacy"');
+      expect(root).toContain('href="/terms"');
+      expect(html.match(/<h1/g)).toHaveLength(1);
+      expect(html).not.toContain('id="pre-hero"');
+    }
+  });
+
+  it("serves /contato the same body", () => {
+    expect(rootOf(served("/contato", "pt-BR"))).toBe(rootOf(served("/contact", "pt-BR")));
   });
 });

@@ -53,6 +53,8 @@ describe("marketingPageFromMetaPath", () => {
       "/privacy",
       "/terms",
       "/cookies",
+      "/contact",
+      "/contato",
       "/status",
     ];
     for (const page of pages) {
@@ -113,6 +115,8 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/watchparty", prefix: "watchPartyPage" },
     { path: "/streamers", prefix: "streamersPage" },
     { path: "/criadores", prefix: "streamersPage" },
+    { path: "/contact", prefix: "contactPage" },
+    { path: "/contato", prefix: "contactPage" },
   ];
 
   for (const { path, prefix } of PINNED) {
@@ -399,6 +403,50 @@ describe("the /streamers page", () => {
   });
 });
 
+describe("the /contact page", () => {
+  it("is one page under two names, canonical /contact in every language", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const main = marketingUrlsFor("/contact", locale);
+      expect(marketingUrlsFor("/contato", locale)).toEqual(main);
+    }
+    expect(renderMarketingHead("/contato", "pt-BR")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/contact" />',
+    );
+    expect(renderMarketingHead("/contact", "es")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/contact?lang=es" />',
+    );
+    expect(renderMarketingHead("/contact", "en")).toContain(
+      '<link rel="alternate" hreflang="es" href="https://pqp.gg/contact?lang=es" />',
+    );
+  });
+
+  it("is indexable and carries the product card", () => {
+    const head = renderMarketingHead("/contact", "en");
+    expect(head).toContain('<meta name="robots" content="index, follow" />');
+    expect(head).toContain("https://pqp.gg/images/og-image.jpg");
+  });
+
+  it("gives the one public address as a contact point, and nothing else about a person", () => {
+    const head = renderMarketingHead("/contact", "en");
+    expect(head).toContain('"contactPoint"');
+    expect(head).toContain("contato@pqp.gg");
+    expect(head).not.toMatch(/"address"|"founder"|"telephone"|"employee"/);
+  });
+
+  it("keeps Discord, films and places out of the search copy", () => {
+    // The independence sentence lives on the page; the head only describes it.
+    const banned =
+      /discord|fi[l]me|ci[n]ema|s[ée]ri[e]s?\b|mo[v]ie|pel[ií]cula|ne[t]flix|di[s]ney|brasil|brazil|reino unido|united kingdom/i;
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const head = renderMarketingHead("/contact", locale);
+      const title = /<title>(.*?)<\/title>/.exec(head)![1]!;
+      const description = /name="description" content="(.*?)"/.exec(head)![1]!;
+      expect(title, locale).not.toMatch(banned);
+      expect(description, locale).not.toMatch(banned);
+    }
+  });
+});
+
 describe("Spanish", () => {
   it("serves the Spanish head, card and FAQ for /vem, stamped es", () => {
     const head = renderMarketingHead("/vem", "es");
@@ -423,6 +471,7 @@ describe("Spanish", () => {
       ["/claim", "claim"],
       ["/watch-party", "watchPartyPage"],
       ["/streamers", "streamersPage"],
+      ["/contact", "contactPage"],
     ] as const) {
       const head = renderMarketingHead(path, "es");
       expect(head, path).toContain(

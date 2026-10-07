@@ -18,6 +18,7 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 - [Desktop download](https://pqp.gg/download): Electron builds, and the code signing policy (https://pqp.gg/download#code-signing)
 - [Status](https://pqp.gg/status): live service status
 - [Support the project](https://pqp.gg/apoie): donations; nothing is unlocked by donating
+- [About and contact](https://pqp.gg/contact): who makes pqp (two brothers), the contact address, and the independence statement
 
 ## Policies
 

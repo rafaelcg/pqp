@@ -167,6 +167,121 @@ export const STREAMERS_PRERENDER_COPY: Record<
   },
 };
 
+/** The catalogue keys the `/contact` block reads, in the order it reads them. */
+export const CONTACT_PRERENDER_KEYS = [
+  "contactPage.eyebrow",
+  "contactPage.title",
+  "contactPage.lead",
+  "contactPage.who.title",
+  "contactPage.who.body",
+  "contactPage.contact.title",
+  "contactPage.contact.body",
+  "contactPage.independent.title",
+  "contactPage.independent.body",
+  "contactPage.links.title",
+  "footer.privacy",
+  "footer.terms",
+  "footer.source",
+] as const;
+
+type ContactKey = (typeof CONTACT_PRERENDER_KEYS)[number];
+
+export const CONTACT_PRERENDER_COPY: Record<
+  MarketingLocale,
+  Record<ContactKey, string>
+> = {
+  "pt-BR": {
+    "contactPage.eyebrow":
+      "Sobre e contato",
+    "contactPage.title":
+      "Quem faz o pqp",
+    "contactPage.lead":
+      "O pqp é um app gratuito e de código aberto para voz, compartilhamento de tela e chat de texto.",
+    "contactPage.who.title":
+      "Quem está por trás",
+    "contactPage.who.body":
+      "O pqp é feito por dois irmãos. É um projeto pequeno, e o código é público para qualquer pessoa ler.",
+    "contactPage.contact.title":
+      "Contato",
+    "contactPage.contact.body":
+      "Para dúvidas, suporte, pedidos de privacidade ou qualquer outro assunto do serviço, manda um e-mail para o endereço abaixo.",
+    "contactPage.independent.title":
+      "Projeto independente",
+    "contactPage.independent.body":
+      "O pqp é um projeto independente e não é afiliado ao Discord nem a nenhuma outra empresa.",
+    "contactPage.links.title":
+      "Políticas e código-fonte",
+    "footer.privacy":
+      "Privacidade",
+    "footer.terms":
+      "Termos",
+    "footer.source":
+      "Código no GitHub",
+  },
+  "en": {
+    "contactPage.eyebrow":
+      "About and contact",
+    "contactPage.title":
+      "Who makes pqp",
+    "contactPage.lead":
+      "pqp is a free, open source app for voice, screen sharing and text chat.",
+    "contactPage.who.title":
+      "Who is behind it",
+    "contactPage.who.body":
+      "pqp is made by two brothers. It is a small project, and the code is public for anyone to read.",
+    "contactPage.contact.title":
+      "Contact",
+    "contactPage.contact.body":
+      "For questions, support, privacy requests or anything else about the service, send an email to the address below.",
+    "contactPage.independent.title":
+      "Independent project",
+    "contactPage.independent.body":
+      "pqp is an independent project and is not affiliated with Discord or any other company.",
+    "contactPage.links.title":
+      "Policies and source code",
+    "footer.privacy":
+      "Privacy",
+    "footer.terms":
+      "Terms",
+    "footer.source":
+      "Source on GitHub",
+  },
+  "es": {
+    "contactPage.eyebrow":
+      "Acerca de y contacto",
+    "contactPage.title":
+      "Quién hace pqp",
+    "contactPage.lead":
+      "pqp es una app gratuita y de código abierto para voz, pantalla compartida y chat de texto.",
+    "contactPage.who.title":
+      "Quién está detrás",
+    "contactPage.who.body":
+      "pqp lo hacen dos hermanos. Es un proyecto pequeño, y el código es público para que cualquiera lo lea.",
+    "contactPage.contact.title":
+      "Contacto",
+    "contactPage.contact.body":
+      "Para dudas, soporte, solicitudes de privacidad o cualquier otro tema del servicio, escribe un correo a la dirección de abajo.",
+    "contactPage.independent.title":
+      "Proyecto independiente",
+    "contactPage.independent.body":
+      "pqp es un proyecto independiente y no está afiliado a Discord ni a ninguna otra empresa.",
+    "contactPage.links.title":
+      "Políticas y código fuente",
+    "footer.privacy":
+      "Privacidad",
+    "footer.terms":
+      "Términos",
+    "footer.source":
+      "Código en GitHub",
+  },
+};
+
+/** The address the page gives, the same constant as `CONTACT_EMAIL` in `help-contact.ts`, pinned by the test. */
+export const CONTACT_PRERENDER_EMAIL = "contato@pqp.gg";
+
+/** The repository, the same constant as `SOURCE_REPO_URL` in `downloads.ts`, pinned by the test. */
+export const CONTACT_PRERENDER_SOURCE_URL = "https://github.com/rafaelcg/pqp";
+
 /** `STREAMERS_WAITLIST_HREF` in `handle-intent.ts`, pinned by the test. */
 export const STREAMERS_PRERENDER_CTA_HREF =
   "/app?intent=watch-party-waitlist&from=streamers";
@@ -205,6 +320,31 @@ function streamersBlock(locale: MarketingLocale): string {
   ].join("");
 }
 
+function contactBlock(locale: MarketingLocale): string {
+  const c = CONTACT_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const h2 = (text: string) =>
+    `<h2 class="mt-10 font-display text-xl font-bold">${e(text)}</h2>`;
+  return [
+    `<div id="pre-page" lang="${locale}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
+    `<main class="mx-auto max-w-2xl">`,
+    `<p class="text-xs font-semibold uppercase tracking-[0.18em] text-accent">${e(c["contactPage.eyebrow"])}</p>`,
+    `<h1 class="mt-3 font-display text-4xl font-extrabold tracking-tight">${e(c["contactPage.title"])}</h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["contactPage.lead"])}</p>`,
+    h2(c["contactPage.who.title"]),
+    `<p class="mt-2 text-text-secondary">${e(c["contactPage.who.body"])}</p>`,
+    h2(c["contactPage.contact.title"]),
+    `<p class="mt-2 text-text-secondary">${e(c["contactPage.contact.body"])}</p>`,
+    `<p class="mt-4"><a href="mailto:${e(CONTACT_PRERENDER_EMAIL)}" class="underline">${e(CONTACT_PRERENDER_EMAIL)}</a></p>`,
+    h2(c["contactPage.independent.title"]),
+    `<p class="mt-2 text-text-secondary">${e(c["contactPage.independent.body"])}</p>`,
+    h2(c["contactPage.links.title"]),
+    `<ul class="mt-2"><li><a href="/privacy" class="underline">${e(c["footer.privacy"])}</a></li><li><a href="/terms" class="underline">${e(c["footer.terms"])}</a></li><li><a href="${e(CONTACT_PRERENDER_SOURCE_URL)}" class="underline">${e(c["footer.source"])}</a></li></ul>`,
+    `</main>`,
+    `</div>`,
+  ].join("");
+}
+
 /**
  * `html` with the page's no-JS body written into `#root`, or `html` unchanged
  * for a page that has none, a document with no `#root`, or a `#root` that
@@ -215,7 +355,9 @@ export function injectMarketingBody(
   page: MarketingPage,
   locale: MarketingLocale,
 ): string {
-  if (page !== "/streamers" && page !== "/criadores") {
+  const isStreamers = page === "/streamers" || page === "/criadores";
+  const isContact = page === "/contact" || page === "/contato";
+  if (!isStreamers && !isContact) {
     return html;
   }
   const at = html.indexOf(ROOT_OPEN);
@@ -223,5 +365,6 @@ export function injectMarketingBody(
     return html;
   }
   const insertAt = at + ROOT_OPEN.length;
-  return html.slice(0, insertAt) + streamersBlock(locale) + html.slice(insertAt);
+  const body = isContact ? contactBlock(locale) : streamersBlock(locale);
+  return html.slice(0, insertAt) + body + html.slice(insertAt);
 }

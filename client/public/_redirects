@@ -35,4 +35,14 @@
 # included), so whoever typed `/ven` reads Spanish. Twin route in main.tsx.
 /ven          /vem?lang=es         302
 
+# The address a Spanish ad was pointed at (pqp.gg/vem/gratis) before the page
+# had any sub-path: only `/vem` exists. A 301 to the page, no query string in
+# the destination, because Pages then carries the visitor's own query across
+# (checked against production on 2026-10-08: `/discord?lang=es&utm_source=x`
+# answers `/vem?lang=es&utm_source=x#importar`), so `?lang=` and any campaign
+# tag survive. The trailing-slash form is listed too. Twin route in main.tsx
+# for builds served outside Pages, and a STATIC_PATHS entry in spa-routes.ts.
+/vem/gratis   /vem                 301
+/vem/gratis/  /vem                 301
+
 /*    /index.html   200

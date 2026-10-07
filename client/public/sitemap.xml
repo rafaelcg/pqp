@@ -78,6 +78,12 @@
     <priority>0.9</priority>
   </url>
   <url>
+    <loc>https://pqp.gg/contact</loc>
+    <lastmod>2026-10-08</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
+  </url>
+  <url>
     <loc>https://pqp.gg/privacy</loc>
     <lastmod>2026-09-29</lastmod>
     <changefreq>monthly</changefreq>
