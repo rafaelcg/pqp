@@ -290,6 +290,8 @@ describe("VoiceSection mic test timing", () => {
       micTestButton().click();
     });
     expect(visibleLabel(micTestButton())).toMatch(/· 5 s$/);
+    // The countdown is visible; the name a screen reader reads stays put.
+    expect(micTestButton().getAttribute("aria-label")).toMatch(/^(Stop|Parar)$/);
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });

@@ -639,6 +639,9 @@ describe("Settings profile save, QA round 3", () => {
     const wrapper = document.getElementById("settings-panel")!.closest(".sm\\:flex-row")!;
     expect(wrapper.className).toContain("max-sm:[&_button:not([role])]:min-h-11");
     expect(wrapper.className).toContain("max-sm:[&_select]:min-h-11");
+    expect(wrapper.className).toContain("max-sm:[&_[role=tab]]:min-h-11");
+    expect(wrapper.className).toContain("max-sm:[&_[role=radio]:not(.rounded-full)]:min-h-11");
+    expect(wrapper.className).toContain("max-sm:[&_input:not([type=file])]:min-h-11");
   });
 
   it("pads the pane by the bar's real height when its buttons wrap", () => {

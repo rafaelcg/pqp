@@ -191,6 +191,11 @@ export function ConnectionDoctorDialog({
             );
           })}
         </ul>
+        {/* Mounted with the dialog and filled when the checks end: a line
+            created already holding its text is often not read. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {report ? t(ADVICE_LABEL[report.advice]) : ""}
+        </p>
         {report && (
           <p
             className={cn(
@@ -199,7 +204,6 @@ export function ConnectionDoctorDialog({
                 ? "border-success/40 bg-success/10 text-paper"
                 : "border-warning/40 bg-warning/10 text-paper",
             )}
-            role="status"
             data-doctor-advice={report.advice}
           >
             {t(ADVICE_LABEL[report.advice])}

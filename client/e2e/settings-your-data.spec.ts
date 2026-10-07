@@ -96,7 +96,9 @@ test.describe("settings, your data", () => {
     await exportButton(page).click();
     await expect(exportButton(page)).toBeDisabled();
     await expect(exportButton(page)).toContainText(/Download in \d+ s/);
-    await expect(exportRow(page).getByRole("alert")).toContainText(
+    // Plain text in the row, said once by the dialog's announcer.
+    await expect(exportRow(page)).toContainText("Too many downloads in a row. Try again in");
+    await expect(page.locator("[data-settings-announcer]")).toContainText(
       "Too many downloads in a row. Try again in",
     );
     // The line grew the row; the button is still where the person's eye was.

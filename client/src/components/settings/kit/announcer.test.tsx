@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsAnnouncer } from "@/components/settings/kit/announcer";
 import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import type { InlineSaveState } from "@/components/settings/kit/use-inline-save";
@@ -95,5 +95,38 @@ describe("SettingsInlineStatus quiet", () => {
     expect(host.textContent).toContain("Esse link já tem dono.");
     expect(region().textContent).toBe("");
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe("SettingsNotice inside Settings", () => {
+  it("says a notice that appears after the tab opened, and not one that was there", async () => {
+    const { SettingsNotice } = await import("@/components/settings/kit/notice");
+    const { markSettingsPaneShown } = await import("@/components/settings/kit/announcer");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    markSettingsPaneShown();
+    const render = async (late: boolean) => {
+      await act(async () => {
+        root!.render(
+          <SettingsAnnouncer>
+            <SettingsNotice tone="info">Já estava aqui.</SettingsNotice>
+            {late ? <SettingsNotice tone="warning">Shift sozinho abre o mic.</SettingsNotice> : null}
+          </SettingsAnnouncer>,
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+    await render(false);
+    expect(region().textContent).toBe("");
+    now.mockReturnValue(1_000_000 + 5_000);
+    await render(true);
+    expect(region().textContent).toBe("Shift sozinho abre o mic.");
+    // Neither notice is a live region of its own inside Settings.
+    expect(host.querySelectorAll('[role="status"]').length).toBe(1);
+    now.mockRestore();
   });
 });

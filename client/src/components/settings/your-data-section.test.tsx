@@ -275,6 +275,10 @@ describe("YourDataSection export feedback", () => {
 
     await tick(10_000);
     expect(exportButton().textContent).toBe("Download in 44 s");
+    // The name stays put while the label counts down.
+    expect(exportButton().getAttribute("aria-label")).toBe(
+      "Download everything we hold about you, available in 54 s",
+    );
     expect(alert?.isConnected).toBe(true);
     // The alert is said once: the countdown a screen reader would hear every
     // second is hidden from it.
@@ -379,7 +383,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    const alert = document.body.querySelector('[role="alert"]');
+    const alert = document.body.querySelector('[aria-live="assertive"]');
     expect(alert?.textContent).toBe(DELETE_FAILED);
     expect(document.body.textContent).not.toContain("database_unavailable");
   });
@@ -389,7 +393,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(document.body.querySelector('[aria-live="assertive"]')?.textContent).toBe(
       DELETE_FAILED,
     );
     expect(document.body.textContent).not.toContain("Could not delete account");
@@ -400,7 +404,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(document.body.querySelector('[aria-live="assertive"]')?.textContent).toBe(
       DELETE_FAILED,
     );
   });
@@ -410,7 +414,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(document.body.querySelector('[aria-live="assertive"]')?.textContent).toBe(
       DELETE_FAILED,
     );
   });
@@ -420,7 +424,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    const alert = document.body.querySelector('[role="alert"]')?.textContent ?? "";
+    const alert = document.body.querySelector('[aria-live="assertive"]')?.textContent ?? "";
     expect(alert).not.toContain("Type your own tag");
     expect(alert.length).toBeGreaterThan(0);
   });
@@ -440,10 +444,14 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    const alert = document.body.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Sandbox");
-    expect(alert?.textContent).toContain("· 15 other members");
-    expect(alert?.textContent).toContain("· 1 other member");
+    // Said through the dialog's own live region; the list is on screen.
+    expect(
+      document.body.querySelector('[aria-live="assertive"]')?.textContent,
+    ).toMatch(/communities|comunidades/i);
+    const footer = document.body.querySelector("input")!.closest(".border-t")!;
+    expect(footer.textContent).toContain("Sandbox");
+    expect(footer.textContent).toContain("· 15 other members");
+    expect(footer.textContent).toContain("· 1 other member");
   });
 
   it("pins the typed confirmation above the buttons, outside the scrolling text", () => {
@@ -467,7 +475,7 @@ describe("DeleteAccountDialog", () => {
     mountDialog();
     await act(async () => confirmButton().click());
     await settle();
-    const alert = document.body.querySelector('[role="alert"]')!;
+    const alert = document.body.querySelector('[aria-live="assertive"]')!;
     expect(alert.closest(".border-t")).not.toBeNull();
   });
 
@@ -641,7 +649,7 @@ describe("focus stays put while a request runs", () => {
       fail(new Response(JSON.stringify({ error: "boom" }), { status: 500 })),
     );
     await settle();
-    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(DELETE_FAILED);
+    expect(document.body.querySelector('[aria-live="assertive"]')?.textContent).toBe(DELETE_FAILED);
     expect(document.activeElement).toBe(confirm);
     expect(confirm.getAttribute("aria-disabled")).toBeNull();
   });

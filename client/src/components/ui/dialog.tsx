@@ -372,10 +372,15 @@ export function Dialog({
         className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-4"
         style={layerStyle}
         onMouseDown={(event) => {
-          if (dismissible && closeOnBackdrop && event.target === event.currentTarget) {
-            // The press's default action would move focus to the page after
-            // the close handed it back to the opener.
-            event.preventDefault();
+          if (event.target !== event.currentTarget) {
+            return;
+          }
+          // A press on the backdrop never moves focus to the page: after a
+          // close that handed it back to the opener, and on a dialog the
+          // backdrop does not close, where it would leave the dialog open with
+          // focus outside it.
+          event.preventDefault();
+          if (dismissible && closeOnBackdrop) {
             onClose();
           }
         }}
@@ -437,7 +442,9 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text"
+                // 28px drawn, 44px to a finger on a phone: the hit area grows,
+                // the icon does not.
+                className="relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']"
                 onClick={onClose}
               >
                 <X className="h-4 w-4" />

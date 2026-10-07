@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  SETTINGS_BUSY,
   SettingsGroup,
   SettingsKeycap,
   SettingsNotice,
@@ -208,6 +209,7 @@ export function FeedbackSection({
   const [error, setError] = useState<string | null>(
     initial.outcome && initial.outcome !== "sent" ? outcomeMessage(initial.outcome) : null,
   );
+  const [errorCount, setErrorCount] = useState(0);
   const mounted = useRef(false);
   const messageId = useId();
   const counterId = useId();
@@ -236,6 +238,8 @@ export function FeedbackSection({
     } else {
       focusAfter.current = "send";
       setError(outcomeMessage(outcome));
+      // The same sentence twice in a row is still news: say it again.
+      setErrorCount((count) => count + 1);
     }
   };
 
@@ -280,7 +284,7 @@ export function FeedbackSection({
   // is often not read. Without an announcer the notice is its own alert.
   useEffect(() => {
     if (announce && error) announce(error);
-  }, [announce, error]);
+  }, [announce, error, errorCount]);
 
   const count = feedbackCount(body);
   const tone = counterTone(count, FEEDBACK_BODY_MAX_LENGTH);
@@ -514,9 +518,15 @@ export function FeedbackSection({
               ref={sendRef}
               size="sm"
               aria-describedby={empty ? noteId : undefined}
-              disabled={!canSend}
+              // Busy but focusable while sending: `disabled` would drop the
+              // keyboard on the page, and an Escape there closes Settings.
+              disabled={empty}
+              aria-disabled={sending || undefined}
               onClick={submit}
-              className="h-11 flex-1 text-sm @lg:h-[var(--control-sm)] @lg:flex-none @lg:text-xs"
+              className={cn(
+                "h-11 flex-1 text-sm @lg:h-[var(--control-sm)] @lg:flex-none @lg:text-xs",
+                sending && SETTINGS_BUSY,
+              )}
             >
               {sending ? t("settings.feedback.sending") : t("settings.feedback.send")}
             </Button>

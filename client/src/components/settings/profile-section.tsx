@@ -204,7 +204,13 @@ export function useHandleAvailability(
       window.clearTimeout(timer);
     };
   }, [handle, ownedHandle, enabled]);
-  return answer.handle === handle.trim() ? answer.value : "idle";
+  if (answer.handle === handle.trim()) {
+    return answer.value;
+  }
+  // The render between a keystroke and its effect. While a check is already
+  // running, the next one is checking too: dropping to idle there emptied the
+  // live region on every key, so "Verificando…" was said once per letter.
+  return answer.value === "checking" ? "checking" : "idle";
 }
 
 /**

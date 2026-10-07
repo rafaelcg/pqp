@@ -192,6 +192,15 @@ function useDataExport(enabled: boolean) {
     if (announce && doneText) announce(doneText);
   }, [announce, doneText]);
   const doneLive = announce ? {} : ({ role: "status", "aria-live": "polite" } as const);
+  // The limiter's answer, said once with the wait as it was answered; the
+  // visible line counts down silently.
+  useEffect(() => {
+    if (announce && until !== null) {
+      announce(t("settings.data.exportCooldown", { time: formatWait(announcedWait) }));
+    }
+    // `announcedWait` is set with `until`, in the same answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [announce, until]);
 
   const status = waiting ? (
     <p className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
@@ -199,9 +208,11 @@ function useDataExport(enabled: boolean) {
       <span aria-hidden className="min-w-0 text-pretty">
         {t("settings.data.exportCooldown", { time: formatWait(waitSeconds) })}
       </span>
-      <span role="alert" className="sr-only">
-        {t("settings.data.exportCooldown", { time: formatWait(announcedWait) })}
-      </span>
+      {announce ? null : (
+        <span role="alert" className="sr-only">
+          {t("settings.data.exportCooldown", { time: formatWait(announcedWait) })}
+        </span>
+      )}
     </p>
   ) : exp.state.kind === "idle" && doneFile ? (
     <p
@@ -223,6 +234,9 @@ function useDataExport(enabled: boolean) {
     exporting,
     waiting,
     waitLabel: waiting ? formatWait(waitSeconds) : null,
+    // The wait as the limiter answered it, for the button's name: the visible
+    // label counts down, the name does not tick under a screen reader.
+    waitName: waiting ? formatWait(announcedWait) : null,
     disabled: !enabled,
     busy,
   };
@@ -277,8 +291,8 @@ export function YourDataSection({
               aria-disabled={data.busy || undefined}
               className={cn(TOUCH, data.busy && SETTINGS_BUSY)}
               aria-label={
-                data.waitLabel
-                  ? t("settings.data.row.export.waitAction", { time: data.waitLabel })
+                data.waitName
+                  ? t("settings.data.row.export.waitAction", { time: data.waitName })
                   : t("settings.data.row.export.action")
               }
             >
@@ -442,6 +456,22 @@ export function DeleteAccountDialog({
       footer={
         <>
           <div className="w-full space-y-3">
+            {/* The dialog's own live regions, mounted with it: a line created
+                already holding its text is often not read. The visible lines
+                below are plain text. */}
+            <p aria-live="assertive" className="sr-only">
+              {error ??
+                (blockingServers && blockingServers.length > 0
+                  ? `${t("settings.delete.ownedTitle")} ${t("settings.delete.ownedBody")}`
+                  : "")}
+            </p>
+            <p aria-live="polite" className="sr-only">
+              {busy
+                ? t("settings.delete.deleting")
+                : missing
+                  ? t("settings.delete.typeMissing", { rest: missing })
+                  : ""}
+            </p>
             {blockingServers && blockingServers.length > 0 && (
               // The list inherits the notice's own foreground: that pair is the
               // one the bench measures on the warning fill. An alert, because it
@@ -449,7 +479,7 @@ export function DeleteAccountDialog({
               <div className="max-h-40 overflow-y-auto">
                 <SettingsNotice
                   tone="warning"
-                  role="alert"
+                  role="note"
                   title={t("settings.delete.ownedTitle")}
                 >
                   <p>{t("settings.delete.ownedBody")}</p>
@@ -469,9 +499,7 @@ export function DeleteAccountDialog({
               </div>
             )}
             {error && (
-              <p role="alert" className="text-sm text-danger">
-                {error}
-              </p>
+              <p className="text-sm text-danger">{error}</p>
             )}
             <div>
               <label
@@ -497,7 +525,6 @@ export function DeleteAccountDialog({
               {missing && (
                 <p
                   id={hintId}
-                  role="status"
                   className="mt-1.5 flex items-center gap-1.5 text-xs text-text-secondary"
                 >
                   <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />

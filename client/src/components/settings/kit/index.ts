@@ -27,7 +27,11 @@ export {
   type SettingsChoice,
 } from "@/components/settings/kit/choice-grid";
 export { SettingsEmpty } from "@/components/settings/kit/empty";
-export { SettingsAnnouncer, useSettingsAnnounce } from "@/components/settings/kit/announcer";
+export {
+  SettingsAnnouncer,
+  markSettingsPaneShown,
+  useSettingsAnnounce,
+} from "@/components/settings/kit/announcer";
 export { flashSettingsRow } from "@/components/settings/kit/flash-row";
 export { SettingsGroup } from "@/components/settings/kit/group";
 export { SettingsInlineStatus } from "@/components/settings/kit/inline-status";

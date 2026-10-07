@@ -49,3 +49,20 @@ export function SettingsAnnouncer({ children }: { children: ReactNode }) {
 export function useSettingsAnnounce(): ((text: string) => void) | null {
   return useContext(SettingsAnnounceContext);
 }
+
+/**
+ * When the pane last changed tab. A notice that is already there when a tab
+ * opens is content, not news; one that appears later (a refusal, a warning a
+ * choice brought up) is said through the announcer.
+ */
+let paneShownAt = 0;
+const PANE_SETTLE_MS = 400;
+
+/** Called by the shell when it shows a tab. */
+export function markSettingsPaneShown(): void {
+  paneShownAt = Date.now();
+}
+
+export function settingsPaneSettled(): boolean {
+  return Date.now() - paneShownAt > PANE_SETTLE_MS;
+}

@@ -5,7 +5,11 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import {
+  settingsPaneSettled,
+  useSettingsAnnounce,
+} from "@/components/settings/kit/announcer";
 import { cn } from "@/lib/utils";
 
 interface SettingsNoticeProps {
@@ -58,9 +62,33 @@ export function SettingsNotice({
 }: SettingsNoticeProps) {
   const { icon: toneIcon, className } = TONE[tone];
   const Icon = icon ?? toneIcon;
+  const live = role ?? (tone === "danger" ? "alert" : "status");
+  // Inside Settings a live notice speaks through the dialog's announcer: a
+  // region inserted already holding its text is often not read. It is said
+  // when it appears after the tab opened and whenever its text changes; one
+  // that was there when the tab opened is content, read in the page.
+  const announce = useSettingsAnnounce();
+  const speaks = announce !== null && live !== "note";
+  const textRef = useRef<HTMLDivElement>(null);
+  const spoken = useRef<string | null>(null);
+  useEffect(() => {
+    if (!speaks) {
+      return;
+    }
+    const text = textRef.current?.textContent?.trim() ?? "";
+    if (spoken.current === null) {
+      spoken.current = text;
+      if (text && settingsPaneSettled()) announce(text);
+      return;
+    }
+    if (text && text !== spoken.current) {
+      spoken.current = text;
+      announce(text);
+    }
+  });
   return (
     <div
-      role={role ?? (tone === "danger" ? "alert" : "status")}
+      role={speaks ? undefined : live}
       className={cn(
         "flex items-start gap-3 px-4 py-3 text-xs",
         className,
@@ -73,7 +101,7 @@ export function SettingsNotice({
       )}
     >
       <Icon aria-hidden className="mt-px h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1 text-pretty">
+      <div ref={textRef} className="min-w-0 flex-1 text-pretty">
         {title ? <p className="text-sm font-medium">{title}</p> : null}
         <div className={title ? "mt-0.5" : undefined}>{children}</div>
       </div>

@@ -83,3 +83,26 @@ describe("Dialog backdrop", () => {
     expect(press.defaultPrevented).toBe(true);
   });
 });
+
+describe("Dialog backdrop on a dialog it does not close", () => {
+  it("keeps focus where it was", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onClose = vi.fn();
+    act(() =>
+      root!.render(
+        <Dialog open title="Apagar sua conta?" onClose={onClose} closeOnBackdrop={false}>
+          <p>conteúdo</p>
+        </Dialog>,
+      ),
+    );
+    const layer = document.querySelector<HTMLElement>("[data-dialog-layer]")!;
+    const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    act(() => {
+      layer.dispatchEvent(press);
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(press.defaultPrevented).toBe(true);
+  });
+});

@@ -284,7 +284,7 @@ describe("FeedbackSection", () => {
     host?.remove();
 
     mount();
-    expect(sendButton().disabled).toBe(true);
+    expect(sendButton().getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
       sendButton().click();
       await Promise.resolve();
@@ -384,6 +384,42 @@ describe("FeedbackSection", () => {
     mount();
     expect(host!.querySelector('[role="alert"]')).toBeNull();
     expect(textarea().value).toBe("meu relato");
+  });
+
+  it("says a second failure in a row again, not only the first", async () => {
+    const { SettingsAnnouncer } = await import("@/components/settings/kit");
+    sendFeedback.mockRejectedValue(new Error("network"));
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsSectionContext.Provider value="feedback">
+            <FeedbackSection voice={null} userId={null} />
+          </SettingsSectionContext.Provider>
+        </SettingsAnnouncer>,
+      ),
+    );
+    type("meu relato");
+    const region = () => host!.querySelector("[data-settings-announcer]")!;
+    const said: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await act(async () => {
+        sendButton().click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      said.push(region().textContent ?? "");
+      // The announcer clears before it speaks: catch the clear in between.
+      act(() => {
+        region().textContent = "";
+      });
+    }
+    expect(said[0]).toMatch(/Couldn't send/);
+    expect(said[1]).toMatch(/Couldn't send/);
   });
 
   it("keeps a draft for the same account and drops it for another", () => {

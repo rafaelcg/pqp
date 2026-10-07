@@ -1722,6 +1722,10 @@ export function VoiceSection({
                     // must not drop the keyboard on the page.
                     aria-disabled={inCall || undefined}
                     data-mic-test=""
+                    // A steady name while it plays: the countdown ticks every
+                    // second, and a focused button whose name changes is read
+                    // again by some screen readers.
+                    aria-label={micTest.playing ? t("settings.voice.micTestStop") : undefined}
                     onClick={() => {
                       if (inCall) {
                         return;
