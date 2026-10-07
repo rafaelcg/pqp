@@ -160,6 +160,13 @@ describe("SettingsModal microphone failures", () => {
     expect(document.querySelector('[role="slider"][aria-label="Sensitivity"]')).toBeNull();
   });
 
+  it("still offers the permission in a call that holds no microphone (listen-only)", async () => {
+    setInCall(true);
+    installMedia({ devices: [MIC_NO_NAME], open: fail("NotAllowedError") });
+    await mount(null);
+    expect(document.querySelector("[data-allow-microphone]")).not.toBeNull();
+  });
+
   it("asks for permission when it was refused", async () => {
     installMedia({ devices: [MIC_NO_NAME], open: fail("NotAllowedError") });
     await mount();

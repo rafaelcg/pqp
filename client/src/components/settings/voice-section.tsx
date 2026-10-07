@@ -68,6 +68,7 @@ import {
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { useInCall } from "@/lib/in-call-state";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { usePreferenceSyncFailed } from "@/lib/preferences";
 import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
 import {
   setAutoHideStageControls,
@@ -1423,6 +1424,9 @@ function MissingDeviceOption({
   );
 }
 
+/** The account preferences Voz writes: the notice reads their sync. */
+const VOICE_SYNCED_KEYS = ["inputVolume", "outputVolume", "muteOnJoin", "compactPeers"] as const;
+
 /* -------------------------------------------------------------- section */
 
 /**
@@ -1463,6 +1467,8 @@ export function VoiceSection({
   showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
+  // The parts of Voz that follow the account (see `preferencesFromLocal`).
+  const voiceSyncFailed = usePreferenceSyncFailed(VOICE_SYNCED_KEYS);
   const ids = useId();
   const musicAutoJoin = useMusicAutoJoin();
   const musicDucking = useMusicDucking();
@@ -1501,8 +1507,10 @@ export function VoiceSection({
     setAsking(true);
     try {
       // A machine with no microphone is answered too: the list comes back
-      // empty and the row says so, which is the news the person asked for.
-      if ((await probeMicrophone()) !== "denied") {
+      // empty and the row says so, which is the news the person asked for. A
+      // microphone another app still holds is not: the notice stays.
+      const probe = await probeMicrophone();
+      if (probe === "granted" || probe === "none") {
         setAllowed(await listAudioDevices());
         // The notice holding the pressed button goes away: the effect below
         // hands the keyboard to the select that takes its place, once it is
@@ -1637,6 +1645,15 @@ export function VoiceSection({
 
   return (
     <div className="space-y-6">
+      {voiceSyncFailed ? (
+        // Sticky, as in Aparência: the control that failed is usually
+        // further down the tab.
+        <div className="sticky top-2 z-10">
+          <SettingsNotice tone="warning" role="alert">
+            {t("settings.syncFailed")}
+          </SettingsNotice>
+        </div>
+      ) : null}
       <SettingsHeaderActions>
         {/* The way out of "stuck on connecting": five checks and the fix. */}
         <Button

@@ -530,6 +530,23 @@ describe("Settings profile save, QA round 3", () => {
     expect(updateMe).not.toHaveBeenCalled();
   });
 
+  it("does not hold a save hostage to an invisible mark already in the saved name", async () => {
+    updateMe.mockReset();
+    updateMe.mockImplementation(async () => makeUser({ displayName: "Rafa\u200F", username: "rafael" }));
+    mount(makeUser({ displayName: "Rafa\u200F" }));
+    const name = document.querySelector('[data-settings-row="display-name"]')!;
+    expect(name.textContent).not.toMatch(/invisible character|caractere invisível/);
+    type(
+      document.querySelector<HTMLInputElement>('[data-settings-row="username"] input')!,
+      "rafael",
+    );
+    await act(async () => {
+      barButton("save")!.click();
+      await Promise.resolve();
+    });
+    expect(updateMe).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Salvo up for the whole moment after a second save", async () => {
     vi.useFakeTimers();
     try {

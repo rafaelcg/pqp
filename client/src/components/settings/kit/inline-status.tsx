@@ -14,12 +14,20 @@ import { useTranslation } from "@/lib/i18n";
 export function SettingsInlineStatus({
   state,
   savingLabel,
+  quiet = false,
 }: {
   state: InlineSaveState;
   savingLabel?: string;
+  /**
+   * Plain text, never announced: for a line whose sentence something else
+   * already says (the unsaved bar says a refused link). The field still points
+   * at it with `aria-describedby`, so it is read when the field takes focus.
+   */
+  quiet?: boolean;
 }) {
   const { t } = useTranslation();
-  const announce = useSettingsAnnounce();
+  const dialogAnnounce = useSettingsAnnounce();
+  const announce = quiet ? null : dialogAnnounce;
   const spoken =
     state.kind === "saving"
       ? (savingLabel ?? state.label ?? t("settings.saving"))
@@ -34,8 +42,9 @@ export function SettingsInlineStatus({
   // Inside Settings the dialog's announcer speaks, errors included: a line
   // created already holding its text is often not read, even as an alert.
   // Elsewhere the line is its own region, as before.
-  const live = announce ? {} : ({ role: "status", "aria-live": "polite" } as const);
-  const alert = announce ? {} : ({ role: "alert" } as const);
+  const live =
+    announce || quiet ? {} : ({ role: "status", "aria-live": "polite" } as const);
+  const alert = announce || quiet ? {} : ({ role: "alert" } as const);
 
   if (state.kind === "idle") {
     return null;

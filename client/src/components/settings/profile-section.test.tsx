@@ -152,10 +152,14 @@ describe("Perfil", () => {
     const input = linkField();
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(describedBy(input)).toContain("Esse link já tem dono. Tenta outro.");
-    const alert = row("public-link").querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Esse link já tem dono. Tenta outro.");
+    // Plain text the field describes itself with: the unsaved bar is what
+    // says the refusal, so the line under the field is not a second alert.
+    expect(row("public-link").querySelector('[role="alert"]')).toBeNull();
+    const line = [...row("public-link").querySelectorAll("p")].find((node) =>
+      node.textContent?.includes("Esse link já tem dono. Tenta outro."),
+    );
     // The kit's error line carries its icon.
-    expect(alert?.querySelector("svg")).not.toBeNull();
+    expect(line?.querySelector("svg")).not.toBeNull();
   });
 
   it("is not invalid without a handle error", async () => {
@@ -259,7 +263,10 @@ describe("Perfil: the public link while it is typed", () => {
     await mount(USER, { handle: "alguem", handleError: "Esse link já tem dono. Tenta outro." });
     await settle();
     expect(status().textContent).toBe("");
-    expect(row("public-link").querySelectorAll('[role="alert"]')).toHaveLength(1);
+    // Said once, by the unsaved bar: neither the availability line nor the
+    // error under the field speaks it again.
+    expect(row("public-link").querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(row("public-link").textContent).toContain("Esse link já tem dono. Tenta outro.");
   });
 });
 

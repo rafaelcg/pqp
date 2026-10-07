@@ -2492,7 +2492,7 @@
   "settings.push.dmDetailsFailed": "No se pudo guardar ese ajuste.",
   "settings.push.dmDetailsHintOn": "El push de un DM dice quién mandó el mensaje. El texto nunca va incluido.",
   "settings.push.loading": "Cargando el push…",
-  "settings.syncFailed": "No se pudo guardar en tu cuenta. Vale en este dispositivo, pero puede volver a como estaba si recargas. Lo intentamos de nuevo en tu próximo cambio.",
+  "settings.syncFailed": "No se pudo guardar en tu cuenta. Vale en este dispositivo, pero puede volver a como estaba si recargas.",
   "communities.members_other": "{countLabel} miembros",
   "communities.members_many": "{countLabel} miembros",
   "communities.members_zero": "{countLabel} miembros",

@@ -2467,7 +2467,7 @@
   "settings.push.dmDetailsFailed": "Não deu para salvar isso.",
   "settings.push.dmDetailsHintOn": "O push de DM diz quem mandou a mensagem. O texto nunca vai junto.",
   "settings.push.loading": "Carregando o push…",
-  "settings.syncFailed": "Não deu pra salvar na sua conta. Vale neste aparelho, mas pode voltar ao que era se você recarregar. Tentamos de novo na próxima mudança.",
+  "settings.syncFailed": "Não deu pra salvar na sua conta. Vale neste aparelho, mas pode voltar ao que era se você recarregar.",
   "communities.members_other": "{countLabel} membros",
   "communities.members_zero": "{countLabel} membros",
   "publicCommunity.members_other": "{countLabel} membros",

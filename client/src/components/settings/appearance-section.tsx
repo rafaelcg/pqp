@@ -39,7 +39,14 @@ import {
 } from "@/components/settings/kit";
 
 /** The account preferences this tab writes: the notice reads their sync. */
-const SYNCED_KEYS = ["theme", "appearance", "accentHue", "contrast", "chatDisplay"] as const;
+const SYNCED_KEYS = [
+  "theme",
+  "appearance",
+  "accentHue",
+  "contrast",
+  "chatDisplay",
+  "showLinkEmbeds",
+] as const;
 
 /**
  * Aparência e idioma. Every control here applies and persists on the spot:

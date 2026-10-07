@@ -22,7 +22,6 @@ import {
   probeMicrophone,
   type MediaDeviceOption,
 } from "@/lib/audio-devices";
-import { isInCall } from "@/lib/in-call-state";
 import { intlLocale } from "@/lib/locale";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
@@ -623,9 +622,11 @@ export function SettingsModal({
       // The probe is a capture of the default microphone. It is only there to
       // unlock the names in the list, so it is not made when a call or the mic
       // test already holds the microphone (a second capture can mute the first
-      // on Safari) or when the names are readable already.
-      const holdsMicrophone =
-        isInCall() || isMicTestRunning() || voiceAnalyserRef.current !== null;
+      // on Safari) or when the names are readable already. Being in a call is
+      // not enough: a listen-only join or an audience seat holds no microphone,
+      // and without the probe it would never be asked for one. The call's
+      // analyser is what says its microphone is open.
+      const holdsMicrophone = isMicTestRunning() || voiceAnalyserRef.current !== null;
       if (!holdsMicrophone && !(await microphoneLabelsReadable())) {
         const probe = await probeMicrophone();
         // No microphone is not a refusal: the list below comes back without
@@ -921,7 +922,9 @@ export function SettingsModal({
       focusProfileField("display-name");
       return;
     }
-    if (hasBidiControl(drafts.displayName)) {
+    // Only a name being changed: a saved name that already carries an
+    // invisible mark (a pasted contact name) must not block saving a link.
+    if (drafts.displayName !== user.displayName && hasBidiControl(drafts.displayName)) {
       setSection("profile");
       setNameError(t("settings.profile.displayNameControls"));
       focusProfileField("display-name");

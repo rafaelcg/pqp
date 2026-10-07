@@ -354,7 +354,9 @@ export function ProfileSection({
   // wins, and the blur says it first.
   const nameError =
     displayNameError ??
-    (hasBidiControl(displayName) ? t("settings.profile.displayNameControls") : null) ??
+    (displayName !== (user?.displayName ?? "") && hasBidiControl(displayName)
+      ? t("settings.profile.displayNameControls")
+      : null) ??
     (nameLeftEmpty && !displayName.trim()
       ? t("settings.profile.displayNameRequired")
       : null);
@@ -566,7 +568,12 @@ export function ProfileSection({
                 ) : null}
                 {handleError ? (
                   <div id={handleErrorId}>
-                    <SettingsInlineStatus state={{ kind: "error", message: handleError }} />
+                    {/* The unsaved bar says this sentence; here it is
+                        plain text the field describes itself with. */}
+                    <SettingsInlineStatus
+                      quiet
+                      state={{ kind: "error", message: handleError }}
+                    />
                   </div>
                 ) : null}
                 {handleKept ? (

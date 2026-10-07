@@ -2469,7 +2469,7 @@
   "settings.push.dmDetailsFailed": "Could not save that setting.",
   "settings.push.dmDetailsHintOn": "A DM push says who sent the message. The text is never included.",
   "settings.push.loading": "Loading push…",
-  "settings.syncFailed": "Could not save to your account. It applies on this device, but may go back after a reload. We will try again on your next change.",
+  "settings.syncFailed": "Could not save to your account. It applies on this device, but may go back after a reload.",
   "communities.members_other": "{countLabel} members",
   "communities.members_zero": "{countLabel} members",
   "publicCommunity.members_other": "{countLabel} members",

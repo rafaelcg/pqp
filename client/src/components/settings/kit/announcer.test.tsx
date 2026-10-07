@@ -76,3 +76,24 @@ describe("SettingsAnnouncer", () => {
     expect(host!.querySelector('[role="status"]')?.textContent).toMatch(/Saved|Salvo/);
   });
 });
+
+describe("SettingsInlineStatus quiet", () => {
+  it("draws the error without speaking it or making it an alert", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsInlineStatus quiet state={{ kind: "error", message: "Esse link já tem dono." }} />
+        </SettingsAnnouncer>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host.textContent).toContain("Esse link já tem dono.");
+    expect(region().textContent).toBe("");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+});

@@ -25,8 +25,30 @@ const SYNC_DEBOUNCE_MS = 500;
 let pending: UserPreferences = {};
 let timer: ReturnType<typeof setTimeout> | null = null;
 
-/** Keys whose last request failed, with the value to send again. */
-const unsent: UserPreferences = {};
+/**
+ * How long a value whose request failed may still ride along with the next
+ * change. Past that it is dropped: the account may have moved on from another
+ * device, and replaying an old value over a newer one is exactly what boot
+ * refuses to do (see the header). The tab still says the account did not get
+ * it, and the value stays on this device.
+ */
+export const UNSENT_TTL_MS = 60_000;
+
+/**
+ * Keys whose last request failed for a reason a retry can fix (offline, a 5xx,
+ * a 429), with the value to send again and when it failed. A refusal of the
+ * body itself (any other 4xx) is not kept: sent again it would fail again, and
+ * take every later change from this tab down with it.
+ */
+const unsent = new Map<keyof UserPreferences, { value: unknown; at: number }>();
+
+function retryable(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== "number" || status === 0) {
+    return true;
+  }
+  return status === 429 || status >= 500;
+}
 /** Per key, the request that last carried it: only that one may report on it. */
 const latestRequest = new Map<keyof UserPreferences, number>();
 let requestCounter = 0;
@@ -65,9 +87,7 @@ export function bindPreferenceSyncAccount(id: string): void {
       timer = null;
     }
     pending = {};
-    for (const key of Object.keys(unsent) as (keyof UserPreferences)[]) {
-      delete unsent[key];
-    }
+    unsent.clear();
     latestRequest.clear();
     setFailedKeys([]);
   }
@@ -78,8 +98,17 @@ function flush(): void {
   timer = null;
   const owner = account;
   // A key whose last request failed rides along with the next change, under
-  // whatever was queued since: the newer value wins.
-  const body: UserPreferences = { ...unsent, ...pending };
+  // whatever was queued since (the newer value wins), for a minute at most.
+  const retained: Record<string, unknown> = {};
+  const now = Date.now();
+  for (const [key, entry] of unsent) {
+    if (now - entry.at > UNSENT_TTL_MS) {
+      unsent.delete(key);
+    } else {
+      retained[key] = entry.value;
+    }
+  }
+  const body: UserPreferences = { ...(retained as UserPreferences), ...pending };
   pending = {};
   const keys = Object.keys(body) as (keyof UserPreferences)[];
   if (keys.length === 0) {
@@ -92,11 +121,11 @@ function flush(): void {
   // Local-first by design: the value is already saved on this device, so a
   // failed sync costs cross-device propagation rather than the setting itself.
   // It is not silent, though: the settings tabs read `failedPreferenceKeys` and
-  // say so, and the next change sends the unsent keys again. Signed-out
+  // say so, and a change within the next minute sends the unsent keys again. Signed-out
   // marketing routes land here too, where no tab is open to say anything.
   void updatePreferences(body).then(
-    () => settle(owner, request, keys, body, true),
-    () => settle(owner, request, keys, body, false),
+    () => settle(owner, request, keys, body, null),
+    (error: unknown) => settle(owner, request, keys, body, error ?? new Error("failed")),
   );
 }
 
@@ -105,8 +134,9 @@ function settle(
   request: number,
   keys: readonly (keyof UserPreferences)[],
   body: UserPreferences,
-  ok: boolean,
+  error: unknown,
 ): void {
+  const ok = error === null;
   // Sent for an account that is no longer signed in here: nothing to keep.
   if (owner !== account) {
     return;
@@ -119,9 +149,13 @@ function settle(
     }
     failed = failed.filter((other) => other !== key);
     if (ok) {
-      delete unsent[key];
+      unsent.delete(key);
     } else {
-      (unsent as Record<string, unknown>)[key] = body[key];
+      if (retryable(error)) {
+        unsent.set(key, { value: body[key], at: Date.now() });
+      } else {
+        unsent.delete(key);
+      }
       failed.push(key);
     }
   }

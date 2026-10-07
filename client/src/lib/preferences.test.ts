@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({ updatePreferences: vi.fn() }));
 vi.mock("@/lib/api", () => ({ updatePreferences: api.updatePreferences }));
 
 const {
+  UNSENT_TTL_MS,
   bindPreferenceSyncAccount,
   failedPreferenceKeys,
   queuePreferenceSync,
@@ -111,5 +112,30 @@ describe("preference sync", () => {
     queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
     await settle();
     expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
+  });
+
+  it("does not replay a refused body: a 4xx would fail again and block every later change", async () => {
+    api.updatePreferences.mockRejectedValueOnce(
+      Object.assign(new Error("Invalid request"), { status: 400 }),
+    );
+    queuePreferenceSync({ theme: "dark" }, { immediate: true });
+    await settle();
+    expect(failedPreferenceKeys()).toEqual(["theme"]);
+    queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+    await settle();
+    expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
+  });
+
+  it("drops a failed value after a minute instead of pushing it over a newer one", async () => {
+    const start = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(start);
+    api.updatePreferences.mockRejectedValueOnce(new Error("offline"));
+    queuePreferenceSync({ theme: "dark" }, { immediate: true });
+    await settle();
+    now.mockReturnValue(start + UNSENT_TTL_MS + 1);
+    queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+    await settle();
+    expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
+    now.mockRestore();
   });
 });

@@ -345,6 +345,23 @@ describe("VoiceSection with the microphone blocked", () => {
     devicesError: "Needs the microphone to list devices.",
   };
 
+  it("keeps the notice when another app still holds the microphone", async () => {
+    getUserMedia = vi.fn(async () => {
+      throw Object.assign(new Error("busy"), { name: "NotReadableError" });
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices: async () => [] },
+    });
+    await mount(blockedProps);
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-allow-microphone]")!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(getUserMedia).toHaveBeenCalled();
+    expect(host!.querySelector("[data-allow-microphone]")).not.toBeNull();
+  });
+
   it("offers a button and the padlock steps, and hides the device list", async () => {
     await mount(blockedProps);
     expect(host!.querySelector("[data-allow-microphone]")).not.toBeNull();
