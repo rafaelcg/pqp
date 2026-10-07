@@ -110,12 +110,23 @@ export function modifierOfCode(code: string): Modifier | null {
 
 /**
  * A Linux desktop, where the fourth modifier is called Super. Read from the
- * user agent's "X11; Linux", which every Linux desktop browser and the
- * Electron shell send: not Android, not ChromeOS ("X11; CrOS"), and not a
- * Node or jsdom test run, whose `navigator.platform` says the host's OS.
+ * user agent's platform group, which on every Linux desktop browser and the
+ * Electron shell names X11 (or Wayland) and Linux, not always side by side
+ * (Firefox on Ubuntu says "X11; Ubuntu; Linux x86_64"). Not Android, not
+ * ChromeOS ("X11; CrOS"), and not a Node or jsdom test run, whose
+ * `navigator.platform` says the host's OS and whose agent has no such group.
  */
+export function isLinuxDesktopAgent(userAgent: string): boolean {
+  const group = /\(([^)]*)\)/.exec(userAgent)?.[1] ?? "";
+  return (
+    /\b(X11|Wayland)\b/.test(group) &&
+    /\bLinux\b/.test(group) &&
+    !/\b(Android|CrOS)\b/.test(group)
+  );
+}
+
 function isLinuxDesktop(): boolean {
-  return typeof navigator !== "undefined" && /X11; Linux/.test(navigator.userAgent);
+  return typeof navigator !== "undefined" && isLinuxDesktopAgent(navigator.userAgent);
 }
 
 /** The fourth modifier's name: Cmd on Apple, Super on Linux, Win elsewhere. */

@@ -553,3 +553,26 @@ describe("metaKeyName", () => {
     expect(metaKeyName(false, false)).toBe("Win");
   });
 });
+
+describe("isLinuxDesktopAgent", () => {
+  it("knows a Linux desktop browser, and nothing else", async () => {
+    const { isLinuxDesktopAgent } = await import("@/components/voice/push-to-talk");
+    expect(
+      isLinuxDesktopAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
+      ),
+    ).toBe(true);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"),
+    ).toBe(true);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/129.0 Mobile"),
+    ).toBe(false);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 Chrome/129.0"),
+    ).toBe(false);
+    expect(isLinuxDesktopAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0")).toBe(false);
+    expect(isLinuxDesktopAgent("Node.js/22")).toBe(false);
+    expect(isLinuxDesktopAgent("Mozilla/5.0 (linux) AppleWebKit/537.36 (KHTML, like Gecko) jsdom/26.0.0")).toBe(false);
+  });
+});
