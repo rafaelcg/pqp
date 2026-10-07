@@ -125,7 +125,10 @@ test.describe("settings, your data", () => {
     // The name without its number gets a hint, and the button stays off.
     const tag = (await dialog.locator("span.select-all").textContent())!;
     await input.fill(tag.split("#")[0]!);
-    await expect(dialog.getByText(`Missing #${tag.split("#")[1]}`)).toBeVisible();
+    // The visible hint; the dialog's live region says the same sentence.
+    await expect(
+      dialog.locator("p:not(.sr-only)", { hasText: `Missing #${tag.split("#")[1]}` }),
+    ).toBeVisible();
     await expect(confirm).toBeDisabled();
     await input.fill(tag);
     await expect(confirm).toBeEnabled();

@@ -105,7 +105,10 @@ test.describe("settings keyboard tab", () => {
     await page.keyboard.press("j");
     await expect(field.locator("kbd")).toHaveText(["J"]);
     await expect(
-      page.getByText("Without Ctrl/Cmd, this key only works outside text boxes."),
+      // In the pane; the dialog's announcer may say the same sentence.
+      page
+        .getByRole("tabpanel")
+        .getByText("Without Ctrl/Cmd, this key only works outside text boxes."),
     ).toBeVisible();
   });
 });

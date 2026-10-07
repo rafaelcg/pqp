@@ -108,12 +108,14 @@ export function modifierOfCode(code: string): Modifier | null {
   return MODIFIER_KEYS[code]?.modifier ?? null;
 }
 
-/** A Linux desktop, where the fourth modifier is called Super. Not Android. */
+/**
+ * A Linux desktop, where the fourth modifier is called Super. Read from the
+ * user agent's "X11; Linux", which every Linux desktop browser and the
+ * Electron shell send: not Android, not ChromeOS ("X11; CrOS"), and not a
+ * Node or jsdom test run, whose `navigator.platform` says the host's OS.
+ */
 function isLinuxDesktop(): boolean {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-  return /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent);
+  return typeof navigator !== "undefined" && /X11; Linux/.test(navigator.userAgent);
 }
 
 /** The fourth modifier's name: Cmd on Apple, Super on Linux, Win elsewhere. */
