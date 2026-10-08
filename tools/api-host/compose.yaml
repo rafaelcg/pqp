@@ -179,11 +179,14 @@ services:
   worker:
     # The `-worker` tag: the same build plus ffmpeg (Dockerfile target
     # `worker`, pushed by deploy-api-vultr.yml beside the plain tag), for the
-    # voice note AAC transcode. Rolling back to a commit from before this tag
-    # existed means rolling back this file with it, which is what redeploying
-    # that commit does; a bare APP_IMAGE_TAG=<old sha> against THIS file fails
-    # the worker's pull and leaves the running worker alone.
-    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}-worker
+    # voice note AAC transcode. pqp-deploy.sh sets WORKER_IMAGE_TAG after
+    # asking the registry: `<tag>-worker` when it exists, the plain `<tag>`
+    # (the API image, no ffmpeg) when it does not, which is every commit from
+    # before the worker tag existed, so any historical sha is a valid rollback
+    # target. A manual `docker compose up` without the script gets
+    # `<APP_IMAGE_TAG>-worker`, and APP_IMAGE_TAG keeps its `:?` guard (the
+    # stale-:latest incident above).
+    image: ghcr.io/rafaelcg/pqp-api:${WORKER_IMAGE_TAG:-${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}-worker}
     env_file:
       - .env
       # SECRETS ONLY THE WORKER HOLDS, in /opt/pqp/worker.env (not in git, mode

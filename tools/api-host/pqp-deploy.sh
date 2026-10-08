@@ -203,6 +203,25 @@ echo "previous-tag=${PREV_TAG:-none}"
 
 export APP_IMAGE_TAG="$TAG" APP_VERSION="$TAG"
 
+# THE WORKER'S IMAGE. Since the voice note transcode, deploy-api-vultr.yml
+# pushes a second tag per commit, `<sha>-worker` (the Dockerfile's `worker`
+# target: the same build plus ffmpeg), and compose.yaml runs the worker from
+# it. No commit from before that has one, and this script installs the NEW
+# compose.yaml before it pulls, so the workflow's rollback (`pqp-deploy
+# $PREV`) would ask for `$PREV-worker`, 404 on the pull and exit with api-a
+# already on the new tag. So: use `<tag>-worker` when the registry has it,
+# and fall back to the plain API image when it does not. The fallback is a
+# worker without ffmpeg, which leaves transcode jobs queued (nothing claims
+# them) and does everything else exactly as before. Checked after the GHCR
+# login above, because the package is private.
+if docker manifest inspect "ghcr.io/rafaelcg/pqp-api:${TAG}-worker" >/dev/null 2>&1; then
+  export WORKER_IMAGE_TAG="${TAG}-worker"
+  echo "worker-image=${WORKER_IMAGE_TAG}"
+else
+  export WORKER_IMAGE_TAG="$TAG"
+  echo "worker-image=${WORKER_IMAGE_TAG} (no ${TAG}-worker in the registry: the worker falls back to the API image, without ffmpeg; voice note transcodes stay queued)"
+fi
+
 # API_REPLICAS lives in .env (NOT passed as an argument -- this script's
 # only argument is the image tag, see the header comment on why that
 # surface stays that small) so flipping it is the same "edit .env, redeploy"
