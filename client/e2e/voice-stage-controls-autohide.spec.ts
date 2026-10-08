@@ -343,9 +343,9 @@ test("one focused stream hides its controls when idle, and only then", async ({
     await page.evaluate(() => (document.activeElement as HTMLElement).blur());
     await expect(bar).toHaveAttribute("data-chrome-hidden", "true", HIDE_WITHIN);
 
-    // --- a tile's own open panel holds the bar ------------------------------
+    // --- a tile's own open menu ("⋯") holds the bar --------------------------
     await page.mouse.move(720, 300);
-    const tilePanelButton = tileControls.locator('button[aria-haspopup="dialog"]');
+    const tilePanelButton = tileControls.locator('button[aria-haspopup="menu"]');
     await expect(tilePanelButton).toHaveCount(1);
     await tilePanelButton.click();
     await expect(tilePanelButton).toHaveAttribute("aria-expanded", "true");
@@ -353,7 +353,13 @@ test("one focused stream hides its controls when idle, and only then", async ({
     await page.waitForTimeout(4_500);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
     await expect(tilePanelButton).toHaveAttribute("aria-expanded", "true");
-    await tilePanelButton.click();
+    // Closed with a press on its button, not Escape: Escape would also leave
+    // the real fullscreen this focused stream is in.
+    const panelBox = (await tilePanelButton.boundingBox())!;
+    await page.mouse.click(
+      panelBox.x + panelBox.width / 2,
+      panelBox.y + panelBox.height / 2,
+    );
     await expect(tilePanelButton).toHaveAttribute("aria-expanded", "false");
     await page.evaluate(() => (document.activeElement as HTMLElement).blur());
     await page.mouse.move(720, 300);

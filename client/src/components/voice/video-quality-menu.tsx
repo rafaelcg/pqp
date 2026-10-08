@@ -231,9 +231,19 @@ export function VideoQualityMenu({
     measure();
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
+    // The panel grows after it opens (the live readout fills in), and it
+    // must grow upward, never down over its own button.
+    const grown =
+      typeof ResizeObserver === "undefined" || !panelRef.current
+        ? null
+        : new ResizeObserver(measure);
+    if (grown && panelRef.current) {
+      grown.observe(panelRef.current);
+    }
     return () => {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
+      grown?.disconnect();
     };
   }, [open]);
 

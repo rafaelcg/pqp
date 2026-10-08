@@ -3903,10 +3903,7 @@ function TileOverlay({
   // overlay when it goes idle.
   const revealed = moreOpen
     ? "opacity-100"
-    : cn(
-        "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
-        TILE_CONTROLS_FADE,
-      );
+    : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
   // The same row as a share's (`ScreenTileFrame`) and the watch party's
   // player: the name and the sound on the left, "⋯" and fullscreen on the
   // right, fullscreen last, along the bottom of the picture.
@@ -3921,6 +3918,8 @@ function TileOverlay({
         // picture so the name keeps its room (`PictureVolume`).
         "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
         STAGE_LAYER.tileControls,
+        // The whole row, name included, fades with the idle stage.
+        TILE_CONTROLS_FADE,
       )}
       style={{
         left: (insets?.left ?? 0) + 8,
@@ -4711,10 +4710,7 @@ export function ScreenTileFrame({
   const revealed =
     moreOpen || hideSelfPreview
       ? "opacity-100"
-      : cn(
-          "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
-          TILE_CONTROLS_FADE,
-        );
+      : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
   const moreButton = (
     <Menu items={moreItems} side="top" align="end" onOpenChange={setMoreOpen}>
       <button
@@ -4831,6 +4827,7 @@ export function ScreenTileFrame({
           className={cn(
             "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
             STAGE_LAYER.tileControls,
+            TILE_CONTROLS_FADE,
           )}
           style={{
             left: insets.left + 8,
