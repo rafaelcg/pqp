@@ -100,25 +100,25 @@ export function isNoteAttachment(row: NoteCarrier): boolean {
 
 /**
  * The claim rule. A note travels alone: it is the only attachment the sender
- * asked for and the only one that verified, and nothing is written beside it.
- * Anything with no note in it passes untouched.
+ * asked for, and nothing is written beside it. Anything with no note in it
+ * passes untouched.
  *
- * `requestedCount` is what the sender asked to attach, before verification,
- * so a note sent with a photo that failed its HEAD is still refused: the
- * sender broke the rule whether or not the photo made it.
+ * Both counts are taken BEFORE verification drops anything. `requestedNotes`
+ * is how many of the sender's own pending rows are notes, and `requestedCount`
+ * how many ids they asked to attach. Counting only what verified would let a
+ * note whose upload failed fall out first and the rest of the send go through
+ * as if no note had been asked for; the sender broke the rule either way.
  */
 export function noteShapeAllowed(input: {
-  attachments: readonly NoteCarrier[];
+  requestedNotes: number;
   requestedCount: number;
   body: string;
 }): boolean {
-  const notes = input.attachments.filter(isNoteAttachment).length;
-  if (notes === 0) {
+  if (input.requestedNotes === 0) {
     return true;
   }
   return (
-    notes === 1 &&
-    input.attachments.length === 1 &&
+    input.requestedNotes === 1 &&
     input.requestedCount === 1 &&
     input.body.trim().length === 0
   );

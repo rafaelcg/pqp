@@ -122,16 +122,21 @@ describe("voice notes", () => {
     expect(at(1500.5)).toBe(false);
   });
 
-  it("bounds the waveform to 128 base64 characters", () => {
+  it("takes exactly 64 peaks of base64, nothing shorter or longer", () => {
     const withWave = (value: string) =>
       createAttachmentSchema.safeParse({ ...note, voice: { durationMs: 1000, waveform: value } })
         .success;
+    const peaks = (count: number) =>
+      btoa(String.fromCharCode(...new Array<number>(count).fill(7)));
+    expect(waveform).toHaveLength(88);
     expect(waveform.length).toBeLessThanOrEqual(VOICE_NOTE_WAVEFORM_MAX_LENGTH);
     expect(withWave(waveform)).toBe(true);
-    expect(withWave("A".repeat(VOICE_NOTE_WAVEFORM_MAX_LENGTH))).toBe(true);
-    expect(withWave("A".repeat(VOICE_NOTE_WAVEFORM_MAX_LENGTH + 1))).toBe(false);
+    expect(withWave(peaks(63))).toBe(false);
+    expect(withWave(peaks(65))).toBe(false);
+    expect(withWave(peaks(96))).toBe(false);
+    expect(withWave("A".repeat(VOICE_NOTE_WAVEFORM_MAX_LENGTH))).toBe(false);
     expect(withWave("")).toBe(false);
-    expect(withWave("not base64!")).toBe(false);
+    expect(withWave(`${"!".repeat(86)}==`)).toBe(false);
   });
 
   it("budgets 16 KiB a started second plus 32 KiB", () => {

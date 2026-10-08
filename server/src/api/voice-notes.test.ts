@@ -425,6 +425,26 @@ describeDb("voice notes", () => {
       expect(await countRows("messages")).toBe(0);
     });
 
+    it("refuses the send when the note failed its upload but the photo beside it did not", async () => {
+      // The note drops out of verification first; counting only what verified
+      // would then send the photo as if no note had been asked for.
+      const note = await mintNote();
+      storage.objects.delete(note.storage_key!);
+      const photo = await mintPhoto();
+      expect(await createMessage(channelId, alice, "", null, [note.id, photo.id])).toBeNull();
+
+      const oversized = await mintNote({
+        durationMs: 1_000,
+        byteSize: 1_000,
+        realBytes: noteByteBudget(1_000) + 1,
+      });
+      const photo2 = await mintPhoto();
+      expect(
+        await createMessage(channelId, alice, "", null, [oversized.id, photo2.id]),
+      ).toBeNull();
+      expect(await countRows("messages")).toBe(0);
+    });
+
     it("drops a note whose stored bytes outgrew the budget", async () => {
       const note = await mintNote({
         durationMs: 1_000,
@@ -445,15 +465,15 @@ describeDb("voice notes", () => {
     });
 
     it("the shape rule is one reusable function", () => {
-      const note = { voice_duration_ms: 1000 };
-      const file = { voice_duration_ms: null };
-      expect(noteShapeAllowed({ attachments: [note], requestedCount: 1, body: "" })).toBe(true);
-      expect(noteShapeAllowed({ attachments: [note], requestedCount: 1, body: " \n " })).toBe(true);
-      expect(noteShapeAllowed({ attachments: [note], requestedCount: 1, body: "oi" })).toBe(false);
-      expect(noteShapeAllowed({ attachments: [note], requestedCount: 2, body: "" })).toBe(false);
-      expect(noteShapeAllowed({ attachments: [note, file], requestedCount: 2, body: "" })).toBe(false);
-      expect(noteShapeAllowed({ attachments: [file, file], requestedCount: 2, body: "oi" })).toBe(true);
-      expect(noteShapeAllowed({ attachments: [], requestedCount: 3, body: "" })).toBe(true);
+      const shape = (requestedNotes: number, requestedCount: number, body: string) =>
+        noteShapeAllowed({ requestedNotes, requestedCount, body });
+      expect(shape(1, 1, "")).toBe(true);
+      expect(shape(1, 1, " \n ")).toBe(true);
+      expect(shape(1, 1, "oi")).toBe(false);
+      expect(shape(1, 2, "")).toBe(false);
+      expect(shape(2, 2, "")).toBe(false);
+      expect(shape(0, 2, "oi")).toBe(true);
+      expect(shape(0, 3, "")).toBe(true);
     });
   });
 

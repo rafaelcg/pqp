@@ -570,13 +570,28 @@ export async function verifyPendingAttachments(
   uploaderId: string,
   attachmentIds: string[],
 ): Promise<VerifiedAttachment[]> {
+  return (await verifyPendingAttachmentsWithNotes(channelId, uploaderId, attachmentIds))
+    .verified;
+}
+
+/**
+ * `verifyPendingAttachments`, plus how many of the sender's pending rows were
+ * notes BEFORE verification dropped any, which is what the claim rule in
+ * `noteShapeAllowed` has to count (a note whose upload failed is still a note
+ * the sender asked to send).
+ */
+export async function verifyPendingAttachmentsWithNotes(
+  channelId: string,
+  uploaderId: string,
+  attachmentIds: string[],
+): Promise<{ verified: VerifiedAttachment[]; requestedNotes: number }> {
   const requested = attachmentIds.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
   // Not gated on storage: a remote row never touched the bucket, and gating
   // here dropped every staged GIF on a deployment with S3 off — which is the
   // deployment shape GIFs actually run on. Rows that DO need the bucket are
   // dropped one at a time by `verifyUpload` below.
   if (requested.length === 0) {
-    return [];
+    return { verified: [], requestedNotes: 0 };
   }
 
   const candidates = await getPool().query<DbAttachment>(
@@ -590,8 +605,9 @@ export async function verifyPendingAttachments(
     [requested, uploaderId, channelId],
   );
   if (candidates.rows.length === 0) {
-    return [];
+    return { verified: [], requestedNotes: 0 };
   }
+  const requestedNotes = candidates.rows.filter(isNoteAttachment).length;
 
   const position = new Map(requested.map((id, index) => [id, index]));
   const verified = await Promise.all(
@@ -632,9 +648,12 @@ export async function verifyPendingAttachments(
     }),
   );
 
-  return verified
-    .filter((entry): entry is VerifiedAttachment => entry.byteSize !== null)
-    .sort((left, right) => left.position - right.position);
+  return {
+    verified: verified
+      .filter((entry): entry is VerifiedAttachment => entry.byteSize !== null)
+      .sort((left, right) => left.position - right.position),
+    requestedNotes,
+  };
 }
 
 /**

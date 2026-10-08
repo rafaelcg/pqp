@@ -142,13 +142,18 @@ export function formatNoteDuration(durationMs: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+/**
+ * Exactly `VOICE_NOTE_WAVEFORM_PEAKS` bytes, base64: 64 bytes are 88
+ * characters, the last two `==`. Anything else is not the waveform the card
+ * draws. The column allows up to `VOICE_NOTE_WAVEFORM_MAX_LENGTH`, so a later
+ * format can widen this without a migration.
+ */
+const WAVEFORM_BASE64 = /^[A-Za-z0-9+/]{86}==$/;
 
 export const voiceNoteWaveformSchema = z
   .string()
-  .min(1)
   .max(VOICE_NOTE_WAVEFORM_MAX_LENGTH)
-  .regex(BASE64, "Waveform must be base64");
+  .regex(WAVEFORM_BASE64, `Waveform must be ${VOICE_NOTE_WAVEFORM_PEAKS} peaks, base64`);
 
 /** The `voice` block of a mint request. The client's word, bounded. */
 export const createVoiceNoteSchema = z.object({
@@ -211,26 +216,23 @@ export type VoiceNote = z.infer<typeof voiceNoteSchema>;
  * Bounded rather than trusted, because "nothing else" stops being true once a
  * number is absurd enough to be a layout weapon.
  */
-export const createAttachmentSchema = z
-  .object({
-    filename: attachmentFilenameSchema,
-    contentType: attachmentContentTypeSchema,
-    byteSize: z.number().int().positive().max(DEFAULT_MAX_ATTACHMENT_BYTES),
-    width: attachmentDimensionSchema.nullish(),
-    height: attachmentDimensionSchema.nullish(),
-    /**
-     * Present only for a voice note. The server also checks the runtime flag
-     * and the byte budget for this duration (`noteByteBudget`).
-     */
-    voice: createVoiceNoteSchema.optional(),
-  })
-  .refine(
-    (value) => !value.voice || isVoiceNoteContentType(value.contentType),
-    {
-      message: "A voice note must be audio/mp4, audio/webm or audio/ogg",
-      path: ["contentType"],
-    },
-  );
+// Written `= z.object({` on one line on purpose: the Android contract test
+// (`AttachmentContractTest`) reads this schema's keys off the source.
+export const createAttachmentSchema = z.object({
+  filename: attachmentFilenameSchema,
+  contentType: attachmentContentTypeSchema,
+  byteSize: z.number().int().positive().max(DEFAULT_MAX_ATTACHMENT_BYTES),
+  width: attachmentDimensionSchema.nullish(),
+  height: attachmentDimensionSchema.nullish(),
+  /**
+   * Present only for a voice note. The server also checks the runtime flag
+   * and the byte budget for this duration (`noteByteBudget`).
+   */
+  voice: createVoiceNoteSchema.optional(),
+}).refine((value) => !value.voice || isVoiceNoteContentType(value.contentType), {
+  message: "A voice note must be audio/mp4, audio/webm or audio/ogg",
+  path: ["contentType"],
+});
 
 export type CreateAttachmentRequest = z.infer<typeof createAttachmentSchema>;
 

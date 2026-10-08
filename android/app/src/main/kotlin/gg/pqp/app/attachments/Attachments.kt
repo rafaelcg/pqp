@@ -32,6 +32,10 @@ val ATTACHMENT_MIME_ALLOWLIST: List<String> = listOf(
     "audio/mpeg",
     "audio/ogg",
     "audio/wav",
+    // The containers voice notes are recorded in. Ordinary audio files to
+    // this client, which does not record or decode a note's `voice` block.
+    "audio/mp4",
+    "audio/webm",
     "application/pdf",
     "text/plain",
 )
@@ -130,6 +134,7 @@ private val EXTENSION_TYPES: Map<String, String> = mapOf(
     "ogg" to "audio/ogg",
     "oga" to "audio/ogg",
     "wav" to "audio/wav",
+    "m4a" to "audio/mp4",
     "pdf" to "application/pdf",
     "txt" to "text/plain",
     "log" to "text/plain",
