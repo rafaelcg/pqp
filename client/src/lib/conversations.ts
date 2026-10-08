@@ -10,6 +10,7 @@
 
 import {
   buildMessagePreview,
+  formatNoteDuration,
   type Channel,
   type DmSummary,
   type PublicUser,
@@ -155,7 +156,7 @@ export interface ConversationMessage {
   authorName: string;
   body: string;
   createdAt: string;
-  attachments: readonly { contentType: string }[];
+  attachments: readonly { contentType: string; voice?: { durationMs: number } }[];
 }
 
 /**
@@ -173,6 +174,7 @@ export function previewFromMessage(
       body: message.body,
       hasAttachments: message.attachments.length > 0,
       isGifAttachment: message.attachments[0]?.contentType === "image/gif",
+      voiceDurationMs: message.attachments[0]?.voice?.durationMs ?? null,
     }),
   };
 }
@@ -288,6 +290,9 @@ export function formatMessagePreview(
     preview: string;
     isAttachment: boolean;
     isGif: boolean;
+    /** Optional: rows from a server that predates voice notes omit both. */
+    isVoice?: boolean;
+    voiceDurationMs?: number | null;
   },
   options: {
     viewerId: string | null;
@@ -295,9 +300,14 @@ export function formatMessagePreview(
     isGroup: boolean;
   },
 ): string {
-  const body = message.isAttachment
-    ? translateMessage(message.isGif ? "dm.preview.gif" : "dm.preview.attachment")
-    : message.preview;
+  const body =
+    message.isAttachment && message.isVoice && typeof message.voiceDurationMs === "number"
+      ? translateMessage("dm.preview.voice", {
+          duration: formatNoteDuration(message.voiceDurationMs),
+        })
+      : message.isAttachment
+        ? translateMessage(message.isGif ? "dm.preview.gif" : "dm.preview.attachment")
+        : message.preview;
   if (message.authorId === options.viewerId) {
     return translateMessage("dm.preview.you", { text: body });
   }

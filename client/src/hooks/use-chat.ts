@@ -1381,6 +1381,8 @@ export function createChatController(
         width: item.width,
         height: item.height,
         url: item.previewUrl,
+        // The sender has heard their own note; the dot is for everyone else.
+        ...(item.voice ? { voice: { ...item.voice, listenedByMe: true } } : {}),
       }));
       const optimistic = buildOptimistic({
         nonce,

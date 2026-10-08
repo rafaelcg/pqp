@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageLightbox } from "@/components/chat/image-lightbox";
+import { VoiceNoteCard, type VoiceNoteMessage } from "@/components/chat/voice-note-card";
 import { fetchAttachmentUrl } from "@/lib/api";
 import { formatByteSize } from "@/lib/attachments";
 import { translateMessage } from "@/lib/i18n";
@@ -25,6 +26,12 @@ const MAX_TILE_HEIGHT_PX = 320;
 
 interface AttachmentGridProps {
   attachments: Attachment[];
+  /**
+   * The message these belong to. With it, an attachment carrying a `voice`
+   * block is drawn as a voice note card; without it (or for a client that
+   * has no idea what `voice` is) it stays the plain audio player.
+   */
+  voiceMessage?: VoiceNoteMessage;
 }
 
 /**
@@ -37,7 +44,7 @@ interface AttachmentGridProps {
  * conversation, and every URL in it was minted by the server for a reader who
  * has already been access-checked.
  */
-export function AttachmentGrid({ attachments }: AttachmentGridProps) {
+export function AttachmentGrid({ attachments, voiceMessage }: AttachmentGridProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // The lightbox navigates only the images of this one message — a video or a
@@ -56,7 +63,13 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
     <>
       <div className="mt-1.5 flex flex-wrap items-start gap-2">
         {attachments.map((attachment) =>
-          isImageContentType(attachment.contentType) ? (
+          attachment.voice && voiceMessage ? (
+            <VoiceNoteCard
+              key={attachment.id}
+              attachment={{ ...attachment, voice: attachment.voice }}
+              message={voiceMessage}
+            />
+          ) : isImageContentType(attachment.contentType) ? (
             <ImageTile
               key={attachment.id}
               attachment={attachment}

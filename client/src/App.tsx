@@ -58,6 +58,12 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
+import {
+  applyVoiceNoteListened,
+  isVoiceNoteListenedFrame,
+  setVoiceNoteViewer,
+} from "@/lib/voice-note-player";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -1217,6 +1223,10 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // The voice note player remembers its speed per account.
+  useEffect(() => {
+    setVoiceNoteViewer(user?.id ?? null);
+  }, [user?.id]);
   // For callbacks that must not change identity when the account loads.
   const userIdRef = useRef<string | null>(null);
   userIdRef.current = user?.id ?? null;
@@ -4673,6 +4683,14 @@ function MainAppContent({
                 },
               };
             });
+            return;
+          }
+
+          // Somebody heard a voice note: the listener's own other sockets (so
+          // the dot goes everywhere) and the author's (for "ouviu"). The store
+          // is global because the player is; no controller owns it.
+          if (isVoiceNoteListenedFrame(message)) {
+            applyVoiceNoteListened(message);
             return;
           }
 
@@ -10544,6 +10562,7 @@ function MainAppContent({
             : undefined
         }
         messages={chat.getMessages()}
+        participants={activeConversation?.participants}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -10650,6 +10669,9 @@ function MainAppContent({
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
         key={selectedChannel.id}
+        voiceNotesServerId={
+          selectedChannel.kind === "server" ? selectedServerId : null
+        }
         onSend={(body, attachments) => {
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
@@ -10863,6 +10885,10 @@ function MainAppContent({
         onSignInAgain={signInAgain}
         appVersion="web"
       />
+
+      {/* A voice note keeps playing across channels; this is its control
+          while its own card is off screen. */}
+      <VoiceNoteMiniPlayer />
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       <DmToasts
