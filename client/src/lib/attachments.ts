@@ -201,33 +201,6 @@ export function selectAttachments(
   return { accepted, rejected };
 }
 
-/**
- * Files out of a paste or a drop.
- *
- * `items` is the fallback rather than the primary because a screenshot paste
- * puts several representations on the clipboard at once — the image, plus HTML
- * markup wrapping it — and only `files` is already filtered down to the bytes.
- */
-export function filesFromDataTransfer(
-  data: DataTransfer | null | undefined,
-): File[] {
-  if (!data) {
-    return [];
-  }
-  if (data.files?.length) {
-    return [...data.files];
-  }
-  return [...(data.items ?? [])]
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
-}
-
-/** True when a drag is carrying files rather than selected text or a link. */
-export function isFileDrag(data: DataTransfer | null | undefined): boolean {
-  return [...(data?.types ?? [])].includes("Files");
-}
-
 // ------------------------------------------------------------------ preview
 
 /**

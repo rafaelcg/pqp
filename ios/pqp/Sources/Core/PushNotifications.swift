@@ -131,7 +131,8 @@ final class PushDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
-    /// Portrait everywhere, landscape while a watch-party theater is open.
+    /// Portrait everywhere, landscape while a stage fills the screen (a watch
+    /// party, or a shared screen fullscreen in a voice room or a call).
     /// Info.plist lists landscape so iOS will rotate that cover at all;
     /// this is what stops the rest of the app going with it.
     func application(

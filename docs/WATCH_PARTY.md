@@ -789,6 +789,21 @@ host's LiveKit publish is an invisible pipe while the show is live. Encerrar
 leaves that pipe so leave-voice chrome does not linger. Friends who want to
 talk use a normal voice channel.
 
+### The strip that sends people here (2026-10-05)
+
+The sidebar block is the only way the app told a member a party was live, and the
+night a brand-new server ran its first film in a plain voice channel
+(2026-10-04, Filminho) forty people sat in the call while the rest of 86 members
+asked in `#general` where the movie was. Behind the runtime flag
+`watch_now_banner` (per server, off by default) a live party, and a share in any
+voice channel, is now a strip above the conversation: who, where, how many, one
+`Assistir`. For a party the tap is `handleWatchLiveParty`, which is the sidebar
+block's own path: selecting the channel IS watching, no seat and no microphone.
+The strip reads `watchParties.byChannel` (live only) and the `channel-live`
+`watching` count, so it shows the same number as the stage and, with
+`watch_party_server_audience` on, the server's. A party the person cannot view is
+never in that map. `docs/plans/WATCH_NOW.md`, `client/src/lib/watch-now.ts`.
+
 ### One surface owns the pane
 
 A watch party channel mounts three stages into the same slot: `WatchPartyPanel`'s
@@ -2030,10 +2045,142 @@ included. The menu portals into the fullscreen element so it opens there.
 
 **Audio stays on the main stream, always**, and the camera playlist has no
 audio track at all (`CAMERA_RUNG.audioKbps = 0`, proto3's "unset"). The two
-egresses start seconds apart and run their own segment timers, so expect
-drift between the face and the film — bounded below by the segment length
-(`LIVE_HLS_SEGMENT_SECONDS`, 4 s in production) and not chased further: holding
-the film back to match a webcam would be a worse film.
+egresses start seconds apart and run their own segment timers. This
+paragraph used to end "expect drift between the face and the film, not
+chased further". It is chased now, by the camera and never by the film: see
+"The camera follows the film" below.
+
+### The camera follows the film (2026-10-03)
+
+**What Rafael saw.** MoonKase party, 2026-10-03: the film mid-chase, the
+presenter's face reacting to something else. "The camera is not in sync with
+the stream."
+
+**Why, measured.** Nothing lined the two players up. Each hls.js instance sat
+at its own live edge, with its own cushion, its own buffer and its own stalls,
+and nothing ever paid a stall back. Measured with the real web player on a
+synthetic film and camera that share one timeline and one PROGRAM-DATE-TIME
+anchor, reading the frame number burnt into each picture
+(`client/e2e/camera-sync/`, `pnpm --filter @pqp/client e2e:camera-sync`, real
+Google Chrome; negative is a camera BEHIND the film):
+
+| Scenario | Conventional, before | LL, before | Conventional, after | LL, after |
+|---|---|---|---|---|
+| Arriving | -1.5 s | -13.6 s | +0.04 s, 0.9 s to sync | +0.08 s, 0.9 s to sync |
+| Camera element stalls 6 s | -7.5 s | -19.6 s | +0.08 s, synced as it resumed | +0.08 s, same |
+| Camera segments hang 30 s | -15.4 s (once +10.2 s: hls.js jumped it past the film) | -27.0 s | +0.08 s, synced as it resumed | -0.04 s |
+| Tab frozen 15 s (Page Lifecycle) | unchanged | unchanged | +0.08 s | 0.00 s |
+| "Ocultar câmera", then "Padrão" | -2.7 s | -14.3 s | +0.08 s, 0.2 s to sync | +0.08 s, 0.2 s to sync |
+
+"After" is the median of the last 5 s of each phase, read off the pictures; one
+frame is 0.04 s. Over the four runs the camera's rate never crossed the film's
+the wrong way (no oscillation), the film's rate and element were never touched,
+and each disturbance cost one seek.
+
+Three causes, in order of size:
+
+1. **A low latency party is 13 s apart by construction.** The film plays about
+   7 s behind its edge (`LlLatencyGovernor`, segments mode), while the camera,
+   a conventional rendition on the LL companion, plays 20 s behind its own
+   (`HLS_LIVE_SYNC_DURATION_COUNT` x 4 s), plus the egress's longer pipeline.
+2. **Every camera stall is kept forever.** A player resumes where it stopped;
+   the film's catch-up (`catchUpPlaybackRate`, `LlLatencyGovernor`) never
+   applied to the camera, so each stall added its whole length to the drift.
+3. **Arriving picks a different spot in each playlist**: one to three seconds
+   on a conventional party, depending on where each egress's newest segment
+   happened to end.
+
+**The epochs agree; the startup delay does not matter.** Both conventional
+renditions are LiveKit Track Composite egresses on the same box, and LiveKit
+stamps `#EXT-X-PROGRAM-DATE-TIME` from the pipeline's start plus running time,
+which is when the media reached the box. `pqp-remux` stamps LL segments from
+its epoch plus media time, video anchored to the first packet's arrival
+(`tools/pqp-remux/internal/session/session.go`, `anchorVideoTimeline`). The
+API's proxy and the edge pass both through untouched
+(`hls-live-window.ts`, which only synthesises one for a segment that has none).
+So the two clocks name the same instant to within the box's jitter, and a
+camera egress that starts seconds later has a later EDGE, not a different
+clock. No server change was needed. Not verified against a live production
+pair: that is the check below.
+
+**What the player does now** (`client/src/lib/camera-sync.ts`, wired in
+`WatchCameraPip`). Once a second, and at the camera's first frame, it reads the
+wall clock of the frame each player is showing (hls.js's `playingDate`: the
+fragment's PROGRAM-DATE-TIME plus the offset into it) and moves the CAMERA onto
+the FILM, never the other way: the film carries the sound and the whole
+audience's sense of where the show is.
+
+- Under 120 ms apart: nothing. Once correcting, it stops under 40 ms
+  (hysteresis, so a reading that wobbles around a line never flips the rate).
+  Tight on purpose: the presenter's voice is in the film's audio and their
+  face is in the camera, so this is lip sync.
+- 120 ms to 1 s: a playback rate nudge on the camera of at most 5 %, around
+  whatever rate the film is playing at (the film's own catch-up runs at up to
+  1.15x).
+- Past 1 s: a seek by the drift, at most once every 4 s and 4 times a minute
+  (then nudges only), never closer than 1.5 s to the newest media the camera's
+  playlist lists, and only ever toward the film. A film nearer real time than
+  the camera can be leaves the camera waiting at that margin, never sped up
+  within 1 s of its own edge.
+- Only while both are playing and the page is visible. The film's element,
+  rate, buffer and hls.js are only ever read. The native engine (no MSE) has
+  no fragment clock here and is left as it was.
+
+**The flag, OFF by default.** `watch_camera_sync` (env `WATCH_CAMERA_SYNC`, only
+`true` turns it on, per server), served as `cameraSync` on
+`GET /api/live-hls/config`. Off, the camera plays loose exactly as on the
+release before this one: nothing writes its rate or position and nothing reads
+the film's clock (`watch-camera-pip-sync.test.tsx`,
+`hls-watch-player-camera-hide.test.tsx`). The rollout: turn it on for one test
+server from the dashboard (controles, interruptores, that server's override),
+do the check below on a quiet-hour party, then turn it on globally. A tab
+already open follows within the 10 minute config refresh, or on focus.
+`pqpCameraSync()` in the browser console exists only while it is on, and
+answers the live drift, the last decision and how many seeks it made.
+
+The hide button, the chip and the quick toggle below are NOT behind the flag.
+
+**What this cannot fix.** It aligns what the two playlists SAY. A camera whose
+PROGRAM-DATE-TIME were wrong would be held wrong (`camPdtErrorMs` in the rig's
+server shows exactly that). And the floor is about two frames: hls.js places a
+segment with audio by its earliest sample, so the film's frame and the
+camera's can read 40 to 80 ms apart when their PDTs agree.
+
+**Native apps.** iOS (`WatchCameraPip.swift`, a second `AVPlayer`) and Android
+(`WatchPane.kt`, a second ExoPlayer) run the camera as an independent player
+with no alignment, so they have the same drift. Not changed here.
+
+**Check it on a party.** With the flag on for that party's server, open the
+party in Chrome on a desktop, press F12, and run `pqpCameraSync()` a few times over a minute: `driftMs` should sit inside
+±120 and `reason` should read `in-sync` (or `nudge` for a moment). Clap or snap
+on camera while something sharp happens on screen and watch the corner: the
+face and the film should land together. Then switch tabs for a minute, come
+back, and run it again: one `seek` in the console, then `in-sync`.
+
+### Hiding the camera in one tap (2026-10-03)
+
+The layout menu's "Ocultar câmera" was there, and Rafael did not find it
+while watching: a choice inside a menu, in a bar that fades, with nothing on
+the picture. So:
+
+- **On the camera itself**, top left: an eye-off button, "Ocultar câmera".
+  Shown with the chrome, while a mouse is over the camera (the chrome fades
+  under a resting pointer and the button must not go with it), and ALWAYS on
+  a touch screen (`pointer-coarse:`), where there is no hover.
+- **"Mostrar câmera" where the camera was**, for `CAMERA_SHOW_CHIP_MS` (6 s)
+  after it is hidden, and when the player finds a camera hidden by a choice
+  remembered from before (opening on a party, or a camera coming on). After
+  that, the layout menu is the way back, as before.
+- **In the quick cluster** (mute and layout, the controls shown while the bar
+  is faded): a one-tap toggle beside the layout picker.
+
+All three set the same `stream` layout, remembered per browser like the
+others, and remember which layout to bring back (`restore` in
+`pqp:watch-camera-pip`). Fullscreen keeps them, because they live inside the
+player. Hiding unmounts the camera's player as before; the film is never
+re-attached. No onboarding card: the one attached slot is the "Watch party
+viewer" hint at exactly that moment, and corner cards yield over a live party
+(`docs/ONBOARDING.md`).
 
 **Telling the audience, and the bug that hid it (2026-09-25).** The camera
 starts in the reconcile queue's link AFTER the film's reconcile has answered
@@ -3396,8 +3543,26 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   instant 90 s in the past (by then both processes have written it) and
   counts viewers whose first-to-last-seen span covers it within 45 s (one
   heartbeat plus its timer). Fifty people who leave and fifty who arrive a
-  minute later read as a peak of 50, not 100. The operator's "watching now"
-  is looser on purpose: seen in the last 120 s.
+  minute later read as a peak of 50, not 100.
+- **Watching now is a different number, and one number** (2026-10-04). The
+  stored rows are flushed once a minute, so they are up to a flush behind and
+  cannot answer "who is here this second". On 2026-10-03, in one live party,
+  the app said 49, the operator dashboard said 96 and the rows said 73 within
+  45 s and 97 within two minutes: three definitions, and the 73 was itself low
+  by the flush lag. Each API process now also rewrites ONE row of its own
+  every 10 s (`hls_session_presence`: the accounts it saw within the 45 s
+  heartbeat tolerance, one upsert per process per broadcast, never per poll),
+  and `presentHlsViewers` unions the fresh rows by account, so two machines
+  never add and neither is a flush behind. A row older than 25 s is ignored,
+  which is what takes a dead machine's viewers out. That is `liveViewers` on
+  the dashboard (it was "seen in the last 120 s" over the stale rows) and, with
+  the flag below, the in-app number, both leaving out accounts that hold a seat
+  in the call (the roster counts those, the dashboard lists them as `inCall`;
+  `voice_peers` answers for both machines, so with `VOICE_REGISTRY` off the
+  dashboard reads every account on the playlist). It reads a few seconds old,
+  not a minute.
+  A rolling deploy dips it for about one heartbeat (30 to 40 s), because the
+  new process starts with an empty map, and then it recovers.
 - **An outage delays the count, it does not lose it.** A sighting no flush
   has stored is kept in memory until one does.
 - **Privacy.** User ids stay in `hls_session_viewers`, are pruned 24 h after
@@ -3406,6 +3571,31 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   únicas"), `liveHls.viewers` on `GET /api/admin/metrics` (per live broadcast:
   now, peak, unique, plus this process's sightings and flush health), and a
   line under "transmissões" on the operator dashboard.
+- **In the app: `watch_party_server_audience`** (per server, default off, a
+  runtime flag: `docs/FEATURE_FLAGS.md`). The live card, the stage footer, the
+  activity feed and the "busy" threshold all read `live.watching` plus the
+  roster, and `watching` is a count of THIS process's sockets that sent
+  `watch-live`: half the audience with two machines, nobody on a phone or an
+  older tab that never sends it, and a person with three tabs three times. With
+  the flag on, `channel-live` and `GET /api/channels/:id/live` also carry
+  `viewers`, the distinct accounts on the playlist (above) minus whoever holds
+  a seat (the roster is the client's own addend; `voice_peers` answers for the
+  other machine's seats). Nothing local is mixed in, so every machine says the
+  same number; the price is that a viewer the heartbeat has not noted yet (a
+  few seconds) and a native player that sends `watch-live` but no heartbeat are
+  not in it, which is also true of the dashboard. It is one optional integer in a
+  frame that already goes to everybody who may view the channel every 30 s, read
+  once per broadcast per fan-out from a 5 s shared cache, so the frame does not
+  grow with the audience and a 500-person arrival wave is a handful of queries,
+  not 500. The socket-auth catch-up and the 50 minute token renewal answer from
+  the last read and never wait on the database. A client that does not know the
+  field (every app already installed, a tab not yet reloaded) ignores it and
+  shows `watching`, exactly as before; the web client reads
+  `watchersWithoutSeat` (`@pqp/shared`). The number is absent, never zero, when
+  it cannot be read. `liveHls.audienceViewers` on the metrics says it is
+  running (`withViewers` climbs, `unavailable` belongs at zero), and
+  `liveHls.viewers.here.presenceWrites` that the rows are landing. Native iOS
+  and Android still show `watching` and are the follow-up.
 - **Not counted:** native apps playing an LL session straight from the edge
   Worker (they do not send the heartbeat yet), and broadcasts from before
   this shipped.
@@ -4281,6 +4471,24 @@ at boot and on the click, consumed after onboarding), so a new account lands
 with the dialog open. Open Graph copy comes from `marketing-meta.ts`, pinned
 to `watchPartyPage.seo.*` by its test; the card image is the default one.
 Both words are reserved handles.
+
+`pqp.gg/streamers` (and `/criadores`, canonical `/streamers`) is the page
+outreach sends a streamer to (`pages/streamers-page.tsx`). Same list, no new
+form: its button is the same intent with `&from=streamers`
+(`STREAMERS_WAITLIST_HREF`), which survives sign-up in the same stash
+(`watch-party-waitlist:streamers`) and makes the dialog send `source:
+"streamers"`. The row keeps it in `watch_party_waitlist.source` (a closed
+list, `WATCH_PARTY_WAITLIST_SOURCES`, sticky across an edit that sends none),
+the dashboard tags the request **streamer**, and a streamer who asked before
+having a server is listed by name under the table (`serverlessCampaign` on
+`GET /api/admin/watch-party-waitlist`) instead of disappearing into the
+`serverless` count; that one is also asked for their channel. Tracking one
+outreach link per streamer is the existing acquisition parameter:
+`pqp.gg/streamers?ref=<who>` lands in `users.acquisition_ref` with
+`acquisition_landing = '/streamers'`. A reader with no JavaScript gets the
+hero, the steps and the FAQ as HTML from the edge (`marketing-prerender.ts`).
+The page never names what people watch; its FAQ says the presenter answers
+for what they share and links the terms.
 
 ## Native apps
 

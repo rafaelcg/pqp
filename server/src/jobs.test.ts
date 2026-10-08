@@ -10,6 +10,9 @@ vi.mock("./services/attachments.js", () => ({
 vi.mock("./services/community-home.js", () => ({
   sweepOrphanedCommunityHomeMedia: vi.fn(async () => 0),
 }));
+vi.mock("./services/community-home-translation.js", () => ({
+  sweepCommunityHomeTranslations: vi.fn(async () => ({ attempted: 0 })),
+}));
 vi.mock("./services/account.js", () => ({
   sweepPendingAccountDeletions: vi.fn(async () => 0),
 }));
@@ -71,6 +74,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
@@ -149,11 +153,16 @@ describe("cold jobs", () => {
     jobs = startColdJobs();
     // 15 before the watch party host sweep, which runs on the same minute
     // tick as the session reminders; 16 before the cluster rate-limit bucket
-    // sweep; 17 before the server-create idempotency key prune. Bump this
+    // sweep; 17 before the server-create idempotency key prune; 19 with the
+    // Baú translation sweep (a minute, asserted below). Bump this
     // when a job is added, and assert the new job's cadence below rather
     // than only moving the number: a count on its own passes for a job that
     // is registered and never fires.
-    expect(jobs.count).toBe(18);
+    expect(jobs.count).toBe(19);
+
+    // The Baú translation sweep: one a minute, none at boot (nothing to
+    // catch up on a process that has only just started reading the flag).
+    expect(sweepCommunityHomeTranslations).not.toHaveBeenCalled();
 
     // One occupancy row a minute, and not one at boot: an extra sample at t=0
     // would land in the same minute bucket as the first tick anyway, so the
@@ -163,6 +172,8 @@ describe("cold jobs", () => {
     expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(OCCUPANCY_SAMPLE_INTERVAL_MS * 3);
     expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(4);
+    // Four minutes have passed: four ticks of the translation sweep.
+    expect(sweepCommunityHomeTranslations).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);

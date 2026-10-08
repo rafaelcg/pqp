@@ -57,6 +57,14 @@ export interface NotificationState {
    * message content. Default true. Off, both fall back to a count.
    */
   previewInApp: boolean;
+  /**
+   * Per server: tell me when somebody starts a stream there. Absent means the
+   * server's default (on for a small server, off for a large one or a
+   * community), which only the server can say, so this map holds explicit
+   * choices only. Honoured only while `stream_start_notifications` is on for
+   * the server. `docs/plans/WATCH_NOW.md` section 3.
+   */
+  streamAlerts: Record<string, boolean>;
 }
 
 export type NotificationPermissionState =
@@ -72,6 +80,7 @@ const DEFAULT_STATE: NotificationState = {
   channels: {},
   arrivalToast: true,
   previewInApp: true,
+  streamAlerts: {},
 };
 
 function isLevel(value: unknown): value is NotificationLevel {
@@ -91,6 +100,19 @@ function readLevelMap(value: unknown): Record<string, NotificationLevel> {
   return map;
 }
 
+function readBooleanMap(value: unknown): Record<string, boolean> {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+  const map: Record<string, boolean> = {};
+  for (const [key, choice] of Object.entries(value)) {
+    if (typeof choice === "boolean") {
+      map[key] = choice;
+    }
+  }
+  return map;
+}
+
 function fromPreferences(
   preferences: NotificationPreferences,
   base: NotificationState,
@@ -102,6 +124,9 @@ function fromPreferences(
     channels: readLevelMap(preferences.channels),
     arrivalToast: preferences.arrivalToast ?? base.arrivalToast,
     previewInApp: preferences.previewInApp ?? base.previewInApp,
+    streamAlerts: preferences.streamAlerts
+      ? readBooleanMap(preferences.streamAlerts)
+      : base.streamAlerts,
   };
 }
 
@@ -118,6 +143,7 @@ function toPreferences(current: NotificationState): NotificationPreferences {
     channels: current.channels,
     arrivalToast: current.arrivalToast,
     previewInApp: current.previewInApp,
+    streamAlerts: current.streamAlerts,
   };
 }
 
@@ -139,6 +165,7 @@ function readStored(): NotificationState {
       channels: readLevelMap(record.channels),
       arrivalToast: record.arrivalToast !== false,
       previewInApp: record.previewInApp !== false,
+      streamAlerts: readBooleanMap(record.streamAlerts),
     };
   } catch {
     // Safari private mode throws on storage access; treat it as "no choices yet".
@@ -225,6 +252,20 @@ export function setArrivalToastEnabled(enabled: boolean): void {
 
 export function setPreviewInAppEnabled(enabled: boolean): void {
   commit({ ...state, previewInApp: enabled }, { sync: true });
+}
+
+/** Set one server's choice, or with `null` fall back to the server's default. */
+export function setServerStreamAlerts(
+  serverId: string,
+  enabled: boolean | null,
+): void {
+  const next = { ...state.streamAlerts };
+  if (enabled === null) {
+    delete next[serverId];
+  } else {
+    next[serverId] = enabled;
+  }
+  commit({ ...state, streamAlerts: next }, { sync: true });
 }
 
 /**
@@ -762,6 +803,117 @@ export function notifyIncomingCall(
   } catch {
     // Android Chrome — see the identical fallback in `deliver`.
     void deliverViaServiceWorker(title, body, tag, path);
+  }
+}
+
+/**
+ * "Alberto começou a transmitir em #filminho · Assistir", when the server says a
+ * stream started somewhere this person asked to hear about.
+ *
+ * THE SERVER DECIDES WHO, THIS DECIDES WHETHER THE OS HEARS ABOUT IT. The
+ * frame only reaches a person the server already chose (flag, opt-in, the 200
+ * member default, DND, mute, access, not in the room, once per channel per 30
+ * minutes). What the server cannot see is this window, so the rest of the rules
+ * are here, and every one of them is a way to say nothing:
+ *
+ * - a window in front, looking at THAT server, already sees the stream (the
+ *   strip, and the share on the sidebar's roster), so nothing on top of it. A
+ *   window in front on another server, a conversation or the home is not
+ *   looking at it: that person is exactly who the notice is for;
+ * - Do Not Disturb, and a server or channel the person turned down;
+ * - their own switch for this server;
+ * - the existing desktop-notification opt-in AND a browser permission that is
+ *   ALREADY granted. This never asks: a prompt out of nowhere is what teaches
+ *   people to block the site, and a stream is not worth that.
+ *
+ * Clicking it opens the app on that channel and joins nothing.
+ */
+export function notifyStreamStarted(
+  frame: {
+    serverId: string;
+    channelId: string;
+    channelName: string;
+    serverName: string;
+    sharerName: string;
+    kind: "voice" | "party";
+  },
+  context: {
+    /** The window is visible and has focus. */
+    windowFocused: boolean;
+    /** The server open in this window, or null on a conversation / the home. */
+    openServerId?: string | null;
+  },
+): boolean {
+  if (
+    (context.windowFocused && context.openServerId === frame.serverId) ||
+    doNotDisturb
+  ) {
+    return false;
+  }
+  if (state.streamAlerts[frame.serverId] === false) {
+    return false;
+  }
+  if (
+    resolveNotificationLevel(state, frame.serverId, frame.channelId) !== "all"
+  ) {
+    return false;
+  }
+  if (!state.desktop || notificationPermission() !== "granted") {
+    return false;
+  }
+  const title =
+    frame.kind === "party"
+      ? translateMessage("notify.streamStarted.titleParty", {
+          name: frame.sharerName,
+          party: frame.channelName,
+        })
+      : translateMessage("notify.streamStarted.title", {
+          name: frame.sharerName,
+          channel: frame.channelName,
+        });
+  const body = translateMessage("notify.streamStarted.body", {
+    server: frame.serverName,
+  });
+  const tag = `stream:${frame.channelId}`;
+  const path = channelRoutePath(frame.serverId, frame.channelId);
+
+  const desktop = getDesktop();
+  if (desktop?.notify) {
+    // The shell can refuse (a bridge from an older build, an OS that will not
+    // draw it): that is not the notice being over, so the web path is tried
+    // after it, and a rejected promise is caught rather than left unhandled.
+    try {
+      const sent: unknown = desktop.notify({ title, body, tag, path });
+      if (sent && typeof (sent as Promise<unknown>).catch === "function") {
+        (sent as Promise<unknown>).catch(() => {
+          void showWebStreamNotice(title, body, tag, path);
+        });
+      }
+      return true;
+    } catch {
+      // Fall through to the web notification below.
+    }
+  }
+  void showWebStreamNotice(title, body, tag, path);
+  return true;
+}
+
+async function showWebStreamNotice(
+  title: string,
+  body: string,
+  tag: string,
+  path: string,
+): Promise<void> {
+  try {
+    const notification = new Notification(title, { body, tag, silent: true });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+      openNotificationTarget(path);
+    };
+  } catch {
+    // Android Chrome: see the identical fallback in `deliver`.
+    await deliverViaServiceWorker(title, body, tag, path);
   }
 }
 

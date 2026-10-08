@@ -351,18 +351,44 @@ struct WatchTheaterPreference: PreferenceKey {
 }
 
 /**
- Portrait everywhere, landscape in the watch theater.
+ Portrait everywhere, landscape while a stage fills the screen.
 
  Info.plist lists landscape so iOS will rotate that cover at all. This lock
  is what stops the rest of the app going with it. iPad already rotates
  and is left alone. `PushDelegate` is the object UIKit asks.
+
+ A STAGE IS WHATEVER FILLS THE SCREEN WITH SOMEBODY'S PICTURE: the watch
+ party, and the fullscreen of a shared screen in a voice room or a call.
+ Each one holds the unlock under its own `Owner`, so one of them letting go
+ cannot lock the other back to portrait, and every enter and leave is
+ idempotent. A bool was enough while the watch party was the only stage;
+ the shared screen came second, and with a bool whichever left first won.
+ Owners, not a counter: the watch party calls `leaveTheater()` from half a
+ dozen places that were never balanced against an enter, and a counter
+ would have gone negative on the first repeat.
  */
 @MainActor
 enum WatchOrientation {
-    private static var theaterOpen = false
+    /// Who is holding landscape open.
+    enum Owner: Hashable {
+        case watchParty
+        /// One per fullscreen presented, so a voice room's and a DM call's
+        /// never stand in for each other.
+        case screenShare(UUID)
+    }
+
+    private static var owners: Set<Owner> = []
+
+    /// Landscape is unlocked because at least one stage asked for it.
+    static var isUnlocked: Bool { !owners.isEmpty }
+
+    /// Stages currently holding the unlock, for tests.
+    static var ownerCount: Int { owners.count }
+
+    static func holds(_ owner: Owner) -> Bool { owners.contains(owner) }
 
     static var allowed: UIInterfaceOrientationMask {
-        if theaterOpen { return .allButUpsideDown }
+        if isUnlocked { return .allButUpsideDown }
         if UIDevice.current.userInterfaceIdiom == .pad { return .all }
         return .portrait
     }
@@ -423,16 +449,41 @@ enum WatchOrientation {
         return screen.nativeBounds.size
     }
 
-    /// Landscape is allowed while a watch party is on screen, and nowhere
-    /// else in the app. The names are historical: there is no theater any
-    /// more, only a stage that fills the screen when the phone is turned.
-    static func enterTheater() {
-        theaterOpen = true
+    /// Landscape is allowed while a watch party is on screen, or a shared
+    /// screen is fullscreen (below), and nowhere else in the app. The names
+    /// are historical: there is no theater any more, only a stage that
+    /// fills the screen when the phone is turned.
+    static func enterTheater() { enter(.watchParty) }
+
+    static func leaveTheater() { leave(.watchParty) }
+
+    /// A shared screen is filling the display (`ScreenShareFullscreenView`).
+    /// The id is that view's own, minted once per presentation.
+    static func enterScreenShare(_ id: UUID) { enter(.screenShare(id)) }
+
+    static func leaveScreenShare(_ id: UUID) { leave(.screenShare(id)) }
+
+    /// Safety net for the one thing a view's own `onDisappear` cannot be
+    /// trusted with: the room or the call ending underneath a fullscreen, so
+    /// the cover is torn down with its presenter instead of being dismissed.
+    /// Drops every shared-screen owner and leaves the watch party's alone.
+    static func releaseAllScreenShares() {
+        let held = owners.filter {
+            if case .screenShare = $0 { return true }
+            return false
+        }
+        guard !held.isEmpty else { return }
+        owners.subtract(held)
         apply()
     }
 
-    static func leaveTheater() {
-        theaterOpen = false
+    private static func enter(_ owner: Owner) {
+        owners.insert(owner)
+        apply()
+    }
+
+    private static func leave(_ owner: Owner) {
+        owners.remove(owner)
         apply()
     }
 

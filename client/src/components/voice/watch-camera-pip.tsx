@@ -17,6 +17,14 @@ import {
   CameraStallWatch,
   cameraProgress,
 } from "@/lib/camera-stall";
+import {
+  CAMERA_SYNC_TICK_MS,
+  CameraSyncController,
+  elementPlaying,
+  hlsEdgeWallMs,
+  hlsPlayingWallMs,
+  type CameraSyncDecision,
+} from "@/lib/camera-sync";
 import { useTranslation } from "@/lib/i18n";
 import {
   getVoicePipVolume,
@@ -63,11 +71,14 @@ import { cn } from "@/lib/utils";
  * and the underlying `<video>` element keeps existing — hls.js needs an
  * `HTMLMediaElement` to attach to either way — just visually hidden.
  *
- * DRIFT IS EXPECTED AND IS NOT CHASED. The two playlists are two independent
- * egresses started seconds apart, each with its own segments, so the camera
- * runs a second or more off the film. Holding the film back to match a webcam
- * would be a worse film. See `docs/WATCH_PARTY.md`, "The presenter's camera,
- * floating over the film".
+ * THE CAMERA FOLLOWS THE FILM (2026-10-03), never the other way. The two
+ * playlists are two independent egresses started seconds apart, and two
+ * players that each sit at their own live edge drifted 1.5 to 2.5 s apart on a
+ * conventional party, about 13 s apart on a low latency one, plus every stall
+ * the camera ever had. With `watch_camera_sync` on (`sync`), the film's wall
+ * clock (`filmClock`) is the reference and THIS player is nudged or seeked
+ * onto it (`lib/camera-sync.ts`); the film's element is only ever read. See
+ * `docs/WATCH_PARTY.md`, "The camera follows the film".
  *
  * A FAILURE IS SILENT. No overlay, no retry banner, no "loading". The camera
  * is not what anybody came for, and the one thing it must never do is take
@@ -92,6 +103,9 @@ export function WatchCameraPip({
   className,
   fit = "cover",
   onFrame,
+  sync = false,
+  filmClock,
+  onHoverChange,
 }: {
   /** The camera/voice playlist, already resolved against the API base. */
   src: string;
@@ -109,6 +123,20 @@ export function WatchCameraPip({
   fit?: "cover" | "contain";
   /** A frame arrived (or the source changed and there is none yet). */
   onFrame: (hasFrame: boolean) => void;
+  /**
+   * `watch_camera_sync`: hold this player to the film's wall clock. Off
+   * leaves the camera exactly as it always was: nothing reads `filmClock`
+   * and nothing writes this element's rate or position.
+   */
+  sync?: boolean;
+  /**
+   * The film's side of the comparison, read once a tick and never written:
+   * the wall clock of the frame it is showing, whether it is playing, and
+   * its rate. Read through a ref, so a new identity never restarts the sync.
+   */
+  filmClock?: () => FilmClockReading | null;
+  /** The pointer entered or left the camera's box (the hide button's hover). */
+  onHoverChange?: (hovered: boolean) => void;
 }) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -127,6 +155,8 @@ export function WatchCameraPip({
   // the clock a voice track keeps moving (`cameraProgress`).
   const hasVideoRef = useRef(hasVideo);
   hasVideoRef.current = hasVideo;
+  const filmClockRef = useRef(filmClock);
+  filmClockRef.current = filmClock;
 
   /**
    * "Voz" volume, persisted per browser. Only reachable when `hasVoiceAudio`
@@ -608,6 +638,96 @@ export function WatchCameraPip({
   }, [activeSrc]);
 
   /**
+   * THE SYNC (`lib/camera-sync.ts`). One controller per session, like the
+   * stall watch, so its seek budget survives this player's own rebuilds.
+   * hls.js only: the native engine (no MSE) gives no fragment clock here, and
+   * a camera that cannot be measured is left exactly as it was.
+   *
+   * It looks once a tick, and once more the moment the camera starts playing,
+   * so a fresh camera (arriving, coming back from "Ocultar câmera", rebuilt by
+   * the stall watch) is put on the film's clock at its first frame rather
+   * than a second later. The film is only ever READ, through `filmClock`.
+   */
+  const syncOn = sync && typeof filmClock === "function";
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!syncOn || !video) {
+      return;
+    }
+    const controller = new CameraSyncController();
+    let lastDecision: CameraSyncDecision | null = null;
+    let lastReading: {
+      filmWallMs: number | null;
+      cameraWallMs: number | null;
+      cameraEdgeWallMs: number | null;
+    } | null = null;
+    const tick = () => {
+      const player = hlsPlayerRef.current;
+      if (!player || usingNativeRef.current) {
+        return;
+      }
+      const film = filmClockRef.current?.() ?? null;
+      const reading = {
+        filmWallMs: film?.wallMs ?? null,
+        cameraWallMs: hlsPlayingWallMs(player),
+        cameraEdgeWallMs: hlsEdgeWallMs(player),
+      };
+      const decision = controller.observe({
+        now: Date.now(),
+        visible:
+          typeof document === "undefined" ||
+          document.visibilityState !== "hidden",
+        filmPlaying: film?.playing ?? false,
+        cameraPlaying: elementPlaying(video),
+        filmRate: film?.rate ?? 1,
+        ...reading,
+      });
+      lastDecision = decision;
+      lastReading = reading;
+      if (decision.kind === "seek") {
+        console.warn(
+          `[watch-camera-pip] camera ${decision.driftMs > 0 ? "ahead of" : "behind"} the film by ${Math.round(Math.abs(decision.driftMs))} ms, seeking it ${decision.bySeconds.toFixed(2)} s`,
+        );
+        try {
+          video.currentTime = Math.max(0, video.currentTime + decision.bySeconds);
+        } catch {
+          // An element mid-teardown; the next tick reads it again.
+        }
+      }
+      if (video.playbackRate !== decision.rate) {
+        video.playbackRate = decision.rate;
+      }
+      if (controller.takeBudgetSpentNotice()) {
+        console.warn(
+          "[watch-camera-pip] camera sync used its seeks for this minute, nudging only",
+        );
+      }
+    };
+    const timer = setInterval(tick, CAMERA_SYNC_TICK_MS);
+    video.addEventListener("playing", tick);
+    // The console readout, for a person checking a live party by hand.
+    const readout = () => ({
+      on: true,
+      driftMs: lastDecision?.driftMs ?? null,
+      reason: lastDecision?.reason ?? null,
+      cameraRate: video.playbackRate,
+      seeks: controller.seeks,
+      ...lastReading,
+    });
+    const scope = window as unknown as { pqpCameraSync?: () => unknown };
+    scope.pqpCameraSync = readout;
+    return () => {
+      clearInterval(timer);
+      video.removeEventListener("playing", tick);
+      if (scope.pqpCameraSync === readout) {
+        delete scope.pqpCameraSync;
+      }
+      // Hand the element back as it was found.
+      video.playbackRate = 1;
+    };
+  }, [syncOn, activeSrc]);
+
+  /**
    * The click IS the user gesture: a `play()` called from inside a click
    * handler is not subject to the autoplay policy at all, so this always
    * succeeds where the automatic attempt was refused. `onPlaying` clears
@@ -647,7 +767,14 @@ export function WatchCameraPip({
       data-testid="watch-camera-pip"
       data-has-video={hasVideo ? "" : undefined}
       data-has-voice-audio={hasVoiceAudio ? "" : undefined}
+      data-camera-sync={syncOn ? "" : undefined}
       className={cn("relative bg-black", className)}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") {
+          onHoverChange?.(true);
+        }
+      }}
+      onPointerLeave={() => onHoverChange?.(false)}
     >
       <video
         ref={videoRef}
@@ -726,8 +853,26 @@ export function WatchCameraPip({
  * on an attached player that is a full re-attach, never a refresh (see the
  * token-refresh effect).
  */
+/** What the film tells the camera each tick (`filmClock`). */
+export interface FilmClockReading {
+  /** Wall clock (epoch ms) of the frame on screen, or null. */
+  wallMs: number | null;
+  /** Moving, with media ahead: not paused, buffering or seeking. */
+  playing: boolean;
+  /** The film's own playback rate. */
+  rate: number;
+}
+
 interface CameraHlsHandle {
   destroy: () => void;
+  /** hls.js's wall clock of the playhead (`#EXT-X-PROGRAM-DATE-TIME`). */
+  playingDate?: Date | null;
+  levels?: Array<{
+    details?: {
+      fragments?: Array<{ programDateTime?: number | null; duration?: number }>;
+    } | null;
+  }> | null;
+  currentLevel?: number;
   startLoad?: (startPosition?: number) => void;
   liveSyncPosition?: number | null;
 }

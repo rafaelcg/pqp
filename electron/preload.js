@@ -98,6 +98,23 @@ const SHARE_CAPABILITIES = Object.freeze({
    * `nativeShareAudioStatus()`; whether it is ON is the runtime flag's.
    */
   nativeShareAudio: process.platform === "win32",
+  /**
+   * This binary can build the Linux "everything but pqp" bus
+   * (`lib/linux-share-audio.js`) and hand its source to the page by name.
+   * A SEPARATE field, never `systemAudio: "loopback"`: every client already
+   * deployed reads that one as "ask for audio and it arrives on the display
+   * stream", and on Linux it would not (it arrives on a second capture only
+   * the new client opens). Whether it is ON is the runtime flag's business,
+   * and whether this machine has `pactl` is `linuxShareAudioStatus()`'s.
+   */
+  linuxShareAudio: process.platform === "linux",
+  /**
+   * This binary can answer `fullscreenAppState()`: whether Windows says a
+   * Direct3D app holds the display in exclusive fullscreen
+   * (`SHQueryUserNotificationState`, `lib/fullscreen-state.js`). The page's
+   * dead-share card (`share_game_capture_hint`) never shows without it.
+   */
+  fullscreenAppState: process.platform === "win32",
   version: shellVersion(),
 });
 
@@ -213,6 +230,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   },
 
   /**
+   * `share_game_capture_hint`: is a Direct3D app in exclusive fullscreen right
+   * now, by Windows' own account? Resolves
+   * `{ state, raw, exclusiveFullscreen }`; `exclusiveFullscreen` is null when
+   * the shell cannot tell. Asked by the page only when a share looks dead.
+   */
+  fullscreenAppState() {
+    return ipcRenderer.invoke("pqp:fullscreen-app-state");
+  },
+
+  /**
    * Native share audio (Windows, `capabilities.nativeShareAudio`). Can this
    * machine do it: add-on loaded, and this Windows build opened a process
    * loopback stream when asked. `{ available, reason, stage, hr, build }`.
@@ -294,6 +321,44 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return () => {
       ipcRenderer.removeListener("pqp:native-share-audio-ended", handler);
     };
+  },
+
+  /**
+   * Linux share audio: can this machine build the bus at all (`pactl` on
+   * PATH, a PulseAudio or PipeWire server answering)? Resolves
+   * `{ available, server }`, and `available: false` off Linux.
+   */
+  linuxShareAudioStatus() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-status");
+  },
+
+  /**
+   * Right before a `getDisplayMedia` the page has asked the person about (flag
+   * on, "share this computer's audio?" answered yes): the shell may build the
+   * bus for the NEXT display request only. Without it a request that happens to
+   * carry `audioRequested` builds nothing. Resolves `true` when armed.
+   */
+  linuxShareAudioArm() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-arm");
+  },
+
+  /**
+   * After `getDisplayMedia` resolved: is this share's bus up, and under which
+   * device label will `enumerateDevices` list its capture source?
+   * Resolves `{ active, label }`.
+   */
+  linuxShareAudioClaim() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-claim");
+  },
+
+  /**
+   * What the live (or last) Linux share did with every playback stream it
+   * saw: app name, binary, process ids, whether it is pqp's, and the outcome
+   * (linked, moved, refused with the sound server's words, kept out). Null off
+   * Linux and before any share. Reads nothing from the sound server.
+   */
+  linuxShareAudioDiagnostics() {
+    return ipcRenderer.invoke("pqp:linux-share-audio-diagnostics");
   },
 
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */

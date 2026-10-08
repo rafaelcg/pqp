@@ -235,7 +235,7 @@ describeDb("the idle hangup across two instances", () => {
 
   beforeEach(async () => {
     process.env.VOICE_REGISTRY = "postgres";
-    delete process.env.VOICE_IDLE_ALONE_MINUTES; // default 10 minutes
+    process.env.VOICE_IDLE_ALONE_MINUTES = "10"; // the mechanism at ten minutes; the default is pinned in voice-idle-alone.test.ts
     hub = createMemoryHub();
     onTheWire = [];
     hub.listeners.add((frame) => onTheWire.push(frame));
@@ -245,7 +245,7 @@ describeDb("the idle hangup across two instances", () => {
     await db
       .getPool()
       .query(
-        `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
+        `TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
       );
   });
 

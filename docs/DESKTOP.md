@@ -144,7 +144,7 @@ as "blocked or cancelled" rather than as a failure.
 | Windows 11 (NT build ≥ 22000) | The machine's own output, minus pqp's | `{ video: source, audio: "loopback" }` when the page asked for audio **and** the picker's box was ticked. Electron 43.4+ remaps that to `loopbackWithoutChrome` when the page sent `restrictOwnAudio: true`. `os.release()` is still `10.0.22631` on Windows 11; parse the build, never `major === 11` |
 | Windows 10 | Video only | Chromium cannot exclude this app from the mixer. The handler returns no loopback, the picker hides the audio box, and the page asks for no audio |
 | macOS | Video only | Chromium's loopback device is WASAPI and exists nowhere else. The client asks for no audio track at all, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa") |
-| Linux | Video only | Same reason; best effort, and Wayland may hand back one pre-picked surface |
+| Linux | Video only, or with `linux_desktop_system_audio` on (0.2.3+) the computer's sound minus pqp's | Chromium's loopback carries the call on Linux, so the shell builds its own bus (`electron/lib/linux-share-audio.js`); see "Linux share audio: what is captured and what is not" below. Wayland may hand back one pre-picked surface |
 
 `loopbackWithMute` is deliberately never used. It taps the same output and
 silences the machine while it does, so the presenter stops hearing both the call
@@ -183,6 +183,114 @@ rollback if that grant turns out to be the bigger problem.
 and the watch party lowers the capture's height with `applyConstraints` while it
 runs. A capture that refuses a constraint keeps running unchanged; nothing in
 that path stops a track.
+
+### Linux share audio: what is captured and what is not
+
+Behind `linux_desktop_system_audio` (global, default off) and a shell that
+publishes `capabilities.linuxShareAudio`. The page arms the shell right before a
+share the person said yes to sound for; nothing runs, and no process is spawned,
+without both. The capture is a remap source, `pqp-share-audio`, over the monitor
+of a null sink, `pqp_share_audio` (the "bus"). pqp's own streams (the call, its
+sounds, a film it plays) never reach the bus: that is the whole point.
+
+**How the bus is fed, since 0.2.4.** The first report from real hardware (a
+CachyOS desktop, PipeWire with pipewire-pulse) said browsers and one game reached
+viewers while Spotify from Flathub and Helldivers 2 did not. Up to 0.2.3 the
+shell MOVED each app's stream into the bus (`pactl move-sink-input`) and looped
+the bus back to the speakers. Reproduced in a container on PipeWire 1.4.2 /
+WirePlumber 0.5.8 and on PulseAudio 17, two kinds of stream cannot be moved:
+
+| Stream | What `pactl` shows | Moved (0.2.3) | Why |
+|---|---|---|---|
+| Opened with `PA_STREAM_DONT_MOVE` | a sink input with `node.dont-reconnect = "true"` | No: `Failure: Invalid argument`, retried silently every 2 s | Wine's winepulse sets that flag whenever a game opens a NAMED endpoint instead of the default one (`pulse_stream_connect` in `dlls/winepulse.drv/pulse.c`), so this is the Proton game case |
+| Native PipeWire (Spotify since 1.2.86, `pw-play`, SDL3, GStreamer) | a sink input with NO `application.process.id` (it lives on the client object) | No: skipped, because a stream with no process cannot be proven not to be the call | Spotify community threads and PCPanel issue #92 (June 2026): from 1.2.86 the Linux client opens a native stream named `audio-src` with an `aux0,aux1` map, and the Flathub build's sink input carries only `media.name` and `pipewire.access.portal.app_id` |
+
+Moving also wrote `"target": "pqp_share_audio"` into WirePlumber's
+`~/.local/state/wireplumber/stream-properties` for every app it moved, for good.
+
+So on PipeWire, when `pw-dump` and `pw-link` are on PATH (they normally come with
+PipeWire itself; Debian and Ubuntu put them in `pipewire-bin`), the
+shell LINKS instead: every playback stream that is not pqp's and is playing to
+the default output gets a second link from its output ports to the bus. The link
+to the speakers is untouched, so the person hears exactly what they heard before,
+nothing is remembered, and there is no loopback and none of its latency.
+WirePlumber leaves links it did not make alone, across a default-device switch
+too, and unloading the bus takes every link into it along. PulseAudio, and
+PipeWire without those two tools, keep the move path, which now traces a native
+stream to its client's process, asks a refused stream once instead of every two
+seconds, and says why in the report.
+
+**Which streams are pqp's.** Process ids only: the stream's own
+`application.process.id`, its client's, and its client's `pipewire.sec.pid` (the
+socket peer as the kernel reports it, which a Flatpak cannot choose; inside its
+sandbox Spotify calls itself pid 2), plus the shell's own executable name. Any
+one in pqp's process list makes the stream pqp's. Names are never used, so an
+app called "pqp" or another Electron app is shared like anything else. A stream
+with no process id at all is never shared.
+
+**What is never shared, on purpose:** pqp's streams; streams playing to another
+device than the default output (an app sent to a headset); the sound server's own
+streams (loopbacks, filter chains, `node.link-group`); and the output of an app
+that relays other sound (it owns a sink, like EasyEffects, or records a sink's
+monitor), because that sound can contain the call. Known limit: two separate
+processes that record the speakers and play them back (`parec | pacat`) look
+like an ordinary player and would be shared, call included; the person would
+hear their own feedback loop first.
+
+**The report.** While a share runs and when it ends, the shell writes
+`~/.config/pqp/logs/linux-share-audio.json` (Electron's `app.getPath("logs")`):
+the mode (`link` or `move`), the output, and one row per playback stream with
+its app name, binary, process ids, Flatpak id, whether it is pqp's, and the
+outcome (`linked`, `moved`, `refused` with the sound server's words,
+`pqp-kept-out`, `other-output`, `skipped-relay`, ...). Inside the desktop app,
+`share-diagnostic.html` shows the same report with a copy button
+(`pqpDesktop.linuxShareAudioDiagnostics()`).
+
+**Manual test matrix.** Flag on, share a screen with "share this computer's
+audio" ticked, and from a second account listen to the share. "Bad" for every
+row: the app is heard locally but not by the viewer, or the viewer hears the
+call (a voice from the call coming back with a delay).
+
+| Server | App | Expect (0.2.4) | Report row |
+|---|---|---|---|
+| PipeWire + pw tools | A browser tab with a video | Heard | `linked` |
+| PipeWire + pw tools | Spotify from Flathub (`com.spotify.Client`) | Heard | `linked`, `flatpak: com.spotify.Client`, app `audio-src` |
+| PipeWire + pw tools | A Proton game that picks its device by name (DONT_MOVE) | Heard | `linked`, `pinned: true` |
+| PipeWire + pw tools | Another Proton/Wine game on the default device | Heard | `linked` |
+| PipeWire + pw tools | A native PipeWire player (`pw-play file.wav`, an SDL3 game) | Heard | `linked` |
+| PipeWire + pw tools | The call itself, a second pqp stream (soundboard, a film in pqp) | NOT heard | `pqp-kept-out` |
+| PipeWire + pw tools | An app sent to a second device in pavucontrol | NOT heard (by design) | `other-output` |
+| PipeWire, no pw tools | Same rows | Browser and native players heard; DONT_MOVE games not | `moved` / `refused (Failure: Invalid argument)` |
+| PulseAudio | Browser, a Wine game on the default device | Heard | `moved` |
+| PulseAudio | A DONT_MOVE game | NOT heard (cannot be moved; nothing else isolates one stream on PulseAudio) | `refused` |
+| Any | Ending the share | Every app still on the speakers, `pactl list short modules` shows no `pqp_share`, `pw-link -l` shows nothing into `pqp_share_audio` | report `endedReason` |
+
+Commands to confirm a report from a user (run while the apps play and the
+share is live):
+
+```bash
+cat ~/.config/pqp/logs/linux-share-audio.json
+pactl list sink-inputs | grep -E 'Sink Input|Sink:|application.name|application.process.id|media.name|node.dont-reconnect|portal.app_id'
+pw-link -l | grep -B1 -A3 pqp_share_audio
+```
+
+Reproduced with a container rig (Debian trixie, PipeWire 1.4.2 / WirePlumber
+0.5.8, and PulseAudio 17): a libpulse tone generator with and without
+`PA_STREAM_DONT_MOVE`, `pw-play` with and without `node.dont-reconnect`, a
+`pw-play` inside `bwrap` with a `/.flatpak-info` (what PipeWire reads to decide a
+client is a Flatpak) and an `AUX0,AUX1` map, and pqp's own stream, each on its
+own frequency, measured on the capture with a Goertzel filter. Before: only the
+plain app reached the capture. After: every stream but pqp's, with pqp's at
+-119 dB or lower, through a hand-made link into the bus, a hand-made move into
+it, the bus made the default, a relay, a late stream and a device switch. Then
+end to end in real Electron 44 on PipeWire 1.0.5 / WirePlumber 0.4.17 (the
+September rig): a pinned native stream captured at -24 dB, the call and a second
+pqp stream at -136 dB or lower across a new app and a device switch. Making the
+bus the default output by hand still lets the call through for about 200 ms
+until the watcher puts the default back and moves the call out, the same known
+gap as 0.2.3; destroying the session manager's link instead of moving the
+stream made that gap last seconds on WirePlumber 0.4, which is why a ROUTED
+stream is moved and only an extra link is cut.
 
 ### A share next to a game at a very high frame rate (`share_high_motion_guard`)
 
@@ -299,6 +407,172 @@ from the dashboard (controles, interruptores, `share_high_motion_guard`), open t
 desktop app, share the game window with CS2 uncapped, run `pqpShareHealth()`
 during the stutter and read it with the paragraph above; then
 `pqpShareHealth.force(1)`, `force(2)`, `force(3)` and watch the viewer at each.
+
+### Sharing a game: Fullscreen vs Fullscreen Windowed (`share_game_capture_hint`)
+
+Field report, 2026-10: sharing Counter-Strike 2 from the Windows app works with
+the game in **Fullscreen Windowed** and not in plain **Fullscreen**. The
+symptom is not pinned yet (black, frozen, or a share that ends). Below,
+VERIFIED means read in the cited source (Chromium 152, which Electron 44
+ships); UNVERIFIED means inference or a user report. Nothing here was run on
+Windows.
+
+**How Chromium captures on Windows (Electron 44 = Chromium 152.0.7977.130,
+[electron DEPS](https://github.com/electron/electron/blob/44-x-y/DEPS)).**
+
+- A **screen** source is Windows Graphics Capture (WGC) from **Windows 11 24H2
+  (build 26100)** on, and DXGI desktop duplication with GDI behind it before
+  that. VERIFIED: `IsWgcEnabledForScreenCapture()` is
+  `base::win::GetVersion() >= base::win::Version::WIN11_24H2`, then
+  `set_allow_wgc_screen_capturer(true)`
+  ([desktop_capture_device.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/content/browser/media/capture/desktop_capture_device.cc));
+  `kDirectXCapturer` is enabled by default, "DirectX as main capture API and
+  GDI as fallback"
+  ([desktop_capture.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/content/public/browser/desktop_capture.cc)).
+- A **window** source is WGC on every Windows: `set_allow_wgc_window_capturer(true)`
+  unconditionally (same file). VERIFIED.
+- **No switch changes this.** The old `AllowWgcScreenCapturer` /
+  `AllowWgcWindowCapturer` features are gone from Chromium 152; only
+  `WebRtcWgcRequireBorder` and `WebRtcAllowWgcUsingTexture` remain, both off
+  ([webrtc_features.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/media/webrtc/webrtc_features.cc)).
+  VERIFIED. Turning `DirectXCapturer` off only forces GDI, which is worse.
+  Electron offers no Windows capture-method option (`useSystemPicker` is
+  macOS only). VERIFIED in
+  [session.md](https://github.com/electron/electron/blob/44-x-y/docs/api/session.md).
+- A still picture produces **no frames**: the capturer runs in "zero hertz"
+  mode and does not deliver a frame whose content did not change
+  (`zero_hertz_is_active`, same file). VERIFIED. So "no frames" alone is never
+  proof of a dead share.
+- Only a **permanent** capturer error ends the track; a temporary one keeps the
+  track live with no new frames ("Continue capturing frames in the temporary
+  error case", same file). VERIFIED. WebRTC's WGC capturer reports permanent
+  when no frame ever arrived (research pass,
+  [wgc_capturer_win.cc](https://webrtc.googlesource.com/src/+/6f37672d358475cd17544121a12494da454d85fb/modules/desktop_capture/win/wgc_capturer_win.cc)).
+  VERIFIED by the research pass, not re-read here.
+
+**What a game in exclusive fullscreen does to that.**
+
+- Microsoft: DXGI duplication's `AcquireNextFrame` returns
+  `DXGI_ERROR_ACCESS_LOST` on a mode change or a "switch from DWM on, DWM off,
+  or other full-screen application"
+  ([Learn](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-acquirenextframe)).
+  VERIFIED. WebRTC treats that as temporary and fills the frame from GDI
+  (research pass, `fallback_desktop_capturer_wrapper.cc`). That a GDI copy of
+  an exclusive-fullscreen Direct3D surface is black is folklore with no
+  Microsoft source: UNVERIFIED.
+- Discord: WGC "does not work for full screen exclusive (FSE) games"; they
+  detect FSE with `SHQueryUserNotificationState`, fall back to their injected
+  hook (which we will never do), and recommend "Borderless". They add that a
+  game in "Full Screen" may be misclassified as FSE
+  ([Discord support, updated 2026-10-03](https://support.discord.com/hc/en-us/articles/9410427556375)).
+  VERIFIED (read through the help-center API). This is the closest primary
+  source on WGC and FSE; Microsoft's own WGC docs say nothing about it.
+- Fullscreen Optimizations (FSO) run "full screen exclusive games ... in a
+  highly optimized borderless windowed format", and the compatibility checkbox
+  **"Disable fullscreen optimizations" restores true exclusive fullscreen**
+  ([DirectX blog](https://devblogs.microsoft.com/directx/demystifying-full-screen-optimizations/)).
+  VERIFIED. So that checkbox makes capture worse, never better. Windows 11's
+  "Optimizations for windowed games" only covers windowed and borderless
+  DX10/11 games
+  ([support](https://support.microsoft.com/en-us/windows/hardware/display-graphics/optimizations-for-windowed-games-in-windows-11)).
+  VERIFIED.
+- What CS2's "Fullscreen" is on a current Windows build (true exclusive, or
+  FSO-promoted flip), on D3D11 and on Vulkan: **no Valve source found.**
+  UNVERIFIED. "Fullscreen Windowed" is a borderless window, which every
+  capturer sees (a user report says `fullscreen 0` + `nowindowborder 1`).
+  `SHQueryUserNotificationState` names Direct3D; whether a Vulkan game in
+  exclusive mode reports it is UNVERIFIED.
+- Electron issue [#21063](https://github.com/electron/electron/issues/21063)
+  is the same symptom ("black screen with mouse on Fullscreen games ...
+  windowed mode instantly fixes the issue"), closed without a root cause.
+- Others: OBS offers DXGI or WGC for display capture and BitBlt or WGC for
+  window capture, and "capture any fullscreen application" is its Game Capture,
+  a hook. NVIDIA's NvFBC is deprecated on Windows 10 and later. Parsec and
+  Steam Remote Play were not checked.
+
+**So: why "Fullscreen Windowed" works and "Fullscreen" may not.** A borderless
+window is composed by DWM like any window, and every Windows capture path reads
+what DWM composes. Exclusive fullscreen hands the output to the game. Below
+24H2 a screen share hits DXGI's documented `ACCESS_LOST` and limps on GDI (black
+or stale, track still live); from 24H2, and for any window share, it is WGC,
+which Discord says does not work for FSE (frozen, or a track that ends).
+**Sharing the game's window instead of the screen does not help**: a window is
+WGC everywhere. **There is no safe code-side fix** in Electron 44: no flag
+selects a capturer that sees an exclusive-fullscreen game, and the only thing
+that does (a hook into the game) is off the table under VAC. So the flag is not
+a capture mode, and nothing about the capture changes.
+
+**What the flag does instead (detect and tell).** Off by default, per server,
+`GET /api/share/config` (`docs/FEATURE_FLAGS.md`).
+
+1. The Windows app's share is sampled for its first minute
+   (`client/src/lib/share-picture-watch.ts`): a clone of the track through
+   `MediaStreamTrackProcessor`, every frame closed at once, one frame every 2 s
+   drawn into a 32x18 canvas. Again for a minute after an unmute. Nothing kept,
+   nothing sent.
+2. `share-picture-check.ts` calls it **black** (mean luma <= 4 and the 98th
+   percentile <= 12, unmoving, for 8 s) or **quiet** (no frame for 8 s).
+   Thresholds are pinned with synthetic frames: a dark film scene, a near-black
+   scene with one light, a fade shorter than the window, a still slide, a game
+   in motion, a black capture with the pointer on it, a frozen game.
+3. **Nothing is shown on pixels alone.** A still slide is quiet too (zero
+   hertz), and so is a healthy capture of a STILL game in fullscreen (a paused
+   frame, a static menu). So quiet first needs a failed **refresh probe**: a
+   new sink on the track makes Chromium ask the source for a frame
+   (`MediaStreamVideoTrack::AddSink` calls `RequestRefreshFrame`, VERIFIED in
+   [media_stream_video_track.cc](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.130/third_party/blink/renderer/modules/mediastream/media_stream_video_track.cc)),
+   and a refresh frame is delivered even when nothing changed (the
+   zero-hertz rule skips only non-refresh frames, same
+   `desktop_capture_device.cc`). A frame within 3 s is a live capture and
+   nothing is said. Every check is tied to the window it was raised in: a
+   mute, an unmute, a re-arm, the minute running out or the reader ending
+   discards an answer still on its way. The page then asks the shell (`fullscreenAppState()`,
+   `electron/lib/fullscreen-state.js`) whether Windows reports
+   `QUNS_RUNNING_D3D_FULL_SCREEN`
+   ([Learn](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ne-shellapi-query_user_notification_state)),
+   at most every 6 s. Only a yes raises the card: black, frozen ("stalled"),
+   or, for a capture whose track ends by itself in its first minute, "ended".
+   The shell asks through one PowerShell `Add-Type` P/Invoke and never touches
+   a game process; any failure is "cannot tell", and that never shows anything.
+4. The card (`ShareGameCaptureNotice`, in the call bar like the mic fallback
+   card) says what viewers get, that the game is in exclusive fullscreen, and
+   the fix: CS2, Settings, Video, Display Mode, Fullscreen Windowed; other
+   games, borderless or windowed fullscreen. "Entendi" closes it; "Não mostrar
+   de novo" silences it for good (the hint store), and a silenced presenter is
+   not even sampled.
+5. `pqpShareHealth()` gains the surface (`monitor` / `window`), a `picture`
+   line (what the watch suspects, and the shell's answer), and a `capturer`
+   line (WGC or DXGI+GDI for a screen on this Windows build).
+
+Known gaps, said plainly: a capture that keeps delivering a STALE picture of
+the desktop behind the game cannot be told from a still slide and is not
+reported. The same goes for a WGC session that answers a refresh by handing
+back its last frame (the research pass read that WebRTC's WGC session re-emits
+the previous frame when its pool is empty): the refresh probe then says
+"alive" and a frozen share is not reported, which is the price of never
+calling a paused game dead. Black and a capture that ends are not affected. A Vulkan game in exclusive mode may not be reported by Windows as
+Direct3D. Discord's misclassification note means a "Fullscreen" game that
+captures fine may still report yes, which is why pixels are required too.
+
+**Test matrix for Rafael's PC** (`share-diagnostic.html` in Chrome, then the
+desktop app with `pqpShareHealth()`; flag on for one server from the dashboard,
+controles, interruptores, `share_game_capture_hint`). First note the Windows
+build (`winver`): 26100 or later means a screen share is WGC.
+
+| CS2 mode | Source | Flag | Expected if the analysis is right | What it means otherwise |
+|---|---|---|---|---|
+| Fullscreen Windowed | screen | off | picture `moving`, share fine | baseline broken: not this problem |
+| Fullscreen Windowed | window | off | `moving`, fine | same |
+| Fullscreen | screen | off | `black` (build < 26100) or `no frames` / ended (26100+) | `moving` means CS2's Fullscreen is FSO-promoted here and the report is something else (look at `captured` fps and the high-motion section) |
+| Fullscreen | window | off | `no frames` or the capture ends | `moving`: window capture survives, tell us, the card's advice would then change |
+| Fullscreen | screen | on | as above, plus the card within about 10 s; `pqpShareHealth()` says `exclusive fullscreen yes` | no card with `exclusive fullscreen no`: Windows does not report CS2 as D3D exclusive (try `-vulkan` off / on) |
+| Fullscreen | window | on | card (stalled or ended) | same |
+| Fullscreen Windowed | screen | on | no card ever, `exclusive fullscreen` not asked or `no` | a card here is a false positive: send the `pqpShareHealth()` output |
+| a still slide or paused video | screen | on | no card | same |
+
+Also worth one run each: the game's compatibility tab with "Disable fullscreen
+optimizations" ticked (expected worse), and alt-tab in Fullscreen (Discord's
+test: a game that minimizes on alt-tab is in exclusive fullscreen).
 
 ---
 

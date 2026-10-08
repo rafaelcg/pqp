@@ -286,6 +286,50 @@ Anything that is not an inline image gets `response-content-disposition=attachme
 presigned GET, so no user-uploaded file can ever render as a document in a browser tab on our
 domain.
 
+## Drag and drop
+
+A file dragged in from the operating system is staged exactly like one picked with the
+paperclip or pasted: `MessageComposer.addFiles` is the only entry, so the per-file checks
+(type, size, 10 per message), the per-file progress bar and the error strip are the same. The
+paperclip stays the accessible path; the drop overlay is `aria-hidden`.
+
+| Surface | A drop does |
+|---|---|
+| Server text channel, a voice channel's chat (viewing or in the call, over the stage and a video too), a DM or group | attaches to that conversation's composer |
+| A thread's panel | attaches to the thread's composer (a drop on the parent channel goes to the parent) |
+| Watch party stage chat | refused: it has no attach control by design, the drag is answered "no drop" |
+| Avatar, profile banner, server icon and banner, community cover and featured image, onboarding photo | the picker's own `handleFile`, so the same crop and the same errors |
+| Baú post composer | the first file, through the composer's own `pickFile` (it already uploads; comments are text) |
+| Anywhere else | nothing: the page-wide guard answers "no drop", so the browser never opens the file |
+
+Rules, all in `client/src/lib/file-drop.ts` and `hooks/use-file-drop-zone.ts`:
+
+- **Only a drag from outside counts.** `types` must contain `Files`, and a drag that started
+  inside pqp (`dragstart` fires only for those) never does, because Chromium dresses a dragged
+  `<img>` as a file.
+- **`installFileDropGuard()` runs from `main.tsx` and is the net under every zone.** A drop nobody
+  claims is not a no-op: the browser navigates to the file and replaces the app, a call in
+  progress included. An unclaimed file drag is answered with `dropEffect = "none"`, which also
+  means no `drop` event is delivered. A test reads the entry point so the guard cannot become
+  dead code.
+- **Uploads off is said, not ignored.** With `GET /api/attachments/config` answering
+  `enabled: false` the overlay reads "File uploads are turned off on this server" and the drag is
+  refused. Before the config has answered, the zone is simply off (unknown is not "disabled").
+- **Folders are named, not swallowed.** Chromium lists a dropped folder in `files` as an empty
+  file with no type, so `readDroppedItems` asks `webkitGetAsEntry()` and the composer says
+  "<name> is a folder ... drop the files inside it".
+- **A dialog opened from a pane is not part of it.** React bubbles events through portals, so
+  every handler checks the target is physically inside the zone.
+
+Desktop: the main window's `will-navigate` handler blocks `file:` and `filesystem:` URLs even
+with no app origin (`lib/nav-policy.js`), and every other web contents gets the same
+`will-navigate` rule (`web-contents-created` in `main.js`). `electron/test/file-drop.spec.mjs`
+runs the real guard in the real shell with injected OS file drags. Dropping on a window's
+title-bar drag region is handled by the OS, not by the page (see the PR for what was checked).
+
+A forum channel (`docs/plans/FORUM_CHANNELS.md`) would add one more composer. The hook point is
+`useFileDropZone` around its post form, with the post composer's own `addFiles`.
+
 ## Read URLs and expiry
 
 Read URLs are presigned per read and live for `ATTACHMENT_URL_TTL_SECONDS` (default 12h). They

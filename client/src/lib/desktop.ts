@@ -65,6 +65,34 @@ export interface PqpDesktop {
    * versions. For `pqpShareHealth()`.
    */
   shareHealth?(): Promise<DesktopShareHealth>;
+  /**
+   * `share_game_capture_hint`: whether Windows says a Direct3D app holds the
+   * display in exclusive fullscreen right now (`SHQueryUserNotificationState`,
+   * `electron/lib/fullscreen-state.js`). Absent in shells before it, which the
+   * page reads as "cannot tell" and then never shows the card.
+   */
+  fullscreenAppState?(): Promise<DesktopFullscreenAppState>;
+  /**
+   * Linux share audio: can this machine build the "everything but pqp" bus?
+   * `available: false` off Linux and where `pactl` is missing.
+   */
+  linuxShareAudioStatus?(): Promise<{ available: boolean; server: string | null }>;
+  /**
+   * Right before the `getDisplayMedia` of a share the person said yes to
+   * sound for: lets the shell build the bus for the next display request only.
+   */
+  linuxShareAudioArm?(): Promise<boolean>;
+  /**
+   * After `getDisplayMedia` resolved: is this share's bus up, and which
+   * `enumerateDevices` label is its capture source?
+   */
+  linuxShareAudioClaim?(): Promise<{ active: boolean; label: string | null }>;
+  /**
+   * What the live (or last) Linux share did with every playback stream it
+   * saw, for the share diagnostic page (`client/public/share-diagnostic.html`).
+   * Null off Linux and before any share; absent in shells before 0.2.4.
+   */
+  linuxShareAudioDiagnostics?(): Promise<LinuxShareAudioDiagnostics | null>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -219,6 +247,15 @@ export interface DesktopShareCapabilities {
    * before it; off unless the runtime flag says so.
    */
   nativeShareAudio?: boolean;
+  /**
+   * Linux: this shell can build a capture source carrying every app's sound
+   * except its own (`electron/lib/linux-share-audio.js`). The sound does NOT
+   * arrive on the display stream; the page opens the source by name. Absent
+   * in every shell before it, and off unless the runtime flag says so.
+   */
+  linuxShareAudio?: boolean;
+  /** The shell answers `fullscreenAppState()` (Windows). Absent before it. */
+  fullscreenAppState?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }
@@ -230,6 +267,15 @@ export interface DesktopShareLiveResult {
   boost: "raised" | "restored" | "unsupported" | "failed" | "idle";
   /** How many of the shell's processes now sit above normal priority. */
   processes: number;
+}
+
+/** `fullscreenAppState()`: QUERY_USER_NOTIFICATION_STATE, named. */
+export interface DesktopFullscreenAppState {
+  /** `d3d-fullscreen`, `busy`, `accepts-notifications`, ..., `unknown`, `unsupported`. */
+  state: string;
+  raw: number | null;
+  /** True for QUNS_RUNNING_D3D_FULL_SCREEN; null when the shell could not tell. */
+  exclusiveFullscreen: boolean | null;
 }
 
 /** `shareHealth()`: the shell's half of `pqpShareHealth()`. */
@@ -249,6 +295,15 @@ export interface DesktopShareHealth {
     live: boolean;
     boost: DesktopShareLiveResult["boost"];
     processes: number;
+  };
+  /**
+   * Which capturer Chromium uses here, from the shell's reading of Chromium's
+   * source (`electron/lib/capture-backend.js`). Absent in shells before it.
+   */
+  capture?: {
+    build: number | null;
+    screen: "wgc" | "dxgi-gdi" | null;
+    window: "wgc" | null;
   };
 }
 
@@ -273,6 +328,37 @@ export interface NativeShareAudioClaim {
   reason?: string;
   stage?: string | null;
   hr?: number | null;
+}
+
+/**
+ * `linuxShareAudioDiagnostics()`: one row per playback stream the Linux share
+ * watcher saw (`electron/lib/linux-share-audio.js`). `outcome` is one of
+ * `linked`, `moved`, `refused`, `move-failed`, `link-failed`, `pending`,
+ * `pqp-kept-out`, `pqp-pulled-out`, `moved-back`, `other-output`,
+ * `not-playing`, `skipped-module`, `skipped-relay`, `skipped-no-process`.
+ */
+export interface LinuxShareAudioDiagnostics {
+  active?: boolean;
+  /** `link` (PipeWire, a second link per stream) or `move` (PulseAudio). */
+  mode?: "link" | "move";
+  server?: string | null;
+  output?: string | null;
+  startedAt?: number;
+  lastReadAt?: number | null;
+  endedReason?: string | null;
+  probe?: { available: boolean; server: string | null; mode?: string | null } | null;
+  streams?: Array<{
+    node: number;
+    app: string;
+    media: string | null;
+    binary: string | null;
+    pids: string[];
+    flatpak: string | null;
+    pinned: boolean;
+    own: boolean;
+    outcome: string;
+    detail: string | null;
+  }>;
 }
 
 export interface DesktopVoiceState {

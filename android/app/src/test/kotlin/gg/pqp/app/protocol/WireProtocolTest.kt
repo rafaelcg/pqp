@@ -218,6 +218,12 @@ class WireProtocolTest {
     private val deliberatelyIgnored: Map<String, String> = mapOf(
         // Only ever answers a `set-camera`, which Android does not send.
         "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
+        // Audience mode's room state (docs/plans/AUDIENCE_MODE.md). The grant
+        // that locks the mic arrives on `voice-speak-changed`, which IS
+        // handled, and on LiveKit the SFU refuses the publish anyway; this is
+        // the badge, the notice and the host controls, none of which the phone
+        // draws yet. Listed in the plan doc as Android follow-up work.
+        "voice-audience" to "the mic lock rides voice-speak-changed; no audience badge or host controls on the phone yet",
         // Who is online in the channel. Android draws no member list yet.
         "presence-update" to "no roster surface on the phone to render it in",
         // The incremental form of the same list, and opt-in: the server sends
@@ -256,6 +262,12 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
+        // "Alberto started streaming in #filminho", sent only to people the
+        // server chose (flag `stream_start_notifications`, off by default).
+        // The same notice reaches a phone with no socket as a push, whose tap
+        // opens the channel; an open phone app draws no notice for it yet.
+        // docs/plans/WATCH_NOW.md lists what a phone would need.
+        "stream-started" to "the push covers a closed app; an open one has no start-of-stream surface yet",
         // The one-minute-before-hangup notice for the idle-alone timeout
         // (VOICE_IDLE_ALONE_MINUTES). The hangup itself still works correctly
         // without this: it arrives as an ordinary `voice-moderation` frame

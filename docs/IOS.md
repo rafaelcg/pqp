@@ -590,6 +590,16 @@ named enter/leaveTheater); the app is portrait everywhere else. Three presented
 theaters failed in three different ways, and the fourth attempt was to stop
 presenting.
 
+**A shared screen turns too.** Tapping a screen share in a voice room or a DM
+call opens `ScreenShareFullscreenView`, and that cover holds the landscape
+unlock for as long as it is on screen. `WatchOrientation` keeps a set of
+owners (`.watchParty`, `.screenShare(id)`), not a bool and not a counter: the
+watch party calls `leaveTheater()` from several places that were never
+balanced against an enter, and one stage letting go must not lock the other
+back to portrait. `PqpApp` drops any stranded share claim once no share is
+left anywhere, for the room or call ending with the cover up. The inline
+stage in the room does not rotate; only the fullscreen does.
+
 The lesson is the one on the pitfalls list: every source-text assertion about
 the theater was green for both broken builds. The tests that replaced them run
 the code — `testNothingInTheTheaterOutranksTheChromesOwnButtons` walks the

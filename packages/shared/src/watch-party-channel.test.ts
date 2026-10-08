@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canStartWatchPartyStream,
+  channelLiveMessageSchema,
+  watchersWithoutSeat,
   computePermissions,
   defaultRolePermissions,
   isVoiceRoomChannelType,
@@ -176,5 +178,58 @@ describe("liveStateFromStream", () => {
     expect(liveStateFromStream(null, [seat("host", true), seat("a")], 4)).toEqual(
       liveStateFromRoster(undefined),
     );
+  });
+});
+
+describe("watchersWithoutSeat (the server's count, or the sockets one machine counted)", () => {
+  it("prefers `viewers` and falls back to `watching`", () => {
+    expect(watchersWithoutSeat({ watching: 49, viewers: 73 })).toBe(73);
+    expect(watchersWithoutSeat({ watching: 49 })).toBe(49);
+    expect(watchersWithoutSeat({ watching: 49, viewers: undefined })).toBe(49);
+    // Zero is an answer: the server counted nobody, which is not "unknown".
+    expect(watchersWithoutSeat({ watching: 5, viewers: 0 })).toBe(0);
+    // Never trusts a malformed number.
+    expect(watchersWithoutSeat({ watching: 5, viewers: -1 })).toBe(5);
+    expect(watchersWithoutSeat({ watching: 5, viewers: Number.NaN })).toBe(5);
+    expect(watchersWithoutSeat({ watching: 5, viewers: 2.9 })).toBe(2);
+  });
+
+  it("is the same sum the sidebar row shows, with either field", () => {
+    const stream = { hlsUrl: "/x", startedAt: 1, presenterPeerId: "host" };
+    const seats = [
+      { peerId: "host", sharingScreen: true },
+      { peerId: "a", sharingScreen: false },
+    ] as unknown as Parameters<typeof liveStateFromStream>[1];
+    expect(
+      liveStateFromStream(stream, seats, watchersWithoutSeat({ watching: 49, viewers: 73 }))
+        .viewerCount,
+    ).toBe(74);
+    expect(
+      liveStateFromStream(stream, seats, watchersWithoutSeat({ watching: 49 })).viewerCount,
+    ).toBe(50);
+  });
+});
+
+describe("channel-live with the optional `viewers` field", () => {
+  const frame = {
+    type: "channel-live" as const,
+    channelId: "00000000-0000-4000-8000-0000000000ee",
+    stream: null,
+    watching: 49,
+  };
+
+  it("parses with and without it", () => {
+    expect(channelLiveMessageSchema.parse({ ...frame, viewers: 73 }).viewers).toBe(73);
+    expect(channelLiveMessageSchema.parse(frame).viewers).toBeUndefined();
+    expect(channelLiveMessageSchema.safeParse({ ...frame, viewers: -1 }).success).toBe(false);
+  });
+
+  it("an older client's schema (no `viewers`) ignores it and keeps `watching`", () => {
+    // What a build from before this field does with the frame: zod strips an
+    // unknown key, the frame is accepted, and the number it shows is `watching`.
+    const oldSchema = channelLiveMessageSchema.omit({ viewers: true });
+    const parsed = oldSchema.parse({ ...frame, viewers: 73 });
+    expect(parsed).toEqual(frame);
+    expect(parsed.watching).toBe(49);
   });
 });

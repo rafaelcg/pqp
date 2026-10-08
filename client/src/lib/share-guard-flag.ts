@@ -1,4 +1,5 @@
 import { fetchShareConfig } from "./api";
+import { recordShareFastStartQuality } from "./share-fast-start";
 
 /**
  * `share_high_motion_guard` as the client learns it: one boolean on
@@ -11,12 +12,27 @@ import { fetchShareConfig } from "./api";
  * OFF for this share and asked again for the next one, so an API that is down,
  * slow, or older than the flag leaves the share exactly as it was before the
  * guard existed.
+ *
+ * `share_game_capture_hint` (`shareGameCaptureHint`) rides on the same answer
+ * and the same cache: one request per server tells the share both.
+ *
+ * So does `share_fast_start_quality` (`shareFastStartQuality`), which the
+ * viewer needs as well as the presenter: every answer is handed to
+ * `share-fast-start.ts` as it arrives, and the call reads it from there.
+ * Unanswered is off, like the rest.
  */
 
 const TTL_MS = 10 * 60_000;
 const ENSURE_BUDGET_MS = 1_500;
 
-const cache = new Map<string, { at: number; value: boolean }>();
+interface ShareFlags {
+  guard: boolean;
+  gameCaptureHint: boolean;
+}
+
+const OFF: ShareFlags = { guard: false, gameCaptureHint: false };
+
+const cache = new Map<string, { at: number; value: ShareFlags }>();
 const refreshing = new Set<string>();
 
 export function resetShareGuardFlagForTests(): void {
@@ -24,14 +40,18 @@ export function resetShareGuardFlagForTests(): void {
   refreshing.clear();
 }
 
-function ask(serverId: string | null): Promise<boolean | null> {
+function ask(serverId: string | null): Promise<ShareFlags | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), ENSURE_BUDGET_MS);
     fetchShareConfig(serverId)
       .then((config) => {
         clearTimeout(timer);
-        const value = config.shareHighMotionGuard === true;
+        const value: ShareFlags = {
+          guard: config.shareHighMotionGuard === true,
+          gameCaptureHint: config.shareGameCaptureHint === true,
+        };
         cache.set(serverId ?? "", { at: Date.now(), value });
+        recordShareFastStartQuality(serverId, config.shareFastStartQuality === true);
         resolve(value);
       })
       .catch(() => {
@@ -55,10 +75,7 @@ export function prefetchShareGuardFlag(serverId?: string | null): void {
   void ask(serverId ?? null).finally(() => refreshing.delete(key));
 }
 
-/** Whether THIS share runs under the guard. Decided before the picker opens and carried on the intent. */
-export async function ensureShareGuardFlag(
-  serverId?: string | null,
-): Promise<boolean> {
+async function ensureShareFlags(serverId?: string | null): Promise<ShareFlags> {
   const key = serverId ?? "";
   const cached = cache.get(key);
   if (cached) {
@@ -68,5 +85,23 @@ export async function ensureShareGuardFlag(
     }
     return cached.value;
   }
-  return (await ask(serverId ?? null)) === true;
+  return (await ask(serverId ?? null)) ?? OFF;
+}
+
+/** Whether THIS share runs under the guard. Decided before the picker opens and carried on the intent. */
+export async function ensureShareGuardFlag(
+  serverId?: string | null,
+): Promise<boolean> {
+  return (await ensureShareFlags(serverId)).guard;
+}
+
+/**
+ * Whether THIS share is watched for a dead picture (`share_game_capture_hint`).
+ * Same contract as the guard: decided before the picker opens, carried on the
+ * intent, off when unanswered.
+ */
+export async function ensureShareGameCaptureHintFlag(
+  serverId?: string | null,
+): Promise<boolean> {
+  return (await ensureShareFlags(serverId)).gameCaptureHint;
 }

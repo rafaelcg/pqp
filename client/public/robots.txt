@@ -28,6 +28,14 @@ Allow: /tela
 # The watch party waitlist page, the one link the campaign shares.
 Allow: /watch-party
 
+# Who makes pqp and how to reach them, under both of its names.
+Allow: /contact
+Allow: /contato
+
+# The page outreach sends a streamer to, under both of its names.
+Allow: /streamers
+Allow: /criadores
+
 # Invite links, and the one exception under /app. This is not permission to
 # index them — the edge middleware writes `noindex, nofollow` into every one of
 # these pages (see client/src/lib/invite-meta.ts). It is permission to FETCH

@@ -95,6 +95,8 @@ describe("validateHandle", () => {
     expect(validateHandle("tela")).toBe("reserved");
     expect(validateHandle("watch-party")).toBe("reserved");
     expect(validateHandle("watchparty")).toBe("reserved");
+    expect(validateHandle("streamers")).toBe("reserved");
+    expect(validateHandle("criadores")).toBe("reserved");
   });
 
   it("reserves the desktop browser-login path", () => {

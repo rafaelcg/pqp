@@ -194,6 +194,15 @@ struct RootView: View {
         }
         .animation(Motion.standard, value: voice.isCollapsed)
         .animation(Motion.standard, value: voice.isLive)
+        // Landscape is unlocked only while a shared screen is fullscreen
+        // (`ScreenShareFullscreenView`), and that view hands the unlock back
+        // when it goes. This is the net under it: with no screen being shared
+        // anywhere, nothing can be fullscreen, so whatever claim is still
+        // standing (the room or the call ended and the cover went down with
+        // its presenter) is dropped and the app goes back to portrait.
+        .onChange(of: voice.remoteScreen == nil && call.remoteScreen == nil) { _, none in
+            if none { WatchOrientation.releaseAllScreenShares() }
+        }
         // Presented from the root rather than from the chat screen: a call
         // answered from the servers tab has to have somewhere to appear, and
         // collapsing it must not depend on which screen started it.

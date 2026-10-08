@@ -8,6 +8,14 @@ import {
 } from "../voice/hls-viewer-counts.js";
 import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import {
+  streamAlertMetrics,
+  type StreamAlertMetrics,
+} from "./stream-alerts.js";
+import {
+  communityHomeTranslationMetrics,
+  type CommunityHomeTranslationMetrics,
+} from "./community-home-translation.js";
+import {
   communityColumns,
   communityTag,
   type CommunityColumns,
@@ -38,7 +46,15 @@ import {
   regionCountryMap,
   sfuRegions,
 } from "../voice/regions.js";
+import {
+  sfuControlPlaneReport,
+  type SfuRegionCallStats,
+} from "../voice/sfu-control-plane.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
+import {
+  audienceModeMetrics,
+  type AudienceModeMetrics,
+} from "../voice/audience.js";
 import {
   getVoiceActivitySnapshot,
   localVoicePeerCount,
@@ -294,6 +310,24 @@ export interface AdminMetrics {
    */
   flags: FeatureFlagMetrics;
   /**
+   * Baú automatic translation (`services/community-home-translation.ts`):
+   * translations done, failed, given up on, skipped (over budget, claimed by
+   * the sibling, flag off, no key), characters sent and the cost the provider
+   * reported, since this process started, plus today's deployment-wide spend
+   * against the daily cap from the database. Live like `flags`: the question it
+   * answers is "is it translating, and why not".
+   */
+  communityHomeTranslation: CommunityHomeTranslationMetrics;
+  /**
+   * The start-of-stream notice (`services/stream-alerts.ts`), since this
+   * process started: shares that armed a timer, those dropped for the flag, the
+   * 20 s debounce or the cooldown, notices claimed, people told, why people
+   * were skipped, sockets delivered, relays, pushes, failures and the slowest
+   * decision. Per process like the push counters: with two instances read each.
+   * Live, never from the 30 s cache.
+   */
+  streamAlerts: StreamAlertMetrics;
+  /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
    *
@@ -548,6 +582,14 @@ export interface AdminMetrics {
      * distinguishes "the optimisation is running" from "no client negotiated
      * it and every frame is still a whole roster".
      */
+    /**
+     * AUDIENCE MODE (`docs/plans/AUDIENCE_MODE.md`), on the instance that
+     * answered, since its last deploy. `enforceFailures` belongs at zero: it
+     * counts participants (or whole boxes) the SFU would not update, each of
+     * which a host was shown as a mic still open. `speakDenied` is the
+     * per-reason count behind the rate-limited `voice.speakDenied` line.
+     */
+    audienceMode: AudienceModeMetrics;
     roster: {
       deltas: number;
       snapshots: number;
@@ -826,9 +868,11 @@ export interface AdminMetrics {
     /**
      * Who is watching (`voice/hls-viewer-counts.ts`). `live` is every
      * broadcast with a viewer seen in the last few minutes, across both API
-     * machines, read from the shared tables and so up to a minute behind; each
-     * has the count now, the peak so far and the distinct accounts. Null when
-     * the query failed. `here` is this process only: its sightings by source
+     * machines; each has the count now (`liveViewers`: distinct accounts with
+     * a heartbeat in the last 45 s, from the machines' presence rows, so the
+     * same number the app's live card shows with `watch_party_server_audience`
+     * on), the peak so far (stored rows, a flush behind) and the distinct
+     * accounts. Null when the query failed. `here` is this process only: its sightings by source
      * since boot, and whether its once-a-minute flush is landing.
      */
     viewers: {
@@ -1107,6 +1151,8 @@ type CachedMetrics = Omit<
   | "instanceCount"
   | "cluster"
   | "flags"
+  | "communityHomeTranslation"
+  | "streamAlerts"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1601,6 +1647,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       registry: voice.registry,
       seats: voice.seats,
       roster: voice.roster,
+      audienceMode: audienceModeMetrics(),
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);
         return {
@@ -1867,13 +1914,15 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions, flags] = await Promise.all([
-    getCachedMetrics(),
-    checkReady(),
-    readSfuStats(),
-    sfuRegionsReport(),
-    featureFlagMetrics(),
-  ]);
+  const [payload, ready, sfu, sfuRegions, flags, communityHomeTranslation] =
+    await Promise.all([
+      getCachedMetrics(),
+      checkReady(),
+      readSfuStats(),
+      sfuRegionsReport(),
+      featureFlagMetrics(),
+      communityHomeTranslationMetrics(),
+    ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
   return {
@@ -1886,6 +1935,8 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfu,
     sfuRegions,
     flags,
+    communityHomeTranslation,
+    streamAlerts: streamAlertMetrics(),
   };
 }
 
@@ -1897,6 +1948,16 @@ export interface SfuRegionsReport {
   countries: Record<string, string>;
   pinnedRooms: Record<string, number>;
   countryHeader: { with: number; without: number };
+  /**
+   * This process's control-plane calls to each SFU box (`listRooms`,
+   * `listParticipants` and the writes after them), per region: calls,
+   * failures by class, calls skipped by the circuit, p50/p95/p99 of the
+   * answers, the budget a speculative read gets right now and whether the
+   * circuit is open. Per process, like `pinnedRooms`: with two instances read
+   * each one, because the thing measured is that process's path to the box.
+   * Null in single-region mode. `voice/sfu-control-plane.ts`.
+   */
+  controlPlane: Record<string, SfuRegionCallStats> | null;
 }
 
 async function sfuRegionsReport(): Promise<SfuRegionsReport> {
@@ -1908,6 +1969,9 @@ async function sfuRegionsReport(): Promise<SfuRegionsReport> {
     countries: Object.fromEntries(regionCountryMap(configured)),
     pinnedRooms: pinnedRoomRegionCounts(),
     countryHeader: countryHeaderStats(),
+    controlPlane: configured
+      ? sfuControlPlaneReport(configured.map((region) => region.id))
+      : null,
   };
 }
 

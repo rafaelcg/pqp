@@ -14,6 +14,7 @@ import {
   renderMarketingHead,
   LANDING_FAQ,
   SOFTWARE_OPERATING_SYSTEMS,
+  STREAMERS_FAQ,
   TELA_FAQ,
   VEM_FAQ,
   VS_DISCORD_FAQ,
@@ -47,9 +48,13 @@ describe("marketingPageFromMetaPath", () => {
       "/claim",
       "/watch-party",
       "/watchparty",
+      "/streamers",
+      "/criadores",
       "/privacy",
       "/terms",
       "/cookies",
+      "/contact",
+      "/contato",
       "/status",
     ];
     for (const page of pages) {
@@ -108,6 +113,10 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/claim", prefix: "claim" },
     { path: "/watch-party", prefix: "watchPartyPage" },
     { path: "/watchparty", prefix: "watchPartyPage" },
+    { path: "/streamers", prefix: "streamersPage" },
+    { path: "/criadores", prefix: "streamersPage" },
+    { path: "/contact", prefix: "contactPage" },
+    { path: "/contato", prefix: "contactPage" },
   ];
 
   for (const { path, prefix } of PINNED) {
@@ -322,6 +331,122 @@ describe("the /vem campaign page", () => {
   });
 });
 
+describe("the /streamers page", () => {
+  const ids = ["share", "bring", "obs", "size", "cost", "need", "help"] as const;
+
+  it("every FAQ pair matches its streamersPage.faq.* twin, in all three languages", () => {
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      expect(STREAMERS_FAQ[locale]).toHaveLength(ids.length);
+      ids.forEach((id, index) => {
+        expect(STREAMERS_FAQ[locale][index], `${locale} ${id}`).toEqual({
+          question: (catalogue as Record<string, string>)[`streamersPage.faq.${id}.q`],
+          answer: (catalogue as Record<string, string>)[`streamersPage.faq.${id}.a`],
+        });
+      });
+    }
+  });
+
+  it("is one page under two names, canonical /streamers in every language", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const main = marketingUrlsFor("/streamers", locale);
+      expect(marketingUrlsFor("/criadores", locale)).toEqual(main);
+    }
+    expect(renderMarketingHead("/criadores", "pt-BR")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/streamers" />',
+    );
+    expect(renderMarketingHead("/streamers", "es")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/streamers?lang=es" />',
+    );
+    expect(renderMarketingHead("/streamers", "en")).toContain(
+      '<link rel="alternate" hreflang="es" href="https://pqp.gg/streamers?lang=es" />',
+    );
+  });
+
+  it("carries its own 1200 x 630 card per language, and says what it is", () => {
+    for (const [locale, file] of [
+      ["pt-BR", "og-streamers.jpg"],
+      ["en", "og-streamers-en.jpg"],
+      ["es", "og-streamers-es.jpg"],
+    ] as const) {
+      const head = renderMarketingHead("/streamers", locale);
+      expect(head).toContain(
+        `<meta property="og:image" content="https://pqp.gg/images/${file}" />`,
+      );
+      expect(head).toContain('<meta property="og:image:width" content="1200" />');
+      expect(head).toContain('<meta property="og:image:height" content="630" />');
+      expect(head).toContain('<meta property="og:image:alt" content="pqp ');
+      expect(head).toContain('<meta name="twitter:image:alt" content="pqp ');
+      expect(head).toContain('"FAQPage"');
+      expect(head).toContain(`<meta name="pqp:locale" content="${locale}" />`);
+    }
+  });
+
+  it("names nothing a person would need the rights to show, anywhere it is served", () => {
+    // Rafael, 2026-10-05: the page implies what people watch and never says
+    // it, in any language. An ad of ours was refused over exactly that.
+    // One letter of each word in brackets, so a grep of the repository for
+    // these words finds copy, not this guard.
+    const banned = /fi[l]me|ci[n]ema|s[ée]rie|mo[v]ie|fi[l]m|pel[ií]cula|ne[t]flix|di[s]ney/i;
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      expect(renderMarketingHead("/streamers", locale)).not.toMatch(banned);
+    }
+    for (const catalogue of [en, ptBR, es]) {
+      for (const [key, value] of Object.entries(catalogue)) {
+        if (!key.startsWith("streamersPage.")) continue;
+        expect(value, key).not.toMatch(banned);
+      }
+    }
+  });
+});
+
+describe("the /contact page", () => {
+  it("is one page under two names, canonical /contact in every language", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const main = marketingUrlsFor("/contact", locale);
+      expect(marketingUrlsFor("/contato", locale)).toEqual(main);
+    }
+    expect(renderMarketingHead("/contato", "pt-BR")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/contact" />',
+    );
+    expect(renderMarketingHead("/contact", "es")).toContain(
+      '<link rel="canonical" href="https://pqp.gg/contact?lang=es" />',
+    );
+    expect(renderMarketingHead("/contact", "en")).toContain(
+      '<link rel="alternate" hreflang="es" href="https://pqp.gg/contact?lang=es" />',
+    );
+  });
+
+  it("is indexable and carries the product card", () => {
+    const head = renderMarketingHead("/contact", "en");
+    expect(head).toContain('<meta name="robots" content="index, follow" />');
+    expect(head).toContain("https://pqp.gg/images/og-image.jpg");
+  });
+
+  it("gives the one public address as a contact point, and nothing else about a person", () => {
+    const head = renderMarketingHead("/contact", "en");
+    expect(head).toContain('"contactPoint"');
+    expect(head).toContain("contato@pqp.gg");
+    expect(head).not.toMatch(/"address"|"founder"|"telephone"|"employee"/);
+  });
+
+  it("keeps Discord, films and places out of the search copy", () => {
+    // The independence sentence lives on the page; the head only describes it.
+    const banned =
+      /discord|fi[l]me|ci[n]ema|s[ée]ri[e]s?\b|mo[v]ie|pel[ií]cula|ne[t]flix|di[s]ney|brasil|brazil|reino unido|united kingdom/i;
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const head = renderMarketingHead("/contact", locale);
+      const title = /<title>(.*?)<\/title>/.exec(head)![1]!;
+      const description = /name="description" content="(.*?)"/.exec(head)![1]!;
+      expect(title, locale).not.toMatch(banned);
+      expect(description, locale).not.toMatch(banned);
+    }
+  });
+});
+
 describe("Spanish", () => {
   it("serves the Spanish head, card and FAQ for /vem, stamped es", () => {
     const head = renderMarketingHead("/vem", "es");
@@ -345,6 +470,8 @@ describe("Spanish", () => {
       ["/download", "downloadPage"],
       ["/claim", "claim"],
       ["/watch-party", "watchPartyPage"],
+      ["/streamers", "streamersPage"],
+      ["/contact", "contactPage"],
     ] as const) {
       const head = renderMarketingHead(path, "es");
       expect(head, path).toContain(
@@ -469,6 +596,11 @@ describe("renderMarketingHead", () => {
     expect(head).toContain('<meta property="og:image:height" content="630" />');
     // `/vem` has its own art at its own size: say nothing rather than lie.
     expect(renderMarketingHead("/vem", "en")).not.toContain("og:image:width");
+    // `/streamers` has its own card drawn at the product card's size, and
+    // declares it.
+    expect(renderMarketingHead("/streamers", "en")).toContain(
+      '<meta property="og:image:width" content="1200" />',
+    );
   });
 
   it("carries FAQPage JSON-LD on /, /vs-discord and /tela only", () => {

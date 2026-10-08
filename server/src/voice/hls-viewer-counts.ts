@@ -56,15 +56,50 @@ import {
  * covers it within `HLS_VIEWER_PRESENT_TOLERANCE_MS` (one heartbeat and its
  * timer jitter). That reading is filed under the minute of the instant.
  *
- * `HLS_VIEWER_LIVE_WINDOW_MS` is only for the operator's "watching now" and
- * this process's own memory: seen within two minutes, knowingly loose.
+ * WATCHING RIGHT NOW is a different question from either of the above, and
+ * the stored rows cannot answer it: they are flushed once a minute, so a
+ * viewer who is on the playlist this second can have a `last_seen_at` a
+ * minute and a half old, and any window short enough to mean "now" undercounts
+ * (a 45 s window over the rows read 73 for a party the loose two minute window
+ * read 97 for). So each process also publishes, every
+ * `HLS_PRESENCE_PUBLISH_INTERVAL_MS`, ONE row of its own
+ * (`hls_session_presence`): the accounts it saw within
+ * `HLS_VIEWER_PRESENT_TOLERANCE_MS`. A reader unions the fresh rows by
+ * account, so two machines never add and neither is a flush behind
+ * (`presentHlsViewers`). That one number is what the operator's `liveViewers`
+ * and the in-app count (`watch_party_server_audience`) both read.
+ * `HLS_VIEWER_LIVE_WINDOW_MS` is now only this process's own memory.
  */
 
 /** Each process writes a broadcast's viewers at most this often. */
 export const HLS_VIEWER_FLUSH_INTERVAL_MS = 60_000;
 
-/** Seen within this long counts as "watching now" on the operator's view. */
+/**
+ * How long this process remembers a viewer it has stored. No longer the
+ * operator's "watching now" (see `HLS_PRESENCE_PUBLISH_INTERVAL_MS`).
+ */
 export const HLS_VIEWER_LIVE_WINDOW_MS = 120_000;
+
+/** Each process republishes who it saw within the tolerance this often. */
+export const HLS_PRESENCE_PUBLISH_INTERVAL_MS = 10_000;
+
+/**
+ * A presence row older than this is ignored: two missed publishes. It is what
+ * takes a dead machine's viewers out of the count without anybody cleaning up.
+ */
+export const HLS_PRESENCE_MAX_AGE_MS = 25_000;
+
+/** Broadcasts one presence tick writes at the same time. */
+const PRESENCE_PUBLISH_CONCURRENCY = 8;
+
+/** One read of a broadcast's count is shared for this long, per process. */
+export const HLS_PRESENCE_READ_CACHE_MS = 5_000;
+
+/**
+ * Sanity cap on one row's ids (16 bytes each). Bounds a bug, not a night: a
+ * 500 viewer party is 8 KB.
+ */
+const MAX_PRESENCE_IDS = 10_000;
 
 /**
  * How far back a flush evaluates concurrency: one flush interval plus the
@@ -138,6 +173,9 @@ interface TrackedSession {
   dirty: boolean;
   lastFlushAt: number;
   flushing: boolean;
+  /** Ids in the presence row this process last wrote; 0 means "empty or none". */
+  presencePublished: number;
+  publishing: boolean;
 }
 
 export interface HlsViewerFlushResult {
@@ -157,6 +195,9 @@ export interface HlsViewerCounterStats {
   viewersHere: number;
   flushes: number;
   flushFailures: number;
+  /** Presence rows written / failed since boot. Failures belong at zero. */
+  presenceWrites: number;
+  presenceFailures: number;
   /** Sightings refused by a sanity cap. Belongs at zero. */
   dropped: number;
 }
@@ -174,6 +215,12 @@ export interface HlsViewerCounter {
    * inside the interval. `force` ignores the interval (shutdown).
    */
   flushDue(options?: { force?: boolean }): Promise<HlsViewerFlushResult[]>;
+  /**
+   * Rewrite this process's presence row for every broadcast it holds viewers
+   * for (and once more, empty, when the last one left). Resolves to the
+   * number of rows written.
+   */
+  publishPresence(): Promise<number>;
   stats(): HlsViewerCounterStats;
   start(): () => Promise<void>;
   resetForTests(): void;
@@ -187,6 +234,7 @@ export function createHlsViewerCounter(
     liveWindowMs?: number;
     evalLagMs?: number;
     presentToleranceMs?: number;
+    presenceIntervalMs?: number;
   } = {},
 ): HlsViewerCounter {
   const now = options.now ?? Date.now;
@@ -196,6 +244,8 @@ export function createHlsViewerCounter(
   const evalLagMs = options.evalLagMs ?? HLS_VIEWER_EVAL_LAG_MS;
   const presentToleranceMs =
     options.presentToleranceMs ?? HLS_VIEWER_PRESENT_TOLERANCE_MS;
+  const presenceIntervalMs =
+    options.presenceIntervalMs ?? HLS_PRESENCE_PUBLISH_INTERVAL_MS;
   const sessions = new Map<string, TrackedSession>();
   // Names this process's share of a viewer's foreground / background time in
   // the row, so two machines add up and a retry of one does not.
@@ -207,6 +257,8 @@ export function createHlsViewerCounter(
   };
   let flushes = 0;
   let flushFailures = 0;
+  let presenceWrites = 0;
+  let presenceFailures = 0;
   let dropped = 0;
   let lastPruneAt = 0;
 
@@ -256,6 +308,8 @@ export function createHlsViewerCounter(
         // not held back a whole interval.
         lastFlushAt: 0,
         flushing: false,
+        presencePublished: 0,
+        publishing: false,
       };
       sessions.set(key, session);
     }
@@ -459,6 +513,13 @@ export function createHlsViewerCounter(
                                - ($2 || ' hours')::interval`,
         [at, String(HLS_VIEWER_ROW_RETENTION_HOURS)],
       );
+      // Presence rows are ignored after seconds; an hour only bounds the
+      // rows of processes and broadcasts that are gone. DB clock, like the
+      // writes.
+      await pool().query(
+        `DELETE FROM hls_session_presence
+          WHERE sampled_at < NOW() - interval '1 hour'`,
+      );
     } catch {
       // The next hour tries again.
     }
@@ -489,6 +550,71 @@ export function createHlsViewerCounter(
     return results;
   }
 
+  async function publishPresence(): Promise<number> {
+    const at = now();
+    const pending = [...sessions.values()];
+    let written = 0;
+    // A few broadcasts at a time, not one after another: a tick must not take
+    // longer than its interval however many parties are live, and not all at
+    // once either (it must never hold more than a handful of pooled connections).
+    for (let from = 0; from < pending.length; from += PRESENCE_PUBLISH_CONCURRENCY) {
+      const results = await Promise.all(
+        pending
+          .slice(from, from + PRESENCE_PUBLISH_CONCURRENCY)
+          .map((session) => publishOne(session, at)),
+      );
+      written += results.filter(Boolean).length;
+    }
+    return written;
+  }
+
+  async function publishOne(session: TrackedSession, at: number): Promise<boolean> {
+    if (session.publishing) {
+      return false;
+    }
+    const ids: string[] = [];
+    for (const [userId, seen] of session.viewers) {
+      if (at - seen.last <= presentToleranceMs) {
+        ids.push(userId);
+        if (ids.length >= MAX_PRESENCE_IDS) {
+          break;
+        }
+      }
+    }
+    // Nobody now and nothing of ours to retract: no write.
+    if (ids.length === 0 && session.presencePublished === 0) {
+      return false;
+    }
+    session.publishing = true;
+    try {
+      // The DATABASE's clock for `sampled_at`, so two machines whose clocks
+      // disagree still agree on which row is fresh. Who counts as present
+      // is this process's own judgement, from its own heartbeats.
+      await pool().query(
+        `INSERT INTO hls_session_presence
+           (channel_id, started_at_ms, instance_id, user_ids, sampled_at)
+         VALUES ($1, $2, $3, $4::uuid[], NOW())
+         ON CONFLICT (channel_id, started_at_ms, instance_id) DO UPDATE
+           SET user_ids = EXCLUDED.user_ids,
+               sampled_at = EXCLUDED.sampled_at`,
+        [session.channelId, session.startedAt, instanceId, ids],
+      );
+      session.presencePublished = ids.length;
+      presenceWrites += 1;
+      return true;
+    } catch (error) {
+      presenceFailures += 1;
+      logEvent("voice.hlsPresenceFailed", {
+        channelId: session.channelId,
+        startedAt: session.startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      session.publishing = false;
+    }
+  }
+
   function stats(): HlsViewerCounterStats {
     const at = now();
     let viewersHere = 0;
@@ -505,6 +631,8 @@ export function createHlsViewerCounter(
       viewersHere,
       flushes,
       flushFailures,
+      presenceWrites,
+      presenceFailures,
       dropped,
     };
   }
@@ -517,8 +645,13 @@ export function createHlsViewerCounter(
       void flushDue().catch(() => undefined);
     }, Math.max(1_000, Math.floor(flushIntervalMs / 4)));
     timer.unref?.();
+    const presenceTimer = setInterval(() => {
+      void publishPresence().catch(() => undefined);
+    }, presenceIntervalMs);
+    presenceTimer.unref?.();
     return async () => {
       clearInterval(timer);
+      clearInterval(presenceTimer);
       await flushDue({ force: true }).catch(() => undefined);
     };
   }
@@ -526,6 +659,7 @@ export function createHlsViewerCounter(
   return {
     note,
     flushDue,
+    publishPresence,
     stats,
     start,
     resetForTests() {
@@ -535,6 +669,8 @@ export function createHlsViewerCounter(
       noted.telemetry = 0;
       flushes = 0;
       flushFailures = 0;
+      presenceWrites = 0;
+      presenceFailures = 0;
       dropped = 0;
       lastPruneAt = 0;
     },
@@ -708,6 +844,111 @@ async function queryHlsViewerAudience(limit: number): Promise<HlsViewerAudience[
   });
 }
 
+// -------------------------------------------------------------- watching now
+
+/**
+ * THE NUMBER, for one broadcast: distinct accounts present on the playlist
+ * right now, unioned across every API process's presence row, MINUS the ones
+ * who hold a seat in the channel's voice room. The seat holders are the roster's
+ * to count (the client adds the roster itself), and a seated tab that also
+ * keeps a player open must not be counted by both. `excludeUserIds` is the
+ * seats this process holds; with `VOICE_REGISTRY=postgres` the other
+ * machine's seats are excluded by the query itself, off `voice_peers`.
+ *
+ * Returns null when it cannot be answered (database down, breaker open): the
+ * caller keeps today's number rather than saying zero.
+ *
+ * Cached for `HLS_PRESENCE_READ_CACHE_MS` and coalesced, per broadcast. An
+ * arrival wave asks once per viewer (the `watch-live` answer, `GET /live`), so
+ * without it 500 people arriving is 500 queries; with it, a handful.
+ */
+const presentCache = new Map<string, { at: number; value: number }>();
+const presentInFlight = new Map<string, Promise<number | null>>();
+
+export function resetHlsPresentCacheForTests(): void {
+  presentCache.clear();
+  presentInFlight.clear();
+}
+
+function presentKey(channelId: string, startedAt: number): string {
+  return `${channelId}:${startedAt}`;
+}
+
+/**
+ * The last answer for a broadcast, however old up to `maxAgeMs`, never a
+ * query. For paths that run once per socket in a reconnect storm.
+ */
+export function peekPresentHlsViewers(
+  channelId: string,
+  startedAt: number,
+  maxAgeMs = 2 * 60_000,
+  nowMs: number = Date.now(),
+): number | null {
+  const held = presentCache.get(presentKey(channelId, startedAt));
+  return held && nowMs - held.at <= maxAgeMs ? held.value : null;
+}
+
+export async function presentHlsViewers(
+  channelId: string,
+  startedAt: number,
+  options: { excludeUserIds?: readonly string[]; nowMs?: number } = {},
+): Promise<number | null> {
+  const key = presentKey(channelId, startedAt);
+  const nowMs = options.nowMs ?? Date.now();
+  const held = presentCache.get(key);
+  if (held && nowMs - held.at < HLS_PRESENCE_READ_CACHE_MS) {
+    return held.value;
+  }
+  const running = presentInFlight.get(key);
+  if (running) {
+    return running;
+  }
+  const query = queryPresentHlsViewers(channelId, startedAt, options.excludeUserIds ?? [])
+    .then((value) => {
+      presentCache.set(key, { at: nowMs, value });
+      // Only live broadcasts are ever asked about, so this stays a handful;
+      // the sweep is for the ones that ended.
+      if (presentCache.size > 64) {
+        for (const [entryKey, entry] of presentCache) {
+          if (nowMs - entry.at > 5 * 60_000) {
+            presentCache.delete(entryKey);
+          }
+        }
+      }
+      return value;
+    })
+    .catch(() => null)
+    .finally(() => {
+      presentInFlight.delete(key);
+    });
+  presentInFlight.set(key, query);
+  return query;
+}
+
+async function queryPresentHlsViewers(
+  channelId: string,
+  startedAt: number,
+  excludeUserIds: readonly string[],
+): Promise<number> {
+  const result = await getPool().query<{ n: number }>(
+    `SELECT COUNT(DISTINCT u.user_id)::int AS n
+       FROM hls_session_presence p
+       CROSS JOIN LATERAL unnest(p.user_ids) AS u(user_id)
+      WHERE p.channel_id = $1
+        AND p.started_at_ms = $2
+        AND p.sampled_at >= NOW() - ($3 || ' milliseconds')::interval
+        AND NOT (u.user_id = ANY($4::uuid[]))
+        AND NOT EXISTS (
+          SELECT 1 FROM voice_peers vp
+           WHERE vp.channel_id = $1
+             AND vp.user_id = u.user_id
+             AND vp.orphaned_at IS NULL
+        )`,
+    [channelId, startedAt, String(HLS_PRESENCE_MAX_AGE_MS), [...excludeUserIds]],
+  );
+  return result.rows[0]?.n ?? 0;
+}
+
 export interface LiveHlsViewerSession {
   /** The channel's id, the join key to `voice.rooms`; never a user id. */
   channelId: string;
@@ -724,7 +965,17 @@ export interface LiveHlsViewerSession {
 
 /**
  * Broadcasts with a viewer seen in the last few minutes, across every API
- * process (read from the shared tables, so up to one flush interval behind).
+ * process. `liveViewers` is the ONE definition of "watching now"
+ * (`presentHlsViewers`): distinct accounts the processes' presence rows say
+ * were on the playlist within the heartbeat tolerance, at most
+ * `HLS_PRESENCE_MAX_AGE_MS` ago. It used to be every account seen in the last
+ * two minutes in rows that were themselves a flush behind, which read 97 for a
+ * party the app said had 49 watching. It leaves out accounts that hold a seat in
+ * the channel's voice room (the roster counts them, and the dashboard lists
+ * `inCall` beside it), exactly as the app's count does, so the two add up the
+ * same way. The seats come from `voice_peers`, which only has rows with
+ * `VOICE_REGISTRY=postgres` (production); without it this reads every account
+ * on the playlist. Peak and unique are still the rows'.
  * For `GET /api/admin/metrics`. Names and the channel id, never a user id.
  */
 export async function liveHlsViewerSessions(
@@ -744,10 +995,18 @@ export async function liveHlsViewerSessions(
             srv.name AS server,
             ${communityColumns("srv")},
             st.started_at_ms::text AS started_at_ms,
-            (SELECT COUNT(*)::int FROM hls_session_viewers v
-              WHERE v.channel_id = st.channel_id
-                AND v.started_at_ms = st.started_at_ms
-                AND v.last_seen_at >= NOW() - ($2 || ' milliseconds')::interval) AS live,
+            (SELECT COUNT(DISTINCT u.user_id)::int
+               FROM hls_session_presence p
+               CROSS JOIN LATERAL unnest(p.user_ids) AS u(user_id)
+              WHERE p.channel_id = st.channel_id
+                AND p.started_at_ms = st.started_at_ms
+                AND p.sampled_at >= NOW() - ($2 || ' milliseconds')::interval
+                AND NOT EXISTS (
+                  SELECT 1 FROM voice_peers vp
+                   WHERE vp.channel_id = st.channel_id
+                     AND vp.user_id = u.user_id
+                     AND vp.orphaned_at IS NULL
+                )) AS live,
             st.peak_viewers,
             st.unique_viewers
        FROM hls_session_viewer_stats st
@@ -756,7 +1015,7 @@ export async function liveHlsViewerSessions(
       WHERE st.updated_at >= NOW() - interval '5 minutes'
       ORDER BY live DESC, st.started_at_ms DESC
       LIMIT $1`,
-    [limit, String(HLS_VIEWER_LIVE_WINDOW_MS)],
+    [limit, String(HLS_PRESENCE_MAX_AGE_MS)],
   );
   return result.rows.map((row) => ({
     channelId: row.channel_id,

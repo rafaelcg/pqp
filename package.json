@@ -20,6 +20,8 @@
     "clerk:env": "cd client && clerk env pull && clerk env pull --file ../.env",
     "clerk:doctor": "clerk doctor",
     "load:chat": "node scripts/chat-load.mjs",
+    "stt:bench": "pnpm --filter @pqp/server exec tsx ../tools/stt-bench/src/run.ts",
+    "stt:typecheck": "pnpm --filter @pqp/server exec tsc -p ../tools/stt-bench/tsconfig.json",
     "ambient:test": "cd tools/ambient && npm test",
     "ambient:scene": "cd tools/ambient && node src/runner.js --once --canned",
     "support:test": "cd tools/support-bot && npm test",

@@ -36,7 +36,7 @@ describe("VoiceTrackModeToggle", () => {
 
   it("names both options and explains the choice", () => {
     const html = render(<VoiceTrackModeToggle mode="junto" onChange={() => {}} />);
-    expect(html).toContain("With the film");
+    expect(html).toContain("With the stream");
     expect(html).toContain("Separate");
   });
 });

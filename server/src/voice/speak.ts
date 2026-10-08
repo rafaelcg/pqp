@@ -3,9 +3,11 @@ import {
   hasPermission,
   isWatchPartyChannelType,
   Permission,
+  type SpeakReason,
 } from "@pqp/shared";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { loadWatchPartySeat } from "../services/watch-parties.js";
+import { applyAudienceMode, loadAudience, type AudienceRoom } from "./audience.js";
 
 export interface VoicePublishGrant {
   canSpeak: boolean;
@@ -19,6 +21,11 @@ export interface VoicePublishGrant {
   canShowFace: boolean;
   /** `Permission.MANAGE_MUSIC`; true where there are no cargos. */
   canManageMusic: boolean;
+  /**
+   * Why `canSpeak` is false, when it is: the channel's permissions, or
+   * audience mode (`voice/audience.ts`). Null when the mic is not locked.
+   */
+  speakReason: SpeakReason | null;
 }
 
 /**
@@ -38,6 +45,13 @@ export interface VoicePublishGrant {
  *
  * Permissive by default: a channel this cannot place (no server id) answers
  * true, so nothing that worked before these bits were enforced goes quiet.
+ *
+ * AUDIENCE MODE is applied here, last, so it reaches every caller above at
+ * once: a token minted mid-call, and a role edit while it is on, cannot hand
+ * the audience back a microphone (`applyAudienceMode`, which only ever takes
+ * away). `options.audience` is the room's state when the caller already has
+ * it (the live re-check reads it once per room); absent, it is read here
+ * (`loadAudience`: nothing at all unless the flag is on for the server).
  */
 export async function resolveVoicePublish(
   channel:
@@ -51,9 +65,16 @@ export async function resolveVoicePublish(
     | undefined,
   channelId: string,
   userId: string,
+  options: { audience?: AudienceRoom | null } = {},
 ): Promise<VoicePublishGrant> {
   if (!channel || channel.kind !== "server" || !channel.server_id) {
-    return { canSpeak: true, canStream: true, canShowFace: false, canManageMusic: true };
+    return {
+      canSpeak: true,
+      canStream: true,
+      canShowFace: false,
+      canManageMusic: true,
+      speakReason: null,
+    };
   }
   // Hand over the row when the caller has one. `type` and `parent_id` are the
   // only two columns the overwrite pass would otherwise re-read the channel
@@ -85,12 +106,19 @@ export async function resolveVoicePublish(
     const seat = await loadWatchPartySeat(channelId, userId);
     canShowFace = Boolean(seat?.isGuest && seat.guests !== "off");
   }
-  return {
-    canSpeak: hasPermission(perms, Permission.SPEAK),
-    canStream,
-    canShowFace,
-    canManageMusic: hasPermission(perms, Permission.MANAGE_MUSIC),
-  };
+  const audience =
+    options.audience !== undefined
+      ? options.audience
+      : await loadAudience(channel, channelId);
+  return applyAudienceMode(
+    {
+      canSpeak: hasPermission(perms, Permission.SPEAK),
+      canStream,
+      canShowFace,
+      canManageMusic: hasPermission(perms, Permission.MANAGE_MUSIC),
+    },
+    { audience, permissions: perms, userId },
+  );
 }
 
 export async function resolveCanSpeak(

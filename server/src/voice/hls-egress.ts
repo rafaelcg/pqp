@@ -1875,6 +1875,30 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off.
    */
   fastStart: boolean;
+  /**
+   * `watch_camera_sync` (runtime flag, off by default, per server): whether a
+   * viewer's camera player holds itself to the film's wall clock
+   * (`client/src/lib/camera-sync.ts`). Client behaviour only, like
+   * `fastStart`: the stream is untouched. Absent on an older API, which the
+   * client reads as off.
+   */
+  cameraSync: boolean;
+  /**
+   * `watch_now_banner` (runtime flag, off by default, per server): whether the
+   * client shows the "Assistir" banner over a text channel while somebody in
+   * the server shares a screen or a watch party is live. Client behaviour
+   * only: the frames it is derived from are sent either way. The
+   * deployment-wide answer is the global value, which is what a conversation
+   * (no server) reads. Absent on an older API, which the client reads as off.
+   * `docs/plans/WATCH_NOW.md`.
+   */
+  watchNowBanner: boolean;
+  /**
+   * `stream_start_notifications` (runtime flag, off by default, per server):
+   * whether the server tells people when a stream starts, and so whether the
+   * client offers the per-server switch. Absent on an older API, read as off.
+   */
+  streamStartNotifications: boolean;
 }
 
 /**
@@ -1894,6 +1918,9 @@ export function liveHlsConfig(): LiveHlsConfig {
     cameraHeight: liveHlsCamera480Enabled() ? 480 : 360,
     llSegmentCadenceDecay: liveHlsLLSegmentCadenceDecayEnabled(),
     fastStart: isEnabled("party_fast_start"),
+    cameraSync: isEnabled("watch_camera_sync"),
+    watchNowBanner: isEnabled("watch_now_banner"),
+    streamStartNotifications: isEnabled("stream_start_notifications"),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -1930,6 +1957,14 @@ export async function liveHlsConfigForServer(
     // Per-server override first, so the operator can turn it on for one
     // community (`feature_flag_overrides`) ahead of everybody else.
     fastStart: isEnabled("party_fast_start", { serverId }),
+    // Same shape: the operator turns the camera sync on for one community
+    // first, then for everybody, from the dashboard with no deploy.
+    cameraSync: isEnabled("watch_camera_sync", { serverId }),
+    // The operator turns the banner and the notices on for one server first.
+    watchNowBanner: isEnabled("watch_now_banner", { serverId }),
+    streamStartNotifications: isEnabled("stream_start_notifications", {
+      serverId,
+    }),
     // Independent of `enabled`/`allowlisted` above (those gate the egress
     // itself, `LIVE_HLS_ENABLED` / `live_hls_enabled`): LL-HLS has its own
     // flag and its own allowlist, so a server with ordinary HLS on can still

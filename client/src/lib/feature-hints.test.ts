@@ -11,6 +11,7 @@ import {
   shouldOfferMusicFieldHint,
   shouldOfferMusicHint,
   shouldOfferShortcutsHint,
+  shouldOfferWatchNowHint,
   shouldOfferWatchPartyHint,
   resetFeatureHintsForTests,
   spendFeatureHintForLoad,
@@ -120,6 +121,40 @@ describe("remember / seen", () => {
     rememberFeatureHint("shortcuts", storage, false);
     expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.shortcuts)).toBeNull();
     expect(isFeatureHintSeen("shortcuts", storage, false)).toBe(false);
+  });
+});
+
+describe("shouldOfferWatchNowHint", () => {
+  const base = {
+    seen: false,
+    automated: false,
+    bannerVisible: true,
+    newcomer: true,
+  };
+
+  it("fires once, for a newcomer, with the strip on screen", () => {
+    expect(shouldOfferWatchNowHint(base)).toBe(true);
+    expect(shouldOfferWatchNowHint({ ...base, seen: true })).toBe(false);
+    expect(shouldOfferWatchNowHint({ ...base, automated: true })).toBe(false);
+    expect(shouldOfferWatchNowHint({ ...base, bannerVisible: false })).toBe(false);
+  });
+
+  it("is not explained to somebody who has been here a while", () => {
+    expect(shouldOfferWatchNowHint({ ...base, newcomer: false })).toBe(false);
+  });
+
+  it("is a moment: it beats the standing tips, and only the dock beats it", () => {
+    expect(winningFeatureHint({ watchNow: true, composerFormat: true, channelPin: true })).toBe(
+      "watchNow",
+    );
+    expect(winningFeatureHint({ watchNow: true, watchParty: true, music: true })).toBe(
+      "watchNow",
+    );
+    expect(winningFeatureHint({ callDock: true, watchNow: true })).toBe("callDock");
+  });
+
+  it("keeps its own remembered key", () => {
+    expect(FEATURE_HINT_STORAGE_KEYS.watchNow).toBe("pqp:feature-hint-watch-now-2026-10");
   });
 });
 

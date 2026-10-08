@@ -456,7 +456,7 @@ describeDb("voice across two instances", () => {
     const db = pools[0]!;
     await db
       .getPool()
-      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`);
+      .query(`TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`);
   });
 
   afterEach(async () => {

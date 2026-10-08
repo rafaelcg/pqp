@@ -1,6 +1,10 @@
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n";
+import {
+  ensureLinuxShellShareAudio,
+  linuxShellShareAudioReady,
+} from "@/lib/linux-shell-share-audio";
 import {
   rememberLinuxShareAudioHint,
   shouldShowLinuxShareAudioHint,
@@ -30,7 +34,27 @@ export function LinuxShareAudioHint({
   const { t } = useTranslation();
   const [eligible] = useState(() => shouldShowLinuxShareAudioHint());
   const [open, setOpen] = useState(true);
-  const show = eligible && visible && open;
+  // The desktop copy says "this app cannot share sound". Once the runtime
+  // flag and the shell say it can (`lib/linux-shell-share-audio.ts`), that
+  // is no longer true, so the hint steps aside.
+  const [shellCarriesSound, setShellCarriesSound] = useState(
+    () => isDesktopShell && linuxShellShareAudioReady(),
+  );
+  useEffect(() => {
+    if (!isDesktopShell || !eligible) {
+      return;
+    }
+    let live = true;
+    void ensureLinuxShellShareAudio().then((ready) => {
+      if (live) {
+        setShellCarriesSound(ready);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [isDesktopShell, eligible]);
+  const show = eligible && visible && open && !shellCarriesSound;
 
   if (!show) {
     return null;

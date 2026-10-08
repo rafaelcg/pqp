@@ -70,9 +70,16 @@
         // the two pages most likely to be somebody's first impression.
         const path = location.pathname.replace(/\/+$/, "") || "/";
         if (
-          ["/", "/privacy", "/terms", "/cookies", "/garanta", "/claim"].includes(
-            path,
-          ) ||
+          [
+            "/",
+            "/privacy",
+            "/terms",
+            "/cookies",
+            "/contact",
+            "/contato",
+            "/garanta",
+            "/claim",
+          ].includes(path) ||
           path.startsWith("/@")
         ) {
           theme = "dark";

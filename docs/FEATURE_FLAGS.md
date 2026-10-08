@@ -100,9 +100,38 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVE_HLS_CAMERA`, `LIVE_HLS_CAMERA_480`, `LIVE_HLS_VOICE_TRACK`,
 `LIVE_HLS_MIC_ARCHIVE`, `LIVE_HLS_REAP_ORPHANS`, `HLS_SHARER_RESUME_HOLD`,
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
+`SFU_REGION_SCOPED_CALLS` (`sfu_region_scoped_calls`, default **on**: SFU
+moderation asks only the box a room lives on, with a per-region budget and
+circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
+see `docs/plans/SFU_REGIONS.md` §"The control plane"),
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
-`PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below).
+`PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
+`COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
+default off; automatic translation of Baú posts, which also needs
+`OPENROUTER_API_KEY` on the API: no key, no translation, no error; served to
+the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
+`docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+`WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
+off, born as a flag): the in-app watch party count is the server's, distinct
+accounts on the playlist from every API machine, instead of the sockets one
+machine counted. Served as `viewers` on `channel-live` and `GET
+/api/channels/:id/live`; absent with the flag off, which is the old frame byte for
+byte. Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "watch_party_server_audience", serverId, enabled: true }` or from controles →
+interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
+`docs/WATCH_PARTY.md` §"How many people watched".
+
+Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
+default off, **per server**, client-only), the presenter's camera held to the
+film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),
+served as `cameraSync` on `GET /api/live-hls/config`. Measured on the real
+player (`client/e2e/camera-sync/`, numbers in `docs/WATCH_PARTY.md` §"The camera
+follows the film"), and still off until a person has checked it on a real
+party: turn it on for one test server (the server's override), then globally.
+Off, the camera plays loose exactly as before: nothing writes its rate or its
+position, and nothing reads the film's clock. Only `true` turns the variable
+on. An API older than the flag sends no field, which the client reads as off.
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
@@ -133,6 +162,107 @@ the client behaves exactly as before: no constraint is written, the shell is tol
 nothing. `pqpShareHealth()` in the console works either way. Design, evidence
 and the test steps: `docs/DESKTOP.md` §"A share next to a game at a very high
 frame rate".
+
+Also born as a flag: `SHARE_GAME_CAPTURE_HINT` (`share_game_capture_hint`,
+default off, **per server**), served by the same `GET /api/share/config?serverId=`
+as `shareGameCaptureHint`. On the Windows desktop app, the presenter's client
+samples its own share for the first minute (a 32x18 luma grid every 2 s, nothing
+kept or sent) and, when the picture is black, no frame arrives for 8 s, or the
+capture ends by itself, asks the shell whether Windows sees a Direct3D app in
+exclusive fullscreen (`SHQueryUserNotificationState`). Only a yes shows the
+presenter one card with the fix (the game's "Fullscreen Windowed" or borderless
+mode) and a "não mostrar de novo". It changes nothing about the capture: there is
+no safe code-side fix in Electron 44 (see the doc). Off, the client samples
+nothing and asks the shell nothing. Needs a desktop build that publishes
+`capabilities.fullscreenAppState`; an older shell answers "cannot tell" and the
+card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
+Windowed".
+
+Born as a flag (no old reader): `SHARE_FAST_START_QUALITY`
+(`share_fast_start_quality`, default off, **per server**), served to the client
+by `GET /api/share/config?serverId=` as `shareFastStartQuality`. How a screen
+share's picture starts in an SFU call, client only (`client/src/lib/share-fast-start.ts`):
+
+- **Viewer:** the share's layer is asked for as soon as the publication is
+  known (the join response, or the moment the share is published), before the
+  subscription is bound, at the layer a 720-line stage wants. LiveKit binds an
+  adaptive-stream subscriber at the 360p copy until the first settings arrive,
+  and the client used to send them only after the bind.
+- **Presenter:** crossing twenty people (`LARGE_ROOM_PARTICIPANTS`) no longer
+  unpublishes and republishes the share, which blanked every viewer and
+  restarted every subscription; the top layer's ceiling moves in place.
+- **Presenter:** the capture really comes down to the planned height. Chrome
+  ignores `height: { max: 720 }` while the share's opening `width: { max: 1920 }`
+  is still in the constraints, so the large-room cap never reached the
+  capture; the width ceiling is now scaled to the height. Never applied to a
+  watch party's source.
+
+No new copy, no bandwidth change per viewer (the same layers and ceilings, see
+`client/e2e/share-fast-start/README.md` for the measurements). Off, the
+session behaves exactly as before. The viewer half reads the call's server
+answer when the media connects, so it is asked for at join
+(`noteCallServer` in `App.tsx`) and cached ten minutes; an answer that arrives
+late only means that one join starts the old way. Turn it on for one server
+from controles → interruptores (the server's override); the next join and the
+next share pick it up.
+
+Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
+(`linux_desktop_system_audio`, default off, **global only**), the computer's
+sound on a screen share from the Linux desktop app, served to the client by
+`GET /api/share/config` as `linuxDesktopSystemAudio`. It only does anything in a
+desktop build whose preload publishes `capabilities.linuxShareAudio`; see
+`electron/lib/linux-share-audio.js`. From desktop 0.2.4 the shell feeds the bus
+by LINKING each app's stream on PipeWire (pinned Proton games and native
+PipeWire apps such as Flathub Spotify included, which 0.2.3 could not move) and
+writes what it did per stream to `~/.config/pqp/logs/linux-share-audio.json`;
+`docs/DESKTOP.md` §"Linux share audio: what is captured and what is not".
+Global on purpose: the client asks the
+config without a server and keeps one answer per page, so a per-server override
+would be accepted and never read; the registry refuses one. Turn it on from
+controles → interruptores; the page asks again before every share, so there is
+no reload and no desktop update. The server half once went missing from
+the merge that shipped the client (#866 into desktop 0.2.3);
+`server/src/lib/flag-client-contract.test.ts` now fails when a field the client
+reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
+server.
+
+Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
+**per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):
+somebody holding `MUTE_MEMBERS` or `MANAGE_CHANNELS` turns a running call into
+a stage where only the staff and the people they let in can talk, enforced on
+the SFU grant and the WebSocket. Served to the client by
+`GET /api/voice/config?serverId=` as `audienceMode`, which only gates turning it
+ON: a room already in audience mode shows its state and its off switch from the
+room's own frames whatever the flag says. Off for a server is also the kill
+switch: the 15 s audience sweep in `ws/voice.ts` switches off every session
+still running there. Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "audience_mode", serverId, enabled: true }` or from controles →
+interruptores; open tabs show the control on the next config refresh (focus or
+10 min). `server/src/lib/flag-client-contract.test.ts` checks the served field,
+the client reader and the dashboard note.
+
+Born as flags (no old reader), both **off** and **per server**, for the "Watch
+now" feature (`docs/plans/WATCH_NOW.md`):
+
+- `WATCH_NOW_BANNER` (`watch_now_banner`): the "Assistir" banner over a text
+  channel while somebody in the server shares a screen or a watch party is
+  live. Client-only (the roster and `watch-party-update` frames it reads are
+  sent either way). Served as `watchNowBanner` on `GET
+  /api/live-hls/config?serverId=` (the deployment-wide answer, which a
+  conversation reads, is the global value). Turn it on for one server:
+  `PUT /api/admin/flag-overrides { key: "watch_now_banner", serverId, enabled: true }`;
+  `enabled: null` returns to the default. Open tabs follow on the next config
+  refresh (focus or 10 min).
+- `STREAM_START_NOTIFICATIONS` (`stream_start_notifications`): the start-of-stream
+  notice. The one that can interrupt people, so it is separate from the banner.
+  Served as `streamStartNotifications` on the same config answer. Turn it on for
+  one server: `PUT /api/admin/flag-overrides { key: "stream_start_notifications",
+  serverId, enabled: true }`. Limits that hold with it on: the share must be
+  stable for 20 s, one notice per channel per 30 min, a server above 200 members
+  and every community notify only people who opted in for that server
+  (`notifications.streamAlerts[serverId]`), at most 500 recipients per notice.
+  `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
+  reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
 
 Staying environment-only, on purpose:
 

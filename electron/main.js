@@ -16,6 +16,7 @@ const {
   MessageChannelMain,
   clipboard,
 } = require("electron");
+const { execFile, execFileSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -52,6 +53,10 @@ const {
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
 const {
+  createLinuxShareAudio,
+  SHARE_SOURCE_LABEL: LINUX_SHARE_SOURCE_LABEL,
+} = require("./lib/linux-share-audio");
+const {
   isAcceptableAccelerator,
   createHoldTracker,
 } = require("./lib/global-ptt");
@@ -78,6 +83,8 @@ const {
 } = require("./lib/tray-state");
 const { createShareAudioController } = require("./lib/win-share-audio-session");
 const { createSharePriority } = require("./lib/share-priority");
+const { createFullscreenState } = require("./lib/fullscreen-state");
+const { screenCapturerFor } = require("./lib/capture-backend");
 const { summariseGpuStatus, formatGpuStatusLine } = require("./lib/gpu-status");
 const {
   PROBE_TONE_PAGE,
@@ -169,6 +176,16 @@ const sharePriority = createSharePriority({
     ABOVE_NORMAL: os.constants.priority.PRIORITY_ABOVE_NORMAL,
   },
   log: (line) => console.log(line),
+});
+
+/**
+ * `share_game_capture_hint`, the shell's half: one question to Windows about
+ * the session, asked only by the page and only when its share already looks
+ * dead. See `lib/fullscreen-state.js`.
+ */
+const fullscreenState = createFullscreenState({
+  platform: process.platform,
+  execFile,
 });
 
 /** Chromium's GPU feature status, read on demand (and once at startup, below). */
@@ -1088,6 +1105,158 @@ function showSourcePicker(labeled, offersNativeAudio) {
 }
 
 /**
+ * The computer's sound in a Linux share, minus the call. See
+ * `lib/linux-share-audio.js` for the routing and why it is not Chromium's own
+ * loopback. Null off Linux, so nothing below can reach `pactl` on a Mac.
+ *
+ * `LC_ALL=C` because `pactl`'s long listings are translated; the timeout
+ * because a sound server that hangs must cost a share its sound, never the
+ * share itself.
+ */
+const PACTL_ENV = { ...process.env, LC_ALL: "C" };
+
+/**
+ * A file that exists only while a share bus may be loaded. It is the one thing
+ * that lets the next launch look for a crashed session's leftovers: with no
+ * marker, startup never talks to the user's sound server at all, which is what
+ * every Linux install without this feature (or with its flag off) must see.
+ */
+function linuxShareAudioMarkerPath() {
+  return path.join(app.getPath("userData"), "linux-share-audio-active");
+}
+
+function setLinuxShareAudioMarker(active) {
+  try {
+    if (active) {
+      fs.writeFileSync(linuxShareAudioMarkerPath(), String(Date.now()));
+    } else {
+      fs.rmSync(linuxShareAudioMarkerPath(), { force: true });
+    }
+  } catch {
+    // A marker that cannot be written costs a crash its startup cleanup; the
+    // next share's own start clears leftovers anyway.
+  }
+}
+
+/**
+ * What the last Linux share did with every playback stream it saw (app name,
+ * binary, process ids, whether it is pqp's, and what happened: linked, moved,
+ * refused with the sound server's own words, kept out). Written only while a
+ * share runs or as it ends, so a bug report can be one `cat` instead of a
+ * guessing game. App names only, the same ones the desktop's sound settings
+ * show; nothing from the call.
+ */
+function linuxShareAudioReportPath() {
+  return path.join(app.getPath("logs"), "linux-share-audio.json");
+}
+
+function writeLinuxShareAudioReport(report) {
+  if (!report) {
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(linuxShareAudioReportPath()), { recursive: true, mode: 0o700 });
+    // Owner-only: it lists which apps were playing, which is nobody else's
+    // business on a shared machine with a traversable home directory.
+    fs.writeFileSync(
+      linuxShareAudioReportPath(),
+      `${JSON.stringify({ shell: app.getVersion(), writtenAt: new Date().toISOString(), ...report }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    fs.chmodSync(linuxShareAudioReportPath(), 0o600);
+  } catch {
+    // A report that cannot be written costs the next bug report its detail.
+  }
+}
+
+/** `execFile` that hands the tool's stderr back on failure ("Failure: Invalid argument"). */
+function runLinuxAudioTool(tool, args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      tool,
+      args,
+      // `pw-dump` of a busy desktop is a few hundred kilobytes of JSON.
+      { env: PACTL_ENV, timeout: 5000, maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout, stderr) =>
+        err ? reject(Object.assign(err, { stderr: String(stderr ?? "") })) : resolve(String(stdout)),
+    );
+  });
+}
+
+const linuxShareAudio =
+  process.platform === "linux"
+    ? createLinuxShareAudio({
+        onActive: setLinuxShareAudioMarker,
+        onReport: writeLinuxShareAudioReport,
+        run: (args) => runLinuxAudioTool("pactl", args),
+        // PipeWire's own tools, for linking instead of moving. The module asks
+        // for `pw-dump` and `pw-link` only, and only once a share has started.
+        runPw: (tool, args) => runLinuxAudioTool(tool, args),
+        subscribe: () => {
+          try {
+            const child = spawn("pactl", ["subscribe"], {
+              env: PACTL_ENV,
+              stdio: ["ignore", "pipe", "ignore"],
+            });
+            child.on("error", () => {});
+            return child;
+          } catch {
+            return null;
+          }
+        },
+        // Every process of this app, the audio service included: that is the
+        // one whose streams carry the call.
+        ownPids: () => new Set(app.getAppMetrics().map((m) => String(m.pid))),
+        // Our own executable's name: a second way to recognise the call, for
+        // a stream whose process ids say nothing useful.
+        ownBinaries: () => new Set([path.basename(process.execPath)]),
+        log: (...parts) => console.log("[pqp] linux share audio:", ...parts),
+      })
+    : null;
+
+let linuxShareAudioStartSeq = 0;
+
+/** How long a share may wait on the sound server before going out silent. */
+const LINUX_SHARE_AUDIO_START_TIMEOUT_MS = 3000;
+
+async function startLinuxShareAudio() {
+  if (!linuxShareAudio) {
+    return { ok: false, reason: "not-linux" };
+  }
+  let timer = null;
+  const requested = ++linuxShareAudioStartSeq;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ok: false, reason: "timeout" }),
+      LINUX_SHARE_AUDIO_START_TIMEOUT_MS,
+    );
+  });
+  const starting = linuxShareAudio.start();
+  try {
+    const outcome = await Promise.race([starting, timeout]);
+    if (outcome.reason === "timeout") {
+      // This share is going out silent, so a bus that finishes loading later
+      // would reroute other apps for nobody. Take it down when it lands,
+      // unless a newer share asked for one in the meantime.
+      starting
+        .then((late) => {
+          if (late?.ok && requested === linuxShareAudioStartSeq) {
+            return linuxShareAudio.stop();
+          }
+          return undefined;
+        })
+        .catch(() => {});
+    }
+    return outcome;
+  } catch (err) {
+    console.warn("[pqp] linux share audio failed to start:", err?.message ?? err);
+    return { ok: false, reason: "error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * The whole "which surface?" decision, from permission to callback payload.
  *
  * Order matters. macOS raises its own screen-recording prompt on the FIRST
@@ -1106,6 +1275,10 @@ async function chooseDisplaySource(audioRequested) {
   // Read first and exactly once per request: an arm is good for the next
   // share only, including one that ends at the permission dialog below.
   const nativeAudio = platform === "win32" && shareAudioController?.consumeArm() === true;
+  // Same rule on Linux: the page arms right before a share it has asked the
+  // person about, with the runtime flag on. A request that merely carries
+  // `audioRequested` (a console probe, a stale page) never builds the bus.
+  const linuxAudioArmed = platform === "linux" && linuxShareAudio?.consumeArm() === true;
   // Whatever the last share left running belongs to a share that is over.
   shareAudioController?.stop();
 
@@ -1167,6 +1340,20 @@ async function chooseDisplaySource(audioRequested) {
       shareAudio().start({ sourceId: source.id });
     }
     return captureResponse(source, platform, false, os.release());
+  }
+  // LINUX: the consent is the page's own "share this computer's audio?"
+  // prompt, because on Wayland the portal pre-picks the surface and this
+  // picker never opens. The page only arms and asks for audio here when the
+  // runtime flag is on AND the person said yes, so `audioRequested` is that
+  // answer and the arm is the proof the page asked.
+  // The sound never rides on this callback (Chromium's loopback would carry
+  // the call, see `captureResponse`); the renderer opens the source this
+  // builds, by name, once `getDisplayMedia` has resolved.
+  if (linuxAudioArmed && audioRequested) {
+    const started = await startLinuxShareAudio();
+    if (!started.ok) {
+      console.warn("[pqp] linux share audio unavailable:", started.reason);
+    }
   }
   // The picker checkbox is the consent. `audioRequested` is only whether the
   // page asked for a track Chromium will accept; an auto-pick (one surface,
@@ -1995,6 +2182,21 @@ if (probingShareAudio) {
 } else if (!gotLock) {
   app.quit();
 } else {
+  // A file dragged out of Finder / Explorer and let go over ANY of our windows
+  // is a navigation to `file://...` unless something stops it, and the window
+  // it replaces is the app. The main window's own `will-navigate` handler
+  // already blocks it (`classifyNavigation` answers "block" for a local file,
+  // see lib/nav-policy.js); this covers every other web contents (the sign-in
+  // popup, a window opened later) with the same verdict so no window is the
+  // exception. `loadFile` / `loadURL` are programmatic and never reach this.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (event, url) => {
+      if (classifyNavigation(url, null) === "block" && /^(file|filesystem):/i.test(url)) {
+        event.preventDefault();
+      }
+    });
+  });
+
   app.on("second-instance", (_event, argv) => {
     collectDeepLinkFromArgv(argv);
     // `showMainWindow` rather than focus: the first instance may be hidden in
@@ -2033,6 +2235,47 @@ if (probingShareAudio) {
       return { active: false, url: null };
     }
     return desktopAuth.status();
+  });
+
+  // Linux share audio. `status` is asked before a share, to decide whether to
+  // offer the sound at all; `claim` after `getDisplayMedia` resolved, and
+  // names the source to open when this share's bus is up. Both answer "no" off
+  // Linux and to any frame that is not the app.
+  ipcMain.handle("pqp:linux-share-audio-status", async (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { available: false, server: null };
+    }
+    const probe = await linuxShareAudio.probe().catch(() => null);
+    return {
+      available: probe?.available === true,
+      server: probe?.server ?? null,
+    };
+  });
+
+  ipcMain.handle("pqp:linux-share-audio-arm", (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
+    linuxShareAudio.arm();
+    return true;
+  });
+
+  ipcMain.handle("pqp:linux-share-audio-claim", (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { active: false, label: null };
+    }
+    const active = linuxShareAudio.isActive();
+    return { active, label: active ? LINUX_SHARE_SOURCE_LABEL : null };
+  });
+
+  // What the live (or last) Linux share did with each stream, for the share
+  // diagnostic page. Memory only: reads nothing from the sound server and
+  // spawns nothing.
+  ipcMain.handle("pqp:linux-share-audio-diagnostics", (event) => {
+    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return null;
+    }
+    return linuxShareAudio.diagnostics();
   });
 
   ipcMain.handle("pqp:get-pending-desktop-auth-ticket", (event) => {
@@ -2248,7 +2491,21 @@ if (probingShareAudio) {
       },
       gpu: gpuStatusSummary(),
       priority: sharePriority.status(),
+      capture: screenCapturerFor(process.platform, os.release()),
     };
+  });
+
+  /**
+   * `share_game_capture_hint`: is a Direct3D app holding the display in
+   * exclusive fullscreen right now (`SHQueryUserNotificationState`)? Asked by
+   * the page only when it already suspects a dead share. Never touches the
+   * game: see `lib/fullscreen-state.js`. App window only.
+   */
+  ipcMain.handle("pqp:fullscreen-app-state", async (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { state: "unsupported", raw: null, exclusiveFullscreen: null };
+    }
+    return fullscreenState.query();
   });
 
   ipcMain.on("pqp:voice-state", (_event, payload) => {
@@ -2298,6 +2555,22 @@ if (probingShareAudio) {
     }
 
     console.log(`[pqp] Loading ${appUrl}`);
+    // A share bus left by a crash (or a kill) is harmless but visible in the
+    // desktop's sound settings. Clear it before anybody can share again, but
+    // only when the marker says a session was live and never ended: otherwise
+    // this launch does not touch the sound server at all.
+    if (linuxShareAudio && fs.existsSync(linuxShareAudioMarkerPath())) {
+      linuxShareAudio
+        .cleanup()
+        .then((remaining) => {
+          // Kept while anything of ours is still loaded: the next launch
+          // looks again instead of forgetting it.
+          if (remaining === 0) {
+            setLinuxShareAudioMarker(false);
+          }
+        })
+        .catch(() => {});
+    }
     const allowedOrigin = configureSessionSecurity(appUrl);
     // A shell that has just been updated must not load the site out of the
     // service worker and HTTP cache the PREVIOUS shell left in this profile: a
@@ -2360,6 +2633,24 @@ if (probingShareAudio) {
     globalVoiceRegistered = { toggleMute: null, toggleDeafen: null };
     globalShortcut.unregisterAll();
     shareAudioController?.dispose();
+    // Synchronously, because nothing async runs after this event. Every app
+    // sitting on the share bus falls back to the default output when it goes.
+    const busModules = linuxShareAudio?.activeModules().reverse() ?? [];
+    let unloadFailed = false;
+    for (const index of busModules) {
+      try {
+        execFileSync("pactl", ["unload-module", String(index)], {
+          env: PACTL_ENV,
+          timeout: 1000,
+        });
+      } catch {
+        // Next launch's cleanup takes what this could not: the marker stays.
+        unloadFailed = true;
+      }
+    }
+    if (busModules.length > 0 && !unloadFailed) {
+      setLinuxShareAudioMarker(false);
+    }
     if (tray && !tray.isDestroyed()) {
       tray.destroy();
     }

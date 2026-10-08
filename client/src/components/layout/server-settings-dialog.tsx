@@ -28,6 +28,7 @@ import { CommunitySettingsSection } from "@/components/communities/community-set
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
+import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -122,6 +123,10 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "member.voice_move": "serverSettings.audit.action.member.voice_move",
   "member.voice_mute": "serverSettings.audit.action.member.voice_mute",
   "member.voice_unmute": "serverSettings.audit.action.member.voice_unmute",
+  "channel.voice_audience_on":
+    "serverSettings.audit.action.channel.voice_audience_on",
+  "channel.voice_audience_off":
+    "serverSettings.audit.action.channel.voice_audience_off",
 };
 
 /**
@@ -899,9 +904,16 @@ export function ServerSettingsDialog({
                 <ServerIdentitySection server={server} onUpdated={onRenamed} />
               )}
 
+              {/* Baú opt-in: Server settings only (name / icon / roles panel).
+                  Fail closed when the instance flag/latch is off. NEW sticker
+                  lives on this control while the per-server bit is false.
+                  Not channel settings, not the /c/slug listing editor, not
+                  user settings. See settings-placement.test.ts. */}
               {serverId &&
-                canManageServer &&
-                communityHomeFeatureOn && (
+                shouldShowCommunityHomeSettingsRow({
+                  featureOn: communityHomeFeatureOn,
+                  canManageServer,
+                }) && (
                   <CommunityHomeSettingsSection
                     serverId={serverId}
                     enabled={server.communityHomeEnabled}

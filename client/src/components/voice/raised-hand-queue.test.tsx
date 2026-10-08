@@ -153,4 +153,41 @@ describe("RaisedHandQueue", () => {
     expect(html).toContain("Fila pra falar");
     expect(html).toContain("Você é o 2º na fila");
   });
+
+  describe("audience mode (docs/plans/AUDIENCE_MODE.md)", () => {
+    const audience = { busy: false, onAllow: () => {} };
+
+    it("gives a host a Liberar o microfone on every hand but their own", () => {
+      const html = render([person("host", 100), person("ana", 200), person("bob", 300)], {
+        selfUserId: "host",
+        audience,
+      });
+      expect(html).not.toContain('data-audience-allow="host"');
+      expect(html).toContain('data-audience-allow="ana"');
+      expect(html).toContain('data-audience-allow="bob"');
+    });
+
+    it("puts it on the compact line for the first hand, which is what most calls show", () => {
+      const html = render([person("ana", 100), person("bob", 200)], {
+        compact: true,
+        audience,
+      });
+      expect(html).toContain('data-audience-allow="ana"');
+      expect(html).not.toContain('data-audience-allow="bob"');
+    });
+
+    it("offers nothing to anybody who does not run the stage", () => {
+      expect(render([person("ana", 100)])).not.toContain("data-audience-allow");
+    });
+
+    it("says it in Portuguese", async () => {
+      const pt = (
+        await import("@/locales/pt-BR/translation.json", {
+          with: { type: "json" },
+        })
+      ).default as Record<string, string>;
+      setActiveCatalogue(pt);
+      expect(render([person("Alberto", 100)], { audience })).toContain("Liberar o microfone");
+    });
+  });
 });

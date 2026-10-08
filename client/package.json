@@ -14,6 +14,8 @@
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "e2e:stale-bundle": "playwright test -c playwright.stale-bundle.config.ts",
+    "e2e:camera-sync": "playwright test -c playwright.camera-sync.config.ts",
+    "e2e:share-fast-start": "playwright test -c playwright.share-fast-start.config.ts",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",

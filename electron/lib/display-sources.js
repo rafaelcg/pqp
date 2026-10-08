@@ -281,8 +281,11 @@ function screenPermission(platform, status) {
  *
  * Do not "helpfully" default this to loopback. A true `audioRequested` is a
  * statement that a human ticked something, and it is the only such statement
- * this function will ever get. Keep macOS and Linux video-only: loopback
- * there still fails the whole request.
+ * this function will ever get. Keep macOS and Linux video-only. On macOS
+ * loopback fails the whole request. On Linux it does NOT fail (measured on
+ * Electron 44, 2026-09-27): Chromium records the default output's monitor,
+ * which carries the call, and `restrictOwnAudio` is not honoured there. So
+ * the Linux sound comes from `lib/linux-share-audio.js`, never from here.
  */
 function captureResponse(source, platform, audioRequested, windowsRelease) {
   if (!source) {

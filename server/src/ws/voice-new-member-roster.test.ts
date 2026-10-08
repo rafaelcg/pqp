@@ -211,7 +211,7 @@ describeDb("voice rosters for a server joined after connect", () => {
   it("reads only the joined server's rooms from the registry, seats on other machines included", async () => {
     process.env.VOICE_REGISTRY = "postgres";
     await getPool().query(
-      `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands,
+      `TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands,
                 voice_retired_peers, voice_instances`,
     );
     const owner = await upsertUser({

@@ -22,6 +22,7 @@ import { communityHomeUpdateSchema } from "./community-home.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
+import { streamStartedSchema } from "./stream-alerts.js";
 import { ownStatusSchema, setIdleMessageSchema } from "./status.js";
 // --- threads ---
 import {
@@ -625,6 +626,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
+  // Per person, decided server side: see `stream-alerts.ts`.
+  streamStartedSchema,
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,

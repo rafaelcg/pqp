@@ -394,7 +394,12 @@ export function WatchChannelStage({
   /** Where the one-time `GET /api/channels/:id/live` answer goes. */
   onSeedChannelLive: (
     channelId: string,
-    live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
+    live: {
+      stream: LiveHlsStream | null;
+      watching: number;
+      viewers?: number;
+      ended?: boolean;
+    },
   ) => void;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
@@ -491,6 +496,7 @@ export function WatchChannelStage({
           onSeedChannelLive(channelId, {
             stream: answer.stream,
             watching: answer.watching,
+            viewers: answer.viewers,
             ended: answer.ended,
           });
         }

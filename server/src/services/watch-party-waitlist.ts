@@ -5,6 +5,7 @@ import {
   type WatchPartyWaitlistApproval,
   type WatchPartyWaitlistEntry,
   type WatchPartyWaitlistKind,
+  type WatchPartyWaitlistSource,
   type WatchPartyWaitlistState,
   type WatchPartyWaitlistStatus,
 } from "@pqp/shared";
@@ -169,6 +170,8 @@ export async function joinWatchPartyWaitlist(
     audienceBucket: WatchPartyAudienceBucket | null;
     note: string | null;
     streamChannel: string | null;
+    /** The campaign page that sent it. Null keeps whatever the row had. */
+    source?: WatchPartyWaitlistSource | null;
   },
 ): Promise<WatchPartyWaitlistEntry> {
   if (!watchPartyWaitlistCampaignEnabled(input.serverId)) {
@@ -194,12 +197,14 @@ export async function joinWatchPartyWaitlist(
     input.audienceBucket,
     input.note,
     input.streamChannel,
+    input.source ?? null,
   ];
   const result = input.serverId
     ? await pool.query<WaitlistRow>(
         `INSERT INTO watch_party_waitlist
-           (server_id, user_id, kind, audience_bucket, note, twitch_or_kick)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (server_id, user_id, kind, audience_bucket, note, twitch_or_kick,
+            source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (server_id, user_id) WHERE server_id IS NOT NULL
          DO UPDATE SET
            kind = CASE WHEN watch_party_waitlist.kind = 'request'
@@ -208,20 +213,23 @@ export async function joinWatchPartyWaitlist(
                                       watch_party_waitlist.audience_bucket),
            note = EXCLUDED.note,
            twitch_or_kick = EXCLUDED.twitch_or_kick,
+           source = COALESCE(EXCLUDED.source, watch_party_waitlist.source),
            updated_at = NOW()
          RETURNING ${ENTRY_COLUMNS}, (xmax = 0) AS inserted`,
         values,
       )
     : await pool.query<WaitlistRow>(
         `INSERT INTO watch_party_waitlist
-           (server_id, user_id, kind, audience_bucket, note, twitch_or_kick)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (server_id, user_id, kind, audience_bucket, note, twitch_or_kick,
+            source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (user_id) WHERE server_id IS NULL
          DO UPDATE SET
            audience_bucket = COALESCE(EXCLUDED.audience_bucket,
                                       watch_party_waitlist.audience_bucket),
            note = EXCLUDED.note,
            twitch_or_kick = EXCLUDED.twitch_or_kick,
+           source = COALESCE(EXCLUDED.source, watch_party_waitlist.source),
            updated_at = NOW()
          RETURNING ${ENTRY_COLUMNS}, (xmax = 0) AS inserted`,
         values,
@@ -232,6 +240,7 @@ export async function joinWatchPartyWaitlist(
       serverId: input.serverId,
       kind: row.kind,
       audienceBucket: row.audience_bucket,
+      source: input.source ?? null,
     });
   }
   // THE RACE WITH THE OPERATOR'S FLIP. The availability check above and this
@@ -434,6 +443,8 @@ export interface OperatorWaitlistRequest {
   audienceBucket: WatchPartyAudienceBucket | null;
   note: string | null;
   streamChannel: string | null;
+  /** The campaign page that sent it (`streamers`), or null for the teaser. */
+  source: string | null;
   createdAt: string;
 }
 
@@ -463,12 +474,20 @@ export interface OperatorWaitlist {
   servers: OperatorWaitlistServer[];
   /** People who said they would watch with no server to ask for. */
   serverless: number;
+  /**
+   * The serverless rows a campaign page sent (today: `pqp.gg/streamers`),
+   * newest first, at most `OPERATOR_WAITLIST_SERVERLESS_LISTED`. Named, unlike
+   * the count above, because a streamer who asked before making a server is
+   * somebody the operator writes to, and an anonymous number cannot be.
+   */
+  serverlessCampaign: OperatorWaitlistRequest[];
   totals: { waiting: number; approved: number; declined: number };
 }
 
 /** Servers on the dashboard's list, and requests shown per server. */
 export const OPERATOR_WAITLIST_SERVER_LIMIT = 200;
 export const OPERATOR_WAITLIST_REQUESTS_PER_SERVER = 20;
+export const OPERATOR_WAITLIST_SERVERLESS_LISTED = 20;
 
 /**
  * The dashboard's "Lista de espera": one line per server, waiting rooms first,
@@ -484,7 +503,7 @@ export const OPERATOR_WAITLIST_REQUESTS_PER_SERVER = 20;
  */
 export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitlist> {
   const pool = getPool();
-  const [aggregates, serverless, totals] = await Promise.all([
+  const [aggregates, serverless, totals, serverlessCampaign] = await Promise.all([
     pool.query<{
       server_id: string;
       name: string;
@@ -539,6 +558,23 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
     pool.query<{ status: WatchPartyWaitlistStatus; n: string }>(
       `SELECT status, COUNT(*)::text AS n FROM watch_party_waitlist GROUP BY status`,
     ),
+    pool.query<{
+      audience_bucket: WatchPartyAudienceBucket | null;
+      note: string | null;
+      twitch_or_kick: string | null;
+      source: string;
+      created_at: Date;
+      username: string;
+      discriminator: string | null;
+    }>(
+      `SELECT w.audience_bucket, w.note, w.twitch_or_kick, w.source,
+              w.created_at, u.username, u.discriminator
+         FROM watch_party_waitlist w
+         JOIN users u ON u.id = w.user_id
+        WHERE w.server_id IS NULL AND w.source IS NOT NULL
+        ORDER BY w.created_at DESC
+        LIMIT ${OPERATOR_WAITLIST_SERVERLESS_LISTED}`,
+    ),
   ]);
 
   const serverIds = aggregates.rows.map((row) => row.server_id);
@@ -550,12 +586,13 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
           audience_bucket: WatchPartyAudienceBucket | null;
           note: string | null;
           twitch_or_kick: string | null;
+          source: string | null;
           created_at: Date;
           username: string;
           discriminator: string | null;
         }>(
           `SELECT r.server_id, r.audience_bucket, r.note, r.twitch_or_kick,
-                  r.created_at, u.username, u.discriminator
+                  r.source, r.created_at, u.username, u.discriminator
              FROM (SELECT w.*,
                           ROW_NUMBER() OVER (PARTITION BY w.server_id
                                              ORDER BY w.created_at DESC) AS rn
@@ -576,6 +613,7 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
       audienceBucket: row.audience_bucket,
       note: row.note,
       streamChannel: row.twitch_or_kick,
+      source: row.source,
       createdAt: row.created_at.toISOString(),
     });
     requestsByServer.set(row.server_id, list);
@@ -606,6 +644,16 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
   return {
     servers,
     serverless: Number(serverless.rows[0]?.n ?? 0),
+    serverlessCampaign: serverlessCampaign.rows.map((row) => ({
+      username: row.discriminator
+        ? `${row.username}#${row.discriminator}`
+        : row.username,
+      audienceBucket: row.audience_bucket,
+      note: row.note,
+      streamChannel: row.twitch_or_kick,
+      source: row.source,
+      createdAt: row.created_at.toISOString(),
+    })),
     totals: {
       waiting: totalMap.get("waiting") ?? 0,
       approved: totalMap.get("approved") ?? 0,

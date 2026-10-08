@@ -178,6 +178,24 @@ function isAuthUrl(url, appOrigin) {
 }
 
 /**
+ * `file:` and `filesystem:` URLs: documents that live on this computer, never
+ * the app and never a link. (`blob:` is NOT here: a blob URL carries the app's
+ * own origin and a download may legitimately go through one.)
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isLocalDocumentUrl(url) {
+  let protocol;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return false;
+  }
+  return protocol === "file:" || protocol === "filesystem:";
+}
+
+/**
  * Decide what to do with a navigation the renderer asked for.
  *
  * @param {string} url
@@ -185,6 +203,17 @@ function isAuthUrl(url, appOrigin) {
  * @returns {"allow" | "external" | "block"}
  */
 function classifyNavigation(url, appOrigin) {
+  // A local file is never somewhere this window may go, and this answer comes
+  // BEFORE the "no origin, do not police" escape below. Dropping a file from
+  // the OS onto a Chromium page that does not handle the drop makes it navigate
+  // to `file:///the/file`, and in this shell that replaces the whole app (a
+  // call in progress included) with a bare document. The page-wide drop guard
+  // in the client prevents the attempt (`client/src/lib/file-drop.ts`); this is
+  // the net under it, for a renderer that predates the guard or a drop that
+  // lands on something that is not the app.
+  if (isLocalDocumentUrl(url)) {
+    return "block";
+  }
   if (!appOrigin) {
     // No origin to pin to (misconfigured); do not start policing navigation,
     // the window would have nowhere to go.

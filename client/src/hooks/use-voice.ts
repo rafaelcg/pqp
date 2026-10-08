@@ -12,6 +12,10 @@ import {
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
   type WatchPartyGuestsMode,
+  type SpeakReason,
+  type VoiceAudienceChange,
+  type VoiceAudienceState,
+  watchersWithoutSeat,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
@@ -40,6 +44,17 @@ import {
 } from "@/lib/share-guard-runtime";
 import { setShareHealthSource } from "@/lib/share-health";
 import {
+  confirmExclusiveFullscreen,
+  earlyEndIsHint,
+  isShareGameCaptureHintSilenced,
+  shouldWatchSharePicture,
+  type ShareCaptureHint,
+} from "@/lib/share-game-capture-hint";
+import {
+  startSharePictureWatch,
+  type SharePictureWatch,
+} from "@/lib/share-picture-watch";
+import {
   capturesSystemAudio,
   ensureConfirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
@@ -56,6 +71,11 @@ import {
   releaseNativeShareAudioFor,
 } from "@/lib/native-share-audio";
 import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
+import {
+  armLinuxShellShareAudio,
+  attachLinuxShellShareAudio,
+  ensureLinuxShellShareAudio,
+} from "@/lib/linux-shell-share-audio";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -387,6 +407,37 @@ export interface VoiceState {
    * moderator lowering it reaches us: nothing else can change it.
    */
   handRaisedAt: number | null;
+  /**
+   * Why `canSpeak` is false, when it is: `permission` (the channel does not
+   * give this person SPEAK) or `audience` (audience mode is on and they are
+   * not on the stage; raising a hand is how to ask). Null when the mic is not
+   * locked, and when an older server did not say. From `welcome` and
+   * `voice-speak-changed`. `docs/plans/AUDIENCE_MODE.md`.
+   */
+  speakReason: SpeakReason | null;
+  /**
+   * The room's audience mode, from `welcome` and `voice-audience`; null is
+   * off. Everybody in the call holds it: the audience draws the badge, a host
+   * draws the controls and `unenforcedUserIds` (a mic the media server has
+   * not confirmed closed yet).
+   */
+  audience: VoiceAudienceState | null;
+  /**
+   * The last audience mode change, for the transient notice in the call
+   * ("Fulano ligou o modo plateia"). `at` is this client's clock, so the
+   * notice can age out; null until something changes during the call.
+   */
+  audienceChange: (VoiceAudienceChange & { at: number }) | null;
+  /**
+   * peerIds in OUR room whose roster entry says `canSpeak: false`: the room's
+   * rule (a channel's SPEAK, or audience mode) says they may not talk. Their
+   * VOICE sink plays at zero and their speaking ring never lights, exactly as
+   * for `serverMutedPeerIds`. On LiveKit the media server already refuses
+   * their microphone; on a mesh room this IS the enforcement, which is the
+   * server mute's trust boundary (a modified sender is heard only by a
+   * modified receiver). Never includes our own peer id.
+   */
+  speakLockedPeerIds: string[];
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
@@ -565,6 +616,16 @@ export interface VoiceState {
    * is in `lib/screen-capture-cursor.ts`.
    */
   isShareCursorVisible: boolean;
+  /**
+   * The presenter's own share looks dead (black, no frames) or ended by
+   * itself within its first minute, while Windows says a Direct3D app holds
+   * the display in exclusive fullscreen: on the Windows desktop app, under
+   * `share_game_capture_hint`. Raised by `share-picture-watch.ts` or the
+   * capture's `ended`, read by `ShareGameCaptureNotice`, cleared by the next
+   * share and by leaving the call. Never set in a browser, with the flag off,
+   * or after "não mostrar de novo" (`lib/share-game-capture-hint.ts`).
+   */
+  shareCaptureHint: ShareCaptureHint | null;
   /**
    * True when the last attempt asked for sound and died AFTER the picker
    * closed, which is the one share failure a person cannot act on by reading:
@@ -1734,6 +1795,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     speakingPeerIds: [],
     serverMutedPeerIds: [],
     handRaisedAt: null,
+    speakReason: null,
+    audience: null,
+    audienceChange: null,
+    speakLockedPeerIds: [],
     occupancy: {},
     peerVolumes: {},
     screenVolumes: {},
@@ -1760,6 +1825,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingScreenAudio: false,
     isSharingSystemAudio: false,
     isShareCursorVisible: false,
+    shareCaptureHint: null,
     screenShareAudioFailed: false,
     sharePublishRecovering: false,
     incomingCalls: [],
@@ -1992,6 +2058,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
     state.serverMutedPeerIds = [];
+    state.speakLockedPeerIds = [];
+    state.audience = null;
+    state.audienceChange = null;
+    state.speakReason = null;
     discardPendingHand();
     state.handRaisedAt = null;
     state.transportFailure = failure;
@@ -2020,6 +2090,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       remotePeers: [...state.remotePeers],
       speakingPeerIds: [...state.speakingPeerIds],
       serverMutedPeerIds: [...state.serverMutedPeerIds],
+      speakLockedPeerIds: [...state.speakLockedPeerIds],
       occupancy: { ...occupancy },
       peerVolumes: { ...state.peerVolumes },
       screenVolumes: { ...state.screenVolumes },
@@ -2251,11 +2322,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     canSpeak: boolean,
     canStream: boolean,
     source: "welcome" | "change",
+    speakReason: SpeakReason | null = null,
   ) {
     const wasSpeak = state.canSpeak;
     const wasStream = state.canStream;
+    const wasReason = state.speakReason;
     state.canSpeak = canSpeak;
     state.canStream = canStream;
+    state.speakReason = canSpeak ? null : speakReason;
     if (!canSpeak) {
       state.isMuted = true;
       applyMute();
@@ -2268,22 +2342,33 @@ export function createVoiceController(transport: RealtimeTransport) {
         void stopCameraInternal();
       }
     }
+    // Audience mode says what happened on its own line in the call (the
+    // `voice-audience` notice and the badge), so the generic SPEAK notices
+    // below stay out of its way: one sentence per event, not two.
+    const byAudience = speakReason === "audience" || wasReason === "audience";
     if (source === "welcome") {
-      if (!canSpeak) {
+      if (!canSpeak && speakReason !== "audience") {
         state.notice = translateMessage("voice.notice.speakDenied");
-      } else if (!canStream) {
+      } else if (!canStream && canSpeak) {
         state.notice = translateMessage("voice.notice.streamDenied");
       }
       return;
     }
     if (wasSpeak && !canSpeak) {
-      state.notice = translateMessage("voice.notice.speakDenied");
+      if (!byAudience) {
+        state.notice = translateMessage("voice.notice.speakDenied");
+      }
       return;
     }
     if (!wasSpeak && canSpeak) {
       applyMute();
-      state.notice = translateMessage("voice.notice.speakGranted");
+      if (!byAudience) {
+        state.notice = translateMessage("voice.notice.speakGranted");
+      }
       void publishMicWhenAllowed();
+      return;
+    }
+    if (byAudience) {
       return;
     }
     if (wasStream && !canStream) {
@@ -2793,7 +2878,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // always is), and the analyser still reads a level. Nobody hears it,
         // so nothing may light up: a speaking ring on a person the room
         // muted would be the panel contradicting the moderator.
-        if (state.serverMutedPeerIds.includes(peerId)) {
+        if (
+          state.serverMutedPeerIds.includes(peerId) ||
+          state.speakLockedPeerIds.includes(peerId)
+        ) {
           speakingTracker.update(peerId, 0, false);
           continue;
         }
@@ -2832,6 +2920,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       .sort();
     if (!sameSpeaking(state.serverMutedPeerIds, next)) {
       state.serverMutedPeerIds = next;
+    }
+    const locked = participants
+      .filter((p) => p.canSpeak === false && p.peerId !== state.peerId)
+      .map((p) => p.peerId)
+      .sort();
+    if (!sameSpeaking(state.speakLockedPeerIds, locked)) {
+      state.speakLockedPeerIds = locked;
     }
     const me = participants.find((p) => p.peerId === state.peerId);
     if (me) {
@@ -2993,6 +3088,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         (id) => id !== peer.peerId,
       );
     }
+    const locked = state.speakLockedPeerIds.includes(peer.peerId);
+    if (peer.canSpeak === false && !locked) {
+      state.speakLockedPeerIds = [...state.speakLockedPeerIds, peer.peerId].sort();
+    } else if (peer.canSpeak !== false && locked) {
+      state.speakLockedPeerIds = state.speakLockedPeerIds.filter(
+        (id) => id !== peer.peerId,
+      );
+    }
   }
 
   /**
@@ -3147,6 +3250,18 @@ export function createVoiceController(transport: RealtimeTransport) {
     null;
   /** The desktop shell was told a share is live (priority boost), and owes the matching false. */
   let shareShellNotified = false;
+  /** The dead-picture watch for this share (`share_game_capture_hint`), null otherwise. */
+  let sharePictureWatch: SharePictureWatch | null = null;
+  /** `Date.now()` when the running share went out, for "ended by itself this soon". */
+  let shareStartedAt = 0;
+  /** `share_game_capture_hint` was on for the running share. */
+  let shareGameCaptureHintOn = false;
+  /**
+   * Bumped whenever the call this controller is in ends or changes, so a
+   * late answer about a share in an earlier call cannot raise a card in this
+   * one (`maybeHintEarlyCaptureEnd`).
+   */
+  let shareHintCallGeneration = 0;
 
   /**
    * Put a running share under `share_high_motion_guard` (when the flag is on
@@ -3163,6 +3278,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     track: MediaStreamTrack,
     baseFps: 30 | 60,
     guardOn: boolean,
+    pictureHintOn = false,
   ) {
     endShareObservation();
     const readReports = async (): Promise<Array<Iterable<unknown>>> => {
@@ -3206,6 +3322,32 @@ export function createVoiceController(transport: RealtimeTransport) {
         void desktop.setShareLive(true).catch(() => {});
       }
     }
+    // `share_game_capture_hint`. A game in exclusive fullscreen can leave the
+    // capture black or without frames while every number on the sender looks
+    // fine. Watched for the first minute on the Windows desktop app, and only
+    // reported once the shell confirms a Direct3D app holds the display.
+    // docs/DESKTOP.md §"Sharing a game: Fullscreen vs Fullscreen Windowed".
+    if (
+      pictureHintOn &&
+      shouldWatchSharePicture({
+        desktopPlatform: getDesktop()?.platform,
+        silenced: isShareGameCaptureHintSilenced(),
+      })
+    ) {
+      sharePictureWatch = startSharePictureWatch({
+        track,
+        confirm: confirmExclusiveFullscreen,
+        onDead: (kind) => {
+          console.warn("[pqp] share picture looks dead under exclusive fullscreen", {
+            kind,
+            surface: track.getSettings?.().displaySurface ?? null,
+          });
+          state.shareCaptureHint = { kind, at: Date.now() };
+          emit();
+        },
+      });
+    }
+    const pictureWatch = sharePictureWatch;
     setShareHealthSource({
       transport: sfu ? "sfu" : "mesh",
       guardEnabled: guardOn,
@@ -3213,10 +3355,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       readReports,
       guard: () => shareGuard,
       captureCheck: () => shareCaptureCheck,
+      picture: () => pictureWatch?.status() ?? null,
     });
   }
 
   function endShareObservation() {
+    sharePictureWatch?.stop();
+    sharePictureWatch = null;
     const guard = shareGuard;
     shareGuard = null;
     shareCaptureCheck = null;
@@ -3815,6 +3960,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     const video = stream.getVideoTracks()[0];
     if (video) {
       video.onended = () => {
+        // `ended` fires when the SOURCE ends, never for our own `stop()`.
+        // Chromium ends a capture on a permanent capturer error, which is what
+        // Windows Graphics Capture reports when it never gets a frame of an
+        // exclusive-fullscreen game: the third face of the same problem.
+        maybeHintEarlyCaptureEnd(stream, video);
         void stopScreenShareInternal();
         emit();
       };
@@ -3825,6 +3975,48 @@ export function createVoiceController(transport: RealtimeTransport) {
         void dropScreenAudio(audio);
       };
     }
+  }
+
+  /**
+   * The capture ended by itself in its first minute, under
+   * `share_game_capture_hint` on the Windows desktop app. Shown only if the
+   * shell says a Direct3D app holds the display in exclusive fullscreen: a
+   * shared window that was simply closed is not this.
+   */
+  function maybeHintEarlyCaptureEnd(stream: MediaStream, video: MediaStreamTrack) {
+    if (
+      screenCaptureStream !== stream ||
+      !shareGameCaptureHintOn ||
+      !earlyEndIsHint(shareStartedAt, Date.now()) ||
+      !shouldWatchSharePicture({
+        desktopPlatform: getDesktop()?.platform,
+        silenced: isShareGameCaptureHintSilenced(),
+      })
+    ) {
+      return;
+    }
+    const afterMs = Date.now() - shareStartedAt;
+    const surface = video.getSettings?.().displaySurface ?? null;
+    // What this answer is about: THIS share, in THIS call. The shell's
+    // answer is asynchronous, and by the time it lands the person may have
+    // shared again, hung up, or moved to another call; then it is about
+    // nothing anybody is looking at and must not raise a card.
+    const startedAt = shareStartedAt;
+    const callGeneration = shareHintCallGeneration;
+    void confirmExclusiveFullscreen().then((exclusive) => {
+      console.warn("[pqp] share capture ended by itself", { afterMs, surface, exclusive });
+      if (
+        exclusive !== true ||
+        state.isSharingScreen ||
+        shareStartedAt !== startedAt ||
+        shareHintCallGeneration !== callGeneration ||
+        state.status !== "connected"
+      ) {
+        return;
+      }
+      state.shareCaptureHint = { kind: "ended", at: Date.now() };
+      emit();
+    });
   }
 
   /** Full stop while still in-call: releases the capture and tells everyone. */
@@ -4186,6 +4378,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   function leaveCall() {
     const wasInLobby =
       state.status === "connected" || state.status === "joining";
+    // Any answer still on its way about a share in this call is now stale.
+    shareHintCallGeneration += 1;
     stopAllSoundLoops();
     if (wasInLobby) {
       playCue("voiceLeave");
@@ -4254,6 +4448,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Leaving lowers your hand, on the server and here. The queue is the
       // room's, and we are not in it any more.
       handRaisedAt: null,
+      // Audience mode is the call's, and we are not in it any more either.
+      speakReason: null,
+      audience: null,
+      audienceChange: null,
+      speakLockedPeerIds: [],
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
       screenVolumes: state.screenVolumes,
@@ -4282,6 +4481,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isSharingScreenAudio: false,
       isSharingSystemAudio: false,
       isShareCursorVisible: false,
+      shareCaptureHint: null,
       screenShareAudioFailed: false,
       sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
@@ -4606,10 +4806,12 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
           state.status = "connected";
+          state.audience = message.audience ?? null;
           applyPublishRules(
             publishFlagsFrom(message).canSpeak,
             publishFlagsFrom(message).canStream,
             "change",
+            message.speakReason ?? null,
           );
           applyPreservedSelfVoice();
           state.self = overlayLocalSelfVoice(message.self);
@@ -4689,10 +4891,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.capacityRoseFrom = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
+        state.audience = message.audience ?? null;
+        state.audienceChange = null;
         applyPublishRules(
           publishFlagsFrom(message).canSpeak,
           publishFlagsFrom(message).canStream,
           "welcome",
+          message.speakReason ?? null,
         );
         applyPreservedSelfVoice();
         state.self = overlayLocalSelfVoice(message.self);
@@ -4917,9 +5122,27 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.canSpeak,
           message.canStream ?? message.canSpeak,
           "change",
+          message.speakReason ?? null,
         );
         if (message.canManageMusic !== undefined) {
           state.canManageMusic = message.canManageMusic;
+        }
+        emit();
+        break;
+      case "voice-audience":
+        // Audience mode changed in our room (`docs/plans/AUDIENCE_MODE.md`).
+        // The state is what every screen draws; the grant that locks or
+        // unlocks OUR mic is `voice-speak-changed`, which the server sends
+        // beside this, so nothing here touches the microphone.
+        if (
+          state.status === "idle" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        state.audience = message.audience;
+        if (message.change) {
+          state.audienceChange = { ...message.change, at: Date.now() };
         }
         emit();
         break;
@@ -4976,6 +5199,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         identities.delete(message.peerId);
         if (state.serverMutedPeerIds.includes(message.peerId)) {
           state.serverMutedPeerIds = state.serverMutedPeerIds.filter(
+            (id) => id !== message.peerId,
+          );
+        }
+        if (state.speakLockedPeerIds.includes(message.peerId)) {
+          state.speakLockedPeerIds = state.speakLockedPeerIds.filter(
             (id) => id !== message.peerId,
           );
         }
@@ -5131,7 +5359,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           ) {
             state.channelLive = {
               ...state.channelLive,
-              [message.channelId]: { ...previous, watching: message.watching },
+              [message.channelId]: {
+                ...previous,
+                watching: watchersWithoutSeat(message),
+              },
             };
             emit();
             break;
@@ -5142,7 +5373,7 @@ export function createVoiceController(transport: RealtimeTransport) {
               stream: message.stream
                 ? resolveLiveHlsStream(message.stream)
                 : null,
-              watching: message.watching,
+              watching: watchersWithoutSeat(message),
               // "Ended" is the server's word, or one it already gave: a null
               // that was never vouched for is a channel we have not been
               // told about, and the seat backstop must not read it as over.
@@ -6001,7 +6232,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       // store rather than passed down four components (it is remembered per
       // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
       // the intent still wins, so a caller can override it for one share.
-      await ensureOsCanExcludeCallAudio();
+      await Promise.all([
+        ensureOsCanExcludeCallAudio(),
+        ensureLinuxShellShareAudio(),
+      ]);
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const captureIntent = { ...intent, hideCursor };
       let captureEnv = liveScreenCaptureEnvironment(intent);
@@ -6029,6 +6263,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // that is a request which can fail on its own; in the shell it is only
       // ever true where the platform can answer it.
       const askedForAudio = options.audio !== false;
+      // LINUX DESKTOP: the shell builds its bus only for a request the page
+      // armed it for (flag on, the person said yes), never because a request
+      // happens to carry audio. Nothing is armed for a stream the caller
+      // already opened.
+      if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
+        await armLinuxShellShareAudio();
+      }
 
       let stream: MediaStream;
       // A stream the caller already opened (the watch party preview) is
@@ -6140,6 +6381,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.notice = translateMessage("voice.notice.nativeShareAudioFailed");
         }
       }
+      // LINUX DESKTOP: the sound was never on the display stream. The shell
+      // built its "everything but pqp" bus while the picker resolved (only
+      // because this request asked for audio, which the page only does once
+      // the person said yes and the runtime flag is on); open it and put its
+      // track where every other share keeps its sound. Silent on any failure,
+      // exactly like a share without the box ticked.
+      if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
+        await attachLinuxShellShareAudio(stream);
+      }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries
       // no content hint by default and the encoder then optimises a screen for
@@ -6241,6 +6491,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;
+      // A new share answers whatever the last one's dead-picture card said.
+      state.shareCaptureHint = null;
+      shareStartedAt = Date.now();
+      shareGameCaptureHintOn = intent.shareGameCaptureHint === true;
       // Decided here, from the surface the picker returned, so the UI can say
       // "this is going out" at the one moment the presenter can still change
       // their mind. `getSettings` is guarded because a track handed over by a
@@ -6294,7 +6548,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         ensureScreenPublishWatchdog();
         // Readable from `pqpShareHealth()` for every share, and under
         // `share_high_motion_guard` for the ones the flag covers.
-        beginShareObservation(track, shareBaseFps, shareGuardOn);
+        beginShareObservation(
+          track,
+          shareBaseFps,
+          shareGuardOn,
+          intent.shareGameCaptureHint === true,
+        );
         shareCaptureCheck = captureCheck;
         if (captureCheck?.enforced) {
           console.warn("[pqp] share capture rate re-applied", captureCheck);
@@ -6911,7 +7170,12 @@ export function createVoiceController(transport: RealtimeTransport) {
      */
     seedChannelLive(
       channelId: string,
-      live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
+      live: {
+        stream: LiveHlsStream | null;
+        watching: number;
+        viewers?: number;
+        ended?: boolean;
+      },
     ) {
       const previous = state.channelLive[channelId];
       // An entry we hold only because of a null the server could not vouch
@@ -6925,7 +7189,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         ...state.channelLive,
         [channelId]: {
           stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
-          watching: live.watching,
+          watching: watchersWithoutSeat(live),
           // ONLY WHEN THE SERVER VOUCHED FOR IT. The route asks the session
           // table (PR 598) and says `ended` when it got an answer; a null
           // WITHOUT it is a query that failed, not a party that is over, and

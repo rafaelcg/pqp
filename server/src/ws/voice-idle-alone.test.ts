@@ -158,7 +158,8 @@ const previousLimit = process.env.VOICE_IDLE_ALONE_MINUTES;
 
 beforeEach(() => {
   process.env.CLERK_SECRET_KEY = "sk_test_voice_idle";
-  delete process.env.VOICE_IDLE_ALONE_MINUTES;
+  // The mechanism is tested at ten minutes; the shipped default has its own test below.
+  process.env.VOICE_IDLE_ALONE_MINUTES = "10";
   vi.useFakeTimers();
   vi.setSystemTime(T0);
   resetVoicePeers();
@@ -405,6 +406,23 @@ describe("idle hangup", () => {
     await sweepIdleAloneSeats(T0 + 40 * MINUTE);
     expect(warnings(a)).toHaveLength(2);
     await sweepIdleAloneSeats(T0 + 41 * MINUTE);
+    expect(hangups(a)).toHaveLength(1);
+  });
+
+  it("defaults to ninety minutes: warned at eighty-nine, gone at ninety", async () => {
+    delete process.env.VOICE_IDLE_ALONE_MINUTES;
+    const channel = randomUUID();
+    const a = await join(randomUUID(), channel);
+    await sweepIdleAloneSeats(T0);
+    await sweepIdleAloneSeats(T0 + 10 * MINUTE);
+    await sweepIdleAloneSeats(T0 + 60 * MINUTE);
+    await sweepIdleAloneSeats(T0 + 88 * MINUTE);
+    expect(warnings(a)).toHaveLength(0);
+    expect(hangups(a)).toHaveLength(0);
+    await sweepIdleAloneSeats(T0 + 89 * MINUTE);
+    expect(warnings(a)).toHaveLength(1);
+    expect(hangups(a)).toHaveLength(0);
+    await sweepIdleAloneSeats(T0 + 90 * MINUTE);
     expect(hangups(a)).toHaveLength(1);
   });
 

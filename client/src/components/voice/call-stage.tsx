@@ -20,7 +20,9 @@ import {
   X,
 } from "lucide-react";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -80,7 +82,13 @@ import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
+import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
+import {
+  AudienceModeStrip,
+  AudienceModeToggle,
+  type AudienceModeHostControls,
+} from "@/components/voice/audience-mode";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
@@ -170,6 +178,13 @@ import {
 } from "@/hooks/use-idle-chrome";
 import { createPortal } from "react-dom";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import {
+  isKeyboardFocus,
+  stageChromeAttentionKey,
+  stageChromeHold,
+  stageChromeMayHide,
+} from "@/components/voice/stage-chrome";
+import { useAutoHideStageControls } from "@/lib/stage-controls-pref";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
@@ -331,6 +346,47 @@ const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
   bl: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] left-3",
   br: "bottom-[calc(var(--call-bar-h,4.5rem)+3rem)] right-3",
 };
+
+/**
+ * What fades a tile's own corner controls (fit, volume, shrink to grid, ...)
+ * with the rest of the stage's overlay. They already reveal on hover, which is
+ * no help to somebody who parked the pointer on the picture: it IS hovering,
+ * so they sat on the film for as long as the pointer did. The stage carries
+ * `data-chrome-hidden`; while it is "true" these go too, unless keyboard focus
+ * is inside them (a Tab reveals everything first, and has to keep what it
+ * reached). Resting the pointer on one pins the stage through
+ * `tileControlsHovered`.
+ */
+const TILE_CONTROLS_FADE =
+  "transition-opacity duration-200 motion-reduce:transition-none [[data-chrome-hidden=true]_&:not(:has(:focus-visible))]:!opacity-0";
+
+/**
+ * A tile's own panel (audio, fit) is open. The stage cannot see it, because the
+ * panel belongs to the tile, and a panel left open while the pointer wandered
+ * off would otherwise be faded out from under the person using it.
+ */
+const TileMenuHoldContext = createContext<((open: boolean) => void) | null>(
+  null,
+);
+
+function useReportTileMenu(open: boolean): void {
+  const report = useContext(TileMenuHoldContext);
+  useEffect(() => {
+    if (!open || !report) {
+      return;
+    }
+    report(true);
+    return () => report(false);
+  }, [open, report]);
+}
+
+/** Whether a pointer event's element is inside a tile's own corner controls. */
+function isInsideTileControls(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('[data-call-chrome="tile"]') !== null
+  );
+}
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
 interface WebkitFullscreenVideo extends HTMLVideoElement {
@@ -673,6 +729,12 @@ export interface CallStageProps {
    */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /**
+   * Audience mode controls for somebody who runs the stage here
+   * (`docs/plans/AUDIENCE_MODE.md`). Absent for everybody else, and always in
+   * a conversation call.
+   */
+  audienceHost?: AudienceModeHostControls | null;
   /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
@@ -772,6 +834,7 @@ export function CallStage({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -842,6 +905,7 @@ export function CallStage({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      audienceHost={audienceHost}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
       fill={fill}
@@ -895,6 +959,7 @@ function ActiveCall({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -973,6 +1038,7 @@ function ActiveCall({
    */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  audienceHost?: AudienceModeHostControls | null;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
   fill?: boolean;
@@ -1494,28 +1560,117 @@ function ActiveCall({
     }
   }, [qualityMenuRequested, qualityMenuOpen]);
   // --- video-player chrome -------------------------------------------------
-  // With a share or a camera on stage the bar and the title overlay fade
-  // after a few idle seconds and come back on any pointer move, key or touch;
-  // a tap on the picture toggles them on a phone. Nothing hides while a menu
-  // from the bar is open, the pointer rests on the bar, focus is inside it
-  // (a keyboard user is on the way to hang up) or push-to-talk is held. An
-  // audio-only call has nothing under the bar and keeps it put; so does a
-  // collapsed stage. Rules and timing: `client/src/hooks/use-idle-chrome.ts`.
+  // With a stream on the stage (one picture alone, or a share in the grid) the
+  // bar, the title overlay, the way back to the grid and each tile's corner
+  // controls fade after a few idle seconds and come back on any pointer move,
+  // key or touch; a tap on the picture toggles them on a phone. A grid of
+  // cameras, an audio-only call, a collapsed stage and a presenter's own
+  // picture keep the controls put, and so does anything in
+  // `stageChromeHold` (a menu, the pointer on a control, keyboard focus on
+  // one, a call that is not connected). Timing: `hooks/use-idle-chrome.ts`;
+  // the rules: `stage-chrome.ts`.
   const reducedMotion = usePrefersReducedMotion();
+  const autoHideSetting = useAutoHideStageControls();
   const [barHovered, setBarHovered] = useState(false);
+  const [tileControlsHovered, setTileControlsHovered] = useState(false);
+  const [tileFocused, setTileFocused] = useState(false);
+  const [tileMenusOpen, setTileMenusOpen] = useState(0);
+  const reportTileMenu = useCallback((open: boolean) => {
+    setTileMenusOpen((count) => Math.max(0, count + (open ? 1 : -1)));
+  }, []);
   const [barFocused, setBarFocused] = useState(false);
+  const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const pushToTalkHeld =
     inputMode === "push-to-talk" &&
     voiceState.isTransmitting &&
     !voiceState.isMuted;
-  const chrome = useIdleChrome(
-    anyVideo && chromeExpanded,
-    qualityMenuOpen || barHovered || barFocused || pushToTalkHeld,
-  );
+  // A stream owns the stage: one picture alone (focused, or the only one), or
+  // a screen share anywhere on it. A grid of cameras with no share is people,
+  // and people keep their controls.
+  const streamOnStage =
+    soloPerson !== null ||
+    soloTile !== null ||
+    soloMusic ||
+    staged.tiles.length === 1 ||
+    staged.tiles.some((tile) => tile.kind === "screen");
+  const ownPictureOnly = soloPerson
+    ? soloPerson.isSelf
+    : soloTile
+      ? soloTile.isSelf
+      : focusedIsLocal ||
+        (!soloMusic &&
+          !musicOnStage &&
+          staged.tiles.length === 1 &&
+          stage.tiles[0]?.isSelf === true);
+  const chromeMayHide = stageChromeMayHide({
+    autoHideSetting,
+    expanded: chromeExpanded && anyVideo,
+    streamOnStage,
+    ownPictureOnly,
+  });
+  const chromeHold = stageChromeHold({
+    menuOpen: qualityMenuOpen || tileMenusOpen > 0,
+    sharePickerOpen,
+    pointerOverControls: barHovered || tileControlsHovered,
+    keyboardFocusInControls: barFocused || tileFocused,
+    pushToTalkHeld,
+    connected: voiceState.status === "connected",
+    error: Boolean(voiceState.error),
+    notice: Boolean(voiceState.notice),
+    peerFailed: remotes.some((person) => person.failed),
+  });
+  const chrome = useIdleChrome(chromeMayHide, chromeHold !== null);
+  const wakeChrome = chrome.wake;
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
     reducedMotion,
   });
+  // Something a person has to notice happened (muted by a moderator, somebody
+  // arrived, a hand went up, a hotkey mute): show the controls for one idle
+  // period rather than letting it change nothing anywhere on screen.
+  const attentionKey = stageChromeAttentionKey({
+    isMuted: voiceState.isMuted,
+    isDeafened: voiceState.isDeafened,
+    serverMuted: voiceState.self?.serverMuted === true,
+    canSpeak: voiceState.canSpeak,
+    peerCount: voiceState.remotePeers.length,
+    handsUp: (voiceState.voiceChannelId
+      ? (voiceState.occupancy[voiceState.voiceChannelId] ?? [])
+      : []
+    ).filter((person) => person.handRaisedAt != null).length,
+  });
+  const attentionSeen = useRef(attentionKey);
+  useEffect(() => {
+    if (attentionSeen.current !== attentionKey) {
+      attentionSeen.current = attentionKey;
+      wakeChrome();
+    }
+  }, [attentionKey, wakeChrome]);
+  // In real fullscreen focus can sit on the body, outside the stage's own key
+  // handler, so a key press there would reveal nothing.
+  useEffect(() => {
+    if (!fullscreen.isFullscreen || !chromeMayHide) {
+      return;
+    }
+    window.addEventListener("keydown", wakeChrome);
+    return () => window.removeEventListener("keydown", wakeChrome);
+  }, [fullscreen.isFullscreen, chromeMayHide, wakeChrome]);
+  // The screen picker is the browser's, and it takes the pointer with it: a
+  // bar that hid while it was up would still be gone on the way back.
+  const startScreenShareWithPicker = useMemo(
+    () =>
+      onStartScreenShare
+        ? async (intent?: { preferBrowserTab?: boolean }) => {
+            setSharePickerOpen(true);
+            try {
+              await onStartScreenShare(intent);
+            } finally {
+              setSharePickerOpen(false);
+            }
+          }
+        : undefined,
+    [onStartScreenShare],
+  );
   // A touch tap is a down and an up that did not travel. Anything that moved
   // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
@@ -1541,7 +1696,7 @@ function ActiveCall({
     }
     chrome.wake();
   };
-  const swallowPressWhileHidden = (event: SyntheticEvent<HTMLDivElement>) => {
+  const swallowPressWhileHidden = (event: SyntheticEvent) => {
     if (!chrome.isHidden()) {
       return;
     }
@@ -1696,6 +1851,11 @@ function ActiveCall({
             compact
             participants={roomParticipants}
             selfUserId={voiceState.self?.userId ?? null}
+            audience={
+              audienceHost && voiceState.audience
+                ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+                : null
+            }
           />
         </div>
       );
@@ -1736,6 +1896,10 @@ function ActiveCall({
         micFallback={voiceState.micFallback}
         visible={!chrome.hidden}
         onDismiss={onDismissMicFallbackNotice}
+      />
+      <ShareGameCaptureNotice
+        hint={voiceState.shareCaptureHint}
+        visible={!chrome.hidden}
       />
       <CapacityNotice
         voiceChannelId={voiceState.voiceChannelId}
@@ -1781,7 +1945,7 @@ function ActiveCall({
       onQualityMenuOpenChange={setQualityMenuRequested}
       watchingHls={watchingHls}
       hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 20}
-      onStartScreenShare={onStartScreenShare}
+      onStartScreenShare={startScreenShareWithPicker}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!userCollapsed)}
       onLeave={onLeave}
@@ -1794,6 +1958,7 @@ function ActiveCall({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      audienceHost={audienceHost}
     />
   );
 
@@ -1886,12 +2051,18 @@ function ActiveCall({
   }
 
   return (
+    <TileMenuHoldContext.Provider value={reportTileMenu}>
     <div
       ref={stageRef}
       data-testid="call-stage"
       data-music-picture={musicPictureOnly ? "" : undefined}
+      data-chrome-hidden={chrome.hidden ? "true" : "false"}
       className={cn(
         "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
+        // The pointer goes with the controls, as in every player. `!` and the
+        // descendant selector because the tiles set their own cursors, and the
+        // pointer has to be gone over the picture whoever owns that element.
+        chrome.hidden && "cursor-none [&_*]:!cursor-none",
         fullscreen.isFullscreen
           ? fullscreen.mode === "element"
             ? "h-full max-h-none"
@@ -1913,13 +2084,44 @@ function ActiveCall({
           chrome.wake();
         }
       }}
+      onPointerOver={(event) => {
+        if (
+          event.pointerType !== "touch" &&
+          isInsideTileControls(event.target)
+        ) {
+          setTileControlsHovered(true);
+        }
+      }}
+      onPointerOut={(event) => {
+        if (
+          isInsideTileControls(event.target) &&
+          !isInsideTileControls(event.relatedTarget)
+        ) {
+          setTileControlsHovered(false);
+        }
+      }}
       onPointerDown={onStagePointerDown}
       onPointerUp={onStagePointerUp}
       onPointerCancel={() => {
         touchDownRef.current = null;
       }}
       onKeyDownCapture={chrome.wake}
-      onFocusCapture={chrome.wake}
+      onFocusCapture={(event) => {
+        chrome.wake();
+        // Keyboard focus on a tile's own control holds the stage like focus on
+        // the bar does; a mouse press on one does not.
+        if (isInsideTileControls(event.target)) {
+          setTileFocused(isKeyboardFocus(event.target));
+        }
+      }}
+      onBlurCapture={(event) => {
+        if (
+          isInsideTileControls(event.target) &&
+          !isInsideTileControls(event.relatedTarget)
+        ) {
+          setTileFocused(false);
+        }
+      }}
       // Read by the strip's reserve and the self-preview's bottom corners.
       style={
         {
@@ -2223,10 +2425,27 @@ function ActiveCall({
             <button
               type="button"
               data-testid="stage-show-all-streams"
+              data-call-chrome="back"
+              data-chrome-hidden={chrome.hidden ? "true" : "false"}
               className={cn(
                 "absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
                 STAGE_LAYER.badges,
+                // Fades with the rest of the overlay (it is the same group:
+                // a stream alone on the stage with a pill across its top is
+                // the bar problem again). Still pressable while faded, and a
+                // press then only brings it back, like the bar.
+                chromeClass,
               )}
+              onPointerEnter={(event) => {
+                if (event.pointerType !== "touch") {
+                  setBarHovered(true);
+                }
+              }}
+              onPointerLeave={() => setBarHovered(false)}
+              onFocus={(event) => setBarFocused(isKeyboardFocus(event.target))}
+              onBlur={() => setBarFocused(false)}
+              onPointerDownCapture={swallowPressWhileHidden}
+              onClickCapture={swallowPressWhileHidden}
               onClick={() => {
                 if (fullscreen.soloPeerId !== null) {
                   fullscreen.toggleScreen(fullscreen.soloPeerId);
@@ -2380,6 +2599,18 @@ function ActiveCall({
           // overlay also holds is never wanted here.
           watchPartyChrome && focusedIsLocal && "hidden",
         )}
+        // The overlay itself passes the pointer through; its few buttons take
+        // it back, and resting on one holds the whole group like the bar.
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") {
+            setBarHovered(true);
+          }
+        }}
+        onPointerLeave={() => setBarHovered(false)}
+        onFocusCapture={(event) =>
+          setBarFocused(isKeyboardFocus(event.target))
+        }
+        onBlurCapture={onBarBlur}
       >
         <div className="min-w-0">
           {titleOnStage && (
@@ -2400,7 +2631,11 @@ function ActiveCall({
                   ? null
                   : t("call.panel.inCall", { count: remotes.length + 1 })))}
             {!voiceState.canSpeak && (
-              <span className="ml-2 text-warning">{t("voice.bar.listenOnly")}</span>
+              <span className="ml-2 text-warning">
+                {voiceState.speakReason === "audience"
+                  ? t("voice.audience.badge")
+                  : t("voice.bar.listenOnly")}
+              </span>
             )}
             {!dockComposer && declinedNames.map((name) => (
               <span key={name} className="ml-2 text-warning">
@@ -2563,7 +2798,11 @@ function ActiveCall({
         // happens to be.
         onPointerDownCapture={swallowPressWhileHidden}
         onClickCapture={swallowPressWhileHidden}
-        onFocusCapture={() => setBarFocused(true)}
+        // KEYBOARD focus holds the bar, a mouse click does not. A button
+        // keeps focus after a click for as long as nothing else takes it, so
+        // holding the bar for plain focus meant one press of mute left it up
+        // for the rest of the stream (`isKeyboardFocus`).
+        onFocusCapture={(event) => setBarFocused(isKeyboardFocus(event.target))}
         onBlurCapture={onBarBlur}
       >
         {/* The bar's notices float just above its box, over the picture,
@@ -2606,6 +2845,7 @@ function ActiveCall({
         </>
       )}
     </div>
+    </TileMenuHoldContext.Provider>
   );
 }
 
@@ -2770,6 +3010,7 @@ export function CallControls({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   leading = null,
   rowRef,
   videoOnStage = false,
@@ -2824,6 +3065,8 @@ export function CallControls({
    * the quality control has something to govern, so it stays.
    */
   videoOnStage?: boolean;
+  /** Audience mode, for somebody who runs the stage. See `audience-mode.tsx`. */
+  audienceHost?: AudienceModeHostControls | null;
 }) {
   const { t } = useTranslation();
   // Probed once per mount — whether the browser has getDisplayMedia never
@@ -2911,6 +3154,9 @@ export function CallControls({
   // Watch party button below, and `set-sharing-screen` would be refused for
   // them anyway. One grant, read once, hides both.
   const listenOnly = !voiceState.canSpeak;
+  // Locked by audience mode rather than by the channel: the mic says so in
+  // those words, and the hand becomes the way to ask.
+  const audienceLocked = listenOnly && voiceState.speakReason === "audience";
   const noVideo = !voiceState.canStream;
   // The room as the roster describes it, which is where the hands are. Self
   // included: your own hand is in the same queue as everybody else's.
@@ -2920,7 +3166,14 @@ export function CallControls({
   const handRaised = voiceState.handRaisedAt !== null;
   const handLabel = handRaised
     ? t("voice.hand.lower")
-    : t("voice.hand.raise");
+    : audienceLocked
+      ? t("voice.hand.ask")
+      : t("voice.hand.raise");
+  // The toggle is offered to a host where the operator turned the feature on,
+  // and ALWAYS while it is on, so the off switch can never be hidden by a
+  // flag that changed mid-call.
+  const showAudienceToggle =
+    audienceHost !== null && (audienceHost.available || voiceState.audience !== null);
 
   const showMute = !collapsed || !pushToTalk;
 
@@ -3002,12 +3255,18 @@ export function CallControls({
         aria-pressed={handRaised}
         aria-label={handLabel}
         data-raise-hand={handRaised ? "up" : "down"}
+        data-primary={audienceLocked && !handRaised ? "" : undefined}
         className={cn(
           "flex items-center justify-center rounded-full",
           size,
           handRaised
             ? "bg-signal/20 text-signal"
-            : "bg-ink-3 text-paper hover:bg-ink-4",
+            : audienceLocked
+              ? // THE AUDIENCE'S ONE ACTION. The mic beside it is locked
+                // and says why; this is how to ask, so it is the button
+                // that looks like a button.
+                "bg-accent text-on-accent ring-2 ring-accent/40 hover:bg-accent-hover"
+              : "bg-ink-3 text-paper hover:bg-ink-4",
         )}
         onClick={onToggleRaisedHand}
       >
@@ -3015,6 +3274,18 @@ export function CallControls({
       </button>
     </Tooltip>
   ) : null;
+  // Audience mode's switch, for somebody who runs the stage. It sits with
+  // the hand, the other control about who may talk.
+  const audienceToggle =
+    showAudienceToggle && audienceHost ? (
+      <AudienceModeToggle
+        on={voiceState.audience !== null}
+        busy={audienceHost.busy}
+        onToggle={audienceHost.onToggle}
+        size={size}
+        iconSize={iconSize}
+      />
+    ) : null;
 
   return (
     <div
@@ -3085,12 +3356,30 @@ export function CallControls({
           no room for a list: the hands are still on every person's row in the
           sidebar, and the raise button below survives the squeeze because
           unlike mute it has nowhere else to live. */}
+      {/* Audience mode's line: why the mic is locked, who may talk, what
+          the media server has not confirmed yet, and what just changed. On
+          the slim bar too, since most calls never expand. */}
+      <AudienceModeStrip
+        audience={voiceState.audience}
+        change={voiceState.audienceChange}
+        speakReason={voiceState.speakReason}
+        participants={roomParticipants}
+        selfUserId={voiceState.self?.userId ?? null}
+        host={audienceHost}
+        compact={collapsed}
+        className={collapsed ? "mb-1.5 px-1" : "mb-1.5"}
+      />
       {(!collapsed || videoOnStage) && (
         <RaisedHandQueue
           participants={roomParticipants}
           selfUserId={voiceState.self?.userId ?? null}
           canLowerHands={canLowerHands}
           onLowerHand={onLowerHand}
+          audience={
+            audienceHost && voiceState.audience
+              ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+              : null
+          }
           className="mb-1.5"
         />
       )}
@@ -3199,18 +3488,22 @@ export function CallControls({
       {showMute && (
         <Tooltip
           label={
-            listenOnly
-              ? t("voice.control.listenOnlyLocked")
-              : voiceState.self?.serverMuted
-                ? t("voice.control.serverMuted")
-                : voiceState.isMuted
-                  ? t("voice.control.unmute")
-                  : t("voice.control.mute")
+            audienceLocked
+              ? t("voice.audience.locked")
+              : listenOnly
+                ? t("voice.control.listenOnlyLocked")
+                : voiceState.self?.serverMuted
+                  ? t("voice.control.serverMuted")
+                  : voiceState.isMuted
+                    ? t("voice.control.unmute")
+                    : t("voice.control.mute")
           }
           detail={
-            !listenOnly && voiceState.self?.serverMuted
-              ? t("voice.serverMuted.self")
-              : undefined
+            audienceLocked
+              ? t("voice.audience.lockedDetail")
+              : !listenOnly && voiceState.self?.serverMuted
+                ? t("voice.serverMuted.self")
+                : undefined
           }
         >
           {/* Neither a listen-only lock nor a moderator's mute is this
@@ -3223,10 +3516,16 @@ export function CallControls({
               type="button"
               aria-pressed={voiceState.isMuted}
               disabled={listenOnly || voiceState.self?.serverMuted === true}
+              data-mic-toggle=""
+              data-speak-locked={
+                listenOnly ? (voiceState.speakReason ?? "permission") : undefined
+              }
               aria-label={
-                listenOnly
-                  ? t("voice.control.listenOnlyLocked")
-                  : voiceState.self?.serverMuted
+                audienceLocked
+                  ? t("voice.audience.locked")
+                  : listenOnly
+                    ? t("voice.control.listenOnlyLocked")
+                    : voiceState.self?.serverMuted
                     ? t("voice.control.serverMuted")
                     : voiceState.isMuted
                       ? t("voice.control.unmute")
@@ -3255,7 +3554,7 @@ export function CallControls({
           </span>
         </Tooltip>
       )}
-      {listenOnly && !collapsed && (
+      {listenOnly && !collapsed && !audienceLocked && (
         <span
           data-listen-only
           className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
@@ -3424,6 +3723,7 @@ export function CallControls({
       {/* The hand after share on both bars, then a hairline before what is
           about the room rather than about you. */}
       {handControl}
+      {audienceToggle}
       <CallControlDivider
         container={collapsed}
         className={collapsed ? "my-1" : "my-1.5"}
@@ -3589,6 +3889,7 @@ function TileOverlay({
 }) {
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
+  useReportTileMenu(moreOpen);
   // A camera is somebody talking: the slider is their voice.
   const pictureSound = audio?.voice ?? audio?.share;
   const moreItems = cameraTileMoreItems(t, {
@@ -3597,15 +3898,22 @@ function TileOverlay({
     pin: onPin ? { pinned, onToggle: onPin } : undefined,
     hide: onHideCamera ? { onHide: onHideCamera } : undefined,
   });
+  // An open menu keeps its own controls visible; otherwise they follow the
+  // tile's hover, stay put on a touch screen, and fade with the stage's
+  // overlay when it goes idle.
   const revealed = moreOpen
     ? "opacity-100"
-      : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+    : cn(
+        "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+        TILE_CONTROLS_FADE,
+      );
   // The same row as a share's (`ScreenTileFrame`) and the watch party's
   // player: the name and the sound on the left, "⋯" and fullscreen on the
   // right, fullscreen last, along the bottom of the picture.
   return (
     <div
       data-tile-controls=""
+      data-call-chrome="tile"
       // The fit control lives in "⋯"; the state it reports stays readable.
       data-tile-fit={fit?.fit}
       className={cn(
@@ -4342,6 +4650,7 @@ export function ScreenTileFrame({
 }) {
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
+  useReportTileMenu(moreOpen);
   const fit = useVideoFit("screen");
   const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
@@ -4402,7 +4711,10 @@ export function ScreenTileFrame({
   const revealed =
     moreOpen || hideSelfPreview
       ? "opacity-100"
-      : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+      : cn(
+          "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+          TILE_CONTROLS_FADE,
+        );
   const moreButton = (
     <Menu items={moreItems} side="top" align="end" onOpenChange={setMoreOpen}>
       <button
@@ -4515,6 +4827,7 @@ export function ScreenTileFrame({
       ) : (
         <div
           data-share-row=""
+          data-call-chrome="tile"
           className={cn(
             "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
             STAGE_LAYER.tileControls,

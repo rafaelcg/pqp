@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { AVATAR_MIME_ALLOWLIST, type User } from "@pqp/shared";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { fetchAvatarConfig } from "@/lib/api";
 import { uploadAvatar } from "@/lib/avatar-upload";
+import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
+import { useTranslation } from "@/lib/i18n";
 
 /**
  * The one avatar picker in the app.
@@ -71,6 +74,7 @@ export function AvatarPicker({
   onUploaded,
   labels,
 }: AvatarPickerProps) {
+  const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
   const [canUpload, setCanUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -107,8 +111,23 @@ export function AvatarPicker({
     }
   }
 
+  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
+  function handleDrop(items: DroppedItems) {
+    const { file, folder } = firstDroppedFile(items);
+    if (file) {
+      void handleFile(file);
+    } else if (folder) {
+      setError(t("composer.dropFolder_one", { name: folder }));
+    }
+  }
+
   return (
-    <>
+    <FileDropZone
+      mode={canUpload && !uploading ? "accept" : "off"}
+      onDrop={handleDrop}
+      acceptLabel={t("chrome.dropImage")}
+      size="field"
+    >
       <div className="mb-2 flex items-center gap-3">
         <UserAvatar
           name={fallbackName}
@@ -184,6 +203,6 @@ export function AvatarPicker({
           {error}
         </p>
       )}
-    </>
+    </FileDropZone>
   );
 }

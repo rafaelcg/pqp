@@ -282,6 +282,13 @@ interface ChannelListProps {
   onServerMuteOccupant?: (userId: string, muted: boolean) => void;
   /** Lower one person's raised hand: "you're up". Same bit as the mute. */
   onLowerOccupantHand?: (userId: string) => void;
+  /**
+   * Audience mode is on in the call we are in and we run its stage: the
+   * people a host let in (null otherwise). Offers "Liberar o microfone" /
+   * "Silenciar" on that call's rows (`docs/plans/AUDIENCE_MODE.md`).
+   */
+  audienceSpeakerUserIds?: string[] | null;
+  onAudienceSpeaker?: (userId: string, allowed: boolean) => void;
   onKickOccupant?: (userId: string, name: string) => void;
   onSetPeerVolume?: (userId: string, volume: number) => void;
   onSetScreenVolume?: (userId: string, volume: number) => void;
@@ -416,6 +423,8 @@ export const ChannelList = memo(function ChannelList({
   onDisconnectVoiceOccupant,
   onServerMuteOccupant,
   onLowerOccupantHand,
+  audienceSpeakerUserIds = null,
+  onAudienceSpeaker,
   onKickOccupant,
   onSetPeerVolume,
   onSetScreenVolume,
@@ -790,6 +799,14 @@ export const ChannelList = memo(function ChannelList({
       canServerMute: canMuteIn(channel.id),
       serverMuted: person.serverMuted,
       handRaised: person.handRaisedAt != null,
+      audience:
+        inSameCall && audienceSpeakerUserIds
+          ? audienceSpeakerUserIds.includes(person.userId)
+            ? "silence"
+            : person.canSpeak === false
+              ? "allow"
+              : null
+          : null,
       canDisconnect: canMoveIn(channel.id),
       canKick: canKickUser(person.userId),
     });
@@ -857,6 +874,20 @@ export const ChannelList = memo(function ChannelList({
           label: t("voice.occupant.lowerHand"),
           icon: Hand,
           onSelect: () => onLowerOccupantHand?.(person.userId),
+        });
+      } else if (action === "audienceAllow") {
+        personal.push({
+          id: "audience-allow",
+          label: t("voice.audience.allow"),
+          icon: Mic,
+          onSelect: () => onAudienceSpeaker?.(person.userId, true),
+        });
+      } else if (action === "audienceSilence") {
+        personal.push({
+          id: "audience-silence",
+          label: t("voice.audience.silence"),
+          icon: MicOff,
+          onSelect: () => onAudienceSpeaker?.(person.userId, false),
         });
       } else if (action === "serverMute") {
         personal.push({

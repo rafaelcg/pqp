@@ -6,14 +6,54 @@ describe("shareConfigForServer", () => {
   afterEach(() => {
     delete process.env.DESKTOP_SHARE_AUDIO_NATIVE;
     delete process.env.SHARE_HIGH_MOTION_GUARD;
+    delete process.env.SHARE_GAME_CAPTURE_HINT;
+    delete process.env.SHARE_FAST_START_QUALITY;
+    delete process.env.LINUX_DESKTOP_SYSTEM_AUDIO;
     resetFeatureFlagsForTests();
   });
 
-  it("keeps native desktop share audio and the high-motion guard off by default", () => {
+  it("keeps native desktop share audio, the high-motion guard and the game capture hint off by default", () => {
     expect(shareConfigForServer(null)).toEqual({
       desktopShareAudioNative: false,
       shareHighMotionGuard: false,
+      shareGameCaptureHint: false,
+      shareFastStartQuality: false,
+      linuxDesktopSystemAudio: false,
     });
+  });
+
+  it("reads the share fast start from its own variable, exact word only", () => {
+    process.env.SHARE_FAST_START_QUALITY = "true";
+    expect(shareConfigForServer(null).shareFastStartQuality).toBe(true);
+    // Independent of the other share switches.
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(false);
+    for (const word of ["TRUE", "1", "on", ""]) {
+      process.env.SHARE_FAST_START_QUALITY = word;
+      expect(shareConfigForServer(null).shareFastStartQuality).toBe(false);
+    }
+  });
+
+  it("keeps Linux desktop system audio off by default and follows its own variable, exact word only", () => {
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+    process.env.LINUX_DESKTOP_SYSTEM_AUDIO = "true";
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(true);
+    // The others are independent of it.
+    expect(shareConfigForServer(null).desktopShareAudioNative).toBe(false);
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(false);
+    for (const word of ["TRUE", "1", "on", "yes", ""]) {
+      process.env.LINUX_DESKTOP_SYSTEM_AUDIO = word;
+      expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+    }
+  });
+
+  it("reads the game capture hint from its own variable, exact word only", () => {
+    process.env.SHARE_GAME_CAPTURE_HINT = "true";
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(true);
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
+    process.env.SHARE_GAME_CAPTURE_HINT = "1";
+    expect(shareConfigForServer(null).shareGameCaptureHint).toBe(false);
   });
 
   it("follows the environment default, exact word only", () => {

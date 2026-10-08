@@ -1,5 +1,7 @@
 import type {
+  VoiceAudienceResponse,
   ChannelType,
+  StreamAlertSetting,
   MusicResolved,
   AcquisitionInput,
   AgeCheckResponse,
@@ -24,6 +26,7 @@ import type {
   CommunityHomeLikeResponse,
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
+  CommunityHomePostTranslationsResponse,
   CreateCommunityHomeCommentRequest,
   CreateCommunityHomeMediaUploadRequest,
   CreateCommunityHomeMediaUploadResponse,
@@ -702,7 +705,35 @@ export interface ShareConfig {
    * API: off.
    */
   shareHighMotionGuard?: boolean;
+  /**
+   * The Linux desktop app may carry the computer's sound, minus the call
+   * (`lib/linux-shell-share-audio.ts`). Absent on an older API: off.
+   */
+  linuxDesktopSystemAudio?: boolean;
+  /**
+   * The Windows desktop app watches the presenter's share for a dead picture
+   * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
+   * Absent on an older API: off.
+   */
+  shareGameCaptureHint?: boolean;
+  /**
+   * A share's picture starts at the stage's layer, and a presenter's share is
+   * not republished when the room crosses twenty
+   * (`lib/share-fast-start.ts`). Absent on an older API: off.
+   */
+  shareFastStartQuality?: boolean;
 }
+
+/**
+ * What `stream_start_notifications` means for this person in this server: is
+ * the flag on, what they get by default (on for a small server, off for a large
+ * one or a community) and the member count behind that. The choice itself is
+ * `notifications.streamAlerts` in the preferences the client already syncs.
+ */
+export const fetchStreamAlertSetting = (serverId: string) =>
+  apiFetch<StreamAlertSetting>(
+    `/api/servers/${encodeURIComponent(serverId)}/stream-alerts`,
+  );
 
 /** `serverId` is the server the call is in; a DM call asks without one. */
 export const fetchShareConfig = (serverId?: string | null) =>
@@ -710,6 +741,39 @@ export const fetchShareConfig = (serverId?: string | null) =>
     serverId
       ? `/api/share/config?serverId=${encodeURIComponent(serverId)}`
       : "/api/share/config",
+  );
+
+/**
+ * What a voice call's controls may offer in this server, decided by the
+ * operator without a deploy (`GET /api/voice/config?serverId=`,
+ * `voiceConfigForServer` on the server). Every field optional: an older API
+ * answers 404 or omits it, and absent is off.
+ */
+export interface VoiceConfig {
+  /**
+   * A host here may turn audience mode on (`docs/plans/AUDIENCE_MODE.md`).
+   * Only gates turning it ON: a room already in audience mode shows its
+   * state and its off switch whatever this says.
+   */
+  audienceMode?: boolean;
+}
+
+export const fetchVoiceConfig = (serverId: string) =>
+  apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** Turn audience mode on or off in the call running in this voice channel. */
+export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
+  put<VoiceAudienceResponse>(`/api/channels/${channelId}/voice-audience`, { enabled });
+
+/** "Liberar o microfone" / "Silenciar" for one person while audience mode is on. */
+export const setVoiceAudienceSpeaker = (
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+) =>
+  put<VoiceAudienceResponse>(
+    `/api/channels/${channelId}/voice-audience/speakers/${userId}`,
+    { allowed },
   );
 
 /**
@@ -794,6 +858,28 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.
    */
   fastStart?: boolean;
+  /**
+   * `watch_camera_sync` for this server (runtime flag, per server, off by
+   * default): whether the presenter's camera follows the film's clock.
+   * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
+   */
+  cameraSync?: boolean;
+  /**
+   * `watch_now_banner` (runtime flag, off by default, per server): the strip
+   * above the conversation that says somebody is sharing their screen in a
+   * voice channel, or a watch party is live, with one tap to watch. The
+   * deployment-wide answer carries the global value, which is what a
+   * conversation (no server) reads. Absent on an older API, which reads as
+   * off. See `lib/watch-now.ts` and `docs/plans/WATCH_NOW.md`.
+   */
+  watchNowBanner?: boolean;
+  /**
+   * `stream_start_notifications` (runtime flag, off by default, per server):
+   * the server may tell members a stream started. The client shows the
+   * per-server switch only where this is true. Absent on an older API, which
+   * reads as off.
+   */
+  streamStartNotifications?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
@@ -827,6 +913,12 @@ export const fetchChannelLive = (channelId: string) =>
      */
     partyLive?: boolean;
     watching: number;
+    /**
+     * The server's count of accounts on the playlist, only while
+     * `watch_party_server_audience` is on for the server. Absent otherwise
+     * and from an older API: `watching` is then the number.
+     */
+    viewers?: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);
 
@@ -1858,8 +1950,26 @@ export const updateServerCommunityHomeConfig = (
     body,
   );
 
-export const fetchCommunityHomePosts = (serverId: string) =>
-  apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/posts`);
+/**
+ * `lang` is the reader's UI locale. The API serves an automatic translation
+ * into it where the server has that on and one exists, and the original
+ * otherwise; it never decides what the viewer may read.
+ */
+export const fetchCommunityHomePosts = (serverId: string, lang?: string) =>
+  apiFetch<CommunityHomePostsResponse>(
+    `/api/servers/${serverId}/home/posts${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
+/** Staff-only, read only: what each language's reader sees for this post. */
+export const fetchCommunityHomeTranslations = (
+  serverId: string,
+  postId: string,
+) =>
+  apiFetch<CommunityHomePostTranslationsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/translations`,
+  );
 
 /** Staff-only: drafts + scheduled, never mixed into the published feed. */
 export const fetchCommunityHomeDrafts = (serverId: string) =>

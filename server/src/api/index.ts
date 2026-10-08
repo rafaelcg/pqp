@@ -143,6 +143,8 @@ import {
   liveHlsTelemetryBatchSchema,
   liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
+  setVoiceAudienceSchema,
+  setVoiceAudienceSpeakerSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -241,7 +243,13 @@ import {
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
   describeChannelVoiceTransport,
+  // --- audience mode ---
+  AudienceModeError,
+  setVoiceAudienceMode,
+  setVoiceAudienceSpeaker,
 } from "../ws/voice.js";
+import { audienceModeEnabledFor } from "../voice/audience.js";
+import { voiceConfigForServer } from "../lib/voice-config.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -366,6 +374,11 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import {
+  isCommunityHomeTranslationConfigured,
+  isCommunityHomeTranslationOn,
+  listPostTranslations,
+} from "../services/community-home-translation.js";
 import {
   cancelChannelSession,
   ChannelSessionError,
@@ -683,6 +696,7 @@ import {
   listConversations,
   openConversation,
 } from "../services/dms.js";
+import { getStreamAlertSetting } from "../services/stream-alerts.js";
 import {
   canAccessChannel,
   findUserById,
@@ -2651,6 +2665,12 @@ router.get("/api/share/config", async ({ url }) =>
   shareConfigForServer(url.searchParams.get("serverId")),
 );
 
+// Voice call switches the operator flips live (`lib/voice-config.ts`):
+// whether a host in this server is offered audience mode.
+router.get("/api/voice/config", async ({ url }) =>
+  voiceConfigForServer(url.searchParams.get("serverId")),
+);
+
 // Whether the operator has forced every stale client to update
 // (`lib/client-update-config.ts`). Read per request, additive, default off.
 router.get("/api/client-update/config", async () => clientUpdateConfig());
@@ -3009,6 +3029,25 @@ router.post(
 );
 
 /**
+ * What this member gets from the start-of-stream notice in this server: the
+ * flag, their effective choice, the server's default and its member count, so
+ * the switch in the server's menu shows the real state without guessing a
+ * count (`services/stream-alerts.ts`). Members only; the choice itself is
+ * written through the preferences the client already syncs.
+ */
+router.get(
+  "/api/servers/:serverId/stream-alerts",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const setting = await getStreamAlertSetting(serverId!, user.id);
+    if (!setting) {
+      throw new NotFound("Server not found");
+    }
+    return setting;
+  },
+);
+
+/**
  * The watch party waitlist (`services/watch-party-waitlist.ts`). Every read
  * answers only the caller's own row; nothing here can list anybody else.
  */
@@ -3030,6 +3069,7 @@ router.post("/api/watch-party/waitlist", async ({ req, res, user }) => {
     audienceBucket: body.audienceBucket ?? null,
     note: body.note,
     streamChannel: body.streamChannel,
+    source: body.source ?? null,
   });
   return { entry };
 });
@@ -4071,6 +4111,18 @@ function requireCommunityHome(): void {
 }
 
 /**
+ * Readers in other languages will be served an automatic translation of this
+ * server's posts: the flag is on for it AND a key is configured to make them.
+ * What the staff composer says to the person writing.
+ */
+function translationActiveFor(serverId: string): boolean {
+  return (
+    isCommunityHomeTranslationOn(serverId) &&
+    isCommunityHomeTranslationConfigured()
+  );
+}
+
+/**
  * Still behind auth like every other `/api` route. Answers 200 with the
  * flags rather than 404ing, so the client can tell "off" from "unreachable".
  * `mediaEnabled` is the storage probe, folded in so the client needs one
@@ -4132,17 +4184,26 @@ router.patch(
   },
 );
 
-router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
-  requireCommunityHome();
-  requireCommunityHome();
-  await requireServerMember(serverId!, user.id);
-  try {
-    const posts = await listCommunityHomePosts(serverId!, user.id);
-    return { posts };
-  } catch (error) {
-    mapCommunityHomeError(error);
-  }
-});
+router.get(
+  "/api/servers/:serverId/home/posts",
+  async ({ url, user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      // `?lang=` is the reader's UI locale. It only ever picks WHICH stored
+      // translation to look for (anything outside en / pt / es is ignored);
+      // what a viewer may read is decided by the lock, not by the language.
+      const posts = await listCommunityHomePosts(
+        serverId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { posts, translationEnabled: translationActiveFor(serverId!) };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
 
 router.get(
   "/api/servers/:serverId/home/drafts",
@@ -4151,7 +4212,7 @@ router.get(
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
-      return { posts };
+      return { posts, translationEnabled: translationActiveFor(serverId!) };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4160,12 +4221,41 @@ router.get(
 
 router.get(
   "/api/servers/:serverId/home/posts/:postId",
-  async ({ user }, { serverId, postId }) => {
+  async ({ url, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      const post = await getCommunityHomePost(serverId!, postId!, user.id);
+      const post = await getCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
       return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * Staff, read only: what each language's reader is shown for this post, and
+ * whether it is still current. Behind MANAGE_SERVER, and the post is looked up
+ * through the same read as the feed first, so an id from another server (or a
+ * draft nobody may see) is a 404 here too. There is no write: a translation
+ * is made again by editing the post.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/translations",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      await getCommunityHomePost(serverId!, postId!, user.id);
+      return {
+        enabled: translationActiveFor(serverId!),
+        translations: await listPostTranslations(postId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -5488,6 +5578,10 @@ router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
       ? { ended: true, partyLive: party?.status === "live" }
       : {}),
     watching: state.watching,
+    // The server's own count of accounts on the playlist, only while
+    // `watch_party_server_audience` is on for this channel's server (absent
+    // otherwise, and a client that does not know it ignores it).
+    ...(state.viewers !== undefined ? { viewers: state.viewers } : {}),
     participants: state.participants,
   };
 });
@@ -8558,6 +8652,145 @@ router.post(
     return { ok: true };
   },
 );
+
+// ------------------------------------------------------------ audience mode
+//
+// "Modo plateia" (`docs/plans/AUDIENCE_MODE.md`): a host turns a running call
+// into a stage. Two routes, both about a ROOM rather than a person's sanction:
+//
+// - WHO: `MUTE_MEMBERS` or `MANAGE_CHANNELS` in that channel (owner and
+//   Administrator resolve to every bit). No outrank check, deliberately:
+//   neither action is a sanction, and the people who run a room (anyone with
+//   either bit) are never affected by it, so a moderator can never silence
+//   another moderator this way. The server mute keeps its outrank check.
+// - WHERE: a server's plain voice channel only. A watch party already has a
+//   stage model and this does not touch it; a DM or group call has nobody to
+//   run it.
+// - THE FLAG (`audience_mode`, per server, default off) gates turning it ON.
+//   Turning it OFF is always allowed, so the flag going off can never strand
+//   a room nobody can unmute.
+//
+// Both answer `{ audience, enforcement }`: what the room now says, and what
+// the media server did with it, so the host's control can show a mic that is
+// still open instead of claiming it worked.
+
+async function requireAudienceHost(
+  serverId: string,
+  userId: string,
+  channelId: string,
+): Promise<void> {
+  await requireServerMember(serverId, userId);
+  if (
+    (await memberHasPermission(serverId, userId, Permission.MUTE_MEMBERS, channelId)) ||
+    (await memberHasPermission(serverId, userId, Permission.MANAGE_CHANNELS, channelId))
+  ) {
+    return;
+  }
+  throw new Forbidden("You do not have permission to do that");
+}
+
+async function requireAudienceChannel(channelId: string, userId: string) {
+  const channel = await requireChannelAccess(channelId, userId);
+  if (channel.kind !== "server" || !channel.server_id) {
+    throw new NotFound("Channel not found");
+  }
+  if (channel.type !== "voice") {
+    throw new HttpError(
+      400,
+      "Audience mode is for voice channels. A watch party already has its own stage.",
+    );
+  }
+  return { ...channel, server_id: channel.server_id };
+}
+
+function audienceModeHttpError(error: unknown): never {
+  if (error instanceof AudienceModeError) {
+    throw new HttpError(409, error.message);
+  }
+  throw error;
+}
+
+router.put(
+  "/api/channels/:channelId/voice-audience",
+  async ({ req, user }, { channelId }) => {
+    const body = setVoiceAudienceSchema.parse(await readJsonBody(req));
+    const channel = await requireAudienceChannel(channelId!, user.id);
+    await requireAudienceHost(channel.server_id, user.id, channelId!);
+    if (body.enabled) {
+      if (!audienceModeEnabledFor(channel.server_id)) {
+        throw new Forbidden("Audience mode is not available on this server");
+      }
+      // Turned on from inside the call: "silence everyone but me" means the
+      // host is in it, and it keeps "nobody left who runs it" meaningful.
+      if (!(await findVoiceChannelForUser(user.id, new Set([channelId!])))) {
+        throw new HttpError(409, "Join the call first");
+      }
+    }
+    let result;
+    try {
+      result = await setVoiceAudienceMode(channelId!, body.enabled, user.id, "host");
+    } catch (error) {
+      audienceModeHttpError(error);
+    }
+    if (result.changed) {
+      // After the change, and never able to undo it or fail the answer: the
+      // room has already changed, and telling the host it did not (so they
+      // press again, find nothing to change, and no audit is ever written)
+      // is worse than a missing row. The failure is logged loudly instead.
+      try {
+        await logAudit({
+          serverId: channel.server_id,
+          actorId: user.id,
+          action: body.enabled
+            ? "channel.voice_audience_on"
+            : "channel.voice_audience_off",
+          targetType: "channel",
+          targetId: channelId!,
+          changes: [{ key: "audienceMode", old: !body.enabled, new: body.enabled }],
+        });
+      } catch (error) {
+        logEvent("voice.audienceMode.auditFailed", {
+          channelId: channelId!,
+          actorId: user.id,
+          enabled: body.enabled,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { audience: result.audience, enforcement: result.enforcement };
+  },
+);
+
+/**
+ * "Liberar o microfone" / "Silenciar": let one person in the audience speak,
+ * or stop letting them. Not audited, for the reason lowering a hand is not:
+ * calling on the next person is the ordinary running of a room. The target
+ * must hold a seat in the call (orphans in their resume window count).
+ * Idempotent.
+ */
+router.put(
+  "/api/channels/:channelId/voice-audience/speakers/:userId",
+  async ({ req, user }, { channelId, userId }) => {
+    const body = setVoiceAudienceSpeakerSchema.parse(await readJsonBody(req));
+    const channel = await requireAudienceChannel(channelId!, user.id);
+    await requireAudienceHost(channel.server_id, user.id, channelId!);
+    if (userId === user.id) {
+      throw new HttpError(400, "You already run this call");
+    }
+    if (body.allowed && !(await findVoiceChannelForUser(userId!, new Set([channelId!])))) {
+      throw new NotFound("That member is not in this call");
+    }
+    let result;
+    try {
+      result = await setVoiceAudienceSpeaker(channelId!, userId!, body.allowed, user.id);
+    } catch (error) {
+      audienceModeHttpError(error);
+    }
+    return { audience: result.audience, enforcement: result.enforcement };
+  },
+);
+
+// -------------------------------------------------------- end audience mode
 
 // ----------------------------------------------------- end voice moderation
 

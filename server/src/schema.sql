@@ -1578,6 +1578,31 @@ CREATE TABLE IF NOT EXISTS voice_raised_hands (
   PRIMARY KEY (channel_id, user_id)
 );
 
+-- Audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md): a running call
+-- turned into a stage. One row while it is on. It belongs to the CALL, so it
+-- cascades with the room row, which goes when the last seat does: a forgotten
+-- audience mode cannot outlive the call it was turned on in. Two tables rather
+-- than columns on `voice_rooms`, so shipping it never takes ACCESS EXCLUSIVE
+-- on the hottest voice table (CLAUDE.md pitfall 22), and so the lifetime is
+-- stated by the cascade chain: the room goes, the mode goes; the mode goes,
+-- every invitation goes.
+CREATE TABLE IF NOT EXISTS voice_audience_mode (
+  channel_id  UUID PRIMARY KEY REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  enabled_by  UUID NOT NULL,
+  enabled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- People a host let speak while audience mode is on. Keyed on the person,
+-- like a raised hand: a socket blip or a refresh inside the resume window
+-- keeps it, leaving the call drops it (`ws/voice.ts`).
+CREATE TABLE IF NOT EXISTS voice_audience_speakers (
+  channel_id  UUID NOT NULL REFERENCES voice_audience_mode(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  granted_by  UUID NOT NULL,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
 -- it for the cluster.
@@ -3900,6 +3925,55 @@ ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT 
 -- newer flip. Same idea as permissions_version.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_version INTEGER NOT NULL DEFAULT 0;
 
+-- Automatic translation of a published Baú post, one row per (post, language).
+-- Written by the background job in services/community-home-translation.ts,
+-- behind the runtime flag `community_home_translation`; empty on every
+-- deployment that never turns it on. `source_hash` is md5 of the title,
+-- teaser and body the translation was made from (see translationSourceHash),
+-- so an edit makes a row stale without anything having to delete it: the read
+-- compares and serves the original instead, and the sweep makes a fresh one.
+-- `same_language` rows are the answer "the post is already in `lang`": no
+-- text, but the sweep must not ask again. New tables only: nothing here
+-- alters or rewrites an existing one.
+CREATE TABLE IF NOT EXISTS community_home_post_translations (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  title TEXT,
+  body TEXT NOT NULL DEFAULT '',
+  teaser TEXT,
+  source_lang TEXT,
+  same_language BOOLEAN NOT NULL DEFAULT FALSE,
+  source_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, lang)
+);
+
+-- The claim. A translation is a network call, so it is never made inside a
+-- transaction; what keeps two API instances from translating the same post
+-- twice is this row, taken with one atomic INSERT ... ON CONFLICT whose WHERE
+-- is the lease and the backoff. `attempts` counts tries for one `source_hash`;
+-- an edit starts it over.
+CREATE TABLE IF NOT EXISTS community_home_translation_jobs (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  PRIMARY KEY (post_id, lang)
+);
+
+-- What the instance has spent today, shared by every API machine, so the
+-- daily cap means the deployment and not one process.
+CREATE TABLE IF NOT EXISTS community_home_translation_usage (
+  day DATE PRIMARY KEY,
+  chars BIGINT NOT NULL DEFAULT 0,
+  requests INTEGER NOT NULL DEFAULT 0
+);
+
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
 -- the session flips live on its own when somebody starts sharing (see
@@ -4805,6 +4879,22 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
 CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
   ON watch_party_waitlist (user_id);
 
+-- Which campaign page sent the row, when one did: `streamers` is the button on
+-- `pqp.gg/streamers`. NULL is every other door (the sidebar teaser, the
+-- `/watch-party` page), which is every row written before this column. Shown
+-- on the dashboard as a tag; the API accepts only the names in
+-- `WATCH_PARTY_WAITLIST_SOURCES` and keeps an existing value when an edit
+-- sends none.
+ALTER TABLE watch_party_waitlist ADD COLUMN IF NOT EXISTS source TEXT
+  CHECK (source ~ '^[a-z0-9-]{1,32}$');
+
+-- The dashboard's newest campaign rows with no server
+-- (`serverlessCampaign`, at most 20), read on every load of the list: walked
+-- newest first and stopped at the limit, instead of sorting every match.
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_campaign
+  ON watch_party_waitlist (created_at DESC)
+  WHERE server_id IS NULL AND source IS NOT NULL;
+
 -- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
 -- A flag is only a row here once an operator has decided something about it:
 -- no row, or `enabled` NULL, means "follow the environment variable, then the
@@ -4885,3 +4975,39 @@ CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
 ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS device_class TEXT
   CHECK (device_class IN ('phone', 'tablet', 'desktop'));
 ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS detail JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- WHO IS WATCHING RIGHT NOW, one row per API process per broadcast. Each
+-- process rewrites its own row every ~10 s with the accounts IT saw within the
+-- heartbeat tolerance (`hls-viewer-counts.ts`, `publishPresence`), so a reader
+-- gets a count that is both fresh and deduplicated across machines:
+-- `hls_session_viewers` is flushed once a minute and is up to a flush behind,
+-- far too stale for a number somebody is looking at. A row ten seconds old is
+-- the whole point; readers ignore anything older than ~25 s, so a machine that
+-- died takes its viewers out of the count by itself. One upsert per process per
+-- broadcast per interval (HOT: no indexed column changes), never per poll.
+CREATE TABLE IF NOT EXISTS hls_session_presence (
+  channel_id     UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  started_at_ms  BIGINT NOT NULL,
+  instance_id    TEXT NOT NULL,
+  user_ids       UUID[] NOT NULL DEFAULT '{}',
+  sampled_at     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (channel_id, started_at_ms, instance_id)
+);
+
+-- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
+-- channel: when a share has been stable long enough, every API machine that saw
+-- it races one upsert on this row, and only the one that finds
+-- `last_notified_at` older than the 30 minute cooldown wins and tells people
+-- (`services/stream-alerts.ts`). The row is the arbiter, not an optimisation:
+-- two machines can both see one share when its sharer reconnects to the other
+-- inside the debounce window. Rows older than a day are deleted by the next
+-- winning claim (one tiny delete per notice, never a batch job): a row past its
+-- cooldown is only a reminder of when, and the upsert overwrites it anyway.
+CREATE TABLE IF NOT EXISTS stream_alert_channels (
+  channel_id       UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  last_notified_at TIMESTAMPTZ NOT NULL,
+  -- What the notice was for (a watch party's session id), so a broadcast that
+  -- repeats while a party stays live can never claim a second time after the
+  -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
+  start_key        TEXT
+);

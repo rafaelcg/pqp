@@ -8,6 +8,8 @@ import {
 } from "livekit-server-sdk";
 import { z } from "zod";
 import { logEvent } from "../lib/log.js";
+import { mapWithConcurrency } from "../lib/admission.js";
+import { logPerRoom } from "./audience.js";
 import {
   isLiveKitConfigured,
   liveKitPublishGrant,
@@ -20,9 +22,24 @@ import {
   deleteVoiceResweep,
   hasLiveVoiceResweeps,
   isVoiceRegistryEnabled,
+  readVoiceRoomRegions,
   upsertVoiceResweep,
 } from "./registry.js";
-import { sfuRegions } from "./regions.js";
+import {
+  homeRegionId,
+  pinnedRoomRegion,
+  sfuRegions,
+  type SfuRegion,
+} from "./regions.js";
+import {
+  classifyError,
+  isNotFound,
+  logPartialCoverage,
+  regionScopingEnabled,
+  resetSfuControlPlane,
+  runRegionCall,
+  type RegionCallMode,
+} from "./sfu-control-plane.js";
 
 /**
  * LiveKit room administration — the SFU half of voice eviction.
@@ -152,164 +169,266 @@ function getHomeRoomService(): RoomServiceClient | null {
 }
 
 /**
- * The client moderation talks through.
- *
- * Single-region mode: the home client itself, so every call is exactly the
- * call it was before regions existed.
- *
- * With `LIVEKIT_REGIONS` set, a client that asks EVERY box. Moderation is the
- * one place a region lookup is not good enough: a banned account's LiveKit
- * connection outlives its WebSocket, and so the process's own region pin
- * (dropped when the last WS peer leaves), so "which box is this room on" has
- * no answer this process can trust at the moment it matters. The boxes
- * themselves are the authority, as the room already was for "who is in it"
- * (see WHY THE SWEEP IS UNCONDITIONAL above). A room lives on one box, so the
- * others answer an empty list or not-found and cost one call each.
+ * One box a moderation call may be sent to, with a client bound to that box
+ * alone. In single-region mode this is the home client itself and nothing
+ * else changes; with `LIVEKIT_REGIONS` every method goes through
+ * `runRegionCall`, which measures, bounds and fences it (see
+ * `sfu-control-plane.ts`).
  */
-function getRoomService(): SfuRoomService | null {
-  const regions = sfuRegions();
-  if (!regions) {
-    return getHomeRoomService();
+interface RegionTarget {
+  id: string;
+  client: SfuRoomService;
+  /**
+   * True with `LIVEKIT_REGIONS` set. "Not found" is then the ordinary answer
+   * of a box that does not hold the room, not something to report.
+   */
+  regional: boolean;
+  /** Pinned: the room is known to live here. Speculative: asked in case. */
+  mode: RegionCallMode;
+}
+
+function sfuConfigured(): boolean {
+  return liveKitConfig() !== null;
+}
+
+function regionalService(
+  region: SfuRegion,
+  caller: string,
+  mode: RegionCallMode,
+): SfuRoomService {
+  const client = clientFor(region);
+  const guard = <T>(call: string, room: string | undefined, run: () => Promise<T>) =>
+    runRegionCall({
+      region: region.id,
+      home: region.home,
+      call,
+      caller,
+      room,
+      mode,
+      run,
+    });
+  return {
+    listRooms: (names) => guard("listRooms", undefined, () => client.listRooms(names)),
+    listParticipants: (room) =>
+      guard("listParticipants", room, () => client.listParticipants(room)),
+    removeParticipant: (room, identity, options) =>
+      guard("removeParticipant", room, () =>
+        client.removeParticipant(room, identity, options),
+      ),
+    mutePublishedTrack: (room, identity, trackSid, muted) =>
+      guard("mutePublishedTrack", room, () =>
+        client.mutePublishedTrack(room, identity, trackSid, muted),
+      ),
+    updateParticipant: (room, identity, options) =>
+      guard("updateParticipant", room, () =>
+        client.updateParticipant(room, identity, options),
+      ),
+  };
+}
+
+/** One lookup failure line per this long, so a database blip is not a line per sweep. */
+const LOOKUP_LOG_INTERVAL_MS = 10_000;
+let lookupLoggedAt = 0;
+
+/**
+ * The registry read, bounded: it runs on the moderator's request path and the
+ * main pool's own query timeout is 15 s. Postgres itself cancels the statement
+ * after its own 500 ms (`REGION_READ_TIMEOUT_MS` in the registry, so a read behind a lock does not hold a pooled
+ * connection); this client-side race is only the backstop for a reply that
+ * never comes. Either way the rooms count as unknown, which asks every box,
+ * never fewer.
+ */
+const REGION_LOOKUP_BUDGET_MS = 1_000;
+
+async function boundedRegionRead(
+  rooms: readonly string[],
+): Promise<Map<string, string | null>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      readVoiceRoomRegions(rooms),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`region lookup over ${REGION_LOOKUP_BUDGET_MS} ms`)),
+          REGION_LOOKUP_BUDGET_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
-  return fanOutRoomService(
-    regions.map((region) => ({ id: region.id, client: clientFor(region) })),
-  );
 }
 
 /**
- * Which box answered for a participant, so the write that follows a listing
- * (remove, mute, update) goes to that box alone. Bounded: a write whose
- * listing was forgotten simply asks every box.
+ * Which regions these rooms are known to live on: the room's pin in this
+ * process, the registry row (so the other instance's rooms count), and any
+ * `hint` the caller captured earlier. Null means at least one room is unknown,
+ * which the caller must read as "ask every box".
+ *
+ * Unknown is a real and common state, not an error: a room's row goes when its
+ * last peer leaves, while a banned account's LiveKit connection can outlive
+ * that (see the block comment on `targetsFor`). A lookup that fails is unknown
+ * too: moderation fails open to MORE boxes, never fewer.
  */
-const participantBox = new Map<string, RoomServiceClient>();
-const PARTICIPANT_BOX_LIMIT = 10_000;
-
-function participantKey(room: string, identity: string): string {
-  return `${room}\u0000${identity}`;
-}
-
-async function firstThatAnswers<T>(
-  boxes: readonly { id: string; client: RoomServiceClient }[],
-  room: string,
-  identity: string,
-  call: (client: RoomServiceClient) => Promise<T>,
-): Promise<T> {
-  const known = participantBox.get(participantKey(room, identity));
-  if (known) {
-    return call(known);
+async function knownRegionIds(
+  rooms: readonly string[],
+  regions: readonly SfuRegion[],
+  hint: readonly string[] = [],
+  /**
+   * False for a routine repeat of a sweep whose spec carries a hint: it routes
+   * on the hint and this process's pin and leaves the registry to the wide
+   * repeat (every half minute), which asks every box regardless. That keeps
+   * ~180 reads per active room per window off the pool.
+   */
+  readRegistry = true,
+): Promise<Set<string> | null> {
+  if (rooms.length === 0) {
+    return null;
   }
-  const results = await Promise.allSettled(boxes.map((box) => call(box.client)));
-  const answered = results.find(
-    (result): result is PromiseFulfilledResult<Awaited<T>> =>
-      result.status === "fulfilled",
-  );
-  if (answered) {
-    return answered.value;
+  const home = regions[0]!.id;
+  // A region id this deployment no longer runs means home, the same rule as
+  // `resolveSfuRegion`: a room pinned to a box an operator removed has
+  // nowhere else to be.
+  const configured = (id: string) => (regions.some((region) => region.id === id) ? id : home);
+  // Every source is unioned, the hint included: a hint is a box the room WAS
+  // on, and a room that has since been re-pinned elsewhere can still hold
+  // somebody on the old box with a token minted before the eviction.
+  let rows = new Map<string, string | null>();
+  if (readRegistry && isVoiceRegistryEnabled()) {
+    try {
+      rows = await boundedRegionRead(rooms);
+    } catch (error) {
+      const now = Date.now();
+      if (now - lookupLoggedAt >= LOOKUP_LOG_INTERVAL_MS) {
+        lookupLoggedAt = now;
+        logEvent("voice.sfuRegionLookupFailed", { error: describeError(error) });
+      }
+      // The registry is the cluster's view and this process's pin or a hint
+      // may be the stale half of a split (api-a pinned Miami, the row says
+      // Sao Paulo), so a read that did not answer leaves nothing trustworthy:
+      // unknown, which asks every box.
+      return null;
+    }
   }
-  throw (results[0] as PromiseRejectedResult).reason;
+  const known = new Set<string>();
+  for (const room of rooms) {
+    const ids = new Set<string>();
+    const pinned = pinnedRoomRegion(room);
+    if (pinned) {
+      ids.add(configured(pinned));
+    }
+    if (rows.has(room)) {
+      ids.add(configured(rows.get(room) ?? home));
+    }
+    for (const hinted of hint) {
+      ids.add(configured(hinted));
+    }
+    if (ids.size === 0) {
+      return null;
+    }
+    ids.forEach((id) => known.add(id));
+  }
+  return known;
 }
 
-/** LiveKit's answer for a room this box does not hold. */
-function isNotFound(error: unknown): boolean {
-  const shaped = error as { status?: unknown; code?: unknown } | null;
-  return shaped?.status === 404 || shaped?.code === "not_found";
+/**
+ * The boxes a moderation call about `rooms` goes to.
+ *
+ * Single-region mode: the home box, exactly as before regions existed.
+ *
+ * With `LIVEKIT_REGIONS`, a room whose region is KNOWN goes to that box alone,
+ * except when `wide` (the first pass of an eviction, and one repeat in a
+ * half minute), which also looks at the other boxes. Before this, every call asked every box and waited for the slowest, so the
+ * two remote boxes (14 of 754 rooms between them) decided how long moderation
+ * took for the rooms in Sao Paulo, and a heavy tail on the long-haul path
+ * produced ~870 timeouts in eleven days (`sfu-control-plane.ts`).
+ *
+ * A room whose region is NOT known (`rooms === null` for "wherever they are",
+ * or no pin and no hint) still asks every box, because a banned account's
+ * LiveKit connection outlives its WebSocket and so the room's pin, and the
+ * boxes themselves are then the only authority on who is in a room (see
+ * "WHY THE SWEEP IS UNCONDITIONAL" at the top). Those calls are speculative:
+ * a remote box gets a short budget and a circuit, and every box is asked
+ * independently, so a sick one delays only its own answer.
+ *
+ * The runtime flag `sfu_region_scoped_calls` off restores the old
+ * ask-everyone behaviour without a deploy.
+ */
+async function targetsFor(
+  caller: string,
+  rooms: readonly string[] | null,
+  hint: readonly string[] = [],
+  /** False for a caller nothing will repeat: it then never gets a budget or a skip. */
+  repeats = true,
+  /**
+   * Ask the boxes the room is NOT known to be on as well, as the fallback
+   * mode. A known pin says where the room is now, not where somebody with a
+   * pre-eviction token still is (a ghost on the old box after the room was
+   * re-pinned), so an eviction looks everywhere once, and its repeats look
+   * everywhere every `WIDE_SWEEP_PERIOD_S`.
+   */
+  wide = false,
+): Promise<RegionTarget[]> {
+  const regions = sfuRegions();
+  if (!regions) {
+    const home = getHomeRoomService();
+    return home
+      ? [{ id: homeRegionId(), client: home, regional: false, mode: "pinned" }]
+      : [];
+  }
+  const known =
+    regionScopingEnabled() && rooms !== null
+      ? await knownRegionIds(rooms, regions, hint, !(hint.length > 0 && !wide))
+      : null;
+  const fallback: RegionCallMode = repeats ? "speculative" : "oneshot";
+  return regions
+    .filter((region) => known === null || wide || known.has(region.id))
+    .map((region) => {
+      const mode: RegionCallMode = known?.has(region.id) ? "pinned" : fallback;
+      return {
+        id: region.id,
+        client: regionalService(region, caller, mode),
+        regional: true,
+        mode,
+      };
+    });
 }
 
-function fanOutRoomService(
-  boxes: readonly { id: string; client: RoomServiceClient }[],
-): SfuRoomService {
-  return {
-    async listRooms(names?: string[]) {
-      const results = await Promise.allSettled(
-        boxes.map((box) => box.client.listRooms(names)),
-      );
-      const rooms: Room[] = [];
-      let failed: unknown = null;
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") {
-          rooms.push(...result.value);
-        } else {
-          failed ??= result.reason;
-          logEvent("voice.sfuRegionCallFailed", {
-            region: boxes[index]!.id,
-            stage: "listRooms",
-            error: describeError(result.reason),
-          });
-        }
-      });
-      if (failed !== null && results.every((result) => result.status === "rejected")) {
-        throw failed;
-      }
-      return rooms;
-    },
-    async listParticipants(room: string) {
-      const results = await Promise.allSettled(
-        boxes.map((box) => box.client.listParticipants(room)),
-      );
-      const participants: Awaited<ReturnType<RoomServiceClient["listParticipants"]>> = [];
-      let unreachable: unknown = null;
-      results.forEach((result, index) => {
-        if (result.status !== "fulfilled") {
-          // Not-found on the boxes that do not hold the room is the ordinary
-          // case. Anything else means that box could not say, and it may be
-          // the one holding the room.
-          if (!isNotFound(result.reason)) {
-            unreachable ??= result.reason;
-            logEvent("voice.sfuRegionCallFailed", {
-              region: boxes[index]!.id,
-              stage: "listParticipants",
-              room,
-              error: describeError(result.reason),
-            });
-          }
-          return;
-        }
-        for (const participant of result.value) {
-          if (participantBox.size >= PARTICIPANT_BOX_LIMIT) {
-            participantBox.clear();
-          }
-          participantBox.set(
-            participantKey(room, participant.identity),
-            boxes[index]!.client,
-          );
-          participants.push(participant);
-        }
-      });
-      if (results.every((result) => result.status === "rejected")) {
-        throw unreachable ?? (results[0] as PromiseRejectedResult).reason;
-      }
-      // A room lives on one box, so participants from any box are the whole
-      // room. An empty answer is only trusted when every box answered: if a
-      // box failed, the room may be there, and saying "nobody is here" would
-      // let a sweep pass as done. Throwing makes the caller log it, and the
-      // re-sweep window (`scheduleResweep`) tries again.
-      if (participants.length === 0 && unreachable !== null) {
-        throw unreachable;
-      }
-      return participants;
-    },
-    removeParticipant(room, identity, options) {
-      return firstThatAnswers(boxes, room, identity, (client) =>
-        client.removeParticipant(room, identity, options),
-      );
-    },
-    mutePublishedTrack(room, identity, trackSid, muted) {
-      return firstThatAnswers(boxes, room, identity, (client) =>
-        client.mutePublishedTrack(room, identity, trackSid, muted),
-      );
-    },
-    updateParticipant(room, identity, options) {
-      return firstThatAnswers(boxes, room, identity, (client) =>
-        client.updateParticipant(room, identity, options),
-      );
-    },
-  };
+/** How one box fared in a call that went to several. */
+type RegionOutcome = "ok" | "failed" | "skipped";
+
+function outcomeOf(error: unknown): RegionOutcome {
+  return classifyError(error) === "circuit-open" ? "skipped" : "failed";
+}
+
+/**
+ * Say, once per ten seconds, when a result was built from fewer boxes than
+ * were asked. A sweep that covered two boxes of three must never be mistaken
+ * for one that covered all three.
+ */
+function noteCoverage(
+  caller: string,
+  call: string,
+  room: string | undefined,
+  outcomes: readonly { id: string; outcome: RegionOutcome }[],
+): void {
+  logPartialCoverage({
+    caller,
+    call,
+    room,
+    answered: outcomes.filter((entry) => entry.outcome === "ok").map((entry) => entry.id),
+    skipped: outcomes.filter((entry) => entry.outcome === "skipped").map((entry) => entry.id),
+    failed: outcomes.filter((entry) => entry.outcome === "failed").map((entry) => entry.id),
+  });
 }
 
 /** Drop the cached admin client. Tests use this after changing LiveKit env. */
 export function resetSfuAdminClient(): void {
   clients.clear();
-  participantBox.clear();
+  resetSfuControlPlane();
 }
 
 /**
@@ -319,11 +438,7 @@ export function resetSfuAdminClient(): void {
  * deliberately just the call. The HOME box: see `pingSfuRegion` for the rest.
  */
 export async function pingSfu(): Promise<void> {
-  const client = getHomeRoomService();
-  if (!client) {
-    throw new Error("LiveKit is not configured");
-  }
-  await client.listRooms();
+  await listSfuRooms();
 }
 
 /**
@@ -337,7 +452,20 @@ export async function listSfuRooms(): Promise<Room[]> {
   if (!client) {
     throw new Error("LiveKit is not configured");
   }
-  return client.listRooms();
+  const regions = sfuRegions();
+  if (!regions) {
+    return client.listRooms();
+  }
+  // Measured like every other call to the box, so the home region has a
+  // latency window and counters beside the remote ones.
+  return runRegionCall({
+    region: regions[0]!.id,
+    home: true,
+    call: "listRooms",
+    caller: "probe",
+    mode: "pinned",
+    run: () => client.listRooms(),
+  });
 }
 
 /** `listSfuRooms` against one configured region. Rejects for an unknown id. */
@@ -346,7 +474,17 @@ export async function listSfuRoomsInRegion(regionId: string): Promise<Room[]> {
   if (!region) {
     throw new Error(`SFU region ${regionId} is not configured`);
   }
-  return clientFor(region).listRooms();
+  // The dashboard and `/ready` probes: never skipped by the circuit (they are
+  // how a recovered region is noticed), and their successes feed the latency
+  // window the budgets are sized from.
+  return runRegionCall({
+    region: region.id,
+    home: region.home,
+    call: "listRooms",
+    caller: "probe",
+    mode: "pinned",
+    run: () => clientFor(region).listRooms(),
+  });
 }
 
 /** `pingSfu` against one configured region, for `/ready`. */
@@ -480,12 +618,18 @@ function staleFor(
  * snapshotted before the mesh peers were dropped.
  */
 const resweepSpecSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("room"), room: z.string().min(1) }),
+  z.object({
+    kind: z.literal("room"),
+    room: z.string().min(1),
+    /** The box(es) the room was on when it was evicted; see `stampRegions`. */
+    regions: z.array(z.string()).optional(),
+  }),
   z.object({
     kind: z.literal("private"),
     room: z.string().min(1),
     allowedUserIds: z.array(z.string()),
     knownIdentities: z.record(z.string(), z.string()),
+    regions: z.array(z.string()).optional(),
   }),
   z.object({
     kind: z.literal("user"),
@@ -508,23 +652,95 @@ function specFrom(
   return parsed.data;
 }
 
-/** One pass of the sweep `spec` describes. See the three `evictSfu*` entry points for what each selects. */
-function runSweep(
-  client: SfuRoomService,
+/**
+ * Seconds between the repeats that also look at the boxes a room is not
+ * known to be on. Stateless on purpose (a five-second window out of every
+ * thirty, so about one claimed tick lands in it): a repeat that is every
+ * sixth by count would need a counter per row shared by both instances.
+ */
+const WIDE_SWEEP_PERIOD_S = 30;
+const WIDE_SWEEP_WINDOW_S = 5;
+
+function widePassNow(): boolean {
+  return Math.floor(Date.now() / 1000) % WIDE_SWEEP_PERIOD_S < WIDE_SWEEP_WINDOW_S;
+}
+
+/** The boxes one pass of `spec` is sent to. */
+function sweepTargets(spec: ResweepSpec, pass: SweepPass): Promise<RegionTarget[]> {
+  // The first pass is the eviction itself and nothing has repeated it yet, so
+  // it is never skipped or cut short; only the repeats are speculative.
+  const repeats = pass === "resweep";
+  const wide = pass === "first" || widePassNow();
+  switch (spec.kind) {
+    case "room":
+      return targetsFor("sweep-room", [spec.room], spec.regions, repeats, wide);
+    case "private":
+      return targetsFor("sweep-private", [spec.room], spec.regions, repeats, wide);
+    case "user":
+      return targetsFor("sweep-user", spec.rooms, [], repeats, wide);
+  }
+}
+
+/**
+ * One pass of the sweep `spec` describes. See the three `evictSfu*` entry
+ * points for what each selects.
+ *
+ * Every box runs the pass INDEPENDENTLY and in parallel: the home box is done
+ * the moment it answers, whatever a remote one is doing, and a remote box that
+ * is slow or skipped costs only its own share. (The old shape merged the boxes
+ * behind one client and waited for the slowest.) Never rejects.
+ */
+async function runSweep(
   spec: ResweepSpec,
   pass: SweepPass,
   evictedAt: number,
 ): Promise<void> {
+  let targets: RegionTarget[];
+  try {
+    targets = await sweepTargets(spec, pass);
+  } catch (error) {
+    // Resolving the boxes cannot fail in practice (the registry lookup
+    // already falls back to "ask every box"), but a pass that rejects would
+    // reject the claim tick that ran it.
+    logEvent("voice.sfuEvictFailed", {
+      room: spec.kind === "user" ? undefined : spec.room,
+      stage: "route",
+      error: describeError(error),
+    });
+    return;
+  }
+  const outcomes = await Promise.all(
+    targets.map(async (target) => ({
+      id: target.id,
+      outcome: await runSweepOn(target, spec, pass, evictedAt),
+    })),
+  );
+  if (targets.some((target) => target.mode !== "pinned")) {
+    noteCoverage(
+      `sweep-${spec.kind}`,
+      spec.kind === "user" ? "listRooms" : "listParticipants",
+      spec.kind === "user" ? undefined : spec.room,
+      outcomes,
+    );
+  }
+}
+
+function runSweepOn(
+  target: RegionTarget,
+  spec: ResweepSpec,
+  pass: SweepPass,
+  evictedAt: number,
+): Promise<RegionOutcome> {
   switch (spec.kind) {
     case "room":
       // No `mintedAt` test: the channel is gone, so `POST /api/voice/token`
       // can never issue a token for this room again and every participant a
       // repeat pass can find is by definition replaying a pre-deletion one.
-      return sweepRoom(client, spec.room, "channel", new Map(), () => true);
+      return sweepRoom(target, spec.room, "channel", new Map(), () => true);
     case "private": {
       const allowed = new Set(spec.allowedUserIds);
       return sweepRoom(
-        client,
+        target,
         spec.room,
         "channel-private",
         new Map(Object.entries(spec.knownIdentities)),
@@ -534,17 +750,18 @@ function runSweep(
       );
     }
     case "user":
-      return sweepUserRooms(client, spec, pass, evictedAt);
+      return sweepUserRooms(target, spec, pass, evictedAt);
   }
 }
 
 async function sweepUserRooms(
-  client: SfuRoomService,
+  target: RegionTarget,
   spec: Extract<ResweepSpec, { kind: "user" }>,
   pass: SweepPass,
   evictedAt: number,
-): Promise<void> {
+): Promise<RegionOutcome> {
   const { userId, rooms } = spec;
+  const { client } = target;
   const knownIdentities = new Map(Object.entries(spec.knownIdentities));
   // One listing narrows an arbitrary number of candidate channels down to
   // the rooms that actually exist, so a 50-channel server costs 1 + (live
@@ -553,18 +770,22 @@ async function sweepUserRooms(
   try {
     active = await client.listRooms(rooms === null ? undefined : [...rooms]);
   } catch (error) {
-    logEvent("voice.sfuEvictFailed", {
-      userId,
-      stage: "listRooms",
-      error: describeError(error),
-    });
-    return;
+    const outcome = outcomeOf(error);
+    if (outcome === "failed") {
+      logEvent("voice.sfuEvictFailed", {
+        userId,
+        region: target.regional ? target.id : undefined,
+        stage: "listRooms",
+        error: describeError(error),
+      });
+    }
+    return outcome;
   }
 
-  await Promise.all(
+  const outcomes = await Promise.all(
     active.map((room) =>
       sweepRoom(
-        client,
+        target,
         room.name,
         "user",
         knownIdentities,
@@ -574,6 +795,12 @@ async function sweepUserRooms(
       ),
     ),
   );
+  // A listing that answered followed by participant reads the circuit skipped
+  // is not full coverage of this box, and must not be reported as such.
+  if (outcomes.includes("failed")) {
+    return "failed";
+  }
+  return outcomes.includes("skipped") ? "skipped" : "ok";
 }
 
 /**
@@ -625,9 +852,8 @@ function scheduleResweep(
       resweeps.delete(key);
       return;
     }
-    const client = getRoomService();
-    if (client) {
-      void runSweep(client, spec, "resweep", evictedAt);
+    if (sfuConfigured()) {
+      void runSweep(spec, "resweep", evictedAt);
     }
   }, RESWEEP_INTERVAL_MS);
   timer.unref?.();
@@ -679,8 +905,7 @@ export function tickSfuResweeps(): Promise<number> {
   if (claimInFlight) {
     return claimInFlight;
   }
-  const client = isVoiceRegistryEnabled() ? getRoomService() : null;
-  if (!client) {
+  if (!isVoiceRegistryEnabled() || !sfuConfigured()) {
     return Promise.resolve(0);
   }
   const work = (async () => {
@@ -698,7 +923,6 @@ export function tickSfuResweeps(): Promise<number> {
           return Promise.resolve();
         }
         return runSweep(
-          client,
           spec,
           "resweep",
           Math.floor(row.evictedAt.getTime() / 1000),
@@ -735,27 +959,41 @@ export function stopSfuResweeps(): void {
  * survive a rolling deploy. New tokens always carry the user id.
  */
 async function sweepRoom(
-  client: SfuRoomService,
+  target: RegionTarget,
   room: string,
   reason: string,
   knownIdentities: ReadonlyMap<string, string>,
   shouldEvict: (participant: ParticipantView) => boolean,
-): Promise<void> {
+): Promise<RegionOutcome> {
+  const { client } = target;
   let participants;
   try {
     participants = await client.listParticipants(room);
   } catch (error) {
-    // An SFU room only exists once somebody joined it over LiveKit, so "room
-    // not found" is the ordinary case for a mesh-era channel. We cannot tell
-    // that apart from an outage from here, and an outage during a ban is
-    // exactly what must not pass silently — so it is logged either way.
-    logEvent("voice.sfuEvictFailed", {
-      room,
-      reason,
-      stage: "list",
-      error: describeError(error),
-    });
-    return;
+    // With several boxes, "room not found" is simply the answer of a box that
+    // does not hold the room: the box answered, so there is nothing to report.
+    if (target.regional && isNotFound(error)) {
+      return "ok";
+    }
+    const outcome = outcomeOf(error);
+    // A box skipped by its circuit is reported once, as partial coverage, by
+    // the caller; a line per skipped sweep would be the noise the circuit
+    // exists to remove.
+    if (outcome === "failed") {
+      // An SFU room only exists once somebody joined it over LiveKit, so
+      // "room not found" is the ordinary case for a mesh-era channel. We
+      // cannot tell that apart from an outage from here on a single box, and
+      // an outage during a ban is exactly what must not pass silently, so it
+      // is logged either way.
+      logEvent("voice.sfuEvictFailed", {
+        room,
+        reason,
+        region: target.regional ? target.id : undefined,
+        stage: "list",
+        error: describeError(error),
+      });
+    }
+    return outcome;
   }
 
   // `removeParticipant` alone only disconnects: LiveKit's own docs note the
@@ -779,6 +1017,7 @@ async function sweepRoom(
   // (already failing), so there is no legitimate token in that window to void.
   const revokeTokenTs = BigInt(nowSeconds() + 1);
 
+  let removalFailed = false;
   await Promise.all(
     participants.map(async (participant) => {
       const identity = participant.identity;
@@ -804,31 +1043,68 @@ async function sweepRoom(
         await client.removeParticipant(room, identity, { revokeTokenTs });
         logEvent("voice.sfuEvicted", { room, identity, userId, reason });
       } catch (error) {
+        removalFailed = true;
         logEvent("voice.sfuEvictFailed", {
           room,
           identity,
           userId,
           reason,
+          region: target.regional ? target.id : undefined,
           stage: "remove",
           error: describeError(error),
         });
       }
     }),
   );
+  return removalFailed ? "failed" : "ok";
+}
+
+/**
+ * Stamp the boxes a room is on into the spec, while they can still be read.
+ *
+ * A re-sweep runs every few seconds for fifteen minutes, and by its second
+ * tick the room's registry row and this process's pin are usually gone (the
+ * last peer left, which is exactly what an eviction causes). Without this, a
+ * deleted channel's room, which lived in Sao Paulo, would be looked for on
+ * every box for the whole window. The hint is only ever a way to ask FEWER
+ * boxes about a room that was known; no hint (and nothing readable) means ask
+ * them all. The spec is stored in `voice_resweeps.scope`, so the sibling that
+ * claims the row has the same hint.
+ */
+async function stampRegions(
+  spec: ResweepSpec,
+  hint: string | null | undefined,
+): Promise<ResweepSpec> {
+  if (spec.kind === "user" || !regionScopingEnabled()) {
+    return spec;
+  }
+  const regions = sfuRegions();
+  if (!regions) {
+    return spec;
+  }
+  const known = await knownRegionIds(
+    [spec.room],
+    regions,
+    hint ? [hint] : [],
+  );
+  return known ? { ...spec, regions: [...known] } : spec;
 }
 
 /** The first pass now, the repeats scheduled; one tracked promise for both. */
 function evict(
-  client: SfuRoomService,
   key: string,
   spec: ResweepSpec,
+  regionHint?: string | null,
 ): Promise<void> {
   const evictedAt = nowSeconds();
   return track(
-    Promise.all([
-      runSweep(client, spec, "first", evictedAt),
-      scheduleResweep(key, spec, evictedAt),
-    ]).then(() => undefined),
+    (async () => {
+      const stamped = await stampRegions(spec, regionHint);
+      await Promise.all([
+        runSweep(stamped, "first", evictedAt),
+        scheduleResweep(key, stamped, evictedAt),
+      ]);
+    })(),
   );
 }
 
@@ -841,12 +1117,11 @@ function evict(
  * moment anyone joins — so a deleted room plus a live token is a way back in.
  * An emptied room is reaped by LiveKit's own `emptyTimeout` anyway.
  */
-export function evictSfuRoom(room: string): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
+export function evictSfuRoom(room: string, regionHint?: string | null): Promise<void> {
+  if (!sfuConfigured()) {
     return Promise.resolve();
   }
-  return evict(client, `room:${room}`, { kind: "room", room });
+  return evict(`room:${room}`, { kind: "room", room }, regionHint);
 }
 
 /**
@@ -861,17 +1136,21 @@ export function evictSfuUsersExcept(
   room: string,
   allowedUserIds: ReadonlySet<string>,
   knownIdentities: ReadonlyMap<string, string>,
+  regionHint?: string | null,
 ): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
+  if (!sfuConfigured()) {
     return Promise.resolve();
   }
-  return evict(client, `private:${room}`, {
-    kind: "private",
-    room,
-    allowedUserIds: [...allowedUserIds],
-    knownIdentities: Object.fromEntries(knownIdentities),
-  });
+  return evict(
+    `private:${room}`,
+    {
+      kind: "private",
+      room,
+      allowedUserIds: [...allowedUserIds],
+      knownIdentities: Object.fromEntries(knownIdentities),
+    },
+    regionHint,
+  );
 }
 
 /** How long to wait before retrying a failed `deleteVoiceResweep`. */
@@ -936,8 +1215,7 @@ export function evictSfuUser(
   rooms: readonly string[] | null,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
+  if (!sfuConfigured()) {
     return Promise.resolve();
   }
   // An explicit empty scope means "no rooms", but `listRooms([])` means "all
@@ -949,7 +1227,7 @@ export function evictSfuUser(
   // Keyed on the user rather than a room: the scope is "wherever they are", and
   // a second ban of the same person should restart one window, not open a
   // second one beside it.
-  return evict(client, `user:${userId}`, {
+  return evict(`user:${userId}`, {
     kind: "user",
     userId,
     rooms: rooms === null ? null : [...rooms],
@@ -983,25 +1261,57 @@ export async function setSfuUserMuted(
   muted: boolean,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const client = getRoomService();
-  if (!client) {
+  const targets = await targetsFor("mute", [room], [], false);
+  if (targets.length === 0) {
     return false;
   }
+  // Every box the room may be on, asked together: the answer is "did anybody
+  // get muted", so a box that holds nobody (or is slow) cannot hold it up
+  // beyond its own budget. A room whose region is known is one box.
+  const results = await Promise.all(
+    targets.map((target) => muteOn(target, room, userId, muted, knownIdentities)),
+  );
+  if (targets[0]!.mode !== "pinned") {
+    noteCoverage(
+      "mute",
+      "listParticipants",
+      room,
+      results.map((result, index) => ({ id: targets[index]!.id, outcome: result.outcome })),
+    );
+  }
+  return results.some((result) => result.changed);
+}
 
+async function muteOn(
+  target: RegionTarget,
+  room: string,
+  userId: string,
+  muted: boolean,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<{ changed: boolean; outcome: RegionOutcome }> {
+  const { client } = target;
   let participants;
   try {
     participants = await client.listParticipants(room);
   } catch (error) {
-    logEvent("voice.sfuMuteFailed", {
-      room,
-      userId,
-      stage: "list",
-      error: describeError(error),
-    });
-    return false;
+    if (target.regional && isNotFound(error)) {
+      return { changed: false, outcome: "ok" };
+    }
+    const outcome = outcomeOf(error);
+    if (outcome === "failed") {
+      logEvent("voice.sfuMuteFailed", {
+        room,
+        userId,
+        region: target.regional ? target.id : undefined,
+        stage: "list",
+        error: describeError(error),
+      });
+    }
+    return { changed: false, outcome };
   }
 
   let changed = false;
+  let failed = false;
   await Promise.all(
     participants.map(async (participant) => {
       const identity = participant.identity;
@@ -1032,10 +1342,12 @@ export async function setSfuUserMuted(
             muted,
           });
         } catch (error) {
+          failed = true;
           logEvent("voice.sfuMuteFailed", {
             room,
             identity,
             userId,
+            region: target.regional ? target.id : undefined,
             stage: "mute",
             error: describeError(error),
           });
@@ -1043,7 +1355,7 @@ export async function setSfuUserMuted(
       }
     }),
   );
-  return changed;
+  return { changed, outcome: failed ? "failed" : "ok" };
 }
 
 /**
@@ -1071,28 +1383,60 @@ export async function setSfuUserCanPublish(
   grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean },
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const client = getRoomService();
-  if (!client) {
+  const targets = await targetsFor("publish-grant", [room], [], false);
+  if (targets.length === 0) {
     return false;
   }
+  const results = await Promise.all(
+    targets.map((target) =>
+      publishGrantOn(target, room, userId, grant, knownIdentities),
+    ),
+  );
+  if (targets[0]!.mode !== "pinned") {
+    noteCoverage(
+      "publish-grant",
+      "listParticipants",
+      room,
+      results.map((result, index) => ({ id: targets[index]!.id, outcome: result.outcome })),
+    );
+  }
+  return results.some((result) => result.changed);
+}
+
+async function publishGrantOn(
+  target: RegionTarget,
+  room: string,
+  userId: string,
+  grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean },
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<{ changed: boolean; outcome: RegionOutcome }> {
+  const { client } = target;
   const publish = liveKitPublishGrant(grant);
 
   let participants;
   try {
     participants = await client.listParticipants(room);
   } catch (error) {
-    logEvent("voice.sfuPublishGrantFailed", {
-      room,
-      userId,
-      canSpeak: grant.canSpeak,
-      canStream: grant.canStream,
-      stage: "list",
-      error: describeError(error),
-    });
-    return false;
+    if (target.regional && isNotFound(error)) {
+      return { changed: false, outcome: "ok" };
+    }
+    const outcome = outcomeOf(error);
+    if (outcome === "failed") {
+      logEvent("voice.sfuPublishGrantFailed", {
+        room,
+        userId,
+        region: target.regional ? target.id : undefined,
+        canSpeak: grant.canSpeak,
+        canStream: grant.canStream,
+        stage: "list",
+        error: describeError(error),
+      });
+    }
+    return { changed: false, outcome };
   }
 
   let changed = false;
+  let failed = false;
   await Promise.all(
     participants.map(async (participant) => {
       const identity = participant.identity;
@@ -1120,6 +1464,7 @@ export async function setSfuUserCanPublish(
             trackSid: published.sid,
             error: describeError(error),
           });
+          failed = true;
         }
       }
       try {
@@ -1151,10 +1496,267 @@ export async function setSfuUserCanPublish(
           stage: "update",
           error: describeError(error),
         });
+        failed = true;
       }
     }),
   );
-  return changed;
+  return { changed, outcome: failed ? "failed" : "ok" };
+}
+
+/** What one room-wide grant pass found and did. */
+export interface RoomPublishReconcile {
+  /** Participants we could identify and compared. */
+  checked: number;
+  /** Participants whose permission was rewritten (or whose tracks were muted). */
+  updated: number;
+  /** Users whose rewrite failed on some box: their mic may still be open. */
+  failedUserIds: string[];
+  /** A box the room is (or may be) on did not answer at all. */
+  unreachable: boolean;
+  /** LiveKit is not configured: nothing was asked. */
+  skipped: boolean;
+}
+
+/**
+ * AUDIENCE MODE'S MEDIA HALF (`docs/plans/AUDIENCE_MODE.md`): bring every
+ * participant in one SFU room to the publish grant `grantFor` says they should
+ * have, live, without anybody reconnecting.
+ *
+ * ROOM-WIDE AND ASKS THE SFU, NOT THIS PROCESS. A toggle has to reach the
+ * seat on the other API machine, the orphan inside its resume window and the
+ * participant whose WebSocket died but whose LiveKit connection did not. All
+ * of those are in `listParticipants`, and none of them is in this process's
+ * map (CLAUDE.md pitfall 19), so the room is the authority.
+ *
+ * ONLY WHAT IS WRONG IS TOUCHED. A participant whose permission already
+ * matches, and who publishes nothing they should not, costs one comparison,
+ * which is what makes the repeats (a retry a few seconds later, the 15 s
+ * sweep while the mode is on) cheap enough to run unconditionally.
+ *
+ * REGION-ROUTED like every other call here (`targetsFor`): the room's pinned
+ * box, Miami or London included. `wide` asks every box as well, known ones as
+ * pinned and the rest as one-shots, which is what a REVOKE's first pass does:
+ * a participant whose socket dropped can still be on a box the room is no
+ * longer pinned to (the same reason an eviction's first pass is wide).
+ *
+ * Unidentified participants (no user in the metadata and none in
+ * `knownIdentities`: an egress, a recorder) are left alone, the way every
+ * moderation call here fails open on a participant it cannot name.
+ *
+ * Never rejects. A box that fails its list is `unreachable`; a participant
+ * whose rewrite fails is in `failedUserIds`. The caller shows both to the
+ * host instead of claiming it worked, and retries.
+ */
+export async function reconcileSfuRoomPublishGrants(
+  room: string,
+  grantFor: (
+    userId: string,
+  ) => Promise<{ canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null>,
+  knownIdentities: ReadonlyMap<string, string>,
+  options: { wide?: boolean } = {},
+): Promise<RoomPublishReconcile> {
+  const empty: RoomPublishReconcile = {
+    checked: 0,
+    updated: 0,
+    failedUserIds: [],
+    unreachable: false,
+    skipped: true,
+  };
+  const targets = await targetsFor(
+    "audience-grant",
+    [room],
+    [],
+    false,
+    options.wide === true,
+  );
+  if (targets.length === 0) {
+    return empty;
+  }
+  // One resolution per person however many seats or boxes they appear on.
+  // A resolution that FAILED is not a skip: the person keeps whatever the SFU
+  // already lets them publish, so they are reported as failed and retried,
+  // never counted as enforced.
+  const grants = new Map<string, Promise<GrantOutcome>>();
+  const grantOf = (userId: string) => {
+    let pending = grants.get(userId);
+    if (!pending) {
+      pending = grantFor(userId).then(
+        (grant): GrantOutcome => ({ grant }),
+        (error: unknown): GrantOutcome => {
+          logPerRoom("voice.audienceMode.grantResolveFailed", room, {
+            userId,
+            error: describeError(error),
+          });
+          return { failed: true };
+        },
+      );
+      grants.set(userId, pending);
+    }
+    return pending;
+  };
+  const results = await Promise.all(
+    targets.map((target) => roomGrantsOn(target, room, grantOf, knownIdentities)),
+  );
+  if (targets.length > 1 || targets[0]!.mode !== "pinned") {
+    noteCoverage(
+      "audience-grant",
+      "listParticipants",
+      room,
+      results.map((result, index) => ({ id: targets[index]!.id, outcome: result.outcome })),
+    );
+  }
+  const failed = new Set<string>();
+  let checked = 0;
+  let updated = 0;
+  let unreachable = false;
+  results.forEach((result, index) => {
+    checked += result.checked;
+    updated += result.updated;
+    for (const userId of result.failed) {
+      failed.add(userId);
+    }
+    // A one-shot to a box the room is not known to be on is a precaution:
+    // its silence is not evidence that somebody is unreachable there.
+    if (result.outcome !== "ok" && targets[index]!.mode === "pinned") {
+      unreachable = true;
+    }
+  });
+  return {
+    checked,
+    updated,
+    failedUserIds: [...failed].sort(),
+    unreachable,
+    skipped: false,
+  };
+}
+
+type GrantOutcome =
+  | { grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean } | null }
+  | { failed: true };
+
+/**
+ * How many participants of one room a pass works on at once: each may cost a
+ * permission resolution and up to a few RPCs to the box, and forty at once is
+ * a burst neither the pool nor the box needs.
+ */
+const ROOM_GRANT_CONCURRENCY = 8;
+
+function sameSources(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
+  const left = [...(a ?? [])].sort();
+  const right = [...(b ?? [])].sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function roomGrantsOn(
+  target: RegionTarget,
+  room: string,
+  grantOf: (userId: string) => Promise<GrantOutcome>,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<{ checked: number; updated: number; failed: string[]; outcome: RegionOutcome }> {
+  const { client } = target;
+  let participants: ParticipantInfo[];
+  try {
+    participants = await client.listParticipants(room);
+  } catch (error) {
+    if (target.regional && isNotFound(error)) {
+      return { checked: 0, updated: 0, failed: [], outcome: "ok" };
+    }
+    const outcome = outcomeOf(error);
+    if (outcome === "failed") {
+      logPerRoom("voice.audienceMode.enforceFailed:list", room, {
+        region: target.regional ? target.id : undefined,
+        mode: target.mode,
+        stage: "list",
+        error: describeError(error),
+      });
+    }
+    return { checked: 0, updated: 0, failed: [], outcome };
+  }
+  let checked = 0;
+  let updated = 0;
+  const failed: string[] = [];
+  await mapWithConcurrency(participants, ROOM_GRANT_CONCURRENCY, async (participant) => {
+      const identity = participant.identity;
+      const userId =
+        userIdFromParticipantMetadata(participant.metadata) ??
+        knownIdentities.get(identity) ??
+        null;
+      if (!userId) {
+        return;
+      }
+      const outcome = await grantOf(userId);
+      if ("failed" in outcome) {
+        failed.push(userId);
+        return;
+      }
+      const grant = outcome.grant;
+      if (!grant) {
+        return;
+      }
+      checked += 1;
+      const publish = liveKitPublishGrant(grant);
+      const current = participant.permission;
+      const permissionMatches =
+        current !== undefined &&
+        current.canPublish === (publish.canPublish ?? false) &&
+        sameSources(
+          current.canPublishSources as unknown as number[] | undefined,
+          publish.canPublishSources as unknown as number[] | undefined,
+        );
+      const toMute = (participant.tracks ?? []).filter(
+        (track) => !track.muted && shouldMutePublishedTrack(track, grant),
+      );
+      if (permissionMatches && toMute.length === 0) {
+        return;
+      }
+      let ok = true;
+      // Mute first, so a build that unpublishes lazily is quiet at once.
+      for (const track of toMute) {
+        try {
+          await client.mutePublishedTrack(room, identity, track.sid, true);
+        } catch (error) {
+          ok = false;
+          logPerRoom("voice.audienceMode.enforceFailed:mute", room, {
+            identity,
+            userId,
+            region: target.regional ? target.id : undefined,
+            stage: "mute",
+            trackSid: track.sid,
+            error: describeError(error),
+          });
+        }
+      }
+      if (!permissionMatches) {
+        try {
+          await client.updateParticipant(room, identity, {
+            permission: {
+              canPublish: publish.canPublish ?? false,
+              canSubscribe: true,
+              canPublishData: false,
+              ...(publish.canPublishSources
+                ? { canPublishSources: publish.canPublishSources }
+                : {}),
+            },
+          });
+        } catch (error) {
+          ok = false;
+          logPerRoom("voice.audienceMode.enforceFailed:update", room, {
+            identity,
+            userId,
+            region: target.regional ? target.id : undefined,
+            stage: "update",
+            canSpeak: grant.canSpeak,
+            error: describeError(error),
+          });
+        }
+      }
+      if (ok) {
+        updated += 1;
+      } else {
+        failed.push(userId);
+      }
+  });
+  return { checked, updated, failed, outcome: "ok" };
 }
 
 function shouldMutePublishedTrack(

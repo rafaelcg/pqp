@@ -133,8 +133,12 @@
     var y = days.length >= 2 ? days[days.length - 2] : null;
     var usd = function (n) { return "US$ " + dec(n, 2); };
     var whole = "US$ " + (Math.round(cost) === cost ? fmt(cost) : dec(cost, 2));
-    if (y && y.mau) return { text: usd(cost / y.mau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ " + fmt(y.mau) + " ativos em 30 dias" };
-    if (y && y.wau) return { text: usd(cost / y.wau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ ativos em 7 dias, até haver 30 dias" };
+    // The same cost over the people who WROTE in the window: "active" counts
+    // anyone who opened the app (a tab left open counts), so the poster figure
+    // is the honest one for engaged users. Same window as the main figure.
+    var posters = function (n) { return n > 0 ? " · " + usd(cost / n) + " por quem escreveu" : ""; };
+    if (y && y.mau) return { text: usd(cost / y.mau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ " + fmt(y.mau) + " ativos em 30 dias" + posters(y.postedMau) };
+    if (y && y.wau) return { text: usd(cost / y.wau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ ativos em 7 dias, até haver 30 dias" + posters(y.postedWau) };
     return { text: "—", badge: { text: whole + "/mês", tone: "flat" }, note: "sem ativos rastreados ainda" };
   }
 

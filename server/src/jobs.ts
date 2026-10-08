@@ -31,6 +31,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
@@ -149,6 +150,21 @@ async function sweepCommunityHomeMedia(): Promise<void> {
   }
 }
 
+/**
+ * Every minute, like the schedule catch-up: it translates the Baú posts that
+ * have no current translation (a crash, an edit, a key or a flag that came
+ * later). With the flag off everywhere or no key it is an in-memory check.
+ */
+export const COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS = 60_000;
+
+async function sweepCommunityHomeTranslation(): Promise<void> {
+  try {
+    await sweepCommunityHomeTranslations();
+  } catch (error) {
+    console.error("[community-home] translation sweep failed:", error);
+  }
+}
+
 /** A registered job's own cleanup. Most are `clearInterval` on a plain
  *  timer; the outgoing webhook poller's is its own `stop()` (see below) —
  *  same list, same accounting, one shape. */
@@ -221,6 +237,11 @@ export function startColdJobs(): ColdJobs {
       COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS,
       "community-home",
       sweepCommunityHomeMedia,
+    ),
+    every(
+      COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
+      "community-home-translation",
+      sweepCommunityHomeTranslation,
     ),
     (() => {
       const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);

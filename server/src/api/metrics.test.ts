@@ -345,6 +345,40 @@ describeDb("GET /api/admin/metrics", () => {
     expect((await call(null, "/api/me", `Bearer ${TOKEN}`)).status).toBe(401);
   });
 
+  it("carries the start-of-stream counters, every one of them, live", async () => {
+    const { resetStreamAlertsForTests } = await import("../services/stream-alerts.js");
+    resetStreamAlertsForTests();
+    const result = await call<{ streamAlerts: Record<string, unknown> }>(
+      operator,
+      "/api/admin/metrics",
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.streamAlerts).toEqual({
+      starts: 0,
+      flagOff: 0,
+      debounced: 0,
+      cooldown: 0,
+      claimed: 0,
+      recipients: 0,
+      emptyAudience: 0,
+      skipped: {
+        sharer: 0,
+        inRoom: 0,
+        dnd: 0,
+        muted: 0,
+        blocked: 0,
+        noAccess: 0,
+        optedOut: 0,
+        overCap: 0,
+      },
+      delivered: 0,
+      relayed: 0,
+      pushed: 0,
+      failures: 0,
+      decisionMsMax: 0,
+    });
+  });
+
   it("answers an instance moderator with counts and no identities", async () => {
     const result = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(result.status).toBe(200);
@@ -663,6 +697,44 @@ describeDb("GET /api/admin/metrics", () => {
     } finally {
       if (saved !== undefined) process.env.LIVEKIT_URL = saved;
     }
+  });
+
+  it("carries no SFU control-plane counters without regions, and a stable shape per region with", async () => {
+    const saved = {
+      url: process.env.LIVEKIT_URL,
+      regions: process.env.LIVEKIT_REGIONS,
+    };
+    delete process.env.LIVEKIT_REGIONS;
+    try {
+      const alone = await call<MetricsBody & { sfuRegions: { controlPlane: unknown } }>(
+        operator,
+        "/api/admin/metrics",
+      );
+      expect(alone.body.sfuRegions.controlPlane).toBeNull();
+    } finally {
+      if (saved.url !== undefined) process.env.LIVEKIT_URL = saved.url;
+      if (saved.regions !== undefined) process.env.LIVEKIT_REGIONS = saved.regions;
+    }
+
+    // The wire shape of one region with nothing called yet. The calls
+    // themselves are pinned in `voice/sfu-control-plane.test.ts`.
+    const { sfuControlPlaneReport } = await import("../voice/sfu-control-plane.js");
+    const report = sfuControlPlaneReport(["sao", "mia"]);
+    expect(Object.keys(report)).toEqual(["sao", "mia"]);
+    expect(report.mia).toEqual({
+      calls: 0,
+      failures: 0,
+      skippedByCircuit: 0,
+      failuresByClass: {},
+      circuitOpen: false,
+      consecutiveFailures: 0,
+      p50Ms: null,
+      p95Ms: null,
+      p99Ms: null,
+      budgetMs: 3000,
+      lastFailureClass: null,
+      sinceLastOkMs: null,
+    });
   });
 
   it("carries a runtime block, and never a cached one", async () => {

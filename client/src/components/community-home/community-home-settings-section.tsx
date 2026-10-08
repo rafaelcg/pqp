@@ -5,6 +5,7 @@ import {
   isCommunityHomeSettingsNew,
   markCommunityHomeRowNew,
   markCommunityHomeSettingsSeen,
+  shouldShowCommunityHomeSettingsNew,
 } from "@/lib/community-home";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -22,28 +23,31 @@ export function CommunityHomeSettingsSection({
   const [checked, setChecked] = useState(enabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showNew, setShowNew] = useState(() =>
+  const [settingsNew, setSettingsNew] = useState(() =>
     isCommunityHomeSettingsNew(),
   );
 
   useEffect(() => {
     setChecked(enabled);
+    setSettingsNew(isCommunityHomeSettingsNew());
   }, [enabled, serverId]);
 
-  useEffect(() => {
-    markCommunityHomeSettingsSeen();
-    setShowNew(false);
-  }, [serverId]);
+  const showNew = shouldShowCommunityHomeSettingsNew({
+    enabled: checked,
+    settingsNew,
+  });
 
   async function update(next: boolean) {
     setSaving(true);
     setError(null);
-    setShowNew(false);
-    markCommunityHomeSettingsSeen();
     try {
       const result = await updateServerCommunityHomeConfig(serverId, {
         enabled: next,
       });
+      // A successful flip clears discovery; opening the panel alone, or a
+      // failed request, must not.
+      setSettingsNew(false);
+      markCommunityHomeSettingsSeen();
       setChecked(result.enabled);
       if (result.enabled) {
         markCommunityHomeRowNew(serverId);
@@ -57,7 +61,7 @@ export function CommunityHomeSettingsSection({
   }
 
   return (
-    <section className="space-y-2">
+    <section className="space-y-2" data-community-home-settings>
       <button
         type="button"
         role="switch"
@@ -70,7 +74,10 @@ export function CommunityHomeSettingsSection({
           <span className="flex items-center gap-2 text-sm text-paper">
             {t("communityHome.settings.title")}
             {showNew && (
-              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+              <span
+                data-community-home-settings-new
+                className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent"
+              >
                 {t("communityHome.badge.new")}
               </span>
             )}

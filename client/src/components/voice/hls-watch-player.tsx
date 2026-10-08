@@ -14,6 +14,7 @@ import {
   Check,
   Columns2,
   Crop,
+  EyeOff,
   Loader2,
   Maximize2,
   MessageSquare,
@@ -161,17 +162,30 @@ import {
 } from "@/hooks/use-idle-chrome";
 import {
   CAMERA_LAYOUTS,
+  CAMERA_SHOW_CHIP_MS,
   cameraLayoutOffered,
   cameraPipBoxes,
   cameraPipMounted,
+  cameraShowChipClass,
   effectiveCameraLayout,
+  hideCameraPref,
   nextCameraPipCorner,
   readCameraPipPref,
+  showCameraPref,
+  withCameraLayout,
   writeCameraPipPref,
   type CameraLayout,
   type CameraPipPref,
 } from "@/lib/watch-camera-pip";
-import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
+import {
+  WatchCameraPip,
+  type FilmClockReading,
+} from "@/components/voice/watch-camera-pip";
+import {
+  elementPlaying,
+  hlsPlayingWallMs,
+  useWatchCameraSync,
+} from "@/lib/camera-sync";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import {
@@ -3114,10 +3128,70 @@ export function HlsWatchPlayer({
     camera: Webcam,
   };
   const LayoutGlyph = layoutIcon[cameraLayout];
+  /**
+   * "MOSTRAR CÂMERA", WHERE THE CAMERA WAS (2026-10-03). Hiding the camera
+   * takes its whole corner away, so for a few seconds a small chip sits in
+   * that corner with the way back on it; after that the way back is the
+   * layout menu, the same as before. Shown on any switch to "Ocultar câmera"
+   * this viewer makes, and when a camera is there but hidden by a choice
+   * remembered from before (a camera coming on mid-party, or the player
+   * opening on one), so a viewer who hid it at the last party learns the
+   * host's camera is on, and how to get it back.
+   */
+  const [showChip, setShowChip] = useState(false);
+  useEffect(() => {
+    if (!showChip) {
+      return;
+    }
+    const timer = window.setTimeout(() => setShowChip(false), CAMERA_SHOW_CHIP_MS);
+    return () => window.clearTimeout(timer);
+  }, [showChip]);
+  const cameraHidden = layoutOffered && cameraLayout === "stream";
+  // False at mount on purpose: a player that OPENS on a hidden camera shows
+  // the chip too (Farol, PR 947).
+  const hadHiddenCameraRef = useRef(false);
+  useEffect(() => {
+    if (cameraHidden && !hadHiddenCameraRef.current) {
+      setShowChip(true);
+    }
+    if (!cameraHidden) {
+      setShowChip(false);
+    }
+    hadHiddenCameraRef.current = cameraHidden;
+  }, [cameraHidden]);
   const updateCameraPip = useCallback((next: CameraPipPref) => {
     setCameraPip(next);
     writeCameraPipPref(next);
   }, []);
+  const pickCameraLayout = (layout: CameraLayout) =>
+    updateCameraPip(withCameraLayout(cameraPip, layout));
+  const hideCamera = () => updateCameraPip(hideCameraPref(cameraPip));
+  const showCamera = () => updateCameraPip(showCameraPref(cameraPip));
+  // The camera's own hide button shows on hover as well as with the chrome:
+  // the chrome fades while a mouse rests on the camera, and the button must
+  // not vanish under the pointer about to press it.
+  const [cameraHovered, setCameraHovered] = useState(false);
+  /**
+   * `watch_camera_sync`: the camera player holds itself to the film's wall
+   * clock (`lib/camera-sync.ts`). This is the film's half, READ ONLY: the
+   * frame on screen's wall clock from hls.js (`playingDate`), whether the
+   * element is moving, and its rate. Null-safe for the native engine, which
+   * has no hls.js and so no clock: the camera then simply is not synced.
+   */
+  const cameraSync = useWatchCameraSync();
+  const readFilmClock = useCallback((): FilmClockReading | null => {
+    const video = videoRef?.current ?? innerRef.current;
+    if (!video) {
+      return null;
+    }
+    return {
+      wallMs: hlsPlayingWallMs(
+        hlsRef.current as unknown as { playingDate?: Date | null } | null,
+      ),
+      playing: elementPlaying(video),
+      rate: video.playbackRate,
+    };
+  }, [videoRef]);
 
   // Item 3: the live badge shows the measured figure on LL instead of the
   // plain "Ao vivo"/"Live" every mode used to say — LL's whole product is
@@ -3203,6 +3277,9 @@ export function HlsWatchPlayer({
           className={boxes.camera ?? ""}
           fit={boxes.cameraFit}
           onFrame={setCameraFrame}
+          sync={cameraSync}
+          filmClock={readFilmClock}
+          onHoverChange={setCameraHovered}
         />
       ) : null}
       {/* THE CORNER CONTROL SITS OVER THE CORNER PICTURE, in the same box.
@@ -3244,6 +3321,55 @@ export function HlsWatchPlayer({
             }
           >
             <Move className="h-3 w-3" aria-hidden="true" />
+          </button>
+          {/* "OCULTAR CÂMERA" ON THE CAMERA ITSELF (2026-10-03). Rafael did
+              not find the hide option during a live party: it lived in a
+              menu inside a bar that fades, and fullscreen showed nothing at
+              all. So the camera carries its own way out, top left, opposite
+              the corner button: with the chrome, while a mouse is over the
+              camera (the chrome fades under a resting pointer and the button
+              must not go with it), and ALWAYS on a touch screen, where there
+              is no hover to reveal it. One tap, the same "Ocultar câmera" as
+              the menu; the "Mostrar câmera" chip below is the way back. */}
+          <Tooltip label={t("voice.hls.cameraLayout.stream")} side="top" align="start">
+            <button
+              type="button"
+              data-testid="watch-camera-pip-hide"
+              className={cn(
+                "absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition-opacity duration-[var(--duration-fast)] hover:bg-black/85 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black motion-reduce:transition-none pointer-coarse:pointer-events-auto pointer-coarse:h-8 pointer-coarse:w-8 pointer-coarse:opacity-100",
+                chrome.hidden && !cameraHovered
+                  ? "pointer-events-none opacity-0"
+                  : "pointer-events-auto opacity-100",
+              )}
+              onClick={(event) => {
+                event.stopPropagation();
+                hideCamera();
+              }}
+            >
+              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </Tooltip>
+        </div>
+      ) : null}
+      {cinema && cameraHidden && showChip ? (
+        <div
+          className={cn(
+            cameraShowChipClass(cameraPip.corner),
+            STAGE_LAYER.tileControls,
+            "animate-fade-in",
+          )}
+        >
+          <button
+            type="button"
+            data-testid="watch-camera-show-chip"
+            className="flex h-9 items-center gap-1.5 rounded-full bg-black/70 px-3 text-xs font-semibold text-white shadow-lg hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+            onClick={(event) => {
+              event.stopPropagation();
+              showCamera();
+            }}
+          >
+            <Webcam className="h-4 w-4" aria-hidden="true" />
+            {t("voice.hls.cameraShow")}
           </button>
         </div>
       ) : null}
@@ -3304,7 +3430,7 @@ export function HlsWatchPlayer({
                 label: t(`voice.hls.cameraLayout.${option}`),
                 icon: layoutIcon[option],
                 checked: cameraLayout === option,
-                onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+                onSelect: () => pickCameraLayout(option),
               }))}
             >
               <button
@@ -3319,6 +3445,36 @@ export function HlsWatchPlayer({
                 <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
               </button>
             </Menu>
+          ) : null}
+          {layoutOffered ? (
+            // One tap, no menu: the camera off, or back on, beside the
+            // picker. The quick pair is the only control a touch viewer sees
+            // without waking anything, which is where hiding a face has to
+            // be reachable from.
+            <button
+              type="button"
+              data-testid="watch-quick-camera-toggle"
+              aria-pressed={cameraHidden}
+              aria-label={
+                cameraHidden
+                  ? t("voice.hls.cameraShow")
+                  : t("voice.hls.cameraLayout.stream")
+              }
+              title={
+                cameraHidden
+                  ? t("voice.hls.cameraShow")
+                  : t("voice.hls.cameraLayout.stream")
+              }
+              tabIndex={chrome.hidden ? 0 : -1}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+              onClick={cameraHidden ? showCamera : hideCamera}
+            >
+              {cameraHidden ? (
+                <Webcam className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -3608,7 +3764,7 @@ export function HlsWatchPlayer({
                   label: t(`voice.hls.cameraLayout.${option}`),
                   icon: layoutIcon[option],
                   checked: cameraLayout === option,
-                  onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+                  onSelect: () => pickCameraLayout(option),
                 }))}
               >
                 <button

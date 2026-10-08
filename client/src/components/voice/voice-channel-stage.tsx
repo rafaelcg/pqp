@@ -1,3 +1,4 @@
+import type { AudienceModeHostControls } from "@/components/voice/audience-mode";
 import type { ReactNode } from "react";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
@@ -47,6 +48,7 @@ export function VoiceChannelStage({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   compactPeers = false,
   fill = false,
   onShapeChange,
@@ -99,6 +101,8 @@ export function VoiceChannelStage({
   /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /** Audience mode, for somebody who runs the stage (`audience-mode.tsx`). */
+  audienceHost?: AudienceModeHostControls | null;
   compactPeers?: boolean;
   /** See `CallStage.watchPartyChrome`. */
   watchPartyChrome?: boolean;
@@ -153,6 +157,7 @@ export function VoiceChannelStage({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      audienceHost={audienceHost}
       compactPeers={compactPeers}
       watchPartyChrome={watchPartyChrome}
       isWatchPartyChannel={isWatchPartyChannel}

@@ -67,7 +67,10 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The server suite alone takes about ten minutes on a normal runner (4,286
+    # tests); at 15 any slow runner hit the limit with every step green and the
+    # job was cancelled, which read as a flake and cost a rerun each time.
+    timeout-minutes: 30
 
     # The authorization matrix is covered by integration tests that run against a
     # real database — a mocked one would not catch a wrong SQL predicate.
@@ -367,6 +370,17 @@ jobs:
       - name: E2E stale bundle (real service worker)
         if: matrix.suite == 'core' && matrix.shard == 1
         run: pnpm --filter @pqp/client e2e:stale-bundle
+
+      # The presenter's camera held to the film, measured off the pictures
+      # (client/playwright.camera-sync.config.ts): the real watch player on a
+      # synthetic live film and camera, no API and no database. Real Google
+      # Chrome, which the runner image ships (Playwright's Chromium has no
+      # H.264), and ffmpeg to make the media. The quick run, about 3 minutes.
+      - name: E2E camera sync (real Chrome, synthetic live HLS)
+        if: matrix.suite == 'media' && matrix.shard == 1
+        run: |
+          command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+          pnpm --filter @pqp/client e2e:camera-sync
 
       - name: Upload E2E artifacts
         if: failure()

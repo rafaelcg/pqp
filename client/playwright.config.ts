@@ -27,6 +27,14 @@ import { MEDIA_SPEC } from "./e2e/media-spec";
  */
 /** Shared with `e2e/watch-party-waitlist.spec.ts`; not a secret. */
 export const E2E_ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
+/**
+ * Where `e2e/community-home-translation.spec.ts` serves a fake
+ * OpenRouter-compatible chat endpoint, so the real translation pipeline runs
+ * with no network and no real key.
+ */
+export const E2E_TRANSLATION_STUB_PORT = Number(
+  process.env.E2E_TRANSLATION_STUB_PORT ?? 3199,
+);
 const CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 5273);
 const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
 const DATABASE_URL =
@@ -74,7 +82,14 @@ const projects: E2EProject[] = [
     use: { ...devices["Desktop Chrome"] },
     // `e2e/stale-bundle/` has its own config (real builds, no API, no
     // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
-    testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC, /stale-bundle[\\/]/],
+    // `e2e/share-fast-start/` too (Docker LiveKit, real Chrome, the `lk`
+    // CLI): `playwright.share-fast-start.config.ts`, `pnpm e2e:share-fast-start`.
+    testIgnore: [
+      /mobile-immersive-stage/,
+      MEDIA_SPEC,
+      /stale-bundle[\\/]/,
+      /share-fast-start[\\/]/,
+    ],
   },
   {
     name: "chromium-media",
@@ -169,6 +184,12 @@ export default defineConfig({
         // chrome via the dev-bypass `?communityHome=0` override.
         COMMUNITY_HOME_ENABLED: "true",
         COMMUNITY_HOME_VIP_ENABLED: "true",
+        // Baú automatic translation: a fake key and a stub endpoint the spec
+        // serves itself. The runtime flag `community_home_translation` stays at
+        // its default (off) for every other spec; the one that wants it flips
+        // it for its own server through the machine token.
+        OPENROUTER_API_KEY: "e2e-translation-key",
+        COMMUNITY_HOME_TRANSLATION_BASE_URL: `http://127.0.0.1:${E2E_TRANSLATION_STUB_PORT}`,
         // The watch party waitlist campaign. Unset it follows
         // LIVE_HLS_ENABLED, which CI does not have, so it would be off and
         // `watch-party-waitlist.spec.ts` would test nothing. The flag-off
