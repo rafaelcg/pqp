@@ -570,6 +570,12 @@ export function DeleteAccountDialog({
                 disabled={data.disabled}
                 aria-disabled={data.busy || undefined}
                 className={data.busy ? SETTINGS_BUSY : undefined}
+                // A steady name while the visible label counts down.
+                aria-label={
+                  data.waitName
+                    ? t("settings.data.exportIn", { time: data.waitName })
+                    : undefined
+                }
               >
                 <Download aria-hidden className="h-3.5 w-3.5" />
                 {data.waitLabel

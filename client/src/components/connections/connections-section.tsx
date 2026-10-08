@@ -245,7 +245,9 @@ export function ConnectionsSection() {
   }, []);
 
   const callbackNotice = callbackError ? (
-    <SettingsNotice tone="danger" inGroup>
+    // An alert even though it arrives with the tab: it answers the trip to
+    // the provider the person just came back from.
+    <SettingsNotice tone="danger" inGroup role="alert">
       {callbackError}
     </SettingsNotice>
   ) : cancelled ? (

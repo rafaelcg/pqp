@@ -138,4 +138,23 @@ describe("preference sync", () => {
     expect(api.updatePreferences).toHaveBeenLastCalledWith({ muteOnJoin: true });
     now.mockRestore();
   });
+
+  it("counts the minute from the first failure, not the latest retry", async () => {
+    const start = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(start);
+    api.updatePreferences.mockRejectedValue(new Error("offline"));
+    queuePreferenceSync({ theme: "dark" }, { immediate: true });
+    await settle();
+    // A retry half a minute later fails too, carrying the same old theme.
+    now.mockReturnValue(start + UNSENT_TTL_MS / 2);
+    queuePreferenceSync({ muteOnJoin: true }, { immediate: true });
+    await settle();
+    // Past a minute from the first failure the old theme is no longer sent.
+    now.mockReturnValue(start + UNSENT_TTL_MS + 1);
+    api.updatePreferences.mockResolvedValue({ preferences: {} });
+    queuePreferenceSync({ compactPeers: true }, { immediate: true });
+    await settle();
+    expect(api.updatePreferences.mock.lastCall?.[0]).not.toHaveProperty("theme");
+    now.mockRestore();
+  });
 });

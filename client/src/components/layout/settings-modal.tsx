@@ -1233,12 +1233,12 @@ export function SettingsModal({
       >
         <SettingsShellContext.Provider value={shell}>
           <SettingsAnnouncer>
-            {/* On a phone every button, button-styled link, select, input,
-                rail tab and segmented option in the dialog is at least a 44px
-                touch target. The round swatches and chips keep their drawn
-                size and grow their hit area instead (`after:-inset-2`), and
-                switches are whole rows already. */}
-            <div className="flex h-full min-h-0 flex-col sm:flex-row max-sm:[&_button:not([role])]:min-h-11 max-sm:[&_a.inline-flex.justify-center]:min-h-11 max-sm:[&_select]:min-h-11 max-sm:[&_input:not([type=file])]:min-h-11 max-sm:[&_[role=tab]]:min-h-11 max-sm:[&_[role=radio]:not(.rounded-full)]:min-h-11">
+            {/* On a phone every button, button-styled link, select, input
+                and segmented option in the dialog is at least a 44px touch
+                target. The rail's tabs, the round swatches and the chips keep
+                their drawn size and grow their hit area instead (an `after`
+                inset), and switches are whole rows already. */}
+            <div className="flex h-full min-h-0 flex-col sm:flex-row max-sm:[&_button:not([role])]:min-h-11 max-sm:[&_a.inline-flex.justify-center]:min-h-11 max-sm:[&_select]:min-h-11 max-sm:[&_input:not([type=file])]:min-h-11 max-sm:[&_[role=radio]:not(.rounded-full)]:min-h-11">
               <SectionRail
                 sections={railItems}
                 active={active.id}
@@ -1289,7 +1289,9 @@ export function SettingsModal({
                     <SettingsSectionContext.Provider value={active.id}>
                       <div className="space-y-6">
                         {closeJumped && active.id === "profile" ? (
-                          <SettingsNotice tone="info">{t("settings.unsaved.jumped")}</SettingsNotice>
+                          <SettingsNotice tone="info" role="status">
+                            {t("settings.unsaved.jumped")}
+                          </SettingsNotice>
                         ) : null}
                         {active.id === "profile" && (
                           <ProfileSection

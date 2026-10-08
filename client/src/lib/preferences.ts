@@ -152,7 +152,11 @@ function settle(
       unsent.delete(key);
     } else {
       if (retryable(error)) {
-        unsent.set(key, { value: body[key], at: Date.now() });
+        // The clock runs from the first failure of this value, not the
+        // latest: a value that keeps failing must not stay fresh forever.
+        const kept = unsent.get(key);
+        const at = kept && Object.is(kept.value, body[key]) ? kept.at : Date.now();
+        unsent.set(key, { value: body[key], at });
       } else {
         unsent.delete(key);
       }

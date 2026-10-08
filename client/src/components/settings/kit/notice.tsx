@@ -78,12 +78,17 @@ export function SettingsNotice({
     const text = textRef.current?.textContent?.trim() ?? "";
     if (spoken.current === null) {
       spoken.current = text;
-      if (text && settingsPaneSettled()) announce(text);
+      // An explicit `role` says the notice answers something that just
+      // happened (a provider's error on return, a refused close), so it is
+      // said even when it arrives with the tab.
+      if (text && (role !== undefined || settingsPaneSettled())) {
+        announce(text, { combine: true });
+      }
       return;
     }
     if (text && text !== spoken.current) {
       spoken.current = text;
-      announce(text);
+      announce(text, { combine: true });
     }
   });
   return (

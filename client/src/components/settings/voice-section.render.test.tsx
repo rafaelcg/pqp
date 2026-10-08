@@ -362,6 +362,8 @@ describe("VoiceSection with the microphone blocked", () => {
     });
     expect(getUserMedia).toHaveBeenCalled();
     expect(host!.querySelector("[data-allow-microphone]")).not.toBeNull();
+    // The notice now says why, instead of the permission text it had.
+    expect(host!.textContent).toMatch(/Another app may be using it|Outro app pode estar usando/);
   });
 
   it("offers a button and the padlock steps, and hides the device list", async () => {

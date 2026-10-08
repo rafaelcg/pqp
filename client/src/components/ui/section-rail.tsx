@@ -334,6 +334,11 @@ export function SectionRail<Id extends string>({
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
                   "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",
+                // Phone strip: 36px drawn, 44px to a finger. The hit area grows
+                // into the strip's padding, so the strip itself never gains a
+                // vertical scroll.
+                !pinned && "max-sm:relative",
+                "max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:-inset-y-1 max-sm:after:content-['']",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />

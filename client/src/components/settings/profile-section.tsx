@@ -557,7 +557,21 @@ export function ProfileSection({
                   ]
                     .filter(Boolean)
                     .join(" ")}
-                  onChange={(event) => onHandle(handleFromInput(event.target.value))}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    // One more character typed into a full link is refused,
+                    // as `maxLength` would: cutting the end instead drops a
+                    // letter the person did not touch. A paste is not
+                    // refused, so an address still loses only its prefix.
+                    if (
+                      !raw.includes("/") &&
+                      raw.length === handle.length + 1 &&
+                      handle.length >= HANDLE_MAX_LENGTH
+                    ) {
+                      return;
+                    }
+                    onHandle(handleFromInput(raw));
+                  }}
                   onKeyDown={saveOnEnter}
                   className="font-mono max-sm:h-11"
                 />

@@ -1490,6 +1490,7 @@ export function VoiceSection({
     ReturnType<typeof listAudioDevices>
   > | null>(null);
   const [asking, setAsking] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
   // Set once the lists are read; the effect that sees the select on the page
   // takes it and moves focus there.
   const focusInputOnceShown = useRef(false);
@@ -1510,6 +1511,9 @@ export function VoiceSection({
       // empty and the row says so, which is the news the person asked for. A
       // microphone another app still holds is not: the notice stays.
       const probe = await probeMicrophone();
+      // Another app holds it: the notice says so now, whatever it said before
+      // (it said permission was needed, and the person just gave it).
+      setMicBusy(probe === "busy");
       if (probe === "granted" || probe === "none") {
         setAllowed(await listAudioDevices());
         // The notice holding the pressed button goes away: the effect below
@@ -1790,7 +1794,7 @@ export function VoiceSection({
                 </Button>
               }
             >
-              {devicesError}
+              {micBusy ? t("settings.voice.micBusy") : devicesError}
             </SettingsNotice>
             <SettingsNotice tone="info" inGroup role="note" icon={Lock}>
               {t("settings.voice.allowMicSteps", desktopContext())}

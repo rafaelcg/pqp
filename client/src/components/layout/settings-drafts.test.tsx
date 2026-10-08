@@ -639,7 +639,9 @@ describe("Settings profile save, QA round 3", () => {
     const wrapper = document.getElementById("settings-panel")!.closest(".sm\\:flex-row")!;
     expect(wrapper.className).toContain("max-sm:[&_button:not([role])]:min-h-11");
     expect(wrapper.className).toContain("max-sm:[&_select]:min-h-11");
-    expect(wrapper.className).toContain("max-sm:[&_[role=tab]]:min-h-11");
+    // The rail's tabs grow their hit area, not their height: the phone strip
+    // has no room for 44px tabs without scrolling vertically.
+    expect(wrapper.className).not.toContain("[role=tab]");
     expect(wrapper.className).toContain("max-sm:[&_[role=radio]:not(.rounded-full)]:min-h-11");
     expect(wrapper.className).toContain("max-sm:[&_input:not([type=file])]:min-h-11");
   });

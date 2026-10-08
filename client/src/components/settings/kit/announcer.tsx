@@ -14,19 +14,31 @@ import {
  * the rows' status lines are plain text inside Settings and say what happened
  * through this region, which is mounted before any of them speaks.
  */
-const SettingsAnnounceContext = createContext<((text: string) => void) | null>(null);
+type Announce = (text: string, options?: { combine?: boolean }) => void;
+
+const SettingsAnnounceContext = createContext<Announce | null>(null);
 
 export function SettingsAnnouncer({ children }: { children: ReactNode }) {
   const [text, setText] = useState("");
   const timer = useRef<number | null>(null);
-  const announce = useCallback((next: string) => {
+  // A status's newer message replaces its older one within a tick
+  // ("Preparando…" then "Pronto" says only "Pronto"), while notices asked for
+  // with `combine` are kept: two that mount in one commit are both said.
+  const queued = useRef<{ text: string; combine: boolean }[]>([]);
+  const announce = useCallback((next: string, options?: { combine?: boolean }) => {
+    const combine = options?.combine ?? false;
+    const kept = combine ? queued.current : queued.current.filter((entry) => entry.combine);
+    queued.current = kept.some((entry) => entry.text === next)
+      ? kept
+      : [...kept, { text: next, combine }];
     // Cleared first, so the same sentence twice in a row ("Salvo" from two
     // rows) is read twice.
     setText("");
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       timer.current = null;
-      setText(next);
+      setText(queued.current.map((entry) => entry.text).join(" "));
+      queued.current = [];
     }, 0);
   }, []);
   useEffect(
@@ -46,7 +58,7 @@ export function SettingsAnnouncer({ children }: { children: ReactNode }) {
 }
 
 /** The dialog's announcer, or null outside Settings (onboarding, tests). */
-export function useSettingsAnnounce(): ((text: string) => void) | null {
+export function useSettingsAnnounce(): Announce | null {
   return useContext(SettingsAnnounceContext);
 }
 

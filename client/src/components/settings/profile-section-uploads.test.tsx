@@ -178,6 +178,15 @@ describe("Perfil uploads and focus", () => {
     expect(document.activeElement).toBe(buttonIn("avatar", /Upload|Enviar/));
   });
 
+  it("refuses one more letter typed into a full link instead of dropping the last", async () => {
+    await mount(USER);
+    const field = row("public-link").querySelector<HTMLInputElement>("input")!;
+    type(field, "abcdefghijklmnopqrst");
+    expect(field.value).toBe("abcdefghijklmnopqrst");
+    type(field, "abcdefghijXklmnopqrst");
+    expect(field.value).toBe("abcdefghijklmnopqrst");
+  });
+
   it("takes the handle out of a pasted profile address", async () => {
     await mount(USER);
     const field = row("public-link").querySelector<HTMLInputElement>("input")!;

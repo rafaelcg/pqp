@@ -130,3 +130,50 @@ describe("SettingsNotice inside Settings", () => {
     now.mockRestore();
   });
 });
+
+describe("SettingsAnnouncer in one tick", () => {
+  it("says two notices that appear together, and an explicit alert even as the tab opens", async () => {
+    const { SettingsNotice } = await import("@/components/settings/kit/notice");
+    const { markSettingsPaneShown } = await import("@/components/settings/kit/announcer");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    markSettingsPaneShown();
+    await act(async () => {
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsNotice tone="danger" role="alert">A conexão expirou.</SettingsNotice>
+          <SettingsNotice tone="info">Só conteúdo.</SettingsNotice>
+        </SettingsAnnouncer>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The explicit alert is said though the tab just opened; the plain
+    // notice that came with the tab is not.
+    expect(region().textContent).toBe("A conexão expirou.");
+  });
+});
+
+describe("SettingsAnnouncer queue", () => {
+  it("says both of two notices that ask in the same tick", async () => {
+    const { SettingsNotice } = await import("@/components/settings/kit/notice");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <SettingsAnnouncer>
+          <SettingsNotice tone="warning" role="alert">Shift sozinho abre o mic.</SettingsNotice>
+          <SettingsNotice tone="info" role="status">J digita um caractere.</SettingsNotice>
+        </SettingsAnnouncer>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(region().textContent).toContain("Shift sozinho abre o mic.");
+    expect(region().textContent).toContain("J digita um caractere.");
+  });
+});
