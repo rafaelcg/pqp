@@ -175,6 +175,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The worker's image: the same stages plus ffmpeg (Dockerfile target
+      # `worker`), for the voice note AAC transcode. Same repository, tag
+      # `<sha>-worker`, which is what tools/api-host/compose.yaml's `worker`
+      # service runs. Every layer but the ffmpeg one comes from the cache the
+      # step above just filled. No `:latest` alias: nothing floats to it.
+      - name: Build & push worker image
+        if: steps.relevant.outputs.needed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: worker
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.commit.outputs.sha }}-worker
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Write deploy SSH key
         if: steps.relevant.outputs.needed == 'true'
         run: |

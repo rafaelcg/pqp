@@ -38,7 +38,16 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
-import { noteShapeAllowed, voiceNotesEnabledForChannel } from "./voice-notes.js";
+import {
+  ATTACHMENT_OBJECT_KEYS,
+  ATTACHMENT_VOICE_JOIN,
+  noteShapeAllowed,
+  voiceNotesEnabledForChannel,
+} from "./voice-notes.js";
+import {
+  enqueuePlannedSpeechJobs,
+  planVoiceNoteJobs,
+} from "./voice-transcription.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -691,6 +700,17 @@ async function insertMessage(
   if (requestedNotes > 0 && !(await voiceNotesEnabledForChannel(channelId))) {
     return null;
   }
+  // What a voice note needs from the worker (an AAC copy, an eager
+  // transcript), decided now, on the pool, so the transaction below only
+  // writes rows. See `voice-transcription.ts`.
+  const speechJobs =
+    requestedNotes > 0
+      ? await planVoiceNoteJobs(
+          channelId,
+          author.id,
+          verified.map((entry) => entry.row),
+        )
+      : [];
 
   const nickRow = await getPool().query<{ nickname: string | null }>(
     `SELECT sm.nickname
@@ -760,6 +780,21 @@ async function insertMessage(
 
     if (interactive?.poll) {
       await insertPoll(client, message.id, interactive.poll);
+    }
+
+    // Rows and a transactional NOTIFY only: the worker is woken at COMMIT,
+    // and a rollback leaves no job behind.
+    if (speechJobs.length > 0) {
+      const claimedIds = new Set(claimed.map((row) => row.id));
+      const pending = await enqueuePlannedSpeechJobs(
+        client,
+        speechJobs.filter((job) => claimedIds.has(job.attachmentId)),
+      );
+      for (const row of claimed) {
+        if (pending.has(row.id)) {
+          row.voice_transcript_status = "pending";
+        }
+      }
     }
 
     await recordMentions(
@@ -936,7 +971,10 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   // ON DELETE SET NULL: once the message is gone the rows are still there but
   // nothing links them back to it.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments WHERE message_id = $1`,
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+       FROM message_attachments a
+       ${ATTACHMENT_VOICE_JOIN}
+      WHERE a.message_id = $1`,
     [messageId],
   );
 
@@ -1030,9 +1068,10 @@ export async function deleteMessagesBulk(
   // `message_attachments.message_id` is ON DELETE SET NULL, so once the
   // messages are gone nothing links those rows back to them.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT a.storage_key
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
        FROM message_attachments a
        JOIN messages m ON m.id = a.message_id
+       ${ATTACHMENT_VOICE_JOIN}
       WHERE m.channel_id = $1 AND a.message_id = ANY($2::uuid[])`,
     [channelId, messageIds],
   );

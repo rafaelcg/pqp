@@ -180,6 +180,26 @@ export const noteTranscriptStatusSchema = z.enum([
   "unavailable",
 ]);
 
+export type NoteTranscriptStatus = z.infer<typeof noteTranscriptStatusSchema>;
+
+/** Longest transcript stored or sent, in characters. */
+export const VOICE_NOTE_TRANSCRIPT_MAX_LENGTH = 4000;
+
+/**
+ * A note's transcript as it travels: on the `voice` block, on the
+ * `voice-note-transcript` frame and as the answer to
+ * `POST /api/attachments/:id/transcript`. `text` is set only when `status` is
+ * `done`. Absent from a read when the `voice_note_transcription` flag is off
+ * where the note lives, even if a transcript is stored.
+ */
+export const voiceNoteTranscriptSchema = z.object({
+  status: noteTranscriptStatusSchema,
+  text: z.string().max(VOICE_NOTE_TRANSCRIPT_MAX_LENGTH).nullable().optional(),
+  language: z.string().nullable().optional(),
+});
+
+export type VoiceNoteTranscript = z.infer<typeof voiceNoteTranscriptSchema>;
+
 /**
  * Receipts are shown only in a conversation this small. Past it, "ouviu" is a
  * roll call and the author would be reading a crowd, so the server neither
@@ -212,14 +232,16 @@ export const voiceNoteSchema = z.object({
   durationMs: z.number().int().nonnegative(),
   waveform: z.string(),
   listenedByMe: z.boolean().optional(),
+  /** Who has played it, with when. Only in a conversation small enough to show receipts. */
   listenedBy: z.array(voiceNoteListenSchema).optional(),
-  transcript: z
-    .object({
-      status: noteTranscriptStatusSchema,
-      text: z.string().max(4000).nullable().optional(),
-      language: z.string().nullable().optional(),
-    })
-    .optional(),
+  transcript: voiceNoteTranscriptSchema.optional(),
+  /**
+   * A presigned GET for an AAC-in-MP4 copy (`audio/mp4`), present once the
+   * worker has made one. Only an Opus note (`audio/webm`, `audio/ogg`) ever
+   * gets one; a player that cannot play the original prefers this. The
+   * `voice-note-updated` frame is what says it now exists.
+   */
+  playbackUrl: z.string().url().optional(),
 });
 
 export type VoiceNote = z.infer<typeof voiceNoteSchema>;
@@ -314,7 +336,7 @@ export const attachmentSchema = z.object({
   voice: voiceNoteSchema.optional(),
 });
 
-export type Attachment =z.infer<typeof attachmentSchema>;
+export type Attachment = z.infer<typeof attachmentSchema>;
 
 /**
  * Response of `GET /api/attachments/:attachmentId/url`, which a client calls
@@ -324,9 +346,24 @@ export type Attachment =z.infer<typeof attachmentSchema>;
 export const attachmentUrlResponseSchema = z.object({
   url: z.string().url(),
   expiresAt: z.string(),
+  /** A voice note's playable copy, when it has one. See `voiceNoteSchema`. */
+  playbackUrl: z.string().url().optional(),
 });
 
 export type AttachmentUrlResponse = z.infer<typeof attachmentUrlResponseSchema>;
+
+/**
+ * Answer of `POST /api/attachments/:attachmentId/transcript`: 202 while the
+ * job is queued or running (`status: "pending"`), 200 once the note has a
+ * settled answer, which is kept for everybody who can hear the note.
+ */
+export const voiceNoteTranscriptResponseSchema = z.object({
+  transcript: voiceNoteTranscriptSchema,
+});
+
+export type VoiceNoteTranscriptResponse = z.infer<
+  typeof voiceNoteTranscriptResponseSchema
+>;
 
 /**
  * Types the client may put in an `<img>`.

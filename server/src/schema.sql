@@ -1066,6 +1066,61 @@ CREATE TABLE IF NOT EXISTS voice_note_listens (
 CREATE INDEX IF NOT EXISTS idx_voice_note_listens_user
   ON voice_note_listens (user_id);
 
+-- ---------------------------------------------------------------- speech jobs
+--
+-- The worker's queue for anything that needs the bytes of a recording:
+--   voice_note       transcribe a voice note (speech-to-text provider)
+--   voice_transcode  make the AAC copy of an Opus note (ffmpeg), into
+--                    message_attachment_voice.playback_key
+--   party_question   reserved for watch party voice questions; nothing
+--                    enqueues or claims it yet
+--
+-- Enqueued in the same transaction as the message that carries the note
+-- (`services/speech-jobs.ts`), or by the lazy request route, so a crash
+-- between "sent" and "queued" cannot happen. Claimed with FOR UPDATE SKIP
+-- LOCKED and a lease, so any number of workers can poll it, and a worker that
+-- dies mid-job leaves a row whose lease expires and is claimed again.
+-- `attempts` is bumped AT CLAIM, so a job that crashes its worker every time
+-- still runs out of attempts instead of looping forever.
+--
+-- One row per (kind, attachment) EVER: the unique index is the dedupe for an
+-- eager enqueue racing a lazy request. A finished row is kept (it is tiny and
+-- CASCADEs with the attachment) and is what a re-request is checked against.
+CREATE TABLE IF NOT EXISTS speech_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('voice_note', 'voice_transcode', 'party_question')),
+  attachment_id UUID REFERENCES message_attachments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  leased_by TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  -- ISO-639-1, set at enqueue for a short clip (the sender's locale): Whisper
+  -- guesses the language badly on a couple of seconds of audio.
+  language_hint TEXT,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ,
+  CHECK (kind = 'party_question' OR attachment_id IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_attachment
+  ON speech_jobs (kind, attachment_id) WHERE attachment_id IS NOT NULL;
+-- The claim's scan: only live rows, in the order they become due.
+CREATE INDEX IF NOT EXISTS idx_speech_jobs_due
+  ON speech_jobs (run_after, id) WHERE status IN ('queued', 'running');
+
+-- Seconds of audio sent to the speech provider per UTC day, shared by every
+-- worker, reserved atomically before each call so the daily cap
+-- (VOICE_STT_DAILY_SECONDS) means the deployment and not one process.
+CREATE TABLE IF NOT EXISTS speech_usage_daily (
+  day DATE PRIMARY KEY,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  refused INTEGER NOT NULL DEFAULT 0
+);
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows

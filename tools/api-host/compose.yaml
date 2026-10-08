@@ -177,9 +177,28 @@ services:
       - replicas
 
   worker:
-    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}
+    # The `-worker` tag: the same build plus ffmpeg (Dockerfile target
+    # `worker`, pushed by deploy-api-vultr.yml beside the plain tag), for the
+    # voice note AAC transcode. Rolling back to a commit from before this tag
+    # existed means rolling back this file with it, which is what redeploying
+    # that commit does; a bare APP_IMAGE_TAG=<old sha> against THIS file fails
+    # the worker's pull and leaves the running worker alone.
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}-worker
     env_file:
       - .env
+      # SECRETS ONLY THE WORKER HOLDS, in /opt/pqp/worker.env (not in git, mode
+      # 0600 like .env). The API never calls a speech provider, it only queues
+      # jobs, so the provider key stays out of the two containers that face
+      # the internet. Names, never values:
+      #   VOICE_STT_PROVIDER        none | workers-ai | groq (unset = none)
+      #   CLOUDFLARE_AI_ACCOUNT_ID  for workers-ai
+      #   CLOUDFLARE_AI_API_TOKEN   for workers-ai, the "Workers AI" permission
+      #   GROQ_API_KEY              for groq
+      #   VOICE_STT_DAILY_SECONDS   the daily audio budget (default 36000)
+      # Optional: with no file the worker runs with no provider, and every
+      # transcript settles "unavailable". Needs Compose 2.24+ for `required`.
+      - path: worker.env
+        required: false
     environment:
       - WORKER_MODE=worker
       - APP_VERSION=${APP_VERSION:-dev}

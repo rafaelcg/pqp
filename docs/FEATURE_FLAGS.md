@@ -275,6 +275,21 @@ enabled: true }` or from controles → interruptores. The rules beside it (byte
 budget per second, a note travels alone with no text) are in
 `server/src/services/voice-notes.ts`.
 
+Born as a flag (no old reader): `VOICE_NOTE_TRANSCRIPTION`
+(`voice_note_transcription`, default off, **per server**), the text under a
+voice note. It sends audio out of Brazil (Cloudflare Workers AI), so it goes
+on one server first. Read at four places, all of which know the note's
+server (a conversation reads the global value): the enqueue at send (eager
+in conversations only), the worker right before it would call the provider
+(a flip mid-queue drops the job with no call and no budget spent), the lazy
+`POST /api/attachments/:id/transcript` (403 when off), and every read: **off
+hides stored transcripts too**, so it is a kill switch and not just "stop
+making new ones". Served as `voiceTranscription` on
+`GET /api/attachments/config?serverId=`. Producing text also needs
+`VOICE_STT_PROVIDER` and its key on the worker; without them a transcript
+settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
+flag: it runs for every webm/ogg note while `voice_notes` is on.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

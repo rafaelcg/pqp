@@ -46,6 +46,7 @@ import {
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
+import { startSpeechJobPoller } from "./services/speech-worker.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -245,6 +246,16 @@ export function startColdJobs(): ColdJobs {
     ),
     (() => {
       const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);
+      return () => poller.stop();
+    })(),
+    // Voice note transcription and AAC transcodes (`speech_jobs`). Same
+    // adaptive shape as the webhook outbox: fast while there is work, 30 s
+    // when idle, woken by the NOTIFY the message transaction sends on enqueue.
+    // A process without storage claims nothing, and one without ffmpeg claims
+    // no transcode, so the API and a worker built from the API image never
+    // take a job they cannot finish.
+    (() => {
+      const poller = startSpeechJobPoller();
       return () => poller.stop();
     })(),
     every(

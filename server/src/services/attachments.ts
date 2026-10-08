@@ -5,12 +5,17 @@ import {
   isImageContentType,
   MAX_ATTACHMENTS_PER_MESSAGE,
   noteByteBudget,
+  voiceTranscriptionPrefs,
   type Attachment,
   type AttachmentContentType,
   type CreateVoiceNote,
+  type NoteTranscriptStatus,
+  type VoiceNote,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
+import { isEnabled } from "../lib/flags.js";
+import { getPreferences } from "./preferences.js";
 import {
   deleteObject,
   headObject,
@@ -29,7 +34,11 @@ import {
 import { createAutomatedReport } from "./reports.js";
 import { isChannelMember } from "./users.js";
 import { overlayListens } from "./voice-note-listens.js";
-import { assertVoiceNoteMintAllowed, isNoteAttachment } from "./voice-notes.js";
+import {
+  ATTACHMENT_VOICE_JOIN,
+  assertVoiceNoteMintAllowed,
+  isNoteAttachment,
+} from "./voice-notes.js";
 
 /**
  * Message attachments: mint an upload URL, claim the resulting row onto a
@@ -67,7 +76,34 @@ export interface DbAttachment {
    */
   voice_duration_ms?: number | null;
   voice_waveform?: string | null;
+  /** The sender's consent to transcription, copied at mint. */
+  voice_transcribe_allowed?: boolean | null;
+  voice_transcript_status?: NoteTranscriptStatus | null;
+  voice_transcript_text?: string | null;
+  voice_transcript_language?: string | null;
+  /** The AAC copy. The key is reserved before the upload; the type is set after it. */
+  voice_playback_key?: string | null;
+  voice_playback_content_type?: string | null;
+  /**
+   * The note's channel's server, null for a conversation (and for a row that
+   * is not a note). Read so the transcription flag can be answered per
+   * server without a second query.
+   */
+  voice_server_id?: string | null;
 }
+
+/** Every `voice_*` field, for carrying them across a RETURNING. */
+const VOICE_FIELDS = [
+  "voice_duration_ms",
+  "voice_waveform",
+  "voice_transcribe_allowed",
+  "voice_transcript_status",
+  "voice_transcript_text",
+  "voice_transcript_language",
+  "voice_playback_key",
+  "voice_playback_content_type",
+  "voice_server_id",
+] as const satisfies readonly (keyof DbAttachment)[];
 
 /**
  * Alias-qualified, and every query below aliases the table `a`. The claim
@@ -83,8 +119,17 @@ const ATTACHMENT_COLUMNS = `a.id, a.message_id, a.channel_id, a.uploader_id,
  * LEFT JOIN on its primary key: one index probe per row, and nothing at all
  * changes for an attachment that is not a note.
  */
-const VOICE_COLUMNS = `v.duration_ms AS voice_duration_ms, v.waveform AS voice_waveform`;
-const VOICE_JOIN = `LEFT JOIN message_attachment_voice v ON v.attachment_id = a.id`;
+const VOICE_COLUMNS = `v.duration_ms AS voice_duration_ms, v.waveform AS voice_waveform,
+       v.transcribe_allowed AS voice_transcribe_allowed,
+       v.transcript_status AS voice_transcript_status,
+       v.transcript_text AS voice_transcript_text,
+       v.transcript_language AS voice_transcript_language,
+       v.playback_key AS voice_playback_key,
+       v.playback_content_type AS voice_playback_content_type,
+       CASE WHEN v.attachment_id IS NULL THEN NULL
+            ELSE (SELECT vc.server_id FROM channels vc WHERE vc.id = a.channel_id)
+       END AS voice_server_id`;
+const VOICE_JOIN = ATTACHMENT_VOICE_JOIN;
 
 /**
  * Upload URL lifetime. Long enough for a phone on bad signal to finish 10 MiB,
@@ -249,8 +294,12 @@ export async function createPendingAttachment(
   ];
   // A note's side row is written in the same statement as the attachment, so
   // there is never an attachment that was minted as a note and reads as a
-  // plain file. `transcribe_allowed` keeps its column default (the sender's
-  // consent is on by default) until preferences exist to copy it from.
+  // plain file. `transcribe_allowed` is the sender's `voiceTranscription.mine`
+  // AS IT IS NOW (on unless they turned it off): consent is fixed per note at
+  // mint, so changing the setting later never reaches back into notes sent.
+  const transcribeAllowed = voice
+    ? voiceTranscriptionPrefs(await getPreferences(input.uploaderId)).mine
+    : true;
   const result = voice
     ? await getPool().query<DbAttachment>(
         `WITH a AS (
@@ -260,12 +309,13 @@ export async function createPendingAttachment(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *
          ), v AS (
-           INSERT INTO message_attachment_voice (attachment_id, duration_ms, waveform)
-           SELECT id, $9, $10 FROM a
-           RETURNING duration_ms, waveform
+           INSERT INTO message_attachment_voice
+             (attachment_id, duration_ms, waveform, transcribe_allowed)
+           SELECT id, $9, $10, $11 FROM a
+           RETURNING *
          )
          SELECT ${ATTACHMENT_COLUMNS}, ${VOICE_COLUMNS} FROM a, v`,
-        [...values, voice.durationMs, voice.waveform],
+        [...values, voice.durationMs, voice.waveform, transcribeAllowed],
       )
     : await getPool().query<DbAttachment>(
         `INSERT INTO message_attachments AS a
@@ -714,8 +764,9 @@ export async function claimAttachments(
   const byId = new Map(verified.map((entry) => [entry.row.id, entry.row]));
   for (const row of claimed.rows) {
     const source = byId.get(row.id);
-    row.voice_duration_ms = source?.voice_duration_ms ?? null;
-    row.voice_waveform = source?.voice_waveform ?? null;
+    for (const field of VOICE_FIELDS) {
+      (row as unknown as Record<string, unknown>)[field] = source?.[field] ?? null;
+    }
   }
 
   // Restore the order the sender chose; an UPDATE returns rows in whatever
@@ -752,12 +803,52 @@ export function toPublicAttachment(row: DbAttachment): Attachment {
         ? {}
         : { downloadFilename: row.filename }),
         }),
-    ...(isNoteAttachment(row)
+    ...(isNoteAttachment(row) ? { voice: publicVoiceBlock(row) } : {}),
+  };
+}
+
+/**
+ * Whether a stored transcript may be shown, which is also whether one may be
+ * made: the `voice_note_transcription` flag where the note lives (a
+ * conversation reads the global value). Off HIDES what is stored, so turning
+ * the flag off is a real kill switch and not just "stop making new ones".
+ */
+export function isTranscriptionOnFor(serverId: string | null | undefined): boolean {
+  return isEnabled("voice_note_transcription", { serverId: serverId ?? null });
+}
+
+/**
+ * The note block of the wire shape.
+ *
+ *   * `transcript` is absent when the flag is off where the note lives, and
+ *     when its sender did not allow transcription: in both cases there is no
+ *     transcript and nothing to ask for, and a client offers nothing.
+ *     Otherwise it is always present, `none` meaning "nobody asked yet".
+ *   * `playbackUrl` is the AAC copy, once its upload is confirmed (the type is
+ *     written after the PUT; a reserved key alone is not a copy).
+ */
+function publicVoiceBlock(row: DbAttachment): VoiceNote {
+  const status = row.voice_transcript_status ?? "none";
+  const showTranscript =
+    row.voice_transcribe_allowed !== false && isTranscriptionOnFor(row.voice_server_id);
+  return {
+    durationMs: row.voice_duration_ms!,
+    waveform: row.voice_waveform ?? "",
+    ...(showTranscript
       ? {
-          voice: {
-            durationMs: row.voice_duration_ms!,
-            waveform: row.voice_waveform ?? "",
+          transcript: {
+            status,
+            text: status === "done" ? (row.voice_transcript_text ?? "") : null,
+            language: row.voice_transcript_language ?? null,
           },
+        }
+      : {}),
+    ...(row.voice_playback_key && row.voice_playback_content_type
+      ? {
+          playbackUrl: presignGet(row.voice_playback_key, {
+            ttlSeconds: attachmentUrlTtlSeconds(),
+            downloadFilename: row.filename.replace(/\.[^.]*$/, "") + ".m4a",
+          }),
         }
       : {}),
   };
@@ -880,31 +971,35 @@ export async function sweepOrphanedAttachments(): Promise<number> {
   const orphans = await getPool().query<{
     id: string;
     storage_key: string | null;
+    playback_key: string | null;
   }>(
-    `SELECT id, storage_key
-     FROM message_attachments
-     WHERE message_id IS NULL
-       AND quarantined_at IS NULL
-       AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
-     ORDER BY created_at ASC
+    `SELECT a.id, a.storage_key, v.playback_key
+     FROM message_attachments a
+     ${VOICE_JOIN}
+     WHERE a.message_id IS NULL
+       AND a.quarantined_at IS NULL
+       AND a.created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
+     ORDER BY a.created_at ASC
      LIMIT ${SWEEP_BATCH}`,
   );
   if (orphans.rows.length === 0) {
     return 0;
   }
 
-  // Only rows that own bytes have anything to delete.
+  // Only rows that own bytes have anything to delete. A voice note's AAC
+  // copy is a second object under the same prefix and goes with it.
   const stored = isStorageConfigured()
-    ? orphans.rows.filter(
-        (row): row is { id: string; storage_key: string } =>
-          row.storage_key !== null,
+    ? orphans.rows.flatMap((row) =>
+        [row.storage_key, row.playback_key].filter(
+          (key): key is string => key !== null,
+        ),
       )
     : [];
   await Promise.all(
-    stored.map((row) =>
-      deleteObject(row.storage_key).catch((error: unknown) => {
+    stored.map((key) =>
+      deleteObject(key).catch((error: unknown) => {
         console.error(
-          `[attachments] leaked object ${row.storage_key}:`,
+          `[attachments] leaked object ${key}:`,
           error instanceof Error ? error.message : error,
         );
       }),
@@ -950,14 +1045,16 @@ export async function sweepQuarantinedAttachments(): Promise<number> {
   const expired = await getPool().query<{
     id: string;
     storage_key: string | null;
+    playback_key: string | null;
   }>(
-    `SELECT id, storage_key
-     FROM message_attachments
-     WHERE quarantined_at IS NOT NULL
-       AND quarantined_at < NOW() - ($1 || ' days')::interval
-       AND NOT COALESCE(scan_labels @> '["illegal"]'::jsonb, FALSE)
-       AND NOT COALESCE(scan_labels @> '["csam_suspected"]'::jsonb, FALSE)
-     ORDER BY quarantined_at ASC
+    `SELECT a.id, a.storage_key, v.playback_key
+     FROM message_attachments a
+     ${VOICE_JOIN}
+     WHERE a.quarantined_at IS NOT NULL
+       AND a.quarantined_at < NOW() - ($1 || ' days')::interval
+       AND NOT COALESCE(a.scan_labels @> '["illegal"]'::jsonb, FALSE)
+       AND NOT COALESCE(a.scan_labels @> '["csam_suspected"]'::jsonb, FALSE)
+     ORDER BY a.quarantined_at ASC
      LIMIT ${SWEEP_BATCH}`,
     [quarantineDays()],
   );
@@ -966,16 +1063,17 @@ export async function sweepQuarantinedAttachments(): Promise<number> {
   }
 
   const stored = isStorageConfigured()
-    ? expired.rows.filter(
-        (row): row is { id: string; storage_key: string } =>
-          row.storage_key !== null,
+    ? expired.rows.flatMap((row) =>
+        [row.storage_key, row.playback_key].filter(
+          (key): key is string => key !== null,
+        ),
       )
     : [];
   await Promise.all(
-    stored.map((row) =>
-      deleteObject(row.storage_key).catch((error: unknown) => {
+    stored.map((key) =>
+      deleteObject(key).catch((error: unknown) => {
         console.error(
-          `[content-safety] leaked quarantined object ${row.storage_key}:`,
+          `[content-safety] leaked quarantined object ${key}:`,
           error instanceof Error ? error.message : error,
         );
       }),

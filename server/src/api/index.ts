@@ -565,6 +565,13 @@ import {
 } from "../services/voice-notes.js";
 import { recordListen, VoiceNoteNotFoundError } from "../services/voice-note-listens.js";
 import {
+  requestVoiceNoteTranscript,
+  // Same name as the listens module's error: aliased so each route maps its
+  // own not-found to a 404.
+  VoiceNoteNotFoundError as TranscriptNoteNotFoundError,
+  VoiceTranscriptionUnavailableError,
+} from "../services/voice-transcription.js";
+import {
   GifBackendError,
   isGifSearchConfigured,
   searchGifs,
@@ -1068,6 +1075,15 @@ const voiceLeaveLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * `POST /api/attachments/:id/transcript`, per account. A request is cheap (a
+ * row) and idempotent per note, but each NEW note it names can cost provider
+ * time, so a burst of a channel's worth of notes is fine and a script is not.
+ */
+const transcriptRequestLimiter = createRateLimiter({
+  capacity: 20,
+  refillPerSecond: 0.2,
+});
+/**
  * `request` / `withdraw` on a party's guest queue. Same shape as the mute
  * toggle's own limiter (`stateLimiter` in `ws/voice.ts`, capacity 15,
  * refill 3/s) per `docs/RAISED_HANDS.md`'s rule for a self-report of this
@@ -1140,6 +1156,7 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
+  transcriptRequestLimiter.reset();
   guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
   listenLimiter.reset();
@@ -1174,6 +1191,11 @@ class NoContent {}
 
 function noContent(): NoContent {
   return new NoContent();
+}
+
+/** Wrap a handler result to answer 202: taken, the work happens elsewhere. */
+class Accepted {
+  constructor(readonly body: unknown) {}
 }
 
 /**
@@ -3433,6 +3455,12 @@ router.get("/api/attachments/config", async ({ url }) => {
     voiceNotes: isEnabled("voice_notes", {
       serverId: serverId.success ? serverId.data : null,
     }),
+    // Whether transcripts exist here at all: off hides stored ones too, so a
+    // client draws no "transcrever" control. Whether a provider is configured
+    // is the worker's business; without one a request settles `unavailable`.
+    voiceTranscription: isEnabled("voice_note_transcription", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
   };
 });
 
@@ -3573,10 +3601,16 @@ router.get(
       expiresAt: new Date(
         Date.now() + attachmentUrlTtlSeconds() * 1000,
       ).toISOString(),
+      // A voice note's AAC copy, once it exists: what a client refetches on
+      // `voice-note-updated`.
+      ...(attachment.voice?.playbackUrl
+        ? { playbackUrl: attachment.voice.playbackUrl }
+        : {}),
     };
   },
 );
 
+/**
 /**
  * "I played this voice note." 204, idempotent: the first call records it and
  * tells the right sockets (see `notifyVoiceNoteListened`), a replay changes
@@ -3609,6 +3643,41 @@ router.post(
       throw error;
     }
     return noContent();
+  },
+);
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued or running (the
+ * answer arrives as a `voice-note-transcript` frame on the note's channel),
+ * 200 with the stored answer once there is one, for whoever asks: the first
+ * request in a server channel pays and everybody after it reads.
+ *
+ * 404 for "no such note" and "not yours to hear" alike; 403 when the
+ * `voice_note_transcription` flag is off where the note lives, or its sender
+ * did not allow transcription.
+ */
+router.post(
+  "/api/attachments/:attachmentId/transcript",
+  async ({ user }, { attachmentId }) => {
+    if (!z.string().uuid().safeParse(attachmentId).success) {
+      throw new NotFound("Voice note not found");
+    }
+    if (!transcriptRequestLimiter.take(user.id)) {
+      throw new HttpError(429, "Slow down");
+    }
+    try {
+      const result = await requestVoiceNoteTranscript(attachmentId!, user.id);
+      const body = { transcript: result.transcript };
+      return result.status === 202 ? new Accepted(body) : body;
+    } catch (error) {
+      if (error instanceof TranscriptNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      if (error instanceof VoiceTranscriptionUnavailableError) {
+        throw new Forbidden(error.message);
+      }
+      throw error;
+    }
   },
 );
 
@@ -11106,6 +11175,10 @@ export async function handleApi(
         ...corsHeaders(req),
       });
       res.end();
+      return;
+    }
+    if (result instanceof Accepted) {
+      sendJson(res, 202, result.body, req);
       return;
     }
     // The handler streamed its own answer (a past-broadcast download). There

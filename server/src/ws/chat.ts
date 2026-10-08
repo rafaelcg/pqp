@@ -15,6 +15,7 @@ import {
   serverRemovedSchema,
   voiceNoteListenedSchema,
   type ChanceRequest,
+  type ChannelFanoutFrame,
   type ChatServerMessage,
   type FriendActivity,
   type MessagePreview,
@@ -714,7 +715,7 @@ function ensureConnection(socket: WebSocket, user: DbUser): ChatConnection {
  */
 export function broadcastToChannel(
   channelId: string,
-  message: ChatServerMessage,
+  message: ChannelFanoutFrame,
   alsoSocket?: WebSocket,
 ): void {
   deliverToChannel(channelId, message, alsoSocket);
@@ -735,7 +736,7 @@ export function broadcastToChannel(
  */
 function deliverToChannel(
   channelId: string,
-  message: ChatServerMessage,
+  message: ChannelFanoutFrame,
   alsoSocket?: WebSocket,
 ): void {
   // One Buffer for the whole audience; never droppable, a message is the one
@@ -2751,7 +2752,7 @@ subscribeToCluster(BROADCAST_TOPIC, (data) => {
   ) {
     return;
   }
-  deliverToChannel(channelId, message as unknown as ChatServerMessage);
+  deliverToChannel(channelId, message as unknown as ChannelFanoutFrame);
 });
 
 subscribeToCluster(PRESENCE_TOPIC, (data, origin) => {
