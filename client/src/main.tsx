@@ -33,6 +33,7 @@ import {
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
+import { withPqpPtBrCopy } from "./lib/clerk-pt-br";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
@@ -386,7 +387,7 @@ function useClerkLocalization(locale: Locale): ClerkLocalization {
     // neutral Latin American Spanish (es-ES says "vosotros" and "ordenador").
     const load =
       locale === "pt-BR"
-        ? () => import("@clerk/localizations/pt-BR").then((m) => m.ptBR)
+        ? () => import("@clerk/localizations/pt-BR").then((m) => withPqpPtBrCopy(m.ptBR))
         : locale === "es"
           ? () => import("@clerk/localizations/es-MX").then((m) => m.esMX)
           : null;
