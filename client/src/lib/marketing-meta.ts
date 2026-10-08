@@ -31,7 +31,7 @@
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
  * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, `landing.faq.*`, `streamersPage.seo.*`,
- * `streamersPage.faq.*`, and
+ * `streamersPage.faq.*`, `contactPage.seo.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
  */
@@ -56,6 +56,8 @@ export type MarketingPage =
   | "/privacy"
   | "/terms"
   | "/cookies"
+  | "/contact"
+  | "/contato"
   | "/status";
 
 export type MarketingLocale = "pt-BR" | "en" | "es";
@@ -88,6 +90,8 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/privacy",
   "/terms",
   "/cookies",
+  "/contact",
+  "/contato",
   "/status",
 ] satisfies MarketingPage[]);
 
@@ -198,6 +202,28 @@ const STREAMERS_COPY: PageCopy = {
       en: "pqp for streamers: your community watching together, in the browser",
       es: "pqp para streamers: tu comunidad viendo junta, en el navegador",
     },
+  },
+};
+
+/**
+ * `/contact` and `/contato`: one page under two names, canonical `/contact`,
+ * the `/watch-party` arrangement. Who makes pqp, the one email address and the
+ * independence statement. Duplicates of `contactPage.seo.*`, pinned by
+ * `marketing-meta.test.ts`. The description names no person, place or
+ * company; the page says the rest.
+ */
+const CONTACT_COPY: PageCopy = {
+  canonicalPath: "/contact",
+  title: {
+    "pt-BR": "Sobre e contato | pqp",
+    en: "About and contact | pqp",
+    es: "Acerca de y contacto | pqp",
+  },
+  description: {
+    "pt-BR":
+      "O pqp é um app gratuito e de código aberto para voz, compartilhamento de tela e chat de texto, feito por dois irmãos. Como falar com a gente, e as políticas e o código por trás do serviço.",
+    en: "pqp is a free, open source app for voice, screen sharing and text chat, made by two brothers. How to reach us, and the policies and source code behind the service.",
+    es: "pqp es una app gratuita y de código abierto para voz, pantalla compartida y chat de texto, hecha por dos hermanos. Cómo contactarnos, y las políticas y el código detrás del servicio.",
   },
 };
 
@@ -370,6 +396,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       en: "The terms for using the hosted pqp service at pqp.gg.",
     },
   },
+  "/contact": CONTACT_COPY,
+  "/contato": CONTACT_COPY,
   "/cookies": {
     canonicalPath: "/cookies",
     title: {
@@ -1042,6 +1070,14 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       url: `${CANONICAL_ORIGIN}/`,
       logo: `${CANONICAL_ORIGIN}/icons/icon-512.png`,
       sameAs: ORGANIZATION_SAME_AS,
+      // The one address the site gives for anybody (`/contact`). No person,
+      // no place: see `pages/contact-page.tsx`.
+      contactPoint: {
+        "@type": "ContactPoint",
+        contactType: "customer support",
+        email: "contato@pqp.gg",
+        availableLanguage: ["pt-BR", "en", "es"],
+      },
     },
   ];
   if (page === "/") {

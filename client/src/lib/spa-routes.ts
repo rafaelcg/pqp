@@ -38,6 +38,8 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/desktop-login",
   "/discord",
   "/ven",
+  // Redirected to `/vem` by `_redirects` and by the router.
+  "/vem/gratis",
   "/blog",
   "/qa/ui",
   // Pages itself redirects this to `/`; a monitor may also request it.
