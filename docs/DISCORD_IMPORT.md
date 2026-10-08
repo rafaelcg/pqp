@@ -8,7 +8,10 @@ server, and not a transfer of members or messages.
 
 ## What a person does
 
-1. In Discord: Server Settings → Templates → copy the link (`discord.new/…`).
+1. In Discord: Server Settings → the template tab → copy the link
+   (`discord.new/…`). Discord makes templates on a computer or in the
+   browser only, not in its phone app, and only for the owner or somebody
+   with Manage Server. The paste step says both.
 2. In pqp: create a community → **Copy a Discord layout**.
 3. Paste the link. Preview the tree, private channels, and dropped items.
 4. Confirm. pqp creates the community, then shows an invite to send.
