@@ -1666,20 +1666,26 @@ export const MessageList = memo(function MessageList({
   }, [loadNewer, loadOlder]);
   handleScrollRef.current = handleScroll;
 
-  // Who a voice note's "ouviu" names. In a conversation everybody who can
-  // hear a note has usually said something, so the authors on screen cover it.
-  const voiceNoteNames = useMemo(() => {
-    const names = new Map<string, string>();
-    for (const one of participants ?? []) {
-      names.set(one.id, one.displayName);
+  // Who a voice note's "ouviu" names: the conversation's participants, then
+  // the authors on screen. A stable function over a ref, so a new message
+  // does not re-render every voice note card through the context; a card
+  // reads the names when its own receipts change, which is when it needs them.
+  const voiceNoteNamesRef = useRef({ participants, messages });
+  voiceNoteNamesRef.current = { participants, messages };
+  const voiceNoteNames = useCallback((userId: string) => {
+    const { participants: people, messages: loaded } = voiceNoteNamesRef.current;
+    const person = people?.find((one) => one.id === userId);
+    if (person) {
+      return person.displayName;
     }
-    for (const one of messages) {
-      if (one.authorName) {
-        names.set(one.authorId, one.authorName);
+    for (let i = loaded.length - 1; i >= 0; i -= 1) {
+      const one = loaded[i]!;
+      if (one.authorId === userId && one.authorName) {
+        return one.authorName;
       }
     }
-    return (userId: string) => names.get(userId) ?? null;
-  }, [messages, participants]);
+    return null;
+  }, []);
 
   if (isLoading) {
     return <MessageListSkeleton />;

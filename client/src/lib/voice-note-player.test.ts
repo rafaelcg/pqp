@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { nextRate, nextUnheardNote, parseRate, type VoiceNoteEntry } from "./voice-note-player";
+import {
+  applyVoiceNoteListened,
+  getListened,
+  getPlayerState,
+  isRetryableListenError,
+  nextRate,
+  nextUnheardNote,
+  parseRate,
+  resetVoiceNotePlayerForTests,
+  setVoiceNoteViewer,
+  type VoiceNoteEntry,
+} from "./voice-note-player";
 
 function note(
   id: string,
@@ -77,5 +88,45 @@ describe("speed pill", () => {
     expect(parseRate("1.5")).toBe(1.5);
     expect(parseRate("3")).toBe(1);
     expect(parseRate(null)).toBe(1);
+  });
+});
+
+describe("account switches", () => {
+  const frame = (userId: string) => ({
+    type: "voice-note-listened" as const,
+    channelId: "dm-1",
+    messageId: "m-1",
+    attachmentId: "a-1",
+    userId,
+    listenedAt: "2026-10-08T21:00:00Z",
+  });
+
+  it("forgets what the previous account heard", () => {
+    resetVoiceNotePlayerForTests();
+    setVoiceNoteViewer("alice");
+    applyVoiceNoteListened(frame("alice"));
+    expect(getListened("a-1")?.me).toBe(true);
+    setVoiceNoteViewer("bob");
+    expect(getListened("a-1")).toBeUndefined();
+    expect(getPlayerState().current).toBeNull();
+  });
+
+  it("keeps a receipt from someone else apart from the reader's own dot", () => {
+    resetVoiceNotePlayerForTests();
+    setVoiceNoteViewer("alice");
+    applyVoiceNoteListened(frame("bob"));
+    expect(getListened("a-1")?.me).toBe(false);
+    expect(getListened("a-1")?.by.get("bob")).toBe("2026-10-08T21:00:00Z");
+  });
+});
+
+describe("listen report retries", () => {
+  it("retries the network and the server, never a refusal", () => {
+    expect(isRetryableListenError({ status: 0 })).toBe(true);
+    expect(isRetryableListenError({ status: 503 })).toBe(true);
+    expect(isRetryableListenError({ status: 429 })).toBe(true);
+    expect(isRetryableListenError(new TypeError("offline"))).toBe(true);
+    expect(isRetryableListenError({ status: 403 })).toBe(false);
+    expect(isRetryableListenError({ status: 404 })).toBe(false);
   });
 });

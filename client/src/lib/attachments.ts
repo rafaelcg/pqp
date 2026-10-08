@@ -88,7 +88,14 @@ export function loadVoiceNotesEnabled(serverId: string | null): Promise<boolean>
   }
   const answer = fetchAttachmentConfig(serverId)
     .then((config) => config.enabled === true && config.voiceNotes === true)
-    .catch(() => false);
+    .catch(() => {
+      // A failed probe is not an answer: forget it, so the next composer
+      // mount asks again instead of hiding the mic for five minutes.
+      if (voiceNoteProbes.get(key)?.answer === answer) {
+        voiceNoteProbes.delete(key);
+      }
+      return false;
+    });
   voiceNoteProbes.set(key, { at: Date.now(), answer });
   return answer;
 }

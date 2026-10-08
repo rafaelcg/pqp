@@ -158,7 +158,14 @@ export function setVoiceNoteViewer(userId: string | null): void {
   if (userId === viewerId) {
     return;
   }
+  const previous = viewerId;
   viewerId = userId;
+  // A different account in the same tab (or a sign-out) starts from nothing:
+  // what the last one heard, reported or had playing is theirs, not this
+  // one's. The first sign-in has nothing to clear.
+  if (previous !== null) {
+    forgetViewerState();
+  }
   let rate: PlaybackRate = 1;
   if (userId) {
     try {
@@ -328,7 +335,13 @@ function onError() {
         void audio.play().catch(() => setState({ status: "paused" }));
       }
     })
-    .catch(() => setState({ status: "error" }));
+    .catch(() => {
+      // Only if that note is still the one playing: the reader may have
+      // moved on to another while this request was out.
+      if (state.current?.attachmentId === current.attachmentId) {
+        setState({ status: "error" });
+      }
+    });
 }
 
 function seekElement(element: HTMLAudioElement, positionMs: number) {
@@ -425,6 +438,31 @@ export function seekVoiceNote(entry: VoiceNoteEntry, positionMs: number): void {
   emit();
 }
 
+/**
+ * Everything that belongs to the account that was signed in: the note
+ * playing, what it heard and reported, receipts it was shown, and the
+ * catalogue built from its reads (which carries its `listenedByMe`).
+ */
+function forgetViewerState(): void {
+  stopTicker();
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }
+  for (const timer of retryTimers.values()) {
+    clearTimeout(timer);
+  }
+  retryTimers.clear();
+  catalog.clear();
+  heardHere.clear();
+  reported.clear();
+  refreshed.clear();
+  listened.clear();
+  state = { ...state, current: null, status: "idle", positionMs: 0, currentMounted: false };
+  emit();
+}
+
 /** Pause whatever is playing, keeping its place. Recording calls this. */
 export function pauseVoiceNote(): void {
   if (audio && !audio.paused) {
@@ -472,12 +510,49 @@ function noteListened(entry: VoiceNoteEntry) {
   if (!listened.get(entry.attachmentId)?.me) {
     updateListened(entry.attachmentId, (record) => ({ ...record, me: true }));
   }
+  // `reported` means sent or on its way; a failure takes it back out so a
+  // retry (below) or the next play can send it again.
   if (entry.listenedByMe || entry.authorId === viewerId || reported.has(entry.attachmentId)) {
     reported.add(entry.attachmentId);
     return;
   }
   reported.add(entry.attachmentId);
-  void markVoiceNoteListened(entry.attachmentId).catch(() => {});
+  reportListened(entry.attachmentId, viewerId, 0);
+}
+
+/** Network errors and 5xx are worth another go; a refusal is not. */
+export function isRetryableListenError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== "number") {
+    return true;
+  }
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
+const LISTEN_RETRY_DELAYS_MS = [2_000, 8_000, 30_000];
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function reportListened(attachmentId: string, forViewer: string | null, attempt: number) {
+  void markVoiceNoteListened(attachmentId).catch((error: unknown) => {
+    if (viewerId !== forViewer) {
+      return;
+    }
+    const delay = LISTEN_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined || !isRetryableListenError(error)) {
+      // Given up: the next time this note plays past a second it tries again.
+      reported.delete(attachmentId);
+      return;
+    }
+    retryTimers.set(
+      attachmentId,
+      setTimeout(() => {
+        retryTimers.delete(attachmentId);
+        if (viewerId === forViewer) {
+          reportListened(attachmentId, forViewer, attempt + 1);
+        }
+      }, delay),
+    );
+  });
 }
 
 /** The `voice-note-listened` frame, as far as the client relies on it. */
@@ -592,5 +667,9 @@ export function resetVoiceNotePlayerForTests(): void {
   reported.clear();
   refreshed.clear();
   listened.clear();
+  for (const timer of retryTimers.values()) {
+    clearTimeout(timer);
+  }
+  retryTimers.clear();
   state = { current: null, status: "idle", positionMs: 0, rate: 1, currentMounted: false };
 }

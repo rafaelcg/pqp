@@ -282,7 +282,7 @@ export function VoiceNoteCard({
           })}
         </div>
         <span className="shrink-0 text-xs tabular-nums text-text-secondary">{clock}</span>
-        {!heardByMe && !playback.isCurrent && (
+        {!heardByMe && (
           <span
             className="h-2 w-2 shrink-0 rounded-full bg-accent"
             title={t("voiceNote.unheard")}
