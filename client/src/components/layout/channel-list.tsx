@@ -545,6 +545,7 @@ export const ChannelList = memo(function ChannelList({
   const [draggedOccupant, setDraggedOccupant] =
     useState<VoiceOccupantDrag | null>(null);
   const [dropHint, setDropHint] = useState<string | null>(null);
+  const hideEmptyTopLevel = !canManage && categories.length > 0 && !draggedId;
   const openProfile = useProfilePopover();
   const memberById = useMemo(() => {
     const map = new Map<string, ServerMember>();
@@ -1585,6 +1586,12 @@ export const ChannelList = memo(function ChannelList({
               </div>
             )}
 
+            {/* An empty "Texto" or "Voz" header is noise for a member when
+                every channel sits in a category, which is what a Discord
+                import produces. Managers keep both: their + buttons are the
+                only way to create a channel. A drag shows them again, because
+                the header is also the drop zone that unfavorites a channel. */}
+            {(topLevelText.length > 0 || !hideEmptyTopLevel) && (
             <ChannelSection
               label={t("chrome.text")}
               canManage={canManage}
@@ -1616,7 +1623,9 @@ export const ChannelList = memo(function ChannelList({
             >
               {topLevelText.map((channel) => renderRow(channel, topLevelText))}
             </ChannelSection>
+            )}
 
+            {(topLevelVoice.length > 0 || !hideEmptyTopLevel) && (
             <ChannelSection
               label={t("chrome.voice")}
               canManage={canManage}
@@ -1649,6 +1658,7 @@ export const ChannelList = memo(function ChannelList({
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
+            )}
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
