@@ -53,7 +53,12 @@ final class ChatModel {
     /// refused the message). Kept, file and all, until the person retries or
     /// discards it: five minutes of talking is not something to delete on a
     /// transient network error.
-    private(set) var failedVoiceNote: HeldVoiceNote?
+    private(set) var failedVoiceNotes: [HeldVoiceNote] = []
+    /// The one the banner offers: the oldest that did not go.
+    var failedVoiceNote: HeldVoiceNote? { failedVoiceNotes.first }
+    /// Set when the screen closes, so a send that settles afterwards does not
+    /// keep a file nobody can retry.
+    @ObservationIgnored private var voiceClosed = false
     /// Notes drawn optimistically and not yet confirmed, by the row's id.
     @ObservationIgnored private var inFlightVoice: [String: HeldVoiceNote] = [:]
     private(set) var gifsEnabled = false
@@ -125,6 +130,7 @@ final class ChatModel {
     ) async {
         self.session = session
         self.channelId = channelId
+        voiceClosed = false
         self.slowmodeSeconds = slowmodeSeconds
         self.bypassesSlowMode = bypassesSlowMode
         // "This conversation is on screen", for the one consumer that needs it:
@@ -232,8 +238,14 @@ final class ChatModel {
         }
         typingSweeper?.cancel()
         typingSweeper = nil
-        // Leaving the screen is leaving the retry: the file is not kept behind it.
-        discardFailedVoiceNote()
+        // Leaving the screen is leaving the retry: no file is kept behind it,
+        // neither a failed note nor one still in flight (its bytes are already
+        // read; the file is only for playing the row and for a retry).
+        voiceClosed = true
+        for held in failedVoiceNotes { Self.removeFile(held.note.fileURL) }
+        failedVoiceNotes = []
+        for held in inFlightVoice.values { Self.removeFile(held.note.fileURL) }
+        inFlightVoice = [:]
     }
 
     func loadEarlier() async {
@@ -291,21 +303,33 @@ final class ChatModel {
         await deliver(held)
     }
 
+    /// Drops the note the banner is showing; the next one that failed, if any,
+    /// takes its place.
     func discardFailedVoiceNote() {
-        if let held = failedVoiceNote { Self.removeFile(held.note.fileURL) }
-        failedVoiceNote = nil
+        guard let held = failedVoiceNotes.first else { return }
+        Self.removeFile(held.note.fileURL)
+        failedVoiceNotes.removeFirst()
+    }
+
+    private func keepAsFailed(_ held: HeldVoiceNote) {
+        // After the screen closed nobody can retry; do not strand the file.
+        guard !voiceClosed else {
+            Self.removeFile(held.note.fileURL)
+            return
+        }
+        if !failedVoiceNotes.contains(held) { failedVoiceNotes.append(held) }
     }
 
     private func deliver(_ held: HeldVoiceNote) async {
         let note = held.note
         guard let session, let channelId, let user = session.currentUser, let uploader else {
-            Self.removeFile(note.fileURL)
+            // Not signed in (or the socket is gone): the recording is kept for a
+            // retry, never deleted because the prerequisites were missing.
+            keepAsFailed(held)
             return
         }
-        // A new note replaces an older failed one; the same note retried clears
-        // its own banner while it is in flight.
-        if let old = failedVoiceNote, old != held { Self.removeFile(old.note.fileURL) }
-        failedVoiceNote = nil
+        // A retried note leaves the failed list while it is in flight.
+        failedVoiceNotes.removeAll { $0 == held }
 
         var pending = Message(pendingBody: "", channelId: channelId, author: user)
         pending.attachments = [Attachment(
@@ -344,11 +368,18 @@ final class ChatModel {
                 holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
             }
             // The file stays until the broadcast confirms the message (see
-            // `apply`), so a refusal can still hand the recording back.
+            // `apply`), so a refusal can still hand the recording back. If no
+            // broadcast ever reaches this model (the screen closed, the socket
+            // dropped) the file is not kept forever either.
+            let url = note.fileURL
+            Task.detached {
+                try? await Task.sleep(for: .seconds(600))
+                try? FileManager.default.removeItem(at: url)
+            }
         } catch {
             messages.removeAll { $0.id == rowId }
             inFlightVoice[rowId] = nil
-            failedVoiceNote = held
+            keepAsFailed(held)
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
@@ -364,7 +395,7 @@ final class ChatModel {
                 try? FileManager.default.removeItem(at: url)
             }
         } else {
-            failedVoiceNote = held
+            keepAsFailed(held)
         }
     }
 

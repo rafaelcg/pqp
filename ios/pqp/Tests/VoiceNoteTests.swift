@@ -436,6 +436,50 @@ final class VoiceNoteRetentionTests: XCTestCase {
         XCTAssertNil(model.failedVoiceNote)
     }
 
+    func testTwoRefusedNotesAreBothKept() throws {
+        let model = ChatModel()
+        let (first, firstURL) = try heldNote()
+        let (second, secondURL) = try heldNote()
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        let rowA = try pendingRow(nonce: "a")
+        let rowB = try pendingRow(nonce: "b")
+        model.stage(channelId: "c", messages: [rowA, rowB])
+        model.stageInFlightVoice(rowId: rowA.id, held: first)
+        model.stageInFlightVoice(rowId: rowB.id, held: second)
+        for nonce in ["a", "b"] {
+            model.apply(.messageRejected(MessageRejection(
+                channelId: "c", nonce: nonce, reason: "slow-mode", retryAfterMs: nil
+            )))
+        }
+        XCTAssertEqual(model.failedVoiceNotes, [first, second])
+        // The banner offers the oldest; discarding it brings up the next.
+        XCTAssertEqual(model.failedVoiceNote, first)
+        model.discardFailedVoiceNote()
+        XCTAssertEqual(model.failedVoiceNote, second)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondURL.path))
+    }
+
+    func testClosingTheScreenDropsFilesStillInFlightToo() throws {
+        let model = ChatModel()
+        let (held, url) = try heldNote()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let row = try pendingRow(nonce: "z")
+        model.stage(channelId: "c", messages: [row])
+        model.stageInFlightVoice(rowId: row.id, held: held)
+        model.close()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        // A refusal that arrives after the close must not resurrect a file
+        // nobody can retry.
+        model.apply(.messageRejected(MessageRejection(
+            channelId: "c", nonce: "z", reason: "slow-mode", retryAfterMs: nil
+        )))
+        XCTAssertNil(model.failedVoiceNote)
+    }
+
     func testLeavingTheScreenLeavesNoFileBehind() throws {
         let model = ChatModel()
         let (held, url) = try heldNote()
