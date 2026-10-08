@@ -411,6 +411,7 @@ import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy"
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
+  favoritesCollapseKey,
   favoritesForServer,
   writeFavoritesForServer,
 } from "@/lib/channel-favorites";
@@ -9585,13 +9586,25 @@ function MainAppContent({
   // not folded away inside a collapsed category. Both the stage (which then
   // drops the room's name and the row of people) and the header read this
   // one flag, so they cannot disagree about where the room is named.
+  // A favorited room is listed only under Favoritos, not in its category,
+  // so that section's fold is the one that hides it.
+  const roomIsFavorite = Boolean(
+    selectedChannel &&
+      selectedServerId &&
+      favoritesForServer(
+        user?.preferences?.favoriteChannels,
+        selectedServerId,
+      ).includes(selectedChannel.id),
+  );
   const voiceRoomRowVisible =
     columnLayout &&
     !sidebarIconsOnly &&
-    !(
-      selectedChannel?.parentId &&
-      collapsedCategories.has(selectedChannel.parentId)
-    );
+    (roomIsFavorite
+      ? !collapsedCategories.has(favoritesCollapseKey(selectedServerId!))
+      : !(
+          selectedChannel?.parentId &&
+          collapsedCategories.has(selectedChannel.parentId)
+        ));
   const voiceStageOwnsHeader = Boolean(
     selectedChannel &&
       selectedChannel.kind === "server" &&

@@ -473,7 +473,12 @@ function useStageFullscreen(
   useEffect(() => {
     const video = videoRef.current;
     const onFullscreenChange = () => {
-      const active = currentFullscreenElement() === containerRef.current;
+      // A stage that unmounted (the share ended under a fullscreen viewer)
+      // leaves both sides null, and null === null read as "still
+      // fullscreen": the shell stayed in its fullscreen layout until reload.
+      const container = containerRef.current;
+      const active =
+        container !== null && currentFullscreenElement() === container;
       setState((was) => syncScreenFullscreen(was, active));
     };
     const onBegin = () => setState((was) => syncScreenFullscreen(was, true));
@@ -1451,6 +1456,25 @@ function ActiveCall({
     observer.observe(barEl);
     return () => observer.disconnect();
   }, [barEl]);
+  // The notices float just above the bar. Over a floating bar they would sit
+  // on each picture's row and take its taps, so the row lifts past them too.
+  const [barNoticesEl, setBarNoticesEl] = useState<HTMLDivElement | null>(null);
+  const [barNoticesPx, setBarNoticesPx] = useState(0);
+  useEffect(() => {
+    if (!barNoticesEl) {
+      setBarNoticesPx(0);
+      return;
+    }
+    const read = () =>
+      setBarNoticesPx(Math.round(barNoticesEl.getBoundingClientRect().height));
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(barNoticesEl);
+    return () => observer.disconnect();
+  }, [barNoticesEl]);
   const [bannersPx, setBannersPx] = useState(0);
   useEffect(() => {
     if (!bannerColumn) {
@@ -2177,6 +2201,19 @@ function ActiveCall({
           setTileControlsHovered(false);
         }
       }}
+      // A picture's row fades with the bar, and a tap on it while faded only
+      // wakes it, as the bar's does: on a phone (no hover) the first tap on
+      // an invisible mute or fullscreen used to act.
+      onPointerDownCapture={(event) => {
+        if (isInsideTileControls(event.target)) {
+          swallowPressWhileHidden(event);
+        }
+      }}
+      onClickCapture={(event) => {
+        if (isInsideTileControls(event.target)) {
+          swallowPressWhileHidden(event);
+        }
+      }}
       onPointerDown={onStagePointerDown}
       onPointerUp={onStagePointerUp}
       onPointerCancel={() => {
@@ -2208,7 +2245,9 @@ function ActiveCall({
           // Lifted over a floating bar, unless the reserve below the strip
           // already keeps the pictures above it.
           "--tile-row-lift":
-            barOverlay && barFloats && !barReserve ? `${barPx || 72}px` : "0px",
+            barOverlay && barFloats && !barReserve
+              ? `${(barPx || 72) + barNoticesPx}px`
+              : "0px",
         } as CSSProperties
       }
     >
@@ -2887,6 +2926,7 @@ function ActiveCall({
             rather than in it: the box is the band the stage reserves, and a
             notice coming and going must not move every picture. */}
         <div
+          ref={setBarNoticesEl}
           data-call-bar-notices=""
           className="absolute inset-x-0 bottom-full flex flex-col items-center gap-2 pb-2 [&>*]:pointer-events-auto"
           style={{ pointerEvents: "none" }}
@@ -3253,7 +3293,9 @@ export function CallControls({
   const showAudienceToggle =
     audienceHost !== null && (audienceHost.available || voiceState.audience !== null);
 
-  const showMute = !collapsed || !pushToTalk;
+  // With a picture on the stage the strip carries the stage's full set, so a
+  // push-to-talk user keeps the mute button there, as the stage bar had it.
+  const showMute = !collapsed || videoOnStage || !pushToTalk;
 
   const startWatchParty = () => {
     if (shareCappedOut || !onStartScreenShare) {

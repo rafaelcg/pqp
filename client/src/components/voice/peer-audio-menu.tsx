@@ -551,7 +551,8 @@ export function PictureVolume({
     >
       <button
         type="button"
-        aria-pressed={silenced}
+        // The label says the action, mute or unmute. A pressed state on top
+        // of it was announced as a second, contradicting one.
         aria-label={silenced ? unmuteLabel : muteLabel}
         className={cn(
           "flex h-6 w-6 items-center justify-center rounded-full hover:bg-ink-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal",

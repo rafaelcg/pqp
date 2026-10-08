@@ -1,5 +1,12 @@
 import { Check, SlidersHorizontal } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -251,6 +258,54 @@ export function VideoQualityMenu({
     };
   }, [open]);
 
+  // Closed by a pick (the rows close it themselves) or by focus leaving:
+  // focus was inside the panel, which is gone now, so it goes back to the
+  // button rather than to the top of the page. A close caused by a press on
+  // something else leaves focus with that something.
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      const active = document.activeElement;
+      if (!active || active === document.body) {
+        buttonRef.current?.focus();
+      }
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  // Arrow keys, Home and End move between the rows, as in every other menu
+  // here; Tab out of the panel closes it.
+  const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const rows = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        '[role="menuitemradio"], [role="menuitem"]',
+      ),
+    );
+    if (rows.length === 0) {
+      return;
+    }
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    let next: number | null = null;
+    if (event.key === "ArrowDown") next = at < 0 ? 0 : (at + 1) % rows.length;
+    else if (event.key === "ArrowUp") next = at <= 0 ? rows.length - 1 : at - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = rows.length - 1;
+    if (next !== null) {
+      event.preventDefault();
+      rows[next]?.focus();
+    }
+  };
+  const onPanelBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    const to = event.relatedTarget as Node | null;
+    if (
+      to &&
+      !event.currentTarget.contains(to) &&
+      !rootRef.current?.contains(to)
+    ) {
+      onOpenChange(false);
+    }
+  };
+
   // Focus goes into the panel when it opens: it is portalled to the end of
   // the page, so Tab from the button would never reach it. The ticked row
   // first, else the panel's first control.
@@ -295,6 +350,8 @@ export function VideoQualityMenu({
         <div
           ref={panelRef}
           role="menu"
+          onKeyDown={onPanelKeyDown}
+          onBlur={onPanelBlur}
           aria-label={label}
           className="fixed z-[100] w-64 max-w-[80vw] rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
           // Hidden for the one frame before it is measured, so it never

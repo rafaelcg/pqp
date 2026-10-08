@@ -117,6 +117,7 @@ describe("PictureVolume", () => {
       />,
     );
     expect(html).toContain("text-danger");
-    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain("Unmute Ana");
+    expect(html).not.toContain("aria-pressed");
   });
 });
