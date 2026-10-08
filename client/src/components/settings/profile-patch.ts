@@ -117,6 +117,24 @@ export function hasBidiControl(value: string): boolean {
 }
 
 /**
+ * Characters that draw nothing: format characters (zero-width space and
+ * joiner, soft hyphen, BOM), the Braille blank and the Hangul fillers. A name
+ * made only of these reads as empty everywhere it is shown.
+ */
+const INVISIBLE = /[\p{Cf}\u2800\u3164\u115F\u1160\uFFA0]/gu;
+
+/** True when the name would show at least one visible character. */
+export function hasVisibleText(value: string): boolean {
+  return value.replace(INVISIBLE, "").trim() !== "";
+}
+
+/** Tabs and line breaks pasted into a one-line name become spaces. */
+export function withoutControlCharacters(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001F\u007F]/g, " ");
+}
+
+/**
  * The longest avatar link the server takes: `avatarUrl` in `updateProfileSchema`
  * (`packages/shared/src/api.ts`) is `.max(500)`. A test pins the two together.
  */

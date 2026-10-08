@@ -257,6 +257,28 @@ describe("a taken public link", () => {
     );
   });
 
+  it("reads the account back when the link was claimed in another window", async () => {
+    updateMe.mockRejectedValueOnce(
+      new ApiError(429, "You can change your handle again on 2026-11-07"),
+    );
+    fetchMe.mockResolvedValueOnce({ ...USER, handle: "outra" });
+    const onUserUpdated = vi.fn();
+    mount(onUserUpdated);
+    type(field("handle"), "rafa2");
+    await save();
+    const confirm = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] button, [role="alertdialog"] button',
+      ),
+    ].find((button) => button.textContent?.includes("@rafa2"))!;
+    await act(async () => {
+      confirm.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(fetchMe).toHaveBeenCalledTimes(1);
+    expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ handle: "outra" }));
+  });
+
   it("does not blame an unchanged link for another field's 400", async () => {
     updateMe.mockClear();
     updateMe.mockRejectedValueOnce(new ApiError(400, "Invalid request"));

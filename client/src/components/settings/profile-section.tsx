@@ -24,7 +24,11 @@ import {
   type User,
   type UserBannerConfig,
 } from "@pqp/shared";
-import { hasBidiControl } from "@/components/settings/profile-patch";
+import {
+  hasBidiControl,
+  hasVisibleText,
+  withoutControlCharacters,
+} from "@/components/settings/profile-patch";
 import {
   SETTINGS_BUSY,
   SettingsCopyButton,
@@ -366,7 +370,7 @@ export function ProfileSection({
     (displayName !== (user?.displayName ?? "") && hasBidiControl(displayName)
       ? t("settings.profile.displayNameControls")
       : null) ??
-    (nameLeftEmpty && !displayName.trim()
+    (nameLeftEmpty && !hasVisibleText(displayName)
       ? t("settings.profile.displayNameRequired")
       : null);
   const nameCounting = displayName.length >= DISPLAY_NAME_MAX_LENGTH - NAME_COUNTER_FROM;
@@ -418,7 +422,7 @@ export function ProfileSection({
                 className={cn("max-sm:h-11", nameError && "border-danger")}
                 onChange={(event) => {
                   setNameLeftEmpty(false);
-                  onDisplayName(event.target.value);
+                  onDisplayName(withoutControlCharacters(event.target.value));
                 }}
                 onFocus={() => {
                   nameAtFocus.current = displayName;
@@ -431,7 +435,7 @@ export function ProfileSection({
                   if (displayName !== nameAtFocus.current && collapsed !== displayName) {
                     onDisplayName(collapsed);
                   }
-                  setNameLeftEmpty(!displayName.trim());
+                  setNameLeftEmpty(!hasVisibleText(displayName));
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.nativeEvent.isComposing) {
@@ -674,6 +678,11 @@ export function ProfileSection({
                 spellCheck={false}
                 aria-describedby={usernameKept ? usernameKeptId : undefined}
                 onChange={(event) => onUsername(usernameFromInput(event.target.value))}
+                // An emptied username cannot be saved (the hint says so): the
+                // saved one comes back when the person leaves the field.
+                onBlur={() => {
+                  if (!username.trim() && savedUsername) onUsername(savedUsername);
+                }}
                 onKeyDown={saveOnEnter}
                 placeholder={t("settings.profile.usernamePlaceholder")}
                 className="max-sm:h-11"

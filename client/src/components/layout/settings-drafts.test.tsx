@@ -547,6 +547,64 @@ describe("Settings profile save, QA round 3", () => {
     expect(updateMe).toHaveBeenCalledTimes(1);
   });
 
+  it("does not save on the second click of a double-click on Desfazer", async () => {
+    updateMe.mockReset();
+    updateMe.mockImplementation(async () => makeUser({ displayName: "Draft Name" }));
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      mount(makeUser());
+      type(displayNameInput(), "Draft Name");
+      act(() => barButton("discard")!.click());
+      act(() => barButton("undo")!.click());
+      // The second click lands where Desfazer was: on Salvar.
+      await act(async () => {
+        barButton("save")!.click();
+        await Promise.resolve();
+      });
+      expect(updateMe).not.toHaveBeenCalled();
+      expect(displayNameInput().value).toBe("Draft Name");
+      // A deliberate press a moment later saves.
+      now.mockReturnValue(1_000_000 + 1_000);
+      await act(async () => {
+        barButton("save")!.click();
+        await Promise.resolve();
+      });
+      expect(updateMe).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("refuses a name made only of invisible characters", () => {
+    updateMe.mockReset();
+    mount(makeUser());
+    type(displayNameInput(), "\u200B\u200B\u3164");
+    act(() => barButton("save")!.click());
+    expect(updateMe).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-settings-row="display-name"]')!.textContent).toMatch(
+      /Enter a display name|Escreve um nome/,
+    );
+  });
+
+  it("turns a pasted tab in the name into a space", () => {
+    mount(makeUser());
+    type(displayNameInput(), "Rafa\tGugli");
+    expect(displayNameInput().value).toBe("Rafa Gugli");
+  });
+
+  it("brings the saved username back when the field is left empty", () => {
+    mount(makeUser());
+    const username = document.querySelector<HTMLInputElement>(
+      '[data-settings-row="username"] input',
+    )!;
+    type(username, "");
+    act(() => {
+      username.focus();
+      username.blur();
+    });
+    expect(username.value).toBe("rafa");
+  });
+
   it("keeps Salvo up for the whole moment after a second save", async () => {
     vi.useFakeTimers();
     try {

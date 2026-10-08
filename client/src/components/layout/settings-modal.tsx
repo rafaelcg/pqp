@@ -47,6 +47,7 @@ import {
   avatarLinkProblem,
   buildProfilePatch,
   hasBidiControl,
+  hasVisibleText,
   isHandleTakenError,
   isProfileDirty,
   pendingHandleChange,
@@ -254,6 +255,9 @@ function storeSection(id: SectionId) {
 
 /** How long "Alterações descartadas" offers Desfazer. */
 export const DISCARD_UNDO_MS = 5000;
+
+/** How long after Desfazer a click on Salvar, in the same spot, is ignored. */
+const UNDO_SAVE_GUARD_MS = 600;
 
 const EMPTY_DRAFTS: ProfileDrafts = {
   displayName: "",
@@ -786,7 +790,19 @@ export function SettingsModal({
     setCloseJumped(false);
   }
 
+  // Desfazer and Salvar sit at the same spot of the bar, one after the other:
+  // the second click of a double-click on Desfazer must not save the edit it
+  // just brought back.
+  const undoneAt = useRef(0);
+  function saveFromBar() {
+    if (Date.now() - undoneAt.current < UNDO_SAVE_GUARD_MS) {
+      return;
+    }
+    saveProfile();
+  }
+
   function undoDiscard() {
+    undoneAt.current = Date.now();
     if (discarded) {
       setDrafts(discarded);
     }
@@ -881,6 +897,13 @@ export function SettingsModal({
           setSection("profile");
           setHandleError(message);
           setSaveError(message);
+          // The link was claimed elsewhere (another window, another device):
+          // read the account back so Perfil locks the field it now holds.
+          void fetchMe()
+            .then((fresh) => {
+              if (fresh.handle !== user.handle) onUserUpdated(fresh);
+            })
+            .catch(() => undefined);
         } else {
           if (err instanceof ApiError && err.status === 409 && /username/i.test(err.message)) {
             setSaveError(t("settings.profile.usernameExhausted"));
@@ -930,7 +953,7 @@ export function SettingsModal({
     }
     // Checked before anything is sent. A blank name used to be dropped from
     // the request, so the save looked like it worked and kept the old name.
-    if (drafts.displayName.trim() === "") {
+    if (!hasVisibleText(drafts.displayName)) {
       // Said once, under the field; the bar does not repeat it.
       setSection("profile");
       setNameError(t("settings.profile.displayNameRequired"));
@@ -1416,7 +1439,7 @@ export function SettingsModal({
                   onUndoDiscard={undoDiscard}
                   error={saveError}
                   onDiscard={discardProfile}
-                  onSave={saveProfile}
+                  onSave={saveFromBar}
                   onShowSource={
                     active.id === "profile" ? undefined : () => setSection("profile")
                   }
