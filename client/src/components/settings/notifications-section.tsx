@@ -365,7 +365,14 @@ function PushRow({
       unavailable={ready && permission === "denied" && !on}
       onCheckedChange={() => void push.toggle()}
       status={
-        notice ?? (status ? <SettingsInlineStatus state={status} /> : null)
+        notice ??
+        (status ? (
+          // "Carregando o push…" is how the tab opens, not news.
+          <SettingsInlineStatus
+            state={status}
+            quiet={status.kind === "saving" && status.label === t("settings.push.loading")}
+          />
+        ) : null)
       }
     />
   );
@@ -539,7 +546,9 @@ function DirectMessagesGroup({
               state={{ kind: "error", message: t("settings.push.dmDetailsFailed") }}
             />
           ) : push.loading ? (
+            // Content of the tab as it opens, not news: not announced.
             <SettingsInlineStatus
+              quiet
               state={{ kind: "saving", label: t("settings.push.loading") }}
             />
           ) : null

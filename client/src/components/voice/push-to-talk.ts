@@ -169,6 +169,14 @@ export function keyDisplayLabel(
 ): string {
   const key = MODIFIER_KEYS[binding.code];
   if (!key) {
+    // The few names that are words, not a key's own character, are said in
+    // the person's language; the saved label is the English one.
+    if (translate) {
+      if (binding.code === "Space") return translate("keyBinding.space");
+      if (binding.code === "MouseMiddle") return translate("keyBinding.mouseMiddle");
+      const button = /^MouseButton(\d+)$/.exec(binding.code)?.[1];
+      if (button) return translate("keyBinding.mouseButton", { number: Number(button) });
+    }
     return binding.label;
   }
   const name = modifierName(key.modifier, apple);

@@ -403,7 +403,9 @@ describe("FeedbackSection", () => {
     );
     type("meu relato");
     const region = () => host!.querySelector("[data-settings-announcer]")!;
-    const said: string[] = [];
+    // Each announcement is a new node in the region, which is what makes a
+    // screen reader say the same sentence again.
+    const nodes: (Element | null)[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await act(async () => {
         sendButton().click();
@@ -412,14 +414,11 @@ describe("FeedbackSection", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      said.push(region().textContent ?? "");
-      // The announcer clears before it speaks: catch the clear in between.
-      act(() => {
-        region().textContent = "";
-      });
+      nodes.push(region().firstElementChild);
     }
-    expect(said[0]).toMatch(/Couldn't send/);
-    expect(said[1]).toMatch(/Couldn't send/);
+    expect(nodes[0]?.textContent).toMatch(/Couldn't send/);
+    expect(nodes[1]?.textContent).toMatch(/Couldn't send/);
+    expect(nodes[1]).not.toBe(nodes[0]);
   });
 
   it("keeps a draft for the same account and drops it for another", () => {

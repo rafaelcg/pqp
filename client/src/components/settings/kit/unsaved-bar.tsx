@@ -5,6 +5,8 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface UnsavedChangesBarProps {
+  /** Bumped on every press of Salvar, so a repeated refusal is said again. */
+  attempt?: number;
   visible: boolean;
   saving: boolean;
   /** The save just landed: "Salvo" for a moment, then the shell hides the bar. */
@@ -59,6 +61,7 @@ export function UnsavedChangesBar({
   onDiscard,
   onSave,
   onShowSource,
+  attempt = 0,
 }: UnsavedChangesBarProps) {
   const { t } = useTranslation();
   // A moment after an action: a check, a line, and at most an undo.
@@ -86,7 +89,9 @@ export function UnsavedChangesBar({
         : message;
   const announcer = (
     <p role="status" aria-live="polite" className="sr-only">
-      {spoken}
+      {/* A new node per save attempt: the same refusal on a second press is
+          still said. */}
+      <span key={attempt}>{spoken}</span>
     </p>
   );
   if (!visible) {

@@ -248,6 +248,10 @@ export function RadioGroup<T extends string | number>({
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",
                 size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
+                // 44px to a finger on a phone: the hit area reaches past the
+                // drawn pill, into the gap between rows.
+                "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
+                size === "sm" ? "max-sm:after:-inset-y-1" : "max-sm:after:-inset-y-0.5",
                 checked
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border text-text-secondary",

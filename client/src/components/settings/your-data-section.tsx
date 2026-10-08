@@ -88,7 +88,12 @@ const DELETE_FOCUS_RETURN_MS = 3000;
  * download UI is easy to miss, so a "Pronto" line names the file for a few
  * seconds. Without it people click again and hit the limiter.
  */
-function useDataExport(enabled: boolean) {
+/**
+ * `ownRegion`: the caller says the lines through a live region of its own (the
+ * delete dialog, which sits outside the Settings announcer), so the lines here
+ * are plain text and `spoken` carries what to say.
+ */
+function useDataExport(enabled: boolean, { ownRegion = false }: { ownRegion?: boolean } = {}) {
   const { t } = useTranslation();
   const exp = useInlineSave({
     savingLabel: t("settings.data.exporting"),
@@ -191,7 +196,8 @@ function useDataExport(enabled: boolean) {
   useEffect(() => {
     if (announce && doneText) announce(doneText);
   }, [announce, doneText]);
-  const doneLive = announce ? {} : ({ role: "status", "aria-live": "polite" } as const);
+  const doneLive =
+    announce || ownRegion ? {} : ({ role: "status", "aria-live": "polite" } as const);
   // The limiter's answer, said once with the wait as it was answered; the
   // visible line counts down silently.
   useEffect(() => {
@@ -208,7 +214,7 @@ function useDataExport(enabled: boolean) {
       <span aria-hidden className="min-w-0 text-pretty">
         {t("settings.data.exportCooldown", { time: formatWait(waitSeconds) })}
       </span>
-      {announce ? null : (
+      {announce || ownRegion ? null : (
         <span role="alert" className="sr-only">
           {t("settings.data.exportCooldown", { time: formatWait(announcedWait) })}
         </span>
@@ -225,12 +231,20 @@ function useDataExport(enabled: boolean) {
       </span>
     </p>
   ) : (
-    <SettingsInlineStatus state={exp.state} />
+    <SettingsInlineStatus state={exp.state} quiet={ownRegion} />
   );
+  const spoken = waiting
+    ? t("settings.data.exportCooldown", { time: formatWait(announcedWait) })
+    : exp.state.kind === "saving"
+      ? (exp.state.label ?? t("settings.saving"))
+      : exp.state.kind === "error"
+        ? exp.state.message
+        : doneText ?? "";
 
   return {
     download,
     status,
+    spoken,
     exporting,
     waiting,
     waitLabel: waiting ? formatWait(waitSeconds) : null,
@@ -290,9 +304,12 @@ export function YourDataSection({
               disabled={data.disabled}
               aria-disabled={data.busy || undefined}
               className={cn(TOUCH, data.busy && SETTINGS_BUSY)}
+              // During the wait the name starts with what the button says
+              // ("Baixar em…"), so voice control finds it, and it holds the
+              // wait as the limiter answered it instead of ticking.
               aria-label={
                 data.waitName
-                  ? t("settings.data.row.export.waitAction", { time: data.waitName })
+                  ? t("settings.data.exportIn", { time: data.waitName })
                   : t("settings.data.row.export.action")
               }
             >
@@ -371,7 +388,7 @@ export function DeleteAccountDialog({
   const [blockingServers, setBlockingServers] = useState<
     BlockingOwnedServer[] | null
   >(null);
-  const data = useDataExport(user !== null);
+  const data = useDataExport(user !== null, { ownRegion: true });
   const typeId = useId();
   const hintId = useId();
 
@@ -470,7 +487,7 @@ export function DeleteAccountDialog({
                 ? t("settings.delete.deleting")
                 : missing
                   ? t("settings.delete.typeMissing", { rest: missing })
-                  : ""}
+                  : data.spoken}
             </p>
             {blockingServers && blockingServers.length > 0 && (
               // The list inherits the notice's own foreground: that pair is the

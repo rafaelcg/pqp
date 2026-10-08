@@ -187,6 +187,22 @@ describe("Perfil uploads and focus", () => {
     expect(field.value).toBe("abcdefghijklmnopqrst");
   });
 
+  it("keeps the caret where a letter was typed, even when it is lowercased", async () => {
+    await mount(USER);
+    const field = row("public-link").querySelector<HTMLInputElement>("input")!;
+    type(field, "abcdef");
+    field.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(field, "abcQdef");
+      field.setSelectionRange(4, 4);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    expect(field.value).toBe("abcqdef");
+    expect(field.selectionStart).toBe(4);
+  });
+
   it("takes the handle out of a pasted profile address", async () => {
     await mount(USER);
     const field = row("public-link").querySelector<HTMLInputElement>("input")!;

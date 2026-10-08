@@ -268,7 +268,7 @@ describe("YourDataSection export feedback", () => {
     expect(exportButton().disabled).toBe(false);
     expect(exportButton().textContent).toBe("Download in 54 s");
     expect(exportButton().getAttribute("aria-label")).toBe(
-      "Download everything we hold about you, available in 54 s",
+      "Download in 54 s",
     );
     const alert = host!.querySelector('[data-settings-row="export"] [role="alert"]');
     expect(alert?.textContent).toBe("Too many downloads in a row. Try again in 54 s.");
@@ -277,7 +277,7 @@ describe("YourDataSection export feedback", () => {
     expect(exportButton().textContent).toBe("Download in 44 s");
     // The name stays put while the label counts down.
     expect(exportButton().getAttribute("aria-label")).toBe(
-      "Download everything we hold about you, available in 54 s",
+      "Download in 54 s",
     );
     expect(alert?.isConnected).toBe(true);
     // The alert is said once: the countdown a screen reader would hear every
@@ -355,6 +355,24 @@ describe("DeleteAccountDialog", () => {
     );
     typeTag();
   }
+
+  it("says the copy's Pronto line through the dialog's own region", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    stubDownload();
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    mount(<DeleteAccountDialog open user={USER} onCancel={() => {}} onDeleted={() => {}} />);
+    const copy = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      /Download your data/.test(b.textContent ?? ""),
+    )!;
+    await act(async () => copy.click());
+    await tick(0);
+    await tick(0);
+    const polite = document.body.querySelector('[role="dialog"] [aria-live="polite"]');
+    expect(polite?.textContent).toMatch(/Done\. The file pqp-my-data/);
+    // The visible line is plain text: no second region says it.
+    expect(document.body.querySelectorAll('[role="dialog"] [role="status"]').length).toBe(0);
+    vi.useRealTimers();
+  });
 
   it("cannot be dismissed while the delete is in flight", async () => {
     fetchMock.mockReturnValue(new Promise(() => {}));

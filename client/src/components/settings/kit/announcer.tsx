@@ -20,6 +20,10 @@ const SettingsAnnounceContext = createContext<Announce | null>(null);
 
 export function SettingsAnnouncer({ children }: { children: ReactNode }) {
   const [text, setText] = useState("");
+  // Bumped on every announcement: the text goes into a new node each time, so
+  // the same sentence twice in a row changes the region even when React folds
+  // the clear and the set into one render.
+  const [said, setSaid] = useState(0);
   const timer = useRef<number | null>(null);
   // A status's newer message replaces its older one within a tick
   // ("Preparando…" then "Pronto" says only "Pronto"), while notices asked for
@@ -31,13 +35,11 @@ export function SettingsAnnouncer({ children }: { children: ReactNode }) {
     queued.current = kept.some((entry) => entry.text === next)
       ? kept
       : [...kept, { text: next, combine }];
-    // Cleared first, so the same sentence twice in a row ("Salvo" from two
-    // rows) is read twice.
-    setText("");
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       timer.current = null;
       setText(queued.current.map((entry) => entry.text).join(" "));
+      setSaid((count) => count + 1);
       queued.current = [];
     }, 0);
   }, []);
@@ -51,7 +53,7 @@ export function SettingsAnnouncer({ children }: { children: ReactNode }) {
     <SettingsAnnounceContext.Provider value={announce}>
       {children}
       <p role="status" aria-live="polite" className="sr-only" data-settings-announcer="">
-        {text}
+        <span key={said}>{text}</span>
       </p>
     </SettingsAnnounceContext.Provider>
   );

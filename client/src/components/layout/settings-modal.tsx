@@ -340,6 +340,7 @@ export function SettingsModal({
   // A close was refused while the profile was dirty. `jumped`: the refusal
   // also moved the person to Perfil from another tab, and Perfil says why.
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [saveAttempt, setSaveAttempt] = useState(0);
   const [closeJumped, setCloseJumped] = useState(false);
   // What Descartar threw away, kept for Desfazer a few seconds.
   const [discarded, setDiscarded] = useState<ProfileDrafts | null>(null);
@@ -625,7 +626,12 @@ export function SettingsModal({
 
     setDevicesLoaded(false);
 
+    // Only the newest read applies: a device plugged in while the first read
+    // is out starts a second, and the older answer must not land last.
+    let latestRead = 0;
     async function loadDevices() {
+      const read = ++latestRead;
+      const stale = () => cancelled || read !== latestRead;
       setDevicesError(null);
       // The probe is a capture of the default microphone. It is only there to
       // unlock the names in the list, so it is not made when a call or the mic
@@ -641,7 +647,7 @@ export function SettingsModal({
         // one and Voz says so. A busy one gets a retry, which is what the
         // permission button does.
         if (probe === "denied" || probe === "busy") {
-          if (!cancelled) {
+          if (!stale()) {
             setDevicesError(
               t(
                 probe === "busy"
@@ -655,7 +661,7 @@ export function SettingsModal({
       }
       const { inputs: nextInputs, outputs: nextOutputs, cameras: nextCameras } =
         await listAudioDevices();
-      if (cancelled) {
+      if (stale()) {
         return;
       }
       setInputs(nextInputs);
@@ -918,6 +924,7 @@ export function SettingsModal({
   }
 
   function saveProfile() {
+    setSaveAttempt((count) => count + 1);
     if (!user || saving || !profileDirty) {
       return;
     }
@@ -1119,8 +1126,11 @@ export function SettingsModal({
   // same place a plain tab switch lands, and the late row still flashes if it
   // turns up within the second.
   const [pendingRow, setPendingRow] = useState<{ id: string; nonce: number } | null>(null);
+  // The tab a row jump was made into: only that switch hands focus to the row.
+  const rowJumpSection = useRef<SectionId | null>(null);
   const openSection = useCallback((next: SectionId, rowId?: string) => {
     setSection(next);
+    rowJumpSection.current = rowId ? next : null;
     setPendingRow(rowId ? { id: rowId, nonce: Date.now() } : null);
   }, []);
   useEffect(() => {
@@ -1165,7 +1175,11 @@ export function SettingsModal({
     }
     const previous = focusedSectionRef.current;
     focusedSectionRef.current = active.id;
-    if (previous === null || previous === active.id || pendingRow) {
+    // A row jump focuses its row (above). Any later switch, "Ver no Perfil"
+    // included, is not that jump, however long ago it was made.
+    const jumpedHere = pendingRow !== null && rowJumpSection.current === active.id;
+    rowJumpSection.current = null;
+    if (previous === null || previous === active.id || jumpedHere) {
       return;
     }
     const focused = document.activeElement;
@@ -1393,6 +1407,7 @@ export function SettingsModal({
 
                 <UnsavedChangesBar
                   visible={barVisible}
+                  attempt={saveAttempt}
                   saving={saving}
                   saved={savedFlash && !profileDirty}
                   blocked={closeBlocked}

@@ -177,3 +177,35 @@ describe("SettingsAnnouncer queue", () => {
     expect(region().textContent).toContain("J digita um caractere.");
   });
 });
+
+describe("SettingsAnnouncer repeats", () => {
+  it("puts the same sentence in a new node each time, so it is said again", async () => {
+    const { useSettingsAnnounce } = await import("@/components/settings/kit/announcer");
+    let say: ((text: string) => void) | null = null;
+    function Grab() {
+      say = useSettingsAnnounce();
+      return null;
+    }
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <SettingsAnnouncer>
+          <Grab />
+        </SettingsAnnouncer>,
+      );
+    });
+    const sayAndSettle = async () => {
+      await act(async () => {
+        say!("Não deu pra enviar.");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      return region().firstElementChild;
+    };
+    const first = await sayAndSettle();
+    const second = await sayAndSettle();
+    expect(second?.textContent).toBe("Não deu pra enviar.");
+    expect(second).not.toBe(first);
+  });
+});

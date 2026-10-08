@@ -168,6 +168,11 @@ describe("Perfil", () => {
     expect(row("public-link").querySelector('[role="alert"]')).toBeNull();
   });
 
+  it("marks a reserved link invalid, as it does a taken one", async () => {
+    await mount(USER, { handle: "admin" });
+    expect(linkField().getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("reads the cooldown date with the disabled field", async () => {
     await mount({ ...USER, handleChangedAt: new Date().toISOString() } as User);
     const input = linkField();

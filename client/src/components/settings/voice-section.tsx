@@ -1589,7 +1589,9 @@ export function VoiceSection({
     setVolumes(draftLocal.inputVolume, draftLocal.outputVolume);
   }, [setVolumes, draftLocal.inputVolume, draftLocal.outputVolume]);
   const { noiseSuppression, echoCancellation, autoGainControl } = draftLocal.micProcessing;
-  const processingKey = `${noiseSuppression}|${echoCancellation}|${autoGainControl}`;
+  // The devices are chosen when the microphone opens too: another microphone
+  // or speaker picked mid-test starts it again on the new one.
+  const processingKey = `${noiseSuppression}|${echoCancellation}|${autoGainControl}|${inputInUse}|${canSelectOutput ? outputInUse : ""}`;
   const lastProcessingKey = useRef(processingKey);
   const micTestOptionsRef = useRef(micTestOptions);
   micTestOptionsRef.current = micTestOptions;

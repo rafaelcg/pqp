@@ -540,6 +540,20 @@ describe("keyDisplayLabel", () => {
     );
   });
 
+  it("says Space and the mouse buttons in the person's language", () => {
+    const say = (id: string, vars?: Record<string, unknown>) =>
+      vars?.number === undefined ? id : `${id}:${String(vars.number)}`;
+    expect(keyDisplayLabel(key("Space", "Space"), say as never, false)).toBe("keyBinding.space");
+    expect(keyDisplayLabel(key("MouseMiddle", "Middle Click"), say as never, false)).toBe(
+      "keyBinding.mouseMiddle",
+    );
+    expect(keyDisplayLabel(key("MouseButton4", "Mouse Button 4"), say as never, false)).toBe(
+      "keyBinding.mouseButton:4",
+    );
+    // Without a translator the saved English label stays.
+    expect(keyDisplayLabel(key("Space", "Space"), undefined, false)).toBe("Space");
+  });
+
   it("keeps the saved label of any other key", () => {
     expect(keyDisplayLabel({ ...defaultPushToTalkBinding, code: "F9", label: "F9" })).toBe("F9");
   });

@@ -547,7 +547,12 @@ export function ProfileSection({
                   disabled={renameAvailableAt !== null}
                   placeholder={t("settings.profile.publicHandle.placeholder")}
                   aria-invalid={
-                    handleError || availability === "taken" ? true : undefined
+                    handleError ||
+                    availability === "taken" ||
+                    availability === "reserved" ||
+                    availability === "blocked"
+                      ? true
+                      : undefined
                   }
                   aria-describedby={[
                     handleDescriptionId,
@@ -570,7 +575,22 @@ export function ProfileSection({
                     ) {
                       return;
                     }
-                    onHandle(handleFromInput(raw));
+                    const input = event.target;
+                    const next = handleFromInput(raw);
+                    // Normalising changes the value under the caret (an
+                    // uppercase letter becomes lowercase), and React puts the
+                    // caret at the end when the value differs: keep it where
+                    // the person was typing.
+                    const caret = Math.max(
+                      0,
+                      (input.selectionStart ?? raw.length) - (raw.length - next.length),
+                    );
+                    onHandle(next);
+                    window.requestAnimationFrame(() => {
+                      if (document.activeElement === input && caret <= input.value.length) {
+                        input.setSelectionRange(caret, caret);
+                      }
+                    });
                   }}
                   onKeyDown={saveOnEnter}
                   className="font-mono max-sm:h-11"

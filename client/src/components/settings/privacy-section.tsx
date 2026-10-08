@@ -193,7 +193,9 @@ export function PrivacySection({
 }) {
   const { t } = useTranslation();
   const save = useInlineSave();
-  const [unblocking, setUnblocking] = useState<string | null>(null);
+  // Per row: one row's request finishing must not free another row's button.
+  const [unblocking, setUnblocking] = useState<ReadonlySet<string>>(() => new Set());
+  const unblockingRef = useRef(new Set<string>());
   const [unblockError, setUnblockError] = useState<{ id: string; message: string } | null>(
     null,
   );
@@ -251,10 +253,12 @@ export function PrivacySection({
   );
 
   async function unblock(person: BlockedUser) {
-    if (unblocking === person.id) {
+    // A ref, not the state: two presses in one tick both read the old state.
+    if (unblockingRef.current.has(person.id)) {
       return;
     }
-    setUnblocking(person.id);
+    unblockingRef.current.add(person.id);
+    setUnblocking(new Set(unblockingRef.current));
     setUnblockError(null);
     awaiting.current.set(person.id, person.displayName);
     try {
@@ -277,7 +281,8 @@ export function PrivacySection({
         ),
       });
     } finally {
-      setUnblocking(null);
+      unblockingRef.current.delete(person.id);
+      setUnblocking(new Set(unblockingRef.current));
     }
   }
 
@@ -517,8 +522,8 @@ export function PrivacySection({
                   })}
                   // Busy but focusable: a disabled button drops keyboard
                   // focus on the page, and a failure keeps the row.
-                  aria-disabled={unblocking === blocked.id || undefined}
-                  className={unblocking === blocked.id ? SETTINGS_BUSY : undefined}
+                  aria-disabled={unblocking.has(blocked.id) || undefined}
+                  className={unblocking.has(blocked.id) ? SETTINGS_BUSY : undefined}
                   onClick={() => void unblock(blocked)}
                 >
                   {t("settings.privacy.unblock")}

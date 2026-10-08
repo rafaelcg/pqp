@@ -377,6 +377,30 @@ describe("PrivacySection", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("keeps each row's Unblock busy until its own request ends", async () => {
+    const pending: Array<() => void> = [];
+    const onUnblockUser = vi.fn(
+      () => new Promise<void>((resolve) => pending.push(resolve)),
+    );
+    mount({ onUnblockUser });
+    const button = (name: string) =>
+      host!.querySelector<HTMLButtonElement>(`button[aria-label="Unblock ${name}"]`)!;
+    await act(async () => button("Fulano").click());
+    await act(async () => button("Beltrana").click());
+    // Beltrana's request ends first: Fulano's button stays busy.
+    await act(async () => {
+      pending[1]!();
+      await Promise.resolve();
+    });
+    expect(button("Fulano").getAttribute("aria-disabled")).toBe("true");
+    await act(async () => button("Fulano").click());
+    expect(onUnblockUser).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      pending[0]!();
+      await Promise.resolve();
+    });
+  });
+
   it("says nothing was unblocked when the request fails", async () => {
     const onUnblockUser = vi
       .fn()

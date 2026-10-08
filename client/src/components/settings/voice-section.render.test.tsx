@@ -1045,3 +1045,38 @@ describe("VoiceSection mic test running flag", () => {
     expect(isMicTestRunning()).toBe(false);
   });
 });
+
+describe("VoiceSection mic test and a new device", () => {
+  it("starts the running test again on a microphone picked mid-test", async () => {
+    const { open } = installWorkingMedia();
+    const second = { deviceId: "mic-2", label: "Yeti" };
+    await mount({ inputs: [MIC, second], settings: { ...defaultLocalSettings, inputDeviceId: "mic-1" } });
+    await act(async () => {
+      micTestButton().click();
+    });
+    const before = open.mock.calls.length;
+    await act(async () => {
+      root!.render(
+        <TooltipProvider>
+          <VoiceSection
+            draftLocal={{ ...defaultLocalSettings, inputDeviceId: "mic-2" }}
+            patchLocal={() => undefined}
+            inputs={[MIC, second]}
+            outputs={[]}
+            cameras={[]}
+            onRevealCameras={() => undefined}
+            devicesError={null}
+            devicesLoaded
+            voiceAnalyser={null}
+            metering
+            showVoiceCleanBadge={false}
+          />
+        </TooltipProvider>,
+      );
+    });
+    const asked = open.mock.calls
+      .slice(before)
+      .map((call) => (call as [MediaStreamConstraints])[0].audio);
+    expect(asked.some((audio) => JSON.stringify(audio).includes("mic-2"))).toBe(true);
+  });
+});
