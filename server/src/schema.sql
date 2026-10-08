@@ -1046,6 +1046,26 @@ CREATE TABLE IF NOT EXISTS message_attachment_voice (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Who has played a voice note, and when they first did. One row per listener:
+-- the primary key is what makes `POST /api/attachments/:id/listened`
+-- idempotent (a replay is `ON CONFLICT DO NOTHING`, and only the insert that
+-- wins sends a live frame). Filled for every channel; whether anybody else
+-- may SEE it is decided on read (a conversation of at most ten people, the
+-- author only), never by what is stored. Keyed to the attachment, not the
+-- message: it is the note that was heard, and CASCADE takes the rows with
+-- the note the sweeper or a message delete removes. user_id cascades with the
+-- account. The PK leads with attachment_id, which is the direction every read
+-- takes (one batch of notes), so no second index; deleting a user scans by
+-- user_id, and that index below keeps it from walking the table.
+CREATE TABLE IF NOT EXISTS voice_note_listens (
+  attachment_id UUID NOT NULL REFERENCES message_attachments(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  listened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (attachment_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_voice_note_listens_user
+  ON voice_note_listens (user_id);
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows

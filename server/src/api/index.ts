@@ -558,9 +558,11 @@ import {
 } from "../services/attachments.js";
 import {
   NoteTooLargeError,
+  noteEditAllowed,
   VoiceNoteContentTypeError,
   VoiceNotesDisabledError,
 } from "../services/voice-notes.js";
+import { recordListen, VoiceNoteNotFoundError } from "../services/voice-note-listens.js";
 import {
   GifBackendError,
   isGifSearchConfigured,
@@ -1094,6 +1096,18 @@ const bulkDeleteLimiter = createRateLimiter({
   capacity: 5,
   refillPerSecond: 0.05,
 });
+/**
+ * "I played this voice note". One call per note per listener ever lands a row,
+ * so the realistic burst is a person catching up on a backlog with auto-play
+ * walking through it, a note every few seconds. Sixty covers a long backlog
+ * at once; sustained it is one a second, which is faster than notes can be
+ * heard. Keyed by user, and a replay still spends a token: the point is the
+ * request rate, not the row count.
+ */
+const listenLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 1,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -1127,6 +1141,7 @@ export function resetApiRateLimits(): void {
   voiceLeaveLimiter.reset();
   guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
+  listenLimiter.reset();
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
   hlsSessionLookupGuard.reset();
@@ -1151,6 +1166,13 @@ class Created {
 
 function created(body: unknown): Created {
   return new Created(body);
+}
+
+/** Wrap a handler result to answer 204 with no body. */
+class NoContent {}
+
+function noContent(): NoContent {
+  return new NoContent();
 }
 
 /**
@@ -3551,6 +3573,41 @@ router.get(
         Date.now() + attachmentUrlTtlSeconds() * 1000,
       ).toISOString(),
     };
+  },
+);
+
+/**
+ * "I played this voice note." 204, idempotent: the first call records it and
+ * tells the right sockets (see `notifyVoiceNoteListened`), a replay changes
+ * nothing, and playing your own note is a no-op that still answers 204.
+ *
+ * 404 for a note the caller cannot see, an attachment that is not a voice
+ * note, and one that does not exist, all alike, as in the URL route above.
+ * There is no storage check: this reads rows, never the bucket.
+ */
+router.post(
+  "/api/attachments/:attachmentId/listened",
+  async ({ res, user }, { attachmentId }) => {
+    const key = `user:${user.id}`;
+    if (!listenLimiter.take(key)) {
+      res.setHeader("Retry-After", String(listenLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    if (!isUuid(attachmentId!)) {
+      throw new NotFound("Attachment not found");
+    }
+    try {
+      const { frame, addressees } = await recordListen(attachmentId!, user.id);
+      if (frame) {
+        notifyVoiceNoteListened(frame, addressees);
+      }
+    } catch (error) {
+      if (error instanceof VoiceNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      throw error;
+    }
+    return noContent();
   },
 );
 
@@ -7335,6 +7392,17 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
 
+  // A voice note travels alone, with no text beside it (the claim enforces
+  // that when it is sent); this is the same rule for the road back in.
+  if (
+    !noteEditAllowed({
+      hasNote: existing.attachments.some((attachment) => attachment.voice),
+      body: body.body,
+    })
+  ) {
+    throw new HttpError(400, "A voice message cannot have text added to it");
+  }
+
   // Same reasoning as the block guard above: an edit is a send. Without this
   // a member posts "hi", edits it into the blocked word, and AutoMod never
   // saw it. The check reads the same rules with the same exemptions as
@@ -7602,7 +7670,7 @@ router.get(
   "/api/channels/:channelId/pins",
   async ({ user }, { channelId }) => {
     await requireChannelAccess(channelId!, user.id);
-    const messages = await listPinnedMessages(channelId!);
+    const messages = await listPinnedMessages(channelId!, user.id);
     return { messages: messages.map(mapMessage) };
   },
 );
@@ -11030,6 +11098,14 @@ export async function handleApi(
       sendJson(res, 201, result.body, req);
       return;
     }
+    if (result instanceof NoContent) {
+      res.writeHead(204, {
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
+      });
+      res.end();
+      return;
+    }
     // The handler streamed its own answer (a past-broadcast download). There
     // is nothing left to write, and `sendJson` would throw on a socket whose
     // head went out long ago.
@@ -11225,7 +11301,7 @@ router.patch("/api/push/settings", async ({ req, user }) => {
 // dominance — are argued in packages/shared/src/friends.ts and on the
 // `friendships` table in schema.sql; enforcement is in services/friends.ts.
 import { friendNudgeFor, friendRequestSchema } from "@pqp/shared";
-import { notifyFriendActivity } from "../ws/chat.js";
+import { notifyFriendActivity, notifyVoiceNoteListened } from "../ws/chat.js";
 import {
   acceptFriendRequest,
   FriendRequestFloodError,

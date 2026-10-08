@@ -123,3 +123,16 @@ export function noteShapeAllowed(input: {
     input.body.trim().length === 0
   );
 }
+
+/**
+ * The edit rule. A note travels alone with no text, and that has to survive
+ * the message being edited later: the claim refuses text beside a note, so an
+ * edit that adds some would be the same message by another road. An edit that
+ * leaves the body empty is the no-op it looks like and stays legal.
+ */
+export function noteEditAllowed(input: {
+  hasNote: boolean;
+  body: string;
+}): boolean {
+  return !input.hasNote || input.body.trim().length === 0;
+}

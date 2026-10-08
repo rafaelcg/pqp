@@ -181,16 +181,38 @@ export const noteTranscriptStatusSchema = z.enum([
 ]);
 
 /**
+ * Receipts are shown only in a conversation this small. Past it, "ouviu" is a
+ * roll call and the author would be reading a crowd, so the server neither
+ * sends the list nor the frame that would grow it. `DM_MAX_PARTICIPANTS` is
+ * the same number today; this is its own name because the rule is about what
+ * is shown, and a group DM may one day be allowed to grow past it.
+ */
+export const VOICE_NOTE_RECEIPTS_MAX_PARTICIPANTS = 10;
+
+/** One person who has played a note, as the author's copy lists them. */
+export const voiceNoteListenSchema = z.object({
+  userId: z.string().uuid(),
+  /** ISO 8601, the first time that person played it. */
+  listenedAt: z.string(),
+});
+
+export type VoiceNoteListen = z.infer<typeof voiceNoteListenSchema>;
+
+/**
  * The `voice` block on a stored attachment. `durationMs` is what the card
- * shows. `listenedByMe`, `listenedBy` and `transcript` are filled by later
- * work and optional until then, so a reader written now keeps parsing.
+ * shows. `listenedByMe` is per viewer and absent where nothing knows the
+ * viewer (a live broadcast reaches everyone with one copy): read it as "not
+ * yet", never as a reset. `listenedBy` is on the AUTHOR's copy only, in a
+ * conversation of at most `VOICE_NOTE_RECEIPTS_MAX_PARTICIPANTS`; absent
+ * anywhere else, and `[]` there means nobody has played it yet. `transcript`
+ * is filled by later work and optional until then, so a reader written now
+ * keeps parsing.
  */
 export const voiceNoteSchema = z.object({
   durationMs: z.number().int().nonnegative(),
   waveform: z.string(),
   listenedByMe: z.boolean().optional(),
-  /** User ids, only in a conversation small enough to show receipts. */
-  listenedBy: z.array(z.string().uuid()).optional(),
+  listenedBy: z.array(voiceNoteListenSchema).optional(),
   transcript: z
     .object({
       status: noteTranscriptStatusSchema,
@@ -201,6 +223,26 @@ export const voiceNoteSchema = z.object({
 });
 
 export type VoiceNote = z.infer<typeof voiceNoteSchema>;
+
+/**
+ * Somebody played a voice note for the first time. Addressed per person, like
+ * `friend-activity`, so it is out of `CHAT_SERVER_MESSAGE_TYPES` and never goes
+ * through the channel relay: it reaches the listener's own sockets (so the dot
+ * on their other devices clears) and, in a conversation small enough to show
+ * receipts, the author's. In a server channel the author gets nothing.
+ *
+ * Sent once, on the first play. Repeats are not a second frame.
+ */
+export const voiceNoteListenedSchema = z.object({
+  type: z.literal("voice-note-listened"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  attachmentId: z.string().uuid(),
+  userId: z.string().uuid(),
+  listenedAt: z.string(),
+});
+
+export type VoiceNoteListened = z.infer<typeof voiceNoteListenedSchema>;
 
 /**
  * Body of `POST /api/channels/:channelId/attachments`, sent before a single

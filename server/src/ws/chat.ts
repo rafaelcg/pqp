@@ -13,6 +13,7 @@ import {
   permissionsUpdateSchema,
   profileUpdateSchema,
   serverRemovedSchema,
+  voiceNoteListenedSchema,
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
@@ -21,6 +22,7 @@ import {
   type PollRequest,
   type ProfileUpdate,
   type ServerRemoved,
+  type VoiceNoteListened,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
@@ -91,6 +93,7 @@ import {
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
+  forEachSocketOfUser,
   SOCKET_CAPS,
   socketHasCap,
 } from "./sockets.js";
@@ -183,6 +186,7 @@ const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
 const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
+const VOICE_LISTENED_TOPIC = "chat.voice-listened";
 
 interface PresenceUser {
   id: string;
@@ -864,6 +868,50 @@ function deliverFriendActivity(
       socket.send(payload);
     }
   });
+}
+
+/**
+ * A voice note was played for the first time: tell the listener's own sockets
+ * (their other devices clear the dot) and, when the caller decided receipts
+ * are shown for this note, the author's.
+ *
+ * ADDRESSED BY ACCOUNT, NOT BY CHANNEL. The listener may have a phone on the
+ * other machine and the author is on whichever machine they happened to
+ * land on, so "deliver to the sockets I hold" is not an answer: the frame is
+ * delivered here and published on `chat.voice-listened` with its addressees,
+ * and every other instance delivers to whichever of those accounts it holds.
+ * An instance that holds none of them does nothing, which is the usual case.
+ *
+ * Fire-and-forget like `notifyFriendActivity`: the play is already committed,
+ * a dropped frame costs a dot that corrects itself on the next history read,
+ * and the HTTP answer must not wait on who has a tab open.
+ */
+export function notifyVoiceNoteListened(
+  frame: VoiceNoteListened,
+  userIds: readonly string[],
+): void {
+  if (userIds.length === 0) {
+    return;
+  }
+  deliverVoiceNoteListened(frame, userIds);
+  if (isBusEnabled()) {
+    publishToCluster(VOICE_LISTENED_TOPIC, { frame, userIds });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. */
+function deliverVoiceNoteListened(
+  frame: VoiceNoteListened,
+  userIds: readonly string[],
+): void {
+  const payload = encode(frame);
+  for (const userId of new Set(userIds)) {
+    forEachSocketOfUser(userId, (socket) => {
+      if (socket.readyState === 1) {
+        socket.send(payload);
+      }
+    });
+  }
 }
 
 /**
@@ -2861,6 +2909,22 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
     return;
   }
   deliverFriendActivity(userId, kind);
+});
+
+/**
+ * A voice note played on another instance. The frame is parsed with the schema
+ * the clients parse it with, and the addressees must survive as a list of
+ * strings: without them the only alternative is to guess who to tell, and a
+ * receipt delivered to the wrong person is worse than one not delivered.
+ */
+subscribeToCluster(VOICE_LISTENED_TOPIC, (data) => {
+  const record = asRecord(data);
+  const parsed = voiceNoteListenedSchema.safeParse(record?.frame);
+  const userIds = asStringArray(record?.userIds);
+  if (!parsed.success || !userIds) {
+    return;
+  }
+  deliverVoiceNoteListened(parsed.data, userIds);
 });
 
 /**
