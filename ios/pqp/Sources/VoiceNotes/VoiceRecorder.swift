@@ -159,6 +159,20 @@ final class VoiceRecorder {
         apply(gesture.handle(.interrupted))
     }
 
+    /// The screen is going away. A hold or a lock has nowhere to come back to,
+    /// so everything is dropped: the microphone released, the session restored
+    /// to what it was, the files deleted. (Without this a locked recording would
+    /// leave `.playAndRecord` active behind a screen that no longer exists.)
+    func abandon() {
+        gesture = VoiceGesture()
+        tearDownRecorder(deleteFile: true)
+        samples = []
+        restoredWaveform = nil
+        elapsedMs = 0
+        swallowingTouch = false
+        clearUndo(deleteFile: true)
+    }
+
     // MARK: - Effects
 
     @ObservationIgnored private var restoredWaveform: String?

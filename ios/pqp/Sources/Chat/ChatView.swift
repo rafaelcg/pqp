@@ -453,7 +453,7 @@ struct ChatView: View {
         }
         .onDisappear {
             model.close()
-            recorder.appBecameInactive()
+            recorder.abandon()
         }
         .task {
             notePlayer.configure(session: session)
