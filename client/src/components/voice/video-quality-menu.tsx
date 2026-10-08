@@ -158,6 +158,7 @@ export function VideoQualityMenu({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const portalHost = useFullscreenPortalHost();
   // Where the panel sits, in viewport pixels. It is portalled out of the bar:
   // in the composer's strip the stage above is a separate box whose own
@@ -191,6 +192,9 @@ export function VideoQualityMenu({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onOpenChange(false);
+        // Back to the button the panel hung from, since the panel is
+        // portalled to the end of the page.
+        buttonRef.current?.focus();
       }
     }
     document.addEventListener("mousedown", onPointerDown);
@@ -245,6 +249,23 @@ export function VideoQualityMenu({
       window.removeEventListener("scroll", measure, true);
       grown?.disconnect();
     };
+  }, [open]);
+
+  // Focus goes into the panel when it opens: it is portalled to the end of
+  // the page, so Tab from the button would never reach it. The ticked row
+  // first, else the panel's first control.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      const target =
+        panel?.querySelector<HTMLElement>('[aria-checked="true"]') ??
+        panel?.querySelector<HTMLElement>("button");
+      target?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open]);
 
   // The button's own name changes with the role, because it is the first
@@ -456,6 +477,7 @@ export function VideoQualityMenu({
           opens the menu, so the two never stack on top of each other. */}
       <Tooltip label={label}>
       <button
+        ref={buttonRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}

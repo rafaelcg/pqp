@@ -4140,7 +4140,9 @@ export function HlsWatchPlayer({
           ) : bottomActions ? (
             // Before the first frame there is nothing to fit or turn up, but
             // a viewer can still stop watching or go fullscreen.
-            <div className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1">
+            // No pill of its own: the buttons carry theirs, and an empty dark
+            // capsule sat in the corner while they waited for a hover.
+            <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
               {bottomActions}
             </div>
           ) : null}

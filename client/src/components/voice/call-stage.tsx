@@ -1734,9 +1734,23 @@ function ActiveCall({
     }
     chrome.wake();
   };
+  // A press that lands on the faded bar only wakes it. The pointerdown wakes
+  // the chrome, so by the click the bar is no longer hidden: the click has to
+  // remember that its press started hidden, or a tap on a phone (no hover to
+  // wake it first) hit the invisible hang-up button.
+  const pressStartedHiddenRef = useRef(false);
   const swallowPressWhileHidden = (event: SyntheticEvent) => {
-    if (!chrome.isHidden()) {
+    const isClick = event.type === "click";
+    if (isClick ? !pressStartedHiddenRef.current : !chrome.isHidden()) {
+      if (!isClick) {
+        pressStartedHiddenRef.current = false;
+      }
       return;
+    }
+    if (isClick) {
+      pressStartedHiddenRef.current = false;
+    } else {
+      pressStartedHiddenRef.current = true;
     }
     event.preventDefault();
     event.stopPropagation();
@@ -1984,7 +1998,16 @@ function ActiveCall({
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
       qualityMenuOpen={qualityMenuOpen}
-      onQualityMenuOpenChange={setQualityMenuRequested}
+      onQualityMenuOpenChange={(open) => {
+        setQualityMenuRequested(open);
+        // The panel is drawn at page level, so leaving the bar for it fired
+        // no pointerleave; a pick unmounts it under the pointer. Let go of
+        // the hover holds rather than keep the stage awake for good.
+        if (!open) {
+          setBarHovered(false);
+          setDockHovered(false);
+        }
+      }}
       watchingHls={watchingHls}
       hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 20}
       onStartScreenShare={startScreenShareWithPicker}
@@ -2775,7 +2798,9 @@ function ActiveCall({
         <div className="flex shrink-0 items-center gap-2">
           {/* The composer's strip already shows the clock when it carries
               the call's controls. */}
-          {!roomInSidebar && !dockComposer && (
+          {/* Not with the chat hidden either: the pane's "show chat" pill
+              sits in this corner, and the clock moves to the bar. */}
+          {!roomInSidebar && !dockComposer && !composerHidden && (
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
@@ -2872,7 +2897,7 @@ function ActiveCall({
         {/* With the room's name in the list, the clock is the one thing left
             of the overlay's corner, and it reads as the call's state: at the
             bar's left end, level with the pill. */}
-        {roomInSidebar && !watchPartyChrome && timerRunning && (
+        {(roomInSidebar || composerHidden) && !watchPartyChrome && timerRunning && (
           <p
             data-testid="call-bar-duration"
             // The time alone from 32rem of bar, where it still clears the
@@ -3257,6 +3282,9 @@ export function CallControls({
   const offersWatchParty =
     canWatchParty && !listenOnly && !noVideo && Boolean(onStartScreenShare);
   const offersCursor = canShare && !noVideo && Boolean(onStartScreenShare);
+  // An open Mais keeps the stage awake, like a tile's own menu.
+  const [stageMenuOpen, setStageMenuOpen] = useState(false);
+  useReportTileMenu(stageMenuOpen);
   const stageMenuItems = stageMoreItems(t, {
         watchParty: offersWatchParty
           ? {
@@ -3824,7 +3852,12 @@ export function CallControls({
           picture reaches it; fullscreen of the whole stage (a camera grid
           with no share) is in "Mais". */}
       {(
-        <Menu items={stageMenuItems} side="top" align="end">
+        <Menu
+          items={stageMenuItems}
+          side="top"
+          align="end"
+          onOpenChange={setStageMenuOpen}
+        >
           <button
             type="button"
             data-testid="call-more"
@@ -4838,7 +4871,11 @@ export function ScreenTileFrame({
           communityName={communityName}
           coverUrl={coverUrl}
           bottomActions={
-            <span className={cn("flex items-center gap-1", revealed)}>
+            // Fades with the idle stage like every other picture's row.
+            <span
+              data-call-chrome="tile"
+              className={cn("flex items-center gap-1", revealed, TILE_CONTROLS_FADE)}
+            >
               {moreButton}
               {fullscreenButton}
             </span>
