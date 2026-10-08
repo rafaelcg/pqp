@@ -245,7 +245,7 @@ fun ChatScreen(
     // so it is handed this transcript whenever it changes. Nothing is queued
     // for a channel with no voice notes in it.
     LaunchedEffect(state.messages, voiceNotes) {
-        voiceNotes?.updateQueue(VoiceNoteQueue.entriesOf(state.messages))
+        voiceNotes?.updateQueue(channelId, VoiceNoteQueue.entriesOf(state.messages))
     }
     VoiceNoticeToast(state.voiceNotice, model::clearVoiceNotice)
     LaunchedEffect(voiceNotes) {

@@ -125,6 +125,7 @@ class VoiceNotes(
     private var player: ExoPlayer? = null
     private var current: QueueEntry? = null
     private var queue: List<QueueEntry> = emptyList()
+    private var queueChannel: String? = null
     private var ticker: Job? = null
     private var retriedUrl = false
     private var focusRequest: AudioFocusRequest? = null
@@ -136,19 +137,22 @@ class VoiceNotes(
     // --- what the screens call ---
 
     /**
-     * The transcript the screen on top is showing, oldest first.
+     * The voice notes of [channelId]'s transcript, oldest first.
      *
-     * Published whenever it changes, and kept after the screen leaves: the
-     * run that is playing can still continue into the next unheard note of the
-     * channel it started in. A note from another channel is never queued.
+     * Published whenever the transcript changes, and kept after the screen
+     * leaves: the run that is playing can still continue into the next unheard
+     * note of the channel it started in. An **empty** list is an answer too:
+     * the last note was deleted, and the queue must forget it rather than
+     * autoplay content that is gone. A queue for a different channel than the
+     * one playing is the screen behind or ahead of it, and must not replace
+     * the run in progress.
      */
-    fun updateQueue(entries: List<QueueEntry>) {
-        if (entries.isEmpty()) return
-        val channel = entries.first().channelId
-        // A queue for a different channel than the one playing is the screen
-        // behind or ahead of it; it must not replace the run in progress.
+    fun updateQueue(channelId: String, entries: List<QueueEntry>) {
         val playingChannel = current?.channelId
-        if (playingChannel == null || playingChannel == channel) queue = entries
+        if (playingChannel == null || playingChannel == channelId) {
+            queue = entries
+            queueChannel = channelId
+        }
     }
 
     /** Tap on a card: play it, pause it, or resume it. */
@@ -307,8 +311,12 @@ class VoiceNotes(
 
     private fun onEnded() {
         val entry = current ?: return
-        markHeard(entry)
-        val next = if (entry.channelId == queue.firstOrNull()?.channelId) {
+        // The ticker marks a note once it has played for a second. One shorter
+        // than that never will, and playing it to the end is hearing it: if it
+        // did not count, such a note would keep its dot for ever and the queue
+        // would offer it again every time.
+        if (entry.durationMs <= LISTEN_AFTER_MS + TICK_MS) markHeard(entry)
+        val next = if (entry.channelId == queueChannel) {
             VoiceNoteQueue.nextUnheard(queue, entry.attachmentId, myId(), _heard.value)
         } else {
             null
@@ -339,10 +347,18 @@ class VoiceNotes(
         if (entry.attachmentId !in _heard.value) _heard.value = _heard.value + entry.attachmentId
         if (entry.listenedByMe || !reported.add(entry.attachmentId)) return
         scope.launch {
-            runCatching { reportListened(entry.attachmentId) }
-                // Not recorded: let the next play try again rather than
-                // pretending the sender was told.
-                .onFailure { reported.remove(entry.attachmentId) }
+            // A few tries, with `reported` held the whole time: a replay while
+            // the first request is in flight must not send a second one, and
+            // must not be the only thing that retries a failed first.
+            var recorded = false
+            for (attempt in 0 until REPORT_ATTEMPTS) {
+                if (attempt > 0) delay(REPORT_RETRY_MS * attempt)
+                recorded = runCatching { reportListened(entry.attachmentId) }.isSuccess
+                if (recorded) break
+            }
+            // Never recorded: let the next play try again rather than
+            // pretending the sender was told.
+            if (!recorded) reported.remove(entry.attachmentId)
         }
     }
 
@@ -384,6 +400,8 @@ class VoiceNotes(
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (exo.isPlaying) {
                 resumeOnGain = true
                 exo.pause()
+                // Nothing is playing, so nothing to poll until focus returns.
+                ticker?.cancel()
                 _playback.value = _playback.value.copy(playing = false)
             }
 
@@ -434,6 +452,8 @@ class VoiceNotes(
         /** A listen is a second of playback, not a tap. */
         const val LISTEN_AFTER_MS = 1_000L
         private const val TICK_MS = 100L
+        private const val REPORT_ATTEMPTS = 3
+        private const val REPORT_RETRY_MS = 3_000L
         private const val DUCKED_VOLUME = 0.25f
     }
 }
