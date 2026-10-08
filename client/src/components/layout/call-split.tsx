@@ -241,15 +241,29 @@ function useChatPaneNeed(
       resize = new ResizeObserver(read);
     }
     // The composer mounts after the pane, and a channel switch replaces it.
+    // The pane also holds the transcript, so a busy channel mutates it all
+    // the time: at most one read per frame, not one per message.
+    let frame: number | null = null;
+    const readSoon = () => {
+      if (frame === null) {
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          read();
+        });
+      }
+    };
     const mutation =
       typeof MutationObserver === "undefined"
         ? null
-        : new MutationObserver(read);
+        : new MutationObserver(readSoon);
     mutation?.observe(pane, { childList: true, subtree: true });
     read();
     return () => {
       resize?.disconnect();
       mutation?.disconnect();
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
     };
   }, [ref, enabled]);
   return need;
@@ -364,6 +378,15 @@ export function CallSplit({
   const [squeezedFrom, setSqueezedFrom] = useState<number | null>(null);
   const canSqueeze =
     !sizedByChoice && resizable && !sideBySide && chatNeed > 0;
+  // A new width means a new natural height for the picture (a 16:9 share in
+  // a narrower pane is shorter), so the held height is measured again.
+  const squeezeWidthRef = useRef(width);
+  useEffect(() => {
+    if (squeezeWidthRef.current !== width) {
+      squeezeWidthRef.current = width;
+      setSqueezedFrom(null);
+    }
+  }, [width]);
   useEffect(() => {
     if (!canSqueeze) {
       setSqueezedFrom(null);
@@ -568,13 +591,17 @@ export function CallSplit({
       return;
     }
     event.preventDefault();
+    // From where the divider is drawn, and clamped by the live floors (the
+    // composer's measured height included), the same as a drag: a stored
+    // fraction past what can be drawn made presses look dead.
+    const nudged = nudgeSplit({
+      fraction: splitFraction(dividerAt, container),
+      container,
+      orientation,
+      deltaPx,
+    });
     commitFraction(
-      nudgeSplit({
-        fraction: fraction ?? splitFraction(dividerAt, container),
-        container,
-        orientation,
-        deltaPx,
-      }),
+      splitFraction(clampSplit({ fraction: nudged, container, ...bounds }), container),
       true,
     );
   };

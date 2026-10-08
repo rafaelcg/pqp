@@ -4137,6 +4137,12 @@ export function HlsWatchPlayer({
                   not this cluster plus the tile's own on top of it. */}
               {bottomActions}
             </div>
+          ) : bottomActions ? (
+            // Before the first frame there is nothing to fit or turn up, but
+            // a viewer can still stop watching or go fullscreen.
+            <div className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1">
+              {bottomActions}
+            </div>
           ) : null}
         </>
       )}

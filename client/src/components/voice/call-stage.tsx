@@ -1418,8 +1418,22 @@ function ActiveCall({
   }, [shape, onShapeChange]);
   // Fullscreen covers the channel list, so the stage speaks for the room
   // again there.
-  const roomInSidebar = roomListOnScreen && shape !== "fullscreen";
-  const notice = useVoiceNotice(voiceState.notice);
+  // Phone held sideways with a picture on: the shell's columns step aside.
+  // Any picture, not only a share: with the call's controls in the composer,
+  // a camera left the full desktop layout on a 390px tall screen and pushed
+  // the composer below it. Everything but the flag lives in the hook
+  // (`use-immersive-stage.ts`).
+  const immersive = useImmersiveStage({
+    shareFocused: (screenStream !== null || anyVideo) && chromeExpanded,
+    fullscreen: fullscreen.isFullscreen,
+  });
+  // A phone held sideways hides the channel list with the other columns, so
+  // the list is not showing the room there even when it would be expanded.
+  const roomInSidebar =
+    roomListOnScreen && shape !== "fullscreen" && !immersive.immersive;
+  // Not counted while the red error strip covers the notice: its 12 seconds
+  // start when it can actually be seen.
+  const notice = useVoiceNotice(voiceState.error ? null : voiceState.notice);
   const [bannerColumn, setBannerColumn] = useState<HTMLDivElement | null>(null);
   const [barEl, setBarEl] = useState<HTMLDivElement | null>(null);
   const [barPx, setBarPx] = useState(0);
@@ -1470,20 +1484,14 @@ function ActiveCall({
       watchFullscreen.exit();
     }
   }, [showCinema, watchFullscreen]);
-  // Phone held sideways with a picture on: the shell's columns step aside.
-  // Any picture, not only a share: with the call's controls in the composer,
-  // a camera left the full desktop layout on a 390px tall screen and pushed
-  // the composer below it. Everything but the flag lives in the hook
-  // (`use-immersive-stage.ts`).
-  const immersive = useImmersiveStage({
-    shareFocused: (screenStream !== null || anyVideo) && chromeExpanded,
-    fullscreen: fullscreen.isFullscreen,
-  });
   // Whatever names this call (the channel, the person in a DM) is the page
   // header's first line. Only where the header is out of sight, fullscreen,
   // does the stage say it again. Not a phone's landscape takeover: that one
   // folds the side columns away and leaves the header where it was.
-  const titleOnStage = shape === "fullscreen";
+  // Sideways with the room's list expanded, the app has also stood its
+  // header down for the stage (`voiceStageOwnsHeader`), so the stage names it.
+  const titleOnStage =
+    shape === "fullscreen" || (immersive.immersive && roomListOnScreen);
   // THE CALL'S CONTROLS LIVE IN THE COMPOSER, whatever the stage shows. A
   // share or a camera used to swap them for a bar drawn over the picture,
   // so the strip a person had been using vanished the moment somebody
@@ -1524,6 +1532,17 @@ function ActiveCall({
   const soloPerson = soloPersonKey
     ? (allPeople.find((person) => person.key === soloPersonKey) ?? null)
     : null;
+  // The people strip is on the stage. With the bar floating over the stage
+  // (fullscreen, a phone held sideways, the chat hidden) the strip has to
+  // stop above the bar's band, or it covers mute and hang-up.
+  const stripDrawn =
+    showStrip &&
+    !soloPerson &&
+    !soloTile &&
+    !soloMusic &&
+    !stripInSidebar &&
+    !stripOnlySelf;
+  const barReserve = barOverlay && (!barFloats || stripDrawn);
   // EVERY share carries its own control, including the only one in the call.
   //
   // This used to be `screenTiles.length > 1`, on the reasoning that a single
@@ -1579,6 +1598,23 @@ function ActiveCall({
     setTileMenusOpen((count) => Math.max(0, count + (open ? 1 : -1)));
   }, []);
   const [barFocused, setBarFocused] = useState(false);
+  // The same two holds for the call's controls in the composer's strip: a
+  // pointer resting on them, or keyboard focus inside, keeps the stage's
+  // notices and picture rows from fading under the person using them.
+  const [dockHovered, setDockHovered] = useState(false);
+  const [dockFocused, setDockFocused] = useState(false);
+  // A control box that goes away cannot fire its own pointerleave or blur
+  // (leaving fullscreen swaps the floating bar for the strip, and back), so
+  // whichever one is not drawn lets go of its hold here.
+  useEffect(() => {
+    if (dockComposer) {
+      setBarHovered(false);
+      setBarFocused(false);
+    } else {
+      setDockHovered(false);
+      setDockFocused(false);
+    }
+  }, [dockComposer]);
   const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const pushToTalkHeld =
     inputMode === "push-to-talk" &&
@@ -1611,12 +1647,14 @@ function ActiveCall({
   const chromeHold = stageChromeHold({
     menuOpen: qualityMenuOpen || tileMenusOpen > 0,
     sharePickerOpen,
-    pointerOverControls: barHovered || tileControlsHovered,
-    keyboardFocusInControls: barFocused || tileFocused,
+    pointerOverControls: barHovered || tileControlsHovered || dockHovered,
+    keyboardFocusInControls: barFocused || tileFocused || dockFocused,
     pushToTalkHeld,
     connected: voiceState.status === "connected",
     error: Boolean(voiceState.error),
-    notice: Boolean(voiceState.notice),
+    // The strip as shown, not the notice as set: closed or timed out, it no
+    // longer holds the stage up.
+    notice: notice.shown !== null,
     peerFailed: remotes.some((person) => person.failed),
   });
   const chrome = useIdleChrome(chromeMayHide, chromeHold !== null);
@@ -1847,6 +1885,9 @@ function ActiveCall({
               className="ml-2 shrink-0 tabular-nums text-text-tertiary"
             />
           </p>
+          {/* With a picture on the stage the strip carries the full queue
+              above its row (lower and allow included), so not this one too. */}
+          {!(dockComposer && chromeExpanded) && (
           <RaisedHandQueue
             compact
             participants={roomParticipants}
@@ -1857,6 +1898,7 @@ function ActiveCall({
                 : null
             }
           />
+          )}
         </div>
       );
     })()
@@ -2023,6 +2065,18 @@ function ActiveCall({
     <div
       data-testid="call-stage-collapsed"
       className="@container flex flex-col gap-1.5"
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") {
+          setDockHovered(true);
+        }
+      }}
+      onPointerLeave={() => setDockHovered(false)}
+      onFocusCapture={(event) => setDockFocused(isKeyboardFocus(event.target))}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDockFocused(false);
+        }
+      }}
     >
       {controls}
       <PttFocusHint
@@ -2128,7 +2182,10 @@ function ActiveCall({
           "--call-row-extra": `${controlRowExtraPx}px`,
           "--stage-banners": `${bannersPx}px`,
           "--call-bar-h": barOverlay ? `${barPx || 72}px` : "0px",
-          "--tile-row-lift": barOverlay && barFloats ? `${barPx || 72}px` : "0px",
+          // Lifted over a floating bar, unless the reserve below the strip
+          // already keeps the pictures above it.
+          "--tile-row-lift":
+            barOverlay && barFloats && !barReserve ? `${barPx || 72}px` : "0px",
         } as CSSProperties
       }
     >
@@ -2461,9 +2518,7 @@ function ActiveCall({
             picture is alone on the stage (that is what "alone" means) and
             while nobody is publishing at all, because then the room view above
             is already showing these same faces, larger. */}
-        {showStrip && !soloPerson && !soloTile && !soloMusic && (
-          <>
-          {!stripInSidebar && !stripOnlySelf && (
+        {stripDrawn && (
           <ListenerStrip
             people={listeners.map((person) => ({
               key: person.key,
@@ -2490,8 +2545,6 @@ function ActiveCall({
                pressed, which is the worst of both. */
             className={STAGE_LAYER.menus}
           />
-          )}
-          </>
         )}
         {/* THE BAR'S OWN TERRITORY, whatever the stage is showing. The
             pictures, the strip and the room view all stop above it, so every
@@ -2500,7 +2553,7 @@ function ActiveCall({
             whole width. Measured, not guessed (`--call-bar-h`): it grows with
             the home indicator and with every line the control row folds
             onto. The same in fullscreen, so nothing moves on the way in. */}
-        {barOverlay && !barFloats && (
+        {barReserve && (
           <div
             aria-hidden="true"
             data-testid="call-stage-bar-reserve"
@@ -4654,7 +4707,15 @@ export function ScreenTileFrame({
   const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
-  const insets = useVideoInsets(boxRef, [tile.stream, tile.hlsUrl, fit.fit, hideSelfPreview]);
+  // `dismissed?.active` too: declining the share swaps the box for a
+  // placeholder, and watching again mounts a new one to measure.
+  const insets = useVideoInsets(boxRef, [
+    tile.stream,
+    tile.hlsUrl,
+    fit.fit,
+    hideSelfPreview,
+    dismissed?.active,
+  ]);
   // A share is what the viewer is watching: the slider is its sound, or the
   // presenter's voice when the share carries none.
   const pictureSound = audio?.share ?? audio?.voice;

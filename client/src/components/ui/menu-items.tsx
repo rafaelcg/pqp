@@ -70,6 +70,11 @@ export function MenuItemRows({
             key={item.id}
             disabled={item.disabled}
             onSelect={() => item.onSelect?.()}
+            // A row with a state is a checkbox row, the one role a screen
+            // reader announces checked or not checked for.
+            {...(item.checked === undefined
+              ? {}
+              : { role: "menuitemcheckbox" as const })}
             aria-checked={item.checked}
             aria-labelledby={item.detail ? `${idPrefix}-${item.id}-label` : undefined}
             aria-describedby={item.detail ? `${idPrefix}-${item.id}-detail` : undefined}
