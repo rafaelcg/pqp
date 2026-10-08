@@ -142,6 +142,26 @@ describe("workers-ai provider", () => {
     await expect(p.transcribe(WAV, {})).rejects.toThrow(/Invalid audio/);
   });
 
+  it("rejects a 200 with no transcription in it rather than reporting silence", async () => {
+    const fetchImpl: typeof fetch = async () => jsonResponse({ success: true, errors: [], result: {} });
+    const p = createWorkersAiProvider({ accountId: "a", apiToken: "t", fetchImpl });
+    await expect(p.transcribe(WAV, {})).rejects.toThrow(/no transcription/);
+  });
+
+  it("does not call out when the caller cancelled during the file read", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls++;
+      return jsonResponse(OK);
+    };
+    const ctl = new AbortController();
+    const p = createWorkersAiProvider({ accountId: "a", apiToken: "t", fetchImpl });
+    const pending = p.transcribe(WAV, { signal: ctl.signal }).catch((e) => e);
+    ctl.abort(new Error("caller gave up"));
+    expect((await pending).message).toBe("caller gave up");
+    expect(calls).toBe(0);
+  });
+
   it("aborts when the timeout passes", async () => {
     const fetchImpl: typeof fetch = (_url, init) =>
       new Promise((_resolve, reject) => {

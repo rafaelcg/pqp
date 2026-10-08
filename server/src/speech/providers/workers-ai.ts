@@ -99,10 +99,12 @@ export function createWorkersAiProvider(o: WorkersAiOptions): SttProvider {
   return {
     id: `workers-ai/${WORKERS_AI_MODEL}`,
     async transcribe(audio, opts: SttOptions): Promise<SttResult> {
-      const a = await loadAudio(audio, opts.format);
-      const body = JSON.stringify(buildWorkersAiBody(o, a, opts));
+      // The budget starts before the file read, which has no signal of its own: check it once the read is done.
       const timeout = AbortSignal.timeout(o.timeoutMs ?? WORKERS_AI_DEFAULT_TIMEOUT_MS);
       const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+      const a = await loadAudio(audio, opts.format);
+      signal.throwIfAborted();
+      const body = JSON.stringify(buildWorkersAiBody(o, a, opts));
       const res = await fetchWithRetry(
         url,
         () => ({
@@ -117,6 +119,11 @@ export function createWorkersAiProvider(o: WorkersAiOptions): SttProvider {
       // The API can answer 200 with success:false for a model error.
       if (parsed.success === false) {
         throw new SpeechHttpError("workers-ai", res.status, (parsed.errors?.[0]?.message ?? "request failed").slice(0, 300));
+      }
+      // A 200 that carries no transcript at all is a broken reply, not silence (silence is `text: ""`).
+      const r = parsed.result ?? parsed;
+      if (typeof r.text !== "string" && !Array.isArray(r.segments)) {
+        throw new SpeechHttpError("workers-ai", res.status, "response has no transcription");
       }
       return parseWorkersAiResponse(parsed);
     },
