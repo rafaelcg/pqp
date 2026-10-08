@@ -4,8 +4,10 @@ import {
   isGifMediaUrl,
   isImageContentType,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  noteByteBudget,
   type Attachment,
   type AttachmentContentType,
+  type CreateVoiceNote,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
@@ -26,6 +28,7 @@ import {
 } from "./content-scan.js";
 import { createAutomatedReport } from "./reports.js";
 import { isChannelMember } from "./users.js";
+import { assertVoiceNoteMintAllowed, isNoteAttachment } from "./voice-notes.js";
 
 /**
  * Message attachments: mint an upload URL, claim the resulting row onto a
@@ -56,6 +59,13 @@ export interface DbAttachment {
   /** SMALLINT: the sender's ordering, 0 for anything claimed before it existed. */
   position: number;
   created_at: Date;
+  /**
+   * From `message_attachment_voice`, present on reads that join it (every
+   * SELECT here does) and null when the row is not a voice note. A RETURNING
+   * cannot join, so a row fresh from an UPDATE leaves these undefined.
+   */
+  voice_duration_ms?: number | null;
+  voice_waveform?: string | null;
 }
 
 /**
@@ -66,6 +76,14 @@ export interface DbAttachment {
 const ATTACHMENT_COLUMNS = `a.id, a.message_id, a.channel_id, a.uploader_id,
        a.storage_key, a.remote_url, a.filename, a.content_type, a.byte_size,
        a.width, a.height, a.position, a.created_at`;
+
+/**
+ * The voice note side row, for every SELECT that hands an attachment on. A
+ * LEFT JOIN on its primary key: one index probe per row, and nothing at all
+ * changes for an attachment that is not a note.
+ */
+const VOICE_COLUMNS = `v.duration_ms AS voice_duration_ms, v.waveform AS voice_waveform`;
+const VOICE_JOIN = `LEFT JOIN message_attachment_voice v ON v.attachment_id = a.id`;
 
 /**
  * Upload URL lifetime. Long enough for a phone on bad signal to finish 10 MiB,
@@ -145,6 +163,8 @@ const EXTENSION_BY_CONTENT_TYPE: Record<AttachmentContentType, string> = {
   "audio/mpeg": ".mp3",
   "audio/ogg": ".ogg",
   "audio/wav": ".wav",
+  "audio/mp4": ".m4a",
+  "audio/webm": ".webm",
   "application/pdf": ".pdf",
   "text/plain": ".txt",
 };
@@ -175,6 +195,11 @@ export interface CreatePendingAttachmentInput {
    */
   width?: number | null;
   height?: number | null;
+  /**
+   * Present for a voice note, already bounded by `createAttachmentSchema`.
+   * The flag and the byte budget are checked here, before anything is signed.
+   */
+  voice?: CreateVoiceNote | null;
 }
 
 export interface PendingAttachment {
@@ -201,25 +226,54 @@ export async function createPendingAttachment(
   if (input.byteSize > limit) {
     throw new AttachmentTooLargeError(limit);
   }
+  const voice = input.voice ?? null;
+  if (voice) {
+    await assertVoiceNoteMintAllowed(input.channelId, {
+      contentType: input.contentType,
+      byteSize: input.byteSize,
+      durationMs: voice.durationMs,
+    });
+  }
 
   const key = storageKey(input.channelId, input.contentType);
-  const result = await getPool().query<DbAttachment>(
-    `INSERT INTO message_attachments AS a
-       (channel_id, uploader_id, storage_key, filename, content_type, byte_size,
-        width, height)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING ${ATTACHMENT_COLUMNS}`,
-    [
-      input.channelId,
-      input.uploaderId,
-      key,
-      input.filename,
-      input.contentType,
-      input.byteSize,
-      input.width ?? null,
-      input.height ?? null,
-    ],
-  );
+  const values = [
+    input.channelId,
+    input.uploaderId,
+    key,
+    input.filename,
+    input.contentType,
+    input.byteSize,
+    input.width ?? null,
+    input.height ?? null,
+  ];
+  // A note's side row is written in the same statement as the attachment, so
+  // there is never an attachment that was minted as a note and reads as a
+  // plain file. `transcribe_allowed` keeps its column default (the sender's
+  // consent is on by default) until preferences exist to copy it from.
+  const result = voice
+    ? await getPool().query<DbAttachment>(
+        `WITH a AS (
+           INSERT INTO message_attachments
+             (channel_id, uploader_id, storage_key, filename, content_type,
+              byte_size, width, height)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING *
+         ), v AS (
+           INSERT INTO message_attachment_voice (attachment_id, duration_ms, waveform)
+           SELECT id, $9, $10 FROM a
+           RETURNING duration_ms, waveform
+         )
+         SELECT ${ATTACHMENT_COLUMNS}, ${VOICE_COLUMNS} FROM a, v`,
+        [...values, voice.durationMs, voice.waveform],
+      )
+    : await getPool().query<DbAttachment>(
+        `INSERT INTO message_attachments AS a
+           (channel_id, uploader_id, storage_key, filename, content_type, byte_size,
+            width, height)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING ${ATTACHMENT_COLUMNS}`,
+        values,
+      );
 
   return {
     attachment: result.rows[0]!,
@@ -339,6 +393,14 @@ async function verifyUpload(row: DbAttachment): Promise<number | null> {
   // The stored type is what the presigned PUT signed, so a mismatch means the
   // object under this key is not the object this row describes.
   if (head.contentType !== row.content_type) {
+    return null;
+  }
+  // A note's budget again, against the measured length, for a store that
+  // ignores the signed `Content-Length`.
+  if (
+    isNoteAttachment(row) &&
+    head.contentLength > noteByteBudget(row.voice_duration_ms!)
+  ) {
     return null;
   }
   return head.contentLength;
@@ -518,8 +580,9 @@ export async function verifyPendingAttachments(
   }
 
   const candidates = await getPool().query<DbAttachment>(
-    `SELECT ${ATTACHMENT_COLUMNS}
+    `SELECT ${ATTACHMENT_COLUMNS}, ${VOICE_COLUMNS}
      FROM message_attachments a
+     ${VOICE_JOIN}
      WHERE a.id = ANY($1::uuid[])
        AND a.uploader_id = $2
        AND a.channel_id = $3
@@ -625,6 +688,16 @@ export async function claimAttachments(
     ],
   );
 
+  // A RETURNING cannot join the voice side row, so carry it over from the
+  // verified rows, which read it. The side row is written at mint and never
+  // changes, so the earlier read is still the truth.
+  const byId = new Map(verified.map((entry) => [entry.row.id, entry.row]));
+  for (const row of claimed.rows) {
+    const source = byId.get(row.id);
+    row.voice_duration_ms = source?.voice_duration_ms ?? null;
+    row.voice_waveform = source?.voice_waveform ?? null;
+  }
+
   // Restore the order the sender chose; an UPDATE returns rows in whatever
   // order it touched them, and the composer's ordering is user-visible.
   return claimed.rows.sort((left, right) => left.position - right.position);
@@ -659,6 +732,14 @@ export function toPublicAttachment(row: DbAttachment): Attachment {
         ? {}
         : { downloadFilename: row.filename }),
         }),
+    ...(isNoteAttachment(row)
+      ? {
+          voice: {
+            durationMs: row.voice_duration_ms!,
+            waveform: row.voice_waveform ?? "",
+          },
+        }
+      : {}),
   };
 }
 
@@ -687,8 +768,9 @@ export async function listAttachmentsForMessages(
   const canSign = isStorageConfigured();
 
   const result = await getPool().query<DbAttachment>(
-    `SELECT ${ATTACHMENT_COLUMNS}
+    `SELECT ${ATTACHMENT_COLUMNS}, ${VOICE_COLUMNS}
      FROM message_attachments a
+     ${VOICE_JOIN}
      WHERE a.message_id = ANY($1::uuid[])
      ORDER BY a.position ASC, a.created_at ASC, a.id ASC`,
     [messageIds],
@@ -726,8 +808,9 @@ export async function getAttachmentForViewer(
   }
 
   const result = await getPool().query<DbAttachment>(
-    `SELECT ${ATTACHMENT_COLUMNS}
+    `SELECT ${ATTACHMENT_COLUMNS}, ${VOICE_COLUMNS}
      FROM message_attachments a
+     ${VOICE_JOIN}
      WHERE a.id = $1 AND a.message_id IS NOT NULL`,
     [attachmentId],
   );

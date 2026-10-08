@@ -38,6 +38,7 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import { noteShapeAllowed } from "./voice-notes.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -662,6 +663,21 @@ async function insertMessage(
   const verified = attachmentIds?.length
     ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
     : [];
+
+  // A voice note travels alone, with no text: refused whole, before any
+  // transaction opens, the same way an empty frame is. Nothing is claimed, so
+  // the note stays unclaimed for the sweeper.
+  if (
+    !noteShapeAllowed({
+      attachments: verified.map((entry) => entry.row),
+      requestedCount: new Set(attachmentIds ?? []).size,
+      // A deck draw only writes its body inside the transaction below, but it
+      // is text beside the note all the same.
+      body: deckAction ? "deck" : storedBody,
+    })
+  ) {
+    return null;
+  }
 
   const nickRow = await getPool().query<{ nickname: string | null }>(
     `SELECT sm.nickname

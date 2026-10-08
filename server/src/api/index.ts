@@ -557,6 +557,11 @@ import {
   maxAttachmentBytes,
 } from "../services/attachments.js";
 import {
+  NoteTooLargeError,
+  VoiceNoteContentTypeError,
+  VoiceNotesDisabledError,
+} from "../services/voice-notes.js";
+import {
   GifBackendError,
   isGifSearchConfigured,
   searchGifs,
@@ -658,6 +663,7 @@ import {
 import {
   ADMIN_FLAG_OVERRIDE_PATH,
   ADMIN_FLAGS_PATH,
+  isEnabled,
   listFeatureFlags,
   setFeatureFlagOverrideSchema,
   setFeatureFlagSchema,
@@ -3390,11 +3396,22 @@ router.get("/api/music/related", async (ctx) => {
  *
  * `maxBytes` rides along so the client rejects an oversized file in the file
  * picker instead of discovering the deployment's own lower cap on a 413.
+ *
+ * `voiceNotes` is the `voice_notes` flag for `?serverId=` (a conversation, or
+ * no id, reads the global value), and only means anything when `enabled` is
+ * true: a note is an upload. The mint checks the same flag for the channel's
+ * own server, so a client that asked with the wrong id is refused there.
  */
-router.get("/api/attachments/config", async () => ({
-  enabled: isAttachmentsConfigured(),
-  maxBytes: maxAttachmentBytes(),
-}));
+router.get("/api/attachments/config", async ({ url }) => {
+  const serverId = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isAttachmentsConfigured(),
+    maxBytes: maxAttachmentBytes(),
+    voiceNotes: isEnabled("voice_notes", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
+  };
+});
 
 router.post(
   "/api/channels/:channelId/attachments",
@@ -3437,6 +3454,7 @@ router.post(
         // would have no box to reserve and every image would land as a reflow.
         width: body.width,
         height: body.height,
+        voice: body.voice ?? null,
       });
       return created({
         attachmentId: pending.attachment.id,
@@ -3449,6 +3467,15 @@ router.post(
           413,
           `Attachments are limited to ${error.limit} bytes`,
         );
+      }
+      if (error instanceof NoteTooLargeError) {
+        throw new HttpError(413, error.message);
+      }
+      if (error instanceof VoiceNotesDisabledError) {
+        throw new Forbidden(error.message);
+      }
+      if (error instanceof VoiceNoteContentTypeError) {
+        throw new HttpError(400, error.message);
       }
       throw error;
     }

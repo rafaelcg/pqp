@@ -12,6 +12,8 @@
  * `push.ts`: every string below is fixed copy, never message content.
  */
 
+import { formatNoteDuration } from "@pqp/shared";
+
 export type PushLocale = "pt-BR" | "en";
 
 /** The instance's own default when a recipient's `settings.locale` is unset. */
@@ -40,6 +42,12 @@ export interface ConversationPushCopyInput {
   mentionOrReply: boolean;
   /** Already truncated by the caller (`truncateLabel`), same as before. */
   authorName: string | null;
+  /**
+   * Set when the message is a voice note. Only its length reaches the push,
+   * formatted the way the card shows it; never the audio or a transcript, so
+   * the push never waits on one.
+   */
+  voiceDurationMs?: number | null;
 }
 
 /**
@@ -65,6 +73,16 @@ export function buildConversationPushCopy(
   }
 
   const author = input.authorName ?? AUTHOR_FALLBACK[locale];
+
+  // A voice note, DM or group alike: the sender is the title, the body says
+  // what it is and how long. Without `dmDetails` the generic copy above stands,
+  // which already says nothing about the message.
+  if (typeof input.voiceDurationMs === "number") {
+    const duration = formatNoteDuration(input.voiceDurationMs);
+    return locale === "pt-BR"
+      ? { title: author, body: `Mensagem de voz · ${duration}` }
+      : { title: author, body: `Voice message · ${duration}` };
+  }
 
   if (channelKind === "group") {
     return locale === "pt-BR"

@@ -264,6 +264,17 @@ now" feature (`docs/plans/WATCH_NOW.md`):
   `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
   reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
 
+Born as a flag (no old reader): `VOICE_NOTES` (`voice_notes`, default off,
+**per server**), voice notes in chat. A note is an ordinary attachment plus a
+`message_attachment_voice` side row; the flag is checked at mint against the
+channel's own server (a conversation reads the global value), so off is the
+kill switch for new notes while notes already sent stay readable. Served as
+`voiceNotes` on `GET /api/attachments/config?serverId=`. Turn it on for one
+server with `PUT /api/admin/flag-overrides { key: "voice_notes", serverId,
+enabled: true }` or from controles → interruptores. The rules beside it (byte
+budget per second, a note travels alone with no text) are in
+`server/src/services/voice-notes.ts`.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

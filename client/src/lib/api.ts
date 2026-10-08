@@ -970,9 +970,14 @@ export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
  * Whether this deployment has object storage, so the paperclip can be hidden.
  * `maxBytes` is optional: a server that only reports `enabled` leaves the client
  * on the shared ceiling, which is the value it would have enforced anyway.
+ *
+ * `voiceNotes` is the `voice_notes` flag, answered per server when asked with
+ * `?serverId=`. Nothing reads it yet: the recorder lands in its own change.
  */
 export const fetchAttachmentConfig = () =>
-  apiFetch<{ enabled: boolean; maxBytes?: number }>("/api/attachments/config");
+  apiFetch<{ enabled: boolean; maxBytes?: number; voiceNotes?: boolean }>(
+    "/api/attachments/config",
+  );
 
 /**
  * Reserve a row and get a presigned PUT for it. The storage key is chosen by

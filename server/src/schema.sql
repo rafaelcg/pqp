@@ -1005,6 +1005,47 @@ ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAM
 CREATE INDEX IF NOT EXISTS idx_message_attachments_quarantined
   ON message_attachments (quarantined_at) WHERE quarantined_at IS NOT NULL;
 
+-- ---------------------------------------------------------------- voice notes
+--
+-- A voice note is an ordinary `message_attachments` row (the bytes, the
+-- claim, the sweep, the signed reads) plus this 1:1 side row, which holds what
+-- only a note has. A side table rather than columns on the hot table: nothing
+-- here ALTERs `message_attachments`, and a later `video` note gets a sibling
+-- table of its own instead of a kind column. CASCADE, not SET NULL: this row
+-- names no object in the bucket, so it has nothing to leak, and it must go
+-- with the attachment the sweeper deletes.
+--
+-- Written in the same statement as the attachment, at mint, behind the
+-- `voice_notes` runtime flag. Every transcript and playback column is
+-- reserved for later work so that work needs no migration of this table:
+--   duration_ms           the recorder's count, what the card shows
+--   waveform              64 peaks, base64
+--   codec                 filled once the bytes have been parsed
+--   verified_duration_ms  the duration read from the container headers
+--   transcribe_allowed    the sender's consent, copied at mint (default on)
+--   transcript_*          the speech-to-text result and its provenance
+--   playback_key / _content_type  a transcoded copy for clients that cannot
+--                         play the original (reserved for iOS and WebM). It
+--                         names a bucket object, so whatever first fills it
+--                         must also teach the attachment sweeps to delete it.
+CREATE TABLE IF NOT EXISTS message_attachment_voice (
+  attachment_id UUID PRIMARY KEY REFERENCES message_attachments(id) ON DELETE CASCADE,
+  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 300 AND 300000),
+  waveform TEXT NOT NULL CHECK (octet_length(waveform) <= 128),
+  codec TEXT,
+  verified_duration_ms INTEGER CHECK (verified_duration_ms >= 0),
+  transcribe_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+  transcript_status TEXT NOT NULL DEFAULT 'none'
+    CHECK (transcript_status IN ('none', 'pending', 'done', 'no_speech', 'failed', 'unavailable')),
+  transcript_text TEXT CHECK (char_length(transcript_text) <= 4000),
+  transcript_language TEXT,
+  transcript_provider TEXT,
+  transcribed_at TIMESTAMPTZ,
+  playback_key TEXT UNIQUE,
+  playback_content_type TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows
