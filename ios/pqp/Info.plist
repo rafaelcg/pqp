@@ -62,7 +62,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>pqp uses your camera for video and screen sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>pqp uses your microphone for voice channels.</string>
+	<string>pqp uses your microphone for voice calls and to record voice messages.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>pqp lets you send photos from your library.</string>
 	<key>PqpApiHost</key>

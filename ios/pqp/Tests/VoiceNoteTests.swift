@@ -712,25 +712,23 @@ final class VoiceNoteFrameTests: XCTestCase {
         XCTAssertNil(at)
     }
 
-    func testUpdatedFrameDecodesWithOrWithoutTheMessage() async {
-        let named = await firstEvent(from: """
-        {"type":"voice-note-updated","channelId":"c1","messageId":"m1"}
+    func testUpdatedFrameDecodesExactlyAsTheSharedSchemaSendsIt() async {
+        let event = await firstEvent(from: """
+        {"type":"voice-note-updated","channelId":"c1","messageId":"m1","attachmentId":"a1","playbackReady":true}
         """)
-        guard case .voiceNoteUpdated(let channelId, let messageId, let message) = named else {
-            return XCTFail("Expected voiceNoteUpdated, got \(String(describing: named))")
+        guard case .voiceNoteUpdated(let channelId, let messageId, let attachmentId, let ready) = event else {
+            return XCTFail("Expected voiceNoteUpdated, got \(String(describing: event))")
         }
-        XCTAssertEqual(channelId, "c1")
-        XCTAssertEqual(messageId, "m1")
-        XCTAssertNil(message)
+        XCTAssertEqual([channelId, messageId, attachmentId], ["c1", "m1", "a1"])
+        XCTAssertTrue(ready)
 
-        let whole = await firstEvent(from: """
-        {"type":"voice-note-updated","channelId":"c1","message":{"id":"m1","channelId":"c1","authorId":"u1",
-         "authorName":"Dede","body":"","createdAt":"2026-10-08T12:00:00.000Z","reactions":[],"attachments":[]}}
+        let notYet = await firstEvent(from: """
+        {"type":"voice-note-updated","channelId":"c1","messageId":"m1","attachmentId":"a1","playbackReady":false}
         """)
-        guard case .voiceNoteUpdated(_, _, let carried) = whole else {
-            return XCTFail("Expected voiceNoteUpdated, got \(String(describing: whole))")
+        guard case .voiceNoteUpdated(_, _, _, let stillPending) = notYet else {
+            return XCTFail("Expected voiceNoteUpdated, got \(String(describing: notYet))")
         }
-        XCTAssertEqual(carried?.id, "m1")
+        XCTAssertFalse(stillPending)
     }
 
     @MainActor

@@ -814,14 +814,12 @@ final class ChatModel {
             applyListen(messageId: messageId, attachmentId: attachmentId,
                         userId: userId, listenedAt: listenedAt)
 
-        case .voiceNoteUpdated(let noteChannelId, let messageId, let message):
-            guard noteChannelId == channelId else { return }
-            if let message, let index = messages.firstIndex(where: { $0.id == message.id }) {
-                messages[index] = message
-            } else if messageId == nil || messages.contains(where: { $0.id == messageId }) {
-                // The copy is ready; the fresh signed URL is in the message.
-                Task { await refreshMessages() }
-            }
+        case .voiceNoteUpdated(let noteChannelId, let messageId, _, let playbackReady):
+            guard noteChannelId == channelId, playbackReady,
+                  messages.contains(where: { $0.id == messageId }) else { return }
+            // The AAC copy exists now; its signed URL is on the message, so read
+            // the page again to pick up `voice.playbackUrl`.
+            Task { await refreshMessages() }
 
         case .ready:
             // The socket came back after a gap. Whatever was said while it was

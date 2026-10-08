@@ -75,10 +75,10 @@ enum RealtimeEvent: Sendable {
     /// of the two this is.
     case voiceNoteListened(channelId: String, messageId: String, attachmentId: String,
                            userId: String, listenedAt: Date?)
-    /// A voice note changed after it was posted: the worker finished its AAC
-    /// copy of an Opus note. Carries the message when the server sends it whole;
-    /// either way the answer is to read the message again.
-    case voiceNoteUpdated(channelId: String, messageId: String?, message: Message?)
+    /// A voice note changed after it was posted. `playbackReady` is true once
+    /// the worker has made the AAC copy of an Opus note. The frame carries no
+    /// message: the answer is to read the message again for `voice.playbackUrl`.
+    case voiceNoteUpdated(channelId: String, messageId: String, attachmentId: String, playbackReady: Bool)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -961,23 +961,14 @@ actor RealtimeClient {
         }
     }
 
-    /// `voice-note-updated`. Only the channel is required: whether the frame
-    /// names the message, or carries it whole, the reaction is the same.
+    /// `voice-note-updated`: `{channelId, messageId, attachmentId,
+    /// playbackReady}`, exactly the shape in `packages/shared/src/chat.ts`. No
+    /// message body rides on it.
     private struct VoiceNoteUpdatedFrame: Decodable {
         let channelId: String
-        let messageId: String?
-        let message: Message?
-
-        private enum CodingKeys: String, CodingKey {
-            case channelId, messageId, message
-        }
-
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            channelId = try c.decode(String.self, forKey: .channelId)
-            messageId = (try? c.decodeIfPresent(String.self, forKey: .messageId)) ?? nil
-            message = (try? c.decodeIfPresent(Message.self, forKey: .message)) ?? nil
-        }
+        let messageId: String
+        let attachmentId: String
+        let playbackReady: Bool
     }
 
     /// `voice-moderation` reuses `message` for a *string* the way
@@ -1139,7 +1130,8 @@ actor RealtimeClient {
             guard let frame = try? Coding.decoder.decode(VoiceNoteUpdatedFrame.self, from: data)
             else { return }
             continuation?.yield(.voiceNoteUpdated(
-                channelId: frame.channelId, messageId: frame.messageId, message: frame.message
+                channelId: frame.channelId, messageId: frame.messageId,
+                attachmentId: frame.attachmentId, playbackReady: frame.playbackReady
             ))
             return
         }
