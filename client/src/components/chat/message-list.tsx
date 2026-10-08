@@ -1670,21 +1670,33 @@ export const MessageList = memo(function MessageList({
   // the authors on screen. A stable function over a ref, so a new message
   // does not re-render every voice note card through the context; a card
   // reads the names when its own receipts change, which is when it needs them.
-  const voiceNoteNamesRef = useRef({ participants, messages });
-  voiceNoteNamesRef.current = { participants, messages };
+  // The map is built lazily, once per new list, on the first receipt asked.
+  const voiceNoteNamesRef = useRef<{
+    participants: typeof participants;
+    messages: ChatMessage[];
+    names: Map<string, string> | null;
+  }>({ participants, messages, names: null });
+  if (
+    voiceNoteNamesRef.current.participants !== participants ||
+    voiceNoteNamesRef.current.messages !== messages
+  ) {
+    voiceNoteNamesRef.current = { participants, messages, names: null };
+  }
   const voiceNoteNames = useCallback((userId: string) => {
-    const { participants: people, messages: loaded } = voiceNoteNamesRef.current;
-    const person = people?.find((one) => one.id === userId);
-    if (person) {
-      return person.displayName;
-    }
-    for (let i = loaded.length - 1; i >= 0; i -= 1) {
-      const one = loaded[i]!;
-      if (one.authorId === userId && one.authorName) {
-        return one.authorName;
+    const source = voiceNoteNamesRef.current;
+    if (!source.names) {
+      const names = new Map<string, string>();
+      for (const one of source.messages) {
+        if (one.authorName) {
+          names.set(one.authorId, one.authorName);
+        }
       }
+      for (const one of source.participants ?? []) {
+        names.set(one.id, one.displayName);
+      }
+      source.names = names;
     }
-    return null;
+    return source.names.get(userId) ?? null;
   }, []);
 
   if (isLoading) {
