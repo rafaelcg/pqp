@@ -1,6 +1,7 @@
 import { Check, SlidersHorizontal } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { Tooltip } from "@/components/ui/tooltip";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { InboundVideoReadout } from "@/components/voice/inbound-video-readout";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -156,6 +157,15 @@ export function VideoQualityMenu({
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const portalHost = useFullscreenPortalHost();
+  // Where the panel sits, in viewport pixels. It is portalled out of the bar:
+  // in the composer's strip the stage above is a separate box whose own
+  // layers (the people strip) drew over a panel hanging up into it, and took
+  // the clicks meant for it.
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(
+    null,
+  );
   const receiveQuality = useReceiveQuality();
   const receiveReason = useReceiveQualityReason();
   const qualities = availableVideoQualities({ participantCount, hlsLive });
@@ -170,7 +180,11 @@ export function VideoQualityMenu({
       return;
     }
     function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         onOpenChange(false);
       }
     }
@@ -186,6 +200,42 @@ export function VideoQualityMenu({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open, onOpenChange]);
+
+  // Above the button, centred on it, and kept inside the window. Measured
+  // again on resize and scroll, since the bar can move under an open panel.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null);
+      return;
+    }
+    const measure = () => {
+      const anchor = rootRef.current?.getBoundingClientRect();
+      const panel = panelRef.current;
+      if (!anchor || !panel) {
+        return;
+      }
+      const width = panel.offsetWidth;
+      const margin = 8;
+      const centre = anchor.left + anchor.width / 2;
+      const left = Math.min(
+        Math.max(centre - width / 2, margin),
+        window.innerWidth - width - margin,
+      );
+      const top = Math.max(anchor.top - panel.offsetHeight - margin, margin);
+      setPlace((previous) =>
+        previous && previous.left === left && previous.top === top
+          ? previous
+          : { left, top },
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open]);
 
   // The button's own name changes with the role, because it is the first
   // thing read and the last thing a screen-reader user hears before opening
@@ -210,11 +260,19 @@ export function VideoQualityMenu({
 
   return (
     <div ref={rootRef} className="relative">
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
+          ref={panelRef}
           role="menu"
           aria-label={label}
-          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className="fixed z-[100] w-64 max-w-[80vw] rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          // Hidden for the one frame before it is measured, so it never
+          // flashes at the window's corner.
+          style={
+            place
+              ? { left: place.left, top: place.top }
+              : { left: 0, top: 0, visibility: "hidden" }
+          }
         >
           {isSendingVideo && (
             <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
@@ -380,7 +438,8 @@ export function VideoQualityMenu({
               />
             </div>
           </div>
-        </div>
+        </div>,
+        portalHost ?? document.body,
       )}
       {/* The tooltip carries the same sentence the old `title` did, minus the
           one-second wait and plus keyboard focus. It closes on the press that
