@@ -176,11 +176,15 @@ export class VoiceNoteNotFoundError extends Error {
 
 /** 403: the flag is off where the note lives, or its sender declined. */
 export class VoiceTranscriptionUnavailableError extends Error {
-  constructor(readonly reason: "flag-off" | "sender-declined") {
+  constructor(readonly reason: "flag-off" | "sender-declined" | "viewer-declined" | "no-recipient-shows") {
     super(
       reason === "flag-off"
         ? "Voice note transcription is not enabled here"
-        : "The sender did not allow this note to be transcribed",
+        : reason === "sender-declined"
+          ? "The sender did not allow this note to be transcribed"
+          : reason === "viewer-declined"
+            ? "Turn on voice note transcripts to ask for one"
+            : "Nobody else in this conversation reads transcripts",
     );
     this.name = "VoiceTranscriptionUnavailableError";
   }
@@ -255,6 +259,16 @@ export async function requestVoiceNoteTranscript(
   }
   if (note.transcript_status !== "none" && note.transcript_status !== "unavailable") {
     return settled();
+  }
+
+  // The same eligibility the eager path applies, so a request can never send
+  // audio out that the send-time rule would have kept: the asker reads
+  // transcripts, and in a conversation somebody other than the sender does.
+  if (!voiceTranscriptionPrefs(await getPreferences(viewerId)).show) {
+    throw new VoiceTranscriptionUnavailableError("viewer-declined");
+  }
+  if (note.server_id === null && !(await someRecipientWantsTranscripts(note.channel_id, note.uploader_id))) {
+    throw new VoiceTranscriptionUnavailableError("no-recipient-shows");
   }
 
   const languageHint =

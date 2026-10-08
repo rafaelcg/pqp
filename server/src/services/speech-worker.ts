@@ -210,6 +210,29 @@ async function settleTranscript(
   return true;
 }
 
+/** The flag went off where the note lives: drop the job, the note back to `none`. */
+async function dropForFlagOff(job: SpeechJob, note: NoteRow): Promise<void> {
+  stats.droppedFlagOff += 1;
+  logEvent("voiceNote.transcription.skipped", { attachmentId: note.attachment_id, reason: "flag-off" });
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    if (await dropSpeechJob(client, job)) {
+      await client.query(
+        `UPDATE message_attachment_voice SET transcript_status = 'none'
+          WHERE attachment_id = $1 AND transcript_status = 'pending'`,
+        [note.attachment_id],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function runVoiceNoteJob(job: SpeechJob): Promise<void> {
   const note = await loadNote(job.attachment_id!);
   if (!note || !note.message_id || !note.storage_key) {
@@ -221,27 +244,10 @@ async function runVoiceNoteJob(job: SpeechJob): Promise<void> {
 
   // THE FLAG AGAIN, before anything costs money. Off since the enqueue: drop
   // the job and put the note back to `none`, so a request after the flag
-  // comes back on can queue it afresh. No provider call, no budget.
+  // comes back on can queue it afresh. No provider call, no budget. Asked
+  // once more right before the call (below), with no await in between.
   if (!isTranscriptionOnFor(note.server_id)) {
-    stats.droppedFlagOff += 1;
-    logEvent("voiceNote.transcription.skipped", { attachmentId: note.attachment_id, reason: "flag-off" });
-    const client = await getPool().connect();
-    try {
-      await client.query("BEGIN");
-      if (await dropSpeechJob(client, job)) {
-        await client.query(
-          `UPDATE message_attachment_voice SET transcript_status = 'none'
-            WHERE attachment_id = $1 AND transcript_status = 'pending'`,
-          [note.attachment_id],
-        );
-      }
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
+    await dropForFlagOff(job, note);
     return;
   }
   if (!note.transcribe_allowed) {
@@ -265,7 +271,15 @@ async function runVoiceNoteJob(job: SpeechJob): Promise<void> {
   }
   const info = readContainerDuration(bytes);
 
-  const seconds = Math.max(1, Math.ceil((info?.durationMs ?? note.duration_ms) / 1000));
+  // The download took time the operator may have used: ask before spending
+  // budget, and once more after it, synchronously, right before the call.
+  if (!isTranscriptionOnFor(note.server_id)) {
+    await dropForFlagOff(job, note);
+    return;
+  }
+  // Charged by the longer of what the sender stated and what the container
+  // says, so neither a client nor a crafted header can shrink the bill.
+  const seconds = Math.max(1, Math.ceil(Math.max(info?.durationMs ?? 0, note.duration_ms) / 1000));
   if (!(await reserveSpeechSeconds(seconds))) {
     stats.overBudget += 1;
     logEvent("voiceNote.transcription.skipped", { attachmentId: note.attachment_id, reason: "over-budget", seconds });
@@ -273,8 +287,14 @@ async function runVoiceNoteJob(job: SpeechJob): Promise<void> {
     return;
   }
 
+  if (!isTranscriptionOnFor(note.server_id)) {
+    // Spent budget stays spent (it is a few seconds); the audio stays here.
+    await dropForFlagOff(job, note);
+    return;
+  }
   let result: SttResult;
   try {
+    // No await between the check above and this call.
     result = await selected.provider.transcribe(Buffer.from(bytes), {
       format: formatFor(note.content_type),
       durationMs: info?.durationMs ?? note.duration_ms,
@@ -385,9 +405,20 @@ async function runTranscodeJob(job: SpeechJob): Promise<void> {
   try {
     await client.query("BEGIN");
     if (!(await finishSpeechJob(client, job, "done"))) {
-      // Somebody else holds it now and will write the same key.
+      // Not our job any more: either another worker holds it (and will write
+      // the same key), or the job went with its attachment. In the second case
+      // nothing names the object we just PUT, so it is deleted here.
       stats.lostLease += 1;
       await client.query("ROLLBACK");
+      const still = await getPool().query(
+        `SELECT 1 FROM message_attachment_voice WHERE attachment_id = $1 AND playback_key = $2`,
+        [note.attachment_id, key],
+      );
+      if ((still.rowCount ?? 0) === 0) {
+        await deleteObject(key).catch((error: unknown) => {
+          console.error(`[speech] leaked playback object ${key}:`, error instanceof Error ? error.message : error);
+        });
+      }
       return;
     }
     const updated = await client.query(

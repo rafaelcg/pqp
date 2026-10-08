@@ -114,6 +114,13 @@ function readMp4(b: Buffer): ContainerInfo | null {
   const stsd = trak ? path(b, trak, "mdia", "minf", "stbl", "stsd") : undefined;
   const codec = stsd && stsd.end - stsd.start >= 16 ? fourCcCodec(b.toString("latin1", stsd.start + 12, stsd.start + 16)) : null;
 
+  // EVERY ANSWER THE FILE GIVES, AND THE LONGEST WINS. The movie header is a
+  // declaration; the sample table and the fragments are the timeline. A
+  // crafted file can declare two seconds over five minutes of samples, and
+  // the duration is what the speech budget is charged by, so the declaration
+  // is never allowed to be shorter than the samples it describes.
+  const candidates: number[] = [];
+
   const mvhd = child(b, moov, "mvhd");
   if (mvhd) {
     const { version } = fullBox(b, mvhd);
@@ -122,15 +129,29 @@ function readMp4(b: Buffer): ContainerInfo | null {
       version === 1 ? Number(b.readBigUInt64BE(mvhd.start + 24)) : b.readUInt32BE(mvhd.start + 16);
     const unknown = version === 1 ? duration >= Number.MAX_SAFE_INTEGER : duration === 0xffffffff;
     if (timescale > 0 && duration > 0 && !unknown) {
-      return { container: "mp4", durationMs: Math.round((duration / timescale) * 1000), codec };
+      candidates.push((duration / timescale) * 1000);
     }
   }
 
-  // Fragmented: the movie header says nothing, the fragments say everything.
-  if (!mdhd) return null;
+  if (!mdhd) {
+    return candidates.length > 0 ? { container: "mp4", durationMs: Math.round(Math.max(...candidates)), codec } : null;
+  }
   const mdhdVersion = fullBox(b, mdhd).version;
   const trackTimescale = b.readUInt32BE(mdhd.start + (mdhdVersion === 1 ? 20 : 12));
-  if (trackTimescale <= 0) return null;
+  if (trackTimescale <= 0) {
+    return candidates.length > 0 ? { container: "mp4", durationMs: Math.round(Math.max(...candidates)), codec } : null;
+  }
+
+  // The sample table of a progressive file: `stts` is (count, delta) pairs.
+  const stts = trak ? path(b, trak, "mdia", "minf", "stbl", "stts") : undefined;
+  if (stts) {
+    const entries = b.readUInt32BE(stts.start + 4);
+    let ticks = 0;
+    for (let i = 0, at = stts.start + 8; i < entries && at + 8 <= stts.end; i++, at += 8) {
+      ticks += b.readUInt32BE(at) * b.readUInt32BE(at + 4);
+    }
+    if (ticks > 0) candidates.push((ticks / trackTimescale) * 1000);
+  }
   const trex = path(b, moov, "mvex", "trex");
   const trexDefaultDuration = trex ? b.readUInt32BE(trex.start + 12) : 0;
 
@@ -169,8 +190,9 @@ function readMp4(b: Buffer): ContainerInfo | null {
       }
     }
   }
-  if (!sawFragment || total <= 0) return null;
-  return { container: "mp4", durationMs: Math.round((total / trackTimescale) * 1000), codec };
+  if (sawFragment && total > 0) candidates.push((total / trackTimescale) * 1000);
+  if (candidates.length === 0) return null;
+  return { container: "mp4", durationMs: Math.round(Math.max(...candidates)), codec };
 }
 
 function fourCcCodec(fourCc: string): string {
@@ -300,15 +322,20 @@ function readWebm(b: Buffer): ContainerInfo | null {
   }
 
   const msPerTick = scale / 1_000_000;
-  if (duration !== null && Number.isFinite(duration) && duration > 0) {
-    return { container: "webm", durationMs: Math.round(duration * msPerTick), codec };
+  const declared =
+    duration !== null && Number.isFinite(duration) && duration > 0 ? duration * msPerTick : 0;
+  // The timeline: the last block's start plus one frame, the frame being the
+  // most common gap between blocks (20 ms for Opus at its default). The only
+  // answer Chrome's recordings give (they carry no Duration), and a floor
+  // under a declared one, which a crafted file could set to anything.
+  let timeline = 0;
+  if (lastBlockStart !== null) {
+    const frame = gaps.length > 0 ? mode(gaps) : 0;
+    timeline = Math.max(lastBlockEnd, lastBlockStart + frame) * msPerTick;
   }
-  if (lastBlockStart === null) return null;
-  // No Duration (Chrome): the last block's start plus one frame, the frame
-  // being the most common gap between blocks (20 ms for Opus at its default).
-  const frame = gaps.length > 0 ? mode(gaps) : 0;
-  const lastTick = Math.max(lastBlockEnd, lastBlockStart + frame);
-  return { container: "webm", durationMs: Math.round(lastTick * msPerTick), codec };
+  const longest = Math.max(declared, timeline);
+  if (longest <= 0) return null;
+  return { container: "webm", durationMs: Math.round(longest), codec };
 }
 
 function mode(values: number[]): number {

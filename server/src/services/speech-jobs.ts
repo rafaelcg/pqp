@@ -109,12 +109,34 @@ export async function claimSpeechJobs(
   if (kinds.length === 0 || limit <= 0) {
     return [];
   }
+  // A job whose worker died on its LAST attempt is not reclaimed: it is
+  // failed here, so a job that crashes its worker every time stops instead
+  // of being taken up again every lease, forever. Its note, if it was waiting
+  // for a transcript, is failed with it.
+  await getPool().query(
+    `WITH exhausted AS (
+       UPDATE speech_jobs
+          SET status = 'failed', finished_at = NOW(), lease_expires_at = NULL,
+              last_error = COALESCE(last_error, 'lease expired on the last attempt')
+        WHERE kind = ANY($1::text[])
+          AND status = 'running' AND lease_expires_at < NOW()
+          AND attempts >= $2
+        RETURNING kind, attachment_id
+     )
+     UPDATE message_attachment_voice v
+        SET transcript_status = 'failed'
+       FROM exhausted e
+      WHERE e.kind = 'voice_note' AND v.attachment_id = e.attachment_id
+        AND v.transcript_status = 'pending'`,
+    [kinds, SPEECH_JOB_MAX_ATTEMPTS],
+  );
   const claimed = await getPool().query<SpeechJob>(
     `WITH due AS (
        SELECT id FROM speech_jobs
         WHERE kind = ANY($1::text[])
           AND ((status = 'queued' AND run_after <= NOW())
-            OR (status = 'running' AND lease_expires_at < NOW()))
+            OR (status = 'running' AND lease_expires_at < NOW()
+                AND attempts < ${SPEECH_JOB_MAX_ATTEMPTS}))
         ORDER BY run_after, id
         LIMIT $2
         FOR UPDATE SKIP LOCKED

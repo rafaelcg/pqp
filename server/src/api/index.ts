@@ -3653,8 +3653,10 @@ router.post(
  * request in a server channel pays and everybody after it reads.
  *
  * 404 for "no such note" and "not yours to hear" alike; 403 when the
- * `voice_note_transcription` flag is off where the note lives, or its sender
- * did not allow transcription.
+ * `voice_note_transcription` flag is off where the note lives, its sender did
+ * not allow transcription, the asker has `voiceTranscription.show` off, or (in
+ * a conversation) nobody but the sender reads transcripts: the same rule the
+ * eager path applies at send.
  */
 router.post(
   "/api/attachments/:attachmentId/transcript",

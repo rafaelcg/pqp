@@ -417,6 +417,24 @@ describeDb("voice note speech jobs", () => {
       actor = bob;
       expect((await postTranscript("not-a-uuid")).status).toBe(404);
     });
+
+    it("applies the send-time eligibility: the asker reads transcripts, and in a conversation a recipient does", async () => {
+      await transcriptionOnFor(serverId);
+      await transcriptionGlobally(true);
+      // Bob turned transcripts off: his request sends nothing out.
+      await mergePreferences(bob.id, { voiceTranscription: { show: false } });
+      const inChannel = await sendNote(channelId);
+      expect((await postTranscript(inChannel.attachmentId)).status).toBe(403);
+
+      // In the conversation nobody but the sender reads transcripts, so the
+      // sender cannot ask for one either: the eager rule said no, and so does this.
+      const inDm = await sendNote(dmChannelId);
+      expect((await jobsFor(inDm.attachmentId)).map((job) => job.kind)).toEqual(["voice_transcode"]);
+      actor = alice;
+      expect((await postTranscript(inDm.attachmentId)).status).toBe(403);
+      await drain();
+      expect(calls).toEqual([]);
+    });
   });
 
   describe("settling without text", () => {
@@ -501,6 +519,24 @@ describeDb("voice note speech jobs", () => {
         [claimed!.id],
       );
       expect(late.rowCount).toBe(0);
+    });
+
+    it("a job whose worker died on its last attempt is failed, not reclaimed forever", async () => {
+      await transcriptionGlobally(true);
+      const { attachmentId } = await sendNote(dmChannelId);
+      await getPool().query(
+        `UPDATE speech_jobs SET status = 'running', leased_by = 'dead-worker', attempts = 3,
+                lease_expires_at = NOW() - INTERVAL '1 second'
+          WHERE attachment_id = $1 AND kind = 'voice_note'`,
+        [attachmentId],
+      );
+      await drain();
+      expect(calls).toEqual([]);
+      expect((await jobsFor(attachmentId)).find((row) => row.kind === "voice_note")).toMatchObject({
+        status: "failed",
+        attempts: 3,
+      });
+      expect((await voiceRow(attachmentId)).transcript_status).toBe("failed");
     });
   });
 

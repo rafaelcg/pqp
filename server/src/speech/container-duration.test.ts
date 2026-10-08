@@ -56,6 +56,23 @@ describe("readContainerDuration", () => {
     expect(read("note-live.webm").includes(Buffer.from([0x44, 0x89]))).toBe(false);
   });
 
+  it("a header that declares less than the samples hold is not believed", () => {
+    // mvhd says one tick; the sample table still says 1.5 s.
+    const mp4 = Buffer.from(read("note.m4a"));
+    const mvhd = mp4.indexOf("mvhd", 0, "latin1");
+    mp4.writeUInt32BE(1, mvhd + 4 + 16);
+    expect(readContainerDuration(mp4)!.durationMs).toBeGreaterThanOrEqual(1_400);
+
+    // Info/Duration says 1 ms; the blocks still run to 1.5 s.
+    const webm = Buffer.from(read("note.webm"));
+    const at = webm.indexOf(Buffer.from([0x44, 0x89]));
+    expect(at).toBeGreaterThan(0);
+    const size = webm[at + 2]! & 0x7f;
+    if (size === 8) webm.writeDoubleBE(1, at + 3);
+    else webm.writeFloatBE(1, at + 3);
+    expect(readContainerDuration(webm)!.durationMs).toBeGreaterThanOrEqual(1_400);
+  });
+
   it("returns null for bytes it does not know or cannot finish", () => {
     expect(readContainerDuration(Buffer.from("not audio at all"))).toBeNull();
     expect(readContainerDuration(Buffer.alloc(0))).toBeNull();
