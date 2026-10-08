@@ -56,9 +56,11 @@ final class ChatModel {
     private(set) var failedVoiceNotes: [HeldVoiceNote] = []
     /// The one the banner offers: the oldest that did not go.
     var failedVoiceNote: HeldVoiceNote? { failedVoiceNotes.first }
-    /// Set when the screen closes, so a send that settles afterwards does not
-    /// keep a file nobody can retry.
-    @ObservationIgnored private var voiceClosed = false
+    /// Bumped every time the screen closes. A send remembers the epoch it began
+    /// in, and one that settles in a LATER epoch (the screen closed, and maybe
+    /// reopened, in between) deletes its file instead of keeping it: close has
+    /// already removed what the new screen could retry.
+    @ObservationIgnored private var voiceEpoch = 0
     /// Notes drawn optimistically and not yet confirmed, by the row's id.
     @ObservationIgnored private var inFlightVoice: [String: HeldVoiceNote] = [:]
     private(set) var gifsEnabled = false
@@ -130,7 +132,6 @@ final class ChatModel {
     ) async {
         self.session = session
         self.channelId = channelId
-        voiceClosed = false
         self.slowmodeSeconds = slowmodeSeconds
         self.bypassesSlowMode = bypassesSlowMode
         // "This conversation is on screen", for the one consumer that needs it:
@@ -241,7 +242,7 @@ final class ChatModel {
         // Leaving the screen is leaving the retry: no file is kept behind it,
         // neither a failed note nor one still in flight (its bytes are already
         // read; the file is only for playing the row and for a retry).
-        voiceClosed = true
+        voiceEpoch += 1
         for held in failedVoiceNotes { Self.removeFile(held.note.fileURL) }
         failedVoiceNotes = []
         for held in inFlightVoice.values { Self.removeFile(held.note.fileURL) }
@@ -311,9 +312,9 @@ final class ChatModel {
         failedVoiceNotes.removeFirst()
     }
 
-    private func keepAsFailed(_ held: HeldVoiceNote) {
+    private func keepAsFailed(_ held: HeldVoiceNote, epoch: Int) {
         // After the screen closed nobody can retry; do not strand the file.
-        guard !voiceClosed else {
+        guard epoch == voiceEpoch else {
             Self.removeFile(held.note.fileURL)
             return
         }
@@ -322,10 +323,11 @@ final class ChatModel {
 
     private func deliver(_ held: HeldVoiceNote) async {
         let note = held.note
+        let epoch = voiceEpoch
         guard let session, let channelId, let user = session.currentUser, let uploader else {
             // Not signed in (or the socket is gone): the recording is kept for a
             // retry, never deleted because the prerequisites were missing.
-            keepAsFailed(held)
+            keepAsFailed(held, epoch: epoch)
             return
         }
         // A retried note leaves the failed list while it is in flight.
@@ -371,15 +373,18 @@ final class ChatModel {
             // `apply`), so a refusal can still hand the recording back. If no
             // broadcast ever reaches this model (the screen closed, the socket
             // dropped) the file is not kept forever either.
-            let url = note.fileURL
-            Task.detached {
+            Task { [weak self] in
                 try? await Task.sleep(for: .seconds(600))
-                try? FileManager.default.removeItem(at: url)
+                // Not if it came back as a failed note in the meantime: that
+                // one is waiting for a retry.
+                guard let self, !self.failedVoiceNotes.contains(held),
+                      !self.inFlightVoice.values.contains(held) else { return }
+                Self.removeFile(held.note.fileURL)
             }
         } catch {
             messages.removeAll { $0.id == rowId }
             inFlightVoice[rowId] = nil
-            keepAsFailed(held)
+            keepAsFailed(held, epoch: epoch)
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
@@ -395,7 +400,7 @@ final class ChatModel {
                 try? FileManager.default.removeItem(at: url)
             }
         } else {
-            keepAsFailed(held)
+            keepAsFailed(held, epoch: voiceEpoch)
         }
     }
 
