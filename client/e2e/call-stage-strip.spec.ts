@@ -371,6 +371,35 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     await page.getByRole("button", { name: "Show participants" }).click();
     await expect(strip(page)).toHaveAttribute("data-open", "true");
 
+    // Stage fullscreen: the composer is out of sight, so the bar floats over
+    // the stage. The strip stops above the bar's band rather than at the
+    // stage's edge, or its chips cover mute and hang-up.
+    await page
+      .getByTestId("call-stage-collapsed")
+      .getByTestId("call-more")
+      .click();
+    await page.getByRole("menuitem", { name: "View fullscreen" }).click();
+    const bar = page.getByTestId("call-controls-bar");
+    await expect(bar).toBeVisible({ timeout: 10_000 });
+    await page.mouse.move(700, 300);
+    await page.mouse.move(710, 310);
+    await expect(strip(page)).toBeVisible();
+    const chipBox = await strip(page)
+      .locator("[data-call-listener]")
+      .first()
+      .boundingBox();
+    const leaveBox = await bar
+      .getByRole("button", { name: "Leave", exact: true })
+      .boundingBox();
+    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(leaveBox!.y + 1);
+    await expect
+      .poll(() => unreachableStageControls(page), { timeout: 5_000 })
+      .toEqual([]);
+    await page.evaluate(() =>
+      document.fullscreenElement ? document.exitFullscreen() : undefined,
+    );
+    await expect(bar).toHaveCount(0, { timeout: 10_000 });
+
     // On a phone the control pill folds onto a second line, and the strip is
     // stacked above the bar: its reserve has to grow with the pill, or the
     // strip sits on the top line, which is where mute and raise hand are.

@@ -602,9 +602,7 @@ test("the whole-picture toggle sticks, and never remounts the picture", async ({
 
   await markStageVideo(page);
   await page.getByTestId("tile-more").first().click();
-  await page
-    .getByRole("menuitemcheckbox", { name: "Show the whole picture" })
-    .click();
+  await page.getByRole("menuitem", { name: "Show the whole picture" }).click();
 
   await expect(page.locator("[data-tile-fit]").first()).toHaveAttribute(
     "data-tile-fit",
