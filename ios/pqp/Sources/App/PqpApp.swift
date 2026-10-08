@@ -28,6 +28,9 @@ struct PqpApp: App {
     /// cold-launched app still answer a call CallKit is already presenting.
     /// See `docs/IOS_CALLKIT.md`.
     @State private var callKit = CallKitCoordinator()
+    /// The one voice-note player. App-wide so a note keeps playing as the person
+    /// moves between screens, and so there is never a second voice under it.
+    @State private var notePlayer = VoiceNotePlayer()
     /// The only object iOS will hand an APNs device token to. SwiftUI owns its
     /// lifetime; `RootView` attaches the session to it.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var push
@@ -55,6 +58,7 @@ struct PqpApp: App {
                 .environment(voice)
                 .environment(ratings)
                 .environment(watchPartyHost)
+                .environment(notePlayer)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that

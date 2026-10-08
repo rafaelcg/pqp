@@ -44,6 +44,11 @@ final class ChatModel {
     /// Files staged in the composer, not yet sent.
     private(set) var pendingAttachments: [PendingAttachment] = []
     private(set) var attachmentsEnabled = false
+    /// Voice notes are on for THIS conversation: storage is configured and the
+    /// `voice_notes` flag is on for its server (or globally, for a DM). Read
+    /// every time the conversation opens, because an operator flips the flag
+    /// with no deploy.
+    private(set) var voiceNotesEnabled = false
     private(set) var gifsEnabled = false
     private var uploader: AttachmentUploader?
 
@@ -108,7 +113,8 @@ final class ChatModel {
         channelId: String,
         session: SessionStore,
         slowmodeSeconds: Int = 0,
-        bypassesSlowMode: Bool = false
+        bypassesSlowMode: Bool = false,
+        serverId: String? = nil
     ) async {
         self.session = session
         self.channelId = channelId
@@ -140,6 +146,7 @@ final class ChatModel {
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
+        async let voiceConfig = try? await session.api.attachmentConfig(serverId: serverId)
         async let gifs = (try? await session.api.gifConfig())?.enabled ?? false
         async let fetched: MessagesResponse = session.api.messages(channelId: channelId)
 
@@ -155,6 +162,7 @@ final class ChatModel {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         attachmentsEnabled = await attachments
+        voiceNotesEnabled = (await voiceConfig)?.offersVoiceNotes ?? false
         gifsEnabled = await gifs
         isLoading = false
     }
@@ -254,6 +262,79 @@ final class ChatModel {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isSending = false
+    }
+
+    /// A finished recording: draw it now, upload it, send it.
+    ///
+    /// The row appears BEFORE the upload (unlike a photo) because a note is the
+    /// whole message and a few seconds of upload with nothing on screen reads as
+    /// a dead button. It plays from the local file until the broadcast replaces
+    /// it. The message has an empty body: the server refuses text beside a note.
+    func sendVoiceNote(_ note: RecordedVoiceNote) async {
+        guard let session, let channelId, let user = session.currentUser, let uploader else {
+            try? FileManager.default.removeItem(at: note.fileURL)
+            return
+        }
+        let replyId = replyingTo?.id
+        replyingTo = nil
+
+        var pending = Message(pendingBody: "", channelId: channelId, author: user)
+        pending.attachments = [Attachment(
+            id: "pending-\(UUID().uuidString)",
+            filename: "voice-note.m4a",
+            contentType: "audio/mp4",
+            byteSize: note.byteSize,
+            url: note.fileURL.absoluteString,
+            voice: VoiceNote(durationMs: note.durationMs, waveform: note.waveform, listenedByMe: true)
+        )]
+        let rowId = pending.id
+        messages.append(pending)
+        isNearBottom = true
+
+        do {
+            let data = try Data(contentsOf: note.fileURL)
+            let attachmentId = try await uploader.upload(
+                PendingAttachment(
+                    filename: "voice-note.m4a",
+                    contentType: "audio/mp4",
+                    data: data,
+                    width: nil,
+                    height: nil,
+                    voice: VoiceMintBlock(durationMs: note.durationMs, waveform: note.waveform)
+                ),
+                channelId: channelId
+            )
+            let nonce = await session.realtime.sendMessage(
+                channelId: channelId, body: "", replyToId: replyId, attachmentIds: [attachmentId]
+            )
+            if let index = messages.firstIndex(where: { $0.id == rowId }) {
+                messages[index].pendingNonce = nonce
+            }
+            if slowmodeSeconds > 0 {
+                holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
+            }
+            // Kept a minute: the row plays from this file until the broadcast
+            // swaps it for the stored copy.
+            let url = note.fileURL
+            Task.detached {
+                try? await Task.sleep(for: .seconds(60))
+                try? FileManager.default.removeItem(at: url)
+            }
+        } catch {
+            messages.removeAll { $0.id == rowId }
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            try? FileManager.default.removeItem(at: note.fileURL)
+        }
+    }
+
+    /// The next note to play after `finished`: someone else's, unheard, playable
+    /// now, in the order of the transcript.
+    func nextUnheardVoiceNote(after finished: VoicePlayable, heard: Set<String>) -> VoicePlayable? {
+        guard let me = session?.currentUser?.id else { return nil }
+        let notes = messages.flatMap { message in
+            message.attachments.compactMap { VoicePlayable(message: message, attachment: $0) }
+        }
+        return VoiceNoteQueue.next(after: finished.attachmentId, in: notes, me: me, heard: heard)
     }
 
     func removeAttachment(_ id: UUID) {
@@ -636,6 +717,20 @@ final class ChatModel {
             // The optimistic rows this notice answers will never be confirmed.
             messages.removeAll { $0.isPending }
 
+        case .voiceNoteListened(let noteChannelId, let messageId, let attachmentId, let userId, let listenedAt):
+            guard noteChannelId == channelId else { return }
+            applyListen(messageId: messageId, attachmentId: attachmentId,
+                        userId: userId, listenedAt: listenedAt)
+
+        case .voiceNoteUpdated(let noteChannelId, let messageId, let message):
+            guard noteChannelId == channelId else { return }
+            if let message, let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index] = message
+            } else if messageId == nil || messages.contains(where: { $0.id == messageId }) {
+                // The copy is ready; the fresh signed URL is in the message.
+                Task { await refreshMessages() }
+            }
+
         case .ready:
             // The socket came back after a gap. Whatever was said while it was
             // down was never delivered here, so the visible page is refetched
@@ -667,6 +762,31 @@ final class ChatModel {
              .callIncoming, .callRingCancelled, .callDeclined:
             break
         }
+    }
+
+    /// A listen receipt. Two meanings, told apart by who listened: ME on another
+    /// device (the dot clears here too), or SOMEONE ELSE on a note I sent (the
+    /// "Ouviu" line appears).
+    private func applyListen(messageId: String, attachmentId: String, userId: String, listenedAt: Date?) {
+        guard let index = messages.firstIndex(where: { $0.id == messageId }),
+              let attachment = messages[index].attachments.firstIndex(where: { $0.id == attachmentId }),
+              var voice = messages[index].attachments[attachment].voice
+        else { return }
+        if userId == session?.currentUser?.id {
+            voice.listenedByMe = true
+        } else {
+            var listeners = voice.listenedBy ?? []
+            guard !listeners.contains(where: { $0.userId == userId }) else { return }
+            listeners.append(VoiceListener(userId: userId, listenedAt: listenedAt))
+            voice.listenedBy = listeners
+        }
+        messages[index].attachments[attachment].voice = voice
+    }
+
+    /// Read the visible page again. A pending Opus note becomes playable on the
+    /// next fetch even if the update frame was missed.
+    func refreshMessages() async {
+        await reloadAfterReconnect()
     }
 
     private func reloadAfterReconnect() async {

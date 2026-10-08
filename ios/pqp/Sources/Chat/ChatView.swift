@@ -18,6 +18,8 @@ struct ChatView: View {
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
     @Environment(WatchPartyHostController.self) private var watchPartyHost
+    @Environment(VoiceNotePlayer.self) private var notePlayer
+    @Environment(\.scenePhase) private var scenePhase
     /// Popping this screen from the watch-party theater's own back chevron,
     /// which stands in for the system nav bar's while that bar's fill (and
     /// its back button) is hidden under the film. See `watchTheater`.
@@ -60,6 +62,9 @@ struct ChatView: View {
     var voiceChannel: Channel? = nil
 
     @State private var model = ChatModel()
+    /// The voice-note microphone. Per screen: a recording belongs to the
+    /// conversation it was started in.
+    @State private var recorder = VoiceRecorder()
     /// Applied once. Without the guard, coming back to this screen from a thread
     /// would overwrite whatever the person has since typed.
     @State private var hasSeededDraft = false
@@ -186,6 +191,7 @@ struct ChatView: View {
                 composerContext
                 attachmentStrip
                 slowModeRow
+                voiceNoteNotices
                 Composer(
                     text: $model.draft,
                     isSending: model.isSending,
@@ -201,7 +207,13 @@ struct ChatView: View {
                         // the two never fight over the bottom of the screen.
                         composerFocused = false
                         withAnimation(Motion.standard) { showingExpression.toggle() }
-                    }
+                    },
+                    // Off when the deployment, the server or this conversation
+                    // has voice notes off, or while a message is being edited
+                    // (an edit cannot become a voice note).
+                    recorder: model.voiceNotesEnabled && model.editing == nil ? recorder : nil,
+                    callIsLive: call.phase.isLive,
+                    seatedInVoiceRoom: voice.holdsSeat
                 )
                 .focused($composerFocused)
 
@@ -427,7 +439,8 @@ struct ChatView: View {
                 channelId: channelId,
                 session: session,
                 slowmodeSeconds: slowmodeSeconds,
-                bypassesSlowMode: isManager
+                bypassesSlowMode: isManager,
+                serverId: server?.id
             )
         }
         // After `open`, which resets the model — seeding before it would be
@@ -438,7 +451,61 @@ struct ChatView: View {
             if model.draft.isEmpty { model.draft = initialDraft }
             composerFocused = true
         }
-        .onDisappear { model.close() }
+        .onDisappear {
+            model.close()
+            recorder.appBecameInactive()
+        }
+        .task {
+            notePlayer.configure(session: session)
+            recorder.onNote = { note in Task { await model.sendVoiceNote(note) } }
+        }
+        // A hold the system took away, or a lock left open behind the lock
+        // screen: the microphone is not ours in the background.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { recorder.appBecameInactive() }
+        }
+        // The microphone and the speaker belong to a call the moment one
+        // starts: a note stops playing, a recording in progress is paused.
+        .onChange(of: call.phase.isLive || voice.holdsSeat) { _, live in
+            guard live else { return }
+            notePlayer.stop()
+            recorder.interrupt()
+        }
+        .onChange(of: recorder.refusal) { _, refusal in
+            guard let refusal else { return }
+            model.error = VoiceRecordRefusalCopy.message(for: refusal)
+            recorder.refusal = nil
+        }
+        .onChange(of: recorder.tooShortHint) { _, hint in
+            guard hint else { return }
+            model.error = VoiceRecordRefusalCopy.tooShort
+            recorder.tooShortHint = false
+        }
+        .onChange(of: recorder.isActive) { _, active in
+            // Playing a note under your own voice would be recorded.
+            if active { notePlayer.stop() }
+        }
+        .environment(\.voiceNoteContext, voiceNoteContext)
+    }
+
+    /// What a card in this transcript needs to carry on: the order, and a way
+    /// to ask for the message again.
+    private var voiceNoteContext: VoiceNoteContext {
+        VoiceNoteContext(
+            next: { [model, notePlayer] finished in
+                model.nextUnheardVoiceNote(after: finished, heard: notePlayer.heardIds)
+            },
+            refresh: { [model] in Task { await model.refreshMessages() } }
+        )
+    }
+
+    @ViewBuilder
+    private var voiceNoteNotices: some View {
+        if let note = recorder.undoable {
+            VoiceUndoBanner(note: note) {
+                withAnimation(Motion.standard) { recorder.undoDiscard() }
+            }
+        }
     }
 
     private var messageList: some View {
@@ -791,6 +858,13 @@ struct Composer: View {
     let onType: () -> Void
     var onAttach: () -> Void = {}
     var onExpress: () -> Void = {}
+    /// Non-nil when voice notes are on for this conversation. The microphone
+    /// takes the send button's place while there is nothing to send.
+    var recorder: VoiceRecorder? = nil
+    /// A pqp call holds the microphone, so recording is refused (see
+    /// `VoiceRecordGate`).
+    var callIsLive = false
+    var seatedInVoiceRoom = false
 
     private var canSend: Bool {
         // A photo with no caption is a valid message, so attachments alone
@@ -799,8 +873,32 @@ struct Composer: View {
             && !isSending && !isHeld
     }
 
+    private var isLocked: Bool {
+        if let recorder, case .locked = recorder.phase { return true }
+        return false
+    }
+
+    private var isHolding: Bool { recorder?.phase == .holding }
+
     var body: some View {
+        Group {
+            if let recorder, isLocked {
+                VoiceLockedPanel(recorder: recorder)
+            } else {
+                row
+            }
+        }
+        .animation(Motion.press, value: canSend)
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.vertical, 10)
+        .background(Palette.inkDeep)
+    }
+
+    private var row: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if let recorder, isHolding {
+                VoiceRecordingBar(recorder: recorder)
+            } else {
             HStack(alignment: .bottom, spacing: 4) {
                 if canAttach {
                     Button(action: onAttach) {
@@ -851,6 +949,7 @@ struct Composer: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Palette.border, lineWidth: 1)
             )
+            }
 
             if canSend {
                 Button(action: onSend) {
@@ -864,12 +963,18 @@ struct Composer: View {
                 .accessibilityIdentifier("composer.send")
                 .accessibilityLabel("Send")
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
+            } else if let recorder {
+                // Nothing to send, so the button becomes the microphone. Held by
+                // slow mode it stays visible but dead, like Send would be.
+                VoiceMicButton(
+                    recorder: recorder,
+                    callIsLive: callIsLive,
+                    seatedInVoiceRoom: seatedInVoiceRoom,
+                    isDisabled: isHeld || isSending
+                )
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
-        .animation(Motion.press, value: canSend)
-        .padding(.horizontal, Metrics.hPadding)
-        .padding(.vertical, 10)
-        .background(Palette.inkDeep)
     }
 }
 
@@ -990,7 +1095,11 @@ struct MessageRow: View {
                 }
 
                 ForEach(message.attachments) { attachment in
-                    AttachmentChip(attachment: attachment)
+                    if attachment.isVoiceNote {
+                        VoiceNoteCard(message: message, attachment: attachment)
+                    } else {
+                        AttachmentChip(attachment: attachment)
+                    }
                 }
 
                 ForEach(message.embeds, id: \.url) { embed in

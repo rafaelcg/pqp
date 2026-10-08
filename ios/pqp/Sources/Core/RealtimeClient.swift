@@ -69,6 +69,16 @@ enum RealtimeEvent: Sendable {
     /// every member, never through a channel relay. Likes deliberately do not
     /// send it. See `packages/shared/src/community-home.ts`.
     case communityHomeUpdate(serverId: String)
+    /// Somebody played a voice note. Goes to the author's sockets (in a
+    /// conversation, where receipts are shown) and to the listener's OWN other
+    /// sockets, so the unplayed dot clears on every device. `userId` says which
+    /// of the two this is.
+    case voiceNoteListened(channelId: String, messageId: String, attachmentId: String,
+                           userId: String, listenedAt: Date?)
+    /// A voice note changed after it was posted: the worker finished its AAC
+    /// copy of an Opus note. Carries the message when the server sends it whole;
+    /// either way the answer is to read the message again.
+    case voiceNoteUpdated(channelId: String, messageId: String?, message: Message?)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -927,6 +937,49 @@ actor RealtimeClient {
         let message: String
     }
 
+    /// `voice-note-listened`: `{channelId, messageId, attachmentId, userId,
+    /// listenedAt}`. Decoded on its own so `listenedAt` is allowed to be absent
+    /// or unreadable without taking the frame down with it.
+    private struct VoiceNoteListenedFrame: Decodable {
+        let channelId: String
+        let messageId: String
+        let attachmentId: String
+        let userId: String
+        let listenedAt: Date?
+
+        private enum CodingKeys: String, CodingKey {
+            case channelId, messageId, attachmentId, userId, listenedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            channelId = try c.decode(String.self, forKey: .channelId)
+            messageId = try c.decode(String.self, forKey: .messageId)
+            attachmentId = try c.decode(String.self, forKey: .attachmentId)
+            userId = try c.decode(String.self, forKey: .userId)
+            listenedAt = (try? c.decodeIfPresent(Date.self, forKey: .listenedAt)) ?? nil
+        }
+    }
+
+    /// `voice-note-updated`. Only the channel is required: whether the frame
+    /// names the message, or carries it whole, the reaction is the same.
+    private struct VoiceNoteUpdatedFrame: Decodable {
+        let channelId: String
+        let messageId: String?
+        let message: Message?
+
+        private enum CodingKeys: String, CodingKey {
+            case channelId, messageId, message
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            channelId = try c.decode(String.self, forKey: .channelId)
+            messageId = (try? c.decodeIfPresent(String.self, forKey: .messageId)) ?? nil
+            message = (try? c.decodeIfPresent(Message.self, forKey: .message)) ?? nil
+        }
+    }
+
     /// `voice-moderation` reuses `message` for a *string* the way
     /// `sanction-notice` does, so it hits the same trap `SanctionFrame` exists
     /// for: decoded through the shared `Envelope`, whose `message` is
@@ -1064,6 +1117,30 @@ actor RealtimeClient {
                   )
             else { return }
             continuation?.yield(.presence(channelId: frame.channelId, users: users))
+            return
+        }
+
+        // BEFORE `Envelope` too, but for the opposite reason: nothing here
+        // collides with it, the fields are just new. A lenient frame of its own
+        // means a date format this build cannot read costs the timestamp, not
+        // the dot clearing.
+        if probe.type == "voice-note-listened" {
+            guard let frame = try? Coding.decoder.decode(VoiceNoteListenedFrame.self, from: data)
+            else { return }
+            continuation?.yield(.voiceNoteListened(
+                channelId: frame.channelId, messageId: frame.messageId,
+                attachmentId: frame.attachmentId, userId: frame.userId,
+                listenedAt: frame.listenedAt
+            ))
+            return
+        }
+
+        if probe.type == "voice-note-updated" {
+            guard let frame = try? Coding.decoder.decode(VoiceNoteUpdatedFrame.self, from: data)
+            else { return }
+            continuation?.yield(.voiceNoteUpdated(
+                channelId: frame.channelId, messageId: frame.messageId, message: frame.message
+            ))
             return
         }
 
