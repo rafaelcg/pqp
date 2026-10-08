@@ -10,6 +10,8 @@ import {
   defaultPttBinding,
   defaultPushToTalkBinding,
   formatBinding,
+  keyDisplayLabel,
+  modifierName,
   isBindableMouseCode,
   isTextEntryTarget,
   matchesBinding,
@@ -512,5 +514,79 @@ describe("parsePttBinding", () => {
     expect(parsePttBinding(null)).toBeNull();
     expect(parsePttBinding("nope")).toBeNull();
     expect(parsePttBinding({})).toBeNull();
+  });
+});
+
+describe("keyDisplayLabel", () => {
+  const key = (code: string, label: string) =>
+    ({ ...captureModifier(keyEvent({ code })), label });
+
+  it("names the fourth modifier for the keyboard in front of the person", () => {
+    // Saved on a Mac as "Left Cmd", opened on Windows: the Windows key.
+    expect(keyDisplayLabel(key("MetaLeft", "Left Cmd"), undefined, false)).toBe("Left Win");
+    expect(keyDisplayLabel(key("MetaLeft", "Left Win"), undefined, true)).toBe("Left Cmd");
+    expect(modifierName("meta", false)).toBe("Win");
+    expect(modifierName("meta", true)).toBe("Cmd");
+  });
+
+  it("puts the side in the person's language when it can", () => {
+    const say = (id: string, vars?: Record<string, unknown>) =>
+      `${id}:${String(vars?.key)}`;
+    expect(keyDisplayLabel(key("ShiftRight", "Right Shift"), say as never, false)).toBe(
+      "keyBinding.modifierRight:Shift",
+    );
+    expect(keyDisplayLabel(key("ControlLeft", "Left Ctrl"), say as never, false)).toBe(
+      "keyBinding.modifierLeft:Ctrl",
+    );
+  });
+
+  it("says Space and the mouse buttons in the person's language", () => {
+    const say = (id: string, vars?: Record<string, unknown>) =>
+      vars?.number === undefined ? id : `${id}:${String(vars.number)}`;
+    expect(keyDisplayLabel(key("Space", "Space"), say as never, false)).toBe("keyBinding.space");
+    expect(keyDisplayLabel(key("MouseMiddle", "Middle Click"), say as never, false)).toBe(
+      "keyBinding.mouseMiddle",
+    );
+    expect(keyDisplayLabel(key("MouseButton4", "Mouse Button 4"), say as never, false)).toBe(
+      "keyBinding.mouseButton:4",
+    );
+    // Without a translator the saved English label stays.
+    expect(keyDisplayLabel(key("Space", "Space"), undefined, false)).toBe("Space");
+  });
+
+  it("keeps the saved label of any other key", () => {
+    expect(keyDisplayLabel({ ...defaultPushToTalkBinding, code: "F9", label: "F9" })).toBe("F9");
+  });
+});
+
+describe("metaKeyName", () => {
+  it("names the fourth modifier per platform", async () => {
+    const { metaKeyName } = await import("@/components/voice/push-to-talk");
+    expect(metaKeyName(true, false)).toBe("Cmd");
+    expect(metaKeyName(false, true)).toBe("Super");
+    expect(metaKeyName(false, false)).toBe("Win");
+  });
+});
+
+describe("isLinuxDesktopAgent", () => {
+  it("knows a Linux desktop browser, and nothing else", async () => {
+    const { isLinuxDesktopAgent } = await import("@/components/voice/push-to-talk");
+    expect(
+      isLinuxDesktopAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
+      ),
+    ).toBe(true);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"),
+    ).toBe(true);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/129.0 Mobile"),
+    ).toBe(false);
+    expect(
+      isLinuxDesktopAgent("Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 Chrome/129.0"),
+    ).toBe(false);
+    expect(isLinuxDesktopAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0")).toBe(false);
+    expect(isLinuxDesktopAgent("Node.js/22")).toBe(false);
+    expect(isLinuxDesktopAgent("Mozilla/5.0 (linux) AppleWebKit/537.36 (KHTML, like Gecko) jsdom/26.0.0")).toBe(false);
   });
 });

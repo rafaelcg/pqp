@@ -545,7 +545,9 @@ test.describe("dropping files", () => {
     await page.getByRole("button", { name: "Open settings" }).first().click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    const picker = dialog.getByRole("textbox", { name: /avatar/i }).first();
+    // The picker's own upload button sits inside its drop zone (the link
+    // field is folded away until "Use a link" is pressed).
+    const picker = dialog.getByRole("button", { name: /upload a photo/i }).first();
     await expect(picker).toBeVisible();
 
     const mint = page.waitForRequest(

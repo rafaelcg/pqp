@@ -33,6 +33,7 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
       "--color-surface-2",
       "--color-surface-3",
       "--color-rail",
+      "--color-surface-card",
     ],
   },
   { id: "borders", tokens: ["--color-border", "--color-border-strong"] },

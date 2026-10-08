@@ -1,21 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Link2, Upload } from "lucide-react";
 import { AVATAR_MIME_ALLOWLIST, type User } from "@pqp/shared";
+import {
+  SETTINGS_BUSY,
+  SETTINGS_FOCUS,
+  SETTINGS_TRANSITION,
+  SettingsInlineStatus,
+  useInlineSave,
+} from "@/components/settings/kit";
+import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { fetchAvatarConfig } from "@/lib/api";
+import { ApiError, fetchAvatarConfig } from "@/lib/api";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 /**
- * The one avatar picker in the app.
+ * The one list of preset avatars in the app.
  *
- * Lifted out of `settings-modal.tsx` when onboarding needed the same control:
- * two pickers would mean two preset lists, and the day one of them gained a
+ * Settings draws them through `AvatarPicker` and onboarding imports this list
+ * for its own step: two lists would drift, and the day one of them gained a
  * ninth shape the other would quietly be missing it. The presets are remote
- * SVGs rather than bundled assets, which is also why there is exactly one place
- * that names them.
+ * images rather than bundled assets, which is also why exactly one place names
+ * them.
  */
 export const AVATAR_PRESETS = [
   "https://api.dicebear.com/9.x/shapes/png?seed=signal",
@@ -37,8 +47,25 @@ export const AVATAR_PRESETS = [
 let configPromise: Promise<{ enabled: boolean }> | null = null;
 
 export function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
-  configPromise ??= fetchAvatarConfig().catch(() => ({ enabled: false }));
+  configPromise ??= fetchAvatarConfig().catch(() => {
+    // A failed read is not the server's answer: forget it, so the next open
+    // of Settings asks again instead of hiding uploads for the whole tab.
+    configPromise = null;
+    return { enabled: false };
+  });
   return configPromise;
+}
+
+/**
+ * What an upload failure says, in the reader's language.
+ *
+ * The upload helpers (`lib/avatar-upload.ts`, `lib/banner-upload.ts`) throw
+ * English sentences of their own for the crop and the storage PUT. Those are
+ * replaced by the caller's localized `fallback`. An `ApiError` is kept, so the
+ * kit's `inlineErrorMessage` can tell a rate limit from any other failure.
+ */
+export function localizedUploadFailure(error: unknown, fallback: string): Error {
+  return error instanceof ApiError ? error : new Error(fallback);
 }
 
 interface AvatarPickerProps {
@@ -51,37 +78,75 @@ interface AvatarPickerProps {
    *
    * Unlike everything else in this control, an upload is **not** a draft: the
    * claim writes `users.avatar_url` before this fires, so there is nothing for
-   * a subsequent Save to apply and nothing a Cancel could take back. Omitting
-   * this prop hides the upload button entirely — a surface with no way to
-   * absorb the new user object has no business starting one.
+   * a later Save to apply and nothing Descartar could take back. Omitting this
+   * prop hides the upload button entirely: a surface with no way to absorb the
+   * new user object has no business starting one.
    */
   onUploaded?: (user: User) => void;
+  /**
+   * Enter in the link field. The caller decides what that means (Perfil saves).
+   */
+  onSubmit?: () => void;
   /** Labels, so the caller's language owns the copy rather than this file. */
   labels: {
     urlPlaceholder: string;
     urlLabel: string;
-    presetLabel: string;
-    clear: string;
+    /** Accessible name of the preset set. */
+    presets: string;
+    /** Accessible name of one preset, from its short name ("quadrado azul"). */
+    preset: (name: string) => string;
+    /** Short name of one preset, 1-based, as the drawing looks. */
+    presetName: (number: number) => string;
+    /** The line under the set once one is chosen, from that short name. */
+    presetSelected: (name: string) => string;
+    remove: string;
+    useLink: string;
     upload: string;
+    /** Under the row while an upload runs, in place of "Salvando…". */
     uploading: string;
+    uploadFailed: string;
   };
 }
 
+/**
+ * The avatar row of Perfil: the picture, then upload, remove and a pasted
+ * link, then the presets. Choosing a preset, removing or pasting a link stages
+ * a draft the unsaved bar saves; an upload applies at once and says so under
+ * the row.
+ */
 export function AvatarPicker({
   value,
   onChange,
   fallbackName,
   onUploaded,
+  onSubmit,
   labels,
 }: AvatarPickerProps) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLButtonElement>(null);
+  const linkButtonRef = useRef<HTMLButtonElement>(null);
+  const linkId = useId();
+  // What was typed in the link field, shown as typed even when it starts
+  // with "/" (which an upload's own path also does, and is never shown).
+  const [typedLink, setTypedLink] = useState("");
+  // Remover takes itself away: focus goes to the button beside it.
+  const refocusAfterRemove = useRef(false);
   const [canUpload, setCanUpload] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The pasted link is the rare path, so it starts folded away.
+  const [linkOpen, setLinkOpen] = useState(false);
+  const presetRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const upload = useInlineSave({ savingLabel: labels.uploading });
+  const uploading = upload.state.kind === "saving";
+  // A dropped folder is refused on the spot, before any upload starts.
+  const [dropError, setDropError] = useState<string | null>(null);
 
+  // Keyed on whether uploads are offered, not on the callback: callers pass a
+  // fresh arrow each render, and while the config read is failing (it is
+  // forgotten so the next open retries) every keystroke would ask again.
+  const uploadable = onUploaded !== undefined;
   useEffect(() => {
-    if (!onUploaded) {
+    if (!uploadable) {
       return;
     }
     let cancelled = false;
@@ -93,92 +158,122 @@ export function AvatarPicker({
     return () => {
       cancelled = true;
     };
-  }, [onUploaded]);
+  }, [uploadable]);
 
-  async function handleFile(file: File) {
-    setUploading(true);
-    setError(null);
-    try {
-      const user = await uploadAvatar(file);
+  useEffect(() => {
+    if (!refocusAfterRemove.current || value) return;
+    refocusAfterRemove.current = false;
+    (uploadRef.current ?? linkButtonRef.current)?.focus();
+  }, [value]);
+
+  function handleFile(file: File) {
+    if (uploading) return;
+    setDropError(null);
+    void upload.run(async () => {
+      let user: User;
+      try {
+        user = await uploadAvatar(file);
+      } catch (error) {
+        throw localizedUploadFailure(error, labels.uploadFailed);
+      }
       onChange(user.avatarUrl ?? "");
       onUploaded?.(user);
-    } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "That upload failed.",
-      );
-    } finally {
-      setUploading(false);
-    }
+    }, labels.uploadFailed);
   }
 
   /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
   function handleDrop(items: DroppedItems) {
     const { file, folder } = firstDroppedFile(items);
     if (file) {
-      void handleFile(file);
+      handleFile(file);
     } else if (folder) {
-      setError(t("composer.dropFolder_one", { name: folder }));
+      setDropError(t("composer.dropFolder_one", { name: folder }));
     }
+  }
+
+  // The field shows a link somebody typed, never one they did not: a preset
+  // is a link too, and so is an uploaded picture, but neither was typed here.
+  const customLink =
+    value && value === typedLink
+      ? value
+      : value && !AVATAR_PRESETS.includes(value) && !value.startsWith("/")
+        ? value
+        : "";
+  const presetIndex = AVATAR_PRESETS.indexOf(value);
+
+  /**
+   * Radio group keys: the arrows (and Home and End) move to the next preset
+   * and choose it, the way a native radio group does. One Tab stop for the set.
+   */
+  function handlePresetKey(event: KeyboardEvent<HTMLDivElement>) {
+    const last = AVATAR_PRESETS.length - 1;
+    const from = presetRefs.current.findIndex((el) => el === document.activeElement);
+    if (from < 0) {
+      return;
+    }
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        next = from === last ? 0 : from + 1;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = from === 0 ? last : from - 1;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = last;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    presetRefs.current[next]?.focus();
+    onChange(AVATAR_PRESETS[next]);
   }
 
   return (
     <FileDropZone
+      className="space-y-3"
       mode={canUpload && !uploading ? "accept" : "off"}
       onDrop={handleDrop}
       acceptLabel={t("chrome.dropImage")}
       size="field"
     >
-      <div className="mb-2 flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <UserAvatar
           name={fallbackName}
           avatarUrl={value || null}
-          className="h-12 w-12 ring-1 ring-ink-4"
-          fallbackClassName="bg-signal text-lg text-ink"
+          rounded="full"
+          className="mr-1 h-12 w-12"
+          fallbackClassName="bg-accent text-lg text-on-accent"
         />
-        <Input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={labels.urlPlaceholder}
-          aria-label={labels.urlLabel}
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {AVATAR_PRESETS.map((url) => (
-          <button
-            key={url}
-            type="button"
-            aria-label={labels.presetLabel}
-            aria-pressed={value === url}
-            className={`h-9 w-9 overflow-hidden rounded-md border ${
-              value === url
-                ? "border-signal ring-1 ring-signal"
-                : "border-ink-4 hover:border-signal/50"
-            }`}
-            onClick={() => onChange(url)}
-          >
-            <img src={url} alt="" className="h-full w-full object-cover" />
-          </button>
-        ))}
-        <button
-          type="button"
-          className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
-          onClick={() => onChange("")}
-        >
-          {labels.clear}
-        </button>
-        {canUpload && (
+        {canUpload ? (
           <>
-            <button
+            {/* Busy, not disabled, while the upload runs: a disabled button
+                drops keyboard focus on the page. */}
+            <Button
+              ref={uploadRef}
               type="button"
-              disabled={uploading}
-              className="rounded-md border border-ink-4 px-2 py-1 text-xs text-paper hover:border-signal/50 disabled:opacity-60"
-              onClick={() => fileRef.current?.click()}
+              variant="secondary"
+              size="sm"
+              aria-disabled={uploading || undefined}
+              className={cn("max-sm:h-11", uploading && SETTINGS_BUSY)}
+              onClick={() => {
+                if (!uploading) fileRef.current?.click();
+              }}
             >
-              {uploading ? labels.uploading : labels.upload}
-            </button>
+              <Upload aria-hidden className="h-3.5 w-3.5" />
+              {labels.upload}
+            </Button>
             <input
               ref={fileRef}
               type="file"
+              tabIndex={-1}
+              aria-hidden
               // A hint to the picker, never a check: the real gate is that
               // `createImageBitmap` refuses to decode anything that is not an
               // image, and after the crop what is uploaded is a JPEG this
@@ -191,18 +286,115 @@ export function AvatarPicker({
                 // after a failure still fires a change event.
                 event.target.value = "";
                 if (file) {
-                  void handleFile(file);
+                  handleFile(file);
                 }
               }}
             />
           </>
-        )}
+        ) : null}
+        {value ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="max-sm:h-11"
+            onClick={() => {
+              refocusAfterRemove.current = true;
+              onChange("");
+            }}
+          >
+            {labels.remove}
+          </Button>
+        ) : null}
+        <Button
+          ref={linkButtonRef}
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="max-sm:h-11"
+          aria-expanded={linkOpen}
+          aria-controls={linkOpen ? linkId : undefined}
+          onClick={() => setLinkOpen((open) => !open)}
+        >
+          <Link2 aria-hidden className="h-3.5 w-3.5" />
+          {labels.useLink}
+        </Button>
       </div>
-      {error && (
-        <p role="alert" className="mt-2 text-xs text-danger">
-          {error}
+
+      {linkOpen ? (
+        <div>
+          <label
+            htmlFor={linkId}
+            className="mb-1.5 block text-xs font-medium text-text-secondary"
+          >
+            {labels.urlLabel}
+          </label>
+          <Input
+            id={linkId}
+            value={customLink}
+            onChange={(event) => {
+              setTypedLink(event.target.value);
+              onChange(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                onSubmit?.();
+              }
+            }}
+            placeholder={labels.urlPlaceholder}
+            className="max-sm:h-11"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+        </div>
+      ) : null}
+
+      <div
+        role="radiogroup"
+        aria-label={labels.presets}
+        onKeyDown={handlePresetKey}
+        className="flex flex-wrap gap-2 p-1 max-sm:grid max-sm:w-fit max-sm:grid-cols-4 max-sm:gap-3"
+      >
+        {AVATAR_PRESETS.map((url, index) => {
+          const selected = value === url;
+          return (
+            <button
+              key={url}
+              ref={(el) => {
+                presetRefs.current[index] = el;
+              }}
+              type="button"
+              role="radio"
+              aria-label={labels.preset(labels.presetName(index + 1))}
+              aria-checked={selected}
+              // One Tab stop for the set: the chosen one, or the first.
+              tabIndex={index === (presetIndex >= 0 ? presetIndex : 0) ? 0 : -1}
+              className={cn(
+                "h-9 w-9 overflow-hidden rounded-[var(--radius-card)] border max-sm:h-11 max-sm:w-11",
+                SETTINGS_TRANSITION,
+                SETTINGS_FOCUS,
+                selected
+                  ? "border-accent ring-2 ring-accent ring-offset-2 ring-offset-ring-offset"
+                  : "border-border hover:border-border-strong",
+              )}
+              onClick={() => onChange(url)}
+            >
+              <img src={url} alt="" className="h-full w-full object-cover" />
+            </button>
+          );
+        })}
+      </div>
+
+      {presetIndex >= 0 ? (
+        <p className="text-xs text-text-tertiary">
+          {labels.presetSelected(labels.presetName(presetIndex + 1))}
         </p>
-      )}
+      ) : null}
+
+      <SettingsInlineStatus
+        state={dropError ? { kind: "error", message: dropError } : upload.state}
+      />
     </FileDropZone>
   );
 }

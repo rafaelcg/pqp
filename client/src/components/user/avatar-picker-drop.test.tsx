@@ -38,10 +38,15 @@ let host: HTMLElement | null = null;
 const labels = {
   urlPlaceholder: "https://",
   urlLabel: "Avatar URL",
-  presetLabel: "Preset",
-  clear: "Clear",
+  presets: "Presets",
+  preset: (name: string) => `Preset, ${name}`,
+  presetName: (number: number) => `p${number}`,
+  presetSelected: (name: string) => `Chosen: ${name}`,
+  remove: "Remove",
+  useLink: "Use a link",
   upload: "Upload",
   uploading: "Uploading",
+  uploadFailed: "Upload failed",
 };
 
 async function mount() {

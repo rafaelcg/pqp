@@ -13,8 +13,19 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-const FOCUSABLE =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// A roving group (radios, tabs) parks its other members at `tabindex="-1"`:
+// they are focusable by script but not Tab stops, so they are not the trap's
+// first or last stop either.
+const FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "textarea:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "[tabindex]",
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(", ");
 
 interface ViewportBox {
   left: number;
@@ -144,6 +155,11 @@ interface DialogProps {
    * the body animates. Omitted, the header never animates.
    */
   headerKey?: string;
+  /**
+   * Classes for the title band, merged over its default padding. Settings uses
+   * it for a 56px band; every other dialog leaves it alone.
+   */
+  headerClassName?: string;
 }
 
 /**
@@ -165,10 +181,23 @@ export function Dialog({
   dismissible = true,
   entrance = true,
   headerKey,
+  headerClassName,
 }: DialogProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // The opener is read while rendering the open dialog, before any child
+  // mounts: a child with `autoFocus` (ConfirmDialog's buttons) takes focus
+  // during commit, and read in the effect the "opener" was that child, gone
+  // on close, so focus fell to the page.
+  const openedRef = useRef(false);
+  if (open && !openedRef.current) {
+    openedRef.current = true;
+    previouslyFocused.current =
+      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+  } else if (!open) {
+    openedRef.current = false;
+  }
   const titleId = useId();
   const descriptionId = useId();
 
@@ -199,7 +228,9 @@ export function Dialog({
       return;
     }
 
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    if (previouslyFocused.current && panelRef.current?.contains(previouslyFocused.current)) {
+      previouslyFocused.current = null;
+    }
 
     // Move focus in without stealing it from an element that autofocused.
     const timer = window.setTimeout(() => {
@@ -261,7 +292,13 @@ export function Dialog({
       if (event.shiftKey && (active === first || !panelRef.current?.contains(active))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && active === last) {
+      } else if (
+        !event.shiftKey &&
+        (active === last || !panelRef.current?.contains(active))
+      ) {
+        // Also when focus fell out of the panel (a focused button that
+        // unmounted leaves it on <body>): Tab must not walk into the app
+        // behind the dialog.
         event.preventDefault();
         first.focus();
       }
@@ -335,7 +372,15 @@ export function Dialog({
         className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-4"
         style={layerStyle}
         onMouseDown={(event) => {
-          if (dismissible && closeOnBackdrop && event.target === event.currentTarget) {
+          if (event.target !== event.currentTarget) {
+            return;
+          }
+          // A press on the backdrop never moves focus to the page: after a
+          // close that handed it back to the opener, and on a dialog the
+          // backdrop does not close, where it would leave the dialog open with
+          // focus outside it.
+          event.preventDefault();
+          if (dismissible && closeOnBackdrop) {
             onClose();
           }
         }}
@@ -357,7 +402,12 @@ export function Dialog({
             width,
           )}
         >
-          <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div
+            className={cn(
+              "flex items-start justify-between gap-3 border-b border-border px-5 py-4",
+              headerClassName,
+            )}
+          >
             <div
               key={headerKey}
               className={cn("min-w-0", headerKey !== undefined && "animate-step-in")}
@@ -392,7 +442,9 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text"
+                // 28px drawn, 44px to a finger on a phone: the hit area grows,
+                // the icon does not.
+                className="relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']"
                 onClick={onClose}
               >
                 <X className="h-4 w-4" />
@@ -403,7 +455,10 @@ export function Dialog({
           <div
             className={cn(
               "min-h-0 flex-1 overscroll-contain",
-              fill ? "overflow-hidden" : "overflow-y-auto",
+              // `clip`, not `hidden`: a hidden box can still be scrolled from
+              // code, and focusing a control mid-animation (the settings save
+              // bar) scrolled the whole body away with no way back.
+              fill ? "overflow-clip" : "overflow-y-auto",
             )}
           >
             {children}

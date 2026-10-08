@@ -422,7 +422,7 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -2387,6 +2387,8 @@ function MainAppContent({
 
   const resolveTokenRef = useRef(resolveToken);
   resolveTokenRef.current = resolveToken;
+  // Stable, because the connection check restarts when its token getter changes.
+  const doctorGetToken = useCallback(() => resolveTokenRef.current(), []);
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
   /**
@@ -4393,6 +4395,7 @@ function MainAppContent({
         // them. Nothing is sent back: a tab that has been open for hours would
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
+        bindPreferenceSyncAccount(me.id);
         if (me.preferences?.appearance) {
           adoptAppearancePreference(me.preferences.appearance);
         }
@@ -8344,6 +8347,41 @@ function MainAppContent({
     [loadBlocks],
   );
 
+  /**
+   * Settings' block (the block-by-name form in Privacidade). The block request
+   * throws back so the row can say it failed; once the server agreed, the same
+   * refreshes as `handleBlockUser` run, so the DM list, unread counts, hidden
+   * messages and the friends list (a block ends a friendship) catch up now
+   * rather than on the next reload. A failed refresh is not a failed block.
+   */
+  const handleSettingsBlock = useCallback(
+    async (userId: string) => {
+      await blockUser(userId);
+      await Promise.allSettled([
+        loadBlocks(),
+        loadConversations({ trustSnapshot: true }),
+        friendsRef.current.refresh(),
+      ]);
+    },
+    [loadBlocks, loadConversations],
+  );
+
+  /**
+   * Settings' unblock. Unlike `handleUnblockUser`, a failure is thrown back so
+   * the Privacidade row can say it (the app's banner sits behind the dialog).
+   * Only the unblock request can fail it: the row is dropped locally once the
+   * server agreed, and the list refresh after it settles on its own, so a
+   * failed refresh never reads as a failed unblock or invites a retry.
+   */
+  const handleSettingsUnblock = useCallback(
+    async (userId: string) => {
+      await unblockUser(userId);
+      setBlockedUsers((current) => current.filter((one) => one.id !== userId));
+      void loadBlocks().catch(() => undefined);
+    },
+    [loadBlocks],
+  );
+
   const handleHideConversation = useCallback(
     async (channelId: string) => {
       try {
@@ -10813,7 +10851,7 @@ function MainAppContent({
         open={doctorOpen}
         onClose={() => setDoctorOpen(false)}
         transport={transport}
-        getToken={() => resolveTokenRef.current()}
+        getToken={doctorGetToken}
         onSignInAgain={signInAgain}
         appVersion="web"
       />
@@ -11553,7 +11591,8 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onUnblockUser={handleSettingsUnblock}
+        onBlockUser={handleSettingsBlock}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
@@ -12091,6 +12130,7 @@ function MainAppContent({
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
+        pushToTalkOn={localSettings.inputMode === "push-to-talk"}
         onClose={() => setShortcutOverlayOpen(false)}
       />
 
