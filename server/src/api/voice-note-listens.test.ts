@@ -386,6 +386,18 @@ describeDb("voice note listens", () => {
       expect(await voiceOf(bob, groupChannelId, messageId)).not.toHaveProperty("listenedBy");
     });
 
+    it("a listener who has since left the conversation is no longer listed", async () => {
+      const { attachmentId, messageId } = await sendNote(groupChannelId);
+      await listen(carol, attachmentId);
+      await listen(bob, attachmentId);
+      await getPool().query(
+        `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+        [groupChannelId, carol.id],
+      );
+      const authors = await voiceOf(alice, groupChannelId, messageId);
+      expect(authors.listenedBy!.map((entry) => entry.userId)).toEqual([bob.id]);
+    });
+
     it("a conversation of eleven or more shows no receipts at all", async () => {
       const { attachmentId, messageId } = await sendNote(groupChannelId);
       for (let i = 0; i < 8; i += 1) {

@@ -89,6 +89,18 @@ export async function recordListen(
     return { frame: null, addressees: [] };
   }
 
+  // Decided BEFORE the insert, not after: the lookup can fail, and a failure
+  // after the row committed would leave a retry hitting the conflict, which
+  // sends nothing, so the first-play frame would be lost for good. Asked first,
+  // a failure leaves the whole call retryable.
+  const addressees = [listenerId];
+  if (
+    receiptsShown(target) &&
+    !(await blockedBetween(listenerId, target.author_id))
+  ) {
+    addressees.push(target.author_id);
+  }
+
   const inserted = await getPool().query<{ listened_at: Date }>(
     `INSERT INTO voice_note_listens (attachment_id, user_id)
      VALUES ($1, $2)
@@ -101,13 +113,6 @@ export async function recordListen(
     return { frame: null, addressees: [] };
   }
 
-  const addressees = [listenerId];
-  if (
-    receiptsShown(target) &&
-    !(await blockedBetween(listenerId, target.author_id))
-  ) {
-    addressees.push(target.author_id);
-  }
   return {
     frame: {
       type: "voice-note-listened",
@@ -208,10 +213,17 @@ export async function overlayListens(
       user_id: string;
       listened_at: Date;
     }>(
-      `SELECT attachment_id, user_id, listened_at FROM voice_note_listens l
-       WHERE attachment_id = ANY($1::uuid[])
+      // Joined to the CURRENT members: somebody who left (or was replaced) is
+      // not a receipt, and it bounds the rows per note to the room size
+      // however many people have ever listened.
+      `SELECT l.attachment_id, l.user_id, l.listened_at
+       FROM voice_note_listens l
+       JOIN message_attachments a ON a.id = l.attachment_id
+       JOIN channel_members cm
+         ON cm.channel_id = a.channel_id AND cm.user_id = l.user_id
+       WHERE l.attachment_id = ANY($1::uuid[])
          AND ${noBlockBetweenSql("l.user_id", "$2::uuid")}
-       ORDER BY listened_at ASC, user_id ASC`,
+       ORDER BY l.listened_at ASC, l.user_id ASC`,
       [withReceipts, viewerId],
     );
     for (const play of plays.rows) {
