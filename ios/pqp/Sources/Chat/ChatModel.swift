@@ -377,8 +377,10 @@ final class ChatModel {
                 try? await Task.sleep(for: .seconds(600))
                 // Not if it came back as a failed note in the meantime: that
                 // one is waiting for a retry.
-                guard let self, !self.failedVoiceNotes.contains(held),
-                      !self.inFlightVoice.values.contains(held) else { return }
+                // A released model has nothing left to retry from: delete.
+                if let self, self.failedVoiceNotes.contains(held) || self.inFlightVoice.values.contains(held) {
+                    return
+                }
                 Self.removeFile(held.note.fileURL)
             }
         } catch {
