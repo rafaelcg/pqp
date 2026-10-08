@@ -293,6 +293,165 @@ final class VoiceNotePlaybackSourceTests: XCTestCase {
     }
 }
 
+// MARK: - Listening
+
+final class VoiceListenMeterTests: XCTestCase {
+    /// Ten ticks of 0.1 s of playback from `start`.
+    private func play(_ meter: inout VoiceListenMeter, from start: Double, ticks: Int, step: Double = 0.1) {
+        for index in 0...ticks {
+            meter.tick(playhead: start + Double(index) * step, playing: true)
+        }
+    }
+
+    func testPlayingForASecondIsListening() {
+        var meter = VoiceListenMeter()
+        play(&meter, from: 0, ticks: 5)
+        XCTAssertFalse(meter.hasListened(durationSeconds: 30, finished: false), "half a second is a thumb")
+        play(&meter, from: 0.5, ticks: 6)
+        XCTAssertTrue(meter.hasListened(durationSeconds: 30, finished: false))
+    }
+
+    func testSeekingPastOneSecondIsNotListening() {
+        var meter = VoiceListenMeter()
+        meter.tick(playhead: 0, playing: true)
+        // Drag to 0:40: the next tick lands far away.
+        meter.seeked()
+        meter.tick(playhead: 40, playing: true)
+        meter.tick(playhead: 40.1, playing: true)
+        XCTAssertLessThan(meter.playedSeconds, 0.2)
+        XCTAssertFalse(meter.hasListened(durationSeconds: 60, finished: false))
+        // Even without the explicit `seeked` call a jump is not a step.
+        var other = VoiceListenMeter()
+        other.tick(playhead: 0, playing: true)
+        other.tick(playhead: 40, playing: true)
+        XCTAssertEqual(other.playedSeconds, 0)
+    }
+
+    func testAPausedOrStalledPlayheadEarnsNothing() {
+        var meter = VoiceListenMeter()
+        for _ in 0..<50 { meter.tick(playhead: 3, playing: true) }
+        for index in 0..<50 { meter.tick(playhead: 3 + Double(index) * 0.1, playing: false) }
+        XCTAssertEqual(meter.playedSeconds, 0)
+    }
+
+    func testDoubleSpeedStillCounts() {
+        var meter = VoiceListenMeter()
+        play(&meter, from: 0, ticks: 6, step: 0.2)
+        XCTAssertTrue(meter.hasListened(durationSeconds: 30, finished: false))
+    }
+
+    func testAShortNoteCountsWhenMostOfItPlaysAndItEnds() {
+        var meter = VoiceListenMeter()
+        play(&meter, from: 0, ticks: 8)
+        XCTAssertFalse(meter.hasListened(durationSeconds: 0.9, finished: false), "not before it ends")
+        XCTAssertTrue(meter.hasListened(durationSeconds: 0.9, finished: true))
+    }
+
+    func testSeekingStraightToTheEndOfALongNoteDoesNotCount() {
+        var meter = VoiceListenMeter()
+        meter.tick(playhead: 0, playing: true)
+        meter.seeked()
+        meter.tick(playhead: 59.9, playing: true)
+        XCTAssertFalse(meter.hasListened(durationSeconds: 60, finished: true))
+    }
+
+    func testResetStartsAgain() {
+        var meter = VoiceListenMeter()
+        play(&meter, from: 0, ticks: 12)
+        meter.reset()
+        XCTAssertEqual(meter.playedSeconds, 0)
+    }
+}
+
+// MARK: - A note that did not go
+
+@MainActor
+final class VoiceNoteRetentionTests: XCTestCase {
+    private func heldNote() throws -> (HeldVoiceNote, URL) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("retain-\(UUID().uuidString).m4a")
+        try Data([0, 1, 2, 3]).write(to: url)
+        let recorded = RecordedVoiceNote(fileURL: url, durationMs: 4_000, waveform: "", byteSize: 4)
+        return (HeldVoiceNote(note: recorded, replyId: "reply-1"), url)
+    }
+
+    private func pendingRow(nonce: String) throws -> Message {
+        let author = try Coding.decoder.decode(
+            CurrentUser.self,
+            from: Data(#"{"id":"a","clerkId":"ck","displayName":"Ana"}"#.utf8)
+        )
+        var row = Message(pendingBody: "", channelId: "c", author: author)
+        row.pendingNonce = nonce
+        return row
+    }
+
+    /// The server refusing the message (a slow-mode window, a flag flipped off
+    /// between mint and claim) must not cost the recording.
+    func testARefusedNoteIsHandedBackForARetryWithItsFile() throws {
+        let model = ChatModel()
+        let (held, url) = try heldNote()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let row = try pendingRow(nonce: "n1")
+        model.stage(channelId: "c", messages: [row])
+        model.stageInFlightVoice(rowId: row.id, held: held)
+
+        model.apply(.messageRejected(MessageRejection(
+            channelId: "c", nonce: "n1", reason: "slow-mode", retryAfterMs: nil
+        )))
+
+        XCTAssertTrue(model.messages.isEmpty, "the optimistic row comes down")
+        XCTAssertEqual(model.failedVoiceNote, held, "and the recording is kept")
+        XCTAssertEqual(model.failedVoiceNote?.replyId, "reply-1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        // Only an explicit discard deletes it.
+        model.discardFailedVoiceNote()
+        XCTAssertNil(model.failedVoiceNote)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testATimeoutNoticeAlsoHandsBackTheRecording() throws {
+        let model = ChatModel()
+        let (held, url) = try heldNote()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let row = try pendingRow(nonce: "n2")
+        model.stage(channelId: "c", messages: [row])
+        model.stageInFlightVoice(rowId: row.id, held: held)
+
+        model.apply(.sanctionNotice(SanctionNotice(
+            sanction: "timeout", serverId: "s", channelId: "c",
+            expiresAt: Date().addingTimeInterval(60), reason: nil, message: "timed out"
+        )))
+
+        XCTAssertEqual(model.failedVoiceNote, held)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testARefusalForARowWithNoRecordingInventsNothing() throws {
+        let model = ChatModel()
+        let row = try pendingRow(nonce: "n3")
+        model.stage(channelId: "c", messages: [row])
+        model.apply(.messageRejected(MessageRejection(
+            channelId: "c", nonce: "n3", reason: "slow-mode", retryAfterMs: nil
+        )))
+        XCTAssertNil(model.failedVoiceNote)
+    }
+
+    func testLeavingTheScreenLeavesNoFileBehind() throws {
+        let model = ChatModel()
+        let (held, url) = try heldNote()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let row = try pendingRow(nonce: "n4")
+        model.stage(channelId: "c", messages: [row])
+        model.stageInFlightVoice(rowId: row.id, held: held)
+        model.apply(.messageRejected(MessageRejection(
+            channelId: "c", nonce: "n4", reason: "slow-mode", retryAfterMs: nil
+        )))
+        model.close()
+        XCTAssertNil(model.failedVoiceNote)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+}
+
 // MARK: - The queue
 
 final class VoiceNoteQueueTests: XCTestCase {

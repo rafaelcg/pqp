@@ -56,6 +56,43 @@ enum VoiceNoteQueue {
     }
 }
 
+/// How much of a note was actually listened to, which is not where the playhead
+/// is. Dragging the waveform to 0:40 is not forty seconds of listening, and a
+/// stalled player is not listening either: only small forward steps count.
+struct VoiceListenMeter: Equatable, Sendable {
+    /// A note counts as listened to once it has played this long.
+    static let thresholdSeconds: Double = 1
+    /// A step bigger than this between two ticks is a seek, not playback. Ticks
+    /// come every 0.1 s, so even 2x playback steps 0.2 s.
+    static let maxStepSeconds: Double = 0.6
+
+    private(set) var playedSeconds: Double = 0
+    private var last: Double?
+
+    mutating func tick(playhead: Double, playing: Bool) {
+        if playing, let last {
+            let step = playhead - last
+            if step > 0, step < Self.maxStepSeconds { playedSeconds += step }
+        }
+        last = playhead
+    }
+
+    /// The playhead jumped; measure the next step from wherever it landed.
+    mutating func seeked() { last = nil }
+
+    mutating func reset() {
+        playedSeconds = 0
+        last = nil
+    }
+
+    /// Past the threshold, or, for a note shorter than it, most of the note.
+    /// `finished` is whether the note has just ended.
+    func hasListened(durationSeconds: Double, finished: Bool) -> Bool {
+        if playedSeconds >= Self.thresholdSeconds { return true }
+        return finished && playedSeconds >= durationSeconds * 0.8
+    }
+}
+
 /// The one voice-note player in the app.
 ///
 /// ONE, app-wide, because two voices at once is noise and because it is what
@@ -86,8 +123,6 @@ final class VoiceNotePlayer {
 
     static let rates: [Float] = [1, 1.5, 2]
     private static let rateKey = "pqp.voiceNoteRate"
-    /// A note counts as listened to once it has played this long.
-    static let listenThresholdSeconds: Double = 1
 
     @ObservationIgnored private weak var session: SessionStore?
     @ObservationIgnored private var player: AVPlayer?
@@ -97,7 +132,13 @@ final class VoiceNotePlayer {
     @ObservationIgnored nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var current: VoicePlayable?
     @ObservationIgnored private var next: (@MainActor (VoicePlayable) -> VoicePlayable?)?
+    @ObservationIgnored private var refresh: (@MainActor () -> Void)?
     @ObservationIgnored private var reported: Set<String> = []
+    /// Receipts whose POST failed. Not retried on a timer (the playhead callback
+    /// fires ten times a second); retried the next time the person plays the
+    /// note.
+    @ObservationIgnored private var failedListens: Set<String> = []
+    @ObservationIgnored private var meter = VoiceListenMeter()
     @ObservationIgnored private var refetched: Set<String> = []
     @ObservationIgnored private var weChangedTheSession = false
 
@@ -136,12 +177,14 @@ final class VoiceNotePlayer {
     /// supplies it because only it knows the order.
     func toggle(
         _ note: VoicePlayable,
-        next: (@MainActor (VoicePlayable) -> VoicePlayable?)? = nil
+        next: (@MainActor (VoicePlayable) -> VoicePlayable?)? = nil,
+        refresh: (@MainActor () -> Void)? = nil
     ) {
         if currentId == note.attachmentId, player != nil {
             isPlaying ? pause() : resume()
             return
         }
+        self.refresh = refresh
         start(note, next: next)
     }
 
@@ -193,6 +236,8 @@ final class VoiceNotePlayer {
                     toleranceBefore: .zero, toleranceAfter: .zero)
         progress = max(0, min(1, fraction))
         elapsedMs = Int(seconds * 1000)
+        // A jump is not listening: the next tick measures from the new spot.
+        meter.seeked()
     }
 
     // MARK: - Starting
@@ -209,6 +254,10 @@ final class VoiceNotePlayer {
         progress = 0
         elapsedMs = 0
         isPlaying = false
+        meter.reset()
+        if failedListens.remove(note.attachmentId) != nil {
+            reported.remove(note.attachmentId)
+        }
 
         guard case .play(let url) = note.source else {
             // Nothing AVPlayer can play yet (an Opus note whose AAC copy has not
@@ -280,6 +329,10 @@ final class VoiceNotePlayer {
               let url = URL(string: fresh),
               currentId == note.attachmentId
         else {
+            // The message may carry fresher signatures (an expired AAC copy has
+            // no URL endpoint of its own), so read it again; the next tap plays
+            // from the new data.
+            refresh?()
             fail(note)
             return
         }
@@ -305,7 +358,8 @@ final class VoiceNotePlayer {
         elapsedMs = Int(seconds * 1000)
         progress = total > 0 ? min(1, max(0, seconds / total)) : 0
         isLoading = false
-        if seconds >= Self.listenThresholdSeconds { reportListen(note) }
+        meter.tick(playhead: seconds, playing: isPlaying)
+        if meter.hasListened(durationSeconds: total, finished: false) { reportListen(note) }
     }
 
     private func reportListen(_ note: VoicePlayable) {
@@ -322,9 +376,11 @@ final class VoiceNotePlayer {
             do {
                 let _: EmptyResponse = try await session.api.post("/api/attachments/\(note.attachmentId)/listened")
             } catch {
-                // Not heard as far as the server knows: let the next play try
-                // again. The dot stays gone locally; it is a receipt, not data.
-                self?.reported.remove(note.attachmentId)
+                // Not heard as far as the server knows. Suppressed for the rest
+                // of this play (see `failedListens`), and the dot comes back so
+                // the screen does not claim a receipt that was never recorded.
+                self?.failedListens.insert(note.attachmentId)
+                self?.heardIds.remove(note.attachmentId)
             }
         }
     }
@@ -333,8 +389,11 @@ final class VoiceNotePlayer {
 
     private func finished(_ note: VoicePlayable) {
         guard currentId == note.attachmentId else { return }
-        // A very short note can end before the 0.1 s observer ever saw a second.
-        if Double(note.durationMs) / 1000 >= Self.listenThresholdSeconds { reportListen(note) }
+        // A note shorter than the threshold ends before it can reach it. Playing
+        // most of it counts; a seek straight to the end does not.
+        if meter.hasListened(durationSeconds: Double(note.durationMs) / 1000, finished: true) {
+            reportListen(note)
+        }
         let following = next?(note)
         let chain = next
         tearDown()

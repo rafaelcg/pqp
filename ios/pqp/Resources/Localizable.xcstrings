@@ -7740,6 +7740,26 @@
           }
         }
       }
+    },
+    "Could not send the voice message (%@)." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra enviar o áudio (%@)."
+          }
+        }
+      }
+    },
+    "Discard" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

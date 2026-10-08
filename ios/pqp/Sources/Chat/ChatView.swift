@@ -47,6 +47,10 @@ struct ChatView: View {
     /// was gated on nothing, so a plain member tapped Pin and got a 403.
     var server: Server? = nil
 
+    /// The server whose feature flags apply, for a screen that has no `server`
+    /// of its own (a thread). `server` wins when both are there.
+    var flagsServerId: String? = nil
+
     /// Text to open the composer with. Set on exactly one path — the depoimento
     /// composer's DM fork — so somebody who decides mid-sentence that what they
     /// wrote is private does not have to type it twice.
@@ -379,7 +383,7 @@ struct ChatView: View {
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
-        .threadDestination($openedThread)
+        .threadDestination($openedThread, serverId: server?.id)
         // Opening a DM from a profile pushes the conversation onto this stack.
         // Wrapped in its own type rather than pushing `DmSummary` directly:
         // other screens in the same stack already declare a destination for
@@ -440,7 +444,7 @@ struct ChatView: View {
                 session: session,
                 slowmodeSeconds: slowmodeSeconds,
                 bypassesSlowMode: isManager,
-                serverId: server?.id
+                serverId: server?.id ?? flagsServerId
             )
         }
         // After `open`, which resets the model — seeding before it would be
@@ -456,7 +460,6 @@ struct ChatView: View {
             recorder.abandon()
         }
         .task {
-            notePlayer.configure(session: session)
             recorder.onNote = { note in Task { await model.sendVoiceNote(note) } }
         }
         // A hold the system took away, or a lock left open behind the lock
@@ -501,6 +504,13 @@ struct ChatView: View {
 
     @ViewBuilder
     private var voiceNoteNotices: some View {
+        if let held = model.failedVoiceNote {
+            VoiceSendFailedBanner(
+                held: held,
+                onRetry: { Task { await model.retryFailedVoiceNote() } },
+                onDiscard: { withAnimation(Motion.standard) { model.discardFailedVoiceNote() } }
+            )
+        }
         if let note = recorder.undoable {
             VoiceUndoBanner(note: note) {
                 withAnimation(Motion.standard) { recorder.undoDiscard() }

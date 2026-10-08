@@ -119,7 +119,7 @@ struct VoiceNoteCard: View {
             if isPending {
                 context.refresh()
             } else if let playable {
-                player.toggle(playable, next: { context.next($0) })
+                player.toggle(playable, next: { context.next($0) }, refresh: { context.refresh() })
             }
         } label: {
             ZStack {

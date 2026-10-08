@@ -97,6 +97,7 @@ struct RootView: View {
     @Environment(CallModel.self) private var call
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
+    @Environment(VoiceNotePlayer.self) private var notePlayer
     @Environment(\.scenePhase) private var scenePhase
 
     let push: PushDelegate
@@ -256,6 +257,10 @@ struct RootView: View {
         .task { await session.restore() }
         .task { call.attach(session: session, ratings: ratings, callKit: callKit) }
         .task { voice.attachCallKit(callKit) }
+        // The player reports listens and refreshes expired links through the
+        // session, so it is wired where the session is, not by whichever chat
+        // screen happens to open first.
+        .task { notePlayer.configure(session: session) }
         #if DEBUG
         // Only ever fires under a launch argument. See
         // `CallRatingModel.offerSyntheticCallIfRequested`.

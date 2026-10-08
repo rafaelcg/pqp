@@ -49,6 +49,13 @@ final class ChatModel {
     /// every time the conversation opens, because an operator flips the flag
     /// with no deploy.
     private(set) var voiceNotesEnabled = false
+    /// A recording that did not make it (the upload failed, or the server
+    /// refused the message). Kept, file and all, until the person retries or
+    /// discards it: five minutes of talking is not something to delete on a
+    /// transient network error.
+    private(set) var failedVoiceNote: HeldVoiceNote?
+    /// Notes drawn optimistically and not yet confirmed, by the row's id.
+    @ObservationIgnored private var inFlightVoice: [String: HeldVoiceNote] = [:]
     private(set) var gifsEnabled = false
     private var uploader: AttachmentUploader?
 
@@ -225,6 +232,8 @@ final class ChatModel {
         }
         typingSweeper?.cancel()
         typingSweeper = nil
+        // Leaving the screen is leaving the retry: the file is not kept behind it.
+        discardFailedVoiceNote()
     }
 
     func loadEarlier() async {
@@ -271,12 +280,32 @@ final class ChatModel {
     /// a dead button. It plays from the local file until the broadcast replaces
     /// it. The message has an empty body: the server refuses text beside a note.
     func sendVoiceNote(_ note: RecordedVoiceNote) async {
-        guard let session, let channelId, let user = session.currentUser, let uploader else {
-            try? FileManager.default.removeItem(at: note.fileURL)
-            return
-        }
         let replyId = replyingTo?.id
         replyingTo = nil
+        await deliver(HeldVoiceNote(note: note, replyId: replyId))
+    }
+
+    /// "Tentar de novo" on a note that did not go.
+    func retryFailedVoiceNote() async {
+        guard let held = failedVoiceNote else { return }
+        await deliver(held)
+    }
+
+    func discardFailedVoiceNote() {
+        if let held = failedVoiceNote { Self.removeFile(held.note.fileURL) }
+        failedVoiceNote = nil
+    }
+
+    private func deliver(_ held: HeldVoiceNote) async {
+        let note = held.note
+        guard let session, let channelId, let user = session.currentUser, let uploader else {
+            Self.removeFile(note.fileURL)
+            return
+        }
+        // A new note replaces an older failed one; the same note retried clears
+        // its own banner while it is in flight.
+        if let old = failedVoiceNote, old != held { Self.removeFile(old.note.fileURL) }
+        failedVoiceNote = nil
 
         var pending = Message(pendingBody: "", channelId: channelId, author: user)
         pending.attachments = [Attachment(
@@ -289,6 +318,7 @@ final class ChatModel {
         )]
         let rowId = pending.id
         messages.append(pending)
+        inFlightVoice[rowId] = held
         isNearBottom = true
 
         do {
@@ -305,7 +335,7 @@ final class ChatModel {
                 channelId: channelId
             )
             let nonce = await session.realtime.sendMessage(
-                channelId: channelId, body: "", replyToId: replyId, attachmentIds: [attachmentId]
+                channelId: channelId, body: "", replyToId: held.replyId, attachmentIds: [attachmentId]
             )
             if let index = messages.firstIndex(where: { $0.id == rowId }) {
                 messages[index].pendingNonce = nonce
@@ -313,18 +343,33 @@ final class ChatModel {
             if slowmodeSeconds > 0 {
                 holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
             }
-            // Kept a minute: the row plays from this file until the broadcast
-            // swaps it for the stored copy.
-            let url = note.fileURL
-            Task.detached {
-                try? await Task.sleep(for: .seconds(60))
-                try? FileManager.default.removeItem(at: url)
-            }
+            // The file stays until the broadcast confirms the message (see
+            // `apply`), so a refusal can still hand the recording back.
         } catch {
             messages.removeAll { $0.id == rowId }
+            inFlightVoice[rowId] = nil
+            failedVoiceNote = held
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-            try? FileManager.default.removeItem(at: note.fileURL)
         }
+    }
+
+    /// The server confirmed (or refused) the row `rowId`. A confirmed note's
+    /// local file is no longer needed, a little later: the row may be playing it.
+    private func settleVoiceRow(_ rowId: String, delivered: Bool) {
+        guard let held = inFlightVoice.removeValue(forKey: rowId) else { return }
+        if delivered {
+            let url = held.note.fileURL
+            Task.detached {
+                try? await Task.sleep(for: .seconds(30))
+                try? FileManager.default.removeItem(at: url)
+            }
+        } else {
+            failedVoiceNote = held
+        }
+    }
+
+    private static func removeFile(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// The next note to play after `finished`: someone else's, unheard, playable
@@ -461,6 +506,11 @@ final class ChatModel {
         self.channelId = channelId
         self.messages = messages
         self.draft = draft
+    }
+
+    /// Test seam: a voice note that is "on its way", as `deliver` records it.
+    func stageInFlightVoice(rowId: String, held: HeldVoiceNote) {
+        inFlightVoice[rowId] = held
     }
 
     // MARK: - Message actions
@@ -621,6 +671,7 @@ final class ChatModel {
             // dropped instead of overwritten — otherwise the swap would put two
             // rows with the same id in the list.
             if let nonce, let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) {
+                settleVoiceRow(messages[index].id, delivered: true)
                 if messages.contains(where: { $0.id == message.id }) {
                     messages.remove(at: index)
                 } else {
@@ -689,6 +740,8 @@ final class ChatModel {
             guard let nonce = rejection.nonce,
                   let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) else { return }
             let body = messages[index].body
+            // A refused voice note is handed back for a retry, not dropped.
+            settleVoiceRow(messages[index].id, delivered: false)
             messages.remove(at: index)
             // Back into the composer, so nothing typed is lost. Ahead of
             // whatever has been typed since rather than instead of it.
@@ -715,6 +768,7 @@ final class ChatModel {
             guard notice.channelId == channelId else { return }
             sanction = notice
             // The optimistic rows this notice answers will never be confirmed.
+            for row in messages where row.isPending { settleVoiceRow(row.id, delivered: false) }
             messages.removeAll { $0.isPending }
 
         case .voiceNoteListened(let noteChannelId, let messageId, let attachmentId, let userId, let listenedAt):
@@ -818,4 +872,11 @@ final class ChatModel {
             }
         }
     }
+}
+
+/// A recording that is on its way to the server, or did not get there.
+struct HeldVoiceNote: Equatable, Sendable {
+    let note: RecordedVoiceNote
+    /// The message it answers, if it was a reply.
+    let replyId: String?
 }

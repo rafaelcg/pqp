@@ -322,6 +322,48 @@ struct VoiceUndoBanner: View {
     }
 }
 
+/// "Nao deu pra enviar o audio (0:12)  Tentar de novo": a recording that did not
+/// go, kept so the person can send it again.
+struct VoiceSendFailedBanner: View {
+    let held: HeldVoiceNote
+    let onRetry: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 14))
+            Text("Could not send the voice message (\(formatNoteDuration(milliseconds: held.note.durationMs))).")
+                .font(Typography.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onRetry) {
+                Text("Try again")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.inkDeep)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.signal))
+            }
+            .accessibilityIdentifier("voice.retry")
+            Button(action: onDiscard) {
+                Image(systemName: "trash")
+                    .font(.system(size: 14))
+                    .frame(width: 30, height: 30)
+            }
+            .accessibilityIdentifier("voice.failed.discard")
+            .accessibilityLabel(Text("Discard voice message"))
+        }
+        .foregroundStyle(Palette.paper)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.danger.opacity(0.25))
+        )
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.vertical, 6)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
 /// What the composer says when the microphone button says no.
 enum VoiceRecordRefusalCopy {
     static func message(for refusal: VoiceRecordRefusal) -> String {
