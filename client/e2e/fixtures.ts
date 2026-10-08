@@ -337,8 +337,18 @@ export async function unreachableStageControls(
   page: Page,
 ): Promise<string[]> {
   return page.evaluate(() => {
-    const docked = document.querySelector('[data-testid="call-stage-collapsed"]');
-    const floating = document.querySelector('[data-testid="call-controls-bar"]');
+    // The strip in the composer only counts while it is actually laid out:
+    // a docked strip still in the DOM but hidden (fullscreen, immersive) must
+    // not stand in for the floating bar the person is really using.
+    const shown = (el: Element | null) => {
+      if (!el) {
+        return null;
+      }
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? el : null;
+    };
+    const docked = shown(document.querySelector('[data-testid="call-stage-collapsed"]'));
+    const floating = shown(document.querySelector('[data-testid="call-controls-bar"]'));
     const bar = docked ?? floating;
     const container = docked
       ? docked.closest("[data-call-dock]") ?? docked
