@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "29 de setembro de 2026",
+  updated: "8 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -52,18 +52,18 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "controller",
-      sourceRev: "39237263",
+      sourceRev: "8d6b4bc2",
       heading: "Quem responde pelos seus dados",
       body: (
         <p>
-          <strong>Quem administra o pqp.gg</strong> é o controlador: uma pessoa
+          <strong>Quem administra o pqp.gg</strong> é o controlador: dois irmãos
           no Reino Unido, tocando isso como projeto pessoal e não como empresa.
           Não existe equipe de privacidade e não existe encarregado nomeado —
-          nomear um seria encenação em um projeto deste tamanho. A mesma pessoa
-          que escreveu o código responde as perguntas de proteção de dados, e
+          nomear um seria encenação em um projeto deste tamanho. Os mesmos dois irmãos
+          que escreveram o código respondem as perguntas de proteção de dados, e
           existe um endereço para isso: <strong>contato@pqp.gg</strong>. Onde
-          esta política mandar escrever para a gente, é esse o endereço e é essa
-          a pessoa que lê.
+          esta política mandar escrever para a gente, é esse o endereço e são eles
+          que leem.
         </p>
       ),
     },
@@ -1010,7 +1010,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "cb94e682",
+      sourceRev: "acf849dd",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -1025,8 +1025,8 @@ export const privacyPtBr: LegalDocument = {
             normalmente tratam dados nos Estados Unidos e na Europa. O servidor de aplicação
             e o banco de dados rodam na <strong>Vultr</strong> em{" "}
             <strong>São Paulo, Brasil</strong>. Os relatórios de erro do app web
-            vão para um coletor da Grafana em São Paulo. A pessoa que administra
-            o pqp.gg está no Reino Unido, então tudo que é tratado por um humano
+            vão para um coletor da Grafana em São Paulo. Os dois irmãos que administram
+            o pqp.gg estão no Reino Unido, então tudo que é tratado por um humano
             é tratado lá.
           </p>
           <p>Parte dos seus dados sai do Brasil no dia a dia:</p>
@@ -1453,7 +1453,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "security",
-      sourceRev: "f0285dd6",
+      sourceRev: "9f871b5e",
       heading: "Segurança",
       body: (
         <p>
@@ -1463,7 +1463,7 @@ export const privacyPtBr: LegalDocument = {
           repassado, onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
           de vida curta e assinados, em vez de públicos. O nosso servidor se
           recusa a buscar prévia de link em endereços de rede interna. Nenhum
-          sistema é perfeitamente seguro, e este é mantido por uma pessoa sem
+          sistema é perfeitamente seguro, e este é mantido por dois irmãos sem
           equipe de segurança atrás. Se você encontrar uma vulnerabilidade, por
           favor conte para a gente em <strong>contato@pqp.gg</strong> antes de
           contar para qualquer outra pessoa. Se um incidente de segurança criar
@@ -1504,13 +1504,13 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "contact",
-      sourceRev: "7751323d",
+      sourceRev: "706c7b98",
       heading: "Contato",
       body: (
         <p>
           Pedidos de privacidade, abuso e segurança, relatos de vulnerabilidade
           e qualquer outra coisa desta página: <strong>contato@pqp.gg</strong>.
-          Um endereço, lido pela única pessoa que toca o pqp.gg.
+          Um endereço, lido pelos dois irmãos que tocam o pqp.gg.
         </p>
       ),
     },

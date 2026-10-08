@@ -27,17 +27,17 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "27 de setembro de 2026",
+  updated: "8 de outubro de 2026",
   sections: [
     {
       id: "intro",
-      sourceRev: "70b87c2b",
+      sourceRev: "119a899f",
       body: (
         <p>
           Estes termos valem para o serviço hospedado em <strong>pqp.gg</strong>
-          , que é tocado por <strong>uma pessoa, não uma empresa</strong>.
-          &quot;Nós&quot; e &quot;a gente&quot;, daqui pra baixo, são essa
-          pessoa. Ao criar uma conta ou usar o app, você concorda com estes
+          , que é tocado por <strong>dois irmãos, não uma empresa</strong>.
+          &quot;Nós&quot; e &quot;a gente&quot;, daqui pra baixo, são esses
+          dois irmãos. Ao criar uma conta ou usar o app, você concorda com estes
           termos. Cópias self-hosted do software open source seguem a licença do
           projeto e os termos que você definir para os seus próprios usuários —
           não estes termos do serviço hospedado.
@@ -46,13 +46,13 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "before-you-move",
-      sourceRev: "11ab44a2",
+      sourceRev: "e96619f9",
       heading: "Leia isto antes de trazer a sua galera pra cá",
       body: (
         <>
           <p>
-            O pqp é um projeto pessoal, feito por diversão por uma pessoa no
-            tempo livre dela, com a família ajudando no produto. Não tem
+            O pqp é um projeto pessoal, feito por diversão por dois irmãos no
+            tempo livre deles. Não tem
             empresa, não tem produto pago e não tem equipe de suporte. Quem lê o
             seu e-mail é quem escreveu o código. Dá para mandar um presente
             para a hospedagem pelo GitHub Sponsors ou Pix, em{" "}
@@ -279,7 +279,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "reporting",
-      sourceRev: "357c1d96",
+      sourceRev: "00e82ac7",
       heading: "Como denunciar abuso",
       body: (
         <>
@@ -307,16 +307,16 @@ export const termsPtBr: LegalDocument = {
             <li>Prints, se você tiver, e mais ou menos quando aconteceu</li>
           </ul>
           <p>
-            <strong>O que acontece depois, sem enfeite.</strong> Uma pessoa lê
+            <strong>O que acontece depois, sem enfeite.</strong> Dois irmãos leem
             as denúncias. Não existe equipe de moderação, não existe escala e
             não existe plantão fora do horário, então a gente não vai publicar
             prazo de resposta que não consegue cumprir. O que é verdade é isto:
-            as denúncias são lidas e tratadas o mais rápido que uma pessoa
-            razoavelmente consegue, normalmente em alguns dias, e denúncias
+            as denúncias são lidas e tratadas o mais rápido que duas pessoas
+            razoavelmente conseguem, normalmente em alguns dias, e denúncias
             envolvendo menores de idade, perigo físico iminente ou imagens
             íntimas sem consentimento furam a fila. Se a gente estiver fora ou
             afogado, demora mais. Isso não é uma meta que a gente descumpre em
-            silêncio — é o formato de um projeto de uma pessoa só, e você
+            silêncio — é o formato de um projeto de duas pessoas, e você
             deveria saber disso antes de contar com a gente.
           </p>
           <p>
@@ -338,7 +338,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "copyright",
-      sourceRev: "c5ef3d5e",
+      sourceRev: "789e3d71",
       heading: "Direitos autorais e outras notificações legais",
       body: (
         <>
@@ -353,7 +353,7 @@ export const termsPtBr: LegalDocument = {
           <p>
             Ordens judiciais e outras notificações legais formais vão para o
             mesmo endereço. Não existe sede registrada para receber citação,
-            porque não existe empresa — o pqp.gg é tocado por uma pessoa física
+            porque não existe empresa — o pqp.gg é tocado por dois irmãos
             no Reino Unido. Remoção de conteúdo que a lei do seu país nos obrigue
             a fazer é algo que a gente faz; uma notificação que só afirma um
             direito é algo que a gente lê e avalia.
@@ -553,7 +553,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "contact",
-      sourceRev: "eca5ae40",
+      sourceRev: "c410149e",
       heading: "Contato",
       body: (
         <>
@@ -564,7 +564,7 @@ export const termsPtBr: LegalDocument = {
             <strong>contato@pqp.gg</strong>.
           </p>
           <p>
-            É a caixa de entrada de uma pessoa só, e isso é de propósito. Mais
+            É a caixa de entrada dos dois irmãos, e isso é de propósito. Mais
             cinco endereços seriam mais cinco caixas que ninguém lê.
           </p>
         </>

@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "29 September 2026",
+  updated: "8 October 2026",
   sections: [
     {
       id: "intro",
@@ -628,7 +628,7 @@ export const cookiesEn: LegalDocument = {
         <p>
           Questions about anything on this page go to{" "}
           <strong>contato@pqp.gg</strong> — the single address for pqp.gg, read
-          by the one person who runs it.
+          by the two brothers who run it.
         </p>
       ),
     },

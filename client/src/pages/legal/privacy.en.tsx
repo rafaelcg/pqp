@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "29 September 2026",
+  updated: "8 October 2026",
   sections: [
     {
       id: "intro",
@@ -37,11 +37,11 @@ export const privacyEn: LegalDocument = {
       heading: "Who is responsible for your data",
       body: (
         <p>
-          <strong>The operator of pqp.gg</strong> is the controller: one person
+          <strong>The operator of pqp.gg</strong> is the controller: two brothers
           in the United Kingdom, running it as a personal project rather than a
           company. There is no privacy team and no appointed data protection
           officer — appointing one would be theatre for a project this size. The
-          same person who wrote the code answers the data-protection questions,
+          same two brothers who wrote the code answer the data-protection questions,
           and there is one address for it: <strong>contato@pqp.gg</strong>.
           Wherever this policy says to write to us, that is the address and that
           is who reads it.
@@ -964,8 +964,8 @@ export const privacyEn: LegalDocument = {
             United States and Europe. The application server and the database
             run on <strong>Vultr</strong> in{" "}
             <strong>São Paulo, Brazil</strong>. Error reports from the web app go
-            to a Grafana collector in São Paulo. The person who operates pqp.gg
-            is in the United Kingdom, so anything handled by a human is handled
+            to a Grafana collector in São Paulo. The two brothers who operate pqp.gg
+            are in the United Kingdom, so anything handled by a human is handled
             there.
           </p>
           <p>
@@ -988,7 +988,7 @@ export const privacyEn: LegalDocument = {
             services, used on the published terms each of them offers, and it is
             those terms that the transfers rest on. There is no bespoke transfer
             agreement negotiated for pqp, because there is no company to sign
-            one and no lawyer to draft it. The person who reads a report or
+            one and no lawyer to draft it. Whoever reads a report or
             answers a deletion request is in the UK, and that is a transfer too.
           </p>
         </>
@@ -1372,7 +1372,7 @@ export const privacyEn: LegalDocument = {
           handle the media in order to relay it. Attachment links are
           short-lived and signed rather than public. Our server refuses to fetch
           link previews from internal network addresses. No system is perfectly
-          secure, and this one is maintained by one person with no security team
+          secure, and this one is maintained by two brothers with no security team
           behind them. If you find a vulnerability, please tell us at{" "}
           <strong>contato@pqp.gg</strong> before you tell anyone else. If a
           breach creates a real risk to you, we will tell you and the relevant
@@ -1414,7 +1414,7 @@ export const privacyEn: LegalDocument = {
         <p>
           Privacy requests, abuse and safety, security reports, and anything
           else on this page: <strong>contato@pqp.gg</strong>. One address, read
-          by the one person who runs pqp.gg.
+          by the two brothers who run pqp.gg.
         </p>
       ),
     },

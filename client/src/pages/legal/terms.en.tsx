@@ -12,15 +12,15 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "27 September 2026",
+  updated: "8 October 2026",
   sections: [
     {
       id: "intro",
       body: (
         <p>
           These terms cover the hosted service at <strong>pqp.gg</strong>, which
-          is run by <strong>one person, not a company</strong>. &quot;We&quot;
-          and &quot;us&quot; below mean that one person. By creating an account
+          is run by <strong>two brothers, not a company</strong>. &quot;We&quot;
+          and &quot;us&quot; below mean those two brothers. By creating an account
           or using the app, you agree to these terms. Self-hosted copies of the
           open-source software are governed by the project licence and whatever
           terms you set for your own users — not these hosted terms.
@@ -33,10 +33,10 @@ export const termsEn: LegalDocument = {
       body: (
         <>
           <p>
-            pqp is a personal project, built for fun by one person in their
-            spare time, with family helping on the product. There is no
-            company, no paid product, and no support team. The person who
-            reads your email is the person who wrote the code. People can send
+            pqp is a personal project, built for fun by two brothers in their
+            spare time. There is no
+            company, no paid product, and no support team. The people who
+            read your email are the people who wrote the code. People can send
             a gift toward hosting via GitHub Sponsors or Pix, on{" "}
             <Link to="/apoie">/apoie</Link>. That unlocks nothing: no badge, no
             extra features, no refunds. It is provided{" "}
@@ -267,15 +267,15 @@ export const termsEn: LegalDocument = {
             <li>Screenshots if you have them, and roughly when it happened</li>
           </ul>
           <p>
-            <strong>What happens next, honestly.</strong> One person reads the
+            <strong>What happens next, honestly.</strong> Two brothers read the
             reports. There is no moderation team, no rota and no out-of-hours
             cover, so we are not going to publish response times we cannot keep.
-            What is true is this: reports are read and acted on as fast as one
-            person reasonably can, usually within a few days, and reports
+            What is true is this: reports are read and acted on as fast as two
+            people reasonably can, usually within a few days, and reports
             involving minors, imminent physical danger, or non-consensual
             intimate images go to the front of the queue. If we are away or
             swamped it takes longer. That is not a target we are quietly missing
-            — it is the shape of a one-person project, and you should know it
+            — it is the shape of a two-person project, and you should know it
             before you rely on us.
           </p>
           <p>
@@ -311,7 +311,7 @@ export const termsEn: LegalDocument = {
           <p>
             Court orders and other formal legal notices go to the same address.
             There is no registered office to serve papers at, because there is
-            no company — pqp.gg is run by an individual in the United Kingdom.
+            no company — pqp.gg is run by two brothers in the United Kingdom.
             Content removal that the law of your country requires us to perform
             is something we will do; a notice that simply asserts a right is
             something we will read and judge.
@@ -499,7 +499,7 @@ export const termsEn: LegalDocument = {
             notices and appeals: <strong>contato@pqp.gg</strong>.
           </p>
           <p>
-            It is one person&apos;s inbox, and that is on purpose. Five more
+            It is the two brothers&apos; inbox, and that is on purpose. Five more
             addresses would mean five more inboxes nobody reads.
           </p>
         </>

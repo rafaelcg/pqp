@@ -17,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "29 de setembro de 2026",
+  updated: "8 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -661,13 +661,13 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "contact",
-      sourceRev: "8bfc576d",
+      sourceRev: "75837e98",
       heading: "Contato",
       body: (
         <p>
           Dúvida sobre qualquer coisa desta página vai para{" "}
           <strong>contato@pqp.gg</strong> — o endereço único do pqp.gg, lido
-          pela única pessoa que toca o projeto.
+          pelos dois irmãos que tocam o projeto.
         </p>
       ),
     },
