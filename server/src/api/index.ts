@@ -558,6 +558,7 @@ import {
 } from "../services/attachments.js";
 import {
   NoteTooLargeError,
+  messageHasNote,
   noteEditAllowed,
   VoiceNoteContentTypeError,
   VoiceNotesDisabledError,
@@ -7395,8 +7396,9 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   // A voice note travels alone, with no text beside it (the claim enforces
   // that when it is sent); this is the same rule for the road back in.
   if (
+    body.body.trim().length > 0 &&
     !noteEditAllowed({
-      hasNote: existing.attachments.some((attachment) => attachment.voice),
+      hasNote: await messageHasNote(messageId!),
       body: body.body,
     })
   ) {

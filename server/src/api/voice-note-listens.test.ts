@@ -26,11 +26,12 @@ import type { DbUser } from "../db.js";
  */
 
 const storage = vi.hoisted(() => ({
+  configured: true,
   objects: new Map<string, { contentLength: number; contentType: string }>(),
 }));
 
 vi.mock("../lib/s3.js", () => ({
-  isStorageConfigured: () => true,
+  isStorageConfigured: () => storage.configured,
   presignPut: (key: string) => `https://storage.test/${key}?sig=put`,
   presignGet: (key: string) => `https://storage.test/${key}?sig=get`,
   headObject: async (key: string) => storage.objects.get(key) ?? null,
@@ -146,6 +147,7 @@ describeDb("voice note listens", () => {
       deleteAuthenticatedSocket(socket);
     }
     storage.objects.clear();
+    storage.configured = true;
     resetApiRateLimits();
     resetFeatureFlagsForTests();
     await getPool().query(
@@ -566,6 +568,12 @@ describeDb("voice note listens", () => {
         );
         expect(stored.rows[0]).toMatchObject({ body: "", edited_at: null });
       }
+    });
+
+    it("refuses it even when storage is off and the note's file cannot be listed", async () => {
+      const { messageId } = await sendNote(channelId);
+      storage.configured = false;
+      expect((await patch(alice, messageId, "olha isso")).status).toBe(400);
     });
 
     it("still lets another message's caption be edited", async () => {

@@ -136,3 +136,20 @@ export function noteEditAllowed(input: {
 }): boolean {
   return !input.hasNote || input.body.trim().length === 0;
 }
+
+/**
+ * Does this message carry a note? Asked of the table rather than of the
+ * attachments a read returns, because that read leaves out a stored file when
+ * storage is not configured, and an edit must not become possible on a note
+ * just because its bytes cannot be signed right now.
+ */
+export async function messageHasNote(messageId: string): Promise<boolean> {
+  const { rows } = await getPool().query(
+    `SELECT 1 FROM message_attachments a
+     JOIN message_attachment_voice v ON v.attachment_id = a.id
+     WHERE a.message_id = $1
+     LIMIT 1`,
+    [messageId],
+  );
+  return rows.length > 0;
+}
