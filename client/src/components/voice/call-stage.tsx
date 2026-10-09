@@ -1514,8 +1514,8 @@ function ActiveCall({
   }, [bannerColumn]);
   // The strip is also where a failed peer's retry lives, and the list has no
   // such button, so a failure brings the strip back until it is fixed.
-  const stripInSidebar =
-    roomInSidebar && !listeners.some((person) => person.failed);
+  const peerFailed = listeners.some((person) => person.failed);
+  const stripInSidebar = roomInSidebar && !peerFailed;
   // A strip holding nobody but ourselves (a 1:1 call where the other person
   // is the picture) names one person, us, who is already in the bar.
   const stripOnlySelf = listeners.every((person) => person.isSelf);
@@ -1595,7 +1595,7 @@ function ActiveCall({
   const chatMusic = useContext(ChatMusicContext);
   const stripDrawn =
     showStrip &&
-    !(musicGivesWay && chatMusic) &&
+    !(musicGivesWay && chatMusic && !peerFailed) &&
     !soloPerson &&
     !soloTile &&
     !soloMusic &&

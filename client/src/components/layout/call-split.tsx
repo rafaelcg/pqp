@@ -241,7 +241,10 @@ function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
  */
 export const ChatMusicContext = createContext(false);
 
-const NO_CHAT_NEED = { need: 0, music: 0 };
+const NO_CHAT_NEED = { need: 0, music: 0, fila: 0 };
+
+/** The least an open music queue is cut to: about its add field. */
+const FILA_MIN_ROOM_PX = 64;
 
 /**
  * The least height the chat pane can be given without cutting its composer
@@ -255,12 +258,13 @@ const NO_CHAT_NEED = { need: 0, music: 0 };
  * composer let a tall stage push both under the bottom of the window.
  *
  * `music` is the part of that which is the music bar in the composer, which
- * a picture with the controls floating on it still makes room for.
+ * a picture with the controls floating on it still makes room for, and
+ * `fila` the open queue inside it, the one part that can scroll.
  */
 function useChatPaneNeed(
   ref: RefObject<HTMLDivElement | null>,
   enabled: boolean,
-): { need: number; music: number } {
+): { need: number; music: number; fila: number } {
   const [need, setNeed] = useState(NO_CHAT_NEED);
   useEffect(() => {
     const pane = ref.current;
@@ -274,7 +278,8 @@ function useChatPaneNeed(
       const header = pane.querySelector<HTMLElement>('[data-testid="call-split-chat-header"]');
       const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
       const music = composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
-      for (const element of [header, composer, music]) {
+      const fila = music?.querySelector<HTMLElement>('[data-music-fila="sheet"]') ?? null;
+      for (const element of [header, composer, music, fila]) {
         if (element && resize && !watched.has(element)) {
           resize.observe(element);
           watched.add(element);
@@ -284,10 +289,13 @@ function useChatPaneNeed(
         ? Math.ceil((header?.offsetHeight ?? 0) + composer.offsetHeight)
         : 0;
       const nextMusic = composer ? Math.ceil(music?.offsetHeight ?? 0) : 0;
+      const nextFila = composer ? Math.ceil(fila?.offsetHeight ?? 0) : 0;
       setNeed((previous) =>
-        previous.need === next && previous.music === nextMusic
+        previous.need === next &&
+        previous.music === nextMusic &&
+        previous.fila === nextFila
           ? previous
-          : { need: next, music: nextMusic },
+          : { need: next, music: nextMusic, fila: nextFila },
       );
     };
     if (typeof ResizeObserver !== "undefined") {
@@ -371,10 +379,11 @@ export function CallSplit({
       : preference.side
     : preference.stacked;
   const container = sideBySide ? width : height;
-  const { need: chatNeed, music: musicNeed } = useChatPaneNeed(
-    chatPaneRef,
-    !sideBySide,
-  );
+  const {
+    need: chatNeed,
+    music: musicNeed,
+    fila: filaHeight,
+  } = useChatPaneNeed(chatPaneRef, !sideBySide);
   // Stacked, the chat's floor is whatever its composer needs right now, so a
   // panel opening above the composer takes its room from the stage.
   const bounds = useMemo(() => {
@@ -452,6 +461,24 @@ export function CallSplit({
     (resizable || !barFloats);
   // The divider is only drawn when the pane is resizable.
   const squeezeGap = resizable ? CALL_SPLIT_DIVIDER_PX : 0;
+  // The open music queue is the one part of the composer that scrolls. A
+  // long one pushed the message box and the call's controls below the
+  // window, so it gets what the pane has left once the stage keeps its
+  // minimum (or its current size, when it is not the expanded stage), and
+  // scrolls inside that.
+  const stageFloor =
+    collapsed === "stage"
+      ? 0
+      : shape === "expanded"
+        ? bounds.minStage
+        : naturalStage.height;
+  const filaRoom =
+    !sideBySide && filaHeight > 0 && container > 0
+      ? Math.max(
+          FILA_MIN_ROOM_PX,
+          container - squeezeGap - stageFloor - (chatNeed - filaHeight),
+        )
+      : null;
   // A new width means a new natural height for the picture (a 16:9 share in
   // a narrower pane is shorter), so the held height is measured again.
   const squeezeWidthRef = useRef(width);
@@ -757,7 +784,7 @@ export function CallSplit({
               : { height: stagePx }
         }
       >
-        <ChatMusicContext.Provider value={musicNeed > 0}>
+        <ChatMusicContext.Provider value={stagePx === null && musicNeed > 0}>
           {stage}
         </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
@@ -797,6 +824,11 @@ export function CallSplit({
         data-call-split-chat=""
         hidden={collapsed === "chat"}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
+        style={
+          filaRoom === null
+            ? undefined
+            : ({ "--fila-room": `${filaRoom}px` } as CSSProperties)
+        }
       >
         {chatHeader && shape !== "none" && (
           <ChatPaneHeader
