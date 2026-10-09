@@ -29,7 +29,7 @@ import {
   claimAttachments,
   listAttachmentsForMessages,
   toPublicAttachment,
-  verifyPendingAttachments,
+  verifyPendingAttachmentsWithNotes,
 } from "./attachments.js";
 import { listBlockedAmong, notBlockedSql } from "./blocks.js";
 import { listEmbedsForMessages } from "./embeds.js";
@@ -38,6 +38,7 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import { noteShapeAllowed } from "./voice-notes.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -659,9 +660,26 @@ async function insertMessage(
     storedBody = interactive.poll.question;
   }
 
-  const verified = attachmentIds?.length
-    ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
-    : [];
+  const { verified, requestedNotes } = attachmentIds?.length
+    ? await verifyPendingAttachmentsWithNotes(channelId, author.id, attachmentIds)
+    : { verified: [], requestedNotes: 0 };
+
+  // A voice note travels alone, with no text: refused whole, before any
+  // transaction opens, the same way an empty frame is. Nothing is claimed, so
+  // the note stays unclaimed for the sweeper. Counted on what was asked for,
+  // not on what verified, so a note whose upload failed cannot drop out and
+  // let the rest of the send through.
+  if (
+    !noteShapeAllowed({
+      requestedNotes,
+      requestedCount: new Set(attachmentIds ?? []).size,
+      // A deck draw only writes its body inside the transaction below, but it
+      // is text beside the note all the same.
+      body: deckAction ? "deck" : storedBody,
+    })
+  ) {
+    return null;
+  }
 
   const nickRow = await getPool().query<{ nickname: string | null }>(
     `SELECT sm.nickname

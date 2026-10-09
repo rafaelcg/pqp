@@ -400,6 +400,22 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
   },
+  voice_notes: {
+    description:
+      "Mensagens de voz: segurar o microfone no chat grava e manda um áudio com a duração e a onda, como no WhatsApp.",
+    env: "VOICE_NOTES",
+    parseEnv: exactTrue,
+    // Off until the recorder has been used on a real server: one server
+    // first (its override), then everybody. See the voice notes plan.
+    codeDefault: false,
+    // Every reader knows the server: the mint checks the channel's server
+    // (a conversation reads the global value), and the client asks
+    // `GET /api/attachments/config?serverId=` with the server it is in.
+    // Off also stops new notes being minted, so it is the kill switch; notes
+    // already sent stay readable.
+    perServer: true,
+    clientVia: "GET /api/attachments/config?serverId= (voiceNotes)",
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",

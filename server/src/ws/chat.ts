@@ -1764,6 +1764,11 @@ async function notifyChannelActivity(
       blockerIds: blockers,
       mentionEveryone: options?.mentionEveryone === true,
       mentionHereUserIds: options?.mentionHereUserIds ?? [],
+      // A conversation's voice note says so on the lock screen. Read off the
+      // preview, which only a conversation carries; never waits on anything.
+      voiceDurationMs: options?.preview?.isVoice
+        ? options.preview.voiceDurationMs
+        : null,
     });
   }
 }
@@ -2202,6 +2207,7 @@ async function postChannelMessageAttempt(
             body: message.body,
             hasAttachments: (message.attachments?.length ?? 0) > 0,
             isGifAttachment: message.attachments?.[0]?.contentType === "image/gif",
+            voiceDurationMs: message.attachments?.[0]?.voice?.durationMs ?? null,
           }),
         }
       : undefined;
@@ -2644,12 +2650,20 @@ function asMessagePreview(
   if (authorId === null || authorName === null || preview === null) {
     return undefined;
   }
+  const voiceDurationMs =
+    record.isVoice === true &&
+    typeof record.voiceDurationMs === "number" &&
+    Number.isFinite(record.voiceDurationMs)
+      ? record.voiceDurationMs
+      : null;
   return {
     authorId,
     authorName,
     preview,
     isAttachment: record.isAttachment === true,
     isGif: record.isGif === true,
+    isVoice: voiceDurationMs !== null,
+    voiceDurationMs,
   };
 }
 

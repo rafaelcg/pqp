@@ -29,6 +29,12 @@ export const ATTACHMENT_MIME_ALLOWLIST = [
   "audio/mpeg",
   "audio/ogg",
   "audio/wav",
+  // Voice notes (`voice` below): Safari records AAC-LC in MP4, Chrome and
+  // Firefox record Opus in WebM. Both are accepted as recorded and never
+  // transcoded. They are ordinary audio files too, so a client that does not
+  // know `voice` shows a plain audio player.
+  "audio/mp4",
+  "audio/webm",
   "application/pdf",
   "text/plain",
 ] as const;
@@ -88,6 +94,114 @@ const attachmentDimensionSchema = z
   .positive()
   .max(ATTACHMENT_MAX_DIMENSION);
 
+// ------------------------------------------------------------- voice notes
+
+/**
+ * A voice note is an attachment with a `voice` block: ordinary bytes in the
+ * bucket, plus what the playback card needs before it fetches them (the
+ * duration and a waveform). It is a sibling slot rather than a "kind" enum, so
+ * a later `video` block sits next to it without renaming anything.
+ *
+ * The containers a recorder may upload, bare (no `;codecs=`): the claim HEAD
+ * compares the stored type to the signed one exactly, so a parameterised type
+ * would never verify.
+ */
+export const VOICE_NOTE_CONTENT_TYPES = [
+  "audio/mp4",
+  "audio/webm",
+  "audio/ogg",
+] as const satisfies readonly AttachmentContentType[];
+
+export function isVoiceNoteContentType(contentType: string): boolean {
+  return (VOICE_NOTE_CONTENT_TYPES as readonly string[]).includes(contentType);
+}
+
+/** Shorter than this is a tap on the mic, not a message. */
+export const VOICE_NOTE_MIN_DURATION_MS = 300;
+/** Five minutes, the recorder's hard stop. */
+export const VOICE_NOTE_MAX_DURATION_MS = 5 * 60 * 1000;
+/** Peaks the recorder samples, one byte each, before base64. */
+export const VOICE_NOTE_WAVEFORM_PEAKS = 64;
+/** The waveform as it travels: base64 text, never longer than this. */
+export const VOICE_NOTE_WAVEFORM_MAX_LENGTH = 128;
+
+/**
+ * The bytes a recorded note of this length may take, checked at mint. 16 KiB
+ * a second is 128 kbps, twice the 64 kbps the recorder targets, and the 32 KiB
+ * on top covers the container headers of a very short clip. A client that
+ * claims two seconds and uploads ten megabytes is refused before anything is
+ * signed. Shared so a recorder can stop itself before the server would refuse.
+ */
+export function noteByteBudget(durationMs: number): number {
+  return 16 * 1024 * Math.ceil(durationMs / 1000) + 32 * 1024;
+}
+
+/** `0:12`, `4:05`. Whole seconds, never below one. */
+export function formatNoteDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Exactly `VOICE_NOTE_WAVEFORM_PEAKS` bytes, base64: 64 bytes are 88
+ * characters, the last two `==`. Anything else is not the waveform the card
+ * draws. The column allows up to `VOICE_NOTE_WAVEFORM_MAX_LENGTH`, so a later
+ * format can widen this without a migration.
+ */
+const WAVEFORM_BASE64 = /^[A-Za-z0-9+/]{86}==$/;
+
+export const voiceNoteWaveformSchema = z
+  .string()
+  .max(VOICE_NOTE_WAVEFORM_MAX_LENGTH)
+  .regex(WAVEFORM_BASE64, `Waveform must be ${VOICE_NOTE_WAVEFORM_PEAKS} peaks, base64`);
+
+/** The `voice` block of a mint request. The client's word, bounded. */
+export const createVoiceNoteSchema = z.object({
+  durationMs: z
+    .number()
+    .int()
+    .min(VOICE_NOTE_MIN_DURATION_MS)
+    .max(VOICE_NOTE_MAX_DURATION_MS),
+  waveform: voiceNoteWaveformSchema,
+});
+
+export type CreateVoiceNote = z.infer<typeof createVoiceNoteSchema>;
+
+/**
+ * Transcript state, reserved for the transcription work. `none` means nobody
+ * asked yet; `unavailable` means the deployment has no speech provider.
+ */
+export const noteTranscriptStatusSchema = z.enum([
+  "none",
+  "pending",
+  "done",
+  "no_speech",
+  "failed",
+  "unavailable",
+]);
+
+/**
+ * The `voice` block on a stored attachment. `durationMs` is what the card
+ * shows. `listenedByMe`, `listenedBy` and `transcript` are filled by later
+ * work and optional until then, so a reader written now keeps parsing.
+ */
+export const voiceNoteSchema = z.object({
+  durationMs: z.number().int().nonnegative(),
+  waveform: z.string(),
+  listenedByMe: z.boolean().optional(),
+  /** User ids, only in a conversation small enough to show receipts. */
+  listenedBy: z.array(z.string().uuid()).optional(),
+  transcript: z
+    .object({
+      status: noteTranscriptStatusSchema,
+      text: z.string().max(4000).nullable().optional(),
+      language: z.string().nullable().optional(),
+    })
+    .optional(),
+});
+
+export type VoiceNote = z.infer<typeof voiceNoteSchema>;
+
 /**
  * Body of `POST /api/channels/:channelId/attachments`, sent before a single
  * byte is uploaded.
@@ -102,12 +216,22 @@ const attachmentDimensionSchema = z
  * Bounded rather than trusted, because "nothing else" stops being true once a
  * number is absurd enough to be a layout weapon.
  */
+// Written `= z.object({` on one line on purpose: the Android contract test
+// (`AttachmentContractTest`) reads this schema's keys off the source.
 export const createAttachmentSchema = z.object({
   filename: attachmentFilenameSchema,
   contentType: attachmentContentTypeSchema,
   byteSize: z.number().int().positive().max(DEFAULT_MAX_ATTACHMENT_BYTES),
   width: attachmentDimensionSchema.nullish(),
   height: attachmentDimensionSchema.nullish(),
+  /**
+   * Present only for a voice note. The server also checks the runtime flag
+   * and the byte budget for this duration (`noteByteBudget`).
+   */
+  voice: createVoiceNoteSchema.optional(),
+}).refine((value) => !value.voice || isVoiceNoteContentType(value.contentType), {
+  message: "A voice note must be audio/mp4, audio/webm or audio/ogg",
+  path: ["contentType"],
 });
 
 export type CreateAttachmentRequest = z.infer<typeof createAttachmentSchema>;
@@ -144,9 +268,11 @@ export const attachmentSchema = z.object({
   height: z.number().int().positive().nullable(),
   /** Presigned GET, valid for `ATTACHMENT_URL_TTL_SECONDS`. */
   url: z.string().url(),
+  /** Set only on a voice note. Absent on every other attachment. */
+  voice: voiceNoteSchema.optional(),
 });
 
-export type Attachment = z.infer<typeof attachmentSchema>;
+export type Attachment =z.infer<typeof attachmentSchema>;
 
 /**
  * Response of `GET /api/attachments/:attachmentId/url`, which a client calls

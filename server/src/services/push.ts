@@ -667,6 +667,8 @@ export interface PushPayloadInput {
    * mention/reply push stays English, unchanged by this field.
    */
   locale: PushLocale;
+  /** A conversation voice note's length; conversation copy only. */
+  voiceDurationMs?: number | null;
 }
 
 export interface PushPayload {
@@ -720,6 +722,7 @@ export function buildPushPayload(input: PushPayloadInput): PushPayload {
     dmDetails: input.dmDetails,
     mentionOrReply: input.mention || input.reply,
     authorName: input.authorName ? truncateLabel(input.authorName) : null,
+    voiceDurationMs: input.voiceDurationMs ?? null,
   });
   return { title: copy.title, body: copy.body, path, tag };
 }
@@ -749,6 +752,12 @@ export interface ChannelPushEvent {
   blockerIds: ReadonlySet<string>;
   mentionEveryone?: boolean;
   mentionHereUserIds?: readonly string[];
+  /**
+   * Set when the message is a voice note in a conversation: the push says
+   * "Mensagem de voz · 0:12" instead of the plain copy. A length, never the
+   * audio or a transcript.
+   */
+  voiceDurationMs?: number | null;
 }
 
 /**
@@ -900,6 +909,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
         serverName: names.server_name,
         authorName: names.author_name,
         locale: resolvePushLocale((settings as { locale?: unknown } | null)?.locale),
+        voiceDurationMs: event.voiceDurationMs ?? null,
       }),
     );
   }
