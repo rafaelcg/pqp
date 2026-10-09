@@ -16,6 +16,7 @@ if (DATABASE_URL) {
 
 const s3 = vi.hoisted(() => ({
   deleted: [] as string[],
+  failDeletes: false,
   objects: new Map<string, { contentType: string; contentLength: number }>(),
 }));
 
@@ -27,6 +28,9 @@ vi.mock("../lib/s3.js", () => ({
   getObjectPrefix: async (key: string) =>
     s3.objects.has(key) ? new Uint8Array(16) : null,
   deleteObject: async (key: string) => {
+    if (s3.failDeletes) {
+      throw new Error("storage down");
+    }
     s3.deleted.push(key);
     s3.objects.delete(key);
   },
@@ -76,6 +80,7 @@ describeDb("soundboard upload ledger", () => {
   beforeEach(async () => {
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     s3.deleted.length = 0;
+    s3.failDeletes = false;
     s3.objects.clear();
     const user = await upsertUser({
       clerkId: "clerk_sb",
@@ -116,6 +121,32 @@ describeDb("soundboard upload ledger", () => {
     await expect(claim(key)).rejects.toMatchObject({ code: "missing" });
     const rows = await getPool().query(`SELECT 1 FROM soundboard_sounds`);
     expect(rows.rowCount).toBe(0);
+  });
+
+  it("keeps the ticket when the object delete fails, and retries after the lease", async () => {
+    const key = await upload();
+    await getPool().query(
+      `UPDATE soundboard_pending_uploads SET expires_at = NOW() - INTERVAL '10 minutes'`,
+    );
+    s3.failDeletes = true;
+    expect(await sweepPendingUploads()).toBe(1);
+    const kept = await getPool().query(
+      `SELECT 1 FROM soundboard_pending_uploads WHERE storage_key = $1`,
+      [key],
+    );
+    expect(kept.rowCount).toBe(1);
+    // Leased: neither another sweep nor a claim may take it meanwhile.
+    s3.failDeletes = false;
+    expect(await sweepPendingUploads()).toBe(0);
+    await expect(claim(key)).rejects.toMatchObject({ code: "missing" });
+    // The lease lapses; the next sweep deletes the object and the ticket.
+    await getPool().query(
+      `UPDATE soundboard_pending_uploads SET cleanup_until = NOW() - INTERVAL '1 second'`,
+    );
+    expect(await sweepPendingUploads()).toBe(1);
+    expect(s3.deleted).toEqual([key]);
+    const gone = await getPool().query(`SELECT 1 FROM soundboard_pending_uploads`);
+    expect(gone.rowCount).toBe(0);
   });
 
   it("never sweeps an upload that is claimed or still inside its signature", async () => {

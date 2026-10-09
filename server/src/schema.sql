@@ -5139,12 +5139,17 @@ CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
 -- A signed upload nobody has claimed yet. Durable and shared, so the cap of
 -- 24 holds across both API machines and a deploy cannot lose the record of an
 -- object that still has to be swept. The claim deletes its row in the same
--- transaction that inserts the sound; the sweep deletes the row first and the
--- object after, so exactly one of them ever owns a given file.
+-- transaction that inserts the sound. A cleanup leases the row (cleanup_until),
+-- deletes the object, and only then deletes the row, so exactly one of them
+-- owns a file at a time and a failed or interrupted cleanup is retried.
 CREATE TABLE IF NOT EXISTS soundboard_pending_uploads (
   storage_key TEXT PRIMARY KEY,
   server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-  expires_at  TIMESTAMPTZ NOT NULL
+  expires_at  TIMESTAMPTZ NOT NULL,
+  -- Set while a cleanup holds the file: the object is being deleted, so a
+  -- claim must not take the ticket. A cleanup that dies or fails simply lets
+  -- the lease lapse and the ticket becomes sweepable again.
+  cleanup_until TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_server

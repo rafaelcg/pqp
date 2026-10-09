@@ -185,60 +185,72 @@ export async function resolvePlayableSound(
   return sound;
 }
 
-/**
- * Give up on a signed upload: forget its pending row, then delete the object.
- *
- * The pending row is the ownership token. Whoever deletes it owns the file,
- * so a claim that already took the row (it deletes it in the transaction that
- * inserts the sound) is never raced: this finds nothing and leaves the object
- * alone. The S3 call is outside any transaction and holds no pooled client.
- */
-async function dropUnclaimedObject(key: string): Promise<void> {
-  const taken = await getPool().query(
-    `DELETE FROM soundboard_pending_uploads WHERE storage_key = $1`,
-    [key],
-  );
-  if ((taken.rowCount ?? 0) > 0) {
-    await deleteObject(key);
-  }
-}
-
+/** How long a cleanup holds a ticket while it deletes the object. */
+const CLEANUP_LEASE_SECONDS = 120;
 /** Past its signature plus this, an upload is abandoned: nothing will claim it. */
 const PENDING_GRACE_SECONDS = 60;
 const SWEEP_BATCH = 50;
 
 /**
+ * Delete the object behind tickets this process holds a lease on, then the
+ * tickets. The lease (`cleanup_until`) is what keeps a claim from taking a
+ * ticket whose file is going away; the ticket row is removed only after the
+ * object is gone, so a failed or interrupted delete leaves the row and the
+ * next sweep retries once the lease lapses. The S3 calls hold no connection
+ * and sit outside any transaction.
+ */
+async function finishCleanup(keys: string[]): Promise<void> {
+  for (const key of keys) {
+    try {
+      await deleteObject(key);
+    } catch {
+      continue;
+    }
+    await getPool()
+      .query(`DELETE FROM soundboard_pending_uploads WHERE storage_key = $1`, [
+        key,
+      ])
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Give up on a signed upload the claim rejected: lease its ticket, delete the
+ * object, then drop the ticket. Never touches a file a claim already took
+ * (its ticket is gone, so there is nothing to lease).
+ */
+async function dropUnclaimedObject(key: string): Promise<void> {
+  const leased = await getPool().query<{ storage_key: string }>(
+    `UPDATE soundboard_pending_uploads
+        SET cleanup_until = NOW() + make_interval(secs => $2)
+      WHERE storage_key = $1
+        AND (cleanup_until IS NULL OR cleanup_until <= NOW())
+      RETURNING storage_key`,
+    [key, CLEANUP_LEASE_SECONDS],
+  );
+  await finishCleanup(leased.rows.map((row) => row.storage_key));
+}
+
+/**
  * Sweep abandoned uploads, on whichever machine runs first. `SKIP LOCKED`
- * means two machines never take the same row. A failed object delete puts the
- * row back a minute later rather than leaking the file.
+ * means two machines never lease the same row.
  */
 export async function sweepPendingUploads(): Promise<number> {
-  const due = await getPool().query<{ storage_key: string; server_id: string }>(
-    `DELETE FROM soundboard_pending_uploads
+  const due = await getPool().query<{ storage_key: string }>(
+    `UPDATE soundboard_pending_uploads
+        SET cleanup_until = NOW() + make_interval(secs => $3)
       WHERE storage_key IN (
         SELECT storage_key FROM soundboard_pending_uploads
          WHERE expires_at <= NOW() - make_interval(secs => $1)
+           AND (cleanup_until IS NULL OR cleanup_until <= NOW())
          ORDER BY expires_at
          LIMIT $2
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING storage_key, server_id`,
-    [PENDING_GRACE_SECONDS, SWEEP_BATCH],
+      RETURNING storage_key`,
+    [PENDING_GRACE_SECONDS, SWEEP_BATCH, CLEANUP_LEASE_SECONDS],
   );
-  for (const row of due.rows) {
-    try {
-      await deleteObject(row.storage_key);
-    } catch {
-      await getPool()
-        .query(
-          `INSERT INTO soundboard_pending_uploads (storage_key, server_id, expires_at)
-           VALUES ($1, $2, NOW() + make_interval(secs => $3))
-           ON CONFLICT (storage_key) DO NOTHING`,
-          [row.storage_key, row.server_id, PENDING_GRACE_SECONDS * 2],
-        )
-        .catch(() => undefined);
-    }
-  }
+  await finishCleanup(due.rows.map((row) => row.storage_key));
   return due.rows.length;
 }
 
@@ -275,7 +287,7 @@ export async function createSoundboardUpload(input: {
   const expiresAtMs = Date.now() + UPLOAD_URL_TTL_SECONDS * 1000;
   // One statement under the server row lock, so two requests cannot both pass
   // a count of 23, and the count is the whole cluster's: stored sounds plus
-  // unexpired pending uploads.
+  // every ticket still in the table (one stays claimable until swept).
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -286,7 +298,7 @@ export async function createSoundboardUpload(input: {
       `SELECT (
          (SELECT COUNT(*) FROM soundboard_sounds WHERE server_id = $1) +
          (SELECT COUNT(*) FROM soundboard_pending_uploads
-           WHERE server_id = $1 AND expires_at > NOW())
+           WHERE server_id = $1)
        )::text AS n`,
       [input.serverId],
     );
@@ -379,7 +391,8 @@ export async function claimSoundboardSound(input: {
     // took it, or an earlier claim of the same key already finished.
     const ticket = await client.query(
       `DELETE FROM soundboard_pending_uploads
-        WHERE storage_key = $1 AND server_id = $2`,
+        WHERE storage_key = $1 AND server_id = $2
+          AND (cleanup_until IS NULL OR cleanup_until <= NOW())`,
       [input.key, input.serverId],
     );
     if ((ticket.rowCount ?? 0) === 0) {
