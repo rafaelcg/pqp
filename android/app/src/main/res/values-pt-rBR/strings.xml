@@ -238,6 +238,13 @@
     <string name="push_settings_server_unsupported">Este servidor ainda não envia notificações para o Android.</string>
     <string name="push_settings_denied">As notificações do pqp estão desativadas nos ajustes do Android.</string>
     <string name="push_settings_working">Registrando…</string>
+    <string name="push_settings_play_services">Este celular está sem o Google Play Services (ou ele está desativado), então as notificações não chegam.</string>
+    <string name="push_settings_offline">Não deu para falar com o pqp para ativar as notificações. Tentando de novo.</string>
+    <string name="push_settings_rejected">O pqp recusou o registro deste celular. Desative e ative as notificações de novo.</string>
+    <string name="push_prompt_title">Ativar notificações?</string>
+    <string name="push_prompt_body">Receba um aviso quando alguém mencionar você, responder ou mandar uma DM com o pqp fechado. Dá para mudar quando quiser na aba Você.</string>
+    <string name="push_prompt_confirm">Ativar</string>
+    <string name="push_prompt_dismiss">Agora não</string>
 
     <!-- Você -->
     <string name="you_title">Você</string>

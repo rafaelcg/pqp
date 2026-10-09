@@ -37,10 +37,14 @@ import gg.pqp.app.R
  * than through a parameter, so wiring it in is one line on a screen several
  * other features are also appending to.
  *
- * The switch is honest about the three ways it can be unavailable, because each
+ * The switch is honest about the ways it can be unavailable, because each
  * needs a different thing from a different person: no Firebase project in the
- * build (Rafael), no FCM leg on the server (Rafael), or a permission the user
- * refused (the user, in Android settings).
+ * build (Rafael), no FCM leg on the server (Rafael), no Google Play services
+ * on the phone, a permission the user refused (the user, in Android settings),
+ * or a network that did not answer (nobody; it retries).
+ *
+ * Notifications are on by default (see [PushPrompt]); this switch is how a
+ * person turns them off, or back on after saying "not now".
  */
 @android.annotation.SuppressLint("InlinedApi")
 @Composable
@@ -69,10 +73,14 @@ fun PushSettingsSection(modifier: Modifier = Modifier) {
         // Only register once there is permission to draw something. A token
         // filed for an app that is not allowed to show a notification is a row
         // on the server that produces silence.
-        if (granted) push.enable()
+        // Also settles the one-time explainer, so a refusal here is not
+        // followed by the prompt on the next launch.
+        push.promptAnswered(granted)
     }
 
-    val configured = state !is PushState.Unavailable && state !is PushState.ServerUnsupported
+    val configured = state !is PushState.Unavailable &&
+        state !is PushState.ServerUnsupported &&
+        state !is PushState.PlayServicesMissing
 
     Column(modifier.fillMaxWidth()) {
         Row(
@@ -113,10 +121,13 @@ fun PushSettingsSection(modifier: Modifier = Modifier) {
             state is PushState.Unavailable -> stringResource(R.string.push_settings_unavailable)
             state is PushState.ServerUnsupported ->
                 stringResource(R.string.push_settings_server_unsupported)
+            state is PushState.PlayServicesMissing ->
+                stringResource(R.string.push_settings_play_services)
             state is PushState.Registering -> stringResource(R.string.push_settings_working)
-            justRefused || (enabled && !permissionGranted) ->
+            state is PushState.PermissionDenied || justRefused || (enabled && !permissionGranted) ->
                 stringResource(R.string.push_settings_denied)
-            state is PushState.Failed -> (state as PushState.Failed).reason
+            state is PushState.Offline -> stringResource(R.string.push_settings_offline)
+            state is PushState.Rejected -> stringResource(R.string.push_settings_rejected)
             else -> null
         }
         if (note != null) {
@@ -140,7 +151,7 @@ fun PushSettingsSection(modifier: Modifier = Modifier) {
  * there.
  */
 @android.annotation.SuppressLint("InlinedApi")
-private fun hasNotificationPermission(context: Context): Boolean {
+internal fun hasNotificationPermission(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
     return ContextCompat.checkSelfPermission(
         context,

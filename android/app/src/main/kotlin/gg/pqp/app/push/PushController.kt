@@ -12,7 +12,10 @@ import gg.pqp.app.BuildConfig
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,9 +35,9 @@ sealed interface PushState {
     data object Unavailable : PushState
 
     /**
-     * The build could send, but the server has no FCM leg to send *from*.
-     * Also the state a build lands in when registration is refused, because a
-     * server that will not accept the token is a server that cannot use it.
+     * The build could send, but the server has no FCM leg to send *from*:
+     * `GET /api/push/config` said `fcm: false`, or the registration came back
+     * 409. Nothing else lands here; a network blip is [Offline], not this.
      */
     data object ServerUnsupported : PushState
 
@@ -46,8 +49,21 @@ sealed interface PushState {
     /** A token is registered against this account on this server. */
     data object On : PushState
 
-    /** A transient failure worth a sentence on screen. */
-    data class Failed(val reason: String) : PushState
+    /**
+     * The API could not be reached, or answered with something a later attempt
+     * can fix. A retry with backoff is already scheduled (see
+     * [PushFailures.backoffMillis]); the next launch starts over if it runs out.
+     */
+    data object Offline : PushState
+
+    /** Android will not let this app draw notifications. Fixed in Android settings. */
+    data object PermissionDenied : PushState
+
+    /** No Google Play services on this phone, so there is no FCM to register with. */
+    data object PlayServicesMissing : PushState
+
+    /** The server looked at the registration and refused it. Retrying repeats it. */
+    data object Rejected : PushState
 }
 
 /**
@@ -107,6 +123,18 @@ class PushController(
 
     private val _enabled = MutableStateFlow(prefs.getBoolean(KEY_ENABLED, false))
 
+    /**
+     * Whether the one-time "turn on notifications?" explainer should be on
+     * screen. Computed at sign-in, answered with [promptAnswered], and never
+     * raised again once it has been answered either way: a person who said no
+     * finds the switch on the You screen, they are not asked a second time.
+     */
+    private val _promptNeeded = MutableStateFlow(false)
+    val promptNeeded: StateFlow<Boolean> = _promptNeeded.asStateFlow()
+
+    /** The registration in flight, or sleeping between retries. One at a time. */
+    private var registerJob: Job? = null
+
     /** The switch's position, which survives a reinstall of nothing and a relaunch of everything. */
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
 
@@ -151,17 +179,33 @@ class PushController(
     private fun onSignedIn() {
         scope.launch {
             refreshConfig()
-            // Re-register on every launch, not only on the launch where
-            // permission was granted. FCM rotates a token on restore, on
-            // cleared data and after long silences, and the old one stops
-            // working without telling anybody.
-            if (enabledByUser && _state.value !is PushState.ServerUnsupported) {
-                register()
+            if (!BuildConfig.PUSH_AVAILABLE) return@launch
+            if (_state.value is PushState.ServerUnsupported) return@launch
+            when {
+                // Re-register on every launch, not only on the launch where
+                // permission was granted. FCM rotates a token on restore, on
+                // cleared data and after long silences, and the old one stops
+                // working without telling anybody.
+                enabledByUser -> startRegistration()
+                // On by default: somebody who has never answered gets
+                // notifications as soon as Android allows them. Below Android
+                // 13 (or with the permission already held) there is nothing to
+                // ask, so it simply turns on. From 13 up an in-app explainer
+                // comes first and the system dialog second.
+                !decided -> {
+                    if (hasNotificationPermission(app)) enable() else _promptNeeded.value = true
+                }
             }
         }
     }
 
+    /** The person (or this app on their behalf) has settled the question. */
+    private val decided: Boolean
+        get() = prefs.contains(KEY_ENABLED) || prefs.getBoolean(KEY_PROMPTED, false)
+
     private fun onSignedOut() {
+        registerJob?.cancel()
+        _promptNeeded.value = false
         VisibleChannel.clear()
         notifier.clearAll()
         val token = lastToken
@@ -206,10 +250,12 @@ class PushController(
     fun enable() {
         if (!BuildConfig.PUSH_AVAILABLE) return
         enabledByUser = true
-        scope.launch { register() }
+        _promptNeeded.value = false
+        startRegistration()
     }
 
     fun disable() {
+        registerJob?.cancel()
         enabledByUser = false
         val token = lastToken
         lastToken = null
@@ -219,19 +265,80 @@ class PushController(
         scope.launch { runCatching { firebaseDeleteToken() } }
     }
 
-    private suspend fun register() {
-        _state.value = PushState.Registering
-        val token = runCatching { firebaseToken() }.getOrElse { error ->
-            // The overwhelmingly likely cause is a build with no Firebase
-            // project, which the flag should already have caught; anything else
-            // is Google Play services missing or too old, which is a real
-            // device state on some hardware and not something to nag about.
-            Log.w(TAG, "no FCM token: ${error.message}")
-            _state.value = PushState.Unavailable
-            return
+    /**
+     * The explainer dialog was answered. [granted] is the outcome of the system
+     * permission request that followed "Turn on"; a "Not now" passes false
+     * without ever having asked. Either way the question is settled for good.
+     */
+    fun promptAnswered(granted: Boolean) {
+        prefs.edit { putBoolean(KEY_PROMPTED, true) }
+        _promptNeeded.value = false
+        if (granted) {
+            enable()
+        } else {
+            enabledByUser = false
         }
-        submit(token)
     }
+
+    private fun startRegistration() {
+        registerJob?.cancel()
+        registerJob = scope.launch { registerWithBackoff() }
+    }
+
+    /**
+     * Register, and on a transient failure keep trying on the
+     * [PushFailures.backoffMillis] schedule. Every other outcome is final for
+     * this attempt and puts its own reason on screen.
+     */
+    private suspend fun registerWithBackoff() {
+        var attempt = 0
+        while (true) {
+            if (_state.value !is PushState.Offline) _state.value = PushState.Registering
+            val failure = attemptRegistration() ?: return
+            _state.value = stateFor(failure)
+            if (failure != PushFailure.Transient) return
+            val wait = PushFailures.backoffMillis(attempt++) ?: return
+            delay(wait)
+        }
+    }
+
+    /** One try. Null is success; otherwise what went wrong. */
+    private suspend fun attemptRegistration(): PushFailure? {
+        // Checked before the token: a revoked permission is a state with its
+        // own sentence, and a token filed for an app that may not draw
+        // anything is a row that produces silence.
+        if (!hasNotificationPermission(app)) return PushFailure.PermissionDenied
+        val playServices = playServicesPresent()
+        if (!playServices) return PushFailure.PlayServicesMissing
+        val token = try {
+            firebaseToken()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Log.w(TAG, "no FCM token: ${error.message}")
+            return PushFailures.classifyToken(error, playServices)
+        }
+        return submit(token)
+    }
+
+    private fun stateFor(failure: PushFailure): PushState = when (failure) {
+        PushFailure.ServerNotConfigured -> PushState.ServerUnsupported
+        PushFailure.Transient -> PushState.Offline
+        PushFailure.PermissionDenied -> PushState.PermissionDenied
+        PushFailure.PlayServicesMissing -> PushState.PlayServicesMissing
+        PushFailure.Rejected -> PushState.Rejected
+    }
+
+    /**
+     * Whether Google Play services is installed and enabled. Without it
+     * `FirebaseMessaging` has nothing to talk to, which is a normal state for
+     * a Huawei or de-Googled phone and not worth retrying. The manifest's
+     * `<queries>` entry is what lets this see the package on Android 11+.
+     */
+    @Suppress("DEPRECATION")
+    private fun playServicesPresent(): Boolean =
+        runCatching { app.packageManager.getApplicationInfo(GMS_PACKAGE, 0).enabled }
+            .getOrDefault(false)
 
     /**
      * `onNewToken`, arriving from [PqpMessagingService].
@@ -246,24 +353,22 @@ class PushController(
             lastToken = token
             return
         }
-        scope.launch { submit(token) }
+        startRegistration()
     }
 
-    private suspend fun submit(token: String) {
-        runCatching { api.register(token) }
-            .onSuccess {
-                lastToken = token
-                _state.value = PushState.On
-            }
-            .onFailure { error ->
-                // A 400 here is not a bug in this client and not something to
-                // put in front of anybody: it is the server's registration
-                // schema refusing a shape it does not know, which is exactly
-                // what it does until an FCM leg exists. See PushApi's note.
-                Log.w(TAG, "push registration refused: ${error.message}")
-                _state.value = PushState.ServerUnsupported
-            }
-    }
+    /** POST the token. Null on success, otherwise the classified failure. */
+    private suspend fun submit(token: String): PushFailure? =
+        try {
+            api.register(token)
+            lastToken = token
+            _state.value = PushState.On
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Log.w(TAG, "push registration failed: ${error.message}")
+            PushFailures.classifyRegistration(error)
+        }
 
     // ------------------------------------------------------------- delivery
 
@@ -397,5 +502,7 @@ class PushController(
         const val PREFS = "pqp.push"
         const val KEY_ENABLED = "enabled"
         const val KEY_TOKEN = "token"
+        const val KEY_PROMPTED = "prompted"
+        const val GMS_PACKAGE = "com.google.android.gms"
     }
 }

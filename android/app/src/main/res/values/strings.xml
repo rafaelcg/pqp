@@ -250,6 +250,13 @@
     <string name="push_settings_server_unsupported">This server cannot send notifications to Android yet.</string>
     <string name="push_settings_denied">Notifications are turned off for pqp in Android settings.</string>
     <string name="push_settings_working">Registering…</string>
+    <string name="push_settings_play_services">Google Play services is missing or turned off on this phone, so notifications cannot be delivered.</string>
+    <string name="push_settings_offline">Could not reach pqp to turn notifications on. Trying again.</string>
+    <string name="push_settings_rejected">pqp refused to register this phone for notifications. Try turning it off and on again.</string>
+    <string name="push_prompt_title">Turn on notifications?</string>
+    <string name="push_prompt_body">Get a heads-up when someone mentions you, replies to you or sends you a direct message while pqp is closed. You can change this any time in You.</string>
+    <string name="push_prompt_confirm">Turn on</string>
+    <string name="push_prompt_dismiss">Not now</string>
 
     <!-- You -->
     <string name="you_title">You</string>
