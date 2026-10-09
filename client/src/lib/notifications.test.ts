@@ -26,7 +26,10 @@ const CHANNEL = "22222222-2222-4222-8222-222222222222";
 function stateWith(overrides: Partial<NotificationState> = {}): NotificationState {
   return {
     desktop: true,
+    desktopChosen: false,
     default: "all",
+    dmDefault: null,
+    serverDefault: null,
     servers: {},
     channels: {},
     arrivalToast: true,

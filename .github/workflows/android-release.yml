@@ -104,6 +104,24 @@ jobs:
           fi
           echo "Tag commit is reachable from main."
 
+      # Same step as android.yml, same secret. Without it the bundle compiles
+      # with PUSH_AVAILABLE=false (build.gradle.kts applies the google-services
+      # plugin only when the file exists) and a Play install can never receive
+      # an FCM push. The file is gitignored: it names a live Firebase project.
+      # The project it names must be the one the server's FCM_PROJECT_ID uses.
+      - name: Write google-services.json (enables FCM push when the secret is set)
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -uo pipefail
+          if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
+            echo "${GOOGLE_SERVICES_JSON}" | base64 --decode > android/app/google-services.json
+            echo "google-services.json written ($(wc -c < android/app/google-services.json) bytes) -- FCM enabled"
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is empty; this bundle has push DISABLED."
+          fi
+
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:

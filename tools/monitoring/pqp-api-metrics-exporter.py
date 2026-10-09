@@ -584,6 +584,8 @@ def _merge_product(a: dict | None, b: dict | None) -> dict | None:
     for key in ("friendships", "pendingFriendRequests", "attachments", "invites", "push"):
         out[key] = take_first(a.get(key), b.get(key))
     out["pushDelivery"] = deep_sum(a.get("pushDelivery"), b.get("pushDelivery"))
+    # Same shape and same convention: in-process, since boot, per replica.
+    out["pushSkipped"] = deep_sum(a.get("pushSkipped"), b.get("pushSkipped"))
     return out
 
 
@@ -1230,6 +1232,24 @@ def render(
             lines,
             "pqp_api_push_delivery_total",
             "Push sends by platform and outcome (product.pushDelivery): sent, failed, pruned.",
+            samples,
+        )
+
+    # Pushes NOT sent, by kind and the first rule that refused the recipient
+    # (product.pushSkipped, services/push-skips.ts). `live_socket` is the rule
+    # that silenced every phone while any socket was open anywhere.
+    push_skipped = product.get("pushSkipped") or {}
+    if isinstance(push_skipped, dict) and push_skipped:
+        samples = []
+        for kind, reasons in sorted(push_skipped.items()):
+            if not isinstance(reasons, dict):
+                continue
+            for reason, count in sorted(reasons.items()):
+                samples.append(({"kind": kind, "reason": reason}, count))
+        labeled_counter(
+            lines,
+            "pqp_api_push_skipped_total",
+            "Pushes not sent, by kind and reason (product.pushSkipped).",
             samples,
         )
 

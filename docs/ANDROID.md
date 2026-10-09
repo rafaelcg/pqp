@@ -8,7 +8,9 @@ direct messages and the friends list are built and verified end to end against a
 live local server. Voice carries audio between two clients, measured at both
 ends rather than inferred from a connection state. Screen sharing sends and
 receives, and the resolution was checked where it arrives rather than where it
-was asked for. Push is built on the client and has **no server leg at all**. The
+was asked for. Push is built on both sides (the server's FCM leg is `server/src/services/fcm.ts`),
+is on by default after sign-in, and has not been confirmed on a real Play-installed
+phone yet; see **Push on the Play build** below. The
 honest boundaries, including the one thing about audio that is still not proven,
 are in **What is real** at the bottom, and what the integration itself fixed is
 in **What the integration fixed** below.
@@ -69,8 +71,9 @@ the order to cut from the bottom:
 2. Voice with a foreground service. **Done, and audio measured on both sides.**
 3. Screen sharing via `MediaProjection`, send and receive. **Done.**
 4. Push via FCM, as the third leg of `server/src/services/push.ts`. **Client
-   built; the server leg is specified and unwritten, and it needs a Firebase
-   project that does not exist. See the push section below.**
+   and server legs built. Whether a Play build receives it depends on the
+   `GOOGLE_SERVICES_JSON` secret reaching the release workflow; see the push
+   section below.**
 5. DMs and the friends list. **Done, and verified between two clients.**
 6. Attachments, reactions, invites, everything on the parity list.
 
@@ -2543,6 +2546,40 @@ until then. The day those secrets exist the config answers `fcm: true`, and
 already-installed builds start offering it with no client change — which is the
 whole reason that gate was a config read rather than a build flag.
 
+### Push on the Play build
+
+Three things kept a Play-installed phone from ever receiving a push, all fixed
+together:
+
+1. **`android-release.yml` never wrote `google-services.json`.** Only
+   `android.yml` (the sideload APK) did, so the Play bundle compiled with
+   `PUSH_AVAILABLE=false` and could not register no matter what the server had.
+   The release workflow now writes it from the same `GOOGLE_SERVICES_JSON`
+   secret, before the build. The Firebase project that file names must be the
+   one the server's `FCM_PROJECT_ID` points at, or the server sends to a
+   project that never issued the token.
+2. **Opt-in, default off.** Nobody found the switch on the You screen. After
+   sign-in the app now turns notifications on by itself. Below Android 13 there
+   is nothing to ask. From 13 up, an in-app explainer (`PushPrompt`) comes
+   first, then the system `POST_NOTIFICATIONS` dialog, only for someone who
+   tapped "Turn on". The question is asked **once**: any answer, including
+   "Not now" and a refusal, is stored (`prompted` in the `pqp.push` prefs) and
+   the app never asks again. The switch stays and turns it off or back on.
+3. **Every failure said "this server cannot send notifications to Android
+   yet".** `PushFailures` (`push/PushFailure.kt`, pinned by `PushFailureTest`)
+   now tells them apart, each with its own sentence under the switch:
+
+| Cause | State | Retried |
+|---|---|---|
+| `fcm: false` from `/api/push/config`, or a 409 on register | `ServerUnsupported` | no |
+| Offline, timeout, 5xx, 429, 408, 425, 401 | `Offline` | yes, 5s / 15s / 45s / 2m / 5m, then on the next launch or token rotation |
+| Android refuses notifications | `PermissionDenied` | no |
+| No (or disabled) Google Play services | `PlayServicesMissing` | no |
+| Any other 4xx, or an unexpected error | `Rejected` | no |
+
+Not done here, on purpose (separate PRs): call pushes carry no `kind`, and DMs
+and mentions share one notification channel (`pqp.messages`).
+
 ### What the client does
 
 | Piece | Where |
@@ -3227,9 +3264,9 @@ above.
 
 Built and **partly verified**: push. Everything downstream of delivery is
 exercised on a device, including the guard that keeps a notification off a
-channel already on screen; FCM delivery itself is not, because no Firebase
-project exists and the server has no FCM leg. **Do not write "Android push
-works"** until a real device has received a real message from a real server.
+channel already on screen; FCM delivery itself is not confirmed on a Play
+install. **Do not write "Android push works"** until a real device running the
+Play build has received a real message from the production server.
 
 There are JVM unit tests over the pure parts worth pinning: the capture sizing
 arithmetic, the stats parsing, deep-link parsing, push presentation, the chat

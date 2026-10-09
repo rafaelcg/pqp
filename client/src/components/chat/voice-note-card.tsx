@@ -13,6 +13,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { cn, formatTime } from "@/lib/utils";
+import { VoiceNoteTranscriptLine } from "@/components/chat/voice-note-transcript";
 import { decodeWaveform } from "@/lib/voice-note-recorder";
 import {
   mountVoiceNote,
@@ -304,6 +305,11 @@ export function VoiceNoteCard({
       {isBroken && (
         <p className="mt-1 text-xs text-danger">{t("voiceNote.unavailable")}</p>
       )}
+      <VoiceNoteTranscriptLine
+        attachmentId={attachment.id}
+        base={voice.transcript}
+        isMine={message.isMine}
+      />
       {receipts.length > 0 && (
         <p className="mt-1 flex items-center gap-1.5 text-xs text-text-tertiary" data-voice-note-receipt>
           <Headphones className="h-3.5 w-3.5 shrink-0" aria-hidden />

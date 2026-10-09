@@ -264,6 +264,27 @@ now" feature (`docs/plans/WATCH_NOW.md`):
   `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
   reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
 
+Born as a flag (no old reader): `DESKTOP_NOTIFY_DEFAULT_ON`
+(`desktop_notify_default_on`, default off, **global only**), client-only. OS banners
+were opt-in behind a switch that defaults to off (19 of 7,012 accounts had it on),
+and one account default covered both DMs and servers. With the flag on, served as
+`desktopNotifyDefaultOn` on `GET /api/push/config`:
+
+- **Desktop app:** the banner switch reads ON until the person touches it
+  (`notifications.desktopChosen`). The shell already auto-grants the permission.
+- **Split defaults:** `notifications.dmDefault` (falls back to `default`, then
+  "all") and `notifications.serverDefault` (falls back to `default`, then
+  **"mentions"**), so a plain message in a server is not a banner by default.
+  The legacy `default` keeps meaning both until a person sets either. Migrated on
+  read, no `UPDATE`. A stored `default: "all"` does not count as a choice for
+  servers: the client wrote it on every save, so it cannot be told apart from the
+  initial value. Stream-start notices keep their old "all unless muted" reading.
+- **Browser:** the first DM or mention that arrives while the tab is hidden, with
+  the permission still undecided, leaves a one-time card ("Ativar notificações")
+  for when the person comes back (`components/layout/notify-offer-hint.tsx`).
+- **Server push:** `resolvePushLevel` honours an explicit `dmDefault` /
+  `serverDefault`; an account that set neither resolves exactly as before.
+
 Born as a flag (no old reader): `VOICE_NOTES` (`voice_notes`, default off,
 **per server**), voice notes in chat. A note is an ordinary attachment plus a
 `message_attachment_voice` side row; the flag is checked at mint against the
@@ -303,6 +324,21 @@ focused stays quiet, as before. Served as `notifyOpenChannel` on
 `GET /api/push/config`; an open tab follows on the next config refresh (focus or
 10 min). Global on purpose: that endpoint has no server in hand, so a
 per-server override would never be read.
+
+Born as a flag (no old reader): `MENTION_IDS_FROM_DB` (`mention_ids_from_db`,
+default off, **global**), role mentions that actually notify. `recordMentions`
+always wrote `message_mentions` rows for the members of a mentioned role (the
+badge after a refresh), but the live `channel-activity` `mention` flag and the
+push recipient list matched the typed tokens against usernames only, so `@mods`
+reached nobody while the message was fresh. With the flag on, `createMessage`
+returns the ids the rows were written for (`mentionedUserIds`), the sending
+instance reads the flag once, and both the local fan-out and the
+`chat.activity` cluster frame carry the ids, so the sibling machine never
+consults the flag and cannot disagree. The ids are unioned with the username
+match, never replacing it; @everyone, @here, mute levels, DND, blocks and
+membership are decided exactly as before. Off, the frame is byte for byte the
+old one. Pinned on real Postgres with two instances on the bus by
+`server/src/ws/role-mention-recipients.test.ts`.
 
 Staying environment-only, on purpose:
 

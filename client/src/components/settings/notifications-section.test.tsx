@@ -17,6 +17,8 @@ const env = vi.hoisted(() => ({
   permission: "default" as NotificationPermissionState,
   desktop: false,
   dmDetails: false,
+  /** `desktop_notify_default_on`: the two account defaults replace the one. */
+  split: false,
   /** What the browser answers when the system switch asks for permission. */
   requestResult: "granted" as NotificationPermissionState,
   /** Holds the push config back until called, to look at the loading state. */
@@ -57,12 +59,16 @@ vi.mock("@/hooks/use-notifications", async () => {
   const { useState } = await import("react");
   const state = {
     desktop: false,
+    desktopChosen: false,
     default: "mentions",
+    dmDefault: null,
+    serverDefault: null,
     arrivalToast: true,
     previewInApp: true,
   };
   return {
     useNotificationState: () => state,
+    useDesktopNotifyDefaultOn: () => env.split,
     // Holds its own permission the way the real hook does: it only changes
     // when the switch asks, or when something tells it to read again.
     useNotificationSettings: () => {
@@ -77,6 +83,8 @@ vi.mock("@/hooks/use-notifications", async () => {
         disable: vi.fn(),
         refreshPermission: () => setPermission(env.permission),
         setDefaultLevel: vi.fn(),
+        setDmDefaultLevel: vi.fn(),
+        setServerDefaultLevel: vi.fn(),
       };
     },
   };
@@ -126,6 +134,7 @@ beforeEach(() => {
     permission: "default",
     desktop: false,
     dmDetails: false,
+    split: false,
     requestResult: "granted",
     holdConfig: null,
   });
@@ -137,6 +146,35 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+});
+
+describe("NotificationsSection account defaults", () => {
+  const row = (id: string) => host!.querySelector(`[data-settings-row="${id}"]`);
+
+  it("flag off: the one default row, as before", async () => {
+    await mount();
+    expect(row("default-level")).not.toBeNull();
+    expect(row("dm-default-level")).toBeNull();
+    expect(row("server-default-level")).toBeNull();
+  });
+
+  it("flag on: a row for DMs and one for servers, and not the old single row", async () => {
+    env.split = true;
+    await mount();
+    expect(row("default-level")).toBeNull();
+    expect(row("dm-default-level")).not.toBeNull();
+    expect(row("server-default-level")).not.toBeNull();
+  });
+
+  it("flag on: the server row starts on mentions and the DM row follows the old default", async () => {
+    env.split = true;
+    await mount();
+    const checked = (id: string) =>
+      row(id)?.querySelector('[role="radio"][aria-checked="true"]')?.textContent;
+    // The mocked account carries `default: "mentions"`, a choice, so both follow it.
+    expect(checked("dm-default-level")).toBe("Only @mentions");
+    expect(checked("server-default-level")).toBe("Only @mentions");
+  });
 });
 
 describe("NotificationsSection push rows", () => {

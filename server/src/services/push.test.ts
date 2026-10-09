@@ -63,6 +63,7 @@ const {
   truncateLabel,
   wantsDmDetails,
 } = await import("./push.js");
+const { pushSkippedSnapshot, resetPushSkips } = await import("./push-skips.js");
 const {
   resetApnsJwtCacheForTests,
   setApnsTransportForTests,
@@ -261,6 +262,50 @@ describe("resolvePushLevel", () => {
     expect(resolvePushLevel(settings, null, "44444444-4444-4444-4444-444444444444")).toBe(
       "none",
     );
+  });
+
+  describe("the split account defaults", () => {
+    const dm = "44444444-4444-4444-4444-444444444444";
+
+    it("keep meaning `default` for both until a person sets either", () => {
+      const settings = { notifications: { default: "mentions" as const } };
+      expect(resolvePushLevel(settings, null, dm)).toBe("mentions");
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("mentions");
+    });
+
+    it("dmDefault speaks for conversations only, serverDefault for servers only", () => {
+      const settings = {
+        notifications: {
+          default: "all" as const,
+          dmDefault: "none" as const,
+          serverDefault: "mentions" as const,
+        },
+      };
+      expect(resolvePushLevel(settings, null, dm)).toBe("none");
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("mentions");
+    });
+
+    it("setting one leaves the other on the legacy default", () => {
+      const onlyServers = { notifications: { default: "none" as const, serverDefault: "all" as const } };
+      expect(resolvePushLevel(onlyServers, serverId, channelId)).toBe("all");
+      expect(resolvePushLevel(onlyServers, null, dm)).toBe("none");
+      const onlyDms = { notifications: { dmDefault: "mentions" as const } };
+      expect(resolvePushLevel(onlyDms, null, dm)).toBe("mentions");
+      expect(resolvePushLevel(onlyDms, serverId, channelId)).toBe("all");
+    });
+
+    it("a server or channel override still beats both", () => {
+      const settings = {
+        notifications: {
+          serverDefault: "none" as const,
+          servers: { [serverId]: "all" as const },
+          channels: { [dm]: "all" as const },
+          dmDefault: "none" as const,
+        },
+      };
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("all");
+      expect(resolvePushLevel(settings, null, dm)).toBe("all");
+    });
   });
 });
 
@@ -583,6 +628,7 @@ describeDb("web push fan-out", () => {
       });
     });
     setLiveSocketProbeForTests((userId) => online.has(userId));
+    resetPushSkips();
 
     // APNs is configured for every case here. The two legs are independent, so
     // "web only" and "APNs only" are asserted explicitly in the cases that care
@@ -746,6 +792,8 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(fcmSent).toHaveLength(0);
+    // Not silent any more: a token on file for a leg nobody configured.
+    expect(pushSkippedSnapshot().message.transport_off).toBe(1);
   });
 
   it("sends an incoming-call push to an Android phone at HIGH priority", async () => {
@@ -791,6 +839,18 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    // The rule that silenced every phone on 2026-10-05, now counted.
+    expect(pushSkippedSnapshot().message.live_socket).toBe(1);
+  });
+
+  it("counts a recipient with no device on file as no_subscription", async () => {
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message).toMatchObject({
+      no_subscription: 1,
+      live_socket: 0,
+    });
   });
 
   it("never pushes the author, even self-mentioned", async () => {
@@ -818,6 +878,7 @@ describeDb("web push fan-out", () => {
     );
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.blocked).toBe(1);
   });
 
   it("skips a mention of somebody outside the audience", async () => {
@@ -844,6 +905,7 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.dnd).toBe(1);
   });
 
   it("respects a per-channel 'none' level", async () => {
@@ -857,6 +919,7 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.muted).toBe(1);
   });
 
   // ------------------------------------------------------------------- DMs
@@ -969,6 +1032,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.level).toBe(1);
   });
 
   // ---------------------------------------------------------- incoming calls
@@ -987,6 +1051,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+    expect(pushSkippedSnapshot().call.live_socket).toBe(1);
     expect(sent[0]!.payload.title).toBe("ana");
     expect(sent[0]!.payload.body).toBe("Incoming group call");
     expect(sent[0]!.payload.path).toBe(`/app/dm/${conversation.channelId}`);
@@ -1035,6 +1100,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().call.dnd).toBe(1);
   });
 
   it("the call push and the missed-call push share the conversation id as tag", async () => {

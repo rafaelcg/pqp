@@ -137,9 +137,11 @@ export type NotificationLevel = z.infer<typeof notificationLevelSchema>;
  * — one chatty #general turned down inside an otherwise normal server — costs
  * two keys rather than a row per channel the user is in.
  *
- * The whole object is replaced on write, never patched key by key: the
- * preference store merges one level deep (jsonb `||`), so a client that sent
- * `{ channels: { x: "none" } }` would drop every other channel's choice.
+ * The maps inside it (`servers`, `channels`, `streamAlerts`) are replaced
+ * whole on write, never patched key by key, so a client that sent
+ * `{ channels: { x: "none" } }` would drop every other channel's choice. The
+ * object itself is merged one level deep by the server: a key a client leaves
+ * out (an older build that predates `dmDefault`, say) keeps its stored value.
  */
 export const notificationPreferencesSchema = z.object({
   /**
@@ -148,7 +150,31 @@ export const notificationPreferencesSchema = z.object({
    * which cannot be re-requested without another explicit click.
    */
   desktop: z.boolean().optional(),
+  /**
+   * Whether the person ever touched the OS-banner switch. `desktop` alone
+   * cannot say: the client writes every field on every save, so a stored
+   * `desktop: false` is usually "never asked", not "said no". With the
+   * `desktop_notify_default_on` flag the desktop app treats the switch as ON
+   * until this is true.
+   */
+  desktopChosen: z.boolean().optional(),
+  /**
+   * The account-wide level for BOTH direct messages and servers, kept for
+   * every client that predates the split below (the phones write it). It keeps
+   * meaning both until a person sets either of the two that follow.
+   */
   default: notificationLevelSchema.optional(),
+  /**
+   * The account-wide level for direct messages and group conversations. Absent
+   * falls back to `default`, then to "all".
+   */
+  dmDefault: notificationLevelSchema.optional(),
+  /**
+   * The account-wide level for server channels. Absent falls back to `default`
+   * and, where the client's `desktop_notify_default_on` flag is on, to
+   * "mentions". A plain message in a busy server is never a banner by default.
+   */
+  serverDefault: notificationLevelSchema.optional(),
   servers: z.record(z.string().uuid(), notificationLevelSchema).optional(),
   channels: z.record(z.string().uuid(), notificationLevelSchema).optional(),
   /** The MSN-style arrival card for a conversation message. Default true. */

@@ -11,11 +11,15 @@ import {
 } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
-import { useNotificationSettings, useNotificationState } from "@/hooks/use-notifications";
+import {
+  useDesktopNotifyDefaultOn,
+  useNotificationSettings,
+  useNotificationState,
+} from "@/hooks/use-notifications";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { DOWNLOAD_PAGE_PATH } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel, type NotificationPermissionState } from "@/lib/notifications";
+import { desktopBannersEnabled, dmDefaultLevel, serverDefaultLevel, setArrivalToastEnabled, setPreviewInAppEnabled, type NotificationLevel, type NotificationPermissionState } from "@/lib/notifications";
 import { getIncomingRing, getSoundState, playCue, setIncomingRing, setSoundCueEnabled, setSoundEnabled, subscribeSounds, type IncomingRingId, type SoundCue } from "@/lib/sounds";
 import { disablePush, enablePush, getCurrentPushSubscription, getPushAvailability, getPushConfig, setPushDmDetails, type PushAvailability } from "@/lib/push";
 import { usePreferenceSyncFailed } from "@/lib/preferences";
@@ -76,10 +80,21 @@ function sharedPushConfig(): ReturnType<typeof getPushConfig> {
 
 export function NotificationsSection() {
   const { t } = useTranslation();
-  const { state, permission, enable, disable, refreshPermission, setDefaultLevel } =
-    useNotificationSettings();
+  const {
+    state,
+    permission,
+    enable,
+    disable,
+    refreshPermission,
+    setDefaultLevel,
+    setDmDefaultLevel,
+    setServerDefaultLevel,
+  } = useNotificationSettings();
+  const splitDefaults = useDesktopNotifyDefaultOn();
   const push = usePushDevice(refreshPermission);
-  const active = state.desktop && permission === "granted";
+  // In the desktop app the switch starts on (`desktopBannersEnabled`), and the
+  // shell has already granted the permission it needs.
+  const active = desktopBannersEnabled(state) && permission === "granted";
   const syncFailed = usePreferenceSyncFailed(SYNCED_KEYS);
 
   return (
@@ -148,39 +163,85 @@ export function NotificationsSection() {
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.notifications.group.messages.title")}>
-        <SettingsRow
-          id="default-level"
-          label={t("settings.notifications.levelLabel")}
-          description={t("settings.notifications.levelHint")}
-          // Under the label at every width: the hint is two sentences and
-          // "Todas as mensagens" is the longest cell, so beside the label
-          // the control would squeeze both. Cells are sized by their text,
-          // not equal, so none is cut short.
-          stacked
-          control={
-            <RadioGroup
-              variant="segmented"
-              fit="content"
-              // One line on a phone: the three labels are 40px tall there
-              // already, but at full size "Todas as mensagens" pushes the
-              // last cell onto a second row.
-              className="max-sm:[&>button]:px-2.5 max-sm:[&>button]:text-xs"
-              label={t("settings.notifications.levelLabel")}
-              value={state.default}
-              onValueChange={setDefaultLevel}
-              options={LEVEL_OPTIONS.map((option) => ({
-                value: option.value,
-                label: t(option.label),
-              }))}
+        {splitDefaults ? (
+          <>
+            <LevelRow
+              id="dm-default-level"
+              label={t("settings.notifications.dmLevelLabel")}
+              hint={t("settings.notifications.dmLevelHint")}
+              value={dmDefaultLevel(state)}
+              onChange={setDmDefaultLevel}
             />
-          }
-        />
+            <LevelRow
+              id="server-default-level"
+              label={t("settings.notifications.serverLevelLabel")}
+              hint={t("settings.notifications.serverLevelHint")}
+              value={serverDefaultLevel(state)}
+              onChange={setServerDefaultLevel}
+            />
+          </>
+        ) : (
+          <LevelRow
+            id="default-level"
+            label={t("settings.notifications.levelLabel")}
+            hint={t("settings.notifications.levelHint")}
+            value={state.default}
+            onChange={setDefaultLevel}
+          />
+        )}
       </SettingsGroup>
 
       <DirectMessagesGroup push={push} permission={permission} />
 
       <SoundsGroup />
     </div>
+  );
+}
+
+/**
+ * One account-wide level: all, only mentions, nothing. Under the label at every
+ * width: the hint is two sentences and "Todas as mensagens" is the longest
+ * cell, so beside the label the control would squeeze both. Cells are sized by
+ * their text, not equal, so none is cut short.
+ */
+function LevelRow({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  value: NotificationLevel;
+  onChange: (level: NotificationLevel) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow
+      id={id}
+      label={label}
+      description={hint}
+      stacked
+      control={
+        <RadioGroup
+          variant="segmented"
+          fit="content"
+          // One line on a phone: the three labels are 40px tall there
+          // already, but at full size "Todas as mensagens" pushes the
+          // last cell onto a second row.
+          className="max-sm:[&>button]:px-2.5 max-sm:[&>button]:text-xs"
+          label={label}
+          value={value}
+          onValueChange={onChange}
+          options={LEVEL_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.label),
+          }))}
+        />
+      }
+    />
   );
 }
 

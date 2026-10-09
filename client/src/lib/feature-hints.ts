@@ -28,6 +28,9 @@ export const FEATURE_HINT_IDS = [
   "composerFormat",
   "channelPin",
   "shortcuts",
+  // Not in the attached queue: the notice is rendered by the composer itself,
+  // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
+  "voiceNoteTranscription",
 ] as const;
 
 export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
@@ -47,6 +50,7 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
+  voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
 
 /** Attached to a control, not the corner. First match mounts. */
@@ -376,4 +380,19 @@ export function shouldOfferChannelPinHint(input: {
 
 export function featureHintEligible(id: FeatureHintId): boolean {
   return !isAutomatedBrowser() && !isFeatureHintSeen(id);
+}
+
+/**
+ * The one-time "your voice notes are transcribed" notice, shown while somebody
+ * records. It states a fact about THIS note, so all three must hold: transcripts
+ * exist where the note is going (the flag), this account allows its notes to be
+ * transcribed (`mine`; someone who already turned it off has been told), and a
+ * recording is under way.
+ */
+export function shouldOfferVoiceNoteTranscriptionNotice(input: {
+  recording: boolean;
+  transcriptionOn: boolean;
+  mine: boolean;
+}): boolean {
+  return input.recording && input.transcriptionOn && input.mine;
 }

@@ -50,6 +50,7 @@ import { ComposerFormatPreview } from "@/components/chat/composer-format-preview
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
+import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
 import {
   VoiceNoteMicButton,
@@ -1453,7 +1454,11 @@ export function MessageComposer({
         ref={setCallHintHost}
         className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
       />
-      {formatHintEnabled && !isFormatBarOpen && !feedback && (
+      <VoiceNoteTranscriptionNotice
+        recording={voiceNoteActive}
+        serverId={voiceNotesServerId}
+      />
+      {formatHintEnabled && !isFormatBarOpen && !feedback && !voiceNoteActive && (
         <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
           <FeatureHint
             id="composerFormat"
