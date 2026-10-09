@@ -58,6 +58,16 @@ describe("loadNotifyConfig", () => {
     expect(isNotifyOpenChannelEnabled()).toBe(false);
   });
 
+  it("an older answer still counts when the newer ask failed", async () => {
+    const first = loadNotifyConfig();
+    const second = loadNotifyConfig();
+    asks.pending[1]!.reject(new Error("offline"));
+    await second;
+    asks.pending[0]!.resolve({ notifyOpenChannel: true });
+    await first;
+    expect(isNotifyOpenChannelEnabled()).toBe(true);
+  });
+
   it("a failed ask keeps the last answer", async () => {
     setNotifyConfigForTests({ notifyOpenChannel: true });
     const done = loadNotifyConfig();

@@ -40,19 +40,22 @@ export function notifyConfigFromPushConfig(answer: {
 }
 
 /**
- * Bumped by every ask. Two asks can be in flight at once (the page's first read
- * and a focus refresh), and the network does not promise to answer them in
- * order: only the newest ask may write, or an old `true` landing after the
- * operator's flip to `false` would put the switch back on until the next pass.
+ * Two asks can be in flight at once (the page's first read and a focus
+ * refresh) and the network does not promise to answer them in order. Each ask
+ * takes a number; an answer is applied only if it is newer than the last one
+ * applied. So a slow old `true` landing after the operator's flip to `false`
+ * is dropped, while an older answer still counts when the newer ask failed.
  */
-let generation = 0;
+let asked = 0;
+let applied = 0;
 
 export async function loadNotifyConfig(): Promise<void> {
-  generation += 1;
-  const mine = generation;
+  asked += 1;
+  const mine = asked;
   try {
     const next = notifyConfigFromPushConfig(await getPushConfig());
-    if (mine === generation) {
+    if (mine > applied) {
+      applied = mine;
       current = next;
     }
   } catch {
