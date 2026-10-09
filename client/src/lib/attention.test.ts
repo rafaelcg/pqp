@@ -144,4 +144,32 @@ describe("createAttentionTracker", () => {
 
     expect(sent).toEqual([true]);
   });
+
+  it("a send that throws is not counted as reported, and the next event retries it", () => {
+    let failNext = false;
+    const tracker = createAttentionTracker({
+      send: (value) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("socket closing");
+        }
+        sent.push(value);
+      },
+      isForeground: () => foreground,
+    });
+    tracker.setConnected(true);
+
+    foreground = false;
+    tracker.evaluate();
+    failNext = true;
+    vi.advanceTimersByTime(ATTENTION_BACKGROUND_GRACE_MS);
+    expect(sent).toEqual([true]);
+    expect(tracker.declared).toBe(false);
+
+    // Any later event (another blur, a visibilitychange) sends it.
+    tracker.evaluate();
+    expect(sent).toEqual([true, false]);
+    tracker.evaluate();
+    expect(sent).toEqual([true, false]);
+  });
 });

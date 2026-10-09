@@ -72,8 +72,15 @@ export function createAttentionTracker(
   const declare = (next: boolean) => {
     declared = next;
     if (connected && reported !== next) {
-      reported = next;
-      options.send(next);
+      // Recorded only once the send went through. A send that throws (a
+      // socket closing under it) leaves the value unreported, and the next
+      // event or the reconnect tries again.
+      try {
+        options.send(next);
+        reported = next;
+      } catch {
+        reported = null;
+      }
     }
   };
 
@@ -84,7 +91,13 @@ export function createAttentionTracker(
         declare(true);
         return;
       }
-      if (!declared || timer !== null) {
+      if (!declared) {
+        // Already background. Normally a no-op; it re-sends only if the last
+        // attempt did not go out.
+        declare(false);
+        return;
+      }
+      if (timer !== null) {
         return;
       }
       timer = setTimeout(() => {
