@@ -84,6 +84,26 @@ describe("NotifyOfferHint", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("a rejected permission request keeps the card so the person can try again", async () => {
+    enable.mockRejectedValueOnce(new Error("permission API failed"));
+    const onDismiss = vi.fn();
+    await mount(<NotifyOfferHint enabled onDismiss={onDismiss} />);
+    const press = async () => {
+      const cta = [...card()!.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Turn on notifications"),
+      );
+      await act(async () => {
+        cta!.click();
+      });
+    };
+    await press();
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(card()).not.toBeNull();
+    await press();
+    expect(enable).toHaveBeenCalledTimes(2);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
   it("'Not now' closes without asking the browser", async () => {
     const onDismiss = vi.fn();
     await mount(<NotifyOfferHint enabled onDismiss={onDismiss} />);

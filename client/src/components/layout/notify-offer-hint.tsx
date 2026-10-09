@@ -54,10 +54,14 @@ export function NotifyOfferHint({
     try {
       // The click is the gesture: this is where the browser's prompt opens.
       await enable();
-    } finally {
+    } catch {
+      // The permission API itself failed, which is not an answer from the
+      // person: the card stays, and the button can be pressed again.
       setBusy(false);
-      close();
+      return;
     }
+    setBusy(false);
+    close();
   };
 
   return (
