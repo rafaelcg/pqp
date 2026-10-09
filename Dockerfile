@@ -1,4 +1,7 @@
-FROM node:22-alpine AS base
+# Docker Hub rate-limits anonymous pulls from shared CI runners (a 429 on this
+# line blocked two API deploys on 2026-10-09). mirror.gcr.io is Google's public
+# pull-through cache of the same official image: no account, no limit we hit.
+FROM mirror.gcr.io/library/node:22-alpine AS base
 # pnpm version comes from the root package.json "packageManager" field.
 RUN corepack enable
 WORKDIR /app
@@ -20,7 +23,7 @@ COPY . .
 RUN pnpm run build
 
 # The application, shared by the two images below. Not built on its own.
-FROM node:22-alpine AS app
+FROM mirror.gcr.io/library/node:22-alpine AS app
 WORKDIR /app
 ENV NODE_ENV=production
 RUN corepack enable
