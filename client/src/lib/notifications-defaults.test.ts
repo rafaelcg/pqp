@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sounds = vi.hoisted(() => ({
   playActivitySound: vi.fn(),
   playCue: vi.fn(),
+  getSoundState: () => ({ enabled: true }),
 }));
 vi.mock("./sounds", () => sounds);
 
