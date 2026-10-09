@@ -89,7 +89,7 @@ export function RaisedHandQueue({
       <p
         data-hand-queue="compact"
         className={cn(
-          "flex shrink-0 items-center gap-1.5 text-[11px] text-paper-muted",
+          "flex shrink-0 items-center gap-1.5 overflow-clip text-[11px] text-paper-muted [overflow-clip-margin:4px]",
           className,
         )}
       >
@@ -97,7 +97,7 @@ export function RaisedHandQueue({
         <span className="sr-only">{t("voice.hand.queue")}</span>
         <span
           data-hand-queue-entry={queue[0]!.userId}
-          className="max-w-[8rem] truncate"
+          className="min-w-0 max-w-[8rem] shrink-[3] truncate"
         >
           {queue[0]!.displayName}
         </span>
@@ -111,9 +111,10 @@ export function RaisedHandQueue({
           />
         )}
         {/* One name and a count: the strip is a line, and the whole list is
-            one click away on the person's row in the sidebar. */}
+            one click away on the person's row in the sidebar. On a narrow
+            strip the name and the count give way before your own place. */}
         {queue.length > 1 && (
-          <span className="tabular-nums">
+          <span className="min-w-0 shrink-[3] truncate tabular-nums">
             {t("voice.hand.more", { count: queue.length - 1 })}
           </span>
         )}
@@ -121,7 +122,7 @@ export function RaisedHandQueue({
           <span
             aria-live="polite"
             data-hand-position={selfIndex + 1}
-            className="font-medium text-signal"
+            className="shrink-0 font-medium text-signal"
           >
             {selfLine}
           </span>

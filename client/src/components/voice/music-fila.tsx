@@ -452,8 +452,13 @@ export function MusicFila({
           // `--fila-room` is what the call split has left under the stage,
           // so a long queue scrolls instead of pushing the composer away.
           // Cut that short, the whole panel scrolls rather than letting its
-          // add field spill over the player below it.
-          className="flex max-h-[min(28rem,50dvh,var(--fila-room,28rem))] min-h-0 flex-col overflow-y-auto overscroll-contain"
+          // add field spill over the player below it. Not while the field's
+          // first-run card shows: it hangs out of the panel and a scroll
+          // container would cut it in half.
+          className={cn(
+            "flex max-h-[min(28rem,50dvh,var(--fila-room,28rem))] min-h-0 flex-col",
+            !fieldHintEnabled && "overflow-y-auto overscroll-contain",
+          )}
         >
           {panel}
         </section>
