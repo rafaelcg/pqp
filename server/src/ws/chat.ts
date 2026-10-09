@@ -61,6 +61,7 @@ import {
   timeoutMessage,
   type ActiveTimeout,
 } from "../services/sanctions.js";
+import { isEnabled } from "../lib/flags.js";
 import { pushChannelActivity } from "../services/push.js";
 import {
   getChannel,
@@ -1696,6 +1697,14 @@ async function notifyChannelActivity(
     mentionEveryone?: boolean;
     mentionHereUserIds?: readonly string[];
     /**
+     * Accounts the message's `message_mentions` rows were written for
+     * (`mention_ids_from_db`). Absent with the flag off, and from a sibling
+     * running a build that predates it. A role mention is resolved to people
+     * only in that table, so this is how a role member's live mention flag and
+     * push learn they were addressed. Additive to the username match.
+     */
+    mentionedUserIds?: readonly string[];
+    /**
      * The redacted preview of the message that caused this activity, for a
      * conversation only. Null/absent for a server channel, an
      * attachment-only message, or a message this instance has no preview
@@ -1720,6 +1729,7 @@ async function notifyChannelActivity(
   // be both larger and slower.
   const mentioned = new Set(mentions);
   const hereIds = new Set(options?.mentionHereUserIds ?? []);
+  const recordedIds = new Set(options?.mentionedUserIds ?? []);
 
   // A conversation is small (at most nine other people), so a preference read
   // per recipient here is a handful of queries on the rare frame that carries
@@ -1785,7 +1795,8 @@ async function notifyChannelActivity(
           user.id === repliedToUserId ||
           Boolean(user.username && mentioned.has(user.username)) ||
           options?.mentionEveryone === true ||
-          hereIds.has(user.id),
+          hereIds.has(user.id) ||
+          recordedIds.has(user.id),
         ...(previewWantedBy?.has(user.id)
           ? {
               preview: options!.preview!.preview,
@@ -1813,6 +1824,7 @@ async function notifyChannelActivity(
       blockerIds: blockers,
       mentionEveryone: options?.mentionEveryone === true,
       mentionHereUserIds: options?.mentionHereUserIds ?? [],
+      mentionedUserIds: options?.mentionedUserIds ?? [],
       // A conversation's voice note says so on the lock screen. Read off the
       // preview, which only a conversation carries; never waits on anything.
       voiceDurationMs: options?.preview?.isVoice
@@ -2244,6 +2256,13 @@ async function postChannelMessageAttempt(
   );
 
   const mentions = extractMentionUsernames(input.body);
+  // Read here, once, on the instance that took the send, and carried to the
+  // siblings in the frame: they never consult the flag themselves, so a flip
+  // that has reached one machine and not yet the other cannot make the two
+  // halves of one message disagree about who was mentioned.
+  const mentionedUserIds = isEnabled("mention_ids_from_db")
+    ? (dbMessage.mentionedUserIds ?? [])
+    : [];
   // Only a conversation's toast/preview reads message content — a server
   // channel's `channel-activity` frame stays exactly the notification it
   // always was (see the schema comment on `channelActivitySchema`).
@@ -2268,6 +2287,9 @@ async function postChannelMessageAttempt(
       repliedToUserId: parent?.author_id ?? null,
       mentionEveryone,
       mentionHereUserIds: hereUserIds,
+      // Left out entirely with the flag off, so the frame is byte for byte
+      // the old one.
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
       preview: preview ?? null,
     });
   }
@@ -2276,7 +2298,12 @@ async function postChannelMessageAttempt(
     input.author.id,
     mentions,
     parent?.author_id ?? null,
-    { mentionEveryone, mentionHereUserIds: hereUserIds, preview },
+    {
+      mentionEveryone,
+      mentionHereUserIds: hereUserIds,
+      mentionedUserIds,
+      preview,
+    },
   );
 
   const threadInfo = await getThreadInfo(input.channelId);
@@ -2834,6 +2861,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       webPush: false,
       mentionEveryone: frame?.mentionEveryone === true,
       mentionHereUserIds,
+      mentionedUserIds: asStringArray(frame?.mentionedUserIds) ?? [],
       preview: asMessagePreview(frame?.preview),
     },
   ).catch((error) => {
