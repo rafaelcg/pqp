@@ -590,6 +590,23 @@ def _merge_product(a: dict | None, b: dict | None) -> dict | None:
     return out
 
 
+def _merge_voice_notes(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.voiceNotes` (services/voice-note-metrics.ts). Everything in it
+    is read from Postgres (the notes, the speech_jobs queue, the daily speech
+    budget), which both replicas and the worker share, so it is the same on
+    either replica and is taken from one. The single exception is `refusals`:
+    requests the API turned away before anything was stored, counted in the
+    process that answered them, since that process booted. That one is
+    ADDITIVE, like `calls`. A replica on an API older than the block reports
+    none, and the other's block is used whole."""
+    if not a and not b:
+        return None
+    body = a if a else b
+    out = {key: value for key, value in body.items() if key != "refusals"}
+    out["refusals"] = deep_sum((a or {}).get("refusals"), (b or {}).get("refusals"))
+    return out
+
+
 # ----- top-level policy table ----------------------------------------------
 
 # SHARED / PER-INSTANCE-HEALTH: DB-derived (every replica queries the same
@@ -620,6 +637,7 @@ _CUSTOM_MERGERS = {
     "liveHls": _merge_live_hls,
     "watchParty": _merge_watch_party,
     "product": _merge_product,
+    "voiceNotes": _merge_voice_notes,
 }
 
 _warned_unclassified_keys: set[str] = set()
@@ -707,6 +725,214 @@ def pool_wait_across(payloads: list[dict]) -> dict | None:
         "authPeakQueued": max(((g.get("peakQueued") or 0) for g in auth), default=0),
         "authOverflowed": sum((g.get("overflowed") or 0) for g in auth),
     }
+
+
+def _vn_num(value) -> float | int:
+    return value if _is_number(value) else 0
+
+
+def _vn_label(value: object) -> str:
+    """A label value from the payload, made safe for the text format. The
+    content types and statuses are bounded server-side, but a quote or a
+    newline in one would corrupt the whole textfile, so never trust it."""
+    return str(value).replace("\\", "").replace('"', "").replace("\n", " ")
+
+
+def render_voice_notes(lines: list[str], voice_notes: dict) -> None:
+    """The `voiceNotes` block (mensagens de voz). All gauges are DB-derived
+    rolling windows, except the refusals counter, which is summed across
+    replicas by _merge_voice_notes(). A nullable figure (a median with no
+    notes, a share with no denominator) is OMITTED rather than written as 0,
+    so a quiet day reads "no data" and not "notes are 0 seconds long".
+    Called only when the block is present, so an older API emits nothing."""
+    usage = voice_notes.get("usage") or {}
+    health = voice_notes.get("health") or {}
+
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_notes_minted",
+        "Voice notes minted (a row exists), sent or not, in the window "
+        "(voiceNotes.usage.minted24h / minted7d). The gap to _sent is notes recorded and discarded.",
+        [({"window": w}, _vn_num(usage.get(k))) for w, k in (("24h", "minted24h"), ("7d", "minted7d"))],
+    )
+    scope_samples = []
+    for window, key in (("24h", "byScope24h"), ("7d", "byScope7d")):
+        by_scope = usage.get(key) or {}
+        for scope in ("dm", "group", "server"):
+            scope_samples.append(({"window": window, "scope": scope}, _vn_num(by_scope.get(scope))))
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_notes_sent",
+        "Voice notes sent, by window and where they went (voiceNotes.usage.byScope24h / byScope7d): "
+        "dm, group, server. Sum over scope for the total.",
+        scope_samples,
+    )
+    type_samples = []
+    for window, key in (("24h", "byContentType24h"), ("7d", "byContentType7d")):
+        by_type = usage.get(key) or {}
+        if isinstance(by_type, dict):
+            for content_type, count in sorted(by_type.items()):
+                type_samples.append(({"window": window, "type": _vn_label(content_type)}, _vn_num(count)))
+    if type_samples:
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_sent_by_type",
+            "Voice notes sent by recorder container (voiceNotes.usage.byContentType24h / 7d): "
+            "audio/mp4 is Safari and the native apps, audio/webm Chromium and Firefox. "
+            "A type with no notes in a window has no series for it.",
+            type_samples,
+        )
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_notes_senders",
+        "Distinct people who sent at least one voice note (voiceNotes.usage.senders24h / senders7d).",
+        [({"window": w}, _vn_num(usage.get(k))) for w, k in (("24h", "senders24h"), ("7d", "senders7d"))],
+    )
+    duration = usage.get("durationSeconds") or {}
+    duration_samples = []
+    for window, total_key, median_key in (("24h", "total24h", "median24h"), ("7d", "total7d", "median7d")):
+        duration_samples.append(({"window": window, "stat": "total"}, _vn_num(duration.get(total_key))))
+        if _is_number(duration.get(median_key)):
+            duration_samples.append(({"window": window, "stat": "median"}, duration[median_key]))
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_notes_duration_seconds",
+        "Length of sent voice notes (voiceNotes.usage.durationSeconds): stat=total is the sum, "
+        "stat=median the middle note. No median series when nothing was sent in the window.",
+        duration_samples,
+    )
+    gauge(
+        lines,
+        "pqp_api_voice_notes_listens_24h",
+        "First plays recorded in the last 24h (voiceNotes.usage.listens24h). The author's own play is never counted.",
+        _vn_num(usage.get("listens24h")),
+    )
+    gauge(
+        lines,
+        "pqp_api_voice_notes_listeners_24h",
+        "Distinct people behind those first plays (voiceNotes.usage.listeners24h).",
+        _vn_num(usage.get("listeners24h")),
+    )
+    if _is_number(usage.get("listenedShare7d")):
+        gauge(
+            lines,
+            "pqp_api_voice_notes_listened_share_7d",
+            "Share 0..1 of last 7 days' sent notes heard at least once by someone other than the author "
+            "(voiceNotes.usage.listenedShare7d). Omitted when nothing was sent. Recent notes have had little time to be heard.",
+            usage["listenedShare7d"],
+        )
+
+    queue = health.get("queue") or {}
+    kinds = [k for k in ("transcription", "transcode") if isinstance(queue.get(k), dict)]
+    queue_samples = []
+    oldest_samples = []
+    for kind in kinds:
+        q = queue[kind]
+        for state, key in (
+            ("queued", "queued"),
+            ("running", "running"),
+            ("retrying", "retrying"),
+            ("expired_leases", "expiredLeases"),
+        ):
+            queue_samples.append(({"kind": kind, "state": state}, _vn_num(q.get(key))))
+        oldest_samples.append(({"kind": kind}, _vn_num(q.get("oldestQueuedSeconds"))))
+    if queue_samples:
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_queue",
+            "Unfinished speech jobs right now (voiceNotes.health.queue), by kind (transcription, transcode) "
+            "and state: queued, running, retrying (queued after a failed attempt), expired_leases "
+            "(running on a worker that died).",
+            queue_samples,
+        )
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_queue_oldest_seconds",
+            "How long the oldest DUE job has waited (voiceNotes.health.queue.*.oldestQueuedSeconds). 0 when "
+            "nothing is due. A healthy worker claims within its poll interval; climbing past a few minutes "
+            "means the worker is down, wedged or out of connections.",
+            oldest_samples,
+        )
+
+    jobs = health.get("jobs") or {}
+    job_kinds = [k for k in ("transcription", "transcode") if isinstance(jobs.get(k), dict)]
+    outcome_samples = []
+    latency_samples = []
+    for kind in job_kinds:
+        j = jobs[kind]
+        for outcome, key in (("ok", "ok24h"), ("skipped", "skipped24h"), ("failed", "failed24h")):
+            outcome_samples.append(({"kind": kind, "outcome": outcome}, _vn_num(j.get(key))))
+        for quantile, key in (("0.5", "p50Seconds"), ("0.95", "p95Seconds")):
+            if _is_number(j.get(key)):
+                latency_samples.append(({"kind": kind, "quantile": quantile}, j[key]))
+    if outcome_samples:
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_jobs_24h",
+            "Speech jobs that settled in the last 24h (voiceNotes.health.jobs), by kind and outcome. "
+            "A ROLLING-WINDOW GAUGE, not a counter: it falls as old jobs age out, so never use rate() or "
+            "increase() on it. skipped is a job settled on purpose without doing the work (message deleted, "
+            "sender declined, over budget); it is in neither side of a success rate.",
+            outcome_samples,
+        )
+    if latency_samples:
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_job_latency_seconds",
+            "Seconds from a job being queued to settling OK over the last 24h (voiceNotes.health.jobs.*.p50Seconds / "
+            "p95Seconds), queue wait included: what the listener feels. Omitted with no ok job.",
+            latency_samples,
+        )
+    transcripts = health.get("transcripts24h") or {}
+    if isinstance(transcripts, dict) and transcripts:
+        labeled_gauge(
+            lines,
+            "pqp_api_voice_notes_transcripts_24h",
+            "Where the last 24h's sent notes stand now, by transcript status (voiceNotes.health.transcripts24h): "
+            "none, pending, done, no_speech, failed, unavailable.",
+            [({"status": _vn_label(status)}, _vn_num(count)) for status, count in sorted(transcripts.items())],
+        )
+
+    budget = health.get("budget") or {}
+    if isinstance(budget, dict) and budget:
+        gauge(
+            lines,
+            "pqp_api_voice_notes_budget_used_seconds",
+            "Provider audio seconds spent today, UTC day (voiceNotes.health.budget.usedSeconds).",
+            _vn_num(budget.get("usedSeconds")),
+        )
+        gauge(
+            lines,
+            "pqp_api_voice_notes_budget_daily_seconds",
+            "VOICE_STT_DAILY_SECONDS as the API reads it (voiceNotes.health.budget.dailySeconds); "
+            "the worker enforces its own copy.",
+            _vn_num(budget.get("dailySeconds")),
+        )
+        gauge(
+            lines,
+            "pqp_api_voice_notes_budget_refused",
+            "Jobs turned away TODAY because the next note would not fit the budget "
+            "(voiceNotes.health.budget.refused). Above 0 means transcripts are unavailable until the UTC day rolls over.",
+            _vn_num(budget.get("refused")),
+        )
+        if _is_number(budget.get("usedShare")):
+            gauge(
+                lines,
+                "pqp_api_voice_notes_budget_used_ratio",
+                "usedSeconds / dailySeconds, 0..1+ (voiceNotes.health.budget.usedShare). Omitted when the budget is 0.",
+                budget["usedShare"],
+            )
+
+    refusals = voice_notes.get("refusals") or {}
+    if isinstance(refusals, dict) and refusals:
+        labeled_counter(
+            lines,
+            "pqp_api_voice_notes_refusal_total",
+            "Voice-note requests turned away before anything was stored, by reason (voiceNotes.refusals), "
+            "summed across replicas. Since process boot, so it resets on a deploy, which rate()/increase() handle. "
+            "reason=mint-flag-off is what tells the feature being off apart from nobody trying.",
+            [({"reason": _vn_label(reason)}, _vn_num(count)) for reason, count in sorted(refusals.items())],
+        )
 
 
 def render(
@@ -1265,6 +1491,12 @@ def render(
             "(product.pushAttentionPassed).",
             [({"kind": kind}, count) for kind, count in sorted(attention_passed.items())],
         )
+
+    # Voice notes (mensagens de voz): usage, queue health, speech budget and
+    # refusals. Absent on an API older than the block, and then so are the series.
+    voice_notes = payload.get("voiceNotes")
+    if isinstance(voice_notes, dict) and voice_notes:
+        render_voice_notes(lines, voice_notes)
 
     gauge(
         lines,
