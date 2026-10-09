@@ -1940,11 +1940,12 @@ function ActiveCall({
         <div className="flex h-9 min-w-0 items-center gap-2">
           <OccupantFaces faces={people} />
           {/* The names give way, the clock does not: on a phone the clock
-              was the part cut to "0:...". The line keeps the clock's room
-              and clips at its own edge, so a hand queue beside it on a
-              narrow strip never has the clock painted over it. */}
+              was the part cut to "0:...". Two columns, so the line is never
+              narrower than the clock however long the call has run, and a
+              hand queue beside it on a narrow strip takes its room from the
+              names, not from under the clock. */}
           <p
-            className="flex min-w-12 flex-1 items-center overflow-hidden text-sm leading-none text-text"
+            className="grid min-w-min flex-1 grid-cols-[minmax(0,max-content)_max-content] items-center text-sm leading-none text-text"
             role="status"
           >
             <span className="min-w-0 truncate">
@@ -1966,7 +1967,6 @@ function ActiveCall({
           {!(dockComposer && chromeExpanded) && (
           <RaisedHandQueue
             compact
-            className="min-w-0 shrink"
             participants={roomParticipants}
             selfUserId={voiceState.self?.userId ?? null}
             audience={

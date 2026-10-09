@@ -85,23 +85,37 @@ export function RaisedHandQueue({
         : null;
 
   if (compact) {
+    const showAllow = Boolean(audience && queue[0]!.userId !== selfUserId);
+    // One column per piece, so a narrow strip can take the line down to its
+    // fixed parts (the hand, the allow button, your own place) and no
+    // further: the first name and the count give way, those never do.
+    const columns = [
+      "auto",
+      "minmax(0,max-content)",
+      showAllow && "auto",
+      queue.length > 1 && "minmax(0,max-content)",
+      selfLine && "auto",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
       <p
         data-hand-queue="compact"
         className={cn(
-          "flex shrink-0 items-center gap-1.5 overflow-clip text-[11px] text-paper-muted [overflow-clip-margin:4px]",
+          "grid min-w-min grid-flow-col items-center gap-1.5 text-[11px] text-paper-muted",
           className,
         )}
+        style={{ gridTemplateColumns: columns }}
       >
         <Hand className="h-3 w-3 shrink-0 text-signal" aria-hidden="true" />
         <span className="sr-only">{t("voice.hand.queue")}</span>
         <span
           data-hand-queue-entry={queue[0]!.userId}
-          className="min-w-0 max-w-[8rem] shrink-[3] truncate"
+          className="min-w-0 max-w-[8rem] truncate"
         >
           {queue[0]!.displayName}
         </span>
-        {audience && queue[0]!.userId !== selfUserId && (
+        {audience && showAllow && (
           <AudienceAllowButton
             short
             name={queue[0]!.displayName}
@@ -111,10 +125,9 @@ export function RaisedHandQueue({
           />
         )}
         {/* One name and a count: the strip is a line, and the whole list is
-            one click away on the person's row in the sidebar. On a narrow
-            strip the name and the count give way before your own place. */}
+            one click away on the person's row in the sidebar. */}
         {queue.length > 1 && (
-          <span className="min-w-0 shrink-[3] truncate tabular-nums">
+          <span className="min-w-0 truncate tabular-nums">
             {t("voice.hand.more", { count: queue.length - 1 })}
           </span>
         )}
@@ -122,7 +135,7 @@ export function RaisedHandQueue({
           <span
             aria-live="polite"
             data-hand-position={selfIndex + 1}
-            className="shrink-0 font-medium text-signal"
+            className="whitespace-nowrap font-medium text-signal"
           >
             {selfLine}
           </span>
