@@ -96,7 +96,14 @@ import type {
   UpdateAutomodRuleInput,
   PublicInvitePreview,
 } from "@pqp/shared";
-import { publicInvitePreviewSchema } from "@pqp/shared";
+import {
+  LIVE_PREVIEW_ENDED_ERROR,
+  livePreviewListingSchema,
+  livePreviewStartResponseSchema,
+  publicInvitePreviewSchema,
+  type LivePreviewChannel,
+  type LivePreviewStartResponse,
+} from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 import { parseRetryAfterMs } from "./reconnect-jitter";
 
@@ -438,6 +445,107 @@ export function fetchPublicInvitePreview(
     invitePreviewCache.set(code, pending);
   }
   return pending;
+}
+
+// ------------------------------------------------ signed-out live preview
+
+/**
+ * Where a signed-out live preview was opened from: a community's public page
+ * or a community invite. See `lib/live-preview.ts`.
+ */
+export type LivePreviewSource =
+  | { kind: "community"; slug: string }
+  | { kind: "invite"; code: string };
+
+/**
+ * What is live in a community right now, for a visitor with no account.
+ * `GET /api/public/live-preview/communities/:slug` or `.../invites/:code`.
+ *
+ * NO AUTH HEADER, on purpose (a bare `fetch`), for `fetchPublicInvitePreview`'s
+ * reason: a stale token must not be able to turn a public read into a 401.
+ * Asked only when the page's own answer said `livePreview: true`, so with the
+ * flag off this request is never made. Every failure is "nothing live".
+ */
+export async function fetchLivePreviewListing(
+  source: LivePreviewSource,
+  options: { signal?: AbortSignal } = {},
+): Promise<{ livePreview: { channels: LivePreviewChannel[]; seconds: number } } | null> {
+  const path =
+    source.kind === "community"
+      ? `/api/public/live-preview/communities/${encodeURIComponent(source.slug)}`
+      : `/api/public/live-preview/invites/${encodeURIComponent(source.code)}`;
+  try {
+    const response = await fetch(`${getApiBaseUrl()}${path}`, {
+      headers: { Accept: "application/json" },
+      signal: options.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const parsed = livePreviewListingSchema.safeParse(await response.json());
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What a start request came back with, already sorted for the panel. */
+export type LivePreviewStartResult =
+  | { kind: "ok"; body: LivePreviewStartResponse }
+  | { kind: "ended" }
+  | { kind: "gone" }
+  | { kind: "retry" };
+
+/**
+ * `POST /api/public/live-preview/start`. `ageConfirmed` is sent only after the
+ * visitor's own device checked their date of birth; the date never leaves it.
+ * Bare `fetch`, no auth header, for the reason above.
+ */
+export async function startLivePreview(input: {
+  channelId: string;
+  ticket: string | null;
+}): Promise<LivePreviewStartResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBaseUrl()}/api/public/live-preview/start`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channelId: input.channelId,
+        ageConfirmed: true,
+        ...(input.ticket ? { ticket: input.ticket } : {}),
+      }),
+    });
+  } catch {
+    return { kind: "retry" };
+  }
+  return classifyLivePreviewStart(response.status, await response.json().catch(() => null));
+}
+
+/** Pure, for the tests: how the panel should read a start answer. */
+export function classifyLivePreviewStart(
+  status: number,
+  body: unknown,
+): LivePreviewStartResult {
+  if (status === 200) {
+    const parsed = livePreviewStartResponseSchema.safeParse(body);
+    return parsed.success ? { kind: "ok", body: parsed.data } : { kind: "retry" };
+  }
+  if (
+    status === 403 &&
+    body &&
+    typeof body === "object" &&
+    (body as { error?: unknown }).error === LIVE_PREVIEW_ENDED_ERROR
+  ) {
+    return { kind: "ended" };
+  }
+  // 404: not previewable or no longer live. 401: the flag went off
+  // everywhere. Either way there is nothing to play, and asking again will not
+  // change that.
+  if (status === 404 || status === 401) {
+    return { kind: "gone" };
+  }
+  return { kind: "retry" };
 }
 
 /** `{ invite: PublicInvitePreview }`, validated; anything else is no preview. */

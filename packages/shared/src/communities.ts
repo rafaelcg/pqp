@@ -843,6 +843,14 @@ export const publicCommunitySchema = z.object({
   bannerUrl: z.string().nullable().default(null),
   /** `YYYY-MM`. Month granularity, same rule the public profile follows. */
   createdMonth: z.string().regex(/^\d{4}-\d{2}$/).nullable().default(null),
+  /**
+   * The signed-out live preview is switched on for this community
+   * (`live_preview`, see `docs/FEATURE_FLAGS.md`). Only ever `true`, and absent
+   * otherwise, so a server with the flag off answers byte for byte what it
+   * always did. It says the door exists, not that anything is live: the page
+   * asks `GET /api/public/live-preview/communities/:slug` for that.
+   */
+  livePreview: z.literal(true).optional(),
 });
 
 export type PublicCommunity = z.infer<typeof publicCommunitySchema>;

@@ -1005,6 +1005,13 @@ export const publicInvitePreviewSchema = z.object({
   serverName: z.string(),
   iconUrl: z.string().nullable(),
   memberCount: z.number().int().nonnegative(),
+  /**
+   * The invite opens a community whose signed-out live preview is on
+   * (`live_preview`). Only ever `true`, absent otherwise, so the body is
+   * unchanged for every server with the flag off. The gate then asks
+   * `GET /api/public/live-preview/invites/:code` what is live.
+   */
+  livePreview: z.literal(true).optional(),
 });
 
 export type PublicInvitePreview = z.infer<typeof publicInvitePreviewSchema>;

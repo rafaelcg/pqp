@@ -14,6 +14,7 @@ import {
   type PublicCommunity,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { isEnabled } from "../lib/flags.js";
 import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
 
@@ -463,6 +464,7 @@ export async function getPublicCommunity(
   slug: string,
 ): Promise<PublicCommunity | null> {
   const result = await getPool().query<{
+    id: string;
     name: string;
     community_slug: string;
     community_tagline: string | null;
@@ -477,7 +479,7 @@ export async function getPublicCommunity(
     banner_url: string | null;
     created_at: Date;
   }>(
-    `SELECT s.name, s.community_slug, s.community_tagline, s.community_about,
+    `SELECT s.id, s.name, s.community_slug, s.community_tagline, s.community_about,
             s.community_links, s.community_featured_kind,
             s.community_featured_embed_url, s.community_featured_url,
             s.community_category, s.member_count, s.icon_url, s.banner_url,
@@ -511,6 +513,12 @@ export async function getPublicCommunity(
     // exact creation second is nobody's business and "desde julho de 2026" is
     // the whole of what a stranger gets from it anyway.
     createdMonth: monthStamp(row.created_at),
+    // The signed-out live preview's door, only while its flag is on for this
+    // community. Absent otherwise, so the body is what it always was. The id
+    // is read to ask the flag and goes no further.
+    ...(isEnabled("live_preview", { serverId: row.id })
+      ? { livePreview: true as const }
+      : {}),
   };
 }
 
