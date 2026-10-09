@@ -328,8 +328,11 @@ function onError() {
       if (state.current?.attachmentId !== current.attachmentId || !audio) {
         return;
       }
-      state = { ...state, current: { ...current, url: fresh.url } };
-      audio.src = fresh.url;
+      // The AAC copy, once the worker has made one, plays where the original
+      // (Opus) may not; the original is the answer when there is no copy.
+      const url = fresh.playbackUrl ?? fresh.url;
+      state = { ...state, current: { ...current, url } };
+      audio.src = url;
       seekElement(audio, resumeAt);
       if (wasPlaying) {
         void audio.play().catch(() => setState({ status: "paused" }));
@@ -342,6 +345,24 @@ function onError() {
         setState({ status: "error" });
       }
     });
+}
+
+/**
+ * The playback copy of a note now exists. Nothing to redraw (the card has no
+ * state about it), but a note that has just failed to play is exactly the one
+ * the copy is for: ask again with the failure forgotten, and the refresh takes
+ * `playbackUrl`.
+ */
+export function applyVoiceNoteUpdated(frame: { attachmentId: string; playbackReady: boolean }): void {
+  if (
+    frame.playbackReady &&
+    state.current?.attachmentId === frame.attachmentId &&
+    state.status === "error"
+  ) {
+    refreshed.delete(frame.attachmentId);
+    setState({ status: "loading" });
+    onError();
+  }
 }
 
 function seekElement(element: HTMLAudioElement, positionMs: number) {

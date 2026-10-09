@@ -11,6 +11,7 @@ import {
   shouldOfferMusicFieldHint,
   shouldOfferMusicHint,
   shouldOfferShortcutsHint,
+  shouldOfferVoiceNoteTranscriptionNotice,
   shouldOfferWatchNowHint,
   shouldOfferWatchPartyHint,
   resetFeatureHintsForTests,
@@ -431,5 +432,23 @@ describe("shouldOfferShortcutsHint", () => {
         attachedHint: "composerFormat",
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldOfferVoiceNoteTranscriptionNotice", () => {
+  it("needs a recording, transcripts where it is going, and consent still on", () => {
+    const on = { recording: true, transcriptionOn: true, mine: true };
+    expect(shouldOfferVoiceNoteTranscriptionNotice(on)).toBe(true);
+    expect(shouldOfferVoiceNoteTranscriptionNotice({ ...on, recording: false })).toBe(false);
+    expect(shouldOfferVoiceNoteTranscriptionNotice({ ...on, transcriptionOn: false })).toBe(false);
+    expect(shouldOfferVoiceNoteTranscriptionNotice({ ...on, mine: false })).toBe(false);
+  });
+
+  it("is remembered under its own key", () => {
+    const storage = memory();
+    expect(isFeatureHintSeen("voiceNoteTranscription", storage, true)).toBe(false);
+    rememberFeatureHint("voiceNoteTranscription", storage, true);
+    expect(isFeatureHintSeen("voiceNoteTranscription", storage, true)).toBe(true);
+    expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(false);
   });
 });

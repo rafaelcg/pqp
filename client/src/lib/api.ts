@@ -7,6 +7,7 @@ import type {
   AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
+  VoiceNoteTranscriptResponse,
   AuditLogPage,
   AvatarConfig,
   BlockListResponse,
@@ -979,7 +980,13 @@ export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
  * `?serverId=`; a conversation asks without one and gets the global value.
  */
 export const fetchAttachmentConfig = (serverId?: string | null) =>
-  apiFetch<{ enabled: boolean; maxBytes?: number; voiceNotes?: boolean }>(
+  apiFetch<{
+    enabled: boolean;
+    maxBytes?: number;
+    voiceNotes?: boolean;
+    /** The `voice_note_transcription` flag, answered the same way as `voiceNotes`. */
+    voiceTranscription?: boolean;
+  }>(
     serverId
       ? `/api/attachments/config?serverId=${encodeURIComponent(serverId)}`
       : "/api/attachments/config",
@@ -1002,6 +1009,19 @@ export async function markVoiceNoteListened(attachmentId: string): Promise<void>
     throw error;
   }
 }
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued (the answer comes
+ * later as a `voice-note-transcript` frame), 200 once there is a settled one;
+ * both carry `{ transcript }`, whose `status` says which. 403 means the flag is
+ * off here, the sender did not allow it, or a preference says no; 404 means the
+ * note is not one the caller can hear; 429 is the per-account limiter. Callers
+ * read the status off the thrown `ApiError`.
+ */
+export const requestVoiceNoteTranscript = (attachmentId: string) =>
+  post<VoiceNoteTranscriptResponse>(
+    `/api/attachments/${attachmentId}/transcript`,
+  );
 
 /**
  * Reserve a row and get a presigned PUT for it. The storage key is chosen by

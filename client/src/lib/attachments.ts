@@ -78,26 +78,50 @@ export function loadAttachmentConfig(): Promise<AttachmentConfig> {
  * a tab open all evening should notice it being turned off without a reload.
  */
 const VOICE_NOTES_TTL_MS = 5 * 60 * 1000;
-const voiceNoteProbes = new Map<string, { at: number; answer: Promise<boolean> }>();
+interface VoiceNoteFlags {
+  notes: boolean;
+  transcription: boolean;
+}
+const voiceNoteProbes = new Map<string, { at: number; answer: Promise<VoiceNoteFlags> }>();
 
-export function loadVoiceNotesEnabled(serverId: string | null): Promise<boolean> {
+function loadVoiceNoteFlags(serverId: string | null): Promise<VoiceNoteFlags> {
   const key = serverId ?? "";
   const cached = voiceNoteProbes.get(key);
   if (cached && Date.now() - cached.at < VOICE_NOTES_TTL_MS) {
     return cached.answer;
   }
   const answer = fetchAttachmentConfig(serverId)
-    .then((config) => config.enabled === true && config.voiceNotes === true)
+    .then((config) => {
+      const notes = config.enabled === true && config.voiceNotes === true;
+      return {
+        notes,
+        // A transcript only exists for a note, so it needs both flags.
+        transcription: notes && config.voiceTranscription === true,
+      };
+    })
     .catch(() => {
       // A failed probe is not an answer: forget it, so the next composer
       // mount asks again instead of hiding the mic for five minutes.
       if (voiceNoteProbes.get(key)?.answer === answer) {
         voiceNoteProbes.delete(key);
       }
-      return false;
+      return { notes: false, transcription: false };
     });
   voiceNoteProbes.set(key, { at: Date.now(), answer });
   return answer;
+}
+
+export function loadVoiceNotesEnabled(serverId: string | null): Promise<boolean> {
+  return loadVoiceNoteFlags(serverId).then((flags) => flags.notes);
+}
+
+/**
+ * Whether voice notes sent here are transcribed (the `voice_note_transcription`
+ * flag, per server; a conversation reads the global value). Same cache and
+ * the same five minutes as `loadVoiceNotesEnabled`.
+ */
+export function loadVoiceTranscriptionEnabled(serverId: string | null): Promise<boolean> {
+  return loadVoiceNoteFlags(serverId).then((flags) => flags.transcription);
 }
 
 /** For tests: forget every cached answer. */
