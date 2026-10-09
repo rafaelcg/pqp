@@ -5153,9 +5153,9 @@ CREATE TABLE IF NOT EXISTS soundboard_pending_uploads (
 );
 
 -- An earlier revision of this table (this feature's own branch, never on
--- main) had no lease column; add it where the table already exists.
+-- main) had no lease column; add it where the table already exists. Every
+-- revision had expires_at, so it needs no migration.
 ALTER TABLE soundboard_pending_uploads
-  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS cleanup_until TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_server
