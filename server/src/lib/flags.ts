@@ -448,6 +448,20 @@ export const FEATURE_FLAGS = {
     // (`flag-client-contract.test.ts`) would rightly fail a field nobody
     // reads. The client PR that reads it adds the line back.
   },
+  notify_open_channel: {
+    description:
+      "Aviso do canal aberto (só cliente: com a janela minimizada, escondida ou sem foco, uma mensagem no canal ou na conversa que está aberta vira banner do sistema, respeitando nível, mudo e não perturbe).",
+    env: "NOTIFY_OPEN_CHANNEL",
+    parseEnv: exactTrue,
+    // Off until it has been checked on a real desktop: the open channel used to
+    // be the one place that never raised a banner, so turning it on changes
+    // what a blurred window does for everybody who has banners enabled.
+    codeDefault: false,
+    // The client asks `GET /api/push/config`, which has no server in hand, and
+    // keeps one answer per page: a per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/push/config (notifyOpenChannel)",
+  },
   push_attention_gate: {
     description:
       "Push pelo que a pessoa está olhando: o celular recebe a notificação a menos que um app ou aba esteja na frente dela e ativo. Desligado, qualquer conexão aberta em qualquer lugar (uma aba esquecida, o desktop minimizado) cala o celular.",

@@ -2,6 +2,7 @@ import type { Message } from "@pqp/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createChatController,
+  THREAD_CHANNEL_FRAMES,
   failedSendCopy,
   failedSendKey,
   messageCanRetry,
@@ -11,6 +12,7 @@ import {
 import type { RealtimeTransport } from "@/lib/realtime";
 
 const notifyOpenChannelMessage = vi.fn();
+const notifyOpenChannelWhileAway = vi.fn((..._args: unknown[]) => false);
 
 vi.mock("@/lib/api", () => ({
   apiFetch: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/lib/notifications", () => ({
   notifyOpenChannelMessage: (...args: unknown[]) =>
     notifyOpenChannelMessage(...args),
+  notifyOpenChannelWhileAway: (...args: unknown[]) =>
+    notifyOpenChannelWhileAway(...args),
 }));
 
 const api = await import("@/lib/api");
@@ -125,6 +129,8 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   notifyOpenChannelMessage.mockReset();
+  notifyOpenChannelWhileAway.mockReset();
+  notifyOpenChannelWhileAway.mockReturnValue(false);
 });
 
 describe("optimistic sending", () => {
@@ -1622,6 +1628,53 @@ describe("applyProfileUpdate", () => {
 
 describe("open-channel sounds", () => {
   const OTHER = "00000000-0000-4000-8000-000000000002";
+
+  describe("banner while the window is away (notify_open_channel)", () => {
+    const incoming = (id: string, body = "hey") =>
+      ({
+        type: "message-broadcast",
+        message: serverMessage({ id, authorId: OTHER, body }),
+      }) as never;
+
+    it("hands the message to the banner path, and then does not play the old sound too", () => {
+      notifyOpenChannelWhileAway.mockReturnValue(true);
+      const { chat } = setup();
+      chat.handleServerMessage(incoming("00000000-0000-4000-8000-0000000000a1", "hey @me"));
+
+      expect(notifyOpenChannelWhileAway).toHaveBeenCalledWith(
+        CHANNEL,
+        true,
+        expect.objectContaining({ authorId: OTHER }),
+      );
+      expect(notifyOpenChannelMessage).not.toHaveBeenCalled();
+      expect(chat.getMessages()).toHaveLength(1);
+    });
+
+    it("falls back to the old sound when the banner path does not take it", () => {
+      const { chat } = setup();
+      chat.handleServerMessage(incoming("00000000-0000-4000-8000-0000000000a2"));
+      expect(notifyOpenChannelWhileAway).toHaveBeenCalledTimes(1);
+      expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
+    });
+
+    it("never asks for your own message", () => {
+      const { chat } = setup();
+      chat.handleServerMessage({
+        type: "message-broadcast",
+        message: serverMessage({ id: "00000000-0000-4000-8000-0000000000a3", body: "mine" }),
+      } as never);
+      expect(notifyOpenChannelWhileAway).not.toHaveBeenCalled();
+    });
+
+    it("never asks for the thread panel's controller", () => {
+      const { transport } = createTransport();
+      const thread = createChatController(transport, THREAD_CHANNEL_FRAMES);
+      thread.setCurrentUser(ME);
+      thread.joinChannel(CHANNEL);
+      thread.handleServerMessage(incoming("00000000-0000-4000-8000-0000000000a4"));
+      expect(notifyOpenChannelWhileAway).not.toHaveBeenCalled();
+    });
+  });
 
   it("does not ping when you send a message, even a self-mention", () => {
     const { chat } = setup();
