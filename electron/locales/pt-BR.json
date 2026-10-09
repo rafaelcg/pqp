@@ -48,7 +48,7 @@
   "tray.undeafen": "Tirar deafen",
   "tray.leave": "Sair da call",
   "tray.show": "Abrir o pqp",
-  "tray.keepInTray": "Manter na bandeja durante a call",
+  "tray.keepInTray": "Manter na bandeja ao fechar a janela",
   "tray.quit": "Sair do pqp",
   "tray.tooltipIdle": "pqp",
   "tray.tooltipLive": "pqp - microfone ligado",

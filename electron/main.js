@@ -69,11 +69,17 @@ const {
   createNativeHookSession,
 } = require("./lib/native-ptt-hook");
 const { DEFAULT_RELEASE_DELAY_MS, clampReleaseDelayMs } = require("./lib/release-delay");
+const {
+  appUserModelId,
+  shouldSetAppUserModelId,
+  notificationOptions,
+} = require("./lib/notify-options");
 const { trayIconKind, trayIconImage } = require("./lib/tray-icon");
 const {
   buildTrayTemplate,
   trayTooltip,
   shouldHideToTray,
+  trayLikelyAvailable,
   normalizeVoiceState,
 } = require("./lib/tray-menu");
 const {
@@ -92,6 +98,13 @@ const {
   runShareAudioProbe,
   formatShareAudioProbe,
 } = require("./lib/win-share-audio-probe");
+
+// Windows files toasts, the taskbar group and the Start entry under this id.
+// It has to be set before the first Notification, and it has to be the
+// installer's appId or the toast shows another name (or, unpackaged, none).
+if (shouldSetAppUserModelId(process.platform)) {
+  app.setAppUserModelId(appUserModelId(require("./package.json")));
+}
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
@@ -237,6 +250,8 @@ let pickerWindow = null;
 let tray = null;
 /** What the renderer last said about the call, for the tray icon and menu. */
 let voiceState = { inCall: false, muted: false, deafened: false };
+/** Whether the renderer has a signed-in session. Unknown (false) until it says. */
+let signedIn = false;
 /** `{ keepInTray: boolean }`, read from userData at startup. */
 let trayPrefs = { keepInTray: DEFAULT_KEEP_IN_TRAY };
 /** True from `before-quit` on, so the close handler stops hiding to the tray. */
@@ -583,16 +598,18 @@ function focusMainWindow() {
  */
 const liveNotifications = new Map();
 
-function showNotification({ title, body, tag, path: appPath }) {
+function showNotification({ title, body, tag, path: appPath, silent }) {
   if (!Notification.isSupported()) {
     return;
   }
   const key = tag || appPath;
   liveNotifications.get(key)?.close();
 
-  // The OS owns the alert sound and Do Not Disturb; overriding either is how a
-  // chat app ends up muted at the system level and never heard from again.
-  const notification = new Notification({ title, body, silent: true });
+  // The OS owns Do Not Disturb; overriding it is how a chat app ends up muted
+  // at the system level and never heard from again. The alert sound is the
+  // renderer's call: silent while the app plays its own cue, the OS sound when
+  // app sounds are off (see lib/notify-options.js).
+  const notification = new Notification(notificationOptions({ title, body, silent }));
   notification.on("click", () => {
     liveNotifications.delete(key);
     focusMainWindow();
@@ -1646,6 +1663,9 @@ function createWindow(appUrl, allowedOrigin) {
         inCall: voiceState.inCall,
         keepInTray: trayPrefs.keepInTray,
         quitting,
+        signedIn,
+        platform: process.platform,
+        trayAvailable: trayLikelyAvailable(process.platform),
       })
     ) {
       return;
@@ -2521,6 +2541,10 @@ if (probingShareAudio) {
     refreshTray();
   });
 
+  ipcMain.on("pqp:signed-in", (_event, value) => {
+    signedIn = value === true;
+  });
+
   ipcMain.on("pqp:notify", (_event, payload) => {
     if (!payload || typeof payload.title !== "string") {
       return;
@@ -2530,6 +2554,8 @@ if (probingShareAudio) {
       body: typeof payload.body === "string" ? payload.body : "",
       tag: typeof payload.tag === "string" ? payload.tag : "",
       path: sanitizeAppPath(payload.path),
+      // Only a real boolean counts; anything else is an older renderer.
+      silent: typeof payload.silent === "boolean" ? payload.silent : undefined,
     });
   });
 
