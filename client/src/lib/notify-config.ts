@@ -39,9 +39,22 @@ export function notifyConfigFromPushConfig(answer: {
   return { notifyOpenChannel: answer.notifyOpenChannel === true };
 }
 
+/**
+ * Bumped by every ask. Two asks can be in flight at once (the page's first read
+ * and a focus refresh), and the network does not promise to answer them in
+ * order: only the newest ask may write, or an old `true` landing after the
+ * operator's flip to `false` would put the switch back on until the next pass.
+ */
+let generation = 0;
+
 export async function loadNotifyConfig(): Promise<void> {
+  generation += 1;
+  const mine = generation;
   try {
-    current = notifyConfigFromPushConfig(await getPushConfig());
+    const next = notifyConfigFromPushConfig(await getPushConfig());
+    if (mine === generation) {
+      current = next;
+    }
   } catch {
     // An older API or a network blip: keep what was there.
   }
