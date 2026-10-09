@@ -140,6 +140,18 @@ function oggDurationMs(bytes: Uint8Array): number | null {
   let preSkip = 0;
   let sampleRate = 0;
   let codec: "opus" | "vorbis" | null = null;
+  // A chained file is several logical streams played one after another.
+  // Each one's length is added, so a chain cannot hide a long clip behind
+  // short parts.
+  let chainedMs = 0;
+
+  const streamMs = (): number | null => {
+    if (!codec || sampleRate <= 0 || lastGranule <= 0) {
+      return null;
+    }
+    const samples = codec === "opus" ? lastGranule - preSkip : lastGranule;
+    return samples > 0 ? (samples * 1000) / sampleRate : null;
+  };
 
   while (offset + 27 <= bytes.length) {
     if (
@@ -149,6 +161,20 @@ function oggDurationMs(bytes: Uint8Array): number | null {
       bytes[offset + 3] !== 0x53
     ) {
       break;
+    }
+    // A beginning-of-stream page after audio has been counted starts the
+    // next link of the chain. (Interleaved streams open all their BOS pages
+    // before any audio, so they do not trip this.)
+    if (((bytes[offset + 5] ?? 0) & 0x02) !== 0 && lastGranule > 0) {
+      const ms = streamMs();
+      if (ms === null) {
+        return null;
+      }
+      chainedMs += ms;
+      lastGranule = 0;
+      codec = null;
+      sampleRate = 0;
+      preSkip = 0;
     }
     const granule = readU64(bytes, offset + 6);
     if (granule > 0) {
@@ -180,14 +206,11 @@ function oggDurationMs(bytes: Uint8Array): number | null {
     offset = end;
   }
 
-  if (!codec || sampleRate <= 0 || lastGranule <= 0) {
+  const last = streamMs();
+  if (last === null && chainedMs === 0) {
     return null;
   }
-  const samples = codec === "opus" ? lastGranule - preSkip : lastGranule;
-  if (samples <= 0) {
-    return null;
-  }
-  return Math.round((samples * 1000) / sampleRate);
+  return Math.round(chainedMs + (last ?? 0));
 }
 
 function identifyOgg(

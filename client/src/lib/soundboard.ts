@@ -366,10 +366,9 @@ async function refreshCustomCatalog(
 ): Promise<void> {
   const pending = catalogRefresh.get(serverId);
   if (pending) {
+    // The refresh in flight is as fresh as another one would be.
     await pending;
-    if (!force) {
-      return;
-    }
+    return;
   }
   const now = Date.now();
   if (!force && now - (catalogRefreshAt.get(serverId) ?? 0) < 4_000) {

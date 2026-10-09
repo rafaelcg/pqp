@@ -68,12 +68,13 @@ export function SoundboardControl({
   }, [serverId]);
 
   useEffect(() => {
-    if (!serverId) {
+    // Someone who cannot use the board downloads and decodes nothing.
+    if (!serverId || !canUse) {
       return;
     }
     let cancelled = false;
     void prefetchSoundboard(serverId).then(() => {
-      if (cancelled || !canUse) {
+      if (cancelled) {
         return;
       }
       void fetchSoundboard(serverId)

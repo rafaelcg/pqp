@@ -26,9 +26,9 @@ function mp3Seconds(seconds: number): Uint8Array {
   return out;
 }
 
-function oggPage(payload: Uint8Array, granule: number): Uint8Array {
+function oggPage(payload: Uint8Array, granule: number, bos = false): Uint8Array {
   const header = new Uint8Array(27 + 1);
-  header.set([0x4f, 0x67, 0x67, 0x53, 0, 0], 0);
+  header.set([0x4f, 0x67, 0x67, 0x53, 0, bos ? 0x02 : 0], 0);
   let left = granule;
   for (let i = 0; i < 8; i += 1) {
     header[6 + i] = left & 0xff;
@@ -80,6 +80,18 @@ describe("audioDurationMs", () => {
     const granule = preSkip + 48000;
     const bytes = concat(oggPage(head, 0), oggPage(new Uint8Array([0]), granule));
     expect(audioDurationMs(bytes, "audio/ogg")).toBe(1000);
+  });
+
+  it("adds up the links of a chained ogg", () => {
+    const head = new Uint8Array(19);
+    head.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 1, 1], 0);
+    head[10] = 0x70;
+    head[11] = 0x01;
+    const granule = 0x0170 + 48000 * 3;
+    const link = (): Uint8Array =>
+      concat(oggPage(head, 0, true), oggPage(new Uint8Array([0]), granule));
+    // Two 3 second links are a 6 second clip, past the 5.2 second cap.
+    expect(audioDurationMs(concat(link(), link()), "audio/ogg")).toBe(6000);
   });
 
   it("times a vorbis ogg from the identification header's sample rate", () => {

@@ -9382,6 +9382,20 @@ export async function handleVoiceMessage(
     if (!sound) {
       return;
     }
+    // The lookup above may have awaited a query. Ask the gate again about
+    // the peer as it is now: still seated in this room, still allowed, not
+    // moderator-muted.
+    const current = peers.get(existingPeerId);
+    if (
+      current !== peer ||
+      !soundboardPlayAllowed({
+        canUseSoundboard: peer.canUseSoundboard,
+        serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
+        channelMatches: peer.voiceChannelId === payload.channelId,
+      })
+    ) {
+      return;
+    }
     if (
       !offerSoundboardPlay({
         channelId: peer.voiceChannelId,

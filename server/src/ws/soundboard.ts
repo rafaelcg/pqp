@@ -124,7 +124,6 @@ export function offerSoundboardPlay(input: {
   durationMs: number;
   now: number;
 }): boolean {
-  sweepSoundboardPlays(input.now);
   const plays = livePlays(input.channelId, input.now);
   if (soundboardRoomFull(input.channelId, input.now, input.userId)) {
     return false;

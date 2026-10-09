@@ -18,11 +18,12 @@ const s3 = vi.hoisted(() => ({
   deleted: [] as string[],
   failDeletes: false,
   failSigning: false,
+  unconfigured: false,
   objects: new Map<string, { contentType: string; contentLength: number }>(),
 }));
 
 vi.mock("../lib/s3.js", () => ({
-  isStorageConfigured: () => true,
+  isStorageConfigured: () => !s3.unconfigured,
   presignPut: (key: string) => {
     if (s3.failSigning) {
       throw new Error("signer down");
@@ -86,6 +87,7 @@ describeDb("soundboard upload ledger", () => {
   beforeEach(async () => {
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     s3.deleted.length = 0;
+    s3.unconfigured = false;
     s3.failDeletes = false;
     s3.failSigning = false;
     s3.objects.clear();
@@ -199,5 +201,16 @@ describeDb("soundboard upload ledger", () => {
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
     expect(s3.deleted).toEqual([key]);
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(false);
+  });
+
+  it("keeps the row when storage is not configured", async () => {
+    const key = await upload();
+    const sound = await claim(key);
+    s3.unconfigured = true;
+    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toThrow(
+      "storage_unavailable",
+    );
+    s3.unconfigured = false;
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
   });
 });
