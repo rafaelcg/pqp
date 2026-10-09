@@ -11,6 +11,7 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { livePreviewMetrics } from "./live-preview.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
@@ -327,6 +328,13 @@ export interface AdminMetrics {
    * Live, never from the 30 s cache.
    */
   streamAlerts: StreamAlertMetrics;
+  /**
+   * The signed-out live preview (`services/live-preview.ts`), since this
+   * process started: windows started and resumed, visitors sent to sign up at
+   * the end of one, refusals by reason (start and playlist apart), and how
+   * many playlist answers went to a preview token. Per process; live.
+   */
+  livePreview: ReturnType<typeof livePreviewMetrics>;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1153,6 +1161,7 @@ type CachedMetrics = Omit<
   | "flags"
   | "communityHomeTranslation"
   | "streamAlerts"
+  | "livePreview"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1937,6 +1946,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     streamAlerts: streamAlertMetrics(),
+    livePreview: livePreviewMetrics(),
   };
 }
 

@@ -296,18 +296,28 @@ export function resolveHlsPlaylistViewer(input: {
   /** See `ViewerClaims.p` in `hls-viewer-token.ts`. The replay proxy passes
    * `"replay"` so an ordinary live-stream token cannot be reused against it. */
   purpose?: "live" | "replay";
-}): { userId: string; issuedAt: number | null } | null {
+  /**
+   * Accept a signed-out live preview token (`"preview"` purpose). Only the
+   * live proxy's header-less door asks, and only after checking the channel is
+   * still previewable; see `HlsViewerTokenPurpose` in `hls-viewer-token.ts`.
+   */
+  allowPreview?: boolean;
+}): { userId: string; issuedAt: number | null; preview?: true } | null {
   const fromToken = verifyHlsViewerToken(
     input.token,
     {
       channelId: input.channelId,
       startedAt: input.startedAt,
       purpose: input.purpose,
+      allowPreview: input.allowPreview,
     },
     input.now,
   );
   // A token that verifies but names somebody else than the authenticated
-  // caller is not this caller's capability. Fall back to the header.
+  // caller is not this caller's capability. Fall back to the header. A
+  // preview token never names an account, so a signed-in caller whose page
+  // still holds one is always served on their own Bearer (pitfall 16: the
+  // second credential never vetoes the first).
   if (
     fromToken &&
     (!input.bearerUserId || fromToken.userId === input.bearerUserId)
@@ -1688,6 +1698,12 @@ export async function buildMasterPlaylistFor(input: {
   /** The `?t=` the request arrived with, stamped onto each variant. */
   token?: string | null;
   now?: number;
+  /**
+   * False for a signed-out live preview viewer: no `?pp=` on the variants, or
+   * the edge Worker would honour a six hour pass once the visitor's short
+   * `?t=` expired, and the window would mean nothing.
+   */
+  allowPartyPass?: boolean;
 }): Promise<string | null> {
   const { rungs, sessionId } = await sessionRungs(
     input.channelId,
@@ -1698,7 +1714,7 @@ export async function buildMasterPlaylistFor(input: {
     return null;
   }
   const now = input.now ?? Date.now();
-  const partyPass = playlistBaseUrl()
+  const partyPass = input.allowPartyPass !== false && playlistBaseUrl()
     ? mintHlsPartyPass({
         userId: input.userId,
         channelId: input.channelId,
