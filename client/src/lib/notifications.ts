@@ -19,12 +19,12 @@ import type {
 import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { shouldShowArrivalToast } from "@/lib/dm-toast-queue";
-import { translateMessage } from "@/lib/i18n";
-import { queuePreferenceSync } from "@/lib/preferences";
 import {
   isDesktopNotifyDefaultOnEnabled,
   onNotifyDefaultsChange,
 } from "@/lib/notify-defaults-config";
+import { translateMessage } from "@/lib/i18n";
+import { queuePreferenceSync } from "@/lib/preferences";
 import { playActivitySound, playCue } from "@/lib/sounds";
 
 export type { NotificationLevel };
