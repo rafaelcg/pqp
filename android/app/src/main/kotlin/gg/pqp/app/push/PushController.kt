@@ -280,6 +280,26 @@ class PushController(
         }
     }
 
+    /**
+     * Back on screen after a trip to Android settings: the permission may now
+     * be granted, or Play services enabled, and the registration that stopped
+     * on either would otherwise wait for the next launch. Only a registration
+     * that is not already running or sleeping on a backoff is restarted, and
+     * only for someone who has notifications switched on.
+     */
+    private fun retryAfterSettings() {
+        if (!BuildConfig.PUSH_AVAILABLE || !enabledByUser) return
+        if (session.phase.value !is SessionPhase.Ready) return
+        if (registerJob?.isActive == true) return
+        when (_state.value) {
+            PushState.PermissionDenied,
+            PushState.PlayServicesMissing,
+            PushState.Offline,
+            -> startRegistration()
+            else -> Unit
+        }
+    }
+
     private fun startRegistration() {
         registerJob?.cancel()
         registerJob = scope.launch { registerWithBackoff() }
@@ -480,6 +500,7 @@ class PushController(
     private inner class ForegroundCounter : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
             startedActivities += 1
+            if (startedActivities == 1) retryAfterSettings()
         }
 
         override fun onActivityStopped(activity: Activity) {
