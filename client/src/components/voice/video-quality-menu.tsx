@@ -297,13 +297,29 @@ export function VideoQualityMenu({
   };
   const onPanelBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
     const to = event.relatedTarget as Node | null;
-    if (
-      to &&
-      !event.currentTarget.contains(to) &&
-      !rootRef.current?.contains(to)
-    ) {
-      onOpenChange(false);
+    if (to) {
+      if (!event.currentTarget.contains(to) && !rootRef.current?.contains(to)) {
+        onOpenChange(false);
+      }
+      return;
     }
+    // No target: Tab off the last row left the page (the browser's own UI).
+    // Checked a frame later, since a click inside also blurs with no target.
+    const panel = event.currentTarget;
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        !panel.contains(active) &&
+        !rootRef.current?.contains(active)
+      ) {
+        onOpenChange(false);
+      }
+      if (!document.hasFocus()) {
+        onOpenChange(false);
+      }
+    });
   };
 
   // Focus goes into the panel when it opens: it is portalled to the end of

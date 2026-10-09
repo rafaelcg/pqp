@@ -9596,9 +9596,17 @@ function MainAppContent({
         selectedServerId,
       ).includes(selectedChannel.id),
   );
+  // A watch party channel is never a row in the list (it has its own
+  // surface), so the list never names one.
+  const roomListedAsRow = !(
+    selectedChannel &&
+    isWatchPartyChannelsEnabled() &&
+    isWatchPartyChannelType(selectedChannel.type)
+  );
   const voiceRoomRowVisible =
     columnLayout &&
     !sidebarIconsOnly &&
+    roomListedAsRow &&
     (roomIsFavorite
       ? !collapsedCategories.has(favoritesCollapseKey(selectedServerId!))
       : !(

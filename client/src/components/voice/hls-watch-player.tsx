@@ -3994,7 +3994,9 @@ export function HlsWatchPlayer({
           {hasFrame ? (
             <div
               data-testid="hls-volume"
-              className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
+              // Lifted with every picture's row over a floating call bar
+              // (`--tile-row-lift`, set by the call stage; 0 elsewhere).
+              className="absolute bottom-[calc(0.5rem+var(--tile-row-lift,0px))] right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
             >
               <Tooltip
                 label={whole ? t("call.fit.fill") : t("call.fit.whole")}
@@ -4142,7 +4144,7 @@ export function HlsWatchPlayer({
             // a viewer can still stop watching or go fullscreen.
             // No pill of its own: the buttons carry theirs, and an empty dark
             // capsule sat in the corner while they waited for a hover.
-            <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+            <div className="absolute bottom-[calc(0.5rem+var(--tile-row-lift,0px))] right-2 flex items-center gap-1.5">
               {bottomActions}
             </div>
           ) : null}

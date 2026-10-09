@@ -4953,7 +4953,7 @@ export function ScreenTileFrame({
         nameChip && (
           <span
             className={cn(
-              "pointer-events-none absolute bottom-2 left-2 flex max-w-[50%]",
+              "pointer-events-none absolute bottom-[calc(0.5rem+var(--tile-row-lift,0px))] left-2 flex max-w-[50%]",
               STAGE_LAYER.labels,
             )}
           >
