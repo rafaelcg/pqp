@@ -23,6 +23,11 @@ export interface PushConfig {
   publicKey: string | null;
   /** Whether this account lets DM pushes name the sender. Default false. */
   dmDetails: boolean;
+  /**
+   * Runtime flag `notify_open_channel`: the open channel raises an OS banner
+   * while the window is away. Absent on an API that predates it, read as off.
+   */
+  notifyOpenChannel?: boolean;
 }
 
 export function getPushConfig(): Promise<PushConfig> {

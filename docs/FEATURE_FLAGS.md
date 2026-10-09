@@ -290,6 +290,20 @@ making new ones". Served as `voiceTranscription` on
 settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
 flag: it runs for every webm/ogg note while `voice_notes` is on.
 
+Born as a flag (no old reader): `NOTIFY_OPEN_CHANNEL` (`notify_open_channel`,
+default off, **global only**), client-only. The server sends no `channel-activity`
+for a channel a socket has open, so the open channel never raised an OS banner,
+even with the window minimised behind a game. With the flag on, a
+`message-broadcast` from somebody else in the open channel (or conversation)
+goes through the ordinary banner path when the window is hidden, minimised or
+without focus (`notifyOpenChannelWhileAway` in `client/src/lib/notifications.ts`):
+levels, channel and server mutes, Do Not Disturb, blocked authors, the desktop
+opt-in and the 10 s burst coalescing all apply. A window that is visible and
+focused stays quiet, as before. Served as `notifyOpenChannel` on
+`GET /api/push/config`; an open tab follows on the next config refresh (focus or
+10 min). Global on purpose: that endpoint has no server in hand, so a
+per-server override would never be read.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

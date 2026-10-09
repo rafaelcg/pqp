@@ -407,6 +407,7 @@ import {
 } from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
+import { startNotifyConfig } from "@/lib/notify-config";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -527,6 +528,7 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
 import {
@@ -2540,6 +2542,8 @@ function MainAppContent({
   // (the teaser, the camera size, a server switched on) shows without a
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
+  // The notification switches (`notify_open_channel`) ride the same refresh.
+  useEffect(() => startNotifyConfig(), []);
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -8437,6 +8441,11 @@ function MainAppContent({
     () => new Set(blockedUsers.map((blocked) => blocked.id)),
     [blockedUsers],
   );
+  // The open channel's banner (`notify_open_channel`) has to skip the same
+  // authors the server skips for every other channel's activity.
+  useEffect(() => {
+    setNotificationBlockedAuthors(blockedUserIds);
+  }, [blockedUserIds]);
 
   // --- watch now: the strip that says a stream is live ----------------------
   // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this

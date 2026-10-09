@@ -11303,6 +11303,10 @@ router.get("/api/push/config", async ({ user }) => {
     // starts offering notifications the moment this answers true, no update
     // required.
     fcm: isFcmEnabled(),
+    // Runtime flag, global, off by default: the open channel raises an OS
+    // banner while the window is away. Read per request, so a flip reaches an
+    // open tab on its next config refresh (`lib/config-refresh.ts`).
+    notifyOpenChannel: isEnabled("notify_open_channel"),
     ...(await getPushSettings(user.id)),
   };
 });
