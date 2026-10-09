@@ -39,6 +39,13 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- Android 11+ hides other packages unless asked for. Push checks that Google
+         Play services is installed and enabled before it tries to get a token,
+         so it can say "this phone has no Play services" instead of retrying. -->
+    <queries>
+        <package android:name="com.google.android.gms" />
+    </queries>
+
     <application
         android:name=".PqpApplication"
         android:allowBackup="false"
