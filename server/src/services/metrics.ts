@@ -91,7 +91,12 @@ import {
   pushDeliverySnapshot,
   type PushDelivery,
 } from "./push-metrics.js";
-import { pushSkippedSnapshot, type PushSkipped } from "./push-skips.js";
+import {
+  pushAttentionPassedSnapshot,
+  pushSkippedSnapshot,
+  type PushAttentionPassed,
+  type PushSkipped,
+} from "./push-skips.js";
 import {
   hlsTelemetryActivity,
   type HlsTelemetryActivity,
@@ -114,6 +119,7 @@ import { readCacheMetrics } from "../lib/read-cache.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
+import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
 import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
 
 /**
@@ -920,6 +926,16 @@ export interface AdminMetrics {
    * active. "12 of 400" here means twelve of everyone who ever signed up.
    */
   connections: ConnectionAdoption & { ofUsers: number };
+  /**
+   * Voice notes (mensagens de voz): usage, queue and transcription health,
+   * the speech budget and the refusals. Almost all of it is read from the
+   * database, so it is the same on every replica and survives a deploy; the
+   * one exception is `refusals`, per instance since boot. Field by field in
+   * `services/voice-note-metrics.ts`. With the `voice_notes` flag off
+   * everywhere the counts read zero because nobody can send, which `flags`
+   * above says; the dashboard does not draw that as a result.
+   */
+  voiceNotes: VoiceNoteMetrics;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1043,6 +1059,13 @@ export interface AdminMetrics {
      * limited. See `services/push-skips.ts`.
      */
     pushSkipped: PushSkipped;
+    /**
+     * Recipients with a live socket that the push attention gate let through
+     * because none of their sockets was foreground and active, per kind. The
+     * counter that moves when `push_attention_gate` goes on; zero while it is
+     * off. See `services/push-skips.ts`.
+     */
+    pushAttentionPassed: PushAttentionPassed;
   };
 
   /**
@@ -1180,6 +1203,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activation,
     callRatings,
     connections,
+    voiceNotes,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1281,6 +1305,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => activationFunnel(),
     () => callRatingSummary(7),
     () => connectionAdoption(),
+    () => voiceNoteMetrics(),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1744,6 +1769,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     // The denominator travels with the numerators rather than leaving the
     // dashboard to pick one: it is the users total in this same payload.
     connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
+    voiceNotes,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),
@@ -1823,6 +1849,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       },
       pushDelivery: pushDeliverySnapshot(),
       pushSkipped: pushSkippedSnapshot(),
+      pushAttentionPassed: pushAttentionPassedSnapshot(),
     },
 
     imports: {

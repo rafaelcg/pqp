@@ -79,6 +79,7 @@ async function call<T = Record<string, unknown>>(
 /** `product.pushSkipped` for one kind before anything was refused. */
 const ZERO_SKIPS = {
   live_socket: 0,
+  attentive_socket: 0,
   blocked: 0,
   dnd: 0,
   muted: 0,
@@ -198,6 +199,7 @@ interface MetricsBody {
       { sent: number; failed: number; pruned: number }
     >;
     pushSkipped: Record<string, Record<string, number>>;
+    pushAttentionPassed: Record<string, number>;
   };
   imports: {
     discord: {
@@ -477,6 +479,7 @@ describeDb("GET /api/admin/metrics", () => {
         reminder: ZERO_SKIPS,
         waitlist: ZERO_SKIPS,
       },
+      pushAttentionPassed: { message: 0, call: 0, stream: 0, reminder: 0, waitlist: 0 },
     });
 
     // The two human messages are both in a server channel, so the DM/group

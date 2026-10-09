@@ -8668,8 +8668,21 @@ function MainAppContent({
     [channels, conversations],
   );
   // `desktop_notify_default_on`, re-asked with the other runtime flags.
-  useEffect(() => startNotifyDefaultsConfig(), []);
+  // Only with an account: `/api/push/config` needs a token, and a page still
+  // resolving `/api/me` would be answered with a 401.
+  const notifyDefaultsUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
+    [notifyDefaultsUserId],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
+  // The desktop shell hides to the tray on close (Windows, Linux) only while
+  // somebody is signed in, so it has to be told when that stops being true:
+  // this shell is only mounted for a signed-in session, and unmounts with it.
+  useEffect(() => {
+    getDesktop()?.setSignedIn?.(true);
+    return () => getDesktop()?.setSignedIn?.(false);
+  }, []);
 
   /**
    * Unread per server icon.

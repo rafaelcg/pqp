@@ -78,6 +78,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   watch_camera_sync: (raw) => raw === "true",
   watch_party_server_audience: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  push_attention_gate: (raw) => raw === "true",
   share_high_motion_guard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   share_game_capture_hint: (raw) => raw === "true",
