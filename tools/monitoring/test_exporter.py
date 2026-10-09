@@ -230,6 +230,7 @@ class RenderGrowthMetricsTests(unittest.TestCase):
                     "message": {"live_socket": 14, "dnd": 1},
                     "call": {"live_socket": 2, "no_subscription": 3},
                 },
+                "pushAttentionPassed": {"message": 6, "call": 1},
             },
             streamQuality={
                 "samplesAccepted": 12,
@@ -293,6 +294,7 @@ class RenderGrowthMetricsTests(unittest.TestCase):
         body = exporter.render(self._payload())
         self.assertIn('pqp_api_push_skipped_total{kind="message",reason="live_socket"} 14', body)
         self.assertIn('pqp_api_push_skipped_total{kind="call",reason="no_subscription"} 3', body)
+        self.assertIn('pqp_api_push_attention_passed_total{kind="message"} 6', body)
 
     def test_stream_quality_fps_bitrate_resolution_and_limitation_reason(self):
         body = exporter.render(self._payload())
@@ -715,6 +717,7 @@ class MergeAdminMetricsTests(unittest.TestCase):
                 "pushSkipped": {
                     "message": {"live_socket": 4},
                 },
+                "pushAttentionPassed": {"message": 3},
             },
         }
 
@@ -735,6 +738,7 @@ class MergeAdminMetricsTests(unittest.TestCase):
         self.assertEqual(merged["product"]["pushDelivery"]["web"]["sent"], 20)
         self.assertEqual(merged["product"]["pushDelivery"]["web"]["failed"], 2)
         self.assertEqual(merged["product"]["pushSkipped"]["message"]["live_socket"], 8)
+        self.assertEqual(merged["product"]["pushAttentionPassed"]["message"], 6)
 
     def test_messages_and_activation_are_not_doubled(self):
         # Different replicas, same DB -- identical DB-derived numbers, which

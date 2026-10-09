@@ -435,6 +435,20 @@ export const FEATURE_FLAGS = {
     // (`flag-client-contract.test.ts`) would rightly fail a field nobody
     // reads. The client PR that reads it adds the line back.
   },
+  push_attention_gate: {
+    description:
+      "Push pelo que a pessoa está olhando: o celular recebe a notificação a menos que um app ou aba esteja na frente dela e ativo. Desligado, qualquer conexão aberta em qualquer lugar (uma aba esquecida, o desktop minimizado) cala o celular.",
+    env: "PUSH_ATTENTION_GATE",
+    parseEnv: exactTrue,
+    // Off until the clients that report attention are out (web and desktop
+    // first) and `pushSkipped` / `pushAttentionPassed` have been read on a
+    // real day. A socket that never reports it counts as foreground unless
+    // idle, so turning this on cannot double-notify an old build.
+    codeDefault: false,
+    // Global: the decision is about a person's sockets, not about a server,
+    // and the call and DM paths have no server at all.
+    perServer: false,
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",

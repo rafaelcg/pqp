@@ -11,12 +11,13 @@ import {
   type PushLocale,
   type StreamAlertLocale,
 } from "./push-copy.js";
-import { isInvisible, resolveStatus } from "../ws/status.js";
+import { hasAttentiveSocket, hasClusterSocket } from "../ws/status.js";
+import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { notePush } from "./push-metrics.js";
 import {
+  notePushAttentionPassed,
   notePushSkipped,
-  notePushSkippedMany,
   type PushSkipContext,
   type PushSkipKind,
   type PushSkipReason,
@@ -65,8 +66,10 @@ import {
  * WHO GETS A PUSH IS NOT DECIDED HERE. `notifyChannelActivity` in ws/chat.ts
  * already answers "who deserves to hear about this message" — audience,
  * blocks, mentions — and this module is handed its conclusions. What is
- * decided here is only the push-specific narrowing: no live socket anywhere,
- * not on do-not-disturb, and a per-channel level that allows it. Every one of
+ * decided here is only the push-specific narrowing: no live socket anywhere
+ * (with `push_attention_gate` on, no socket that is in front of the person;
+ * see `socketRefusal`), not on do-not-disturb, and a per-channel level that
+ * allows it. Every one of
  * those that refuses somebody says so: `push-skips.ts` counts it on
  * `GET /api/admin/metrics` and logs `push.skipped` with the reason.
  *
@@ -557,39 +560,108 @@ export function setPushSenderForTests(next: PushSender | null): void {
 }
 
 /**
- * "Is this person connected anywhere in the cluster?" — the status registry
- * already merges every instance's contribution, so this is one in-memory read.
+ * Where this person's sockets stand, cluster-wide: none at all, connected but
+ * with nothing in front of them, or at least one screen in front of them
+ * (foreground and not idle, `socketIsAttentive` in ws/status.ts). The status
+ * registry already merges every instance's contribution, so this is two
+ * in-memory reads, whichever machine holds the socket.
  *
- * `resolveStatus` alone is not the answer: it reports `offline` for an
- * *invisible* user who is very much connected and reading the channel live, and
+ * Invisible users count as connected: they are reading the channel live, and
  * pushing their phone as well would double-notify exactly the people who asked
- * to be least visible. Hence the second check.
+ * to be least visible. `hasClusterSocket` says so already.
  */
-function registryHasLiveSocket(userId: string): boolean {
-  return resolveStatus(userId) !== "offline" || isInvisible(userId);
+export type SocketPresence = "none" | "background" | "attentive";
+
+function registrySocketPresence(userId: string): SocketPresence {
+  if (!hasClusterSocket(userId)) {
+    return "none";
+  }
+  return hasAttentiveSocket(userId) ? "attentive" : "background";
 }
 
-let hasLiveSocket: (userId: string) => boolean = registryHasLiveSocket;
+let socketPresence: (userId: string) => SocketPresence = registrySocketPresence;
 
+/**
+ * Test seam, the old boolean shape: `true` is a socket in front of them, which
+ * is what "connected" meant to every test written before the attention gate.
+ */
 export function setLiveSocketProbeForTests(
   next: ((userId: string) => boolean) | null,
 ): void {
-  hasLiveSocket = next ?? registryHasLiveSocket;
+  socketPresence = next
+    ? (userId) => (next(userId) ? "attentive" : "none")
+    : registrySocketPresence;
 }
 
-/** The ids with no live socket; the rest are counted as `live_socket` skips. */
+/** Test seam with the whole answer, for the attention gate's cases. */
+export function setSocketPresenceProbeForTests(
+  next: ((userId: string) => SocketPresence) | null,
+): void {
+  socketPresence = next ?? registrySocketPresence;
+}
+
+/**
+ * DOES A SOCKET STAND IN THE WAY OF THIS PUSH? Null means no.
+ *
+ * Gate off (the default, and every deployment before it): any socket anywhere
+ * blocks, the rule that let one forgotten tab or a minimised desktop window
+ * silence every phone the account owns.
+ *
+ * Gate on (`push_attention_gate`): only a socket in front of the person blocks.
+ * A connection that is backgrounded, hidden, unfocused past its grace, or idle
+ * no longer speaks for them, so the phone is told.
+ */
+export function socketRefusal(
+  presence: SocketPresence,
+  attentionGate: boolean,
+): Extract<PushSkipReason, "live_socket" | "attentive_socket"> | null {
+  if (presence === "none") {
+    return null;
+  }
+  if (!attentionGate) {
+    return "live_socket";
+  }
+  return presence === "attentive" ? "attentive_socket" : null;
+}
+
+/** Read once per fan-out, so one decision never straddles a flip. */
+function attentionGateOn(): boolean {
+  return isEnabled("push_attention_gate");
+}
+
+/**
+ * Whether `userId` gets past the socket rule, counting the refusal, or (gate
+ * on) the connected person the old rule would have refused and this one lets
+ * through: `pushAttentionPassed`, the number that says the gate is working.
+ */
+function passesSocketRule(
+  userId: string,
+  attentionGate: boolean,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): boolean {
+  const presence = socketPresence(userId);
+  const refusal = socketRefusal(presence, attentionGate);
+  if (refusal) {
+    notePushSkipped(kind, refusal, userId, skipContext);
+    return false;
+  }
+  if (presence !== "none") {
+    notePushAttentionPassed(kind);
+  }
+  return true;
+}
+
+/** The ids the socket rule lets through; the rest are counted as skips. */
 function splitOnLiveSocket(
   userIds: readonly string[],
   kind: PushSkipKind,
   skipContext: PushSkipContext,
 ): string[] {
-  const offline: string[] = [];
-  const connected: string[] = [];
-  for (const userId of userIds) {
-    (hasLiveSocket(userId) ? connected : offline).push(userId);
-  }
-  notePushSkippedMany(kind, "live_socket", connected, skipContext);
-  return offline;
+  const attentionGate = attentionGateOn();
+  return userIds.filter((userId) =>
+    passesSocketRule(userId, attentionGate, kind, skipContext),
+  );
 }
 
 /** Drop (and count) everybody whose stored status is do-not-disturb. */
@@ -901,6 +973,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       : audience.userIds;
 
   const skipContext: PushSkipContext = { channelId: event.channelId };
+  const attentionGate = attentionGateOn();
   const offline: string[] = [];
   for (const userId of candidateIds) {
     if (userId === event.authorId) {
@@ -910,8 +983,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       notePushSkipped("message", "blocked", userId, skipContext);
       continue;
     }
-    if (hasLiveSocket(userId)) {
-      notePushSkipped("message", "live_socket", userId, skipContext);
+    if (!passesSocketRule(userId, attentionGate, "message", skipContext)) {
       continue;
     }
     offline.push(userId);

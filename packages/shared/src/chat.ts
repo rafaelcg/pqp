@@ -25,7 +25,11 @@ import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
 import { streamStartedSchema } from "./stream-alerts.js";
-import { ownStatusSchema, setIdleMessageSchema } from "./status.js";
+import {
+  ownStatusSchema,
+  setAttentionMessageSchema,
+  setIdleMessageSchema,
+} from "./status.js";
 // --- threads ---
 import {
   threadJoinMessageSchema,
@@ -693,6 +697,8 @@ const chatClientFrameUnion = z.discriminatedUnion("type", [
   // from outside it, which is an identifier this design does not otherwise
   // need to invent.
   setIdleMessageSchema,
+  // Same reasoning as `set-idle`: it describes the connection itself.
+  setAttentionMessageSchema,
   pollVoteMessageSchema,
   pollCloseMessageSchema,
 ]);

@@ -305,6 +305,27 @@ membership are decided exactly as before. Off, the frame is byte for byte the
 old one. Pinned on real Postgres with two instances on the bus by
 `server/src/ws/role-mention-recipients.test.ts`.
 
+Born as a flag (no old reader): `PUSH_ATTENTION_GATE` (`push_attention_gate`,
+default off, **global only**), which decides whether an open connection silences
+the phone. Off is the old rule: any socket anywhere in the cluster suppresses
+every push (message, call ring, stream start), so a forgotten tab or a minimised
+desktop window kept every phone quiet. On, the server pushes unless at least one
+of the account's sockets is **foreground and not idle**. Foreground is the
+client's own report, the `set-attention { foreground }` frame (web and desktop:
+visible and focused, with a grace before "background"); idle is the old
+`set-idle`. Both ride the status registry's cluster snapshot, so a socket on
+api-a answers for a push decided on api-b. A socket that never sends
+`set-attention` (every phone build today, every bundle from before the frame)
+counts as **foreground unless idle**: iOS already reports idle when it goes to
+the background, Android keeps today's behaviour until it sends the frame, and no
+old client can start getting a push on top of its own banner. Global because
+the decision is about a person's sockets and the DM and call paths have no
+server. Read it on `GET /api/admin/metrics`: `product.pushAttentionPassed` counts
+connected people the gate let through (zero while off), and
+`product.pushSkipped.*.attentive_socket` replaces `live_socket` once it is on.
+Decision code: `socketRefusal` in `server/src/services/push.ts` and
+`socketIsAttentive` in `server/src/ws/status.ts`.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,
