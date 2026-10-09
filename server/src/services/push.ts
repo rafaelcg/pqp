@@ -15,6 +15,13 @@ import { isInvisible, resolveStatus } from "../ws/status.js";
 import { logEvent } from "../lib/log.js";
 import { notePush } from "./push-metrics.js";
 import {
+  notePushSkipped,
+  notePushSkippedMany,
+  type PushSkipContext,
+  type PushSkipKind,
+  type PushSkipReason,
+} from "./push-skips.js";
+import {
   type ApnsConfig,
   isApnsEnabled,
   isApnsTokenGone,
@@ -59,7 +66,9 @@ import {
  * already answers "who deserves to hear about this message" — audience,
  * blocks, mentions — and this module is handed its conclusions. What is
  * decided here is only the push-specific narrowing: no live socket anywhere,
- * not on do-not-disturb, and a per-channel level that allows it.
+ * not on do-not-disturb, and a per-channel level that allows it. Every one of
+ * those that refuses somebody says so: `push-skips.ts` counts it on
+ * `GET /api/admin/metrics` and logs `push.skipped` with the reason.
  *
  * PUSHES FIRE ON THE ORIGIN INSTANCE ONLY. A user with no socket is on no
  * instance, so if the cluster-bus copy of the activity fan-out also pushed,
@@ -568,6 +577,37 @@ export function setLiveSocketProbeForTests(
   hasLiveSocket = next ?? registryHasLiveSocket;
 }
 
+/** The ids with no live socket; the rest are counted as `live_socket` skips. */
+function splitOnLiveSocket(
+  userIds: readonly string[],
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): string[] {
+  const offline: string[] = [];
+  const connected: string[] = [];
+  for (const userId of userIds) {
+    (hasLiveSocket(userId) ? connected : offline).push(userId);
+  }
+  notePushSkippedMany(kind, "live_socket", connected, skipContext);
+  return offline;
+}
+
+/** Drop (and count) everybody whose stored status is do-not-disturb. */
+function withoutDnd(
+  userIds: readonly string[],
+  preferences: ReadonlyMap<string, UserPreferences>,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): string[] {
+  return userIds.filter((userId) => {
+    if (preferences.get(userId)?.status === "dnd") {
+      notePushSkipped(kind, "dnd", userId, skipContext);
+      return false;
+    }
+    return true;
+  });
+}
+
 // --------------------------------------------------------------- decisions
 
 export type ManualStatusLike = string | undefined;
@@ -597,19 +637,32 @@ export interface PushDecisionInput {
  *   requirement one of this feature: mentions, replies and DMs only.
  */
 export function shouldPush(input: PushDecisionInput): boolean {
+  return pushRefusal(input) === null;
+}
+
+/**
+ * The same matrix as `shouldPush`, saying which rule refused: null means push.
+ * `push-skips.ts` counts the answer, so the order of these checks is also the
+ * order the skip reasons are attributed in.
+ */
+export function pushRefusal(
+  input: PushDecisionInput,
+): Extract<PushSkipReason, "dnd" | "muted" | "level"> | null {
   if (input.manualStatus === "dnd") {
-    return false;
+    return "dnd";
   }
   if (input.level === "none") {
-    return false;
+    return "muted";
   }
   if (input.mention) {
-    return true;
+    return null;
   }
   if (input.channelKind !== "server") {
-    return input.level === "all";
+    return input.level === "all" ? null : "level";
   }
-  return false;
+  // A plain server-channel message. Unreachable from `sendChannelPush`, whose
+  // candidates for a server channel are only the mentioned and the replied-to.
+  return "level";
 }
 
 /**
@@ -836,12 +889,22 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       ? [...new Set([...mentioned, ...(replied ? [replied] : [])])]
       : audience.userIds;
 
-  const offline = candidateIds.filter(
-    (userId) =>
-      userId !== event.authorId &&
-      !event.blockerIds.has(userId) &&
-      !hasLiveSocket(userId),
-  );
+  const skipContext: PushSkipContext = { channelId: event.channelId };
+  const offline: string[] = [];
+  for (const userId of candidateIds) {
+    if (userId === event.authorId) {
+      continue;
+    }
+    if (event.blockerIds.has(userId)) {
+      notePushSkipped("message", "blocked", userId, skipContext);
+      continue;
+    }
+    if (hasLiveSocket(userId)) {
+      notePushSkipped("message", "live_socket", userId, skipContext);
+      continue;
+    }
+    offline.push(userId);
+  }
   if (offline.length === 0) {
     return;
   }
@@ -859,12 +922,17 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
 
   const recipients = offline.filter((userId) => {
     const settings = preferences.get(userId) ?? null;
-    return shouldPush({
+    const refusal = pushRefusal({
       mention: mentioned.has(userId) || userId === replied,
       channelKind: audience.kind,
       manualStatus: settings?.status,
       level: resolvePushLevel(settings, audience.serverId, event.channelId),
     });
+    if (refusal) {
+      notePushSkipped("message", refusal, userId, skipContext);
+      return false;
+    }
+    return true;
   });
   if (recipients.length === 0) {
     return;
@@ -919,6 +987,8 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
     (userId) => payloads.get(userId),
     transports,
     MESSAGE_DELIVERY,
+    "message",
+    skipContext,
   );
 }
 
@@ -958,6 +1028,8 @@ async function deliverToUsers(
   payloadFor: (userId: string) => PushPayload | undefined,
   transports: PushTransports,
   delivery: PushDeliveryOptions,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext = {},
 ): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
     `SELECT ${SUBSCRIPTION_COLUMNS}
@@ -965,6 +1037,26 @@ async function deliverToUsers(
      WHERE user_id = ANY($1::uuid[])`,
     [userIds],
   );
+
+  // The last two "why not" answers (`push-skips.ts`): a person with no device
+  // on file at all, and a person whose every device is on a leg this
+  // deployment has not configured (an FCM token on an instance with no FCM
+  // key). Both used to end the fan-out in silence.
+  const withRows = new Set<string>();
+  const reachable = new Set<string>();
+  for (const subscription of subscriptions.rows) {
+    withRows.add(subscription.user_id);
+    if (hasConfiguredLeg(subscription, transports)) {
+      reachable.add(subscription.user_id);
+    }
+  }
+  for (const userId of userIds) {
+    if (!withRows.has(userId)) {
+      notePushSkipped(kind, "no_subscription", userId, skipContext);
+    } else if (!reachable.has(userId)) {
+      notePushSkipped(kind, "transport_off", userId, skipContext);
+    }
+  }
 
   await Promise.all(
     subscriptions.rows.map(async (subscription) => {
@@ -982,6 +1074,25 @@ async function deliverToUsers(
       }
       await deliverWebPush(subscription, payload, transports.vapid, delivery);
     }),
+  );
+}
+
+/** Whether the leg this row needs is configured, mirroring each leg's own guard. */
+function hasConfiguredLeg(
+  subscription: StoredPushSubscription,
+  transports: PushTransports,
+): boolean {
+  if (subscription.platform === "apns") {
+    return Boolean(transports.apns && subscription.token);
+  }
+  if (subscription.platform === "fcm") {
+    return Boolean(transports.fcm && subscription.token);
+  }
+  return Boolean(
+    transports.vapid &&
+      subscription.endpoint &&
+      subscription.p256dh &&
+      subscription.auth,
   );
 }
 
@@ -1270,7 +1381,8 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
     return;
   }
 
-  const offline = event.rungUserIds.filter((userId) => !hasLiveSocket(userId));
+  const skipContext: PushSkipContext = { conversationId: event.conversationId };
+  const offline = splitOnLiveSocket(event.rungUserIds, "call", skipContext);
   if (offline.length === 0) {
     return;
   }
@@ -1285,9 +1397,7 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
-  const recipients = offline.filter(
-    (userId) => preferences.get(userId)?.status !== "dnd",
-  );
+  const recipients = withoutDnd(offline, preferences, "call", skipContext);
   if (recipients.length === 0) {
     return;
   }
@@ -1298,7 +1408,14 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
     kind: event.kind,
     callerName: event.callerName,
   });
-  await deliverToUsers(recipients, () => payload, transports, CALL_DELIVERY);
+  await deliverToUsers(
+    recipients,
+    () => payload,
+    transports,
+    CALL_DELIVERY,
+    "call",
+    skipContext,
+  );
 }
 
 // ------------------------------------------------------------ watch party session reminders
@@ -1363,6 +1480,8 @@ export async function sendChannelSessionReminderPush(
     () => payload,
     transports,
     SESSION_REMINDER_DELIVERY,
+    "reminder",
+    { channelId: event.channelId },
   );
 }
 
@@ -1427,7 +1546,8 @@ export async function sendStreamStartedPush(
   if (!transports) {
     return 0;
   }
-  const offline = event.userIds.filter((userId) => !hasLiveSocket(userId));
+  const skipContext: PushSkipContext = { channelId: event.channelId };
+  const offline = splitOnLiveSocket(event.userIds, "stream", skipContext);
   if (offline.length === 0) {
     return 0;
   }
@@ -1439,9 +1559,7 @@ export async function sendStreamStartedPush(
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
-  const recipients = offline.filter(
-    (userId) => preferences.get(userId)?.status !== "dnd",
-  );
+  const recipients = withoutDnd(offline, preferences, "stream", skipContext);
   if (recipients.length === 0) {
     return 0;
   }
@@ -1456,6 +1574,8 @@ export async function sendStreamStartedPush(
       ),
     transports,
     STREAM_START_DELIVERY,
+    "stream",
+    skipContext,
   );
   return recipients.length;
 }
@@ -1564,6 +1684,7 @@ export function pushWatchPartyWaitlistApproved(
         ),
       transports,
       SESSION_REMINDER_DELIVERY,
+      "waitlist",
     );
   })().catch((error: unknown) => {
     console.error(

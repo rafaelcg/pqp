@@ -63,6 +63,7 @@ const {
   truncateLabel,
   wantsDmDetails,
 } = await import("./push.js");
+const { pushSkippedSnapshot, resetPushSkips } = await import("./push-skips.js");
 const {
   resetApnsJwtCacheForTests,
   setApnsTransportForTests,
@@ -583,6 +584,7 @@ describeDb("web push fan-out", () => {
       });
     });
     setLiveSocketProbeForTests((userId) => online.has(userId));
+    resetPushSkips();
 
     // APNs is configured for every case here. The two legs are independent, so
     // "web only" and "APNs only" are asserted explicitly in the cases that care
@@ -746,6 +748,8 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(fcmSent).toHaveLength(0);
+    // Not silent any more: a token on file for a leg nobody configured.
+    expect(pushSkippedSnapshot().message.transport_off).toBe(1);
   });
 
   it("sends an incoming-call push to an Android phone at HIGH priority", async () => {
@@ -791,6 +795,18 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    // The rule that silenced every phone on 2026-10-05, now counted.
+    expect(pushSkippedSnapshot().message.live_socket).toBe(1);
+  });
+
+  it("counts a recipient with no device on file as no_subscription", async () => {
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message).toMatchObject({
+      no_subscription: 1,
+      live_socket: 0,
+    });
   });
 
   it("never pushes the author, even self-mentioned", async () => {
@@ -818,6 +834,7 @@ describeDb("web push fan-out", () => {
     );
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.blocked).toBe(1);
   });
 
   it("skips a mention of somebody outside the audience", async () => {
@@ -844,6 +861,7 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.dnd).toBe(1);
   });
 
   it("respects a per-channel 'none' level", async () => {
@@ -857,6 +875,7 @@ describeDb("web push fan-out", () => {
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.muted).toBe(1);
   });
 
   // ------------------------------------------------------------------- DMs
@@ -969,6 +988,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.level).toBe(1);
   });
 
   // ---------------------------------------------------------- incoming calls
@@ -987,6 +1007,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+    expect(pushSkippedSnapshot().call.live_socket).toBe(1);
     expect(sent[0]!.payload.title).toBe("ana");
     expect(sent[0]!.payload.body).toBe("Incoming group call");
     expect(sent[0]!.payload.path).toBe(`/app/dm/${conversation.channelId}`);
@@ -1035,6 +1056,7 @@ describeDb("web push fan-out", () => {
     });
 
     expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().call.dnd).toBe(1);
   });
 
   it("the call push and the missed-call push share the conversation id as tag", async () => {
