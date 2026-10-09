@@ -1188,6 +1188,54 @@ always-on view; PostHog would be the ad-hoc exploration layer on top, fed from
 the same seam. Keep new steps flowing through `recordActivationStep` and that
 stays true.
 
+## Voice notes (mensagens de voz)
+
+`GET /api/admin/metrics` carries a `voiceNotes` block that answers two
+questions: is the feature used, and does the pipeline behind it work. Every
+field is documented on the `VoiceNoteMetrics` type in
+`server/src/services/voice-note-metrics.ts`.
+
+It is **read from the database**, not counted in memory, because the work spans
+the API (mint, send) and `pqp-worker` (transcribe, transcode) on more than one
+machine: the rows are the one place they all write, so the numbers are the same
+on both replicas and survive a deploy. The queries are bounded by a time window
+with an index behind it (`idx_message_attachment_voice_created`,
+`idx_voice_note_listens_listened`, `idx_speech_jobs_finished`) or by the partial
+index of unfinished jobs (`idx_speech_jobs_due`), so none of them reads history.
+
+- `usage`: notes minted and sent in 24 h / 7 d, by where they went (dm / group /
+  server), by container (`audio/mp4` is Safari and the native apps,
+  `audio/webm` is Chromium and Firefox), senders, total and median length,
+  first plays in 24 h, and the share of last week's notes heard at least once.
+- `health.queue`: per job kind (`transcription`, `transcode`), what is queued,
+  running and retrying, **`oldestQueuedSeconds`** (how long the oldest due job
+  has waited: a worker that is down, wedged or out of connections shows up as
+  this number climbing) and `expiredLeases` (claimed by a worker that died).
+- `health.jobs`: what settled in 24 h per kind: ok, skipped on purpose (`gone`,
+  `already`, `sender-declined`, `over-budget`, `no-provider`), failed, the
+  success rate (skipped jobs are in neither side of it) and p50 / p95 seconds
+  from queued to done, which includes the queue wait because that is what the
+  listener feels.
+- `health.transcripts24h`: where the last day's notes stand by transcript status.
+- `health.budget`: provider seconds used today (UTC) against
+  `VOICE_STT_DAILY_SECONDS`, and `refused`, the jobs turned away because the
+  next note did not fit (`exhausted` is `refused > 0`). The limit is read from
+  the API's environment while the worker enforces its own, so set the variable
+  on both or the dashboard shows the default.
+- `refusals`: requests turned away before anything was stored (the flag off at
+  mint or at claim, a byte budget exceeded, a second attachment or text beside
+  the note, an edit that adds text). The one in-memory part: per instance since
+  boot, summed across replicas by the exporter. Everything else in the block
+  is take-from-one.
+
+`voice_notes` and `voice_note_transcription` themselves are in `flags`. With
+`voice_notes` off everywhere every count is zero because nobody can send, and
+`refusals["mint-flag-off"]` is what tells that apart from nobody trying.
+
+A field added to the block does not appear in Grafana until it is added to
+`render()` in `tools/monitoring/pqp-api-metrics-exporter.py` (and the block is
+given a merge rule there: it mixes a take-from-one body with summed refusals).
+
 ## The SFU box (Vultr, São Paulo)
 
 Production voice runs on a self-hosted LiveKit at `wss://sfu.pqp.gg`, with TURN

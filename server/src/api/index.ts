@@ -560,6 +560,7 @@ import {
   NoteTooLargeError,
   messageHasNote,
   noteEditAllowed,
+  recordVoiceNoteRefusal,
   VoiceNoteContentTypeError,
   VoiceNotesDisabledError,
 } from "../services/voice-notes.js";
@@ -7473,6 +7474,7 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
       body: body.body,
     })
   ) {
+    recordVoiceNoteRefusal("edit-text-beside-note");
     throw new HttpError(400, "A voice message cannot have text added to it");
   }
 

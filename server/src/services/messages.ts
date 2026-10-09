@@ -41,7 +41,8 @@ import { insertPoll, listPollsForMessages } from "./polls.js";
 import {
   ATTACHMENT_OBJECT_KEYS,
   ATTACHMENT_VOICE_JOIN,
-  noteShapeAllowed,
+  noteShapeRefusal,
+  recordVoiceNoteRefusal,
   voiceNotesEnabledForChannel,
 } from "./voice-notes.js";
 import {
@@ -678,15 +679,15 @@ async function insertMessage(
   // the note stays unclaimed for the sweeper. Counted on what was asked for,
   // not on what verified, so a note whose upload failed cannot drop out and
   // let the rest of the send through.
-  if (
-    !noteShapeAllowed({
-      requestedNotes,
-      requestedCount: new Set(attachmentIds ?? []).size,
-      // A deck draw only writes its body inside the transaction below, but it
-      // is text beside the note all the same.
-      body: deckAction ? "deck" : storedBody,
-    })
-  ) {
+  const shapeRefusal = noteShapeRefusal({
+    requestedNotes,
+    requestedCount: new Set(attachmentIds ?? []).size,
+    // A deck draw only writes its body inside the transaction below, but it
+    // is text beside the note all the same.
+    body: deckAction ? "deck" : storedBody,
+  });
+  if (shapeRefusal) {
+    recordVoiceNoteRefusal(shapeRefusal);
     return null;
   }
 
@@ -698,6 +699,7 @@ async function insertMessage(
   // to the sweeper. Only asked when a note is in the send, so no other message
   // pays for it.
   if (requestedNotes > 0 && !(await voiceNotesEnabledForChannel(channelId))) {
+    recordVoiceNoteRefusal("claim-flag-off");
     return null;
   }
   // What a voice note needs from the worker (an AAC copy, an eager

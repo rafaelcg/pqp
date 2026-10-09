@@ -1066,6 +1066,16 @@ CREATE TABLE IF NOT EXISTS voice_note_listens (
 CREATE INDEX IF NOT EXISTS idx_voice_note_listens_user
   ON voice_note_listens (user_id);
 
+-- The operator metrics read "notes minted in the last 24 hours / 7 days" and
+-- "first plays in the last 24 hours" (`services/voice-note-metrics.ts`). Both
+-- are time windows over tables that only grow, and neither has another index
+-- that leads with time, so without these each refresh of the dashboard would
+-- read every note ever sent.
+CREATE INDEX IF NOT EXISTS idx_message_attachment_voice_created
+  ON message_attachment_voice (created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_note_listens_listened
+  ON voice_note_listens (listened_at);
+
 -- ---------------------------------------------------------------- speech jobs
 --
 -- The worker's queue for anything that needs the bytes of a recording:
@@ -1110,6 +1120,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_attachment
 -- The claim's scan: only live rows, in the order they become due.
 CREATE INDEX IF NOT EXISTS idx_speech_jobs_due
   ON speech_jobs (run_after, id) WHERE status IN ('queued', 'running');
+-- What settled lately, for the operator metrics' success rate and latency
+-- ("jobs finished in the last 24 hours"). Partial like the one above, and for
+-- the same reason: the rows that are neither done nor failed have no
+-- `finished_at` and are the other index's.
+CREATE INDEX IF NOT EXISTS idx_speech_jobs_finished
+  ON speech_jobs (finished_at) WHERE status IN ('done', 'failed');
 
 -- Seconds of audio sent to the speech provider per UTC day, shared by every
 -- worker, reserved atomically before each call so the daily cap
