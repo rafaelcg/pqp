@@ -56,11 +56,23 @@ import {
 const CANCEL_SLIDE_PX = 96;
 /** Slide this far up to lock it. */
 const LOCK_SLIDE_PX = 72;
+/**
+ * How far the cancel hint follows the finger. The held-touch row is a timer,
+ * then the hint 18px to its right (the row gap plus the hint's own margin), so
+ * the hint may travel less than that and no further: past it the hint slid
+ * over the timer. Keep this under the gap.
+ */
+const HINT_SLIDE_MAX_PX = 12;
 /** A touch shorter than this is a tap, not a recording. */
 const TAP_MS = 350;
 const UNDO_MS = 5000;
 /** Live bars drawn while recording, newest on the right. */
 const LIVE_BARS = 96;
+
+/** The cancel hint's horizontal offset for a finger that slid `slideX` (<= 0). */
+export function cancelHintOffset(slideX: number): number {
+  return Math.max(-HINT_SLIDE_MAX_PX, Math.min(0, slideX / 2));
+}
 
 export type VoiceNotePhase =
   | { kind: "idle" }
@@ -749,7 +761,7 @@ export function VoiceNotePanel({ controller }: { controller: VoiceNoteController
             "ml-2 flex min-w-0 items-center gap-1 truncate text-xs transition-colors duration-[var(--duration-fast)]",
             cancelling ? "text-danger" : "text-text-tertiary",
           )}
-          style={{ transform: `translateX(${Math.max(-60, controller.slide.x / 2)}px)` }}
+          style={{ transform: `translateX(${cancelHintOffset(controller.slide.x)}px)` }}
         >
           <ChevronLeft className="h-3.5 w-3.5 shrink-0" aria-hidden />
           {cancelling ? t("voiceNote.releaseToCancel") : t("voiceNote.slideToCancel")}
