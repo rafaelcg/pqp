@@ -21,12 +21,32 @@ vi.mock("@/lib/config-refresh", () => ({ onConfigRefresh: () => () => {} }));
 const {
   isNotifyOpenChannelEnabled,
   loadNotifyConfig,
+  startNotifyConfig,
   setNotifyConfigForTests,
 } = await import("./notify-config");
 
 beforeEach(() => {
   asks.pending.length = 0;
   setNotifyConfigForTests(null);
+});
+
+describe("startNotifyConfig", () => {
+  it("goes back to off on teardown, and drops an ask still in flight", async () => {
+    const stop = startNotifyConfig();
+    asks.pending[0]!.resolve({ notifyOpenChannel: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(isNotifyOpenChannelEnabled()).toBe(true);
+    stop();
+    expect(isNotifyOpenChannelEnabled()).toBe(false);
+
+    const next = startNotifyConfig();
+    next();
+    asks.pending[1]!.resolve({ notifyOpenChannel: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(isNotifyOpenChannelEnabled()).toBe(false);
+  });
 });
 
 describe("loadNotifyConfig", () => {

@@ -242,7 +242,8 @@ describe("the wiring the decision depends on", () => {
 
   it("the app loads the flag and hands over the blocked authors", async () => {
     const app = await read("App.tsx");
-    expect(app).toMatch(/useEffect\(\(\) => startNotifyConfig\(\), \[\]\)/);
+    // Only with an account: a signed-out page has no token for the request.
+    expect(app).toMatch(/notifyConfigUserId \? startNotifyConfig\(\) : undefined/);
     expect(app).toMatch(/setNotificationBlockedAuthors\(blockedUserIds\)/);
   });
 });

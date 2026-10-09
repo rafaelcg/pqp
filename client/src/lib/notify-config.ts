@@ -66,9 +66,17 @@ export async function loadNotifyConfig(): Promise<void> {
 /** Ask now and again on every config refresh. Returns the teardown. */
 export function startNotifyConfig(): () => void {
   void loadNotifyConfig();
-  return onConfigRefresh(() => {
+  const stop = onConfigRefresh(() => {
     void loadNotifyConfig();
   });
+  return () => {
+    stop();
+    // The answer belongs to the account that asked. Whoever signs in next
+    // starts from off, and an ask still in flight from this one is dropped.
+    asked += 1;
+    applied = asked;
+    current = OFF;
+  };
 }
 
 /** Test seam. */

@@ -2543,7 +2543,13 @@ function MainAppContent({
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
   // The notification switches (`notify_open_channel`) ride the same refresh.
-  useEffect(() => startNotifyConfig(), []);
+  // Only with an account: `/api/push/config` needs a token, and a signed-out
+  // page (or one still resolving `/api/me`) would be answered with a 401.
+  const notifyConfigUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyConfigUserId ? startNotifyConfig() : undefined),
+    [notifyConfigUserId],
+  );
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
