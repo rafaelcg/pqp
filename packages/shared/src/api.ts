@@ -137,9 +137,11 @@ export type NotificationLevel = z.infer<typeof notificationLevelSchema>;
  * — one chatty #general turned down inside an otherwise normal server — costs
  * two keys rather than a row per channel the user is in.
  *
- * The whole object is replaced on write, never patched key by key: the
- * preference store merges one level deep (jsonb `||`), so a client that sent
- * `{ channels: { x: "none" } }` would drop every other channel's choice.
+ * The maps inside it (`servers`, `channels`, `streamAlerts`) are replaced
+ * whole on write, never patched key by key, so a client that sent
+ * `{ channels: { x: "none" } }` would drop every other channel's choice. The
+ * object itself is merged one level deep by the server: a key a client leaves
+ * out (an older build that predates `dmDefault`, say) keeps its stored value.
  */
 export const notificationPreferencesSchema = z.object({
   /**

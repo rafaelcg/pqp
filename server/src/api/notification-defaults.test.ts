@@ -153,6 +153,62 @@ describeDb("notification defaults", () => {
     ).toBe("mentions");
   });
 
+  it("an old client that omits the new keys does not undo them", async () => {
+    await call("PATCH", "/api/me/preferences", {
+      notifications: {
+        desktop: true,
+        desktopChosen: true,
+        default: "all",
+        dmDefault: "all",
+        serverDefault: "none",
+        servers: {},
+        channels: {},
+      },
+    });
+    // What a phone writes: its own model, none of the three new keys.
+    const old = await call<PreferencesAnswer>("PATCH", "/api/me/preferences", {
+      notifications: { desktop: false, default: "mentions", servers: {}, channels: {} },
+    });
+    expect(old.status).toBe(200);
+    expect(old.body.preferences.notifications).toMatchObject({
+      // what it sent wins
+      desktop: false,
+      default: "mentions",
+      // what it left out survives
+      desktopChosen: true,
+      dmDefault: "all",
+      serverDefault: "none",
+    });
+    const read = await call<{ preferences?: PreferencesAnswer["preferences"] }>("GET", "/api/me");
+    expect(read.body.preferences?.notifications).toMatchObject({
+      dmDefault: "all",
+      serverDefault: "none",
+      desktopChosen: true,
+    });
+  });
+
+  it("a key a client does send still wins, and the maps inside are replaced whole", async () => {
+    const serverA = "11111111-1111-4111-8111-111111111111";
+    const serverB = "22222222-2222-4222-8222-222222222222";
+    await call("PATCH", "/api/me/preferences", {
+      notifications: { serverDefault: "none", servers: { [serverA]: "none", [serverB]: "all" } },
+    });
+    const next = await call<PreferencesAnswer>("PATCH", "/api/me/preferences", {
+      notifications: { serverDefault: "all", servers: { [serverB]: "all" } },
+    });
+    expect(next.body.preferences.notifications).toMatchObject({
+      serverDefault: "all",
+      servers: { [serverB]: "all" },
+    });
+    expect(next.body.preferences.notifications?.servers).not.toHaveProperty(serverA);
+  });
+
+  it("a patch with no notifications leaves the stored ones alone", async () => {
+    await call("PATCH", "/api/me/preferences", { notifications: { dmDefault: "none" } });
+    const other = await call<PreferencesAnswer>("PATCH", "/api/me/preferences", { muteOnJoin: true });
+    expect(other.body.preferences.notifications).toMatchObject({ dmDefault: "none" });
+  });
+
   it("rejects a level the schema does not know", async () => {
     const bad = await call("PATCH", "/api/me/preferences", {
       notifications: { serverDefault: "everything" },
