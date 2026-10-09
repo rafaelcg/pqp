@@ -91,7 +91,12 @@ import {
   pushDeliverySnapshot,
   type PushDelivery,
 } from "./push-metrics.js";
-import { pushSkippedSnapshot, type PushSkipped } from "./push-skips.js";
+import {
+  pushAttentionPassedSnapshot,
+  pushSkippedSnapshot,
+  type PushAttentionPassed,
+  type PushSkipped,
+} from "./push-skips.js";
 import {
   hlsTelemetryActivity,
   type HlsTelemetryActivity,
@@ -1043,6 +1048,13 @@ export interface AdminMetrics {
      * limited. See `services/push-skips.ts`.
      */
     pushSkipped: PushSkipped;
+    /**
+     * Recipients with a live socket that the push attention gate let through
+     * because none of their sockets was foreground and active, per kind. The
+     * counter that moves when `push_attention_gate` goes on; zero while it is
+     * off. See `services/push-skips.ts`.
+     */
+    pushAttentionPassed: PushAttentionPassed;
   };
 
   /**
@@ -1823,6 +1835,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       },
       pushDelivery: pushDeliverySnapshot(),
       pushSkipped: pushSkippedSnapshot(),
+      pushAttentionPassed: pushAttentionPassedSnapshot(),
     },
 
     imports: {

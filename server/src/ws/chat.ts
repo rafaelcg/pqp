@@ -106,7 +106,12 @@ import {
   sendEncoded,
   sendEncodedDroppable,
 } from "./fanout.js";
-import { isInvisible, isPresentForHere, setSocketIdle } from "./status.js";
+import {
+  isInvisible,
+  isPresentForHere,
+  setSocketAttention,
+  setSocketIdle,
+} from "./status.js";
 
 interface ChatConnection {
   socket: WebSocket;
@@ -2436,6 +2441,16 @@ export async function handleChatMessage(
   // about all three. Nothing on this path touches the database.
   if (payload.type === "set-idle") {
     setSocketIdle(conn.socket, payload.idle);
+    return;
+  }
+
+  // The other half of "is anybody in front of this connection": the client
+  // says whether it is foreground (web: visible and focused, after a grace).
+  // Read by the push attention gate, cluster-wide, through the status
+  // registry. Same cost profile as `set-idle`: sent on a transition and once
+  // per (re)connect, dropped when unchanged, no database.
+  if (payload.type === "set-attention") {
+    setSocketAttention(conn.socket, payload.foreground);
     return;
   }
 

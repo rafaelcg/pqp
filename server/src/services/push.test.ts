@@ -59,11 +59,18 @@ const {
   sendChannelPush,
   setLiveSocketProbeForTests,
   setPushSenderForTests,
+  setSocketPresenceProbeForTests,
   shouldPush,
+  socketRefusal,
+  sendStreamStartedPush,
   truncateLabel,
   wantsDmDetails,
 } = await import("./push.js");
-const { pushSkippedSnapshot, resetPushSkips } = await import("./push-skips.js");
+const { pushAttentionPassedSnapshot, pushSkippedSnapshot, resetPushSkips } =
+  await import("./push-skips.js");
+const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } =
+  await import("../lib/flags.js");
+type SocketPresence = import("./push.js").SocketPresence;
 const {
   resetApnsJwtCacheForTests,
   setApnsTransportForTests,
@@ -235,6 +242,25 @@ describe("shouldPush", () => {
         level: "all",
       }),
     ).toBe(true);
+  });
+});
+
+describe("socketRefusal (the push attention gate)", () => {
+  it("walks the whole table", () => {
+    const table: [SocketPresence, boolean, string | null][] = [
+      // presence, gate on, refusal
+      ["none", false, null],
+      ["none", true, null],
+      // Gate off: any socket anywhere silences the phone (the old rule).
+      ["background", false, "live_socket"],
+      ["attentive", false, "live_socket"],
+      // Gate on: only a socket in front of the person does.
+      ["background", true, null],
+      ["attentive", true, "attentive_socket"],
+    ];
+    for (const [presence, gate, refusal] of table) {
+      expect(socketRefusal(presence, gate), `${presence}/${gate}`).toBe(refusal);
+    }
   });
 });
 
@@ -920,6 +946,132 @@ describeDb("web push fan-out", () => {
 
     expect(sent).toEqual([]);
     expect(pushSkippedSnapshot().message.muted).toBe(1);
+  });
+
+  // ------------------------------------------------- the attention gate
+
+  describe("with push_attention_gate", () => {
+    /** Per user: what the cluster registry would say about their sockets. */
+    let presence: Map<string, SocketPresence>;
+
+    beforeEach(async () => {
+      presence = new Map();
+      setSocketPresenceProbeForTests((userId) => presence.get(userId) ?? "none");
+      // The way production sets it: a global row, read through the snapshot
+      // `startFeatureFlags` loads, never the environment (pitfalls 9 and 12).
+      resetFeatureFlagsForTests();
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+      await startFeatureFlags();
+    });
+
+    afterEach(async () => {
+      await setGlobalFlag("push_attention_gate", null, { kind: "dashboard" });
+      resetFeatureFlagsForTests();
+    });
+
+    async function dmTo(recipient: string) {
+      const conversation = await openConversation(ana.id, [recipient]);
+      await subscribe(recipient);
+      return {
+        channelId: conversation.channelId,
+        audience: audienceOf("dm", [ana.id, recipient]),
+        authorId: ana.id,
+        mentionedUsernames: [] as string[],
+        repliedToUserId: null,
+        blockerIds: new Set<string>(),
+      };
+    }
+
+    it("off (no row): a backgrounded socket still silences the phone", async () => {
+      const event = await dmTo(bea.id);
+      presence.set(bea.id, "background");
+
+      await sendChannelPush(event);
+
+      expect(sent).toEqual([]);
+      expect(pushSkippedSnapshot().message.live_socket).toBe(1);
+      expect(pushAttentionPassedSnapshot().message).toBe(0);
+    });
+
+    it("on: a backgrounded socket no longer silences the DM push", async () => {
+      await setGlobalFlag("push_attention_gate", true, { kind: "dashboard" });
+      const event = await dmTo(bea.id);
+      presence.set(bea.id, "background");
+
+      await sendChannelPush(event);
+
+      expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+      expect(pushAttentionPassedSnapshot().message).toBe(1);
+      expect(pushSkippedSnapshot().message.live_socket).toBe(0);
+    });
+
+    it("on: a socket in front of them still suppresses it", async () => {
+      await setGlobalFlag("push_attention_gate", true, { kind: "dashboard" });
+      const event = await dmTo(bea.id);
+      presence.set(bea.id, "attentive");
+
+      await sendChannelPush(event);
+
+      expect(sent).toEqual([]);
+      expect(pushSkippedSnapshot().message.attentive_socket).toBe(1);
+    });
+
+    it("on: the rest of the matrix still applies to somebody let through", async () => {
+      await setGlobalFlag("push_attention_gate", true, { kind: "dashboard" });
+      const event = await dmTo(bea.id);
+      presence.set(bea.id, "background");
+      await mergePreferences(bea.id, { status: "dnd" });
+
+      await sendChannelPush(event);
+
+      expect(sent).toEqual([]);
+      expect(pushAttentionPassedSnapshot().message).toBe(1);
+      expect(pushSkippedSnapshot().message.dnd).toBe(1);
+    });
+
+    it("on: rings a backgrounded callee, not one in front of the app", async () => {
+      await setGlobalFlag("push_attention_gate", true, { kind: "dashboard" });
+      const conversation = await openConversation(ana.id, [bea.id, caio.id]);
+      await subscribe(bea.id);
+      await subscribe(caio.id);
+      presence.set(bea.id, "background");
+      presence.set(caio.id, "attentive");
+
+      await sendCallPush({
+        conversationId: conversation.channelId,
+        kind: "group",
+        rungUserIds: [bea.id, caio.id],
+        callerName: "ana",
+      });
+
+      expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+      expect(pushAttentionPassedSnapshot().call).toBe(1);
+      expect(pushSkippedSnapshot().call.attentive_socket).toBe(1);
+    });
+
+    it("on: a stream start reaches a backgrounded viewer, not one in front of the app", async () => {
+      await setGlobalFlag("push_attention_gate", true, { kind: "dashboard" });
+      await subscribe(bea.id);
+      await subscribe(caio.id);
+      presence.set(bea.id, "background");
+      presence.set(caio.id, "attentive");
+
+      const pushed = await sendStreamStartedPush({
+        userIds: [bea.id, caio.id],
+        serverId,
+        channelId,
+        sharerName: "ana",
+        channelLabel: "general",
+        serverName: "Friends",
+      });
+
+      expect(pushed).toBe(1);
+      expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+      expect(pushSkippedSnapshot().stream.attentive_socket).toBe(1);
+      expect(pushAttentionPassedSnapshot().stream).toBe(1);
+    });
   });
 
   // ------------------------------------------------------------------- DMs
