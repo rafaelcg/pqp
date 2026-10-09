@@ -471,6 +471,12 @@ export interface MentionWrite {
   mentionEveryone?: boolean;
   mentionHere?: boolean;
   canMentionEveryone?: boolean;
+  /**
+   * Ask `recordMentions` to hand back the ids it wrote (`mention_ids_from_db`).
+   * Off, the INSERTs carry no RETURNING and nothing is materialised, so a
+   * message that mentions a big role costs exactly what it did before.
+   */
+  collectRecipients?: boolean;
 }
 
 async function recordMentions(
@@ -481,11 +487,17 @@ async function recordMentions(
   body: string,
   reply?: { parentId: string; authorId: string },
   extra?: MentionWrite,
-): Promise<void> {
+): Promise<string[]> {
   const parsed = extractMentions(body);
   const usernames = parsed.usernames;
+  // Everyone a row was written for, from every source below. Each INSERT is
+  // `ON CONFLICT DO NOTHING ... RETURNING`, so a person already recorded by an
+  // earlier source is not returned twice and the union is the set of rows.
+  const collect = extra?.collectRecipients === true;
+  const returning = collect ? "RETURNING user_id" : "";
+  const recorded = new Set<string>();
   if (usernames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, u.id
        FROM users u
@@ -504,13 +516,17 @@ async function recordMentions(
                )
              END
          AND ${notBlockedSql("u.id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, channelId, usernames, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (parsed.roleNames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT DISTINCT $1::uuid, mr.user_id
        FROM channels c
@@ -537,7 +553,8 @@ async function recordMentions(
                   END
          )
          AND ${notBlockedSql("mr.user_id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [
         messageId,
         channelId,
@@ -546,33 +563,45 @@ async function recordMentions(
         extra?.mentionEveryone === true || extra?.canMentionEveryone === true,
       ],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   const extraIds = extra?.extraUserIds ?? [];
   if (extraIds.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, x.user_id
        FROM UNNEST($2::uuid[]) AS x(user_id)
        WHERE x.user_id <> $3
          AND ${notBlockedSql("x.user_id", "$3")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, extraIds, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (!reply) {
-    return;
+    return [...recorded];
   }
-  await db.query(
+  const answered = await db.query<{ user_id: string }>(
     `INSERT INTO message_mentions (message_id, user_id)
      SELECT $1::uuid, parent.author_id
      FROM messages parent
      WHERE parent.id = $2 AND parent.author_id <> $3
        AND ${notBlockedSql("parent.author_id", "$3")}
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     ${returning}`,
     [messageId, reply.parentId, reply.authorId],
   );
+  for (const row of answered.rows) {
+    recorded.add(row.user_id);
+  }
+  return [...recorded];
 }
 
 /**
@@ -605,7 +634,18 @@ async function recordMentions(
  * the earlier message: the caller must not fan it out, only answer the
  * sender who asked twice.
  */
-export type CreateMessageResult = HydratedMessage & { duplicate: boolean };
+export type CreateMessageResult = HydratedMessage & {
+  duplicate: boolean;
+  /**
+   * Every account a `message_mentions` row was written for in this send:
+   * names, roles, @here, and the person replied to, already filtered by
+   * blocks and membership. Only on a freshly created message (a duplicate
+   * carries none, and is never fanned out). What the live `channel-activity`
+   * mention flag and the push recipient list read when `mention_ids_from_db`
+   * is on, because a role mention is only resolved to people here.
+   */
+  mentionedUserIds?: string[];
+};
 
 export async function createMessage(
   channelId: string,
@@ -797,7 +837,7 @@ async function insertMessage(
       }
     }
 
-    await recordMentions(
+    const mentionedUserIds = await recordMentions(
       client,
       message.id,
       channelId,
@@ -829,6 +869,7 @@ async function insertMessage(
       chance,
       poll: polls.get(message.id) ?? null,
       duplicate: false,
+      mentionedUserIds,
     };
   } catch (error) {
     await client.query("ROLLBACK");

@@ -444,6 +444,17 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/client-update/config (forceUpdate)",
   },
+  mention_ids_from_db: {
+    description:
+      "Menção de cargo (@cargo) avisa de verdade: o selo ao vivo e o push usam as pessoas que a mensagem registrou, não só o @usuário digitado (desligado: só quem foi citado pelo nome recebe).",
+    env: "MENTION_IDS_FROM_DB",
+    parseEnv: exactTrue,
+    // Off until a role mention has been seen to notify on a real server.
+    codeDefault: false,
+    // Read once per send, on the instance that took it, where the server is
+    // known but a conversation has no roles: global on purpose.
+    perServer: false,
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

@@ -290,6 +290,21 @@ making new ones". Served as `voiceTranscription` on
 settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
 flag: it runs for every webm/ogg note while `voice_notes` is on.
 
+Born as a flag (no old reader): `MENTION_IDS_FROM_DB` (`mention_ids_from_db`,
+default off, **global**), role mentions that actually notify. `recordMentions`
+always wrote `message_mentions` rows for the members of a mentioned role (the
+badge after a refresh), but the live `channel-activity` `mention` flag and the
+push recipient list matched the typed tokens against usernames only, so `@mods`
+reached nobody while the message was fresh. With the flag on, `createMessage`
+returns the ids the rows were written for (`mentionedUserIds`), the sending
+instance reads the flag once, and both the local fan-out and the
+`chat.activity` cluster frame carry the ids, so the sibling machine never
+consults the flag and cannot disagree. The ids are unioned with the username
+match, never replacing it; @everyone, @here, mute levels, DND, blocks and
+membership are decided exactly as before. Off, the frame is byte for byte the
+old one. Pinned on real Postgres with two instances on the bus by
+`server/src/ws/role-mention-recipients.test.ts`.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

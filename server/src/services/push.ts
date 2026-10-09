@@ -753,6 +753,12 @@ export interface ChannelPushEvent {
   mentionEveryone?: boolean;
   mentionHereUserIds?: readonly string[];
   /**
+   * Accounts a `message_mentions` row exists for (`mention_ids_from_db`), which
+   * is where a role mention becomes people. Empty with the flag off. Unioned
+   * with the username match, never replacing it.
+   */
+  mentionedUserIds?: readonly string[];
+  /**
    * Set when the message is a voice note in a conversation: the push says
    * "Mensagem de voz · 0:12" instead of the plain copy. A length, never the
    * audio or a transcript.
@@ -818,6 +824,11 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
     }
   }
   for (const userId of event.mentionHereUserIds ?? []) {
+    if (audience.has(userId)) {
+      mentioned.add(userId);
+    }
+  }
+  for (const userId of event.mentionedUserIds ?? []) {
     if (audience.has(userId)) {
       mentioned.add(userId);
     }
