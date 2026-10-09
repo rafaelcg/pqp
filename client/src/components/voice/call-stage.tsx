@@ -4600,7 +4600,7 @@ function TileBadge({
       className={cn(
         "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
         inline
-          ? "min-w-[4.5rem] rounded-md"
+          ? "min-w-[4.5rem] rounded-md @max-[12rem]/picture:hidden"
           : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
@@ -4884,7 +4884,9 @@ export function ScreenTileFrame({
       </Tooltip>
     ) : null;
   const nameChip = showName ? (
-    <span className="min-w-[4.5rem] truncate rounded-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
+    // Steps aside on a very narrow picture (a third tile on a phone), where
+    // its floor pushed the mute button under "⋯".
+    <span className="min-w-[4.5rem] truncate rounded-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper @max-[12rem]/picture:hidden">
       {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
     </span>
   ) : null;

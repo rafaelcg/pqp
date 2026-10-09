@@ -1,5 +1,12 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import type { ComponentType, ReactElement, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type ComponentType,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
 import {
@@ -50,12 +57,39 @@ export function Menu({
   // Inside a fullscreen element when there is one, or the menu opens where
   // nothing can see it (the watch player's layout picker, 2026-09-25).
   const portalHost = useFullscreenPortalHost();
-  if (items.length === 0 || disabled) {
+  // Radix reports a close from an effect on its Root, so a Root that goes
+  // away while open (its row removed the picture, its items ran out, it
+  // remounted elsewhere) never says it closed. Whoever listens (the call
+  // stage's idle fade) would then hold on to "open" for good. Track it here
+  // and report the close ourselves when the Root goes.
+  const openRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const reportOpen = useCallback((open: boolean) => {
+    openRef.current = open;
+    onOpenChangeRef.current?.(open);
+  }, []);
+  const rendered = items.length > 0 && !disabled;
+  useEffect(() => {
+    if (!rendered && openRef.current) {
+      reportOpen(false);
+    }
+  }, [rendered, reportOpen]);
+  useEffect(
+    () => () => {
+      if (openRef.current) {
+        openRef.current = false;
+        onOpenChangeRef.current?.(false);
+      }
+    },
+    [],
+  );
+  if (!rendered) {
     return <>{children}</>;
   }
 
   return (
-    <DropdownMenuPrimitive.Root onOpenChange={onOpenChange}>
+    <DropdownMenuPrimitive.Root onOpenChange={reportOpen}>
       <DropdownMenuPrimitive.Trigger asChild>
         {children}
       </DropdownMenuPrimitive.Trigger>
