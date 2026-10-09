@@ -98,7 +98,10 @@ import {
   useMusicPlacement,
   useMusicStagePresence,
 } from "@/lib/music-prefs";
-import { useImmersiveStage } from "@/hooks/use-immersive-stage";
+import {
+  useImmersiveStage,
+  useSmallLandscape,
+} from "@/hooks/use-immersive-stage";
 import {
   chooseFullscreenStrategy,
   enterNativeVideoFullscreen,
@@ -1523,11 +1526,16 @@ function ActiveCall({
   // strip stays and only the pictures change above it. The floating bar is
   // for where the composer is out of sight: fullscreen, and a page with no
   // composer to dock into. A watch party's own bar keeps its controls.
+  // A phone held sideways keeps the controls on the picture whenever there
+  // is one, takeover or not: with the chat brought back ("Mostrar o chat")
+  // the composer has no room to carry them without crushing the picture.
+  const smallLandscape = useSmallLandscape();
   const composerOutOfSight =
     fullscreen.isFullscreen ||
     watchFullscreen.active ||
     // A phone held sideways folds the chat away for the picture.
     immersive.immersive ||
+    (smallLandscape && anyVideo && chromeExpanded) ||
     composerHidden;
   const dockControls =
     !composerOutOfSight && !(chromeExpanded && watchPartyChrome);
@@ -2156,6 +2164,9 @@ function ActiveCall({
     <div
       ref={stageRef}
       data-testid="call-stage"
+      // Read by the split: the composer gives up no room for the controls
+      // while they float on the stage.
+      data-bar-floats={barFloats ? "" : undefined}
       data-music-picture={musicPictureOnly ? "" : undefined}
       data-chrome-hidden={chrome.hidden ? "true" : "false"}
       className={cn(
@@ -4058,7 +4069,7 @@ function TileOverlay({
         // Lifted over a floating bar, but never past the picture's own top:
         // with pictures stacked on a sideways phone the lift is taller than
         // the top picture, and its row went up under the page header.
-        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem - var(--stage-banners, 0px)))`,
       }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -4970,7 +4981,7 @@ export function ScreenTileFrame({
         nameChip && (
           <span
             className={cn(
-              "pointer-events-none absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem))] left-2 flex max-w-[50%]",
+              "pointer-events-none absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem-var(--stage-banners,0px)))] left-2 flex max-w-[50%]",
               STAGE_LAYER.labels,
             )}
           >
@@ -4989,7 +5000,7 @@ export function ScreenTileFrame({
           style={{
             left: insets.left + 8,
             right: insets.right + 8,
-            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem - var(--stage-banners, 0px)))`,
           }}
         >
           <div className="flex min-w-0 items-center gap-1.5">

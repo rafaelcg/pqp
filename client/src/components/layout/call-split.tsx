@@ -18,7 +18,6 @@ import {
   VideoOff,
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
-import { IMMERSIVE_STAGE_ATTRIBUTE } from "@/hooks/use-immersive-stage";
 import {
   CALL_SPLIT_DIVIDER_PX,
   CALL_SPLIT_STEP_COARSE_PX,
@@ -201,28 +200,34 @@ function usePaneSize(ref: RefObject<HTMLDivElement | null>): PaneSize {
 }
 
 /**
- * Whether the stage has taken the window (a phone held sideways with a
- * picture on). The stage publishes it on `<html>` (`use-immersive-stage.ts`);
- * the split only reads it.
+ * Whether the call's controls float on the stage (the stage marks itself
+ * `data-bar-floats`): fullscreen, a phone held sideways with a picture on,
+ * the chat hidden. The composer then carries no controls and gives up no
+ * room for them.
  */
-function useImmersiveTakeover(): boolean {
-  const read = () =>
-    typeof document !== "undefined" &&
-    document.documentElement.hasAttribute(IMMERSIVE_STAGE_ATTRIBUTE);
-  const [on, setOn] = useState(read);
+function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
+  const [floats, setFloats] = useState(false);
   useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) {
+      return;
+    }
+    const read = () =>
+      setFloats(pane.querySelector("[data-bar-floats]") !== null);
+    read();
     if (typeof MutationObserver === "undefined") {
       return;
     }
-    const observer = new MutationObserver(() => setOn(read()));
-    observer.observe(document.documentElement, {
+    const observer = new MutationObserver(read);
+    observer.observe(pane, {
+      subtree: true,
+      childList: true,
       attributes: true,
-      attributeFilter: [IMMERSIVE_STAGE_ATTRIBUTE],
+      attributeFilter: ["data-bar-floats"],
     });
-    setOn(read());
     return () => observer.disconnect();
-  }, []);
-  return on;
+  }, [paneRef]);
+  return floats;
 }
 
 /**
@@ -406,10 +411,11 @@ export function CallSplit({
   // sideways while a call rings, before any picture brings the full-screen
   // takeover): the stage's own height rule then filled the pane and pushed
   // the composer, with hang-up in it, below the screen.
-  // Not while the stage has taken the window: the composer is meant to be
-  // out of sight there and the call's controls float on the picture, so
-  // squeezing the picture for it shrank the picture to nothing.
-  const immersiveTakeover = useImmersiveTakeover();
+  // Not while the call's controls float on the stage (a phone held
+  // sideways with a picture, takeover or not): the picture keeps its height
+  // and the chat takes what is left. Squeezing it for the composer shrank
+  // it to nothing.
+  const barFloats = useStageBarFloats(stagePaneRef);
   const canSqueeze =
     !sizedByChoice &&
     !sideBySide &&
@@ -417,7 +423,7 @@ export function CallSplit({
     shape === "expanded" &&
     collapsed === "none" &&
     container > 0 &&
-    (resizable || !immersiveTakeover);
+    (resizable || !barFloats);
   // The divider is only drawn when the pane is resizable.
   const squeezeGap = resizable ? CALL_SPLIT_DIVIDER_PX : 0;
   // A new width means a new natural height for the picture (a 16:9 share in
