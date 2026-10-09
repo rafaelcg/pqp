@@ -61,9 +61,16 @@ import { MessageComposer } from "@/components/chat/message-composer";
 import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
 import {
   applyVoiceNoteListened,
+  applyVoiceNoteUpdated,
   isVoiceNoteListenedFrame,
   setVoiceNoteViewer,
 } from "@/lib/voice-note-player";
+import {
+  applyVoiceNoteTranscript,
+  isVoiceNoteTranscriptFrame,
+  isVoiceNoteUpdatedFrame,
+} from "@/lib/voice-note-transcript";
+import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -4425,6 +4432,7 @@ function MainAppContent({
         if (me.preferences?.chatDisplay) {
           adoptChatDisplay(me.preferences.chatDisplay);
         }
+        adoptVoiceTranscription(me.preferences);
         const merged = applyRemotePreferences(
           loadLocalSettings(),
           me.preferences,
@@ -4691,6 +4699,19 @@ function MainAppContent({
           // is global because the player is; no controller owns it.
           if (isVoiceNoteListenedFrame(message)) {
             applyVoiceNoteListened(message);
+            return;
+          }
+
+          // A transcript settled (or was asked for), and the AAC copy of a
+          // note was made. Both go to the whole channel and into stores keyed
+          // by attachment, like the receipts above: a card in the list, a
+          // thread panel or a search hit reads the same answer.
+          if (isVoiceNoteTranscriptFrame(message)) {
+            applyVoiceNoteTranscript(message);
+            return;
+          }
+          if (isVoiceNoteUpdatedFrame(message)) {
+            applyVoiceNoteUpdated(message);
             return;
           }
 
