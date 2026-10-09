@@ -36,6 +36,9 @@ import { isCommunitiesEnabled } from "./communities.js";
  *  - The channel is a server channel of type `watch_party`, not private, and
  *    the server's @everyone role can VIEW it after the channel's @everyone
  *    overwrite. A signed-out visitor gets at most what a fresh member gets.
+ *  - The live party's host opted it in: "Prévia pública"
+ *    (`options.publicPreview` on its `channel_sessions` row), off by default.
+ *    The flag says a community MAY offer previews; this says THIS party does.
  *  - A live HLS session is open on it. A screen share in an ordinary voice
  *    channel has no HLS transcode (the room gate in `docs/WATCH_PARTY.md`), so
  *    there is nothing to preview there without starting an egress for a
@@ -133,6 +136,7 @@ export type LivePreviewRefusal =
   | "suspended"
   | "not-watch-party"
   | "private-channel"
+  | "not-public"
   | "not-live"
   | "unsigned"
   | "window-used"
@@ -231,6 +235,13 @@ export function noteLivePreviewPlaylistServed(): void {
 
 // ------------------------------------------------------------- eligibility
 
+/**
+ * The host's opt-in, as SQL on a `channel_sessions` row aliased `cs`. One
+ * spelling for every query that asks, so they cannot disagree. JSONB, so a
+ * row stored before the option existed (no key) reads as off.
+ */
+const PUBLIC_PREVIEW_OPT_IN_SQL = `COALESCE((cs.options->>'publicPreview')::boolean, FALSE)`;
+
 interface ChannelFacts {
   channelId: string;
   serverId: string;
@@ -241,6 +252,8 @@ interface ChannelFacts {
   isCommunity: boolean;
   suspended: boolean;
   everyoneCanView: boolean;
+  /** A live party on the channel whose host turned "Prévia pública" on. */
+  publicParty: boolean;
 }
 
 /**
@@ -307,9 +320,16 @@ async function loadChannelFacts(channelId: string): Promise<ChannelFacts | null>
     is_private: boolean;
     is_community: boolean | null;
     is_community_suspended: boolean | null;
+    public_party: boolean;
   }>(
     `SELECT c.id, c.name, c.server_id, c.type, c.kind, c.is_private,
-            s.is_community, s.is_community_suspended
+            s.is_community, s.is_community_suspended,
+            EXISTS (
+              SELECT 1 FROM channel_sessions cs
+               WHERE cs.channel_id = c.id
+                 AND cs.status = 'live'
+                 AND ${PUBLIC_PREVIEW_OPT_IN_SQL}
+            ) AS public_party
        FROM channels c
        LEFT JOIN servers s ON s.id = c.server_id
       WHERE c.id = $1`,
@@ -330,6 +350,7 @@ async function loadChannelFacts(channelId: string): Promise<ChannelFacts | null>
     isCommunity: row.is_community === true,
     suspended: row.is_community_suspended === true,
     everyoneCanView: view.get(row.id) === true,
+    publicParty: row.public_party === true,
   };
 }
 
@@ -337,8 +358,14 @@ async function loadChannelFacts(channelId: string): Promise<ChannelFacts | null>
  * The verdict on facts already read. The flag is asked here, on every call,
  * so a cached fact never outlives an operator switching the flag off: a flip
  * reaches the next playlist request, not the next cache expiry.
+ *
+ * `requireOptIn: false` is only for the host's own question "could this
+ * channel offer a preview at all", which decides whether the switch is drawn.
  */
-function judge(facts: ChannelFacts | null): LivePreviewRefusal | null {
+function judge(
+  facts: ChannelFacts | null,
+  options: { requireOptIn?: boolean } = {},
+): LivePreviewRefusal | null {
   if (!facts || facts.kind !== "server") {
     return "not-found";
   }
@@ -357,7 +384,20 @@ function judge(facts: ChannelFacts | null): LivePreviewRefusal | null {
   if (facts.isPrivate || !facts.everyoneCanView) {
     return "private-channel";
   }
+  if (options.requireOptIn !== false && !facts.publicParty) {
+    return "not-public";
+  }
   return null;
+}
+
+/**
+ * Whether a party on this channel COULD be previewed if its host opted in:
+ * every rule but the opt-in and "is something live". For the setup card's
+ * "Prévia pública" switch, which is drawn only where it can work. A fresh
+ * read, never the playlist cache.
+ */
+export async function livePreviewChannelAvailable(channelId: string): Promise<boolean> {
+  return judge(await loadChannelFacts(channelId), { requireOptIn: false }) === null;
 }
 
 export type LivePreviewEligibility =
@@ -467,10 +507,10 @@ export async function previewServerForInvite(code: string): Promise<string | nul
 const LIVE_ROW_MAX_AGE_HOURS = 12;
 
 /**
- * The previewable channels of `serverId` with a live HLS session on them, in
- * channel order, each with the live party's title (null without a party row)
- * and the account count the app's live card shows. Empty when nothing
- * qualifies.
+ * The previewable channels of `serverId` with a live HLS session on them AND
+ * a live party whose host turned "Prévia pública" on, in channel order, each
+ * with that party's title and the account count the app's live card shows.
+ * Empty when nothing qualifies.
  */
 export async function listLivePreviewChannels(
   serverId: string,
@@ -494,11 +534,12 @@ export async function listLivePreviewChannels(
           ORDER BY hs.started_at DESC
           LIMIT 1
        ) h ON TRUE
-       LEFT JOIN LATERAL (
+       JOIN LATERAL (
          SELECT cs.title
            FROM channel_sessions cs
           WHERE cs.channel_id = c.id
             AND cs.status = 'live'
+            AND ${PUBLIC_PREVIEW_OPT_IN_SQL}
           ORDER BY cs.went_live_at DESC NULLS LAST
           LIMIT 1
        ) s ON TRUE
@@ -533,7 +574,9 @@ export async function listLivePreviewChannels(
  * `LIVE_PREVIEW_UPCOMING_MAX`. Only on channels a signed-out visitor could
  * preview once they go live (a public watch party channel @everyone can
  * VIEW), so a private channel's name or session title never reaches this
- * answer. Title, start and channel name only: no creator, no host, no
+ * answer, and only parties whose host turned "Prévia pública" on: a host who
+ * did not opt in has not agreed to show that party to people with no account,
+ * its title included. Title, start and channel name only: no creator, no host, no
  * description, no cover, no reminder count.
  */
 export async function listLivePreviewUpcoming(
@@ -555,6 +598,7 @@ export async function listLivePreviewUpcoming(
         AND NOT c.is_private
         AND cs.status = 'scheduled'
         AND cs.starts_at > NOW()
+        AND ${PUBLIC_PREVIEW_OPT_IN_SQL}
       ORDER BY cs.starts_at, cs.id
       LIMIT $2`,
     // Read a few more than shown, so channels @everyone cannot view do not

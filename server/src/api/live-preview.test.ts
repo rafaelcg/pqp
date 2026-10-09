@@ -105,13 +105,19 @@ interface Res {
 async function call(
   method: string,
   path: string,
-  options: { body?: unknown; headers?: Record<string, string> } = {},
+  options: {
+    body?: unknown;
+    headers?: Record<string, string>;
+    /** Signed in as this account (a Bearer header resolving to it). */
+    as?: { id: string; clerk_id: string };
+  } = {},
 ): Promise<Res> {
-  actor = null;
+  actor = options.as ?? null;
   const response = await realFetch(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(options.as ? { Authorization: "Bearer test-session" } : {}),
       ...(options.headers ?? {}),
     },
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
@@ -184,7 +190,26 @@ describeDb("signed-out live preview", () => {
     return result.rows[0]!.id;
   }
 
-  async function goLive(channelId: string, rung: string | null = null): Promise<void> {
+  /** The title every opted-in party below carries unless a test renames it. */
+  const PARTY_TITLE = "Sessão de teste";
+
+  /**
+   * A live stream AND the live party a host opted in ("Prévia pública"),
+   * which is what a previewable channel is. `publicPreview: false` is a
+   * party whose host did not.
+   */
+  async function goLive(
+    channelId: string,
+    rung: string | null = null,
+    publicPreview = true,
+  ): Promise<void> {
+    await getPool().query(
+      `INSERT INTO channel_sessions
+         (channel_id, title, starts_at, status, created_by, host_user_id, went_live_at, options)
+       VALUES ($1, $2, NOW(), 'live', $3, $3, NOW(), jsonb_build_object('publicPreview', $4::boolean))
+       ON CONFLICT DO NOTHING`,
+      [channelId, PARTY_TITLE, ownerId, publicPreview],
+    );
     await getPool().query(
       `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, presenter_peer_id, rung)
        VALUES ($1, $2, to_timestamp($3 / 1000.0), 'peer-1', $4)`,
@@ -378,7 +403,7 @@ describeDb("signed-out live preview", () => {
       expect(listing.cache).toBe("public, max-age=10");
       expect(listing.body).toEqual({
         livePreview: {
-          channels: [{ id: liveChannel, name: "cinema", title: null, viewers: 0 }],
+          channels: [{ id: liveChannel, name: "cinema", title: PARTY_TITLE, viewers: 0 }],
           seconds: 300,
           upcoming: [],
         },
@@ -394,22 +419,34 @@ describeDb("signed-out live preview", () => {
         title: string,
         status: string,
         startsInMs: number | null,
+        publicPreview = true,
       ) => {
         await getPool().query(
           `INSERT INTO channel_sessions
-             (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at)
+             (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at, options)
            VALUES ($1, $2, $3,
                    CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint || ' milliseconds')::interval END,
                    $5, $6, $6,
-                   CASE WHEN $5 = 'live' THEN NOW() ELSE NULL END)`,
-          [channelId, serverId, title, startsInMs, status, ownerId],
+                   CASE WHEN $5 = 'live' THEN NOW() ELSE NULL END,
+                   jsonb_build_object('publicPreview', $7::boolean))`,
+          [channelId, serverId, title, startsInMs, status, ownerId, publicPreview],
         );
       };
+      const everyoneRole = (
+        await getPool().query<{ id: string }>(
+          `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+          [serverId],
+        )
+      ).rows[0]!.id;
       const extra = await channel(serverId, "telinha", "watch_party");
       const extra2 = await channel(serverId, "sessao-da-noite", "watch_party");
       const extra3 = await channel(serverId, "maratona", "watch_party");
       const voiceRoomChannel = await channel(serverId, "papo", "voice");
-      await session(liveChannel, "Sessão de sexta: Central do Brasil", "live", -60_000);
+      await getPool().query(
+        `UPDATE channel_sessions SET title = 'Sessão de sexta: Central do Brasil'
+          WHERE channel_id = $1 AND status = 'live'`,
+        [liveChannel],
+      );
       // Shown, soonest first, at most three.
       await session(idleChannel, "Cidade de Deus", "scheduled", 2 * 86_400_000);
       await session(extra, "O Auto da Compadecida", "scheduled", 86_400_000);
@@ -417,8 +454,20 @@ describeDb("signed-out live preview", () => {
       await session(extra3, "Tropa de Elite", "scheduled", 4 * 86_400_000);
       // Never shown: a private channel, an @everyone-denied one, a voice
       // channel, a past start, a draft, a cancelled one, and another server.
-      await session(privateChannel, "Segredo", "scheduled", 3_600_000);
-      await session(deniedChannel, "Só a staff", "scheduled", 3_600_000);
+      // (Fresh channels: the fixture's private and denied ones already hold a
+      // live party, and a channel holds one active party at a time.)
+      const privateSoon = await channel(serverId, "vip-2", "watch_party", true);
+      await session(privateSoon, "Segredo", "scheduled", 3_600_000);
+      const deniedSoon = await channel(serverId, "staff-2", "watch_party");
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'role', $2, 0, 64)`,
+        [deniedSoon, everyoneRole],
+      );
+      await session(deniedSoon, "Só a staff", "scheduled", 3_600_000);
+      // A party whose host never turned "Prévia pública" on: not shown.
+      const notOptedIn = await channel(serverId, "fechada", "watch_party");
+      await session(notOptedIn, "Sem prévia", "scheduled", 3_600_000, false);
       await session(voiceRoomChannel, "Papo", "scheduled", 3_600_000);
       const past = await channel(serverId, "ontem", "watch_party");
       await session(past, "Já foi", "scheduled", -3_600_000);
@@ -426,7 +475,8 @@ describeDb("signed-out live preview", () => {
       await session(draft, "Rascunho", "draft", null);
       const cancelled = await channel(serverId, "cancelada", "watch_party");
       await session(cancelled, "Cancelada", "cancelled", 3_600_000);
-      await session(otherLiveChannel, "Outra sala", "scheduled", 3_600_000);
+      const otherSoon = await channel(otherServerId, "outra-tela", "watch_party");
+      await session(otherSoon, "Outra sala", "scheduled", 3_600_000);
 
       // Two accounts on the playlist (one on two machines), one of whom also
       // holds a seat, and a second seated account: three accounts in all.
@@ -509,8 +559,57 @@ describeDb("signed-out live preview", () => {
       expect(livePreviewMetrics().refused).toMatchObject({
         "private-channel": 2,
         "not-watch-party": 1,
-        "not-live": 1,
+        // The idle channel has no party at all, so nobody opted it in.
+        "not-public": 1,
       });
+    });
+
+    it("an opted-in party with no stream on it is not live", async () => {
+      await getPool().query(
+        `INSERT INTO channel_sessions
+           (channel_id, title, starts_at, status, created_by, host_user_id, went_live_at, options)
+         VALUES ($1, 'Sem imagem', NOW(), 'live', $2, $2, NOW(), '{"publicPreview": true}')`,
+        [idleChannel, ownerId],
+      );
+      expect((await start(idleChannel)).status).toBe(404);
+      expect(livePreviewMetrics().refused).toMatchObject({ "not-live": 1 });
+    });
+
+    it("needs the host's opt-in: not listed and not started without it, refused at once when it goes off", async () => {
+      const optIn = (on: boolean) =>
+        getPool().query(
+          `UPDATE channel_sessions
+              SET options = options || jsonb_build_object('publicPreview', $2::boolean)
+            WHERE channel_id = $1 AND status = 'live'`,
+          [liveChannel, on],
+        );
+      const listing = () => call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+
+      await optIn(false);
+      expect(((await listing()).body as { livePreview: { channels: unknown[] } }).livePreview.channels).toEqual([]);
+      expect((await start(liveChannel)).status).toBe(404);
+      expect(livePreviewMetrics().refused).toMatchObject({ "not-public": 1 });
+
+      await optIn(true);
+      expect(
+        ((await listing()).body as { livePreview: { channels: Array<{ id: string }> } }).livePreview
+          .channels.map((row) => row.id),
+      ).toEqual([liveChannel]);
+      await goLive(liveChannel, "720p30");
+      const started = await start(liveChannel);
+      expect(started.status).toBe(200);
+      const body = started.body as StartBody;
+      const token = tokenOf(body.stream.hlsUrl);
+      const rendition = `/api/voice/hls-playlist/${liveChannel}/${STARTED_AT}/720p30?t=${token}`;
+
+      // The host turns it off mid-party: no new window, from the very next
+      // start (a fresh read), and a reload of the running one is refused too.
+      await optIn(false);
+      expect((await start(liveChannel)).status).toBe(404);
+      expect((await start(liveChannel, { ticket: body.ticket })).status).toBe(404);
+      // The player already running keeps its picture until its window ends,
+      // the same rule as the flag going off (renditions are not re-checked).
+      expect((await call("GET", rendition)).status).toBe(200);
     });
 
     it("needs the age declaration before anything plays", async () => {
@@ -660,6 +759,55 @@ describeDb("signed-out live preview", () => {
     });
   });
 
+  // ------------------------------------------- the host's switch
+
+  describe("the setup card's question: could this party be previewed", () => {
+    const ownerActor = async () =>
+      (
+        await getPool().query<{ id: string; clerk_id: string }>(
+          `SELECT id, clerk_id FROM users WHERE id = $1`,
+          [ownerId],
+        )
+      ).rows[0]!;
+
+    it("with the flag off, the config carries nothing new and every channel answers no", async () => {
+      const as = await ownerActor();
+      const config = await call("GET", `/api/live-hls/config?serverId=${serverId}`, { as });
+      expect(config.status).toBe(200);
+      expect(Object.keys(config.body as object)).not.toContain("livePreview");
+      const answer = await call("GET", `/api/channels/${liveChannel}/live-preview`, { as });
+      expect(answer.body).toEqual({ available: false, seconds: 300 });
+    });
+
+    it("with the flag on, says yes for a public watch party channel whatever the opt-in, and no elsewhere", async () => {
+      process.env.LIVE_PREVIEW = "true";
+      const as = await ownerActor();
+      const config = await call("GET", `/api/live-hls/config?serverId=${serverId}`, { as });
+      expect((config.body as { livePreview?: unknown }).livePreview).toEqual({ seconds: 300 });
+      // Asked before any host has opted in: the switch must be drawn so they can.
+      await getPool().query(
+        `UPDATE channel_sessions SET options = '{}'::jsonb WHERE channel_id = $1`,
+        [liveChannel],
+      );
+      const ask = async (id: string) =>
+        ((await call("GET", `/api/channels/${id}/live-preview`, { as })).body as {
+          available: boolean;
+        }).available;
+      expect(await ask(liveChannel)).toBe(true);
+      expect(await ask(idleChannel)).toBe(true);
+      expect(await ask(privateChannel)).toBe(false);
+      expect(await ask(deniedChannel)).toBe(false);
+      expect(await ask(voiceChannel)).toBe(false);
+      await getPool().query(`UPDATE servers SET is_community = FALSE WHERE id = $1`, [serverId]);
+      expect(await ask(liveChannel)).toBe(false);
+    });
+
+    it("needs a signed-in account that can see the channel", async () => {
+      process.env.LIVE_PREVIEW = "true";
+      expect((await call("GET", `/api/channels/${liveChannel}/live-preview`)).status).toBe(401);
+    });
+  });
+
   // -------------------------------------------------------- per server
 
   describe("as a per-server override", () => {
@@ -696,7 +844,7 @@ describeDb("signed-out live preview", () => {
       const served = await call("GET", "/api/public/live-preview/communities/outra-sala");
       expect(served.status).toBe(200);
       expect(served.body).toMatchObject({
-        livePreview: { channels: [{ id: otherLiveChannel, title: null }], upcoming: [] },
+        livePreview: { channels: [{ id: otherLiveChannel, title: PARTY_TITLE }], upcoming: [] },
       });
     });
   });

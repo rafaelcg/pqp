@@ -304,7 +304,10 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import {
+  livePreviewChannelAvailable,
+  livePreviewOnFor,
   livePreviewPlaylistAllowed,
+  livePreviewSeconds,
   noteLivePreviewPlaylistServed,
 } from "../services/live-preview.js";
 import { logEvent } from "../lib/log.js";
@@ -2707,9 +2710,18 @@ router.get("/api/voice/backend", async () => {
 // allowlist); without it, the global flag, which is what a client asks before
 // it knows the server. Read per request, so an operator flipping a server on
 // the dashboard is answered correctly by the very next call.
-router.get("/api/live-hls/config", async ({ url }) =>
-  liveHlsConfigForServer(url.searchParams.get("serverId")),
-);
+router.get("/api/live-hls/config", async ({ url }) => {
+  const serverId = url.searchParams.get("serverId");
+  const config = await liveHlsConfigForServer(serverId);
+  // `livePreview` only while the signed-out live preview's flag is on for
+  // this server, and absent otherwise, so with the flag off this answer is
+  // byte for byte what it always was and the client asks nothing more. It
+  // says the setup card MAY offer "Prévia pública"; whether this channel can
+  // is `GET /api/channels/:id/live-preview`.
+  return serverId && livePreviewOnFor(serverId)
+    ? { ...config, livePreview: { seconds: livePreviewSeconds() } }
+    : config;
+});
 
 /**
  * The signed playlist proxy (`hls-playlist-proxy.ts`): rewrites the live
@@ -5618,6 +5630,24 @@ router.post(
  * for this caller, watchers without a seat, and seats. The socket path is
  * the live one; this is belt and braces, and the same VIEW check.
  */
+/**
+ * Whether a watch party on this channel could be previewed by signed-out
+ * visitors if its host turned "Prévia pública" on: the flag for its server, a
+ * community that is not suspended, a public watch party channel @everyone can
+ * VIEW (`livePreviewChannelAvailable`). The setup card draws the switch only
+ * when this says yes, and asks only when `GET /api/live-hls/config` carried
+ * `livePreview`. Anybody who can see the channel may ask; the answer is one
+ * bit about the channel and the window length, and the switch itself is
+ * written through the party's options PATCH, which checks the role.
+ */
+router.get("/api/channels/:channelId/live-preview", async ({ user }, { channelId }) => {
+  await requireChannelAccess(channelId!, user.id);
+  return {
+    available: await livePreviewChannelAvailable(channelId!),
+    seconds: livePreviewSeconds(),
+  };
+});
+
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
   const state = await getChannelLiveState(channelId!);
