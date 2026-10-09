@@ -329,6 +329,11 @@ is asked to sign up. Design, limits and the local test recipe:
   matched while the flag is off everywhere (they answer the same 401 an unknown
   path does).
 - **Also needs `COMMUNITIES_ENABLED`.** The flag never widens past communities.
+- **And the host's opt-in, per party.** The flag only lets a community offer
+  previews. Each party is previewable only once its host (or a co-host, or
+  MANAGE_CHANNELS) turns "Prévia pública" on in its options, off by default.
+  With the flag off, `GET /api/live-hls/config?serverId=` carries no
+  `livePreview` and the switch is never drawn.
 - **The numbers stay in the environment:** `LIVE_PREVIEW_SECONDS` (default 300,
   clamped to 30 to 3600) and `LIVE_PREVIEW_RESET_HOURS` (default 24).
 - **Switching it off stops new previews at once, and running ones within the

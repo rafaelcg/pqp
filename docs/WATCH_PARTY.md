@@ -3521,12 +3521,14 @@ A streamer's link used to send a signed-out visitor straight to sign-up, and
 many stopped there: Clerk's sign-up stalls inside Instagram and TikTok in-app
 browsers, and in one party 78 of 86 newcomers never found the stream. The live
 preview ("prévia ao vivo") lets that visitor watch first. Behind the per-server
-runtime flag `live_preview` (`LIVE_PREVIEW`), default off.
+runtime flag `live_preview` (`LIVE_PREVIEW`), default off, and then only for a
+party whose host turned "Prévia pública" on.
 
 ### What the visitor sees
 
 1. On `pqp.gg/c/<slug>`, or on the signed-out invite gate for a community
-   invite, a big live card: the community's banner (never the stream), the
+   invite, while a party whose host turned "Prévia pública" on is live, a big
+   live card: the community's banner (never the stream), the
    live badge, the account count, a play button, "Acontecendo agora em
    #canal", the party's title, "Assistir agora" and "Prévia de N minutos, sem
    criar conta". On the community page it takes the banner's place at the top.
@@ -3571,8 +3573,8 @@ answers, only while the flag is on for that community:
   count, never who. Preview visitors are never in it. Bounded at 500 ms, and
   absent when it could not be read in time;
 - **upcoming**: at most three scheduled sessions, soonest first, only on
-  public watch party channels @everyone can VIEW, with the title, the start
-  and the channel name. No host, creator, description, cover or reminder
+  public watch party channels @everyone can VIEW and only parties whose host
+  turned "Prévia pública" on, with the title, the start and the channel name. No host, creator, description, cover or reminder
   count.
 
 The community's tagline, category and member count come from
@@ -3594,10 +3596,40 @@ All of these, checked by the server every time, or nothing:
   server's @everyone role can VIEW it after the channel's @everyone overwrite
   (the shared `computePermissions`). A visitor gets at most what a fresh member
   gets.
+- The live party's host opted it in: "Prévia pública" in the party's options
+  (`options.publicPreview` on its `channel_sessions` row), default off. The
+  flag says a community may offer previews; the switch says this party does.
+  A party with the switch off is not listed, `/start` refuses it with reason
+  `not-public`, and its scheduled sessions stay out of `upcoming` too.
 - A live HLS session is open on it. A screen share in an ordinary voice channel
   has no HLS transcode (the room gate above), so there is nothing to preview
   there without starting an egress for a stranger. That is deliberately not
   done.
+
+### The host's switch
+
+"Prévia pública" sits in the party's options: the setup card's Ajustes step
+and the live "Opções" dialog. The hint gives the real window length
+(`LIVE_PREVIEW_SECONDS`).
+
+- It is drawn only where it can work. `GET /api/live-hls/config?serverId=`
+  carries `livePreview: { seconds }` only while the flag is on for that server,
+  and only then does the client ask `GET /api/channels/:id/live-preview`,
+  which answers whether this channel passes every other rule (a community not
+  suspended, a public watch party channel @everyone can view). With the flag
+  off the config is unchanged and nothing more is asked.
+- It is written through the party's ordinary options PATCH, so the same role
+  table decides who may flip it: the host, a co-host, or MANAGE_CHANNELS
+  (`edit` in `watch-party-session.ts`). A member with START_WATCH_PARTY who is
+  not running this party cannot. The server validates the role, never the
+  client.
+- It can be flipped while the party is live. Off refuses new windows from the
+  next `/start` (a fresh read), and the master playlist refuses new players
+  within the 15 s fact cache. A player already running keeps its picture
+  until its window ends, the same rule as the flag going off.
+- Stored in the options JSONB, like every other per-party option, so there
+  is no new column and no boot DDL. A row stored before the option existed
+  reads as off.
 
 ### The window, enforced by the server
 
