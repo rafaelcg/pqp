@@ -1,6 +1,8 @@
+import type { VoiceNoteTranscript } from "@pqp/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
+  MAX_STORED_TRANSCRIPTS,
   RECHECK_AFTER_MS,
   RECHECK_LIMIT,
   SLOW_DOWN_MS,
@@ -27,7 +29,7 @@ function frame(status: string, text: string | null = null) {
     channelId: "c-1",
     messageId: "m-1",
     attachmentId: ID,
-    transcript: { status, text, language: "pt" },
+    transcript: { status: status as VoiceNoteTranscript["status"], text, language: "pt" },
   };
 }
 
@@ -174,5 +176,59 @@ describe("requestTranscript", () => {
     applyVoiceNoteTranscript(frame("done", "oi"));
     await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS * 3);
     expect(requestVoiceNoteTranscript).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops showing 'transcribing' once the rechecks run out", async () => {
+    requestVoiceNoteTranscript.mockResolvedValue({ transcript: { status: "pending" } });
+    await requestTranscript(ID);
+    for (let i = 0; i < RECHECK_LIMIT + 2; i += 1) {
+      await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS + 1);
+    }
+    expect(getStoredTranscript(ID)).toBeUndefined();
+  });
+
+  it("drops the pending note when a recheck is refused", async () => {
+    requestVoiceNoteTranscript.mockResolvedValueOnce({ transcript: { status: "pending" } });
+    await requestTranscript(ID);
+    requestVoiceNoteTranscript.mockRejectedValueOnce(new ApiError(403, "no"));
+    await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS + 1);
+    expect(getStoredTranscript(ID)).toBeUndefined();
+  });
+
+  it("keeps trying through the limiter instead of abandoning the note", async () => {
+    requestVoiceNoteTranscript.mockResolvedValueOnce({ transcript: { status: "pending" } });
+    await requestTranscript(ID);
+    requestVoiceNoteTranscript.mockRejectedValueOnce(new ApiError(429, "slow"));
+    await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS + 1);
+    expect(getStoredTranscript(ID)?.status).toBe("pending");
+    requestVoiceNoteTranscript.mockResolvedValueOnce({
+      transcript: { status: "done", text: "saiu" },
+    });
+    await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS + 1);
+    expect(getStoredTranscript(ID)?.text).toBe("saiu");
+  });
+
+  it("does not let a late 202 undo a transcript the frame already delivered", async () => {
+    let resolve!: (value: unknown) => void;
+    requestVoiceNoteTranscript.mockReturnValue(new Promise((r) => (resolve = r)));
+    const asked = requestTranscript(ID);
+    applyVoiceNoteTranscript(frame("done", "rápido"));
+    resolve({ transcript: { status: "pending" } });
+    await asked;
+    expect(getStoredTranscript(ID)).toMatchObject({ status: "done", text: "rápido" });
+    await vi.advanceTimersByTimeAsync(RECHECK_AFTER_MS * 3);
+    expect(requestVoiceNoteTranscript).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the cache", () => {
+  it("is bounded, and drops the oldest first", () => {
+    for (let i = 0; i < MAX_STORED_TRANSCRIPTS + 25; i += 1) {
+      applyVoiceNoteTranscript({ ...frame("done", `n${i}`), attachmentId: `n-${i}` });
+    }
+    expect(getStoredTranscript("n-0")).toBeUndefined();
+    expect(getStoredTranscript(`n-${MAX_STORED_TRANSCRIPTS + 24}`)?.text).toBe(
+      `n${MAX_STORED_TRANSCRIPTS + 24}`,
+    );
   });
 });

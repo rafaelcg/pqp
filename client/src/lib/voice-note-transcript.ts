@@ -100,6 +100,30 @@ function subscribeTo(attachmentId: string, listener: () => void): () => void {
   };
 }
 
+/**
+ * A tab that stays open for days receives a frame for every note settled in
+ * every channel it is joined to, so the store is a cache and not a ledger: past
+ * this many entries the oldest one nobody is drawing is dropped. That loses
+ * nothing, because a card's base (the read) carries the same transcript, and a
+ * note that is mid-request is never evicted.
+ */
+export const MAX_STORED_TRANSCRIPTS = 400;
+
+function evictOverflow(): void {
+  if (stored.size <= MAX_STORED_TRANSCRIPTS) {
+    return;
+  }
+  for (const key of stored.keys()) {
+    if (stored.size <= MAX_STORED_TRANSCRIPTS) {
+      return;
+    }
+    if (listeners.has(key) || inFlight.has(key) || optimistic.has(key) || rechecks.has(key)) {
+      continue;
+    }
+    stored.delete(key);
+  }
+}
+
 function put(attachmentId: string, transcript: VoiceNoteTranscript): void {
   const previous = stored.get(attachmentId);
   if (
@@ -110,7 +134,10 @@ function put(attachmentId: string, transcript: VoiceNoteTranscript): void {
   ) {
     return;
   }
+  // Re-inserted so the oldest key in the map is the least recently updated.
+  stored.delete(attachmentId);
   stored.set(attachmentId, transcript);
+  evictOverflow();
   emit(attachmentId);
 }
 
@@ -245,9 +272,24 @@ function cancelRecheck(attachmentId: string): void {
   }
 }
 
+/**
+ * Stop showing "transcrevendo" for a note we have stopped waiting on. What the
+ * card falls back to is its read: a "Transcrever" button on a note that had
+ * none, so the person can ask again, or whatever the server last said.
+ */
+function dropPending(attachmentId: string): void {
+  cancelRecheck(attachmentId);
+  optimistic.delete(attachmentId);
+  if (stored.get(attachmentId)?.status === "pending") {
+    stored.delete(attachmentId);
+    emit(attachmentId);
+  }
+}
+
 function scheduleRecheck(attachmentId: string, count: number): void {
   cancelRecheck(attachmentId);
   if (count >= RECHECK_LIMIT) {
+    dropPending(attachmentId);
     return;
   }
   const timer = setTimeout(() => {
@@ -277,8 +319,15 @@ function ask(attachmentId: string, recheck: number): Promise<void> {
     .then(({ transcript }) => {
       optimistic.delete(attachmentId);
       setRequestState(attachmentId, "idle");
-      put(attachmentId, transcript);
-      if (transcript.status === "pending") {
+      // The frame can beat the HTTP answer: a note that settled while this
+      // 202 was on its way stays settled.
+      const current = stored.get(attachmentId);
+      const settledAlready =
+        current !== undefined && current.status !== "none" && current.status !== "pending";
+      if (!(transcript.status === "pending" && settledAlready)) {
+        put(attachmentId, transcript);
+      }
+      if (transcript.status === "pending" && !settledAlready) {
         scheduleRecheck(attachmentId, recheck);
       } else {
         cancelRecheck(attachmentId);
@@ -286,23 +335,25 @@ function ask(attachmentId: string, recheck: number): Promise<void> {
     })
     .catch((error: unknown) => {
       const status = error instanceof ApiError ? error.status : 0;
-      if (recheck === 0 || status === 403 || status === 404) {
-        takeBackOptimism(attachmentId);
-      }
       if (status === 403 || status === 404) {
+        dropPending(attachmentId);
         setRequestState(attachmentId, "refused");
-      } else if (status === 429) {
-        setRequestState(attachmentId, "slow");
-        setTimeout(() => {
-          if (requestState.get(attachmentId) === "slow") {
-            setRequestState(attachmentId, "idle");
-          }
-        }, SLOW_DOWN_MS);
       } else if (recheck > 0) {
-        // A recheck that failed to get through tries again on its own clock.
+        // A recheck that did not get through (offline, a 5xx, the limiter)
+        // tries again on its own clock, and gives up the way the rest do.
         scheduleRecheck(attachmentId, recheck);
       } else {
-        setRequestState(attachmentId, "failed");
+        takeBackOptimism(attachmentId);
+        if (status === 429) {
+          setRequestState(attachmentId, "slow");
+          setTimeout(() => {
+            if (requestState.get(attachmentId) === "slow") {
+              setRequestState(attachmentId, "idle");
+            }
+          }, SLOW_DOWN_MS);
+        } else {
+          setRequestState(attachmentId, "failed");
+        }
       }
     })
     .finally(() => {
