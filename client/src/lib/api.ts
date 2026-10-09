@@ -976,12 +976,32 @@ export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
  * on the shared ceiling, which is the value it would have enforced anyway.
  *
  * `voiceNotes` is the `voice_notes` flag, answered per server when asked with
- * `?serverId=`. Nothing reads it yet: the recorder lands in its own change.
+ * `?serverId=`; a conversation asks without one and gets the global value.
  */
-export const fetchAttachmentConfig = () =>
+export const fetchAttachmentConfig = (serverId?: string | null) =>
   apiFetch<{ enabled: boolean; maxBytes?: number; voiceNotes?: boolean }>(
-    "/api/attachments/config",
+    serverId
+      ? `/api/attachments/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/attachments/config",
   );
+
+/**
+ * "I heard this voice note." Idempotent on the server and answered with 204,
+ * which `apiFetch` (JSON only) would report as an error, so this is a bare
+ * request that only cares whether it went out.
+ */
+export async function markVoiceNoteListened(attachmentId: string): Promise<void> {
+  try {
+    await apiFetch<unknown>(`/api/attachments/${attachmentId}/listened`, {
+      method: "POST",
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 204) {
+      return;
+    }
+    throw error;
+  }
+}
 
 /**
  * Reserve a row and get a presigned PUT for it. The storage key is chosen by
