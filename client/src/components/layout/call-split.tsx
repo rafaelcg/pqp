@@ -784,7 +784,12 @@ export function CallSplit({
               : { height: stagePx }
         }
       >
-        <ChatMusicContext.Provider value={stagePx === null && musicNeed > 0}>
+        {/* Not for a stage the person sized by dragging: there the music
+            bar takes nothing from the picture. A squeeze counts, because
+            the bar is part of what the squeeze makes room for. */}
+        <ChatMusicContext.Provider
+          value={musicNeed > 0 && (stagePx === null || squeezed)}
+        >
           {stage}
         </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
