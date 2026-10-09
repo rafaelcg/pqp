@@ -492,7 +492,23 @@ describeDb("signed-out live preview", () => {
       expect(res.status).toBe(401);
     });
 
-    it("stops serving the moment the flag goes off or the channel goes private", async () => {
+    it("a rendition never gets a preview-only refusal, so a shared edge fetch cannot pass one to members", async () => {
+      // The edge Worker coalesces rendition polls into one origin fetch that
+      // carries whichever viewer's token missed its cache, and hands the
+      // answer to everybody waiting. A 404 or 429 meant for a preview viewer
+      // must therefore never come out of a rendition request.
+      await goLive(liveChannel, "720p30");
+      const body = (await start(liveChannel)).body as StartBody;
+      const token = tokenOf(body.stream.hlsUrl);
+      const rendition = `/api/voice/hls-playlist/${liveChannel}/${STARTED_AT}/720p30?t=${token}`;
+      expect((await call("GET", rendition)).status).toBe(200);
+      process.env.LIVE_PREVIEW = "false";
+      expect((await call("GET", rendition)).status).toBe(200);
+      // The session URL, fetched once per player, is where it is refused.
+      expect((await call("GET", pathOf(body.stream.hlsUrl))).status).toBe(404);
+    });
+
+    it("refuses new players the moment the flag goes off or the channel goes private", async () => {
       const body = (await start(liveChannel)).body as StartBody;
       const path = pathOf(body.stream.hlsUrl);
       expect((await call("GET", path)).status).toBe(200);

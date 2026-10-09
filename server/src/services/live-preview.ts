@@ -375,9 +375,11 @@ export async function livePreviewEligibility(
 }
 
 /**
- * The same verdict for the playlist proxy, which a preview viewer hits every
- * two seconds. The FACTS are cached per channel for `ELIGIBILITY_TTL_MS`; the
- * flag is judged live on every request. A read that fails falls back to the
+ * The same verdict for the playlist proxy's session URL (the master playlist,
+ * once per player; renditions are deliberately not re-checked, see the
+ * preview branch of `tryHlsCapabilityDoor`). A reconnect herd can still bring
+ * many at once, so the FACTS are cached per channel for `ELIGIBILITY_TTL_MS`;
+ * the flag is judged live on every request. A read that fails falls back to the
  * last facts it had (a database blip must not cut a preview off any more than
  * it cuts off a member), and with none at all it refuses.
  */

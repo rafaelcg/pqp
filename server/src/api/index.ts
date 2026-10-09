@@ -2767,13 +2767,25 @@ async function tryHlsCapabilityDoor(
     );
     return false;
   }
-  if (viewer.preview) {
+  if (viewer.preview && match[3] === undefined) {
     // A preview token proves only that this server let somebody start a
-    // window on this channel, minutes ago at most. Whether the channel may
+    // window on this channel, minutes ago at most. On the SESSION URL (the
+    // master playlist, fetched once per player) whether the channel may
     // still be previewed (the flag, the community, @everyone VIEW) is asked
-    // again, so an operator switching the flag off, or a channel going
-    // private, cuts every preview on the next playlist fetch rather than at
-    // the end of the window. `livePreviewPlaylistAllowed` logs its refusals.
+    // again, and the address bucket is taken. `livePreviewPlaylistAllowed`
+    // logs its refusals.
+    //
+    // NOT ON A RENDITION, on purpose. The edge Worker (`tools/hls-edge/`)
+    // coalesces every viewer's rendition poll into ONE origin fetch per rung
+    // per 2 s, carrying the token of whichever viewer missed its cache, and
+    // hands that one answer to everybody waiting on it. A preview-only
+    // refusal here (a 404 because the flag just went off, a 429 from the
+    // bucket below, keyed on the Worker's address) would then reach the
+    // MEMBERS polling the same rung. A rendition body is identical for every
+    // viewer and names nobody, so a valid, unexpired preview token is enough
+    // for it; the token's own expiry, the end of the window, is the bound.
+    // That makes the kill switch "no new preview, no new player, and every
+    // running one gone within `LIVE_PREVIEW_SECONDS`", not "within 2 s".
     const address = clientAddress(req as never);
     const key = `preview-playlist:${address}`;
     if (!previewPlaylistLimiter.take(key)) {
