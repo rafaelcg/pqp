@@ -64,11 +64,18 @@ export async function uploadSoundboardFile(input: {
   if (!response.ok) {
     throw new Error("storage");
   }
-  const claimed = await claimSoundboardSound(input.serverId, {
-    key: minted.key,
-    name: input.name,
-    emoji: input.emoji,
-    volume: input.volume,
-  });
-  return claimed.sound;
+  // A claim is idempotent by key, so a lost response is retried with the SAME
+  // key rather than minting a second upload that would claim a duplicate.
+  const claim = () =>
+    claimSoundboardSound(input.serverId, {
+      key: minted.key,
+      name: input.name,
+      emoji: input.emoji,
+      volume: input.volume,
+    });
+  try {
+    return (await claim()).sound;
+  } catch {
+    return (await claim()).sound;
+  }
 }

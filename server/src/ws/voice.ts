@@ -12513,15 +12513,17 @@ subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
     return;
   }
   const { durationMs, ...frame } = parsed.data;
-  if (getRoomPeers(frame.channelId).length === 0) {
-    return;
-  }
-  noteClusterFrameReceived();
+  // Counted even with nobody here yet: someone who joins this machine while
+  // the clip is still playing must find the slot taken.
   noteRemoteSoundboardPlay({
     channelId: frame.channelId,
     userId: frame.userId,
     durationMs,
   });
+  if (getRoomPeers(frame.channelId).length === 0) {
+    return;
+  }
+  noteClusterFrameReceived();
   broadcastToRoom(frame.channelId, frame);
 });
 

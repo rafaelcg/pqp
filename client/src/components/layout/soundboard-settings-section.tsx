@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -24,9 +24,17 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function reload(): void {
-    void fetchSoundboard(serverId)
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const reloadSeq = useRef(0);
+
+  function reload(): Promise<void> {
+    const seq = (reloadSeq.current += 1);
+    return fetchSoundboard(serverId)
       .then((page) => {
+        // Only the newest request may write the list.
+        if (seq !== reloadSeq.current) {
+          return;
+        }
         noteSoundboardCatalog(serverId, page.sounds);
         setSounds(page.sounds);
         setMaxSounds(page.maxSounds);
@@ -37,7 +45,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   }
 
   useEffect(() => {
-    reload();
+    void reload();
   }, [serverId, t]);
 
   return (
@@ -87,7 +95,10 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                 volume={sound.volume}
                 label={t("soundboard.settings.clipVolume", { name: sound.name })}
                 onCommit={(volume) => {
-                  void updateSoundboardSound(serverId, sound.id, { volume })
+                  // One save at a time, in the order they were made, so a
+                  // slow earlier request cannot land after a later one.
+                  saveQueue.current = saveQueue.current
+                    .then(() => updateSoundboardSound(serverId, sound.id, { volume }))
                     .then(() => reload())
                     .catch(() => setError(t("soundboard.settings.saveFailed")));
                 }}

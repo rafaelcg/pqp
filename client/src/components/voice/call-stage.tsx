@@ -3586,7 +3586,7 @@ export function CallControls({
       {/* Watch party, the share cursor, and join/leave sounds. They used to
           be their own tiles and filled the slim bar. A phone still hides
           this whole control under 22rem, the same width those tiles used. */}
-      <CallControlGroup className={collapsed ? "hidden @min-[22rem]:flex" : "hidden sm:flex"}>
+      <CallControlGroup className={collapsed ? "hidden @min-[22rem]:flex" : "flex"}>
         <Menu items={moreItems} side="top" align="end">
           <button
             type="button"

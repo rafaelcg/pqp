@@ -134,14 +134,34 @@ export function useSoundboardListenerVolume(): [number, (volume: number) => void
   ];
 }
 
+const CUSTOM_CLEAR_GRACE_MS = 30_000;
+let customClearTimer: ReturnType<typeof setTimeout> | null = null;
+
 /** The call this machine is in. Plays for that server can refresh the catalog. */
 export function setSoundboardCatalogServer(serverId: string | null): void {
   catalogServerId = serverId;
   // Entering another server's call drops the previous server's custom clips
   // and their decoded audio, so playing across servers keeps at most one
-  // board in memory. A null (the control unmounting) keeps what it has: the
-  // same call may remount it a moment later.
+  // board in memory. A null (the control unmounting) keeps what it has for a
+  // moment, since the same call may remount it, then lets go of the decoded
+  // audio if no call has taken over.
+  if (customClearTimer) {
+    clearTimeout(customClearTimer);
+    customClearTimer = null;
+  }
   if (serverId === null) {
+    customClearTimer = setTimeout(() => {
+      customClearTimer = null;
+      if (catalogServerId !== null) {
+        return;
+      }
+      for (const id of [...customUrls.keys()]) {
+        customUrls.delete(id);
+        customNames.delete(id);
+        buffers.delete(id);
+        loading.delete(id);
+      }
+    }, CUSTOM_CLEAR_GRACE_MS);
     return;
   }
   for (const [id, row] of customUrls) {
