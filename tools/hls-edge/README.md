@@ -881,6 +881,25 @@ appears on a stream URL, and this Worker's gate is exactly what it was before
 this feature existed — the production refusal above never triggers because
 there is never a party pass to refuse.
 
+## Signed-out live preview tokens: nothing to deploy here
+
+The API's signed-out live preview (`docs/WATCH_PARTY.md` §"Watching without an
+account") hands a visitor with no account a viewer token of purpose `preview`:
+the same shape and the same key as any `?t=`, with a random visitor id in `u`
+and an expiry at the end of that visitor's few minutes. This Worker already
+verifies `?t=` without looking at the purpose on the live routes, so it plays
+those URLs as they are and refuses them the moment they expire, with no new
+secret and no deploy. Two things keep the window meaning what it says:
+
+- The API never mints a party pass for a preview viewer (`stampPreviewStream`,
+  and the master playlist's `allowPartyPass: false`), so there is no `?pp=` for
+  this Worker to fall back to once the `?t=` is gone.
+- The conventional session URL is still forwarded to the API, which re-checks
+  the flag and the channel on every master request.
+
+A revocation does not reach a preview token through `HLS_REVOKED_USERS` (it
+names no account); its own expiry, at most `LIVE_PREVIEW_SECONDS`, is the bound.
+
 ## Enabling in production
 
 Three pieces, all operator-side — this repo ships the code, not the

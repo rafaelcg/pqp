@@ -310,3 +310,32 @@ server's override) or `PUT /api/admin/flag-overrides
 token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
+
+## `live_preview` (per server, default off)
+
+The signed-out live preview, born as a flag (`LIVE_PREVIEW`, only `true` turns
+it on). A visitor with no account who opens a community's page or one of its
+invites while a watch party is live can watch the film for a few minutes, then
+is asked to sign up. Design, limits and the local test recipe:
+`docs/WATCH_PARTY.md` §"Watching without an account".
+
+- **Every reader knows the server.** The public community and invite reads
+  resolve the server first; the start route reads the channel row; the playlist
+  proxy re-checks the channel it serves on every fetch. So a per-server
+  override is exact.
+- **Off is byte for byte the old behaviour.** `GET /api/public/communities/:slug`
+  and `GET /api/public/invites/:code` carry `livePreview: true` only while the
+  flag is on for that server, and the three new public routes are not even
+  matched while the flag is off everywhere (they answer the same 401 an unknown
+  path does).
+- **Also needs `COMMUNITIES_ENABLED`.** The flag never widens past communities.
+- **The numbers stay in the environment:** `LIVE_PREVIEW_SECONDS` (default 300,
+  clamped to 30 to 3600) and `LIVE_PREVIEW_RESET_HOURS` (default 24).
+- **Switching it off cuts every running preview** on the next playlist fetch
+  (about two seconds), not at the end of each window.
+
+Turn it on for one community: `PUT /api/admin/flag-overrides
+{ key: "live_preview", serverId, enabled: true }`, or controles → interruptores.
+`GET /api/admin/metrics` → `livePreview` counts windows started and resumed,
+visitors sent to sign up, refusals by reason, and playlist answers served to a
+preview token.
