@@ -10,8 +10,9 @@
  *     channel named `cinema` that @everyone can see.
  *  2. Writes an open `hls_sessions` row for it, the way the egress writer
  *     records a live ladder with one rung, and a live watch party row
- *     (`channel_sessions`) so the preview page has a title to show
- *     (`--title=...`). A party already open on the channel is left alone.
+ *     (`channel_sessions`) with its host's "Prévia pública" opt-in turned on
+ *     (`options.publicPreview`, which the preview needs) and a title to show
+ *     (`--title=...`). A party already open on the channel is only opted in.
  *  3. Runs ffmpeg (test pattern and a tone) writing a live HLS rendition
  *     into a temporary directory, and serves that directory as a tiny
  *     path-style S3 bucket (`../db-blip-harness/fake-s3.mjs`).
@@ -103,8 +104,8 @@ await db.query(
 // only the row made here is ended on the way out.
 const party = await db.query(
   `INSERT INTO channel_sessions
-     (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at)
-   SELECT $1, $2, $3, now(), 'live', $4, $4, now()
+     (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at, options)
+   SELECT $1, $2, $3, now(), 'live', $4, $4, now(), '{"publicPreview": true}'::jsonb
     WHERE NOT EXISTS (
       SELECT 1 FROM channel_sessions
        WHERE channel_id = $1 AND status IN ('draft', 'scheduled', 'live')
@@ -113,6 +114,13 @@ const party = await db.query(
   [channelId, serverId, TITLE, server.rows[0].owner_id],
 );
 const partyId = party.rows[0]?.id ?? null;
+// A party somebody already opened on the channel: opted in, so the preview
+// can show it. Without the opt-in the preview refuses it (not-public).
+await db.query(
+  `UPDATE channel_sessions SET options = options || '{"publicPreview": true}'::jsonb
+    WHERE channel_id = $1 AND status = 'live'`,
+  [channelId],
+);
 
 const root = mkdtempSync(join(tmpdir(), "pqp-live-preview-"));
 const dir = join(root, "live", channelId);
