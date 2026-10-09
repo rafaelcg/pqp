@@ -4823,14 +4823,6 @@ function MainAppContent({
             return;
           }
 
-          // Somebody played a voice note: the listener's other devices clear
-          // the dot, and the author of a small conversation's note sees an
-          // "ouviu". Not applied yet (the client PR for listens does), but it
-          // is a chat frame and must not fall through to the voice handler.
-          if (message.type === "voice-note-listened") {
-            return;
-          }
-
           if (message.type === "permissions-update") {
             if (message.serverId !== selectedServerIdRef.current) {
               return;
