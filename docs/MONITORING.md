@@ -1233,6 +1233,9 @@ index of unfinished jobs (`idx_speech_jobs_due`), so none of them reads history.
 `voice_notes` off everywhere every count is zero because nobody can send, and
 `refusals["mint-flag-off"]` is what tells that apart from nobody trying.
 
+The series, the dashboard (`/d/pqp-voice-notes`), the four alert rules and the
+deploy steps are in `tools/monitoring/README.md`, section "Voice notes".
+
 A field added to the block does not appear in Grafana until it is added to
 `render()` in `tools/monitoring/pqp-api-metrics-exporter.py` (and the block is
 given a merge rule there: it mixes a take-from-one body with summed refusals).
@@ -1451,6 +1454,8 @@ restart and would churn the series set for nothing.
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
 | `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `tools/monitoring/grafana-dashboard-voice-notes.json` | "pqp Mensagens de voz" dashboard: voice-note usage and pipeline health |
+| `tools/monitoring/grafana-alert-rules-voice-notes.json` | Voice-note alerts: queue stuck, job failure rate, speech budget exhausted and at 80% |
 | `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |
 | `tools/monitoring/grafana-alert-rules-activation.json` | The one funnel alert: "activation funnel stalled at the age gate" |
 | `server/src/services/activation.ts` | `recordActivationStep` (the funnel seam) and `activationFunnel` (the cohort report on `/api/admin/metrics`) |

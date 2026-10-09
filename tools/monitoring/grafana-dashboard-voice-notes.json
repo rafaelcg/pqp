@@ -1,0 +1,1048 @@
+{
+  "_comment": [
+    "The 'Mensagens de voz' dashboard: voice-note usage and the health of the",
+    "transcode and transcription pipeline, from GET /api/admin/metrics",
+    "(payload.voiceNotes) via the textfile exporter in this directory",
+    "(pqp-api-metrics-exporter.py). Import: POST /api/dashboards/db with body",
+    "{\"dashboard\": <this file minus _comment, plus \"id\": null>, \"overwrite\": true}.",
+    "Steps are in this directory's README, section 'Voice notes'.",
+    "",
+    "The datasource is the Grafana Cloud Prometheus built-in, uid",
+    "grafanacloud-prom, written in directly (the other dashboards here use a",
+    "placeholder; this stack has only the one, so there is nothing to remap).",
+    "",
+    "Every panel needs the exporter on the SFU box to be the version that knows",
+    "voiceNotes, and the API to be past PR #984. Until then they read 'No data',",
+    "which is the honest state. Most series are rolling 24h or 7d WINDOWS read",
+    "from Postgres, so they are gauges that go up and down: do not wrap them in",
+    "rate() or increase(). The one counter is pqp_api_voice_notes_refusal_total.",
+    "Not provisioned from the repo: the UI is the source of truth once imported."
+  ],
+  "title": "pqp Mensagens de voz",
+  "uid": "pqp-voice-notes",
+  "tags": [
+    "pqp",
+    "voice-notes"
+  ],
+  "timezone": "utc",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Usage",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "title": "Sent (24h)",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(pqp_api_voice_notes_sent{window=\"24h\"})",
+          "legendFormat": "sent 24h"
+        }
+      ],
+      "description": "Voice notes sent in the trailing 24h, all scopes (voiceNotes.usage.byScope24h summed).",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Senders (24h)",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_senders{window=\"24h\"}",
+          "legendFormat": "people"
+        }
+      ],
+      "description": "Distinct people who sent at least one note in the trailing 24h.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Sent / 24h, by scope",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_sent{window=\"24h\"}",
+          "legendFormat": "{{scope}}"
+        }
+      ],
+      "description": "Notes sent in the trailing 24h split dm / group / server. A rolling window, so a level, not a per-day bar."
+    },
+    {
+      "id": 5,
+      "title": "Sent / 24h, by recorder",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_sent_by_type{window=\"24h\"}",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "description": "audio/mp4 is Safari and the native apps, audio/webm is Chromium and Firefox. Useful for deciding which codec path to test first."
+    },
+    {
+      "id": 6,
+      "title": "Sent: 24h vs 7d",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(pqp_api_voice_notes_sent{window=\"24h\"})",
+          "legendFormat": "24h"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(pqp_api_voice_notes_sent{window=\"7d\"})",
+          "legendFormat": "7d"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_minted{window=\"24h\"}",
+          "legendFormat": "minted 24h (sent or not)"
+        }
+      ],
+      "description": "Sent over the trailing 24h and 7d. Minted is notes recorded whether or not they were sent; a wide gap to sent is recordings thrown away or uploads that failed."
+    },
+    {
+      "id": 7,
+      "title": "Length of notes (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_duration_seconds{window=\"24h\",stat=\"median\"}",
+          "legendFormat": "median"
+        }
+      ],
+      "description": "Median length of notes sent in the trailing 24h, in seconds. The line is absent when nothing was sent."
+    },
+    {
+      "id": 8,
+      "title": "Audio sent (24h, minutes)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_duration_seconds{window=\"24h\",stat=\"total\"} / 60",
+          "legendFormat": "minutes sent"
+        }
+      ],
+      "description": "Total length of notes sent in the trailing 24h. Compare against the speech budget below: transcripts are the only thing that spends provider seconds."
+    },
+    {
+      "id": 9,
+      "title": "First plays (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_listens_24h",
+          "legendFormat": "first plays"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_listeners_24h",
+          "legendFormat": "people listening"
+        }
+      ],
+      "description": "First plays recorded in the trailing 24h and the distinct people behind them. A repeat play by the same person is not counted; the author's own play never is."
+    },
+    {
+      "id": 10,
+      "title": "Listened share (7d)",
+      "type": "gauge",
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 8,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_listened_share_7d",
+          "legendFormat": "heard"
+        }
+      ],
+      "description": "Share of the last 7 days' notes heard at least once by someone other than the author. Recent notes have had little time to be heard, so read the trend, not the level.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Senders (7d)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 12,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_senders{window=\"7d\"}",
+          "legendFormat": "people"
+        }
+      ],
+      "description": "Distinct people who sent at least one note in the trailing 7 days.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 12,
+      "title": "Sent (7d)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 16,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(pqp_api_voice_notes_sent{window=\"7d\"})",
+          "legendFormat": "notes"
+        }
+      ],
+      "description": "Notes sent in the trailing 7 days.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 13,
+      "title": "Refused requests (per hour)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 20,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (reason) (increase(pqp_api_voice_notes_refusal_total[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "description": "Requests turned away before anything was stored, by reason. mint-flag-off climbing is people trying a feature that is switched off; the claim-* and mint-too-large reasons are a client doing something it should not."
+    },
+    {
+      "id": 14,
+      "title": "Health",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "title": "Oldest due job waiting",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (kind) (pqp_api_voice_notes_queue_oldest_seconds)",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "description": "How long the oldest job that is due has been waiting. A healthy worker claims within its poll interval, so this climbing past 5 minutes (the alert) means the worker is down, wedged or out of connections."
+    },
+    {
+      "id": 16,
+      "title": "Queue depth",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_queue{state=\"queued\"}",
+          "legendFormat": "{{kind}} queued"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_queue{state=\"running\"}",
+          "legendFormat": "{{kind}} running"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_queue{state=\"retrying\"}",
+          "legendFormat": "{{kind}} retrying"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_queue{state=\"expired_leases\"}",
+          "legendFormat": "{{kind}} expired leases"
+        }
+      ],
+      "description": "Unfinished speech jobs now. retrying is queued after a failed attempt. expired leases is a job a worker took and died on; it should be 0 and is reclaimed on the next claim."
+    },
+    {
+      "id": 17,
+      "title": "Jobs settled (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_jobs_24h",
+          "legendFormat": "{{kind}} {{outcome}}"
+        }
+      ],
+      "description": "What settled in the trailing 24h by kind and outcome. skipped is settled on purpose without doing the work (message deleted, sender declined, over budget) and is not a failure."
+    },
+    {
+      "id": 18,
+      "title": "Success rate (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=\"ok\"}) / clamp_min(sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=~\"ok|failed\"}), 1)",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "description": "ok / (ok + failed) over the trailing 24h, skipped left out. Meaningless at tiny volume: one failure in three jobs reads 67%. The alert needs at least 5 settled jobs."
+    },
+    {
+      "id": 19,
+      "title": "Time to done (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_job_latency_seconds{quantile=\"0.5\"}",
+          "legendFormat": "{{kind}} p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_job_latency_seconds{quantile=\"0.95\"}",
+          "legendFormat": "{{kind}} p95"
+        }
+      ],
+      "description": "Seconds from a job being queued to settling OK, queue wait included, which is what the listener feels (a transcode: send until the AAC copy exists; a transcription: until the text exists)."
+    },
+    {
+      "id": 20,
+      "title": "Transcript status (24h)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_transcripts_24h",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "description": "Where the last 24h's sent notes stand now. none is nobody asked for one (server channels, flag off, sender declined). pending that stays pending is stuck; unavailable is no provider or the budget spent."
+    },
+    {
+      "id": 21,
+      "title": "Speech budget used (UTC day)",
+      "type": "gauge",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_budget_used_ratio",
+          "legendFormat": "used"
+        }
+      ],
+      "description": "Provider audio seconds spent today against VOICE_STT_DAILY_SECONDS, resets at 00:00 UTC. The API reads the limit from its own environment while the worker enforces its own, so set the variable on both.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Speech budget seconds",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 6,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_budget_used_seconds",
+          "legendFormat": "used today"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_budget_daily_seconds",
+          "legendFormat": "daily limit"
+        }
+      ],
+      "description": "Seconds used against the daily limit. The sawtooth is the UTC day rolling over."
+    },
+    {
+      "id": 23,
+      "title": "Refused by budget (today)",
+      "type": "stat",
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 16,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_voice_notes_budget_refused",
+          "legendFormat": "refused"
+        }
+      ],
+      "description": "Jobs turned away today because the next note would not fit. Above 0 means transcripts are unavailable until the UTC day rolls over.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 24,
+      "title": "Exporter scrape",
+      "type": "stat",
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 20,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "pqp_api_metrics_scrape_ok",
+          "legendFormat": "scrape ok"
+        }
+      ],
+      "description": "1 when the exporter last reached the API. If this is 0 every other panel is blank on purpose, not healthy.",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    }
+  ]
+}
