@@ -214,6 +214,109 @@ export function formatPreviewCountdown(seconds: number): string {
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
 }
 
+// ------------------------------------------------------------------ page
+
+/**
+ * Whether the page around the player is drawn. Only the entry card shows
+ * while idle; every other phase is the full live page (the age question and
+ * the end are sheets over it).
+ */
+export function previewShowsPage(phase: LivePreviewPhase): boolean {
+  return phase.kind !== "idle";
+}
+
+/**
+ * Whether anything on screen may offer an account. Never to somebody who
+ * answered under the threshold: the account gate's blocked screen never
+ * suggests signing up again, and this keeps that rule for every button on
+ * the page, the sticky bar and the header included.
+ */
+export function previewOffersSignUp(phase: LivePreviewPhase): boolean {
+  return phase.kind !== "declined";
+}
+
+/** The countdown turns to the warning colour at this many seconds left. */
+export const PREVIEW_URGENT_SECONDS = 30;
+
+export function previewIsUrgent(secondsLeft: number): boolean {
+  return secondsLeft <= PREVIEW_URGENT_SECONDS;
+}
+
+/**
+ * How much of the window is left, 0 to 1, for the bar across the top of the
+ * player. The window's length is the listing's `seconds`, so the bar is full
+ * at the start of a fresh window and shorter on a resumed one.
+ */
+export function previewRemainingFraction(
+  expiresAt: number,
+  windowSeconds: number,
+  now: number = Date.now(),
+): number {
+  if (!Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+    return 0;
+  }
+  const left = (expiresAt - now) / (windowSeconds * 1000);
+  return Math.min(1, Math.max(0, left));
+}
+
+/** The window in whole minutes, for "Prévia de N minutos". Never below one. */
+export function previewWindowMinutes(seconds: number): number {
+  return Math.max(1, Math.round(seconds / 60));
+}
+
+/**
+ * The viewer count to draw, or null to draw none. Zero is not shown: "0
+ * assistindo" on a live party says something false about the room (the
+ * count is accounts only, and a party with only seated people or only
+ * preview visitors can read zero).
+ */
+export function previewViewerCount(channel: { viewers?: number } | null): number | null {
+  const viewers = channel?.viewers;
+  return typeof viewers === "number" && Number.isFinite(viewers) && viewers > 0
+    ? Math.floor(viewers)
+    : null;
+}
+
+export type ShareOutcome = "shared" | "copied" | "cancelled" | "failed";
+
+type ShareNavigator = {
+  share?: (data: { url: string; title?: string }) => Promise<void>;
+  clipboard?: { writeText: (text: string) => Promise<void> };
+};
+
+/**
+ * The Share button: the system share sheet where there is one (phones, the
+ * in-app browsers), copying the link otherwise. A sheet the person closed is
+ * "cancelled", not a reason to copy behind their back.
+ */
+export async function shareLink(
+  url: string,
+  title: string,
+  nav: ShareNavigator | null = typeof navigator === "undefined" ? null : navigator,
+): Promise<ShareOutcome> {
+  if (nav?.share) {
+    try {
+      await nav.share({ url, title });
+      return "shared";
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return "cancelled";
+      }
+      // A share sheet that refuses (an embedded webview without one) falls
+      // through to copying.
+    }
+  }
+  if (nav?.clipboard) {
+    try {
+      await nav.clipboard.writeText(url);
+      return "copied";
+    } catch {
+      return "failed";
+    }
+  }
+  return "failed";
+}
+
 // --------------------------------------------------------------- sign-up
 
 /**

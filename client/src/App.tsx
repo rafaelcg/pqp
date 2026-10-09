@@ -503,6 +503,12 @@ import {
 } from "@/lib/community-home";
 import { pickArrivalPartyChannel } from "@/lib/live-party-landing";
 import { LivePreviewPanel } from "@/components/live-preview/live-preview-panel";
+import {
+  ClerkLivePreviewAuth,
+  ClerkSignUpReturn,
+} from "@/components/live-preview/live-preview-auth";
+import { heroHue } from "@/lib/hero-tint";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -1096,17 +1102,32 @@ function ClerkAppGate() {
                       happens exactly as it would from the button below. */}
                   {invitePreview.livePreview && inviteCode && !canDesktopAuth ? (
                     <div className="mt-6 w-full">
-                      <LivePreviewPanel
-                        source={{ kind: "invite", code: inviteCode }}
-                        landing="/app"
-                        surface="invite"
-                        onSignUpIntent={() => noteSignupCta("gate", "")}
-                        renderSignUp={(button) => (
-                          <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-                            {button}
-                          </SignUpButton>
+                      <ClerkSignUpReturn redirectUrl={redirectUrl} />
+                      <ClerkLivePreviewAuth redirectUrl={redirectUrl}>
+                        {(auth) => (
+                          <LivePreviewPanel
+                            source={{ kind: "invite", code: inviteCode }}
+                            landing="/app"
+                            surface="invite"
+                            // The invite's public preview is all this page
+                            // has: name, icon and member count. No address,
+                            // tagline or category, so those parts stay out.
+                            community={{
+                              name: invitePreview.serverName,
+                              slug: null,
+                              tagline: null,
+                              category: null,
+                              memberCount:
+                                invitePreview.memberCount > 0 ? invitePreview.memberCount : null,
+                              iconUrl: resolveUploadedImageUrl(invitePreview.iconUrl),
+                              bannerUrl: null,
+                              hue: heroHue(inviteCode),
+                            }}
+                            auth={auth}
+                            onSignUpIntent={() => noteSignupCta("gate", "")}
+                          />
                         )}
-                      />
+                      </ClerkLivePreviewAuth>
                     </div>
                   ) : null}
                 </>

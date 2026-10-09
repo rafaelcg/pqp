@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LIVE_PREVIEW_MEDIUM } from "@pqp/shared";
 import { peekAcquisition, stashAcquisition } from "./acquisition";
 import { classifyLivePreviewStart } from "./api";
@@ -16,12 +16,20 @@ import {
   phaseAfterStart,
   phaseOnWatch,
   PREVIEW_AGE_DECLINED_TTL_MS,
+  previewIsUrgent,
+  previewOffersSignUp,
+  previewRemainingFraction,
   previewSecondsLeft,
+  previewShowsPage,
+  previewViewerCount,
+  previewWindowMinutes,
   readPreviewAgeMemory,
   readPreviewTicket,
   rememberPreviewAge,
+  shareLink,
   stashLivePreviewAcquisition,
   writePreviewTicket,
+  type LivePreviewPhase,
 } from "./live-preview";
 
 /**
@@ -231,5 +239,110 @@ describe("the dev-only signed-out switch", () => {
     const local = memoryStorage();
     local.setItem("pqp:dev-signed-out", "1");
     expect(devSignedOutPreview(local)).toBe(false);
+  });
+});
+
+describe("the live page around the player", () => {
+  const phases: LivePreviewPhase[] = [
+    { kind: "idle" },
+    { kind: "age" },
+    { kind: "declined" },
+    { kind: "starting" },
+    { kind: "watching", hlsUrl: "/x", mode: "conventional", expiresAt: 1 },
+    { kind: "ended" },
+    { kind: "gone" },
+    { kind: "error" },
+  ];
+
+  it("draws only the entry card while idle, and the full page for every other phase", () => {
+    expect(phases.filter(previewShowsPage).map((phase) => phase.kind)).toEqual([
+      "age",
+      "declined",
+      "starting",
+      "watching",
+      "ended",
+      "gone",
+      "error",
+    ]);
+  });
+
+  it("offers an account in every phase except to somebody under the threshold", () => {
+    // The declined page carries no sign-up anywhere: header, sticky bar,
+    // chat card, "Me avisa" and "Entrar na comunidade" all read this.
+    expect(phases.filter((phase) => !previewOffersSignUp(phase)).map((phase) => phase.kind)).toEqual([
+      "declined",
+    ]);
+  });
+
+  it("turns the countdown to the warning colour in the last 30 seconds", () => {
+    expect(previewIsUrgent(31)).toBe(false);
+    expect(previewIsUrgent(30)).toBe(true);
+    expect(previewIsUrgent(0)).toBe(true);
+  });
+
+  it("sizes the countdown bar against the whole window, clamped", () => {
+    const now = 1_000_000;
+    expect(previewRemainingFraction(now + 300_000, 300, now)).toBe(1);
+    expect(previewRemainingFraction(now + 150_000, 300, now)).toBe(0.5);
+    // A resumed window is already shorter.
+    expect(previewRemainingFraction(now + 30_000, 300, now)).toBeCloseTo(0.1);
+    expect(previewRemainingFraction(now - 1, 300, now)).toBe(0);
+    expect(previewRemainingFraction(now + 999_999, 300, now)).toBe(1);
+    expect(previewRemainingFraction(now + 1_000, 0, now)).toBe(0);
+  });
+
+  it("says the window in whole minutes, never zero", () => {
+    expect(previewWindowMinutes(300)).toBe(5);
+    expect(previewWindowMinutes(120)).toBe(2);
+    expect(previewWindowMinutes(30)).toBe(1);
+  });
+
+  it("draws a viewer count only above zero, and only a number", () => {
+    expect(previewViewerCount({ viewers: 38 })).toBe(38);
+    expect(previewViewerCount({ viewers: 0 })).toBeNull();
+    expect(previewViewerCount({})).toBeNull();
+    expect(previewViewerCount(null)).toBeNull();
+    expect(previewViewerCount({ viewers: Number.NaN })).toBeNull();
+  });
+});
+
+describe("the Share button", () => {
+  const url = "https://pqp.gg/c/sandbox";
+
+  it("uses the system share sheet where there is one", async () => {
+    const share = vi.fn(async () => {});
+    const writeText = vi.fn(async () => {});
+    expect(await shareLink(url, "Sandbox", { share, clipboard: { writeText } })).toBe("shared");
+    expect(share).toHaveBeenCalledWith({ url, title: "Sandbox" });
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("does not copy behind the back of somebody who closed the sheet", async () => {
+    const abort = Object.assign(new Error("closed"), { name: "AbortError" });
+    const writeText = vi.fn(async () => {});
+    const outcome = await shareLink(url, "Sandbox", {
+      share: async () => {
+        throw abort;
+      },
+      clipboard: { writeText },
+    });
+    expect(outcome).toBe("cancelled");
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("copies the link without a share sheet, or when the sheet refuses", async () => {
+    const writeText = vi.fn(async () => {});
+    expect(await shareLink(url, "Sandbox", { clipboard: { writeText } })).toBe("copied");
+    expect(
+      await shareLink(url, "Sandbox", {
+        share: async () => {
+          throw new Error("NotAllowedError");
+        },
+        clipboard: { writeText },
+      }),
+    ).toBe("copied");
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(await shareLink(url, "Sandbox", {})).toBe("failed");
+    expect(await shareLink(url, "Sandbox", null)).toBe("failed");
   });
 });

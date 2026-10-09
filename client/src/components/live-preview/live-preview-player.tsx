@@ -1,5 +1,5 @@
-import { Volume2, VolumeX } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Maximize, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { chooseHlsEngine, isAutoplayRefusal, resolveHlsUrl } from "@/lib/hls-playback";
 import { hlsLivePlayerConfig, llHlsConfig } from "@/lib/hls-live-edge";
@@ -19,17 +19,26 @@ import { useTranslation } from "@/lib/i18n";
  * `onUnavailable` fires when the playlist refuses (401, 403 or 404: the
  * window ended, the flag went off, the party ended) or the native player
  * gives up. The panel decides what that means by asking the server again.
+ *
+ * The controls are only the ones this player can really do: sound on and
+ * off, and full screen (the frame, so the badges come along; the native
+ * player's own full screen on an iPhone, which has no element full screen).
+ * No quality menu: hls.js picks the rung for the player's size.
+ * `children` are the panel's overlays (the live badge, the countdown).
  */
 export function LivePreviewPlayer({
   url,
   mode,
   onUnavailable,
+  children,
 }: {
   url: string;
   mode: "conventional" | "ll";
   onUnavailable: () => void;
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const frameRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(true);
   const unavailableRef = useRef(onUnavailable);
@@ -148,8 +157,21 @@ export function LivePreviewPlayer({
     }
   };
 
+  const canFullscreen = fullscreenSupported(frameRef.current, videoRef.current);
+  const enterFullscreen = () => {
+    const frame = frameRef.current;
+    const video = videoRef.current as WebkitVideo | null;
+    if (frame?.requestFullscreen && document.fullscreenEnabled) {
+      void frame.requestFullscreen().catch(() => {});
+      return;
+    }
+    video?.webkitEnterFullscreen?.();
+  };
+
+  const soundLabel = muted ? t("livePreview.player.unmute") : t("livePreview.player.mute");
+
   return (
-    <div className="relative h-full w-full bg-surface-0">
+    <div ref={frameRef} className="relative h-full w-full bg-surface-0">
       <video
         ref={videoRef}
         className="h-full w-full object-contain"
@@ -162,20 +184,87 @@ export function LivePreviewPlayer({
         disablePictureInPicture
         onClick={toggleSound}
       />
-      <Button
-        type="button"
-        size="icon"
-        variant="secondary"
-        className="absolute bottom-3 right-3 rounded-full"
-        aria-label={muted ? t("livePreview.player.unmute") : t("livePreview.player.mute")}
-        onClick={toggleSound}
-      >
-        {muted ? (
+      {children}
+      {muted && (
+        // Playback starts muted (the only autoplay a phone allows), so the
+        // first thing to offer is the sound. Floats over the picture.
+        <Button
+          type="button"
+          className="absolute bottom-2.5 left-2.5 h-11 rounded-[var(--radius-card)] bg-text px-3.5 font-bold text-surface-0 shadow-[var(--shadow-2)] hover:bg-text-secondary lg:bottom-auto lg:left-4 lg:top-16"
+          onClick={toggleSound}
+        >
           <VolumeX aria-hidden className="h-4 w-4" />
-        ) : (
-          <Volume2 aria-hidden className="h-4 w-4" />
+          <span className="lg:hidden">{t("livePreview.player.tapToListen")}</span>
+          <span className="hidden lg:inline">{t("livePreview.player.unmute")}</span>
+        </Button>
+      )}
+      {canFullscreen && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label={t("livePreview.player.fullscreen")}
+          className="absolute right-1.5 top-1.5 h-11 w-11 text-text hover:bg-surface-0/40 lg:hidden"
+          onClick={enterFullscreen}
+        >
+          <Maximize aria-hidden className="h-5 w-5" />
+        </Button>
+      )}
+      <div className="absolute inset-x-0 bottom-0 hidden items-center justify-between bg-surface-0/75 px-3 py-1.5 lg:flex">
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={soundLabel}
+            className="h-11 w-11 text-text"
+            onClick={toggleSound}
+          >
+            {muted ? (
+              <VolumeX aria-hidden className="h-5 w-5" />
+            ) : (
+              <Volume2 aria-hidden className="h-5 w-5" />
+            )}
+          </Button>
+          <span className="inline-flex items-center gap-1.5 pl-1.5 text-sm font-semibold text-text">
+            <span aria-hidden className="h-2 w-2 rounded-full bg-danger" />
+            {t("livePreview.player.live")}
+          </span>
+        </div>
+        {canFullscreen && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={t("livePreview.player.fullscreen")}
+            className="h-11 w-11 text-text"
+            onClick={enterFullscreen}
+          >
+            <Maximize aria-hidden className="h-5 w-5" />
+          </Button>
         )}
-      </Button>
+      </div>
     </div>
   );
+}
+
+type WebkitVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+
+/**
+ * Element full screen where the browser has it, the iPhone's native player
+ * otherwise. Read on render: before the first render both refs are null and
+ * the answer is the document's, which is the same answer.
+ */
+function fullscreenSupported(
+  frame: HTMLDivElement | null,
+  video: HTMLVideoElement | null,
+): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  if (document.fullscreenEnabled && (!frame || typeof frame.requestFullscreen === "function")) {
+    return true;
+  }
+  const probe = (video ?? document.createElement("video")) as WebkitVideo;
+  return typeof probe.webkitEnterFullscreen === "function";
 }

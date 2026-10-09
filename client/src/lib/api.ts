@@ -101,7 +101,7 @@ import {
   livePreviewListingSchema,
   livePreviewStartResponseSchema,
   publicInvitePreviewSchema,
-  type LivePreviewChannel,
+  type LivePreviewListing,
   type LivePreviewStartResponse,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
@@ -469,7 +469,7 @@ export type LivePreviewSource =
 export async function fetchLivePreviewListing(
   source: LivePreviewSource,
   options: { signal?: AbortSignal } = {},
-): Promise<{ livePreview: { channels: LivePreviewChannel[]; seconds: number } } | null> {
+): Promise<LivePreviewListing | null> {
   const path =
     source.kind === "community"
       ? `/api/public/live-preview/communities/${encodeURIComponent(source.slug)}`
