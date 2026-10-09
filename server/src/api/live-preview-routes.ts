@@ -17,6 +17,7 @@ import {
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import {
   listLivePreviewChannels,
+  listLivePreviewUpcoming,
   livePreviewMaybeOn,
   livePreviewSeconds,
   previewServerForInvite,
@@ -152,7 +153,10 @@ async function serveListing(
       sendError(res, 404, "Not found", req);
       return;
     }
-    const channels = await listLivePreviewChannels(serverId);
+    const [channels, upcoming] = await Promise.all([
+      listLivePreviewChannels(serverId),
+      listLivePreviewUpcoming(serverId),
+    ]);
     // The same for every caller holding the link, and needed no credential:
     // a few seconds at a shared cache is what keeps a streamer's audience
     // arriving at once from being one query each. Short, because "is anything
@@ -165,7 +169,7 @@ async function serveListing(
     });
     res.end(
       JSON.stringify({
-        livePreview: { channels, seconds: livePreviewSeconds() },
+        livePreview: { channels, seconds: livePreviewSeconds(), upcoming },
       }),
     );
   } catch (error) {

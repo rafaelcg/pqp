@@ -78,6 +78,7 @@ const { decodeHlsViewerToken, mintHlsPreviewToken } = await import(
 const { resetHlsPlaylistCacheForTests } = await import(
   "../voice/hls-playlist-proxy.js"
 );
+const { resetHlsPresentCacheForTests } = await import("../voice/hls-viewer-counts.js");
 
 /** Recent, whole seconds: a session row older than 12 hours is not "live". */
 const STARTED_AT = Math.floor(Date.now() / 1000) * 1000 - 60_000;
@@ -200,6 +201,7 @@ describeDb("signed-out live preview", () => {
     resetApiRateLimits();
     resetLivePreviewForTests();
     resetHlsPlaylistCacheForTests();
+    resetHlsPresentCacheForTests();
     flags.resetFeatureFlagsForTests();
     viewerNotes.calls = 0;
     process.env.CLERK_SECRET_KEY = "sk_test_live_preview";
@@ -226,7 +228,8 @@ describeDb("signed-out live preview", () => {
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
                 audit_log, hls_sessions, channel_overwrites, roles,
-                feature_flags, feature_flag_overrides, feature_flag_audit
+                feature_flags, feature_flag_overrides, feature_flag_audit,
+                channel_sessions, hls_session_presence, voice_rooms, voice_peers
        RESTART IDENTITY CASCADE`,
     );
     const owner = await upsertUser({ clerkId: "clerk_owner", displayName: "Owner", avatarUrl: null });
@@ -310,7 +313,16 @@ describeDb("signed-out live preview", () => {
     });
 
     it("does not even match the new routes: they 401 like any unknown path", async () => {
-      expect((await call("GET", "/api/public/live-preview/communities/sala-do-rafa")).status).toBe(401);
+      await getPool().query(
+        `INSERT INTO channel_sessions (channel_id, server_id, title, starts_at, status, created_by)
+         VALUES ($1, $2, 'Amanhã', NOW() + interval '1 day', 'scheduled', $3)`,
+        [idleChannel, serverId, ownerId],
+      );
+      const listing = await call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+      expect(listing.status).toBe(401);
+      // No party title, schedule or count leaks through the refusal.
+      expect(listing.text).not.toContain("Amanhã");
+      expect(listing.text).not.toContain("viewers");
       const code = (await createInvite(serverId, ownerId, {})).code;
       expect((await call("GET", `/api/public/live-preview/invites/${code}`)).status).toBe(401);
       expect((await start(liveChannel)).status).toBe(401);
@@ -365,11 +377,112 @@ describeDb("signed-out live preview", () => {
       expect(listing.status).toBe(200);
       expect(listing.cache).toBe("public, max-age=10");
       expect(listing.body).toEqual({
-        livePreview: { channels: [{ id: liveChannel, name: "cinema" }], seconds: 300 },
+        livePreview: {
+          channels: [{ id: liveChannel, name: "cinema", title: null, viewers: 0 }],
+          seconds: 300,
+          upcoming: [],
+        },
       });
       const code = (await createInvite(serverId, ownerId, {})).code;
       const byInvite = await call("GET", `/api/public/live-preview/invites/${code}`);
       expect(byInvite.body).toEqual(listing.body);
+    });
+
+    it("names the live party, counts accounts only, and lists the next sessions on public channels", async () => {
+      const session = async (
+        channelId: string,
+        title: string,
+        status: string,
+        startsInMs: number | null,
+      ) => {
+        await getPool().query(
+          `INSERT INTO channel_sessions
+             (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at)
+           VALUES ($1, $2, $3,
+                   CASE WHEN $4::bigint IS NULL THEN NULL ELSE NOW() + ($4::bigint || ' milliseconds')::interval END,
+                   $5, $6, $6,
+                   CASE WHEN $5 = 'live' THEN NOW() ELSE NULL END)`,
+          [channelId, serverId, title, startsInMs, status, ownerId],
+        );
+      };
+      const extra = await channel(serverId, "telinha", "watch_party");
+      const extra2 = await channel(serverId, "sessao-da-noite", "watch_party");
+      const extra3 = await channel(serverId, "maratona", "watch_party");
+      const voiceRoomChannel = await channel(serverId, "papo", "voice");
+      await session(liveChannel, "Sessão de sexta: Central do Brasil", "live", -60_000);
+      // Shown, soonest first, at most three.
+      await session(idleChannel, "Cidade de Deus", "scheduled", 2 * 86_400_000);
+      await session(extra, "O Auto da Compadecida", "scheduled", 86_400_000);
+      await session(extra2, "Bacurau", "scheduled", 3 * 86_400_000);
+      await session(extra3, "Tropa de Elite", "scheduled", 4 * 86_400_000);
+      // Never shown: a private channel, an @everyone-denied one, a voice
+      // channel, a past start, a draft, a cancelled one, and another server.
+      await session(privateChannel, "Segredo", "scheduled", 3_600_000);
+      await session(deniedChannel, "Só a staff", "scheduled", 3_600_000);
+      await session(voiceRoomChannel, "Papo", "scheduled", 3_600_000);
+      const past = await channel(serverId, "ontem", "watch_party");
+      await session(past, "Já foi", "scheduled", -3_600_000);
+      const draft = await channel(serverId, "rascunho", "watch_party");
+      await session(draft, "Rascunho", "draft", null);
+      const cancelled = await channel(serverId, "cancelada", "watch_party");
+      await session(cancelled, "Cancelada", "cancelled", 3_600_000);
+      await session(otherLiveChannel, "Outra sala", "scheduled", 3_600_000);
+
+      // Two accounts on the playlist (one on two machines), one of whom also
+      // holds a seat, and a second seated account: three accounts in all.
+      const a = (await upsertUser({ clerkId: "clerk_a", displayName: "A", avatarUrl: null })).id;
+      const b = (await upsertUser({ clerkId: "clerk_b", displayName: "B", avatarUrl: null })).id;
+      const c = (await upsertUser({ clerkId: "clerk_c", displayName: "C", avatarUrl: null })).id;
+      await getPool().query(
+        `INSERT INTO hls_session_presence (channel_id, started_at_ms, instance_id, user_ids, sampled_at)
+         VALUES ($1, $2, 'api-a', $3::uuid[], NOW()), ($1, $2, 'api-b', $4::uuid[], NOW())`,
+        [liveChannel, STARTED_AT, [a, b], [a]],
+      );
+      await getPool().query(
+        `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, 'livekit')`,
+        [liveChannel],
+      );
+      await getPool().query(
+        `INSERT INTO voice_peers (peer_id, channel_id, user_id, instance_id, display_name)
+         VALUES (gen_random_uuid(), $1, $2, gen_random_uuid(), 'B'),
+                (gen_random_uuid(), $1, $3, gen_random_uuid(), 'C')`,
+        [liveChannel, b, c],
+      );
+
+      // A preview visitor watching never raises the count.
+      const started = (await start(liveChannel)).body as StartBody;
+      expect((await call("GET", pathOf(started.stream.hlsUrl))).status).toBe(200);
+
+      const listing = await call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+      expect(listing.status).toBe(200);
+      const body = listing.body as {
+        livePreview: {
+          channels: Array<Record<string, unknown>>;
+          upcoming: Array<Record<string, unknown>>;
+        };
+      };
+      expect(body.livePreview.channels).toEqual([
+        {
+          id: liveChannel,
+          name: "cinema",
+          title: "Sessão de sexta: Central do Brasil",
+          viewers: 3,
+        },
+      ]);
+      expect(body.livePreview.upcoming.map((row) => [row.title, row.channelName])).toEqual([
+        ["O Auto da Compadecida", "telinha"],
+        ["Cidade de Deus", "sessao-da-tarde"],
+        ["Bacurau", "sessao-da-noite"],
+      ]);
+      for (const row of body.livePreview.upcoming) {
+        // Title, start and channel name, and nothing else.
+        expect(Object.keys(row).sort()).toEqual(["channelName", "startsAt", "title"]);
+        expect(row.startsAt as number).toBeGreaterThan(Date.now());
+      }
+      // Nothing in the answer names a person.
+      for (const id of [ownerId, a, b, c]) {
+        expect(listing.text).not.toContain(id);
+      }
     });
 
     it("refuses a private server, a suspended community and unknown names with one 404", async () => {
@@ -566,6 +679,25 @@ describeDb("signed-out live preview", () => {
       await flags.setServerFlagOverride("live_preview", serverId, false, { kind: "dashboard" });
       expect((await start(liveChannel)).status).toBe(404);
       expect((await start(otherLiveChannel)).status).toBe(200);
+    });
+
+    it("global on, this community off: its listing is a bare 404 with no party fields", async () => {
+      process.env.LIVE_PREVIEW = "true";
+      await getPool().query(
+        `INSERT INTO channel_sessions (channel_id, server_id, title, starts_at, status, created_by)
+         VALUES ($1, $2, 'Amanhã', NOW() + interval '1 day', 'scheduled', $3)`,
+        [idleChannel, serverId, ownerId],
+      );
+      await flags.setServerFlagOverride("live_preview", serverId, false, { kind: "dashboard" });
+      const refused = await call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+      expect(refused.status).toBe(404);
+      expect(refused.text).not.toContain("Amanhã");
+      expect(refused.text).not.toContain("upcoming");
+      const served = await call("GET", "/api/public/live-preview/communities/outra-sala");
+      expect(served.status).toBe(200);
+      expect(served.body).toMatchObject({
+        livePreview: { channels: [{ id: otherLiveChannel, title: null }], upcoming: [] },
+      });
     });
   });
 });

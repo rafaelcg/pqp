@@ -3,15 +3,19 @@ import {
   computePermissions,
   hasPermission,
   LIVE_PREVIEW_DEFAULT_SECONDS,
+  LIVE_PREVIEW_UPCOMING_MAX,
   parsePermissions,
   Permission,
   type LivePreviewChannel,
+  type LivePreviewListedChannel,
   type LivePreviewStartResponse,
+  type LivePreviewUpcoming,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { flagServerOverrides, isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { liveHlsStreamFor, liveHlsStreamFromDb } from "../voice/hls-egress.js";
+import { presentHlsViewers } from "../voice/hls-viewer-counts.js";
 import { stampPreviewStream } from "../voice/hls-viewer-token.js";
 import { isCommunitiesEnabled } from "./communities.js";
 
@@ -179,6 +183,8 @@ export function resetLivePreviewForTests(): void {
   counters.playlistRefused = {};
   eligibilityCache.clear();
   refusalLog.clear();
+  seatedCache.clear();
+  seatedInFlight.clear();
 }
 
 /**
@@ -461,24 +467,45 @@ export async function previewServerForInvite(code: string): Promise<string | nul
 const LIVE_ROW_MAX_AGE_HOURS = 12;
 
 /**
- * The previewable channels of `serverId` with a live HLS session on them,
- * name and id only, in channel order. Empty when nothing qualifies.
+ * The previewable channels of `serverId` with a live HLS session on them, in
+ * channel order, each with the live party's title (null without a party row)
+ * and the account count the app's live card shows. Empty when nothing
+ * qualifies.
  */
 export async function listLivePreviewChannels(
   serverId: string,
-): Promise<LivePreviewChannel[]> {
-  const result = await getPool().query<{ id: string; name: string; position: number }>(
-    `SELECT DISTINCT c.id, c.name, c.position
+): Promise<LivePreviewListedChannel[]> {
+  const result = await getPool().query<{
+    id: string;
+    name: string;
+    started_ms: string;
+    title: string | null;
+  }>(
+    `SELECT c.id, c.name, h.started_ms, s.title
        FROM channels c
-       JOIN hls_sessions h ON h.channel_id = c.id
+       JOIN LATERAL (
+         SELECT (EXTRACT(EPOCH FROM hs.started_at) * 1000)::bigint AS started_ms
+           FROM hls_sessions hs
+          WHERE hs.channel_id = c.id
+            AND hs.ended_at IS NULL
+            AND hs.cleaned_at IS NULL
+            AND hs.presenter_peer_id IS NOT NULL
+            AND hs.started_at > NOW() - ($2 || ' hours')::interval
+          ORDER BY hs.started_at DESC
+          LIMIT 1
+       ) h ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT cs.title
+           FROM channel_sessions cs
+          WHERE cs.channel_id = c.id
+            AND cs.status = 'live'
+          ORDER BY cs.went_live_at DESC NULLS LAST
+          LIMIT 1
+       ) s ON TRUE
       WHERE c.server_id = $1
         AND c.kind = 'server'
         AND c.type = 'watch_party'
         AND NOT c.is_private
-        AND h.ended_at IS NULL
-        AND h.cleaned_at IS NULL
-        AND h.presenter_peer_id IS NOT NULL
-        AND h.started_at > NOW() - ($2 || ' hours')::interval
       ORDER BY c.position, c.id`,
     [serverId, String(LIVE_ROW_MAX_AGE_HOURS)],
   );
@@ -486,9 +513,148 @@ export async function listLivePreviewChannels(
     serverId,
     result.rows.map((row) => row.id),
   );
+  const visible = result.rows.filter((row) => view.get(row.id) === true);
+  const viewers = await Promise.all(
+    visible.map((row) => livePreviewViewerCount(row.id, Number(row.started_ms))),
+  );
+  return visible.map((row, index) => {
+    const count = viewers[index];
+    return {
+      id: row.id,
+      name: row.name,
+      title: row.title,
+      ...(typeof count === "number" ? { viewers: count } : {}),
+    };
+  });
+}
+
+/**
+ * The next scheduled sessions on `serverId`, soonest first, at most
+ * `LIVE_PREVIEW_UPCOMING_MAX`. Only on channels a signed-out visitor could
+ * preview once they go live (a public watch party channel @everyone can
+ * VIEW), so a private channel's name or session title never reaches this
+ * answer. Title, start and channel name only: no creator, no host, no
+ * description, no cover, no reminder count.
+ */
+export async function listLivePreviewUpcoming(
+  serverId: string,
+): Promise<LivePreviewUpcoming[]> {
+  const result = await getPool().query<{
+    channel_id: string;
+    channel_name: string;
+    title: string;
+    starts_ms: string;
+  }>(
+    `SELECT c.id AS channel_id, c.name AS channel_name, cs.title,
+            (EXTRACT(EPOCH FROM cs.starts_at) * 1000)::bigint AS starts_ms
+       FROM channel_sessions cs
+       JOIN channels c ON c.id = cs.channel_id
+      WHERE c.server_id = $1
+        AND c.kind = 'server'
+        AND c.type = 'watch_party'
+        AND NOT c.is_private
+        AND cs.status = 'scheduled'
+        AND cs.starts_at > NOW()
+      ORDER BY cs.starts_at, cs.id
+      LIMIT $2`,
+    // Read a few more than shown, so channels @everyone cannot view do not
+    // leave the list short.
+    [serverId, LIVE_PREVIEW_UPCOMING_MAX * 4],
+  );
+  const view = await everyoneCanView(serverId, [
+    ...new Set(result.rows.map((row) => row.channel_id)),
+  ]);
   return result.rows
-    .filter((row) => view.get(row.id) === true)
-    .map((row) => ({ id: row.id, name: row.name }));
+    .filter((row) => view.get(row.channel_id) === true)
+    .slice(0, LIVE_PREVIEW_UPCOMING_MAX)
+    .map((row) => ({
+      title: row.title,
+      startsAt: Number(row.starts_ms),
+      channelName: row.channel_name,
+    }));
+}
+
+// ----------------------------------------------------------------- viewers
+
+/** The longest the listing waits for a count before answering without one. */
+const VIEWER_COUNT_WAIT_MS = 500;
+const SEATED_CACHE_MS = 5_000;
+const seatedCache = new Map<string, { at: number; value: number }>();
+const seatedInFlight = new Map<string, Promise<number | null>>();
+
+/**
+ * Accounts holding a seat in the channel's voice room, from the registry's
+ * rows. Cached and coalesced per channel, like `presentHlsViewers`, so a
+ * streamer's audience arriving at once is a handful of queries.
+ */
+function seatedAccounts(channelId: string, now = Date.now()): Promise<number | null> {
+  const held = seatedCache.get(channelId);
+  if (held && now - held.at < SEATED_CACHE_MS) {
+    return Promise.resolve(held.value);
+  }
+  const running = seatedInFlight.get(channelId);
+  if (running) {
+    return running;
+  }
+  const query = getPool()
+    .query<{ n: number }>(
+      `SELECT COUNT(DISTINCT user_id)::int AS n
+         FROM voice_peers
+        WHERE channel_id = $1
+          AND orphaned_at IS NULL`,
+      [channelId],
+    )
+    .then((result) => {
+      const value = result.rows[0]?.n ?? 0;
+      if (seatedCache.size >= ELIGIBILITY_CACHE_MAX) {
+        seatedCache.clear();
+      }
+      seatedCache.set(channelId, { at: now, value });
+      return value;
+    })
+    .catch(() => null)
+    .finally(() => {
+      seatedInFlight.delete(channelId);
+    });
+  seatedInFlight.set(channelId, query);
+  return query;
+}
+
+/**
+ * How many ACCOUNTS are watching a live party: the accounts on the playlist
+ * that hold no seat (`presentHlsViewers`, every machine's presence row) plus
+ * the accounts that do. The app's live card adds the same two halves. A
+ * preview visitor is never in either (their playlist fetches are counted
+ * apart, `noteLivePreviewPlaylistServed`), so nobody can raise this number
+ * by opening private windows.
+ *
+ * BOUNDED like `audienceViewersFor`: an optional number on a public answer
+ * must not hold it, so past `VIEWER_COUNT_WAIT_MS`, or on any failure, the
+ * answer goes without it and the reads finish into their caches.
+ */
+export async function livePreviewViewerCount(
+  channelId: string,
+  startedAt: number,
+): Promise<number | undefined> {
+  if (!Number.isFinite(startedAt)) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), VIEWER_COUNT_WAIT_MS);
+    timer.unref?.();
+  });
+  const counted = Promise.all([
+    presentHlsViewers(channelId, startedAt),
+    seatedAccounts(channelId),
+  ]).then(([present, seated]) =>
+    present === null || seated === null ? undefined : present + seated,
+  );
+  try {
+    return await Promise.race([counted.catch(() => undefined), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ------------------------------------------------------------------ ticket

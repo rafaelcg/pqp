@@ -25,15 +25,52 @@ export const livePreviewChannelSchema = z.object({
 
 export type LivePreviewChannel = z.infer<typeof livePreviewChannelSchema>;
 
+/** At most this many upcoming sessions are listed. */
+export const LIVE_PREVIEW_UPCOMING_MAX = 3;
+
+/**
+ * A live channel as the listing describes it: the channel, plus what the
+ * page needs to draw the party around the player.
+ *
+ *  - `title`: the live watch party's own title (`channel_sessions.title`),
+ *    null when the stream has no party row (the page then says `#name`).
+ *  - `viewers`: how many ACCOUNTS are watching, the count the app's live card
+ *    shows (accounts on the playlist plus accounts holding a seat). Preview
+ *    visitors are never in it. Absent when it could not be read in time.
+ *
+ * A count, never who: no id, name or avatar of anybody watching.
+ */
+export const livePreviewListedChannelSchema = livePreviewChannelSchema.extend({
+  title: z.string().nullable().optional(),
+  viewers: z.number().int().nonnegative().optional(),
+});
+
+export type LivePreviewListedChannel = z.infer<typeof livePreviewListedChannelSchema>;
+
+/**
+ * One scheduled session on a channel @everyone can view: the title, when it
+ * starts (epoch ms) and the channel's name. Nothing about who made it.
+ */
+export const livePreviewUpcomingSchema = z.object({
+  title: z.string(),
+  startsAt: z.number(),
+  channelName: z.string(),
+});
+
+export type LivePreviewUpcoming = z.infer<typeof livePreviewUpcomingSchema>;
+
 /**
  * `GET /api/public/live-preview/communities/:slug` and
  * `GET /api/public/live-preview/invites/:code`. `channels` is empty while
- * nothing is live; `seconds` is the window a visitor gets per channel.
+ * nothing is live; `seconds` is the window a visitor gets per channel;
+ * `upcoming` is at most `LIVE_PREVIEW_UPCOMING_MAX` scheduled sessions,
+ * soonest first.
  */
 export const livePreviewListingSchema = z.object({
   livePreview: z.object({
-    channels: z.array(livePreviewChannelSchema),
+    channels: z.array(livePreviewListedChannelSchema),
     seconds: z.number().int().positive(),
+    upcoming: z.array(livePreviewUpcomingSchema).max(LIVE_PREVIEW_UPCOMING_MAX).default([]),
   }),
 });
 
