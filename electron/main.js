@@ -1665,7 +1665,11 @@ function createWindow(appUrl, allowedOrigin) {
         quitting,
         signedIn,
         platform: process.platform,
-        trayAvailable: trayLikelyAvailable(process.platform),
+        // The platform heuristic AND a tray that really exists: a `new Tray()`
+        // that threw leaves `tray` null, and nothing then could bring back a
+        // window hidden "to the tray".
+        trayAvailable:
+          trayLikelyAvailable(process.platform) && Boolean(tray) && !tray.isDestroyed(),
       })
     ) {
       return;
