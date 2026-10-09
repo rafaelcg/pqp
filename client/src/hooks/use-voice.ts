@@ -6800,6 +6800,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           cameraDeviceId || undefined,
         );
       } catch (err) {
+        // A camera error, so a share that starts later does not clear it.
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
             ? translateMessage("voice.error.cameraBlocked", desktopContext())
@@ -6852,6 +6854,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           await sfu.publishCamera(stream);
         }
       } catch (err) {
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.message
             ? err.message
@@ -6932,6 +6935,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           cameraDeviceId || undefined,
         );
       } catch (err) {
+        // A camera error, so a share that starts later does not clear it.
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
             ? translateMessage("voice.error.cameraBlocked", desktopContext())
@@ -6977,6 +6982,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           await sfu.publishCamera(current);
         }
       } catch (err) {
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.message
             ? err.message

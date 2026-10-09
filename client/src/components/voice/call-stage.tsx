@@ -2636,7 +2636,10 @@ function ActiveCall({
           aria-label={t("call.stage.selfPreview")}
           className={cn(
             "absolute touch-none overflow-hidden rounded-lg bg-ink-3 shadow-lg ring-1 ring-ink-4/80",
-            STAGE_LAYER.tileControls,
+            // One rung under every picture's control row: on a short phone
+            // the preview can sit on a letterboxed share's bottom row, and
+            // the row's buttons have to stay pressable on top of it.
+            STAGE_LAYER.reactions,
             compactPeers ? "w-24 sm:w-32" : "w-28 sm:w-40",
             pipDrag ? "cursor-grabbing" : "cursor-grab",
             !pipDrag &&
@@ -4600,7 +4603,14 @@ function TileBadge({
       className={cn(
         "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
         inline
-          ? "min-w-[4.5rem] rounded-md @max-[12rem]/picture:hidden"
+          ? // On a very narrow picture the name steps aside, so the mute
+            // button is not pushed under "⋯". What the badge says about
+            // the person (muted, moderator-muted, connecting) stays; a
+            // badge with nothing but the name goes with it.
+            cn(
+              "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0",
+              !muted && !serverMuted && !connecting && "@max-[12rem]/picture:hidden",
+            )
           : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
@@ -4614,7 +4624,9 @@ function TileBadge({
       ) : (
         muted && <MicOff className="h-3 w-3 shrink-0 text-danger" />
       )}
-      <span className="truncate">{name}</span>
+      <span className={cn("truncate", inline && "@max-[12rem]/picture:hidden")}>
+        {name}
+      </span>
       {connecting && connectingLabel && (
         <span className="flex items-center gap-1 text-paper-muted">
           <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
