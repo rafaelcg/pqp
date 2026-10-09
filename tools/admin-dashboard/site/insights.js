@@ -541,6 +541,149 @@
     return { tone: "on", label: "ligada", why: "está na variável" };
   }
 
+  // ------------------------------------------------------------ voice notes
+  //
+  // The "mensagens de voz" panel flags three things, and each is a claim an
+  // operator acts on, so the rules live here, tested, and not in the render:
+  //
+  //  - a queue that is stuck (the oldest DUE job has waited too long, or a
+  //    worker took jobs and died: an expired lease). The API already
+  //    excludes retries still in backoff from `oldestQueuedSeconds`, so a
+  //    value here means "due and unclaimed", never "waiting its turn".
+  //  - a job kind that fails. A rate over a handful of jobs is noise, so it
+  //    is judged only from VOICE_NOTE_MIN_SAMPLE settled jobs up; below that
+  //    any failure is still shown (a warn), never promoted to a bad.
+  //  - the provider budget: spent (the API refused a job today) or nearly.
+  //
+  // ZERO IS NOT ALWAYS A RESULT. With the `voice_notes` flag off everywhere
+  // and nothing sent in seven days, every count is zero because nobody can
+  // send, so the state is "off" and the page says that instead of drawing a
+  // healthy row of zeroes.
+  var VOICE_NOTE_QUEUE_WARN_SECONDS = 120;
+  var VOICE_NOTE_QUEUE_BAD_SECONDS = 300;
+  var VOICE_NOTE_MIN_SAMPLE = 5;
+  var VOICE_NOTE_BUDGET_WARN_SHARE = 0.8;
+  var VOICE_NOTE_KIND_LABEL = { transcode: "transcodificação", transcription: "transcrição" };
+  var STATE_RANK = { ok: 0, warn: 1, bad: 2 };
+
+  /** "45 s", "7 min", "2 h 5 min": the age of a waiting job, in the words a scan wants. */
+  function ageLabel(seconds) {
+    var s = Math.max(0, Math.round(Number(seconds) || 0));
+    if (s < 60) return s + " s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + " min";
+    var h = Math.floor(m / 60);
+    var rest = m % 60;
+    return h + " h" + (rest ? " " + rest + " min" : "");
+  }
+
+  function voiceNoteQueueState(queue) {
+    var q = queue || {};
+    var age = Number(q.oldestQueuedSeconds) || 0;
+    if (age >= VOICE_NOTE_QUEUE_BAD_SECONDS) return "bad";
+    if (age >= VOICE_NOTE_QUEUE_WARN_SECONDS || (Number(q.expiredLeases) || 0) > 0) return "warn";
+    return "ok";
+  }
+
+  function voiceNoteRateState(jobs) {
+    var j = jobs || {};
+    var ok = Number(j.ok24h) || 0;
+    var failed = Number(j.failed24h) || 0;
+    if (failed === 0) return "ok";
+    if (ok + failed < VOICE_NOTE_MIN_SAMPLE) return "warn";
+    var rate = ok / (ok + failed);
+    if (rate < 0.5) return "bad";
+    if (rate < 0.9) return "warn";
+    return "ok";
+  }
+
+  function voiceNoteBudgetState(budget) {
+    var b = budget || {};
+    if (b.exhausted) return "warn";
+    if (typeof b.usedShare === "number" && b.usedShare >= VOICE_NOTE_BUDGET_WARN_SHARE) return "warn";
+    return "ok";
+  }
+
+  /**
+   * `voiceNotes` block (+ the `flags` block) -> what to flag.
+   *   { state: "raw" | "off" | "ok" | "warn" | "bad",
+   *     queue:  { transcode, transcription },   // "ok" | "warn" | "bad"
+   *     rate:   { transcode, transcription },
+   *     budget: "ok" | "warn",
+   *     items:  [{ key, state, text }] }         // worst first, only what is not ok
+   * `raw` is an API that predates the block: the page hides the panel.
+   */
+  function voiceNoteHealth(vn, flags) {
+    if (!vn || !vn.usage || !vn.health) {
+      return { state: "raw", queue: {}, rate: {}, budget: "ok", items: [] };
+    }
+    var health = vn.health;
+    var kinds = ["transcode", "transcription"];
+    var queue = {};
+    var rate = {};
+    var items = [];
+
+    kinds.forEach(function (kind) {
+      var q = (health.queue || {})[kind] || {};
+      var j = (health.jobs || {})[kind] || {};
+      queue[kind] = voiceNoteQueueState(q);
+      rate[kind] = voiceNoteRateState(j);
+      var label = VOICE_NOTE_KIND_LABEL[kind];
+      var age = Number(q.oldestQueuedSeconds) || 0;
+      if (age >= VOICE_NOTE_QUEUE_WARN_SECONDS) {
+        items.push({
+          key: "queue-" + kind, state: queue[kind],
+          text: "fila de " + label + ": o job mais antigo espera há " + ageLabel(age) +
+            ". um worker saudável pega em segundos; confira o pqp-worker"
+        });
+      }
+      var expired = Number(q.expiredLeases) || 0;
+      if (expired > 0) {
+        items.push({
+          key: "lease-" + kind, state: "warn",
+          text: "fila de " + label + ": " + expired + (expired === 1 ? " job claimado" : " jobs claimados") +
+            " por um worker que caiu (lease vencida)"
+        });
+      }
+      if (rate[kind] !== "ok") {
+        var failed = Number(j.failed24h) || 0;
+        var ok = Number(j.ok24h) || 0;
+        items.push({
+          key: "rate-" + kind, state: rate[kind],
+          text: label + ": " + failed + (failed === 1 ? " falha" : " falhas") + " em " + (ok + failed) +
+            " jobs concluídos nas últimas 24h" +
+            (typeof j.successRate24h === "number" ? " (" + pct(j.successRate24h * 100) + "% de sucesso)" : "")
+        });
+      }
+    });
+
+    var budget = voiceNoteBudgetState(health.budget);
+    if (budget !== "ok") {
+      var b = health.budget || {};
+      items.push({
+        key: "budget", state: "warn",
+        text: b.exhausted
+          ? "orçamento de transcrição de hoje esgotado: " + (Number(b.refused) || 0) +
+            " jobs recusados, as notas ficam sem texto até virar o dia UTC"
+          : pct((Number(b.usedShare) || 0) * 100) + "% do orçamento de transcrição de hoje já foi usado"
+      });
+    }
+
+    items.sort(function (a, b) { return STATE_RANK[b.state] - STATE_RANK[a.state]; });
+
+    var worst = items.length ? items[0].state : "ok";
+    var minted = Number(vn.usage.minted7d) || 0;
+    var flag = flags && flags.values && flags.values.voice_notes;
+    var offEverywhere = !!flag && flag.effective === false && !(Number(flag.serverOverrides) > 0);
+    var busy = minted > 0 ||
+      kinds.some(function (k) {
+        var q = (health.queue || {})[k] || {};
+        return (Number(q.queued) || 0) + (Number(q.running) || 0) > 0;
+      });
+    var state = offEverywhere && !busy ? "off" : worst;
+    return { state: state, queue: queue, rate: rate, budget: budget, items: items };
+  }
+
   /** The three, in incident order, always three, always in these slots. */
   function buildInsights(input) {
     return [
@@ -563,6 +706,8 @@
     liveHlsLlState: liveHlsLlState,
     audienceBucketLabel: audienceBucketLabel,
     waitlistBucketHistogram: waitlistBucketHistogram,
-    waitlistStatusLabel: waitlistStatusLabel
+    waitlistStatusLabel: waitlistStatusLabel,
+    voiceNoteHealth: voiceNoteHealth,
+    ageLabel: ageLabel
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
