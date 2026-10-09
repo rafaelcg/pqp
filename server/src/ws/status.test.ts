@@ -78,6 +78,11 @@ import {
   resolveStatus,
   resolveStatuses,
   resetStatusRegistry,
+  hasAttentiveSocket,
+  hasClusterSocket,
+  setSocketAttention,
+  setSocketIdle,
+  socketIsAttentive,
   unregisterStatusSocket,
 } from "./status.js";
 
@@ -466,5 +471,99 @@ describe("telling the account's own sockets", () => {
     applyManualStatus(userId, "dnd");
 
     expect(framesOfType(tab.received, "own-status")).toHaveLength(2);
+  });
+});
+
+describe("attention (push_attention_gate's input)", () => {
+  it("socketIsAttentive: foreground and not idle, undeclared reads as foreground", () => {
+    // The whole decision table. `null` is a socket that never sent
+    // `set-attention`, i.e. every build from before the frame.
+    const table: [boolean | null, boolean, boolean][] = [
+      // foreground, idle, attentive
+      [true, false, true],
+      [true, true, false],
+      [false, false, false],
+      [false, true, false],
+      [null, false, true],
+      [null, true, false],
+    ];
+    for (const [foreground, idle, attentive] of table) {
+      expect(socketIsAttentive({ foreground, idle }), `${foreground}/${idle}`).toBe(
+        attentive,
+      );
+    }
+  });
+
+  it("a fresh socket that says nothing counts as in front of them", async () => {
+    const userId = randomUUID();
+    const tab = recordingSocket();
+    await registerStatusSocket(tab.socket, userId);
+
+    expect(hasClusterSocket(userId)).toBe(true);
+    expect(hasAttentiveSocket(userId)).toBe(true);
+  });
+
+  it("background or idle stops a socket counting; connected is still connected", async () => {
+    const userId = randomUUID();
+    const tab = recordingSocket();
+    await registerStatusSocket(tab.socket, userId);
+
+    setSocketAttention(tab.socket, false);
+    expect(hasAttentiveSocket(userId)).toBe(false);
+    expect(hasClusterSocket(userId)).toBe(true);
+
+    setSocketAttention(tab.socket, true);
+    expect(hasAttentiveSocket(userId)).toBe(true);
+
+    // Foreground but walked away: the old idle signal still counts.
+    setSocketIdle(tab.socket, true);
+    expect(hasAttentiveSocket(userId)).toBe(false);
+  });
+
+  it("one attentive socket is enough, among several that are not", async () => {
+    const userId = randomUUID();
+    const forgottenTab = recordingSocket();
+    const desktop = recordingSocket();
+    await registerStatusSocket(forgottenTab.socket, userId);
+    await registerStatusSocket(desktop.socket, userId);
+
+    setSocketAttention(forgottenTab.socket, false);
+    setSocketAttention(desktop.socket, false);
+    expect(hasAttentiveSocket(userId)).toBe(false);
+
+    setSocketAttention(desktop.socket, true);
+    expect(hasAttentiveSocket(userId)).toBe(true);
+
+    unregisterStatusSocket(desktop.socket);
+    expect(hasAttentiveSocket(userId)).toBe(false);
+  });
+
+  it("keeps a signal that arrived before the socket finished registering", async () => {
+    // `ready` does not wait for registration (one preferences read), and a
+    // client reports its state straight after `ready`. Dropping that report
+    // would leave a backgrounded reconnect counting as in front of them.
+    const userId = randomUUID();
+    const phone = recordingSocket();
+    setSocketAttention(phone.socket, false);
+    setSocketIdle(phone.socket, true);
+    await registerStatusSocket(phone.socket, userId);
+
+    expect(hasAttentiveSocket(userId)).toBe(false);
+    expect(resolveStatus(userId)).toBe("idle");
+  });
+
+  it("set-attention reaches the registry through the chat handler", async () => {
+    const userId = randomUUID();
+    const tab = recordingSocket();
+    setAuthenticatedSocket(tab.socket, asUser(userId));
+    await registerStatusSocket(tab.socket, userId);
+
+    await handleChatMessage(
+      { socket: tab.socket, user: asUser(userId) },
+      { type: "set-attention", foreground: false },
+    );
+    expect(hasAttentiveSocket(userId)).toBe(false);
+
+    deleteAuthenticatedSocket(tab.socket);
   });
 });

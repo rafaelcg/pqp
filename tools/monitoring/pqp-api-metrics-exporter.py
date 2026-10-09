@@ -586,6 +586,7 @@ def _merge_product(a: dict | None, b: dict | None) -> dict | None:
     out["pushDelivery"] = deep_sum(a.get("pushDelivery"), b.get("pushDelivery"))
     # Same shape and same convention: in-process, since boot, per replica.
     out["pushSkipped"] = deep_sum(a.get("pushSkipped"), b.get("pushSkipped"))
+    out["pushAttentionPassed"] = deep_sum(a.get("pushAttentionPassed"), b.get("pushAttentionPassed"))
     return out
 
 
@@ -1251,6 +1252,18 @@ def render(
             "pqp_api_push_skipped_total",
             "Pushes not sent, by kind and reason (product.pushSkipped).",
             samples,
+        )
+
+    # Connected recipients the attention gate let through (push_attention_gate
+    # on, no socket foreground and active). Zero while the flag is off.
+    attention_passed = product.get("pushAttentionPassed") or {}
+    if isinstance(attention_passed, dict) and attention_passed:
+        labeled_counter(
+            lines,
+            "pqp_api_push_attention_passed_total",
+            "Recipients holding a socket that the push attention gate let through, by kind "
+            "(product.pushAttentionPassed).",
+            [({"kind": kind}, count) for kind, count in sorted(attention_passed.items())],
         )
 
     gauge(

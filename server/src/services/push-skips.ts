@@ -20,7 +20,7 @@ import { logEvent } from "../lib/log.js";
  *
  * Cumulative, in-process, per instance, all keys pre-seeded to zero: the same
  * convention as `push-metrics.ts`, so the exporter sums it across replicas.
- * Bounded cardinality: 5 kinds x 7 reasons.
+ * Bounded cardinality: 5 kinds x 8 reasons.
  */
 
 export type PushSkipKind = "message" | "call" | "stream" | "reminder" | "waitlist";
@@ -28,6 +28,11 @@ export type PushSkipKind = "message" | "call" | "stream" | "reminder" | "waitlis
 export type PushSkipReason =
   /** A live socket anywhere in the cluster (the rule this module was built to expose). */
   | "live_socket"
+  /**
+   * With `push_attention_gate` on, the narrower rule: a socket that is
+   * foreground and not idle. `live_socket` stops growing once the gate is on.
+   */
+  | "attentive_socket"
   /** The recipient blocked the author. */
   | "blocked"
   /** Stored do-not-disturb, read at send time. */
@@ -51,6 +56,7 @@ export const PUSH_SKIP_KINDS: readonly PushSkipKind[] = [
 
 export const PUSH_SKIP_REASONS: readonly PushSkipReason[] = [
   "live_socket",
+  "attentive_socket",
   "blocked",
   "dnd",
   "muted",
@@ -192,6 +198,30 @@ export function notePushSkippedMany(
 
 export type PushSkipped = Record<PushSkipKind, Record<PushSkipReason, number>>;
 
+/**
+ * `product.pushAttentionPassed`: recipients who HELD a live socket and were
+ * let past the socket rule anyway, because none of their sockets was in front
+ * of them (`push_attention_gate` on). Under the old rule every one of these
+ * was a `live_socket` skip. It counts the gate deciding, not a delivery: the
+ * person can still be refused further down (DND, level, no device), which
+ * `pushSkipped` then says. Zero while the gate is off.
+ */
+const attentionPassed = new Map<PushSkipKind, number>();
+
+export function notePushAttentionPassed(kind: PushSkipKind): void {
+  attentionPassed.set(kind, (attentionPassed.get(kind) ?? 0) + 1);
+}
+
+export type PushAttentionPassed = Record<PushSkipKind, number>;
+
+export function pushAttentionPassedSnapshot(): PushAttentionPassed {
+  const out = {} as PushAttentionPassed;
+  for (const kind of PUSH_SKIP_KINDS) {
+    out[kind] = attentionPassed.get(kind) ?? 0;
+  }
+  return out;
+}
+
 /** Snapshot for `GET /api/admin/metrics`, every key present. */
 export function pushSkippedSnapshot(): PushSkipped {
   const out = {} as PushSkipped;
@@ -208,6 +238,7 @@ export function pushSkippedSnapshot(): PushSkipped {
 /** Test seam: forget every count and every log window. */
 export function resetPushSkips(): void {
   counts.clear();
+  attentionPassed.clear();
   logWindows.clear();
   lastSweepAt = 0;
   secondStartedAt = 0;

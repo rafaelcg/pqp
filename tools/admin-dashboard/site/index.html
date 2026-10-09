@@ -608,6 +608,7 @@
   .srv-name { font-weight: 600; }
   .srv-cat { font-size: 11px; color: var(--faint); }
   .cell-strong { font-weight: 700; color: var(--text); }
+  .cell-bad { font-weight: 700; color: var(--danger); }
   .rank {
     display: inline-grid; place-items: center; width: 20px; height: 20px;
     border-radius: 6px; font-size: 11px; font-weight: 700;
@@ -2122,6 +2123,117 @@
       o download é o <span class="mono">pqp.apk</span> saindo do github. um pode ser maior que o outro
       (desistiu, tentou de novo, baixou com curl).
     </p>
+  </section>
+
+  <!-- ============ VOICE NOTES ============ -->
+  <!-- `voiceNotes` block of /metrics. Usage on top, the pipeline's health under
+       it. Almost all of it is read from the database by the API, so it is the
+       same on both replicas; the refusals line is the one in-memory part and
+       belongs to whichever replica answered. What is flagged, and the
+       thresholds, are in insights.js (voiceNoteHealth), which is tested. -->
+  <section aria-label="mensagens de voz" id="secVoiceNotes">
+    <div class="sec-head">
+      <h2>mensagens de voz</h2>
+      <span class="rule"></span>
+      <span class="note" id="vnNote">uso · fila · transcrição · orçamento</span>
+    </div>
+    <div class="grid g-apps" id="vnUsage">
+      <div class="metric">
+        <span class="m-label">notas enviadas · 24h</span>
+        <span class="m-val num" id="vnSent24h">-</span>
+        <div class="m-foot">
+          <span class="delta flat" id="vnSent7d">7d: -</span>
+          <span class="m-note" id="vnScope">dm · grupo · servidor</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">pessoas mandando · 24h</span>
+        <span class="m-val num" id="vnSenders24h">-</span>
+        <div class="m-foot">
+          <span class="delta flat" id="vnSenders7d">7d: -</span>
+          <span class="m-note" id="vnMinted">gravadas e não enviadas à parte</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">tempo gravado · 24h</span>
+        <span class="m-val num" id="vnDuration">-</span>
+        <div class="m-foot">
+          <span class="delta flat" id="vnDuration7d">7d: -</span>
+          <span class="m-note" id="vnMedian">mediana -</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">notas ouvidas · 7d</span>
+        <span class="m-val num" id="vnHeard">-</span>
+        <div class="m-foot">
+          <span class="delta flat" id="vnListens">24h: -</span>
+          <span class="m-note" id="vnHeardNote">por alguém além de quem mandou</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stat-row" id="vnHealth" style="margin-top:14px">
+      <div class="stat-mini" id="vnQueueTranscode">
+        <span class="k">fila mais antiga · transcodificação</span>
+        <span class="v num" id="vnQueueTranscodeV">-</span>
+      </div>
+      <div class="stat-mini" id="vnQueueTranscription">
+        <span class="k">fila mais antiga · transcrição</span>
+        <span class="v num" id="vnQueueTranscriptionV">-</span>
+      </div>
+      <div class="stat-mini" id="vnRateTranscode">
+        <span class="k">sucesso 24h · transcodificação</span>
+        <span class="v num" id="vnRateTranscodeV">-</span>
+      </div>
+      <div class="stat-mini" id="vnRateTranscription">
+        <span class="k">sucesso 24h · transcrição</span>
+        <span class="v num" id="vnRateTranscriptionV">-</span>
+      </div>
+      <div class="stat-mini" id="vnBudget">
+        <span class="k">orçamento de transcrição · hoje</span>
+        <span class="v num" id="vnBudgetV">-</span>
+      </div>
+    </div>
+    <div id="vnFlags"><!-- injected: what is wrong, worst first --></div>
+
+    <div class="grid g-3" style="margin-top:14px">
+      <div class="card pad">
+        <p class="subtle-title">o pipeline por tipo de job</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>job</th>
+                <th class="r" title="esperando · rodando agora">fila</th>
+                <th class="r">ok · 24h</th>
+                <th class="r">falhou · 24h</th>
+                <th class="r" title="mediana e percentil 95, da nota enviada até o job terminar">p50 · p95</th>
+              </tr>
+            </thead>
+            <tbody id="vnJobsBody"><!-- injected --></tbody>
+          </table>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:10px 0 0">
+          fila é esperando · rodando agora. p50 e p95 contam da nota enviada até o job terminar, com a espera na fila:
+          é o que quem ouve sente. jobs encerrados de propósito (mensagem apagada, remetente
+          recusou, sem orçamento) ficam fora do sucesso.
+        </p>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">onde as notas de 24h estão na transcrição</p>
+        <div id="vnTranscripts" class="wide-dist"><!-- injected --></div>
+        <p class="subtle-title" style="margin-top:14px">formato gravado · 7d</p>
+        <div id="vnTypes" class="wide-dist"><!-- injected --></div>
+      </div>
+    </div>
+
+    <div class="grid" style="grid-template-columns:minmax(0,1fr);margin-top:14px">
+      <div class="card pad">
+        <p class="subtle-title">recusas desde o boot · só da réplica que respondeu</p>
+        <div id="vnRefusals"><!-- injected --></div>
+      </div>
+    </div>
   </section>
 
   </div><!-- /pane-pessoas -->
@@ -3859,6 +3971,199 @@
         'as mensagens do elenco da casa e de webhooks aparecem aqui, à parte, e em nenhum outro lugar.</p>';
   }
 
+  /* ---------------- render: voice notes (mensagens de voz) ----------------
+     The `voiceNotes` block. Between this page and an API that predates it, the
+     section says so (sectionUnavailable) instead of drawing zeroes.
+
+     What is FLAGGED (a stuck queue, a failing job kind, the budget) is decided
+     by PQPInsights.voiceNoteHealth, which is unit tested; this function only
+     paints its answer. With the flag off everywhere and nothing sent, the
+     state is "off" and the note says so, because a row of zeroes there is the
+     feature being off and not a result. */
+  var VN_NONE = "-";
+  var VN_TRANSCRIPT_ROWS = [
+    { key: "done", label: "com texto", cls: "good" },
+    { key: "no_speech", label: "sem fala", cls: "" },
+    { key: "pending", label: "esperando", cls: "mid" },
+    { key: "unavailable", label: "indisponível", cls: "mid" },
+    { key: "failed", label: "falhou", cls: "bad" },
+    { key: "none", label: "ninguém pediu", cls: "" }
+  ];
+  var VN_REFUSAL_LABELS = {
+    "mint-flag-off": "gravar com a flag desligada",
+    "mint-content-type": "formato de áudio recusado",
+    "mint-too-large": "arquivo maior que a duração explica",
+    "claim-not-only-attachment": "enviada com outro anexo",
+    "claim-text-beside-note": "enviada com texto junto",
+    "claim-flag-off": "flag desligada na hora de enviar",
+    "edit-text-beside-note": "edição que põe texto na nota"
+  };
+  var VN_TYPE_LABELS = { "audio/mp4": "mp4 · safari, apps", "audio/webm": "webm · chrome", "audio/ogg": "ogg" };
+
+  function vnMinutes(seconds) {
+    var s = Math.round(Number(seconds) || 0);
+    if (s < 90) return fmt(s) + " s";
+    if (s < 5400) return fmt(Math.round(s / 60)) + " min";
+    return fmtDec(s / 3600) + " h";
+  }
+  function vnSeconds(seconds) {
+    return typeof seconds === "number" && isFinite(seconds) ? fmtDec(seconds) + " s" : VN_NONE;
+  }
+  function vnTone(box, state) {
+    if (!box) return;
+    box.className = "stat-mini" + (state === "bad" ? " bad" : state === "warn" ? " attn" : "");
+  }
+  function vnBars(box, rows, total) {
+    if (!box) return;
+    box.innerHTML = "";
+    var peak = 1;
+    rows.forEach(function (r) { peak = Math.max(peak, r.n); });
+    rows.forEach(function (r) {
+      var row = el("div", "dist-row" + (r.n ? "" : " zero"));
+      row.innerHTML =
+        '<span class="dr-k">' + esc(r.label) + '</span>' +
+        '<span class="dr-bar"><i class="' + (r.cls || "") + '" style="width:' +
+          (r.n ? Math.max(3, (r.n / peak) * 100) : 0).toFixed(1) + '%"></i></span>' +
+        '<span class="dr-n num">' + fmt(r.n) + '</span>' +
+        '<span class="dr-p num">' + (total ? fmtPct(r.n, total) : VN_NONE) + '</span>';
+      box.appendChild(row);
+    });
+  }
+
+  function renderVoiceNotes(d) {
+    var vn = d && d.voiceNotes;
+    var verdict = window.PQPInsights && window.PQPInsights.voiceNoteHealth
+      ? window.PQPInsights.voiceNoteHealth(vn, d && d.flags)
+      : { state: "raw", queue: {}, rate: {}, budget: "ok", items: [] };
+    if (verdict.state === "raw") {
+      sigState.voiceNotes = null;
+      return sectionUnavailable("secVoiceNotes", "mensagens de voz");
+    }
+    sectionRestore("secVoiceNotes");
+
+    var u = vn.usage, h = vn.health;
+    var sc24 = u.byScope24h || {};
+    setText("vnSent24h", fmt(u.sent24h || 0));
+    setText("vnSent7d", "7d: " + fmt(u.sent7d || 0));
+    setText("vnScope", fmt(sc24.dm || 0) + " dm · " + fmt(sc24.group || 0) + " grupo · " + fmt(sc24.server || 0) + " servidor");
+    setText("vnSenders24h", fmt(u.senders24h || 0));
+    setText("vnSenders7d", "7d: " + fmt(u.senders7d || 0));
+    var unsent = Math.max(0, (u.minted24h || 0) - (u.sent24h || 0));
+    setText("vnMinted", fmt(unsent) + (unsent === 1 ? " gravada e não enviada" : " gravadas e não enviadas"));
+    var dur = u.durationSeconds || {};
+    setText("vnDuration", vnMinutes(dur.total24h));
+    setText("vnDuration7d", "7d: " + vnMinutes(dur.total7d));
+    setText("vnMedian", "mediana " + vnSeconds(dur.median24h));
+    setText("vnHeard", typeof u.listenedShare7d === "number" ? fmtDec(u.listenedShare7d * 100) + "%" : VN_NONE);
+    setText("vnListens", "24h: " + fmt(u.listens24h || 0) + (u.listens24h === 1 ? " play" : " plays"));
+    setText("vnHeardNote", fmt(u.listenedNotes7d || 0) + " de " + fmt(u.sent7d || 0) + " notas · fora quem mandou");
+
+    var queue = h.queue || {}, jobs = h.jobs || {};
+    ["transcode", "transcription"].forEach(function (kind) {
+      var cap = kind === "transcode" ? "Transcode" : "Transcription";
+      var q = queue[kind] || {}, j = jobs[kind] || {};
+      var waiting = (q.queued || 0) + (q.running || 0);
+      setText("vnQueue" + cap + "V", waiting || q.oldestQueuedSeconds
+        ? window.PQPInsights.ageLabel(q.oldestQueuedSeconds || 0)
+        : "vazia");
+      vnTone($("vnQueue" + cap), verdict.queue[kind]);
+      var settled = (j.ok24h || 0) + (j.failed24h || 0);
+      setText("vnRate" + cap + "V", typeof j.successRate24h === "number"
+        ? fmtDec(j.successRate24h * 100) + "%"
+        : (settled ? VN_NONE : "sem jobs"));
+      vnTone($("vnRate" + cap), verdict.rate[kind]);
+    });
+    var b = h.budget || {};
+    setText("vnBudgetV", typeof b.usedShare === "number"
+      ? fmtDec(b.usedShare * 100) + "%"
+      : (b.dailySeconds === 0 ? "zerado" : VN_NONE));
+    var budgetBox = $("vnBudget");
+    if (budgetBox) {
+      vnTone(budgetBox, verdict.budget);
+      budgetBox.title = fmt(b.usedSeconds || 0) + " de " + fmt(b.dailySeconds || 0) + " s · " +
+        fmt(b.calls || 0) + " chamadas ao provedor · " + fmt(b.refused || 0) + " recusadas";
+    }
+
+    var flagsBox = $("vnFlags");
+    if (flagsBox) {
+      flagsBox.innerHTML = "";
+      verdict.items.forEach(function (it) {
+        var row = el("div", "note-item " + (it.state === "bad" ? "bad" : "mid"));
+        row.setAttribute("role", "status");
+        row.innerHTML = '<div class="ni-body"><p class="ni-text">' + esc(it.text) + '</p></div>';
+        row.style.marginTop = "8px";
+        flagsBox.appendChild(row);
+      });
+    }
+
+    var body = $("vnJobsBody");
+    if (body) {
+      body.innerHTML = "";
+      [["transcode", "transcodificação (aac)"], ["transcription", "transcrição"]].forEach(function (k) {
+        var q = queue[k[0]] || {}, j = jobs[k[0]] || {};
+        var tr = el("tr");
+        tr.innerHTML =
+          '<td><span class="srv-name">' + esc(k[1]) + '</span>' +
+            ((q.retrying || q.expiredLeases)
+              ? '<div class="srv-cat">' + (q.retrying ? fmt(q.retrying) + ' tentando de novo' : '') +
+                (q.retrying && q.expiredLeases ? ' · ' : '') +
+                (q.expiredLeases ? fmt(q.expiredLeases) + ' com lease vencida' : '') + '</div>'
+              : '') + '</td>' +
+          '<td class="r num" style="white-space:nowrap">' + fmt(q.queued || 0) + ' · ' + fmt(q.running || 0) + '</td>' +
+          '<td class="r num cell-strong">' + fmt(j.ok24h || 0) +
+            (j.skipped24h ? '<div class="srv-cat">+' + fmt(j.skipped24h) + ' encerrados</div>' : '') + '</td>' +
+          '<td class="r num' + (j.failed24h ? ' cell-bad' : '') + '">' + fmt(j.failed24h || 0) + '</td>' +
+          '<td class="r num" style="white-space:nowrap">' + vnSeconds(j.p50Seconds) + ' · ' + vnSeconds(j.p95Seconds) + '</td>';
+        body.appendChild(tr);
+      });
+    }
+
+    var tr24 = h.transcripts24h || {};
+    var trTotal = 0;
+    VN_TRANSCRIPT_ROWS.forEach(function (r) { trTotal += Number(tr24[r.key]) || 0; });
+    vnBars($("vnTranscripts"), VN_TRANSCRIPT_ROWS.map(function (r) {
+      return { label: r.label, cls: r.cls, n: Number(tr24[r.key]) || 0 };
+    }), trTotal);
+
+    var types = u.byContentType7d || {};
+    var typeKeys = Object.keys(types).sort(function (a, b) { return types[b] - types[a]; });
+    var typeTotal = 0;
+    typeKeys.forEach(function (k) { typeTotal += types[k]; });
+    var typesBox = $("vnTypes");
+    if (typeKeys.length) {
+      vnBars(typesBox, typeKeys.map(function (k) {
+        return { label: VN_TYPE_LABELS[k] || k, cls: "", n: types[k] };
+      }), typeTotal);
+    } else if (typesBox) {
+      typesBox.innerHTML = '<div class="empty">nenhuma nota enviada nos últimos 7 dias</div>';
+    }
+
+    var ref = vn.refusals || {};
+    var refBox = $("vnRefusals");
+    if (refBox) {
+      var parts = Object.keys(ref).filter(function (k) { return ref[k] > 0; }).map(function (k) {
+        return '<span><b class="num">' + fmt(ref[k]) + '</b> ' + esc(VN_REFUSAL_LABELS[k] || k) + '</span>';
+      });
+      refBox.innerHTML = parts.length
+        ? '<div class="legend">' + parts.join("") + '</div>'
+        : '<div class="empty">nenhuma recusa desde que esta réplica subiu</div>';
+    }
+
+    var off = verdict.state === "off";
+    setText("vnNote", off
+      ? "desligado: a flag voice_notes está off em todo lugar e ninguém mandou nota em 7 dias, então os zeros são o recurso desligado"
+      : fmt(u.sent7d || 0) + (u.sent7d === 1 ? " nota" : " notas") + " em 7 dias · " +
+        (verdict.items.length ? fmt(verdict.items.length) + (verdict.items.length === 1 ? " coisa pra olhar" : " coisas pra olhar") : "pipeline em ordem"));
+
+    sigState.voiceNotes = verdict.state === "warn" || verdict.state === "bad"
+      ? {
+          state: verdict.state, label: "mensagens de voz",
+          value: verdict.state === "bad" ? "com problema" : "atenção",
+          note: verdict.items[0].text
+        }
+      : null;
+  }
+
   /* ---------------- render: apps + product ----------------
      Two sources in one row. `distribution` is merged onto /metrics by this
      Worker (clicks in KV, GitHub download_count). `product` is the API.
@@ -3952,7 +4257,7 @@
     // is voice up, then who is here and what they are doing. Capacity and the
     // SFU sit high because they are the two pills that go red for something
     // nobody has complained about yet.
-    var order = ["health", "capacity", "sfu", "voice", "messages", "ratings", "automated", "android"];
+    var order = ["health", "capacity", "sfu", "voiceNotes", "voice", "messages", "ratings", "automated", "android"];
     var html = "";
     order.forEach(function (key) {
       var sig = sigState[key];
@@ -6646,6 +6951,7 @@
     renderVoiceRooms(voice.rooms);
     renderMessageSplit(msgs.last24h || 0, msgs.automated24h || 0);
     renderApps(d);
+    renderVoiceNotes(d);
     renderProvenance(d);
     setMetricSignals(d);
 

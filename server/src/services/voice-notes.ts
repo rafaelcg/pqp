@@ -29,6 +29,56 @@ export const ATTACHMENT_VOICE_JOIN = `LEFT JOIN message_attachment_voice v ON v.
  */
 export const ATTACHMENT_OBJECT_KEYS = `unnest(array_remove(ARRAY[a.storage_key, v.playback_key], NULL)) AS storage_key`;
 
+// ------------------------------------------------------------------ refusals
+
+/**
+ * Every way a voice note is turned away, counted where the refusal happens.
+ *
+ * WHY THEY ARE COUNTED. A refusal is invisible by construction: the sender
+ * sees a toast (or nothing, for a claim that returns null) and the server
+ * stores nothing, so "voice notes are broken" and "nobody is trying" look the
+ * same from the database. These counters are the third thing: people tried
+ * and were refused, and why. They are `voiceNotes.refusals` on
+ * `GET /api/admin/metrics`.
+ *
+ * In-process and cumulative since boot, per instance, like `calls.*`: the
+ * operator exporter sums them across replicas. The refusals that happen
+ * before this code (the shared Zod schema rejecting an unknown container with
+ * a 400) never reach it and are not counted; `mint-content-type` here is the
+ * second line of defence and normally reads zero.
+ */
+export const VOICE_NOTE_REFUSAL_REASONS = [
+  "mint-flag-off",
+  "mint-content-type",
+  "mint-too-large",
+  "claim-not-only-attachment",
+  "claim-text-beside-note",
+  "claim-flag-off",
+  "edit-text-beside-note",
+] as const;
+
+export type VoiceNoteRefusalReason = (typeof VOICE_NOTE_REFUSAL_REASONS)[number];
+
+const refusals = new Map<VoiceNoteRefusalReason, number>();
+
+/** Count one refusal. Never throws: a counter must not be able to fail a send. */
+export function recordVoiceNoteRefusal(reason: VoiceNoteRefusalReason): void {
+  refusals.set(reason, (refusals.get(reason) ?? 0) + 1);
+}
+
+/** Every reason pre-seeded to zero, so a series exists before its first event. */
+export function voiceNoteRefusals(): Record<VoiceNoteRefusalReason, number> {
+  const out = {} as Record<VoiceNoteRefusalReason, number>;
+  for (const reason of VOICE_NOTE_REFUSAL_REASONS) {
+    out[reason] = refusals.get(reason) ?? 0;
+  }
+  return out;
+}
+
+export function resetVoiceNoteRefusalsForTests(): void {
+  refusals.clear();
+}
+
 /** The caller answers 403. Off where it is going: nothing is minted. */
 export class VoiceNotesDisabledError extends Error {
   constructor() {
@@ -80,10 +130,12 @@ export interface VoiceNoteUpload {
  */
 export function checkVoiceNoteUpload(upload: VoiceNoteUpload): void {
   if (!isVoiceNoteContentType(upload.contentType)) {
+    recordVoiceNoteRefusal("mint-content-type");
     throw new VoiceNoteContentTypeError();
   }
   const limit = noteByteBudget(upload.durationMs);
   if (upload.byteSize > limit) {
+    recordVoiceNoteRefusal("mint-too-large");
     throw new NoteTooLargeError(limit);
   }
 }
@@ -97,6 +149,7 @@ export async function assertVoiceNoteMintAllowed(
   upload: VoiceNoteUpload,
 ): Promise<void> {
   if (!(await voiceNotesEnabledForChannel(channelId))) {
+    recordVoiceNoteRefusal("mint-flag-off");
     throw new VoiceNotesDisabledError();
   }
   checkVoiceNoteUpload(upload);
@@ -128,14 +181,27 @@ export function noteShapeAllowed(input: {
   requestedCount: number;
   body: string;
 }): boolean {
+  return noteShapeRefusal(input) === null;
+}
+
+/**
+ * Why `noteShapeAllowed` says no, for the counter: the note was not the only
+ * attachment (another file, or a second note), or it had text beside it.
+ * Null when the shape is fine. When both are true the attachment count wins,
+ * because that is the one a client cannot produce by accident.
+ */
+export function noteShapeRefusal(input: {
+  requestedNotes: number;
+  requestedCount: number;
+  body: string;
+}): "claim-not-only-attachment" | "claim-text-beside-note" | null {
   if (input.requestedNotes === 0) {
-    return true;
+    return null;
   }
-  return (
-    input.requestedNotes === 1 &&
-    input.requestedCount === 1 &&
-    input.body.trim().length === 0
-  );
+  if (input.requestedNotes !== 1 || input.requestedCount !== 1) {
+    return "claim-not-only-attachment";
+  }
+  return input.body.trim().length === 0 ? null : "claim-text-beside-note";
 }
 
 /**

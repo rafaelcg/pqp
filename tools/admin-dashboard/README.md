@@ -131,9 +131,45 @@ read as nine equals.
 |---|---|
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
-| **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
+| **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push), and **mensagens de voz** (see below) |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+
+### mensagens de voz
+
+The `voiceNotes` block of `/metrics`, on **pessoas e conteúdo** under apps e produto.
+Usage on top (notes sent in 24 h and 7 d, split dm / grupo / servidor, who sent them,
+recorded time and its median, first plays and the share of the week's notes heard at
+least once), the pipeline under it (the oldest due job per kind, success rate per kind,
+today's provider budget), then a per-kind table, where the last day's notes stand by
+transcript status, the recorded format, and the refusals counted since boot.
+
+What is **flagged** is decided in `site/insights.js` (`voiceNoteHealth`), where it is
+unit tested, and the page only paints the answer. A tile goes amber or red, a line under
+the tiles says why, and the strip under the header grows a **mensagens de voz** pill. The
+pill is there only while something is flagged, so it costs the strip nothing the rest of
+the time.
+
+| Flag | warn | bad |
+|---|---|---|
+| oldest due job, per kind | 2 min, or any lease that expired (a worker took jobs and died) | 5 min |
+| success rate 24 h, per kind | under 90% from 5 settled jobs up, or any failure below that sample | under 50% from 5 jobs up |
+| provider budget today | 80% used, or any job refused | |
+
+Reading it honestly: the oldest-due age already leaves out a retry still in its
+backoff, so a value is always "due and unclaimed", never "waiting its turn". Jobs that
+settled on purpose without doing the work (message deleted, sender declined, over
+budget, no provider) are in neither side of the success rate. p50 and p95 run from the
+note being sent to the job finishing, queue wait included, because that is what the
+listener feels. With the `voice_notes` flag off everywhere and nothing sent in seven
+days the state is **off** and the note says so: a row of zeroes there is the feature
+being off, not a result. On an API that predates the block the section says so
+instead of drawing zeroes, like the others.
+
+The refusals line is the one in-memory part, so it belongs to whichever replica
+answered. Everything else is read from the database by the API and is the same on both.
+The field list is on `VoiceNoteMetrics` in `server/src/services/voice-note-metrics.ts`.
+This is the `/` view; `/novo` does not carry the section yet.
 
 ### controles: the only part of this page that writes
 

@@ -21,12 +21,32 @@ vi.mock("@/lib/config-refresh", () => ({ onConfigRefresh: () => () => {} }));
 const {
   isDesktopNotifyDefaultOnEnabled,
   loadNotifyDefaultsConfig,
+  startNotifyDefaultsConfig,
   setDesktopNotifyDefaultOnForTests,
 } = await import("./notify-defaults-config");
 
 beforeEach(() => {
   asks.pending.length = 0;
   setDesktopNotifyDefaultOnForTests(false);
+});
+
+describe("startNotifyDefaultsConfig", () => {
+  it("goes back to off on teardown, and drops an ask still in flight", async () => {
+    const stop = startNotifyDefaultsConfig();
+    asks.pending[0]!.resolve({ desktopNotifyDefaultOn: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(isDesktopNotifyDefaultOnEnabled()).toBe(true);
+    stop();
+    expect(isDesktopNotifyDefaultOnEnabled()).toBe(false);
+
+    const next = startNotifyDefaultsConfig();
+    next();
+    asks.pending[1]!.resolve({ desktopNotifyDefaultOn: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(isDesktopNotifyDefaultOnEnabled()).toBe(false);
+  });
 });
 
 describe("loadNotifyDefaultsConfig", () => {
