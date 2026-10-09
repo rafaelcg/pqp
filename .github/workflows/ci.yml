@@ -76,7 +76,7 @@ jobs:
     # real database — a mocked one would not catch a wrong SQL predicate.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: mirror.gcr.io/library/postgres:16-alpine
         env:
           POSTGRES_USER: pqp
           POSTGRES_PASSWORD: pqp
@@ -298,7 +298,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: mirror.gcr.io/library/postgres:16-alpine
         env:
           POSTGRES_USER: pqp
           POSTGRES_PASSWORD: pqp
