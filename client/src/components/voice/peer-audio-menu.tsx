@@ -515,11 +515,18 @@ export function PictureVolume({
   track,
   kind,
   className,
+  ignoreChange,
 }: {
   name: string;
   track: PeerAudioTrack;
   kind: "voice" | "share";
   className?: string;
+  /**
+   * True while the press in progress only wakes faded controls. A range
+   * input moves on the press itself, so that first touch must not change
+   * anybody's volume.
+   */
+  ignoreChange?: () => boolean;
 }) {
   const { t } = useTranslation();
   const silenced = track.volume === 0;
@@ -582,7 +589,12 @@ export function PictureVolume({
         aria-valuetext={t("voice.tile.volumePercent", {
           percent: Math.round(track.volume * 100),
         })}
-        onChange={(event) => track.onSetVolume(Number(event.target.value))}
+        onChange={(event) => {
+          if (ignoreChange?.()) {
+            return;
+          }
+          track.onSetVolume(Number(event.target.value));
+        }}
         // Hidden on a narrow picture (its row under 20rem), where it squeezed
         // the name to three letters. The mute button stays, and the sidebar
         // still has the full panel.

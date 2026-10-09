@@ -368,6 +368,13 @@ const TILE_CONTROLS_FADE =
  * panel belongs to the tile, and a panel left open while the pointer wandered
  * off would otherwise be faded out from under the person using it.
  */
+/**
+ * Whether the press now in progress started on faded controls. Such a press
+ * only wakes them; a slider moves its value on the press itself, so it asks
+ * this before applying the change.
+ */
+const WakePressContext = createContext<() => boolean>(() => false);
+
 const TileMenuHoldContext = createContext<((open: boolean) => void) | null>(
   null,
 );
@@ -1771,6 +1778,7 @@ function ActiveCall({
   // remember that its press started hidden, or a tap on a phone (no hover to
   // wake it first) hit the invisible hang-up button.
   const pressStartedHiddenRef = useRef(false);
+  const isWakePress = useCallback(() => pressStartedHiddenRef.current, []);
   const swallowPressWhileHidden = (event: SyntheticEvent) => {
     const isClick = event.type === "click";
     if (isClick ? !pressStartedHiddenRef.current : !chrome.isHidden()) {
@@ -2160,6 +2168,7 @@ function ActiveCall({
   }
 
   return (
+    <WakePressContext.Provider value={isWakePress}>
     <TileMenuHoldContext.Provider value={reportTileMenu}>
     <div
       ref={stageRef}
@@ -2354,7 +2363,10 @@ function ActiveCall({
       )}
       </div>
       <div className="flex h-full w-full flex-col">
-        <div className="relative min-h-0 flex-1">
+        {/* The pictures start below the banner column while it shows: a
+            picture's row is capped at its own top, and under the red strip
+            the top picture's controls could not be tapped. */}
+        <div className="relative min-h-0 flex-1 pt-[var(--stage-banners,0px)]">
           {soloPerson ? (
             /* One camera alone on the stage, from a click on its tile or from
                its own button. The stage is already fullscreen; this only
@@ -2978,6 +2990,7 @@ function ActiveCall({
       )}
     </div>
     </TileMenuHoldContext.Provider>
+    </WakePressContext.Provider>
   );
 }
 
@@ -4032,6 +4045,7 @@ function TileOverlay({
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
+  const isWakePress = useContext(WakePressContext);
   // A camera is somebody talking: the slider is their voice.
   const pictureSound = audio?.voice ?? audio?.share;
   const moreItems = cameraTileMoreItems(t, {
@@ -4069,7 +4083,7 @@ function TileOverlay({
         // Lifted over a floating bar, but never past the picture's own top:
         // with pictures stacked on a sideways phone the lift is taller than
         // the top picture, and its row went up under the page header.
-        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem - var(--stage-banners, 0px)))`,
+        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
       }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -4080,6 +4094,7 @@ function TileOverlay({
             track={pictureSound}
             kind={audio?.voice ? "voice" : "share"}
             className={cn("pointer-events-auto", revealed)}
+            ignoreChange={isWakePress}
           />
         )}
       </div>
@@ -4804,6 +4819,7 @@ export function ScreenTileFrame({
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
+  const isWakePress = useContext(WakePressContext);
   const fit = useVideoFit("screen");
   const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
@@ -4981,7 +4997,7 @@ export function ScreenTileFrame({
         nameChip && (
           <span
             className={cn(
-              "pointer-events-none absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem-var(--stage-banners,0px)))] left-2 flex max-w-[50%]",
+              "pointer-events-none absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem))] left-2 flex max-w-[50%]",
               STAGE_LAYER.labels,
             )}
           >
@@ -5000,7 +5016,7 @@ export function ScreenTileFrame({
           style={{
             left: insets.left + 8,
             right: insets.right + 8,
-            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem - var(--stage-banners, 0px)))`,
+            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
           }}
         >
           <div className="flex min-w-0 items-center gap-1.5">
@@ -5011,6 +5027,7 @@ export function ScreenTileFrame({
                 track={pictureSound}
                 kind={audio?.share ? "share" : "voice"}
                 className={cn("pointer-events-auto", revealed)}
+                ignoreChange={isWakePress}
               />
             )}
           </div>
