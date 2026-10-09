@@ -9,7 +9,9 @@
  *     slug with `--slug=<slug>`), and makes sure it has a public watch party
  *     channel named `cinema` that @everyone can see.
  *  2. Writes an open `hls_sessions` row for it, the way the egress writer
- *     records a live ladder with one rung.
+ *     records a live ladder with one rung, and a live watch party row
+ *     (`channel_sessions`) so the preview page has a title to show
+ *     (`--title=...`). A party already open on the channel is left alone.
  *  3. Runs ffmpeg (test pattern and a tone) writing a live HLS rendition
  *     into a temporary directory, and serves that directory as a tiny
  *     path-style S3 bucket (`../db-blip-harness/fake-s3.mjs`).
@@ -22,7 +24,7 @@
  *
  * Usage, from the repo root:
  *   set -a; source .env; set +a
- *   node tools/live-preview-dev/fake-live.mjs [--slug=sandbox] [--port=9611]
+ *   node tools/live-preview-dev/fake-live.mjs [--slug=sandbox] [--port=9611] [--title=...]
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -43,6 +45,7 @@ const args = Object.fromEntries(
   }),
 );
 const SLUG = args.slug ?? "sandbox";
+const TITLE = args.title ?? "Sessão de teste: barras de cor";
 const PORT = Number(args.port ?? 9611);
 const BUCKET = "pqp-live-preview-dev";
 const RUNG = "720p30";
@@ -60,7 +63,7 @@ const db = new pg.Client({ connectionString: databaseUrl });
 await db.connect();
 
 const server = await db.query(
-  `SELECT id, name FROM servers WHERE community_slug = $1 AND is_community`,
+  `SELECT id, name, owner_id FROM servers WHERE community_slug = $1 AND is_community`,
   [SLUG],
 );
 if (server.rows.length === 0) {
@@ -94,6 +97,22 @@ await db.query(
    VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, 'fake-presenter')`,
   [channelId, `live/${channelId}/${startedAt}-${RUNG}`, startedAt, RUNG],
 );
+
+// The party's title, as a host going live would leave it. Only when nothing
+// is open on the channel (one active party per channel is a unique index);
+// only the row made here is ended on the way out.
+const party = await db.query(
+  `INSERT INTO channel_sessions
+     (channel_id, server_id, title, starts_at, status, created_by, host_user_id, went_live_at)
+   SELECT $1, $2, $3, now(), 'live', $4, $4, now()
+    WHERE NOT EXISTS (
+      SELECT 1 FROM channel_sessions
+       WHERE channel_id = $1 AND status IN ('draft', 'scheduled', 'live')
+    )
+   RETURNING id`,
+  [channelId, serverId, TITLE, server.rows[0].owner_id],
+);
+const partyId = party.rows[0]?.id ?? null;
 
 const root = mkdtempSync(join(tmpdir(), "pqp-live-preview-"));
 const dir = join(root, "live", channelId);
@@ -177,6 +196,15 @@ async function stop() {
       channelId,
     ])
     .catch(() => {});
+  if (partyId) {
+    await db
+      .query(
+        `UPDATE channel_sessions SET status = 'ended', ended_at = now(), updated_at = now()
+          WHERE id = $1 AND status = 'live'`,
+        [partyId],
+      )
+      .catch(() => {});
+  }
   await db.end().catch(() => {});
   await s3.stop();
   rmSync(root, { recursive: true, force: true });
