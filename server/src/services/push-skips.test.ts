@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PUSH_SKIP_KINDS,
+  PUSH_SKIP_LOG_MAX_PER_SECOND,
   PUSH_SKIP_LOG_WINDOW_MS,
   PUSH_SKIP_REASONS,
   notePushSkipped,
@@ -76,5 +77,34 @@ describe("push skip counters", () => {
     expect(lines).toHaveLength(4);
     // The four the window swallowed are reported on the next line.
     expect(lines[3]).toContain("suppressed=4");
+  });
+
+  it("caps the whole log per second for one large fan-out, and says how much it dropped", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+
+    const crowd = Array.from({ length: 500 }, (_, i) => `member-${i}`);
+    notePushSkippedMany("stream", "live_socket", crowd, { channelId: "party" });
+
+    expect(pushSkippedSnapshot().stream.live_socket).toBe(500);
+    expect(lines).toHaveLength(PUSH_SKIP_LOG_MAX_PER_SECOND);
+
+    vi.setSystemTime(Date.now() + 1_000);
+    notePushSkipped("message", "dnd", "somebody");
+    expect(lines).toHaveLength(PUSH_SKIP_LOG_MAX_PER_SECOND + 1);
+    expect(lines.at(-1)).toContain(`dropped=${500 - PUSH_SKIP_LOG_MAX_PER_SECOND}`);
+  });
+
+  it("a person whose line was dropped by the cap logs on their next skip", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+    const crowd = Array.from({ length: PUSH_SKIP_LOG_MAX_PER_SECOND + 1 }, (_, i) => `m${i}`);
+    notePushSkippedMany("message", "live_socket", crowd);
+    const last = crowd.at(-1)!;
+    expect(lines.some((line) => line.includes(`userId=${last} `) || line.endsWith(`userId=${last}`))).toBe(false);
+
+    vi.setSystemTime(Date.now() + 1_000);
+    notePushSkipped("message", "live_socket", last);
+    expect(lines.at(-1)).toContain(`userId=${last}`);
   });
 });

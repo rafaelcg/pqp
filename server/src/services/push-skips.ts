@@ -75,16 +75,62 @@ function key(kind: PushSkipKind, reason: PushSkipReason): string {
  * true number.
  */
 export const PUSH_SKIP_LOG_WINDOW_MS = 60_000;
-/** Past this, expired windows are dropped; it bounds the map by the live set. */
+
+/**
+ * A ceiling on the whole log, not just per person. An `@everyone` in a large
+ * server, or a stream start to 500 people who all have the app open, is one
+ * decision with hundreds of distinct recipients, and the per-person window
+ * does nothing for the first pass. Past this many lines in a second the rest
+ * are only counted, and the next line that is written reports how many were
+ * dropped (`dropped=`). The counters are unaffected.
+ */
+export const PUSH_SKIP_LOG_MAX_PER_SECOND = 20;
+
+/**
+ * The per-person windows are swept for expired entries at most this often,
+ * and only once the map is past `LOG_WINDOW_SWEEP_AT`. A sweep on every
+ * insertion above the threshold would be quadratic during exactly the burst
+ * it is meant to survive, since nothing in a burst has expired yet.
+ */
+const LOG_WINDOW_SWEEP_EVERY_MS = 10_000;
 const LOG_WINDOW_SWEEP_AT = 5_000;
+/**
+ * Past this the map takes no new windows until a sweep makes room: a person
+ * not tracked is still counted, and their line is subject to the global cap
+ * like any other, so the worst case is an extra line per minute for them.
+ */
+const LOG_WINDOW_MAX = 20_000;
 const logWindows = new Map<string, { at: number; suppressed: number }>();
+let lastSweepAt = 0;
+
+let secondStartedAt = 0;
+let linesThisSecond = 0;
+let droppedLines = 0;
 
 function sweepLogWindows(now: number): void {
+  if (logWindows.size < LOG_WINDOW_SWEEP_AT || now - lastSweepAt < LOG_WINDOW_SWEEP_EVERY_MS) {
+    return;
+  }
+  lastSweepAt = now;
   for (const [windowKey, window] of logWindows) {
     if (now - window.at >= PUSH_SKIP_LOG_WINDOW_MS) {
       logWindows.delete(windowKey);
     }
   }
+}
+
+/** Whether the global per-second ceiling has room for one more line. */
+function takeLogLine(now: number): boolean {
+  if (now - secondStartedAt >= 1_000) {
+    secondStartedAt = now;
+    linesThisSecond = 0;
+  }
+  if (linesThisSecond >= PUSH_SKIP_LOG_MAX_PER_SECOND) {
+    droppedLines += 1;
+    return false;
+  }
+  linesThisSecond += 1;
+  return true;
 }
 
 export interface PushSkipContext {
@@ -111,9 +157,13 @@ export function notePushSkipped(
     window.suppressed += 1;
     return;
   }
-  if (logWindows.size >= LOG_WINDOW_SWEEP_AT) {
-    sweepLogWindows(now);
+  sweepLogWindows(now);
+  if (!takeLogLine(now)) {
+    // Not written, so no window starts: this person's next skip may log.
+    return;
   }
+  const dropped = droppedLines;
+  droppedLines = 0;
   logEvent("push.skipped", {
     kind,
     reason,
@@ -121,8 +171,11 @@ export function notePushSkipped(
     channelId: context.channelId,
     conversationId: context.conversationId,
     suppressed: window?.suppressed || undefined,
+    dropped: dropped || undefined,
   });
-  logWindows.set(windowKey, { at: now, suppressed: 0 });
+  if (window || logWindows.size < LOG_WINDOW_MAX) {
+    logWindows.set(windowKey, { at: now, suppressed: 0 });
+  }
 }
 
 /** Convenience for a batch that was refused for one reason. */
@@ -156,4 +209,8 @@ export function pushSkippedSnapshot(): PushSkipped {
 export function resetPushSkips(): void {
   counts.clear();
   logWindows.clear();
+  lastSweepAt = 0;
+  secondStartedAt = 0;
+  linesThisSecond = 0;
+  droppedLines = 0;
 }
