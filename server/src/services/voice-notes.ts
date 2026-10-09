@@ -15,6 +15,20 @@ import { isEnabled } from "../lib/flags.js";
  * can reuse the shape check without anything here being renamed.
  */
 
+/** The voice side row, for any query that aliases `message_attachments` as `a`. */
+export const ATTACHMENT_VOICE_JOIN = `LEFT JOIN message_attachment_voice v ON v.attachment_id = a.id`;
+
+/**
+ * Every bucket object one attachment row names, one per output row, as
+ * `storage_key`: the upload itself and a voice note's AAC copy
+ * (`playback_key`). Every path that deletes attachment rows (a message, a
+ * channel, a server, an account) reads its keys through this, because the copy
+ * lives under the same prefix and must go with the original; the two sweeps in
+ * `attachments.ts` read both columns themselves. Needs `ATTACHMENT_VOICE_JOIN`
+ * and the alias `a`.
+ */
+export const ATTACHMENT_OBJECT_KEYS = `unnest(array_remove(ARRAY[a.storage_key, v.playback_key], NULL)) AS storage_key`;
+
 /** The caller answers 403. Off where it is going: nothing is minted. */
 export class VoiceNotesDisabledError extends Error {
   constructor() {

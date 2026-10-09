@@ -404,9 +404,38 @@ export const userPreferencesSchema = z.object({
     .array(z.string().uuid())
     .max(PINNED_CONVERSATIONS_MAX)
     .optional(),
+  /**
+   * Voice note transcription, both halves on by default (absent reads as
+   * true; see `voiceTranscriptionPrefs`).
+   *
+   *   * `mine`: my notes may be transcribed. Copied onto each note when it is
+   *     minted (`message_attachment_voice.transcribe_allowed`), so changing it
+   *     later never reaches back into notes already sent.
+   *   * `show`: I want to read other people's notes. In a conversation, a
+   *     note is transcribed as soon as it is sent if at least one recipient
+   *     has this on; in a server channel nothing runs until somebody asks.
+   *
+   * Replaced as a whole on write, same as `sounds`.
+   */
+  voiceTranscription: z
+    .object({
+      mine: z.boolean().optional(),
+      show: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
+/** `voiceTranscription` with its defaults applied: both on unless turned off. */
+export function voiceTranscriptionPrefs(
+  preferences: Pick<UserPreferences, "voiceTranscription"> | null | undefined,
+): { mine: boolean; show: boolean } {
+  return {
+    mine: preferences?.voiceTranscription?.mine !== false,
+    show: preferences?.voiceTranscription?.show !== false,
+  };
+}
 
 // ------------------------------------------------------------- age gate (18+)
 

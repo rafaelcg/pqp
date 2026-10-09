@@ -416,6 +416,25 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/attachments/config?serverId= (voiceNotes)",
   },
+  voice_note_transcription: {
+    description:
+      "Transcrição de mensagens de voz: o texto aparece embaixo do áudio. Em conversa sai na hora; em canal de servidor só quando alguém pede.",
+    env: "VOICE_NOTE_TRANSCRIPTION",
+    parseEnv: exactTrue,
+    // Off: it sends audio to a third party (Cloudflare Workers AI) and costs
+    // money per minute. One server first, then everybody.
+    codeDefault: false,
+    // Every reader knows the note, and so its channel's server: the enqueue at
+    // send, the worker before it calls the provider (a flip mid-queue costs
+    // nothing), the lazy request route and every read. A conversation reads
+    // the global value. Off also HIDES stored transcripts on read, so it is a
+    // real kill switch and not just "stop making new ones".
+    perServer: true,
+    // Served as `voiceTranscription` on `GET /api/attachments/config?serverId=`,
+    // but no client reads it yet, so no `clientVia`: the contract test
+    // (`flag-client-contract.test.ts`) would rightly fail a field nobody
+    // reads. The client PR that reads it adds the line back.
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
