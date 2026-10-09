@@ -992,7 +992,25 @@ export interface LiveHlsConfig {
    * reads as off.
    */
   streamStartNotifications?: boolean;
+  /**
+   * Present only while the signed-out live preview's flag (`live_preview`) is
+   * on for THIS server: the setup card may offer "Prévia pública", and
+   * `seconds` is the window a visitor gets. Absent everywhere else, which is
+   * every answer with the flag off. Whether this channel can is
+   * `fetchChannelLivePreview`.
+   */
+  livePreview?: { seconds: number };
 }
+
+/**
+ * Whether a watch party on this channel could be previewed by signed-out
+ * visitors once its host turns "Prévia pública" on. Asked only when the
+ * server's config carried `livePreview`.
+ */
+export const fetchChannelLivePreview = (channelId: string) =>
+  apiFetch<{ available: boolean; seconds: number }>(
+    `/api/channels/${encodeURIComponent(channelId)}/live-preview`,
+  );
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
   apiFetch<LiveHlsConfig>(

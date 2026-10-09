@@ -558,6 +558,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { useChannelLivePreview } from "@/hooks/use-channel-live-preview";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { useWatchNow, useWatchNowFlag } from "@/hooks/use-watch-now";
 import { useStreamAlertSettings } from "@/hooks/use-stream-alert-settings";
@@ -2536,6 +2537,15 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  // "Prévia pública" in the open watch party's options: drawn only where the
+  // signed-out live preview could actually show this party.
+  const publicPreviewSeconds = useChannelLivePreview(
+    selection.kind === "server" &&
+      channels.find((channel) => channel.id === selectedChannelId)?.type === "watch_party"
+      ? selectedChannelId
+      : null,
+    liveHlsConfig,
+  );
   // `party_fast_start` (runtime flag, per server): the selected server's
   // answer is what the watch player reads, and the player chunk is fetched
   // as soon as it is on, not when the first playlist URL arrives.
@@ -10022,6 +10032,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -10363,6 +10374,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}

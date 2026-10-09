@@ -317,6 +317,26 @@ export async function shareLink(
   return "failed";
 }
 
+// ------------------------------------------------- the host's opt-in
+
+/**
+ * "Prévia pública" in the watch party's options: the window in seconds when
+ * the switch is drawn, or null when it is not. Drawn only where it can work:
+ * the server said the flag is on for this server (`config.livePreview`) AND
+ * this channel could be previewed (a community, a public watch party channel
+ * @everyone can view). Anything not answered yet, or answered no, hides it:
+ * a switch that does nothing would promise a preview nobody will get.
+ */
+export function publicPreviewSwitchSeconds(
+  config: { livePreview?: { seconds: number } } | null | undefined,
+  channel: { available: boolean; seconds: number } | null | undefined,
+): number | null {
+  if (!config?.livePreview || !channel?.available) {
+    return null;
+  }
+  return channel.seconds > 0 ? channel.seconds : config.livePreview.seconds;
+}
+
 // --------------------------------------------------------------- sign-up
 
 /**

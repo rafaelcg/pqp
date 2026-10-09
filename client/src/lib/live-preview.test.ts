@@ -23,6 +23,7 @@ import {
   previewShowsPage,
   previewViewerCount,
   previewWindowMinutes,
+  publicPreviewSwitchSeconds,
   readPreviewAgeMemory,
   readPreviewTicket,
   rememberPreviewAge,
@@ -344,5 +345,25 @@ describe("the Share button", () => {
     expect(writeText).toHaveBeenCalledTimes(2);
     expect(await shareLink(url, "Sandbox", {})).toBe("failed");
     expect(await shareLink(url, "Sandbox", null)).toBe("failed");
+  });
+});
+
+describe("when the host's Prévia pública switch is drawn", () => {
+  const flagOn = { livePreview: { seconds: 300 } };
+
+  it("needs the flag on for the server AND a channel the preview could show", () => {
+    expect(publicPreviewSwitchSeconds(flagOn, { available: true, seconds: 300 })).toBe(300);
+    // The flag off: the config never carries `livePreview`, and nothing is asked.
+    expect(publicPreviewSwitchSeconds({}, { available: true, seconds: 300 })).toBeNull();
+    expect(publicPreviewSwitchSeconds(null, { available: true, seconds: 300 })).toBeNull();
+    // Not a community, a private channel, @everyone cannot view: the server says no.
+    expect(publicPreviewSwitchSeconds(flagOn, { available: false, seconds: 300 })).toBeNull();
+    // Not answered yet: hidden rather than a switch that may do nothing.
+    expect(publicPreviewSwitchSeconds(flagOn, null)).toBeNull();
+  });
+
+  it("uses the channel answer's window, falling back to the server's", () => {
+    expect(publicPreviewSwitchSeconds(flagOn, { available: true, seconds: 120 })).toBe(120);
+    expect(publicPreviewSwitchSeconds(flagOn, { available: true, seconds: 0 })).toBe(300);
   });
 });

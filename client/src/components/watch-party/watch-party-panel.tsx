@@ -298,6 +298,12 @@ export interface WatchPartyPanelProps {
    * drawn disabled rather than left out (see `WatchPartyOptionsPanel`).
    */
   lowLatencyAvailable?: boolean | null;
+  /**
+   * "Prévia pública": the signed-out preview window in seconds when the
+   * switch may be drawn for this party, null when it may not
+   * (`useChannelLivePreview`). See `WatchPartyOptionsPanel`.
+   */
+  publicPreviewSeconds?: number | null;
   /** Apply a mic-gain choice to the running mix at once. See `StreamMixControl`. */
   onMicGainChange?: (value: number) => void;
   /** Same as `onMicGainChange`, for the display (tab-audio) branch. */
@@ -655,6 +661,7 @@ function WatchPartyOptionsDialog({
           onChange={(patch) => void props.onOptionsChange(patch)}
           isHost={party.viewerRole === "host"}
           lowLatencyAvailable={props.lowLatencyAvailable}
+          publicPreviewSeconds={props.publicPreviewSeconds ?? null}
           live={party.state === "live"}
         />
         {/* THIS COMPUTER'S SWITCH, not the party's: whether the share carries
@@ -1580,6 +1587,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   stacked
                   isHost={party.viewerRole === "host"}
                   lowLatencyAvailable={props.lowLatencyAvailable}
+                  publicPreviewSeconds={props.publicPreviewSeconds ?? null}
                   live={party.state === "live"}
                 />
                 {(props.onMicInStreamChange || canPutPictureUp) && (
