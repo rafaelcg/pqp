@@ -73,9 +73,17 @@ export async function loadNotifyDefaultsConfig(): Promise<void> {
 /** Ask now and again on every config refresh. Returns the teardown. */
 export function startNotifyDefaultsConfig(): () => void {
   void loadNotifyDefaultsConfig();
-  return onConfigRefresh(() => {
+  const stop = onConfigRefresh(() => {
     void loadNotifyDefaultsConfig();
   });
+  return () => {
+    stop();
+    // The answer belongs to the account that asked. Whoever signs in next
+    // starts from off, and an ask still in flight from this one is dropped.
+    asked += 1;
+    applied = asked;
+    apply(false);
+  };
 }
 
 /** Test seam. */

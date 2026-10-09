@@ -8653,7 +8653,13 @@ function MainAppContent({
     [channels, conversations],
   );
   // `desktop_notify_default_on`, re-asked with the other runtime flags.
-  useEffect(() => startNotifyDefaultsConfig(), []);
+  // Only with an account: `/api/push/config` needs a token, and a page still
+  // resolving `/api/me` would be answered with a 401.
+  const notifyDefaultsUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
+    [notifyDefaultsUserId],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
 
   /**

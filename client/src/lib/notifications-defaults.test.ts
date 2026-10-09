@@ -471,7 +471,8 @@ describe("the wiring the decision depends on", () => {
 
   it("the app loads the flag and draws the card in the corner queue", async () => {
     const app = await read("App.tsx");
-    expect(app).toMatch(/useEffect\(\(\) => startNotifyDefaultsConfig\(\), \[\]\)/);
+    // Only with an account: a page still resolving /api/me has no token.
+    expect(app).toMatch(/notifyDefaultsUserId \? startNotifyDefaultsConfig\(\) : undefined/);
     expect(app).toMatch(/notifyOffer: wantsNotifyOfferCard && notifyOfferReady/);
     expect(app).toMatch(/enabled=\{effectiveCornerHint === "notifyOffer"\}/);
   });
