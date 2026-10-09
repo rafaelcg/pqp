@@ -4055,7 +4055,10 @@ function TileOverlay({
       style={{
         left: (insets?.left ?? 0) + 8,
         right: (insets?.right ?? 0) + 8,
-        bottom: `calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px))`,
+        // Lifted over a floating bar, but never past the picture's own top:
+        // with pictures stacked on a sideways phone the lift is taller than
+        // the top picture, and its row went up under the page header.
+        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
       }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -4967,7 +4970,7 @@ export function ScreenTileFrame({
         nameChip && (
           <span
             className={cn(
-              "pointer-events-none absolute bottom-[calc(0.5rem+var(--tile-row-lift,0px))] left-2 flex max-w-[50%]",
+              "pointer-events-none absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem))] left-2 flex max-w-[50%]",
               STAGE_LAYER.labels,
             )}
           >
@@ -4986,7 +4989,7 @@ export function ScreenTileFrame({
           style={{
             left: insets.left + 8,
             right: insets.right + 8,
-            bottom: `calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px))`,
+            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
           }}
         >
           <div className="flex min-w-0 items-center gap-1.5">

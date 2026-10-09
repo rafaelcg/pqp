@@ -18,6 +18,7 @@ import {
   VideoOff,
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { IMMERSIVE_STAGE_ATTRIBUTE } from "@/hooks/use-immersive-stage";
 import {
   CALL_SPLIT_DIVIDER_PX,
   CALL_SPLIT_STEP_COARSE_PX,
@@ -197,6 +198,31 @@ function usePaneSize(ref: RefObject<HTMLDivElement | null>): PaneSize {
     return () => observer.disconnect();
   }, [ref]);
   return size;
+}
+
+/**
+ * Whether the stage has taken the window (a phone held sideways with a
+ * picture on). The stage publishes it on `<html>` (`use-immersive-stage.ts`);
+ * the split only reads it.
+ */
+function useImmersiveTakeover(): boolean {
+  const read = () =>
+    typeof document !== "undefined" &&
+    document.documentElement.hasAttribute(IMMERSIVE_STAGE_ATTRIBUTE);
+  const [on, setOn] = useState(read);
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+    const observer = new MutationObserver(() => setOn(read()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: [IMMERSIVE_STAGE_ATTRIBUTE],
+    });
+    setOn(read());
+    return () => observer.disconnect();
+  }, []);
+  return on;
 }
 
 /**
@@ -380,13 +406,18 @@ export function CallSplit({
   // sideways while a call rings, before any picture brings the full-screen
   // takeover): the stage's own height rule then filled the pane and pushed
   // the composer, with hang-up in it, below the screen.
+  // Not while the stage has taken the window: the composer is meant to be
+  // out of sight there and the call's controls float on the picture, so
+  // squeezing the picture for it shrank the picture to nothing.
+  const immersiveTakeover = useImmersiveTakeover();
   const canSqueeze =
     !sizedByChoice &&
     !sideBySide &&
     chatNeed > 0 &&
     shape === "expanded" &&
     collapsed === "none" &&
-    container > 0;
+    container > 0 &&
+    (resizable || !immersiveTakeover);
   // The divider is only drawn when the pane is resizable.
   const squeezeGap = resizable ? CALL_SPLIT_DIVIDER_PX : 0;
   // A new width means a new natural height for the picture (a 16:9 share in
