@@ -21,7 +21,7 @@ import { getDesktop } from "@/lib/desktop";
 import { shouldShowArrivalToast } from "@/lib/dm-toast-queue";
 import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { playActivitySound, playCue } from "@/lib/sounds";
+import { getSoundState, playActivitySound, playCue } from "@/lib/sounds";
 
 export type { NotificationLevel };
 
@@ -661,6 +661,19 @@ export function openNotificationTarget(path: string): void {
   routeTo?.(path);
 }
 
+/**
+ * What the desktop shell is told about the banner's own sound.
+ *
+ * `true` while the app's sounds are on: the app plays its cue (or deliberately
+ * none), and an OS sound on top would double it. `false` when the person turned
+ * app sounds off, so the OS banner makes its own noise instead of arriving
+ * silent; the OS keeps its Do Not Disturb and its volume. A shell that predates
+ * the field ignores it and stays silent, as before.
+ */
+export function appPlaysSounds(): boolean {
+  return getSoundState().enabled;
+}
+
 function describe(burst: Burst): { title: string; body: string } {
   const { activity } = burst;
   // `#` says "a channel in a server". A conversation's label is a person's
@@ -694,7 +707,7 @@ function deliver(burst: Burst): void {
   if (desktop?.notify) {
     // The main process can raise the window on click, which a renderer-side
     // `window.focus()` cannot do from behind another app.
-    desktop.notify({ title, body, tag: channelId, path });
+    desktop.notify({ title, body, tag: channelId, path, silent: appPlaysSounds() });
     return;
   }
 
@@ -789,7 +802,7 @@ export function notifyIncomingCall(
 
   const desktop = getDesktop();
   if (desktop?.notify) {
-    desktop.notify({ title, body, tag, path });
+    desktop.notify({ title, body, tag, path, silent: appPlaysSounds() });
     return;
   }
 
@@ -883,7 +896,13 @@ export function notifyStreamStarted(
     // draw it): that is not the notice being over, so the web path is tried
     // after it, and a rejected promise is caught rather than left unhandled.
     try {
-      const sent: unknown = desktop.notify({ title, body, tag, path });
+      const sent: unknown = desktop.notify({
+        title,
+        body,
+        tag,
+        path,
+        silent: appPlaysSounds(),
+      });
       if (sent && typeof (sent as Promise<unknown>).catch === "function") {
         (sent as Promise<unknown>).catch(() => {
           void showWebStreamNotice(title, body, tag, path);

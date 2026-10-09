@@ -2547,6 +2547,13 @@ function MainAppContent({
   // (the teaser, the camera size, a server switched on) shows without a
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
+  // The desktop shell hides to the tray on close (Windows, Linux) only while
+  // somebody is signed in, so it has to be told when that stops being true:
+  // this shell is only mounted for a signed-in session, and unmounts with it.
+  useEffect(() => {
+    getDesktop()?.setSignedIn?.(true);
+    return () => getDesktop()?.setSignedIn?.(false);
+  }, []);
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
