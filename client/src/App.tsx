@@ -1597,6 +1597,7 @@ function MainAppContent({
     active: false,
     canSideBySide: false,
     chatHidden: false,
+    stageHidden: false,
   });
   /**
    * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
@@ -10499,6 +10500,7 @@ function MainAppContent({
             // The chat pane is put away, and the composer the controls dock into
             // with it.
             composerHidden={splitState.chatHidden}
+            stageHidden={splitState.stageHidden}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10559,6 +10561,7 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
           composerHidden={splitState.chatHidden}
+          stageHidden={splitState.stageHidden}
           onDismissError={() => voice.dismissError()}
           onSetPeerVolume={stableOnSetPeerVolume}
           onSetScreenVolume={stableOnSetScreenVolume}

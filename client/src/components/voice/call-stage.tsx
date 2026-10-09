@@ -717,6 +717,8 @@ export interface CallStageProps {
    * away. The controls then float over the stage instead.
    */
   composerHidden?: boolean;
+  /** The video pane is put away: the controls stay in the composer. */
+  stageHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -833,6 +835,7 @@ export function CallStage({
   onDismissError,
   roomListOnScreen = false,
   composerHidden = false,
+  stageHidden = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -904,6 +907,7 @@ export function CallStage({
       onDismissError={onDismissError}
       roomListOnScreen={roomListOnScreen}
       composerHidden={composerHidden}
+      stageHidden={stageHidden}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -958,6 +962,7 @@ function ActiveCall({
   onDismissError,
   roomListOnScreen = false,
   composerHidden = false,
+  stageHidden = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -1026,6 +1031,8 @@ function ActiveCall({
    * away. The controls then float over the stage instead.
    */
   composerHidden?: boolean;
+  /** The video pane is put away: the controls stay in the composer. */
+  stageHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -1439,7 +1446,10 @@ function ActiveCall({
   // the composer below it. Everything but the flag lives in the hook
   // (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
-    shareFocused: (screenStream !== null || anyVideo) && chromeExpanded,
+    // Not with the video pane put away: there is no picture on screen to
+    // take the window for.
+    shareFocused:
+      (screenStream !== null || anyVideo) && chromeExpanded && !stageHidden,
     fullscreen: fullscreen.isFullscreen,
   });
   // A phone held sideways hides the channel list with the other columns, so
@@ -1542,7 +1552,9 @@ function ActiveCall({
     watchFullscreen.active ||
     // A phone held sideways folds the chat away for the picture.
     immersive.immersive ||
-    (smallLandscape && anyVideo && chromeExpanded) ||
+    // Not with the video pane put away: the floating bar lives on the stage,
+    // so the controls would have nowhere visible to be.
+    (smallLandscape && anyVideo && chromeExpanded && !stageHidden) ||
     composerHidden;
   const dockControls =
     !composerOutOfSight && !(chromeExpanded && watchPartyChrome);
@@ -2234,6 +2246,19 @@ function ActiveCall({
           swallowPressWhileHidden(event);
         }
       }}
+      // A press that only woke the controls may end without a click (a drag
+      // on the volume slider). Let go once it is over, after any click it
+      // makes, so later keyboard or assistive changes are not ignored.
+      onPointerUpCapture={() => {
+        if (pressStartedHiddenRef.current) {
+          window.setTimeout(() => {
+            pressStartedHiddenRef.current = false;
+          }, 0);
+        }
+      }}
+      onPointerCancelCapture={() => {
+        pressStartedHiddenRef.current = false;
+      }}
       onPointerDown={onStagePointerDown}
       onPointerUp={onStagePointerUp}
       onPointerCancel={() => {
@@ -2363,10 +2388,18 @@ function ActiveCall({
       )}
       </div>
       <div className="flex h-full w-full flex-col">
-        {/* The pictures start below the banner column while it shows: a
+        {/* With the bar floating (fullscreen, a phone held sideways) the
+            pictures start below the banner column while it shows: a
             picture's row is capped at its own top, and under the red strip
-            the top picture's controls could not be tapped. */}
-        <div className="relative min-h-0 flex-1 pt-[var(--stage-banners,0px)]">
+            the top picture's controls could not be tapped. Docked, the rows
+            sit at each picture's bottom, so a passing notice does not push
+            every picture down and back. */}
+        <div
+          className={cn(
+            "relative min-h-0 flex-1",
+            barFloats && "pt-[var(--stage-banners,0px)]",
+          )}
+        >
           {soloPerson ? (
             /* One camera alone on the stage, from a click on its tile or from
                its own button. The stage is already fullscreen; this only
@@ -2570,7 +2603,8 @@ function ActiveCall({
               data-call-chrome="back"
               data-chrome-hidden={chrome.hidden ? "true" : "false"}
               className={cn(
-                "absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
+                // Below the banner column, not over the strip's own buttons.
+                "absolute left-1/2 top-[calc(0.75rem+var(--stage-banners,0px))] flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
                 STAGE_LAYER.badges,
                 // Fades with the rest of the overlay (it is the same group:
                 // a stream alone on the stage with a pill across its top is

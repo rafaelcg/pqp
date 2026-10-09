@@ -31,6 +31,7 @@ export function VoiceChannelStage({
   onShareWithoutSound,
   onDismissError,
   composerHidden,
+  stageHidden,
   roomListOnScreen,
   onStopScreenShare,
   onFocusScreenShare,
@@ -81,6 +82,8 @@ export function VoiceChannelStage({
   onDismissError?: () => void;
   /** See `CallStage`\'s prop of the same name. */
   composerHidden?: boolean;
+  /** The video pane is put away; the controls stay in the composer. */
+  stageHidden?: boolean;
   /** See `CallStage`'s prop of the same name. */
   roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
@@ -140,6 +143,7 @@ export function VoiceChannelStage({
       onShareWithoutSound={onShareWithoutSound}
       onDismissError={onDismissError}
       composerHidden={composerHidden}
+      stageHidden={stageHidden}
       roomListOnScreen={roomListOnScreen}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}

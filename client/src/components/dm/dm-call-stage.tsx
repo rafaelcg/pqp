@@ -39,6 +39,7 @@ export function DmCallStage({
   onSetPeerVolume,
   onSetScreenVolume,
   composerHidden,
+  stageHidden,
   onStopScreenShare,
   onFocusScreenShare,
   onToggleRaisedHand,
@@ -72,6 +73,8 @@ export function DmCallStage({
   onSetScreenVolume?: (userId: string, volume: number) => void;
   /** See `CallStage`\'s prop of the same name. */
   composerHidden?: boolean;
+  /** The video pane is put away; the controls stay in the composer. */
+  stageHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   /**
@@ -154,6 +157,7 @@ export function DmCallStage({
       onSetPeerVolume={onSetPeerVolume}
       onSetScreenVolume={onSetScreenVolume}
       composerHidden={composerHidden}
+      stageHidden={stageHidden}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       onToggleRaisedHand={onToggleRaisedHand}

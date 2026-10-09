@@ -163,6 +163,8 @@ export interface CallSplitState {
   canSideBySide: boolean;
   /** The chat pane is put away, and its header with it. */
   chatHidden: boolean;
+  /** The video pane is put away ("Esconder o vídeo"). */
+  stageHidden: boolean;
 }
 
 export interface PaneSize {
@@ -497,9 +499,10 @@ export function CallSplit({
   // for the call to fill the pane gets a band of empty pane under it.
   const fills = sized || collapsed === "chat";
   const chatHidden = collapsed === "chat";
+  const stageHidden = collapsed === "stage";
   useEffect(() => {
-    onSplitStateChange?.({ active: fills, canSideBySide, chatHidden });
-  }, [fills, canSideBySide, chatHidden, onSplitStateChange]);
+    onSplitStateChange?.({ active: fills, canSideBySide, chatHidden, stageHidden });
+  }, [fills, canSideBySide, chatHidden, stageHidden, onSplitStateChange]);
 
   const setCollapsed = useCallback(
     (next: CallSplitCollapsed) => {
