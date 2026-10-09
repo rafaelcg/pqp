@@ -320,6 +320,51 @@ test("putting a pane away hides it, keeps the picture, and gives it back", async
   await leaveVoiceIfConnected(page);
 });
 
+/**
+ * Hiding the video changes nothing else the split reports on a wide window,
+ * and App once dropped that report. The call then still believed its video
+ * was on screen, so a window made short enough to float the bar floated it
+ * onto the hidden pane: chat and composer, and no way to hang up.
+ */
+test("a short window with the video put away still has the call controls", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await openApp(page);
+  await joinLobbyWithCamera(page);
+
+  const divider = page.getByTestId("call-split-divider");
+  const grip = (await divider.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.getByTestId("call-split-collapse-stage").click();
+  await expect(page.getByTestId("call-stage")).toBeHidden();
+
+  await page.setViewportSize({ width: 1920, height: 400 });
+  // The bar's rules follow a media query, which answers a beat after the
+  // resize. Checked before it does, the old layout passes for the new one.
+  await page.waitForFunction(
+    () =>
+      matchMedia("(orientation: landscape) and (max-height: 500px)").matches,
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const leave = page
+    .getByRole("button", { name: "Leave", exact: true })
+    .filter({ visible: true });
+  await expect(leave.first()).toBeVisible();
+  await expect(page.locator("[data-bar-floats]")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.getByTestId("call-split-restore").click();
+  await expect(page.getByTestId("call-stage")).toBeVisible();
+  await leaveVoiceIfConnected(page);
+});
+
 test("a stored split is what the next call opens with", async ({ page }) => {
   await ensureVoiceChannel();
   await page.setViewportSize({ width: 1440, height: 900 });

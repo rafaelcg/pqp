@@ -1624,7 +1624,8 @@ function MainAppContent({
     setSplitState((previous) =>
       previous.active === next.active &&
       previous.canSideBySide === next.canSideBySide &&
-      previous.chatHidden === next.chatHidden
+      previous.chatHidden === next.chatHidden &&
+      previous.stageHidden === next.stageHidden
         ? previous
         : next,
     );
