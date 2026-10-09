@@ -285,6 +285,14 @@ export async function createSoundboardUpload(input: {
   }
   const key = soundboardObjectKey(input.serverId, input.contentType);
   const expiresAtMs = Date.now() + UPLOAD_URL_TTL_SECONDS * 1000;
+  // Sign before reserving: a signer failure then leaves no ticket counting
+  // toward the cap.
+  const uploadUrl = presignPut(
+    key,
+    input.contentType,
+    input.byteSize,
+    UPLOAD_URL_TTL_SECONDS,
+  );
   // One statement under the server row lock, so two requests cannot both pass
   // a count of 23, and the count is the whole cluster's: stored sounds plus
   // every ticket still in the table (one stays claimable until swept).
@@ -320,12 +328,7 @@ export async function createSoundboardUpload(input: {
   }
   return {
     key,
-    uploadUrl: presignPut(
-      key,
-      input.contentType,
-      input.byteSize,
-      UPLOAD_URL_TTL_SECONDS,
-    ),
+    uploadUrl,
     expiresAt: new Date(expiresAtMs).toISOString(),
   };
 }

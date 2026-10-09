@@ -80,17 +80,23 @@ export function soundboardRoomFull(
 /**
  * Count a play another machine admitted. Never refuses: the sender already
  * did, and its listeners hear it either way. It only makes this machine's
- * next local offer see the same room. The frame carries no duration, so the
- * longest clip is assumed.
+ * next local offer see the same room. The cluster frame carries the clip's
+ * length; an older sender's frame does not, so the longest clip is assumed.
  */
 export function noteRemoteSoundboardPlay(input: {
   channelId: string;
   userId: string;
+  /** The admitted clip's length, from the cluster frame. Absent: the longest. */
+  durationMs?: number;
   now?: number;
 }): void {
   const now = input.now ?? Date.now();
   const plays = livePlays(input.channelId, now);
-  plays.push({ userId: input.userId, endsAt: now + SOUNDBOARD_MAX_DURATION_MS });
+  const duration = Math.min(
+    SOUNDBOARD_MAX_DURATION_MS,
+    Math.max(1, input.durationMs ?? SOUNDBOARD_MAX_DURATION_MS),
+  );
+  plays.push({ userId: input.userId, endsAt: now + duration });
   active.set(input.channelId, plays);
 }
 

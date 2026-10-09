@@ -5373,7 +5373,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           emoji: message.emoji,
           soundId: message.soundId,
         });
-        void playSoundboardClip(message.soundId, !state.isDeafened);
+        void playSoundboardClip(
+          message.soundId,
+          () => !state.isDeafened && state.voiceChannelId === message.channelId,
+        );
         break;
       case "channel-live":
         // Every channel this socket may view, in or out of the room. Same

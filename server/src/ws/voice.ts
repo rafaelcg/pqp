@@ -9403,7 +9403,13 @@ export async function handleVoiceMessage(
     };
     broadcastToRoom(peer.voiceChannelId, frame);
     if (clusterOn()) {
-      publishVoice(VOICE_SOUNDBOARD_TOPIC, frame);
+      // The length rides the cluster frame only, so the other machine's
+      // overlap cap frees a slot when this clip ends. Its listeners get the
+      // frame without it.
+      publishVoice(VOICE_SOUNDBOARD_TOPIC, {
+        ...frame,
+        durationMs: sound.durationMs,
+      });
     }
     return;
   }
@@ -12484,6 +12490,7 @@ const voiceSoundboardFrameSchema = z.object({
   displayName: z.string().min(1).max(64),
   emoji: z.string().min(1).max(32),
   playedAt: z.number().int().nonnegative(),
+  durationMs: z.number().int().positive().max(60_000).optional(),
 });
 
 subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
@@ -12491,12 +12498,16 @@ subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
   if (!parsed.success) {
     return;
   }
-  const frame = parsed.data;
+  const { durationMs, ...frame } = parsed.data;
   if (getRoomPeers(frame.channelId).length === 0) {
     return;
   }
   noteClusterFrameReceived();
-  noteRemoteSoundboardPlay({ channelId: frame.channelId, userId: frame.userId });
+  noteRemoteSoundboardPlay({
+    channelId: frame.channelId,
+    userId: frame.userId,
+    durationMs,
+  });
   broadcastToRoom(frame.channelId, frame);
 });
 

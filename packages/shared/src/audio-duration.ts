@@ -14,6 +14,15 @@ const MPEG1_L3_BITRATES = [
 
 const MPEG1_RATES = [44100, 48000, 32000];
 
+// MPEG-2 and MPEG-2.5 Layer III: the lower sample rates a voice recording
+// or a tool's "small file" preset produces. Half the frame size, 576 samples.
+const MPEG2_L3_BITRATES = [
+  0, 8000, 16000, 24000, 32000, 40000, 48000, 56000, 64000, 80000, 96000,
+  112000, 128000, 144000, 160000, 0,
+];
+const MPEG2_RATES = [22050, 24000, 16000];
+const MPEG25_RATES = [11025, 12000, 8000];
+
 export function audioDurationMs(
   bytes: Uint8Array,
   contentType: string,
@@ -69,7 +78,7 @@ function mp3DurationMs(bytes: Uint8Array): number | null {
     if (header.sampleRate !== rate) {
       break;
     }
-    samples += 1152;
+    samples += header.samplesPerFrame;
     frames += 1;
     offset += header.frameBytes;
   }
@@ -95,30 +104,34 @@ function skipId3(bytes: Uint8Array): number {
 function readMp3Header(
   bytes: Uint8Array,
   offset: number,
-): { frameBytes: number; sampleRate: number } | null {
+): { frameBytes: number; sampleRate: number; samplesPerFrame: number } | null {
   if (bytes[offset] !== 0xff || (bytes[offset + 1]! & 0xe0) !== 0xe0) {
     return null;
   }
   const version = (bytes[offset + 1]! >> 3) & 0x03;
   const layer = (bytes[offset + 1]! >> 1) & 0x03;
-  // MPEG1, Layer 3 only. That is what a person exports. Other layers
-  // are refused rather than guessed.
-  if (version !== 0x03 || layer !== 0x01) {
+  // Layer III only, in MPEG-1, MPEG-2 and MPEG-2.5. That is what a person
+  // exports. Other layers are refused rather than guessed.
+  if (version === 0x01 || layer !== 0x01) {
     return null;
   }
+  const mpeg1 = version === 0x03;
   const bitrateIndex = (bytes[offset + 2]! >> 4) & 0x0f;
   const rateIndex = (bytes[offset + 2]! >> 2) & 0x03;
   const padding = (bytes[offset + 2]! >> 1) & 0x01;
-  const bitrate = MPEG1_L3_BITRATES[bitrateIndex] ?? 0;
-  const sampleRate = MPEG1_RATES[rateIndex] ?? 0;
+  const bitrate = (mpeg1 ? MPEG1_L3_BITRATES : MPEG2_L3_BITRATES)[bitrateIndex] ?? 0;
+  const rates = mpeg1 ? MPEG1_RATES : version === 0x02 ? MPEG2_RATES : MPEG25_RATES;
+  const sampleRate = rates[rateIndex] ?? 0;
   if (bitrate === 0 || sampleRate === 0) {
     return null;
   }
-  const frameBytes = Math.floor((144 * bitrate) / sampleRate) + padding;
+  const samplesPerFrame = mpeg1 ? 1152 : 576;
+  const frameBytes =
+    Math.floor(((samplesPerFrame / 8) * bitrate) / sampleRate) + padding;
   if (frameBytes < 4 || offset + frameBytes > bytes.length) {
     return null;
   }
-  return { frameBytes, sampleRate };
+  return { frameBytes, sampleRate, samplesPerFrame };
 }
 
 function oggDurationMs(bytes: Uint8Array): number | null {

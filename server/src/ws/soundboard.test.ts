@@ -122,4 +122,28 @@ describe("soundboard play gate", () => {
       offerSoundboardPlay({ channelId: "room", userId: "a", durationMs: 500, now }),
     ).toBe(false);
   });
+
+  it("frees a remote slot when the admitted clip ends, not at the maximum", () => {
+    resetSoundboardPlays();
+    const now = 1_000;
+    for (let i = 0; i < 12; i += 1) {
+      noteRemoteSoundboardPlay({
+        channelId: "room",
+        userId: `r${i}`,
+        durationMs: 500,
+        now,
+      });
+    }
+    expect(
+      offerSoundboardPlay({ channelId: "room", userId: "a", durationMs: 500, now }),
+    ).toBe(false);
+    expect(
+      offerSoundboardPlay({
+        channelId: "room",
+        userId: "a",
+        durationMs: 500,
+        now: now + 600,
+      }),
+    ).toBe(true);
+  });
 });

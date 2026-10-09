@@ -50,6 +50,27 @@ describe("audioDurationMs", () => {
     expect(ms).toBeLessThan(1100);
   });
 
+  it.each([
+    { name: "MPEG-2", version: 0xf3, rate: 22050, rateBits: 0x00 },
+    { name: "MPEG-2.5", version: 0xe3, rate: 11025, rateBits: 0x00 },
+  ])("times a $name layer III file at its lower sample rate", ({ version, rate, rateBits }) => {
+    // 64 kbps (index 8 in the MPEG-2 table), 576 samples per frame.
+    const bitrate = 64000;
+    const frameBytes = Math.floor((72 * bitrate) / rate);
+    const frame = new Uint8Array(frameBytes);
+    frame[0] = 0xff;
+    frame[1] = version;
+    frame[2] = 0x80 | rateBits;
+    const count = Math.round((1000 * rate) / 576 / 1000);
+    const bytes = new Uint8Array(frameBytes * count);
+    for (let i = 0; i < count; i += 1) {
+      bytes.set(frame, i * frameBytes);
+    }
+    const ms = audioDurationMs(bytes, "audio/mpeg");
+    expect(ms).toBeGreaterThan(950);
+    expect(ms).toBeLessThan(1050);
+  });
+
   it("times an opus ogg from the last granule", () => {
     const head = new Uint8Array(19);
     head.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 1, 1], 0);

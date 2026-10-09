@@ -137,6 +137,22 @@ export function useSoundboardListenerVolume(): [number, (volume: number) => void
 /** The call this machine is in. Plays for that server can refresh the catalog. */
 export function setSoundboardCatalogServer(serverId: string | null): void {
   catalogServerId = serverId;
+  // Entering another server's call drops the previous server's custom clips
+  // and their decoded audio, so playing across servers keeps at most one
+  // board in memory. A null (the control unmounting) keeps what it has: the
+  // same call may remount it a moment later.
+  if (serverId === null) {
+    return;
+  }
+  for (const [id, row] of customUrls) {
+    if (row.serverId === serverId) {
+      continue;
+    }
+    customUrls.delete(id);
+    customNames.delete(id);
+    buffers.delete(id);
+    loading.delete(id);
+  }
 }
 
 export function noteSoundboardCatalog(
@@ -217,6 +233,16 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
   );
 }
 
+/** Most decoded custom clips kept at once: one full board. Built-ins stay. */
+const CUSTOM_BUFFER_MAX = 24;
+
+function evictCustomBuffers(): void {
+  const custom = [...buffers.keys()].filter((id) => customUrls.has(id));
+  for (const id of custom.slice(0, Math.max(0, custom.length - CUSTOM_BUFFER_MAX))) {
+    buffers.delete(id);
+  }
+}
+
 function warm(url: string, id: string): Promise<AudioBuffer | null> {
   const cached = buffers.get(id);
   if (cached) {
@@ -235,6 +261,7 @@ function warm(url: string, id: string): Promise<AudioBuffer | null> {
       const buffer = await decodeAudioBuffer(await response.arrayBuffer());
       if (buffer) {
         buffers.set(id, buffer);
+        evictCustomBuffers();
       }
       return buffer;
     } catch {
@@ -363,9 +390,12 @@ async function refreshCustomCatalog(
  */
 export async function playSoundboardClip(
   soundId: string,
-  hear: boolean,
+  hear: boolean | (() => boolean),
 ): Promise<void> {
-  if (!hear) {
+  // A function is asked again after the fetch and decode, so a listener who
+  // deafened or left the call while the clip loaded does not hear it start.
+  const mayHear = (): boolean => (typeof hear === "function" ? hear() : hear);
+  if (!mayHear()) {
     return;
   }
   unlockSounds();
@@ -374,7 +404,7 @@ export async function playSoundboardClip(
     await refreshCustomCatalog(catalogServerId, !customUrls.has(soundId));
     buffer = await bufferFor(soundId);
   }
-  if (!buffer) {
+  if (!buffer || !mayHear()) {
     return;
   }
   startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);

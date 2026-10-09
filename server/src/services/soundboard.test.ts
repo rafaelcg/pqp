@@ -17,12 +17,18 @@ if (DATABASE_URL) {
 const s3 = vi.hoisted(() => ({
   deleted: [] as string[],
   failDeletes: false,
+  failSigning: false,
   objects: new Map<string, { contentType: string; contentLength: number }>(),
 }));
 
 vi.mock("../lib/s3.js", () => ({
   isStorageConfigured: () => true,
-  presignPut: (key: string) => `https://bucket.test/${key}?sig=1`,
+  presignPut: (key: string) => {
+    if (s3.failSigning) {
+      throw new Error("signer down");
+    }
+    return `https://bucket.test/${key}?sig=1`;
+  },
   presignGet: (key: string) => `https://bucket.test/${key}?get=1`,
   headObject: async (key: string) => s3.objects.get(key) ?? null,
   getObjectPrefix: async (key: string) =>
@@ -81,6 +87,7 @@ describeDb("soundboard upload ledger", () => {
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     s3.deleted.length = 0;
     s3.failDeletes = false;
+    s3.failSigning = false;
     s3.objects.clear();
     const user = await upsertUser({
       clerkId: "clerk_sb",
@@ -147,6 +154,13 @@ describeDb("soundboard upload ledger", () => {
     expect(s3.deleted).toEqual([key]);
     const gone = await getPool().query(`SELECT 1 FROM soundboard_pending_uploads`);
     expect(gone.rowCount).toBe(0);
+  });
+
+  it("leaves no ticket behind when signing the upload URL fails", async () => {
+    s3.failSigning = true;
+    await expect(upload()).rejects.toThrow("signer down");
+    const rows = await getPool().query(`SELECT 1 FROM soundboard_pending_uploads`);
+    expect(rows.rowCount).toBe(0);
   });
 
   it("never sweeps an upload that is claimed or still inside its signature", async () => {
