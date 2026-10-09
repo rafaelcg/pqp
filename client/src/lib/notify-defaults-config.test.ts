@@ -58,6 +58,16 @@ describe("loadNotifyDefaultsConfig", () => {
     expect(isDesktopNotifyDefaultOnEnabled()).toBe(false);
   });
 
+  it("an older answer still counts when the newer ask failed", async () => {
+    const first = loadNotifyDefaultsConfig();
+    const second = loadNotifyDefaultsConfig();
+    asks.pending[1]!.reject(new Error("offline"));
+    await second;
+    asks.pending[0]!.resolve({ desktopNotifyDefaultOn: true });
+    await first;
+    expect(isDesktopNotifyDefaultOnEnabled()).toBe(true);
+  });
+
   it("a failed ask keeps the last answer", async () => {
     setDesktopNotifyDefaultOnForTests(true);
     const done = loadNotifyDefaultsConfig();
