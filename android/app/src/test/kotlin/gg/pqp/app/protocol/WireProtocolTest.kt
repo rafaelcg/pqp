@@ -52,16 +52,11 @@ class WireProtocolTest {
     /**
      * Frames this build handles that `packages/shared` does not declare **yet**.
      *
-     * `voice-note-listened` is specified (the listens contract: `{channelId,
-     * messageId, attachmentId, userId, listenedAt}`, to the author's sockets in
-     * a conversation and to the listener's own other sockets) and is built on
-     * the server in its own PR, which is what adds the schema. This client
-     * ships behind the `voice_notes` flag, dark, ahead of it. The branch is
-     * harmless until the server sends the frame, and the next test fails the
-     * day shared declares it, so the entry is deleted rather than left to
-     * excuse a typo.
+     * Empty. When a client ships a frame ahead of the server PR that adds its
+     * schema, name it here; the next test fails the day shared declares it, so
+     * the entry is deleted rather than left to excuse a typo.
      */
-    private val announcedAheadOfShared = setOf("voice-note-listened")
+    private val announcedAheadOfShared = emptySet<String>()
 
     @Test
     fun `a frame announced ahead of shared is removed from the list once shared declares it`() {
