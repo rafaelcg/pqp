@@ -148,7 +148,7 @@ describeDb("soundboard upload ledger", () => {
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
   });
 
-  it("deletes the row first, and a missing object does not bring it back", async () => {
+  it("deletes the object, then the row, and a second delete finds nothing", async () => {
     const key = await upload();
     const sound = await claim(key);
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);

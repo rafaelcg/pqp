@@ -490,21 +490,26 @@ export async function deleteSoundboardSound(
   serverId: string,
   soundId: string,
 ): Promise<boolean> {
-  // Row first: if the object delete then fails the clip is gone from the
-  // board and the file is only an orphan, not a clip that shows and is silent.
-  const result = await getPool().query<{ storage_key: string }>(
-    `DELETE FROM soundboard_sounds
-      WHERE id = $1 AND server_id = $2
-      RETURNING storage_key`,
+  const found = await getPool().query<{ storage_key: string }>(
+    `SELECT storage_key
+       FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2`,
     [soundId, serverId],
   );
-  const key = result.rows[0]?.storage_key;
-  forgetPlayable(soundId);
+  const key = found.rows[0]?.storage_key;
   if (!key) {
     return false;
   }
+  // Object first: a storage error leaves the row in place, so the delete can
+  // be retried and no file is orphaned with its key forgotten. A missing
+  // object still counts as gone (`deleteObject` treats 404 as success).
   if (isStorageConfigured()) {
-    await deleteObject(key).catch(() => undefined);
+    await deleteObject(key);
   }
+  await getPool().query(
+    `DELETE FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
+    [soundId, serverId],
+  );
+  forgetPlayable(soundId);
   return true;
 }
