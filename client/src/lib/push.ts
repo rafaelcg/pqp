@@ -21,6 +21,12 @@ export interface PushConfig {
   /** False when the server has no VAPID keys — the whole feature is off. */
   enabled: boolean;
   publicKey: string | null;
+  /**
+   * Runtime flag `desktop_notify_default_on`: banners start on in the desktop
+   * app, DMs and servers have their own default level, and the browser offers
+   * a one-time card. Absent on an API that predates it, read as off.
+   */
+  desktopNotifyDefaultOn?: boolean;
   /** Whether this account lets DM pushes name the sender. Default false. */
   dmDetails: boolean;
 }

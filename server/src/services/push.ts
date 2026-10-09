@@ -686,7 +686,12 @@ export function resolvePushLevel(
       return serverLevel;
     }
   }
-  return notifications?.default ?? "all";
+  // No server: a conversation. The split defaults are an explicit choice, so
+  // an account that never made one resolves through `default` exactly as it
+  // always did, and a server's plain message still never pushes whatever this
+  // says (`shouldPush`).
+  const split = serverId ? notifications?.serverDefault : notifications?.dmDefault;
+  return split ?? notifications?.default ?? "all";
 }
 
 // ----------------------------------------------------------------- payload

@@ -264,6 +264,27 @@ now" feature (`docs/plans/WATCH_NOW.md`):
   `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
   reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
 
+Born as a flag (no old reader): `DESKTOP_NOTIFY_DEFAULT_ON`
+(`desktop_notify_default_on`, default off, **global only**), client-only. OS banners
+were opt-in behind a switch that defaults to off (19 of 7,012 accounts had it on),
+and one account default covered both DMs and servers. With the flag on, served as
+`desktopNotifyDefaultOn` on `GET /api/push/config`:
+
+- **Desktop app:** the banner switch reads ON until the person touches it
+  (`notifications.desktopChosen`). The shell already auto-grants the permission.
+- **Split defaults:** `notifications.dmDefault` (falls back to `default`, then
+  "all") and `notifications.serverDefault` (falls back to `default`, then
+  **"mentions"**), so a plain message in a server is not a banner by default.
+  The legacy `default` keeps meaning both until a person sets either. Migrated on
+  read, no `UPDATE`. A stored `default: "all"` does not count as a choice for
+  servers: the client wrote it on every save, so it cannot be told apart from the
+  initial value. Stream-start notices keep their old "all unless muted" reading.
+- **Browser:** the first DM or mention that arrives while the tab is hidden, with
+  the permission still undecided, leaves a one-time card ("Ativar notificações")
+  for when the person comes back (`components/layout/notify-offer-hint.tsx`).
+- **Server push:** `resolvePushLevel` honours an explicit `dmDefault` /
+  `serverDefault`; an account that set neither resolves exactly as before.
+
 Born as a flag (no old reader): `VOICE_NOTES` (`voice_notes`, default off,
 **per server**), voice notes in chat. A note is an ordinary attachment plus a
 `message_attachment_voice` side row; the flag is checked at mint against the

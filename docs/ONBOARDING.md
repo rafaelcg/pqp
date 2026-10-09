@@ -19,6 +19,7 @@ Adding one means adding a row here.
 | Baú post | `components/community-home/community-home-post-hint.tsx` | Corner card | a publish in the open server while looking at another channel (unread went up; not the author) | CTA opens Baú; X / Escape / 8 s. Not a campaign: no `lib/hints.ts` key |
 | Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
 | QG invite | `components/layout/qg-hint.tsx` | Corner card with hero | QG is listed and not joined | `pqp:qg-hint-…` (impression) |
+| Notification offer | `components/layout/notify-offer-hint.tsx`, rules in `shouldQueueNotifyOffer` (`lib/notifications.ts`) | Corner card, after a waiting build and a Baú post, before the QG. "Quer ser avisado quando te chamarem?" with **Ativar notificações** (the click is the gesture the browser's permission prompt needs) and Agora não | flag `desktop_notify_default_on` on, a browser tab (never the desktop app), banners off, permission still undecided, and a DM or a mention reached the tab while it was hidden; drawn when the person is back. Not over a live party | `pqp:notify-offer-2026-10` (impression), or the permission being answered |
 | Voz limpa nudge | `components/voice/voice-clean-hint.tsx` | Inline CornerCard above the user bar | first voice call with the mic on since ship, desktop (≥640px), not presenting a watch party | `voiceCleanNudgeDismissedAt` (preference — "Ativar" or "Depois" both count). Narrower than 640px: no card, a NOVO dot on the Settings noise-suppression row instead |
 | Party newcomer strip | `components/onboarding/party-newcomer-strip.tsx`, rules in `lib/party-newcomer.ts` | One-line strip under the party bar, above the split | flag `party_newcomer_experience` on for the server, a live party, no seat, an account whose first-run finished under 24 h ago. While it is up the Watch party viewer hint below stands down | `pqp:party-newcomer-strip-2026-09` (dismiss). Same flag also puts the rail away and gives the chat a floor on a phone, and holds the Get the app strip back for that newcomer |
 | Mobile beta | `components/layout/mobile-beta-hint.tsx` | Corner card | phone browser, not the native app | `pqp:mobile-beta-hint-…` (impression) |
@@ -79,7 +80,7 @@ the card cannot tell the two cases apart.
 
 **One corner at a time.** Every corner card renders through
 `components/layout/corner-card.tsx` and is arbitrated by
-`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, qg, voiceClean,
+`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, notifyOffer, qg, voiceClean,
 mobileBeta, whatsNew, cargos, shortcuts — `voiceClean` is the one entry that
 does not paint in the bottom-right corner; it shares the list because "never
 two cards at once" is the rule, not the position). The update prompt is

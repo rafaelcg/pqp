@@ -263,6 +263,50 @@ describe("resolvePushLevel", () => {
       "none",
     );
   });
+
+  describe("the split account defaults", () => {
+    const dm = "44444444-4444-4444-4444-444444444444";
+
+    it("keep meaning `default` for both until a person sets either", () => {
+      const settings = { notifications: { default: "mentions" as const } };
+      expect(resolvePushLevel(settings, null, dm)).toBe("mentions");
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("mentions");
+    });
+
+    it("dmDefault speaks for conversations only, serverDefault for servers only", () => {
+      const settings = {
+        notifications: {
+          default: "all" as const,
+          dmDefault: "none" as const,
+          serverDefault: "mentions" as const,
+        },
+      };
+      expect(resolvePushLevel(settings, null, dm)).toBe("none");
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("mentions");
+    });
+
+    it("setting one leaves the other on the legacy default", () => {
+      const onlyServers = { notifications: { default: "none" as const, serverDefault: "all" as const } };
+      expect(resolvePushLevel(onlyServers, serverId, channelId)).toBe("all");
+      expect(resolvePushLevel(onlyServers, null, dm)).toBe("none");
+      const onlyDms = { notifications: { dmDefault: "mentions" as const } };
+      expect(resolvePushLevel(onlyDms, null, dm)).toBe("mentions");
+      expect(resolvePushLevel(onlyDms, serverId, channelId)).toBe("all");
+    });
+
+    it("a server or channel override still beats both", () => {
+      const settings = {
+        notifications: {
+          serverDefault: "none" as const,
+          servers: { [serverId]: "all" as const },
+          channels: { [dm]: "all" as const },
+          dmDefault: "none" as const,
+        },
+      };
+      expect(resolvePushLevel(settings, serverId, channelId)).toBe("all");
+      expect(resolvePushLevel(settings, null, dm)).toBe("all");
+    });
+  });
 });
 
 describe("buildPushPayload / truncation", () => {

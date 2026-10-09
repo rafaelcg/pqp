@@ -400,6 +400,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
   },
+  desktop_notify_default_on: {
+    description:
+      "Notificações padrão (só cliente: no app desktop o banner do sistema já vem ligado, DMs e servidores têm níveis padrão separados, e o servidor fica em só menções; no navegador, depois da primeira DM ou menção com a aba escondida, aparece um cartão único pra ativar).",
+    env: "DESKTOP_NOTIFY_DEFAULT_ON",
+    parseEnv: exactTrue,
+    // Off until it has been checked on a real desktop build: turning it on
+    // changes what banners an account that never opened the settings gets.
+    codeDefault: false,
+    // `GET /api/push/config` has no server in hand and the client keeps one
+    // answer per page: a per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/push/config (desktopNotifyDefaultOn)",
+  },
   voice_notes: {
     description:
       "Mensagens de voz: segurar o microfone no chat grava e manda um áudio com a duração e a onda, como no WhatsApp.",
