@@ -1,4 +1,5 @@
 import { fetchShareConfig } from "./api";
+import { recordShareFastStartQuality } from "./share-fast-start";
 
 /**
  * `share_high_motion_guard` as the client learns it: one boolean on
@@ -14,6 +15,11 @@ import { fetchShareConfig } from "./api";
  *
  * `share_game_capture_hint` (`shareGameCaptureHint`) rides on the same answer
  * and the same cache: one request per server tells the share both.
+ *
+ * So does `share_fast_start_quality` (`shareFastStartQuality`), which the
+ * viewer needs as well as the presenter: every answer is handed to
+ * `share-fast-start.ts` as it arrives, and the call reads it from there.
+ * Unanswered is off, like the rest.
  */
 
 const TTL_MS = 10 * 60_000;
@@ -45,6 +51,7 @@ function ask(serverId: string | null): Promise<ShareFlags | null> {
           gameCaptureHint: config.shareGameCaptureHint === true,
         };
         cache.set(serverId ?? "", { at: Date.now(), value });
+        recordShareFastStartQuality(serverId, config.shareFastStartQuality === true);
         resolve(value);
       })
       .catch(() => {

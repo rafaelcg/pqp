@@ -178,12 +178,132 @@ nothing and asks the shell nothing. Needs a desktop build that publishes
 card never shows. `docs/DESKTOP.md` §"Sharing a game: Fullscreen vs Fullscreen
 Windowed".
 
+Born as a flag (no old reader): `SHARE_FAST_START_QUALITY`
+(`share_fast_start_quality`, default off, **per server**), served to the client
+by `GET /api/share/config?serverId=` as `shareFastStartQuality`. How a screen
+share's picture starts in an SFU call, client only (`client/src/lib/share-fast-start.ts`):
+
+- **Viewer:** the share's layer is asked for as soon as the publication is
+  known (the join response, or the moment the share is published), before the
+  subscription is bound, at the layer a 720-line stage wants. LiveKit binds an
+  adaptive-stream subscriber at the 360p copy until the first settings arrive,
+  and the client used to send them only after the bind.
+- **Presenter:** crossing twenty people (`LARGE_ROOM_PARTICIPANTS`) no longer
+  unpublishes and republishes the share, which blanked every viewer and
+  restarted every subscription; the top layer's ceiling moves in place.
+- **Presenter:** the capture really comes down to the planned height. Chrome
+  ignores `height: { max: 720 }` while the share's opening `width: { max: 1920 }`
+  is still in the constraints, so the large-room cap never reached the
+  capture; the width ceiling is now scaled to the height. Never applied to a
+  watch party's source.
+
+No new copy, no bandwidth change per viewer (the same layers and ceilings, see
+`client/e2e/share-fast-start/README.md` for the measurements). Off, the
+session behaves exactly as before. The viewer half reads the call's server
+answer when the media connects, so it is asked for at join
+(`noteCallServer` in `App.tsx`) and cached ten minutes; an answer that arrives
+late only means that one join starts the old way. Turn it on for one server
+from controles → interruptores (the server's override); the next join and the
+next share pick it up.
+
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
-(`linux_desktop_system_audio`, default off), the computer's sound on a screen
-share from the Linux desktop app, served to the client by
-`GET /api/share/config`. It only does anything in a desktop build whose
-preload publishes `capabilities.linuxShareAudio`; see
-`electron/lib/linux-share-audio.js`.
+(`linux_desktop_system_audio`, default off, **global only**), the computer's
+sound on a screen share from the Linux desktop app, served to the client by
+`GET /api/share/config` as `linuxDesktopSystemAudio`. It only does anything in a
+desktop build whose preload publishes `capabilities.linuxShareAudio`; see
+`electron/lib/linux-share-audio.js`. From desktop 0.2.4 the shell feeds the bus
+by LINKING each app's stream on PipeWire (pinned Proton games and native
+PipeWire apps such as Flathub Spotify included, which 0.2.3 could not move) and
+writes what it did per stream to `~/.config/pqp/logs/linux-share-audio.json`;
+`docs/DESKTOP.md` §"Linux share audio: what is captured and what is not".
+Global on purpose: the client asks the
+config without a server and keeps one answer per page, so a per-server override
+would be accepted and never read; the registry refuses one. Turn it on from
+controles → interruptores; the page asks again before every share, so there is
+no reload and no desktop update. The server half once went missing from
+the merge that shipped the client (#866 into desktop 0.2.3);
+`server/src/lib/flag-client-contract.test.ts` now fails when a field the client
+reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
+server.
+
+Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
+**per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):
+somebody holding `MUTE_MEMBERS` or `MANAGE_CHANNELS` turns a running call into
+a stage where only the staff and the people they let in can talk, enforced on
+the SFU grant and the WebSocket. Served to the client by
+`GET /api/voice/config?serverId=` as `audienceMode`, which only gates turning it
+ON: a room already in audience mode shows its state and its off switch from the
+room's own frames whatever the flag says. Off for a server is also the kill
+switch: the 15 s audience sweep in `ws/voice.ts` switches off every session
+still running there. Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "audience_mode", serverId, enabled: true }` or from controles →
+interruptores; open tabs show the control on the next config refresh (focus or
+10 min). `server/src/lib/flag-client-contract.test.ts` checks the served field,
+the client reader and the dashboard note.
+
+Born as flags (no old reader), both **off** and **per server**, for the "Watch
+now" feature (`docs/plans/WATCH_NOW.md`):
+
+- `WATCH_NOW_BANNER` (`watch_now_banner`): the "Assistir" banner over a text
+  channel while somebody in the server shares a screen or a watch party is
+  live. Client-only (the roster and `watch-party-update` frames it reads are
+  sent either way). Served as `watchNowBanner` on `GET
+  /api/live-hls/config?serverId=` (the deployment-wide answer, which a
+  conversation reads, is the global value). Turn it on for one server:
+  `PUT /api/admin/flag-overrides { key: "watch_now_banner", serverId, enabled: true }`;
+  `enabled: null` returns to the default. Open tabs follow on the next config
+  refresh (focus or 10 min).
+- `STREAM_START_NOTIFICATIONS` (`stream_start_notifications`): the start-of-stream
+  notice. The one that can interrupt people, so it is separate from the banner.
+  Served as `streamStartNotifications` on the same config answer. Turn it on for
+  one server: `PUT /api/admin/flag-overrides { key: "stream_start_notifications",
+  serverId, enabled: true }`. Limits that hold with it on: the share must be
+  stable for 20 s, one notice per channel per 30 min, a server above 200 members
+  and every community notify only people who opted in for that server
+  (`notifications.streamAlerts[serverId]`), at most 500 recipients per notice.
+  `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
+  reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
+
+Born as a flag (no old reader): `VOICE_NOTES` (`voice_notes`, default off,
+**per server**), voice notes in chat. A note is an ordinary attachment plus a
+`message_attachment_voice` side row; the flag is checked at mint against the
+channel's own server (a conversation reads the global value), so off is the
+kill switch for new notes while notes already sent stay readable. Served as
+`voiceNotes` on `GET /api/attachments/config?serverId=`. Turn it on for one
+server with `PUT /api/admin/flag-overrides { key: "voice_notes", serverId,
+enabled: true }` or from controles → interruptores. The rules beside it (byte
+budget per second, a note travels alone with no text) are in
+`server/src/services/voice-notes.ts`.
+
+Born as a flag (no old reader): `VOICE_NOTE_TRANSCRIPTION`
+(`voice_note_transcription`, default off, **per server**), the text under a
+voice note. It sends audio out of Brazil (Cloudflare Workers AI), so it goes
+on one server first. Read at four places, all of which know the note's
+server (a conversation reads the global value): the enqueue at send (eager
+in conversations only), the worker right before it would call the provider
+(a flip mid-queue drops the job with no call and no budget spent), the lazy
+`POST /api/attachments/:id/transcript` (403 when off), and every read: **off
+hides stored transcripts too**, so it is a kill switch and not just "stop
+making new ones". Served as `voiceTranscription` on
+`GET /api/attachments/config?serverId=`. Producing text also needs
+`VOICE_STT_PROVIDER` and its key on the worker; without them a transcript
+settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
+flag: it runs for every webm/ogg note while `voice_notes` is on.
+
+Born as a flag (no old reader): `MENTION_IDS_FROM_DB` (`mention_ids_from_db`,
+default off, **global**), role mentions that actually notify. `recordMentions`
+always wrote `message_mentions` rows for the members of a mentioned role (the
+badge after a refresh), but the live `channel-activity` `mention` flag and the
+push recipient list matched the typed tokens against usernames only, so `@mods`
+reached nobody while the message was fresh. With the flag on, `createMessage`
+returns the ids the rows were written for (`mentionedUserIds`), the sending
+instance reads the flag once, and both the local fan-out and the
+`chat.activity` cluster frame carry the ids, so the sibling machine never
+consults the flag and cannot disagree. The ids are unioned with the username
+match, never replacing it; @everyone, @here, mute levels, DND, blocks and
+membership are decided exactly as before. Off, the frame is byte for byte the
+old one. Pinned on real Postgres with two instances on the bus by
+`server/src/ws/role-mention-recipients.test.ts`.
 
 Staying environment-only, on purpose:
 

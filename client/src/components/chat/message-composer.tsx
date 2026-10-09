@@ -50,7 +50,14 @@ import { ComposerFormatPreview } from "@/components/chat/composer-format-preview
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
+import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
+import {
+  VoiceNoteMicButton,
+  VoiceNotePanel,
+  VoiceNoteUndo,
+  useVoiceNoteComposer,
+} from "@/components/chat/voice-note-composer";
 import {
   useEffect,
   useId,
@@ -156,6 +163,11 @@ interface MessageComposerProps {
   onInsertConsumed?: () => void;
   /** Where uploads are minted. Null disables the paperclip along with the send. */
   channelId?: string | null;
+  /**
+   * The server the channel belongs to, null in a conversation. Only read for
+   * the `voice_notes` flag, which is answered per server.
+   */
+  voiceNotesServerId?: string | null;
   /**
    * Files (and folders) dropped on the pane this composer belongs to. The drop
    * target is the whole conversation rather than the textarea, so it lives in
@@ -353,6 +365,7 @@ export function MessageComposer({
   insertText,
   onInsertConsumed,
   channelId = null,
+  voiceNotesServerId = null,
   droppedItems = null,
   onDroppedItemsConsumed,
   replyTarget = null,
@@ -429,6 +442,20 @@ export function MessageComposer({
   }, [slowModeUntil]);
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+  // Voice notes. Absent (flag off, no storage, no recorder) and nothing here
+  // changes: the send button stays the send button.
+  const voiceNote = useVoiceNoteComposer({
+    channelId,
+    serverId: voiceNotesServerId,
+    allowed: variant !== "stream" && !disabled,
+    onSend: (noteBody, noteAttachments) => onSend(noteBody, noteAttachments),
+    onFeedback: (tone, message) => setFeedback({ tone, message }),
+    onDone: () => inputRef.current?.focus(),
+  });
+  const voiceNoteActive = voiceNote.phase.kind !== "idle";
+  const voiceNoteHolding =
+    (voiceNote.phase.kind === "recording" || voiceNote.phase.kind === "starting") &&
+    voiceNote.phase.mode === "hold";
 
   // Coalesced: a write per keystroke would serialise every draft on the
   // input hot path. The draft lands a moment after typing pauses, and the
@@ -1427,7 +1454,11 @@ export function MessageComposer({
         ref={setCallHintHost}
         className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
       />
-      {formatHintEnabled && !isFormatBarOpen && !feedback && (
+      <VoiceNoteTranscriptionNotice
+        recording={voiceNoteActive}
+        serverId={voiceNotesServerId}
+      />
+      {formatHintEnabled && !isFormatBarOpen && !feedback && !voiceNoteActive && (
         <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
           <FeatureHint
             id="composerFormat"
@@ -1489,6 +1520,7 @@ export function MessageComposer({
         back. Errors and /help still need a place to land; they overlay the
         last messages instead of moving the input.
       */}
+      {!feedback && <VoiceNoteUndo controller={voiceNote} />}
       {feedback && FeedbackIcon && (
         <div
           className={cn(
@@ -1644,7 +1676,8 @@ export function MessageComposer({
         )}
           </div>
         )}
-        <div className="relative min-h-10 min-w-0">
+        {voiceNoteActive && <VoiceNotePanel controller={voiceNote} />}
+        <div className={cn("relative min-h-10 min-w-0", voiceNoteActive && "hidden")}>
           {body.length === 0 && (
             <span
               aria-hidden
@@ -1703,7 +1736,14 @@ export function MessageComposer({
             onKeyDown={handleKeyDown}
           />
         </div>
-        <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
+        <div
+          className={cn(
+            "flex items-center gap-0.5 px-1.5 pb-1.5",
+            voiceNoteActive && !voiceNoteHolding && "hidden",
+          )}
+        >
+          {!voiceNoteHolding && (
+          <>
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
           {insertItems.length > 0 && variant !== "stream" && (
@@ -1811,7 +1851,18 @@ export function MessageComposer({
               </Button>
             </Tooltip>
           )}
+          </>
+          )}
           <span className="flex-1" />
+        {voiceNote.available &&
+        (voiceNoteHolding ||
+          (!voiceNoteActive &&
+            composerBodyIsEmpty(body) &&
+            pending.length === 0 &&
+            slowModeRemaining <= 0 &&
+            !isPollComposerOpen)) ? (
+          <VoiceNoteMicButton controller={voiceNote} disabled={disabled || isRunningSlash} />
+        ) : (
         <Button
           type="submit"
           size="icon"
@@ -1846,6 +1897,7 @@ export function MessageComposer({
             </>
           )}
         </Button>
+        )}
         </div>
       </div>
       <p id={holdHintId} role="status" className="sr-only">

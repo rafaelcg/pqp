@@ -33,9 +33,14 @@ object MessagePermissions {
 
     fun canManage(role: String?): Boolean = role == "owner" || role == "admin"
 
-    /** Only the author, and never a webhook's row: there is no account behind it. */
+    /**
+     * Only the author, and never a webhook's row: there is no account behind
+     * it. Nor a voice note: it has no words to change, and the server refuses
+     * an edit that would add some to one.
+     */
     fun canEdit(message: Message, meId: String?): Boolean =
-        meId != null && message.authorId == meId && !message.isWebhook
+        meId != null && message.authorId == meId && !message.isWebhook &&
+            message.attachments.none { it.isVoiceNote }
 
     fun canDelete(message: Message, meId: String?, role: String?, isServerChannel: Boolean): Boolean =
         (meId != null && message.authorId == meId) || (isServerChannel && canManage(role))

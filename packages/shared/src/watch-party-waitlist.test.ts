@@ -50,4 +50,12 @@ describe("joinWatchPartyWaitlistSchema", () => {
   it("takes a serverless row", () => {
     expect(joinWatchPartyWaitlistSchema.parse({ serverId: null })).toMatchObject({ serverId: null, note: null, streamChannel: null });
   });
+
+  it("carries the streamers page's marker, and nothing the list does not name", () => {
+    expect(joinWatchPartyWaitlistSchema.parse({ serverId: null, source: "streamers" })).toMatchObject({ source: "streamers" });
+    expect(joinWatchPartyWaitlistSchema.parse({ serverId: null, source: null })).toMatchObject({ source: null });
+    expect(joinWatchPartyWaitlistSchema.parse({ serverId: null }).source).toBeUndefined();
+    expect(joinWatchPartyWaitlistSchema.safeParse({ serverId: null, source: "ads" }).success).toBe(false);
+    expect(joinWatchPartyWaitlistSchema.safeParse({ serverId: null, source: "Streamers" }).success).toBe(false);
+  });
 });

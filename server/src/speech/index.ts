@@ -6,6 +6,7 @@ export { createGroqProvider, groqCostUsd, GROQ_USD_PER_HOUR } from "./providers/
 export { createOpenRouterSttProvider, buildOpenRouterSttBody } from "./providers/openrouter.js";
 export { createWhisperCppProvider } from "./providers/whisper-cpp.js";
 export { createReplayProvider } from "./providers/replay.js";
+export { createWorkersAiProvider, buildWorkersAiBody, workersAiCostUsd } from "./providers/workers-ai.js";
 export { createXaiProvider, toKeyterms } from "./providers/xai.js";
 export * from "./metrics.js";
 export { createOpenRouterChatTranslator, buildSystemPrompt, parseStringArray } from "./translators/openrouter-chat.js";

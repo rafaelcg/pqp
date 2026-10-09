@@ -125,6 +125,10 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "member.voice_move": "serverSettings.audit.action.member.voice_move",
   "member.voice_mute": "serverSettings.audit.action.member.voice_mute",
   "member.voice_unmute": "serverSettings.audit.action.member.voice_unmute",
+  "channel.voice_audience_on":
+    "serverSettings.audit.action.channel.voice_audience_on",
+  "channel.voice_audience_off":
+    "serverSettings.audit.action.channel.voice_audience_off",
 };
 
 /**

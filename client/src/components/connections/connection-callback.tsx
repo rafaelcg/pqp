@@ -59,7 +59,12 @@ export function ConnectionCallbackOverlay({
           return "ok" as const;
         } catch (caught) {
           stashConnectionErrorFromWindow(
-            messageFromCompleteFailure(caught, completeFailed),
+            messageFromCompleteFailure(caught, {
+              alreadyLinked: t("settings.connections.alreadyLinked"),
+              expired: t("settings.connections.expired"),
+              cancelled: t("settings.connections.cancelled"),
+              fallback: completeFailed,
+            }),
           );
           return "error" as const;
         }

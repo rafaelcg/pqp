@@ -4426,3 +4426,140 @@ describe("raising a hand", () => {
     expect(voice.getState().handRaisedAt).toBeNull();
   });
 });
+
+describe("audience mode", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  const HOST = "00000000-0000-4000-8000-0000000000dd";
+  const OTHER_PEER = "00000000-0000-4000-8000-0000000000ee";
+  const audienceState = {
+    since: 1_000,
+    byUserId: HOST,
+    speakerUserIds: [],
+    unenforcedUserIds: [],
+  };
+
+  it("a welcome locked by audience mode says so, and does not blame the channel", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    const message = welcome("mesh");
+    voice.handleSignaling({
+      ...message,
+      canSpeak: false,
+      canStream: false,
+      speakReason: "audience",
+      audience: audienceState,
+      self: { ...message.self, canSpeak: false },
+    });
+    await settle();
+    const state = voice.getState();
+    expect(state.canSpeak).toBe(false);
+    expect(state.isMuted).toBe(true);
+    expect(state.speakReason).toBe("audience");
+    expect(state.audience).toEqual(audienceState);
+    // The audience line says it; the generic "no permission" sentence would
+    // be wrong (the channel does allow it).
+    expect(state.notice ?? "").not.toContain("permission");
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("follows voice-audience for our room only, and keeps the change for the notice", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.handleSignaling({
+      type: "voice-audience",
+      voiceChannelId: "00000000-0000-4000-8000-00000000ffff",
+      audience: audienceState,
+      change: { kind: "on", byUserId: HOST },
+    });
+    expect(voice.getState().audience).toBeNull();
+    voice.handleSignaling({
+      type: "voice-audience",
+      voiceChannelId: CHANNEL,
+      audience: audienceState,
+      change: { kind: "on", byUserId: HOST },
+    });
+    expect(voice.getState().audience).toEqual(audienceState);
+    expect(voice.getState().audienceChange).toMatchObject({ kind: "on", byUserId: HOST });
+    voice.handleSignaling({
+      type: "voice-audience",
+      voiceChannelId: CHANNEL,
+      audience: null,
+      change: { kind: "off", byUserId: null, reason: "no-host" },
+    });
+    expect(voice.getState().audience).toBeNull();
+    voice.leave();
+    expect(voice.getState().audienceChange).toBeNull();
+  });
+
+  it("a host letting us talk unlocks the mic, keeps us muted, and clears the reason", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: false,
+      canStream: false,
+      speakReason: "audience",
+    });
+    expect(voice.getState().speakReason).toBe("audience");
+    expect(voice.getState().isMuted).toBe(true);
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: true,
+      canStream: false,
+    });
+    expect(voice.getState().canSpeak).toBe(true);
+    expect(voice.getState().speakReason).toBeNull();
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("silences, on this receiver, a peer the roster says may not speak", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh", [{ peerId: OTHER_PEER }]));
+    await settle();
+    const base = {
+      userId: "00000000-0000-4000-8000-0000000000cc",
+      displayName: "Me",
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+      serverMuted: false,
+    };
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [
+        // Our own lock is not a receiver's business.
+        { ...base, peerId: PEER, canSpeak: false },
+        { ...base, peerId: OTHER_PEER, userId: HOST, canSpeak: false },
+      ],
+    });
+    expect(voice.getState().speakLockedPeerIds).toEqual([OTHER_PEER]);
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [
+        { ...base, peerId: PEER },
+        { ...base, peerId: OTHER_PEER, userId: HOST, canSpeak: true },
+      ],
+    });
+    expect(voice.getState().speakLockedPeerIds).toEqual([]);
+  });
+});

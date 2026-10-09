@@ -7520,6 +7520,246 @@
           }
         }
       }
+    },
+    "Processing audio…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Processando áudio…"
+          }
+        }
+      }
+    },
+    "Could not play this voice message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra tocar este áudio."
+          }
+        }
+      }
+    },
+    "Heard" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouviu"
+          }
+        }
+      }
+    },
+    "Play voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocar áudio"
+          }
+        }
+      }
+    },
+    "Pause voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar áudio"
+          }
+        }
+      }
+    },
+    "Playback speed" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidade"
+          }
+        }
+      }
+    },
+    "Not played yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não ouvido"
+          }
+        }
+      }
+    },
+    "Hold to record a voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segure pra gravar um áudio"
+          }
+        }
+      }
+    },
+    "Record voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar áudio"
+          }
+        }
+      }
+    },
+    "Slide to cancel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deslize pra cancelar"
+          }
+        }
+      }
+    },
+    "Discard voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar áudio"
+          }
+        }
+      }
+    },
+    "Resume recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar gravação"
+          }
+        }
+      }
+    },
+    "Pause recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar gravação"
+          }
+        }
+      }
+    },
+    "Send voice message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar áudio"
+          }
+        }
+      }
+    },
+    "Locked. You can let go." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Travado. Pode soltar o dedo."
+          }
+        }
+      }
+    },
+    "You reached the 5 minute limit." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chegou no limite de 5 minutos."
+          }
+        }
+      }
+    },
+    "Voice message discarded (%@)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Áudio descartado (%@)"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desfazer"
+          }
+        }
+      }
+    },
+    "You are on a call. Leave it to record a voice message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você está em uma call. Saia dela pra gravar um áudio."
+          }
+        }
+      }
+    },
+    "Microphone access is off. Enable it in Settings to record voice messages." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O acesso ao microfone está desligado. Ative nos Ajustes pra gravar áudios."
+          }
+        }
+      }
+    },
+    "Could not start recording. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra começar a gravar. Tente de novo."
+          }
+        }
+      }
+    },
+    "Hold the microphone to record a voice message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segure o microfone pra gravar um áudio."
+          }
+        }
+      }
+    },
+    "Could not send the voice message (%@)." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra enviar o áudio (%@)."
+          }
+        }
+      }
+    },
+    "Discard" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

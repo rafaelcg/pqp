@@ -1,10 +1,13 @@
 import type {
+  VoiceAudienceResponse,
   ChannelType,
+  StreamAlertSetting,
   MusicResolved,
   AcquisitionInput,
   AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
+  VoiceNoteTranscriptResponse,
   AuditLogPage,
   AvatarConfig,
   BlockListResponse,
@@ -605,7 +608,11 @@ export async function exportMyData(): Promise<Blob> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(response.status, body.error ?? "Export failed");
+    throw new ApiError(
+      response.status,
+      body.error ?? "Export failed",
+      parseRetryAfterMs(response.headers.get("Retry-After")),
+    );
   }
   return response.blob();
 }
@@ -714,7 +721,24 @@ export interface ShareConfig {
    * Absent on an older API: off.
    */
   shareGameCaptureHint?: boolean;
+  /**
+   * A share's picture starts at the stage's layer, and a presenter's share is
+   * not republished when the room crosses twenty
+   * (`lib/share-fast-start.ts`). Absent on an older API: off.
+   */
+  shareFastStartQuality?: boolean;
 }
+
+/**
+ * What `stream_start_notifications` means for this person in this server: is
+ * the flag on, what they get by default (on for a small server, off for a large
+ * one or a community) and the member count behind that. The choice itself is
+ * `notifications.streamAlerts` in the preferences the client already syncs.
+ */
+export const fetchStreamAlertSetting = (serverId: string) =>
+  apiFetch<StreamAlertSetting>(
+    `/api/servers/${encodeURIComponent(serverId)}/stream-alerts`,
+  );
 
 /** `serverId` is the server the call is in; a DM call asks without one. */
 export const fetchShareConfig = (serverId?: string | null) =>
@@ -722,6 +746,39 @@ export const fetchShareConfig = (serverId?: string | null) =>
     serverId
       ? `/api/share/config?serverId=${encodeURIComponent(serverId)}`
       : "/api/share/config",
+  );
+
+/**
+ * What a voice call's controls may offer in this server, decided by the
+ * operator without a deploy (`GET /api/voice/config?serverId=`,
+ * `voiceConfigForServer` on the server). Every field optional: an older API
+ * answers 404 or omits it, and absent is off.
+ */
+export interface VoiceConfig {
+  /**
+   * A host here may turn audience mode on (`docs/plans/AUDIENCE_MODE.md`).
+   * Only gates turning it ON: a room already in audience mode shows its
+   * state and its off switch whatever this says.
+   */
+  audienceMode?: boolean;
+}
+
+export const fetchVoiceConfig = (serverId: string) =>
+  apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** Turn audience mode on or off in the call running in this voice channel. */
+export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
+  put<VoiceAudienceResponse>(`/api/channels/${channelId}/voice-audience`, { enabled });
+
+/** "Liberar o microfone" / "Silenciar" for one person while audience mode is on. */
+export const setVoiceAudienceSpeaker = (
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+) =>
+  put<VoiceAudienceResponse>(
+    `/api/channels/${channelId}/voice-audience/speakers/${userId}`,
+    { allowed },
   );
 
 /**
@@ -812,6 +869,22 @@ export interface LiveHlsConfig {
    * Absent on an older API, which reads as off. See `lib/camera-sync.ts`.
    */
   cameraSync?: boolean;
+  /**
+   * `watch_now_banner` (runtime flag, off by default, per server): the strip
+   * above the conversation that says somebody is sharing their screen in a
+   * voice channel, or a watch party is live, with one tap to watch. The
+   * deployment-wide answer carries the global value, which is what a
+   * conversation (no server) reads. Absent on an older API, which reads as
+   * off. See `lib/watch-now.ts` and `docs/plans/WATCH_NOW.md`.
+   */
+  watchNowBanner?: boolean;
+  /**
+   * `stream_start_notifications` (runtime flag, off by default, per server):
+   * the server may tell members a stream started. The client shows the
+   * per-server switch only where this is true. Absent on an older API, which
+   * reads as off.
+   */
+  streamStartNotifications?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
@@ -902,9 +975,53 @@ export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
  * Whether this deployment has object storage, so the paperclip can be hidden.
  * `maxBytes` is optional: a server that only reports `enabled` leaves the client
  * on the shared ceiling, which is the value it would have enforced anyway.
+ *
+ * `voiceNotes` is the `voice_notes` flag, answered per server when asked with
+ * `?serverId=`; a conversation asks without one and gets the global value.
  */
-export const fetchAttachmentConfig = () =>
-  apiFetch<{ enabled: boolean; maxBytes?: number }>("/api/attachments/config");
+export const fetchAttachmentConfig = (serverId?: string | null) =>
+  apiFetch<{
+    enabled: boolean;
+    maxBytes?: number;
+    voiceNotes?: boolean;
+    /** The `voice_note_transcription` flag, answered the same way as `voiceNotes`. */
+    voiceTranscription?: boolean;
+  }>(
+    serverId
+      ? `/api/attachments/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/attachments/config",
+  );
+
+/**
+ * "I heard this voice note." Idempotent on the server and answered with 204,
+ * which `apiFetch` (JSON only) would report as an error, so this is a bare
+ * request that only cares whether it went out.
+ */
+export async function markVoiceNoteListened(attachmentId: string): Promise<void> {
+  try {
+    await apiFetch<unknown>(`/api/attachments/${attachmentId}/listened`, {
+      method: "POST",
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 204) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued (the answer comes
+ * later as a `voice-note-transcript` frame), 200 once there is a settled one;
+ * both carry `{ transcript }`, whose `status` says which. 403 means the flag is
+ * off here, the sender did not allow it, or a preference says no; 404 means the
+ * note is not one the caller can hear; 429 is the per-account limiter. Callers
+ * read the status off the thrown `ApiError`.
+ */
+export const requestVoiceNoteTranscript = (attachmentId: string) =>
+  post<VoiceNoteTranscriptResponse>(
+    `/api/attachments/${attachmentId}/transcript`,
+  );
 
 /**
  * Reserve a row and get a presigned PUT for it. The storage key is chosen by

@@ -5,6 +5,7 @@ import {
   type VoiceParticipant,
 } from "@pqp/shared";
 import { Tooltip } from "@/components/ui/tooltip";
+import { AudienceAllowButton } from "@/components/voice/audience-mode";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +42,7 @@ export function RaisedHandQueue({
   selfUserId,
   canLowerHands = false,
   onLowerHand,
+  audience = null,
   compact = false,
   className,
 }: {
@@ -54,6 +56,13 @@ export function RaisedHandQueue({
    */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /**
+   * Audience mode is on and this viewer runs the stage: every hand gets a
+   * one-tap "Liberar o microfone" (`docs/plans/AUDIENCE_MODE.md`). On the
+   * compact line the first hand gets it, because that line is what most
+   * calls show. Null for everybody else.
+   */
+  audience?: { busy: boolean; onAllow: (userId: string) => void } | null;
   /** One line for the collapsed call strip instead of a panel. */
   compact?: boolean;
   className?: string;
@@ -92,6 +101,15 @@ export function RaisedHandQueue({
         >
           {queue[0]!.displayName}
         </span>
+        {audience && queue[0]!.userId !== selfUserId && (
+          <AudienceAllowButton
+            short
+            name={queue[0]!.displayName}
+            userId={queue[0]!.userId}
+            busy={audience.busy}
+            onAllow={audience.onAllow}
+          />
+        )}
         {/* One name and a count: the strip is a line, and the whole list is
             one click away on the person's row in the sidebar. */}
         {queue.length > 1 && (
@@ -140,6 +158,14 @@ export function RaisedHandQueue({
               {index + 1}
             </span>
             <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
+            {audience && person.userId !== selfUserId && (
+              <AudienceAllowButton
+                name={person.displayName}
+                userId={person.userId}
+                busy={audience.busy}
+                onAllow={audience.onAllow}
+              />
+            )}
             {canLowerHands && onLowerHand && person.userId !== selfUserId && (
               <Tooltip
                 label={t("voice.hand.lowerFor", { name: person.displayName })}

@@ -21,7 +21,16 @@ data class PendingAttachment(
     val attachmentId: String? = null,
     /** The mint or the upload refused. Shown, never swallowed. */
     val failed: Boolean = false,
+    /**
+     * Set when this is a recorded voice note rather than a picked file. It
+     * rides with the attachment so a retry mints with the same duration and
+     * waveform, and so the optimistic row can draw the card before the server
+     * has answered.
+     */
+    val voice: CreateVoiceNote? = null,
 ) {
+    val isVoiceNote: Boolean get() = voice != null
+
     val uploading: Boolean get() = attachmentId == null && !failed
     val isImage: Boolean get() = contentType in INLINE_IMAGE_TYPES
 }

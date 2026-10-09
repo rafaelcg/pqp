@@ -29,7 +29,7 @@ import {
   claimAttachments,
   listAttachmentsForMessages,
   toPublicAttachment,
-  verifyPendingAttachments,
+  verifyPendingAttachmentsWithNotes,
 } from "./attachments.js";
 import { listBlockedAmong, notBlockedSql } from "./blocks.js";
 import { listEmbedsForMessages } from "./embeds.js";
@@ -38,6 +38,16 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import {
+  ATTACHMENT_OBJECT_KEYS,
+  ATTACHMENT_VOICE_JOIN,
+  noteShapeAllowed,
+  voiceNotesEnabledForChannel,
+} from "./voice-notes.js";
+import {
+  enqueuePlannedSpeechJobs,
+  planVoiceNoteJobs,
+} from "./voice-transcription.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -239,7 +249,7 @@ async function hydrate(
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       // Cache-only — a history read must never trigger a network fetch on
       // someone else's behalf, so a link nobody has posted before yet simply
       // shows no embed until whoever's create/edit request resolves one.
@@ -461,6 +471,12 @@ export interface MentionWrite {
   mentionEveryone?: boolean;
   mentionHere?: boolean;
   canMentionEveryone?: boolean;
+  /**
+   * Ask `recordMentions` to hand back the ids it wrote (`mention_ids_from_db`).
+   * Off, the INSERTs carry no RETURNING and nothing is materialised, so a
+   * message that mentions a big role costs exactly what it did before.
+   */
+  collectRecipients?: boolean;
 }
 
 async function recordMentions(
@@ -471,11 +487,17 @@ async function recordMentions(
   body: string,
   reply?: { parentId: string; authorId: string },
   extra?: MentionWrite,
-): Promise<void> {
+): Promise<string[]> {
   const parsed = extractMentions(body);
   const usernames = parsed.usernames;
+  // Everyone a row was written for, from every source below. Each INSERT is
+  // `ON CONFLICT DO NOTHING ... RETURNING`, so a person already recorded by an
+  // earlier source is not returned twice and the union is the set of rows.
+  const collect = extra?.collectRecipients === true;
+  const returning = collect ? "RETURNING user_id" : "";
+  const recorded = new Set<string>();
   if (usernames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, u.id
        FROM users u
@@ -494,13 +516,17 @@ async function recordMentions(
                )
              END
          AND ${notBlockedSql("u.id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, channelId, usernames, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (parsed.roleNames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT DISTINCT $1::uuid, mr.user_id
        FROM channels c
@@ -527,7 +553,8 @@ async function recordMentions(
                   END
          )
          AND ${notBlockedSql("mr.user_id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [
         messageId,
         channelId,
@@ -536,33 +563,45 @@ async function recordMentions(
         extra?.mentionEveryone === true || extra?.canMentionEveryone === true,
       ],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   const extraIds = extra?.extraUserIds ?? [];
   if (extraIds.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, x.user_id
        FROM UNNEST($2::uuid[]) AS x(user_id)
        WHERE x.user_id <> $3
          AND ${notBlockedSql("x.user_id", "$3")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, extraIds, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (!reply) {
-    return;
+    return [...recorded];
   }
-  await db.query(
+  const answered = await db.query<{ user_id: string }>(
     `INSERT INTO message_mentions (message_id, user_id)
      SELECT $1::uuid, parent.author_id
      FROM messages parent
      WHERE parent.id = $2 AND parent.author_id <> $3
        AND ${notBlockedSql("parent.author_id", "$3")}
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     ${returning}`,
     [messageId, reply.parentId, reply.authorId],
   );
+  for (const row of answered.rows) {
+    recorded.add(row.user_id);
+  }
+  return [...recorded];
 }
 
 /**
@@ -595,7 +634,18 @@ async function recordMentions(
  * the earlier message: the caller must not fan it out, only answer the
  * sender who asked twice.
  */
-export type CreateMessageResult = HydratedMessage & { duplicate: boolean };
+export type CreateMessageResult = HydratedMessage & {
+  duplicate: boolean;
+  /**
+   * Every account a `message_mentions` row was written for in this send:
+   * names, roles, @here, and the person replied to, already filtered by
+   * blocks and membership. Only on a freshly created message (a duplicate
+   * carries none, and is never fanned out). What the live `channel-activity`
+   * mention flag and the push recipient list read when `mention_ids_from_db`
+   * is on, because a role mention is only resolved to people here.
+   */
+  mentionedUserIds?: string[];
+};
 
 export async function createMessage(
   channelId: string,
@@ -659,9 +709,48 @@ async function insertMessage(
     storedBody = interactive.poll.question;
   }
 
-  const verified = attachmentIds?.length
-    ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
-    : [];
+  const { verified, requestedNotes } = attachmentIds?.length
+    ? await verifyPendingAttachmentsWithNotes(channelId, author.id, attachmentIds)
+    : { verified: [], requestedNotes: 0 };
+
+  // A voice note travels alone, with no text: refused whole, before any
+  // transaction opens, the same way an empty frame is. Nothing is claimed, so
+  // the note stays unclaimed for the sweeper. Counted on what was asked for,
+  // not on what verified, so a note whose upload failed cannot drop out and
+  // let the rest of the send through.
+  if (
+    !noteShapeAllowed({
+      requestedNotes,
+      requestedCount: new Set(attachmentIds ?? []).size,
+      // A deck draw only writes its body inside the transaction below, but it
+      // is text beside the note all the same.
+      body: deckAction ? "deck" : storedBody,
+    })
+  ) {
+    return null;
+  }
+
+  // The flag again, at the claim. The mint checked it, but a note minted
+  // while it was on can sit unclaimed for up to an hour, and turning
+  // `voice_notes` off has to stop those too: it is the off switch, and a
+  // switch that leaves already-minted notes deliverable is not one. Refused
+  // the same way the shape rule is, with nothing claimed, so the note falls
+  // to the sweeper. Only asked when a note is in the send, so no other message
+  // pays for it.
+  if (requestedNotes > 0 && !(await voiceNotesEnabledForChannel(channelId))) {
+    return null;
+  }
+  // What a voice note needs from the worker (an AAC copy, an eager
+  // transcript), decided now, on the pool, so the transaction below only
+  // writes rows. See `voice-transcription.ts`.
+  const speechJobs =
+    requestedNotes > 0
+      ? await planVoiceNoteJobs(
+          channelId,
+          author.id,
+          verified.map((entry) => entry.row),
+        )
+      : [];
 
   const nickRow = await getPool().query<{ nickname: string | null }>(
     `SELECT sm.nickname
@@ -733,7 +822,22 @@ async function insertMessage(
       await insertPoll(client, message.id, interactive.poll);
     }
 
-    await recordMentions(
+    // Rows and a transactional NOTIFY only: the worker is woken at COMMIT,
+    // and a rollback leaves no job behind.
+    if (speechJobs.length > 0) {
+      const claimedIds = new Set(claimed.map((row) => row.id));
+      const pending = await enqueuePlannedSpeechJobs(
+        client,
+        speechJobs.filter((job) => claimedIds.has(job.attachmentId)),
+      );
+      for (const row of claimed) {
+        if (pending.has(row.id)) {
+          row.voice_transcript_status = "pending";
+        }
+      }
+    }
+
+    const mentionedUserIds = await recordMentions(
       client,
       message.id,
       channelId,
@@ -765,6 +869,7 @@ async function insertMessage(
       chance,
       poll: polls.get(message.id) ?? null,
       duplicate: false,
+      mentionedUserIds,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -907,7 +1012,10 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   // ON DELETE SET NULL: once the message is gone the rows are still there but
   // nothing links them back to it.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments WHERE message_id = $1`,
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+       FROM message_attachments a
+       ${ATTACHMENT_VOICE_JOIN}
+      WHERE a.message_id = $1`,
     [messageId],
   );
 
@@ -1001,9 +1109,10 @@ export async function deleteMessagesBulk(
   // `message_attachments.message_id` is ON DELETE SET NULL, so once the
   // messages are gone nothing links those rows back to them.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT a.storage_key
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
        FROM message_attachments a
        JOIN messages m ON m.id = a.message_id
+       ${ATTACHMENT_VOICE_JOIN}
       WHERE m.channel_id = $1 AND a.message_id = ANY($2::uuid[])`,
     [channelId, messageIds],
   );
@@ -1134,7 +1243,7 @@ async function hydrateOne(
 ): Promise<HydratedMessage> {
   const [reactions, attachments, embeds, threads, polls] = await Promise.all([
     listReactionsForMessages([message.id], viewerId),
-    listAttachmentsForMessages([message.id]),
+    listAttachmentsForMessages([message.id], viewerId),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
@@ -1259,6 +1368,7 @@ export async function unpinMessage(
  */
 export async function listPinnedMessages(
   channelId: string,
+  viewerId?: string,
 ): Promise<HydratedMessage[]> {
   const result = await getPool().query<DbMessage>(
     `${MESSAGE_SELECT}
@@ -1270,7 +1380,7 @@ export async function listPinnedMessages(
   const [reactionsByMessage, attachmentsByMessage, embedsByMessage, pollsByMessage] =
     await Promise.all([
       listReactionsForMessages(messageIds),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       listEmbedsForMessages(result.rows),
       listPollsForMessages(messageIds),
     ]);

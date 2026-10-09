@@ -1,464 +1,75 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type CSSProperties,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
-  canRenameHandle,
-  DISPLAY_NAME_MAX_LENGTH,
-  deleteConfirmationMatches,
-  expectedDeleteConfirmation,
-  HANDLE_MAX_LENGTH,
-  handleRenameAvailableAt,
-  MAX_USER_BANNER_BYTES,
-  normalizeHandle,
-  publicProfileDisplayUrl,
-  publicProfilePath,
-  USER_BANNER_HEIGHT,
-  USER_BANNER_MIME_ALLOWLIST,
-  USER_BANNER_WIDTH,
-  FEEDBACK_BODY_MAX_LENGTH,
-  FEEDBACK_KINDS,
-  type FeedbackKind,
   type BlockedUser,
-  type DmPrivacy,
   type User,
-  type UserBannerConfig,
-  type UserPreferences,
+  HANDLE_RENAME_COOLDOWN_DAYS,
+  usernameSchema,
+  validateHandle,
 } from "@pqp/shared";
 import { SignOutButton } from "@/components/layout/sign-out-button";
-import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
-import { FileDropZone } from "@/components/ui/file-drop-zone";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { AvatarPicker } from "@/components/user/avatar-picker";
+import { SectionRail } from "@/components/ui/section-rail";
+import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import {
-  useNotificationSettings,
-  useNotificationState,
-} from "@/hooks/use-notifications";
-import { useAccentHue } from "@/hooks/use-accent-hue";
-import { useAppearance } from "@/hooks/use-appearance";
-import { useChatDisplay } from "@/hooks/use-chat-display";
-import { useContrast } from "@/hooks/use-contrast";
-import { useTheme } from "@/hooks/use-theme";
-import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
-import { KeyBindingField } from "@/components/voice/key-binding-field";
-import { DEFAULT_CHAT_DISPLAY, type ChatDensity } from "@/lib/chat-display";
-import { isApplePlatform } from "@/lib/composer-formatting";
-import {
-  findBindingConflict,
-  parseShortcutOverrides,
-  resolveShortcutBindings,
-  SHORTCUT_GROUPS,
-  type BindableId,
-  type ShortcutAction,
-  type ShortcutOverrides,
-} from "@/lib/keyboard-shortcuts";
-import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
-import { ObsVirtualCameraHint } from "@/components/voice/obs-virtual-camera-hint";
-import {
-  dismissObsVirtualCameraHint,
-  isObsVirtualCameraHintDismissed,
-  isObsVirtualCameraLabel,
-} from "@/lib/obs-virtual-camera";
-import {
-  DEFAULT_VIDEO_QUALITY,
-  parseVideoQuality,
-  VIDEO_QUALITIES,
-  type VideoQuality,
-} from "@/lib/video-quality";
-import {
-  DEFAULT_SCREEN_FRAME_RATE,
-  parseScreenFrameRate,
-  SCREEN_FRAME_RATES,
-  type ScreenFrameRate,
-} from "@/lib/hls-capture-rate";
-import {
-  bindingTypesText,
-  defaultPttBinding,
-  formatBinding,
-  parsePttBinding,
-  supportsKeyBinding,
-  type KeyBinding,
-  type PttBinding,
-} from "@/components/voice/push-to-talk";
-import {
-  clampReleaseDelayMs,
-  DEFAULT_RELEASE_DELAY_MS,
-  MAX_RELEASE_DELAY_MS,
-} from "@/lib/ptt-release-delay";
-import { PttBindingField } from "@/components/voice/key-binding-field";
-import {
-  getPttReleaseStuck,
-  subscribePttReleaseStuck,
-} from "@/components/voice/shell-unbind";
-import { pttHintMessageKey, usePttNativeSupport } from "@/lib/ptt-native-support";
-import type { VoiceInputMode } from "@/hooks/use-voice";
-import {
-  parseVadThreshold,
-  SPEAKING_THRESHOLD,
-} from "@/lib/voice-audio";
-import {
-  defaultMicProcessing,
   ensureCameraPermission,
-  ensureMediaPermission,
+  isMicTestRunning,
   listAudioDevices,
-  supportsAudioOutputSelection,
+  microphoneLabelsReadable,
+  probeMicrophone,
   type MediaDeviceOption,
-  type MicProcessing,
 } from "@/lib/audio-devices";
-import {
-  NOISE_SUPPRESSION_MODES,
-  parseNoiseSuppressionMode,
-  type NoiseSuppressionMode,
-} from "../../lib/noise-suppression";
-import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
-import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
+import { intlLocale } from "@/lib/locale";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
-import {
-  setAutoHideStageControls,
-  useAutoHideStageControls,
-} from "@/lib/stage-controls-pref";
-import {
-  isVoiceCleanSettingsSeen,
-  markVoiceCleanSettingsSeen,
-  shouldShowVoiceCleanSettingsBadge,
-} from "@/lib/voice-clean";
-import {
-  SUPPORTED_LOCALES,
-  intlLocale,
-  setLocalePreference,
-  type Locale,
-} from "@/lib/locale";
-import {
-  adoptNotificationPreferences,
-  setArrivalToastEnabled,
-  setPreviewInAppEnabled,
-  type NotificationLevel,
-} from "@/lib/notifications";
-import {
-  adoptSoundPreferences,
-  getIncomingRing,
-  getSoundState,
-  playCue,
-  previewPttBeeps,
-  setIncomingRing,
-  setPttBeepEnabled,
-  setSoundCueEnabled,
-  setSoundEnabled,
-  subscribeSounds,
-  type IncomingRingId,
-  type SoundCue,
-  type SoundState,
-} from "@/lib/sounds";
-import {
-  disablePush,
-  enablePush,
-  getCurrentPushSubscription,
-  getPushAvailability,
-  getPushConfig,
-  setPushDmDetails,
-  type PushAvailability,
-} from "@/lib/push";
-import {
-  ACCENT_SWATCHES,
-  effectiveAccentHue,
-  type AccentHuePreference,
-} from "@/lib/accent";
-import type { AppearancePreference } from "@/lib/appearance";
-import type { ContrastPreference } from "@/lib/contrast";
-import type { ThemePreference } from "@/lib/theme";
-import {
-  ApiError,
-  deleteMyAccount,
-  deleteUserBanner,
-  exportMyData,
-  fetchUserBannerConfig,
-  sendFeedback,
-  updateMe,
-  OwnedServersError,
-  type BlockingOwnedServer,
-} from "@/lib/api";
+import { isVoiceCleanSettingsSeen, markVoiceCleanSettingsSeen, shouldShowVoiceCleanSettingsBadge } from "@/lib/voice-clean";
+import { ApiError, fetchMe, updateMe } from "@/lib/api";
+import { isApplePlatform } from "@/lib/composer-formatting";
+import { isDesktopApp } from "@/lib/desktop";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { HelpSection } from "@/components/layout/help-section";
-import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { requestConnectionCheck } from "@/lib/settings-request";
-import {
-  buildFeedbackContext,
-  type FeedbackVoiceContext,
-} from "@/lib/feedback-context";
+import { type FeedbackVoiceContext } from "@/lib/feedback-context";
 import { cn } from "@/lib/utils";
+import { LocalSettings, preferencesFromLocal, saveLocalSettings } from "@/components/settings/local-settings";
+import { VoiceSection } from "@/components/settings/voice-section";
+import { KeyboardSection } from "@/components/settings/keyboard-section";
+import { AppearanceSection } from "@/components/settings/appearance-section";
+import { NotificationsSection } from "@/components/settings/notifications-section";
+import { PrivacySection } from "@/components/settings/privacy-section";
+import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
+import { ProfileSection, type HandleAvailability } from "@/components/settings/profile-section";
+import { endFeedbackVisit, FeedbackSection } from "@/components/settings/feedback-section";
+import {
+  AVATAR_URL_MAX_LENGTH,
+  avatarLinkProblem,
+  buildProfilePatch,
+  hasBidiControl,
+  hasVisibleText,
+  isHandleTakenError,
+  isProfileDirty,
+  pendingHandleChange,
+  profileDraftsFrom,
+  type ProfileDrafts,
+} from "@/components/settings/profile-patch";
+import { SettingsAnnouncer, markSettingsPaneShown } from "@/components/settings/kit/announcer";
+import { flashSettingsRow } from "@/components/settings/kit/flash-row";
+import { inlineErrorMessage } from "@/components/settings/kit/use-inline-save";
+import {
+  SettingsBuildLine,
+  SettingsNotice,
+  SettingsPaneHeader,
+  SettingsSectionContext,
+  SettingsShellContext,
+  UnsavedChangesBar,
+  type SettingsSectionId,
+  type SettingsShellValue,
+} from "@/components/settings/kit";
 
-export interface LocalSettings {
-  muteOnJoin: boolean;
-  compactPeers: boolean;
-  inputDeviceId: string;
-  /** Webcam on this machine. Device-local, same reason as the mic id. */
-  cameraDeviceId: string;
-  outputDeviceId: string;
-  inputVolume: number;
-  outputVolume: number;
-  showLinkEmbeds: boolean;
-  /**
-   * Voice input mode and its key binding.
-   *
-   * DEVICE-LOCAL FOR NOW, and deliberately absent from `preferencesFromLocal`.
-   * `userPreferencesSchema` in `@pqp/shared` has no key for either yet, and
-   * that schema is not this change's to edit — the exact keys to add are listed
-   * in the handover. Until they exist these live in `localStorage` alongside
-   * the device ids, which is the right home for the *binding* in any case: a
-   * `KeyboardEvent.code` is a physical key on the keyboard in front of you, and
-   * syncing it to a phone or a different layout is meaningless.
-   */
-  inputMode: VoiceInputMode;
-  /**
-   * Voice-activity sensitivity, 0..1 on the same scale as the speaking
-   * tracker. Device-local with `inputMode`: it describes this mic in this
-   * room, and `@pqp/shared` has no preference key for it yet.
-   */
-  vadThreshold: number;
-  /**
-   * `PttBinding` rather than plain `KeyBinding`: push-to-talk can be bound to
-   * a mouse button (middle click, or one of the two "extra" side buttons) as
-   * well as a key, on the desktop shell's native hook (Tier 2, see
-   * `electron/lib/native-ptt-hook.js`). See `push-to-talk.ts` for why that
-   * type stays separate from the `KeyBinding` every app shortcut still uses.
-   */
-  pushToTalkKey: PttBinding;
-  /**
-   * How long the mic stays open after the PHYSICAL release before actually
-   * closing, on the desktop shell's native hook: 0 to 2000 ms, default 20.
-   * Same idea as Discord's own release-delay slider: closing the instant the
-   * key comes up clips the end of a word. Device-local for the same reason
-   * `pushToTalkKey` is: this is a property of this machine's native hook, and
-   * has no meaning at all on the web (there is no native hook there, see
-   * `use-push-to-talk.ts`) or on a shell too old to carry the bridge.
-   */
-  pttReleaseDelayMs: number;
-  /**
-   * Short local tones when the PTT key opens and closes the mic. Device-local
-   * with the binding: it is a cue for this machine, and it is not a synced
-   * sound preference.
-   */
-  pttBeep: boolean;
-  /**
-   * Desktop only: whether the shell holds the push-to-talk binding while the
-   * window is in the background (the native hook, or its `globalShortcut`
-   * fallback). Off keeps push-to-talk in-window, which is what someone wants
-   * when the same key means something in the game they are playing. On by
-   * default: working outside the window is the point of the desktop app.
-   */
-  pttGlobal: boolean;
-  /**
-   * Remapped Discord-style shortcuts. Device-local for the same reason as
-   * the PTT key: a `KeyboardEvent.code` is this keyboard. Absent keys keep
-   * the platform default (Cmd on Apple, Ctrl elsewhere).
-   */
-  shortcuts: ShortcutOverrides;
-  /** getUserMedia processing flags. Also pending a shared-schema key. */
-  micProcessing: MicProcessing;
-  /**
-   * What the camera is asked for. Device-local for the same reason the device
-   * ids are: it describes this machine's webcam and this machine's uplink, and
-   * syncing it to a phone would be meaningless.
-   */
-  videoQuality: VideoQuality;
-  /**
-   * Capture cadence for a screen share. Device-local with videoQuality: it
-   * describes this display's refresh and this machine's encoder.
-   */
-  screenFrameRate: ScreenFrameRate;
-}
-
-/** Option labels, so the select and the catalogue cannot drift apart. */
-const VIDEO_QUALITY_LABELS: Record<VideoQuality, MessageKey> = {
-  auto: "settings.voice.videoQuality.auto",
-  "1080p": "settings.voice.videoQuality.1080p",
-  "720p": "settings.voice.videoQuality.720p",
-  "480p": "settings.voice.videoQuality.480p",
-  "360p": "settings.voice.videoQuality.360p",
-};
-
-const SCREEN_FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
-  auto: "settings.voice.screenFrameRate.auto",
-  "30": "settings.voice.screenFrameRate.30",
-  "60": "settings.voice.screenFrameRate.60",
-};
-
-const STORAGE_KEY = "pqp-local-settings";
-
-export const defaultLocalSettings: LocalSettings = {
-  muteOnJoin: false,
-  compactPeers: false,
-  inputDeviceId: "",
-  cameraDeviceId: "",
-  outputDeviceId: "",
-  inputVolume: 1,
-  outputVolume: 1,
-  showLinkEmbeds: true,
-  // Voice activity stays the default: it is what every existing user already
-  // has, and push-to-talk is a choice people make, not one made for them.
-  inputMode: "voice-activity",
-  vadThreshold: SPEAKING_THRESHOLD,
-  pushToTalkKey: defaultPttBinding(),
-  pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
-  pttBeep: true,
-  pttGlobal: true,
-  shortcuts: {},
-  micProcessing: defaultMicProcessing,
-  // Auto, always. A default that pins a size would be a default that is wrong
-  // on somebody's uplink.
-  videoQuality: DEFAULT_VIDEO_QUALITY,
-  screenFrameRate: DEFAULT_SCREEN_FRAME_RATE,
-};
-
-export function loadLocalSettings(): LocalSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return defaultLocalSettings;
-    }
-    const parsed = JSON.parse(raw) as Partial<LocalSettings>;
-    return {
-      ...defaultLocalSettings,
-      ...parsed,
-      inputVolume:
-        typeof parsed.inputVolume === "number"
-          ? Math.min(2, Math.max(0, parsed.inputVolume))
-          : defaultLocalSettings.inputVolume,
-      outputVolume:
-        typeof parsed.outputVolume === "number"
-          ? Math.min(1, Math.max(0, parsed.outputVolume))
-          : defaultLocalSettings.outputVolume,
-      inputDeviceId:
-        typeof parsed.inputDeviceId === "string"
-          ? parsed.inputDeviceId
-          : defaultLocalSettings.inputDeviceId,
-      cameraDeviceId:
-        typeof parsed.cameraDeviceId === "string"
-          ? parsed.cameraDeviceId
-          : defaultLocalSettings.cameraDeviceId,
-      outputDeviceId:
-        typeof parsed.outputDeviceId === "string"
-          ? parsed.outputDeviceId
-          : defaultLocalSettings.outputDeviceId,
-      inputMode:
-        parsed.inputMode === "push-to-talk" ? "push-to-talk" : "voice-activity",
-      vadThreshold: parseVadThreshold(parsed.vadThreshold),
-      // A binding that no longer parses — hand-edited storage, or a key this
-      // build has since started refusing — falls back rather than leaving
-      // push-to-talk bound to nothing and the user apparently mute. Absent
-      // `device` (every blob stored before mouse buttons existed) reads as
-      // `"keyboard"`, which is exactly what it always meant.
-      pushToTalkKey:
-        parsePttBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
-      pttReleaseDelayMs: clampReleaseDelayMs(parsed.pttReleaseDelayMs),
-      pttBeep:
-        typeof parsed.pttBeep === "boolean"
-          ? parsed.pttBeep
-          : defaultLocalSettings.pttBeep,
-      pttGlobal:
-        typeof parsed.pttGlobal === "boolean"
-          ? parsed.pttGlobal
-          : defaultLocalSettings.pttGlobal,
-      shortcuts: parseShortcutOverrides(parsed.shortcuts),
-      micProcessing: {
-        echoCancellation: parsed.micProcessing?.echoCancellation !== false,
-        // Was a boolean until Sep 2026: `true` and a missing value both read
-        // as the browser's own suppressor, `false` as none, which is what
-        // every stored blob out there says today.
-        noiseSuppression: parseNoiseSuppressionMode(
-          parsed.micProcessing?.noiseSuppression,
-        ),
-        autoGainControl: parsed.micProcessing?.autoGainControl !== false,
-      },
-      // Hand-edited storage, or a level a later build stopped offering, falls
-      // back to auto rather than to a size nothing knows how to ask for.
-      videoQuality: parseVideoQuality(parsed.videoQuality),
-      screenFrameRate: parseScreenFrameRate(parsed.screenFrameRate),
-    };
-  } catch {
-    return defaultLocalSettings;
-  }
-}
-
-export function saveLocalSettings(settings: LocalSettings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-}
-
-/**
- * The half of `LocalSettings` that describes the person rather than the
- * machine, ready to send to the server.
- *
- * Takes a partial so a single control change queues only the key it touched.
- * The device ids are what the filtering is for: they name hardware in this
- * browser profile and nowhere else, so they never leave the device.
- */
-export function preferencesFromLocal(
-  settings: Partial<LocalSettings>,
-): UserPreferences {
-  const preferences: UserPreferences = {};
-  if (settings.muteOnJoin !== undefined) {
-    preferences.muteOnJoin = settings.muteOnJoin;
-  }
-  if (settings.compactPeers !== undefined) {
-    preferences.compactPeers = settings.compactPeers;
-  }
-  if (settings.inputVolume !== undefined) {
-    preferences.inputVolume = settings.inputVolume;
-  }
-  if (settings.outputVolume !== undefined) {
-    preferences.outputVolume = settings.outputVolume;
-  }
-  if (settings.showLinkEmbeds !== undefined) {
-    preferences.showLinkEmbeds = settings.showLinkEmbeds;
-  }
-  return preferences;
-}
-
-/**
- * Overlay the account's settings onto this device's. The server wins on read —
- * it is the only copy that saw the change made on another device — while the
- * device keeps the parts the account does not carry.
- *
- * `theme`, `appearance`, `contrast` and `accentHue` are absent on purpose:
- * each lives in its own store under its own key, because the boot script
- * has to resolve them before this module exists.
- *
- * Notification levels are the same shape of thing — their own store, read by
- * the rail and the channel list rather than by any settings state — so this is
- * where the account's copy is handed over rather than returned.
- */
-export function applyRemotePreferences(
-  local: LocalSettings,
-  preferences: UserPreferences | undefined,
-): LocalSettings {
-  if (!preferences) {
-    return local;
-  }
-  adoptNotificationPreferences(preferences.notifications);
-  adoptSoundPreferences(preferences.sounds);
-  return {
-    ...local,
-    muteOnJoin: preferences.muteOnJoin ?? local.muteOnJoin,
-    compactPeers: preferences.compactPeers ?? local.compactPeers,
-    inputVolume: preferences.inputVolume ?? local.inputVolume,
-    outputVolume: preferences.outputVolume ?? local.outputVolume,
-    showLinkEmbeds: preferences.showLinkEmbeds ?? local.showLinkEmbeds,
-  };
-}
+export * from "@/components/settings/local-settings";
+export { displayMicLevel, sliderToVadThreshold } from "@/components/settings/voice-section";
 
 interface SettingsModalProps {
   open: boolean;
@@ -470,7 +81,10 @@ interface SettingsModalProps {
   onClose: () => void;
   onLocalSave: (settings: LocalSettings) => void;
   onUserUpdated: (user: User) => void;
-  onUnblockUser: (userId: string) => void;
+  /** Throws when the unblock failed, so the row can say so. */
+  onUnblockUser: (userId: string) => void | Promise<void>;
+  /** Settings' own block form; throws when the block failed. */
+  onBlockUser?: (userId: string) => void | Promise<void>;
   onAudioSettingsLive?: (settings: LocalSettings) => void;
   /**
    * A section to land on when the dialog opens — the user menu's "send
@@ -487,40 +101,41 @@ interface SettingsModalProps {
 /* ------------------------------------------------------------------ layout */
 
 /**
- * The sections, in nav order.
+ * The sections, in nav order, in three named groups and a divider.
  *
  * This list is the whole information architecture: settings used to be one
  * column that mixed a display name, a microphone gain slider and the button
  * that deletes your account, and finding anything meant scrolling past
- * everything. The grouping below is what the old column already implied —
- * nothing moved between meanings, it was only given a name and a door.
+ * everything. The groups say what a section is about: your account (who you
+ * are, who can reach you, what we hold about you), the app on this device, and
+ * how to reach us.
  *
  * "Your data" is its own section rather than the tail of Profile on purpose:
  * export and deletion are rights the privacy policy promises, and a promise
  * that is only reachable by scrolling to the bottom of the longest page in the
  * app is one nobody finds. As a named door it is more visible than it was.
  */
-type SectionId =
-  | "profile"
-  | "connections"
-  | "voice"
-  | "keyboard"
-  | "notifications"
-  | "appearance"
-  | "privacy"
-  | "data"
-  | "feedback"
-  | "help"
-  | "moderation";
+type SectionId = SettingsSectionId;
 
 /** For callers that open the dialog at a particular section (the user menu). */
-export type SettingsSectionId = SectionId;
+export type { SettingsSectionId };
+
+type SectionGroup = "account" | "app" | "support" | "moderation";
+
+const GROUP_LABELS: Record<Exclude<SectionGroup, "moderation">, MessageKey> = {
+  account: "settings.nav.group.account",
+  app: "settings.nav.group.app",
+  support: "settings.nav.group.support",
+};
 
 interface SectionDef {
   id: SectionId;
   label: MessageKey;
   description: MessageKey;
   icon: LucideIcon;
+  group: SectionGroup;
+  /** Drop the 40rem reading width: Moderação's report list wants the room. */
+  wide?: boolean;
 }
 
 const SECTIONS: SectionDef[] = [
@@ -529,3411 +144,161 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.profile",
     description: "settings.profile.description",
     icon: UserRound,
+    group: "account",
   },
   {
     id: "connections",
     label: "settings.section.connections",
     description: "settings.connections.description",
     icon: Gamepad2,
-  },
-  {
-    id: "voice",
-    label: "settings.section.voice",
-    description: "settings.voice.description",
-    icon: Mic,
-  },
-  {
-    id: "keyboard",
-    label: "settings.section.keyboard",
-    description: "settings.keyboard.description",
-    icon: Keyboard,
-  },
-  {
-    id: "notifications",
-    label: "settings.section.notifications",
-    description: "settings.notifications.description",
-    icon: Bell,
-  },
-  {
-    id: "appearance",
-    label: "settings.section.appearance",
-    description: "settings.appearance.description",
-    icon: Palette,
+    group: "account",
   },
   {
     id: "privacy",
     label: "settings.section.privacy",
     description: "settings.privacy.description",
     icon: ShieldCheck,
+    group: "account",
   },
   {
     id: "data",
     label: "settings.section.data",
     description: "settings.data.description",
     icon: Database,
+    group: "account",
+  },
+  {
+    id: "voice",
+    label: "settings.section.voice",
+    description: "settings.voice.description",
+    icon: Mic,
+    group: "app",
+  },
+  {
+    id: "notifications",
+    label: "settings.section.notifications",
+    description: "settings.notifications.description",
+    icon: Bell,
+    group: "app",
+  },
+  {
+    id: "appearance",
+    label: "settings.section.appearance",
+    description: "settings.appearance.description",
+    icon: Palette,
+    group: "app",
+  },
+  {
+    id: "keyboard",
+    label: "settings.section.keyboard",
+    description: "settings.keyboard.description",
+    icon: Keyboard,
+    group: "app",
   },
   {
     id: "feedback",
     label: "settings.section.feedback",
     description: "settings.feedback.description",
     icon: Bug,
+    group: "support",
   },
   {
     id: "help",
     label: "settings.section.help",
     description: "help.description",
     icon: CircleHelp,
+    group: "support",
   },
   // Hidden from the rail unless `canModerateInstance` resolves true — see
   // `visibleSections` where `SettingsModal` filters this out for everyone
-  // else. Kept last so the tab order for every existing account never shifts.
+  // else. Kept last, after a divider, so the tab order for every existing
+  // account never shifts and End still lands on Ajuda e contato for them.
   {
     id: "moderation",
     label: "settings.section.moderation",
     description: "settings.moderation.description",
     icon: Siren,
+    group: "moderation",
+    wide: true,
   },
 ];
 
 /**
- * The section rail — a vertical list beside the content on a desktop, a
- * horizontally scrolling strip above it on a phone.
- *
- * It is a real tablist: arrow keys move between sections and only the selected
- * tab is in the tab order, so a keyboard user crosses the rail with two
- * keystrokes rather than one per section. Both axes are accepted because the same control
- * is vertical at one width and horizontal at another, and a user should not
- * have to know which one the CSS picked.
+ * Where the dialog was last closed, for this browser tab. Session storage so a
+ * reload lands where a close-and-reopen lands; a new tab starts on Perfil.
  */
-function SectionRail({
-  sections,
-  active,
-  onSelect,
-  idFor,
-  panelId,
-}: {
-  sections: SectionDef[];
-  active: SectionId;
-  onSelect: (id: SectionId) => void;
-  idFor: (id: SectionId) => string;
-  panelId: string;
-}) {
-  const { t } = useTranslation();
-  const railRef = useRef<HTMLDivElement>(null);
+export const SETTINGS_SECTION_STORAGE_KEY = "pqp:settings-section";
 
-  function move(to: number) {
-    const index = (to + sections.length) % sections.length;
-    const next = sections[index]!;
-    onSelect(next.id);
-    const tabs =
-      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[index]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = sections.findIndex((section) => section.id === active);
-    switch (event.key) {
-      case "ArrowRight":
-      case "ArrowDown":
-        event.preventDefault();
-        move(current + 1);
-        break;
-      case "ArrowLeft":
-      case "ArrowUp":
-        event.preventDefault();
-        move(current - 1);
-        break;
-      case "Home":
-        event.preventDefault();
-        move(0);
-        break;
-      case "End":
-        event.preventDefault();
-        move(sections.length - 1);
-        break;
-      default:
-        break;
+function readStoredSection(): SectionId {
+  try {
+    const stored = window.sessionStorage.getItem(SETTINGS_SECTION_STORAGE_KEY);
+    const known = SECTIONS.find((entry) => entry.id === stored);
+    // Never Voz after a reload: it asks for the microphone as it opens, and
+    // a browser that does not remember the grant would prompt the moment
+    // somebody opened Settings to change something else.
+    if (known && known.id !== "voice") {
+      return known.id;
     }
+  } catch {
+    // Storage blocked: Perfil, as a new tab would.
   }
-
-  return (
-    <div
-      ref={railRef}
-      role="tablist"
-      aria-label={t("settings.nav.label")}
-      onKeyDown={handleKeyDown}
-      className={cn(
-        // The phone strip scrolls sideways *inside the panel*. That is the only
-        // place sideways scrolling is allowed to exist here — the page itself
-        // must never move, which is what the 390px layout test measures.
-        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
-        "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
-      )}
-    >
-      {sections.map((section) => {
-        const selected = section.id === active;
-        const Icon = section.icon;
-        return (
-          <button
-            key={section.id}
-            id={idFor(section.id)}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            aria-controls={panelId}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onSelect(section.id)}
-            className={cn(
-              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
-              selected
-                ? "bg-signal/12 font-medium text-paper"
-                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {t(section.label)}
-          </button>
-        );
-      })}
-    </div>
-  );
+  return "profile";
 }
 
-/** Heading for the pane on the right, so a section always says what it is. */
-function SectionHeader({ section }: { section: SectionDef }) {
-  const { t } = useTranslation();
-  return (
-    <div className="mb-5">
-      <h3 className="font-display text-lg font-bold text-paper">
-        {t(section.label)}
-      </h3>
-      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
-    </div>
-  );
-}
-
-/** A labelled group inside a section. */
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <p className="mb-2 text-xs uppercase tracking-wide text-paper-muted">
-        {label}
-      </p>
-      {children}
-      {hint && <p className="mt-1.5 text-xs text-paper-muted">{hint}</p>}
-    </div>
-  );
-}
-
-const CHIP_BASE =
-  "rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60";
-
-function chipClass(selected: boolean): string {
-  return cn(
-    CHIP_BASE,
-    selected
-      ? "border-accent bg-accent/10 text-text"
-      : "border-border text-text-muted hover:border-accent/50",
-  );
-}
-
-/* ------------------------------------------------------------------- voice */
-
-/**
- * The live bar and the voice-activity line share this scale, so the marker
- * sits on the same coordinates as the level the person is watching.
- *
- * The 1.8 gain is how the existing meter made a typical speaking level fill
- * more than a sliver of the bar. The volume floor stops a dragged-down
- * input volume from pinning the line to the left edge.
- *
- * This is the Settings bar, not the gate. The gate reads
- * `pipeline.analyser` (after the input-volume gain). The preview stream
- * here is raw getUserMedia. The marker matches this bar; a quiet talker
- * still has to move the line until their bar crosses it.
- */
-const MIC_LEVEL_DISPLAY_GAIN = 1.8;
-const MIC_LEVEL_VOLUME_FLOOR = 0.15;
-
-export function displayMicLevel(raw: number, volume: number): number {
-  return Math.min(
-    1,
-    raw * MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume),
-  );
-}
-
-export function sliderToVadThreshold(percent: number, volume: number): number {
-  const scale =
-    MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume);
-  return parseVadThreshold(percent / 100 / scale);
-}
-
-/**
- * Volume only scales how the level reads, so it is held in a ref: putting it in
- * the effect deps would tear down the preview stream and re-prompt
- * `getUserMedia` on every slider tick.
- */
-function MicLevelMeter({
-  deviceId,
-  inputVolume,
-  liveAnalyser,
-  active,
-  threshold,
-  onThresholdChange,
-}: {
-  deviceId: string;
-  inputVolume: number;
-  liveAnalyser: AnalyserNode | null;
-  active: boolean;
-  /** When set, the meter also hosts the voice-activity sensitivity line. */
-  threshold?: number;
-  onThresholdChange?: (value: number) => void;
-}) {
-  const { t } = useTranslation();
-  const [level, setLevel] = useState(0);
-  const volumeRef = useRef(inputVolume);
-
-  useEffect(() => {
-    volumeRef.current = inputVolume;
-  }, [inputVolume]);
-
-  useEffect(() => {
-    if (!active) {
-      setLevel(0);
-      return;
-    }
-
-    let cancelled = false;
-    let raf = 0;
-    let preview: { stream: MediaStream; ctx: AudioContext } | null = null;
-
-    function meter(analyser: AnalyserNode) {
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        if (cancelled) {
-          return;
-        }
-        analyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (const v of data) {
-          sum += v;
-        }
-        const avg = sum / data.length / 255;
-        setLevel(displayMicLevel(avg, volumeRef.current));
-        raf = requestAnimationFrame(tick);
-      };
-      tick();
-    }
-
-    async function start() {
-      if (liveAnalyser) {
-        meter(liveAnalyser);
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-          video: false,
-        });
-        if (cancelled) {
-          for (const track of stream.getTracks()) {
-            track.stop();
-          }
-          return;
-        }
-        const ctx = new AudioContext();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        ctx.createMediaStreamSource(stream).connect(analyser);
-        preview = { stream, ctx };
-        meter(analyser);
-      } catch {
-        setLevel(0);
-      }
-    }
-
-    void start();
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      if (preview) {
-        for (const track of preview.stream.getTracks()) {
-          track.stop();
-        }
-        void preview.ctx.close();
-      }
-    };
-  }, [active, deviceId, liveAnalyser]);
-
-  const label = t("settings.voice.inputLevel");
-  const gated = threshold !== undefined && onThresholdChange !== undefined;
-  const thresholdPct =
-    threshold !== undefined
-      ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
-      : 0;
-
-  return (
-    <div className="space-y-1.5">
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {gated ? t("settings.voice.sensitivity") : label}
-      </span>
-      <div
-        className={cn(
-          "relative h-2 rounded-full",
-          gated && "has-[:focus]:ring-2 has-[:focus]:ring-signal/60",
-        )}
-      >
-        <div
-          className="h-2 overflow-hidden rounded-full bg-ink"
-          role="progressbar"
-          aria-label={label}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(level * 100)}
-        >
-          <div
-            className="h-full rounded-full bg-signal transition-[width] duration-75"
-            style={{ width: `${Math.round(level * 100)}%` }}
-          />
-        </div>
-        {gated && (
-          <>
-            <div
-              aria-hidden
-              className="pointer-events-none absolute top-[-3px] h-[14px] w-1 -translate-x-1/2 rounded-full bg-paper"
-              style={{ left: `${thresholdPct}%` }}
-            />
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={thresholdPct}
-              onChange={(e) =>
-                onThresholdChange?.(
-                  sliderToVadThreshold(Number(e.target.value), inputVolume),
-                )
-              }
-              className="absolute -inset-y-2 inset-x-0 w-full cursor-pointer opacity-0"
-              aria-label={t("settings.voice.sensitivity")}
-              aria-valuetext={t("settings.voice.percent", {
-                percent: thresholdPct,
-              })}
-            />
-          </>
-        )}
-      </div>
-      {gated && (
-        <span className="block text-xs text-paper-muted">
-          {t("settings.voice.sensitivityHint")}
-        </span>
-      )}
-    </div>
-  );
-}
-
-const INPUT_MODES: {
-  value: VoiceInputMode;
-  label: MessageKey;
-  description: MessageKey;
-}[] = [
-  {
-    value: "voice-activity",
-    label: "settings.voice.mode.activity",
-    description: "settings.voice.mode.activityHint",
-  },
-  {
-    value: "push-to-talk",
-    label: "settings.voice.mode.ptt",
-    description: "settings.voice.mode.pttHint",
-  },
-];
-
-/**
- * The two that are still yes-or-no. Noise suppression left this list when it
- * grew a third setting; it gets a select of its own below.
- */
-const MIC_PROCESSING_OPTIONS: {
-  key: "echoCancellation" | "autoGainControl";
-  label: MessageKey;
-  description: MessageKey;
-}[] = [
-  {
-    key: "echoCancellation",
-    label: "settings.voice.processing.echo",
-    description: "settings.voice.processing.echoHint",
-  },
-  {
-    key: "autoGainControl",
-    label: "settings.voice.processing.gain",
-    description: "settings.voice.processing.gainHint",
-  },
-];
-
-/** Labels for the three suppressors, in the order the select offers them. */
-const NOISE_SUPPRESSION_LABELS: Record<NoiseSuppressionMode, MessageKey> = {
-  off: "settings.voice.processing.noise.off",
-  browser: "settings.voice.processing.noise.browser",
-  advanced: "settings.voice.processing.noise.advanced",
-};
-
-function PttBeepRow({
-  enabled,
-  soundsOn,
-  onEnabledChange,
-}: {
-  enabled: boolean;
-  soundsOn: boolean;
-  onEnabledChange: (next: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <label className="flex cursor-pointer items-start gap-3">
-      <input
-        type="checkbox"
-        className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-        checked={enabled}
-        onChange={(e) => onEnabledChange(e.target.checked)}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm">{t("settings.voice.pttBeep")}</span>
-        <span className="block text-xs text-paper-muted">
-          {t("settings.voice.pttBeepHint")}
-        </span>
-      </span>
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={!soundsOn || !enabled}
-        onClick={(event) => {
-          event.preventDefault();
-          previewPttBeeps();
-        }}
-      >
-        {t("settings.voice.pttBeepTest")}
-      </Button>
-    </label>
-  );
-}
-
-/**
- * macOS-only: shown while `usePttNativeSupport().permission === "denied"`.
- * macOS never re-prompts once Accessibility/Input Monitoring have been said
- * no to (or simply never granted), so the only way back is Settings. This
- * is the deep link, not a native system dialog we do not have a way to
- * trigger reliably ourselves. See `MAC_ACCESSIBILITY_SETTINGS_URL` /
- * `MAC_INPUT_MONITORING_SETTINGS_URL` in `electron/lib/native-ptt-hook.js`.
- */
-function PttPermissionNudge({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="status"
-      className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5"
-    >
-      <p className="text-sm font-medium">{t("settings.voice.pttPermissionTitle")}</p>
-      <p className="text-xs text-paper-muted">{t("settings.voice.pttPermissionBody")}</p>
-      <Button type="button" size="sm" variant="secondary" onClick={onOpenSettings}>
-        {t("settings.voice.pttPermissionOpenSettings")}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * The push-to-talk binding, its release delay (desktop only) and the
- * "works everywhere on this computer" hint, sized to whatever this shell
- * can actually do. Split out of `VoiceSection` because the desktop-only
- * pieces (release delay, the permission nudge, the native-vs-fallback hint)
- * need `usePttNativeSupport`'s state and that state has nothing to say on
- * the web build.
- */
-function PttControls({
-  draftLocal,
-  patchLocal,
-  sounds,
-}: {
-  draftLocal: LocalSettings;
-  patchLocal: (partial: Partial<LocalSettings>) => void;
-  sounds: SoundState;
-}) {
-  const { t } = useTranslation();
-  const isDesktop = isDesktopApp();
-  const native = usePttNativeSupport();
-  const releaseStuck = useSyncExternalStore(
-    subscribePttReleaseStuck,
-    getPttReleaseStuck,
-    () => false,
-  );
-  const hintKey = pttHintMessageKey({
-    isDesktop,
-    platformSupported: native.platformSupported,
-    platformReason: native.platformReason,
-    permission: native.permission,
-    global: draftLocal.pttGlobal,
-  });
-
-  return (
-    <div className="space-y-3">
-      <PttBindingField
-        label={t(isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey")}
-        binding={draftLocal.pushToTalkKey}
-        allowMouse={isDesktop}
-        takenBy={(binding) => {
-          if (binding.device === "mouse") {
-            // A mouse button cannot collide with a keyboard-only app
-            // shortcut. See the note on `PttBinding` in push-to-talk.ts.
-            return null;
-          }
-          const conflict = findBindingConflict(
-            bindableMap(draftLocal),
-            "pushToTalk",
-            binding,
-          );
-          return conflict ? t(ACTION_LABEL[conflict]) : null;
-        }}
-        onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
-      />
-
-      {isDesktop && native.available && (
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.pttReleaseDelay")}
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={MAX_RELEASE_DELAY_MS}
-            step={10}
-            value={draftLocal.pttReleaseDelayMs}
-            onChange={(e) =>
-              patchLocal({
-                pttReleaseDelayMs: clampReleaseDelayMs(Number(e.target.value)),
-              })
-            }
-            className="w-full accent-[var(--color-signal)]"
-          />
-          <span className="mt-0.5 block text-xs text-paper-muted">
-            {t("settings.voice.pttReleaseDelayMs", { ms: draftLocal.pttReleaseDelayMs })}
-          </span>
-          <span className="mt-0.5 block text-xs text-paper-muted">
-            {t("settings.voice.pttReleaseDelayHint")}
-          </span>
-        </label>
-      )}
-
-      {isDesktop && (
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-            checked={draftLocal.pttGlobal}
-            onChange={(e) => patchLocal({ pttGlobal: e.target.checked })}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm">{t("settings.voice.pttGlobal")}</span>
-            <span className="block text-xs text-paper-muted">
-              {t("settings.voice.pttGlobalHint")}
-            </span>
-          </span>
-        </label>
-      )}
-
-      <PttBeepRow
-        enabled={draftLocal.pttBeep}
-        soundsOn={sounds.enabled}
-        onEnabledChange={(pttBeep) => {
-          setPttBeepEnabled(pttBeep);
-          patchLocal({ pttBeep });
-        }}
-      />
-
-      {isDesktop && releaseStuck && (
-        <p
-          role="alert"
-          className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs"
-        >
-          {t("settings.voice.pttGlobalReleaseFailed")}
-        </p>
-      )}
-
-      {isDesktop && draftLocal.pttGlobal && native.permission === "denied" && (
-        <PttPermissionNudge onOpenSettings={native.openSettings} />
-      )}
-
-      {/* The honest limit, stated where the binding is set rather than
-          discovered later by talking to nobody. */}
-      <p className="text-xs text-paper-muted">
-        {t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
-        {!isDesktop && (
-          <>
-            {" "}
-            <a
-              href="/download"
-              target="_blank"
-              rel="noopener"
-              className="text-accent underline underline-offset-2"
-            >
-              {t("settings.voice.pttGetDesktop")}
-            </a>
-          </>
-        )}
-      </p>
-      {draftLocal.pushToTalkKey.device === "keyboard" &&
-        bindingTypesText(draftLocal.pushToTalkKey) && (
-          <p className="text-xs text-paper-muted">
-            {t("settings.voice.pttTypingNote", {
-              key: formatBinding(draftLocal.pushToTalkKey),
-            })}
-          </p>
-        )}
-    </div>
-  );
-}
-
-/**
- * Devices, levels, input mode and microphone processing.
- *
- * Everything here applies live rather than on Save — the same behaviour it had
- * in the single column, kept because a level you cannot hear while you set it
- * is a level you set twice.
- */
-function VoiceSection({
-  draftLocal,
-  patchLocal,
-  inputs,
-  outputs,
-  cameras,
-  onRevealCameras,
-  devicesError,
-  voiceAnalyser,
-  metering,
-  showVoiceCleanBadge,
-}: {
-  draftLocal: LocalSettings;
-  patchLocal: (partial: Partial<LocalSettings>) => void;
-  inputs: MediaDeviceOption[];
-  outputs: MediaDeviceOption[];
-  cameras: MediaDeviceOption[];
-  onRevealCameras: () => void;
-  devicesError: string | null;
-  voiceAnalyser: AnalyserNode | null;
-  metering: boolean;
-  /** NOVO dot on the noise-suppression row; see `lib/voice-clean.ts`. */
-  showVoiceCleanBadge: boolean;
-}) {
-  const { t } = useTranslation();
-  const musicAutoJoin = useMusicAutoJoin();
-  const musicDucking = useMusicDucking();
-  const autoHideControls = useAutoHideStageControls();
-  const canSelectOutput = supportsAudioOutputSelection();
-  const checkConnection = () => requestConnectionCheck();
-  const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
-  // Probed once: whether this machine has a keyboard worth binding does not
-  // change while the dialog is open, and re-evaluating it per render would run
-  // a media query on every slider tick.
-  const canBindKey = useMemo(() => supportsKeyBinding(), []);
-  const [obsHintDismissed, setObsHintDismissed] = useState(
-    isObsVirtualCameraHintDismissed,
-  );
-  const selectClass =
-    "h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal";
-
-  return (
-    <div className="space-y-5">
-      {devicesError && (
-        <p className="text-xs text-warning" role="status">
-          {devicesError}
-        </p>
-      )}
-
-      {/* The way out of "stuck on connecting": five checks and the fix. */}
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-4 bg-ink-3/40 px-3 py-2">
-        <p className="min-w-0 flex-1 text-xs text-paper-muted">
-          {t("connection.checkHint")}
-        </p>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={checkConnection}
-          data-settings-check-connection
-        >
-          {t("connection.check")}
-        </Button>
-      </div>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputDevice")}
-        </span>
-        <select
-          value={draftLocal.inputDeviceId}
-          onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-          className={selectClass}
-        >
-          <option value="">{t("settings.voice.systemDefault")}</option>
-          {inputs.map((device) => (
-            <option key={device.deviceId} value={device.deviceId}>
-              {device.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputVolume")}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={200}
-          value={Math.round(draftLocal.inputVolume * 100)}
-          onChange={(e) =>
-            patchLocal({ inputVolume: Number(e.target.value) / 100 })
-          }
-          className="w-full accent-[var(--color-signal)]"
-        />
-        <span className="mt-0.5 block text-xs text-paper-muted">
-          {t("settings.voice.percent", {
-            percent: Math.round(draftLocal.inputVolume * 100),
-          })}
-        </span>
-      </label>
-
-      <MicLevelMeter
-        deviceId={draftLocal.inputDeviceId}
-        inputVolume={draftLocal.inputVolume}
-        liveAnalyser={voiceAnalyser}
-        active={metering}
-        threshold={
-          draftLocal.inputMode === "voice-activity"
-            ? draftLocal.vadThreshold
-            : undefined
-        }
-        onThresholdChange={
-          draftLocal.inputMode === "voice-activity"
-            ? (vadThreshold) => patchLocal({ vadThreshold })
-            : undefined
-        }
-      />
-
-      <fieldset className="space-y-2">
-        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.inputMode")}
-        </legend>
-        {INPUT_MODES.map((mode) => (
-          <label
-            key={mode.value}
-            className="flex cursor-pointer items-start gap-3"
-          >
-            <input
-              type="radio"
-              name="input-mode"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={draftLocal.inputMode === mode.value}
-              onChange={() => patchLocal({ inputMode: mode.value })}
-            />
-            <span className="min-w-0">
-              <span className="block text-sm">{t(mode.label)}</span>
-              <span className="block text-xs text-paper-muted">
-                {t(mode.description)}
-              </span>
-            </span>
-          </label>
-        ))}
-      </fieldset>
-
-      {draftLocal.inputMode === "push-to-talk" &&
-        (canBindKey ? (
-          <PttControls draftLocal={draftLocal} patchLocal={patchLocal} sounds={sounds} />
-        ) : (
-          <div className="space-y-1.5">
-            <p className="text-xs text-paper-muted">
-              {t("settings.voice.pttNoKeyboard")}
-            </p>
-            <PttBeepRow
-              enabled={draftLocal.pttBeep}
-              soundsOn={sounds.enabled}
-              onEnabledChange={(pttBeep) => {
-                setPttBeepEnabled(pttBeep);
-                patchLocal({ pttBeep });
-              }}
-            />
-          </div>
-        ))}
-
-      <fieldset className="space-y-2">
-        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.processing")}
-        </legend>
-        {MIC_PROCESSING_OPTIONS.map((option) => (
-          <label
-            key={option.key}
-            className="flex cursor-pointer items-start gap-3"
-          >
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={draftLocal.micProcessing[option.key]}
-              onChange={(e) =>
-                patchLocal({
-                  micProcessing: {
-                    ...draftLocal.micProcessing,
-                    [option.key]: e.target.checked,
-                  },
-                })
-              }
-            />
-            <span className="min-w-0">
-              <span className="block text-sm">{t(option.label)}</span>
-              <span className="block text-xs text-paper-muted">
-                {t(option.description)}
-              </span>
-            </span>
-          </label>
-        ))}
-        <label className="block">
-          <span className="mb-1 flex items-center gap-2 text-sm">
-            {t("settings.voice.processing.noise")}
-            {showVoiceCleanBadge && (
-              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
-                {t("voiceClean.badge")}
-              </span>
-            )}
-          </span>
-          <select
-            value={draftLocal.micProcessing.noiseSuppression}
-            onChange={(e) =>
-              patchLocal({
-                micProcessing: {
-                  ...draftLocal.micProcessing,
-                  noiseSuppression: parseNoiseSuppressionMode(e.target.value),
-                },
-              })
-            }
-            className={selectClass}
-          >
-            {NOISE_SUPPRESSION_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {t(NOISE_SUPPRESSION_LABELS[mode])}
-              </option>
-            ))}
-          </select>
-          <span className="mt-1 block text-xs text-paper-muted">
-            {t(
-              draftLocal.micProcessing.noiseSuppression === "advanced"
-                ? "settings.voice.processing.noise.advancedHint"
-                : "settings.voice.processing.noiseHint",
-            )}
-          </span>
-        </label>
-        <p className="text-xs text-paper-muted">
-          {t("settings.voice.processing.note")}
-        </p>
-      </fieldset>
-
-      {canSelectOutput ? (
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.outputDevice")}
-          </span>
-          <select
-            value={draftLocal.outputDeviceId}
-            onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
-            className={selectClass}
-          >
-            <option value="">{t("settings.voice.systemDefault")}</option>
-            {outputs.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <p className="text-xs text-paper-muted">
-          {t("settings.voice.outputUnsupported", desktopContext())}
-        </p>
-      )}
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.outputVolume")}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={Math.round(draftLocal.outputVolume * 100)}
-          onChange={(e) =>
-            patchLocal({ outputVolume: Number(e.target.value) / 100 })
-          }
-          className="w-full accent-[var(--color-signal)]"
-        />
-        <span className="mt-0.5 block text-xs text-paper-muted">
-          {t("settings.voice.percent", {
-            percent: Math.round(draftLocal.outputVolume * 100),
-          })}
-        </span>
-      </label>
-
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.cameraDevice")}
-          </span>
-          <select
-            value={draftLocal.cameraDeviceId}
-            onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
-            onFocus={() => onRevealCameras()}
-            className={selectClass}
-          >
-            <option value="">{t("settings.voice.systemDefault")}</option>
-            {cameras.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ObsVirtualCameraHint
-          show={
-            !obsHintDismissed &&
-            isObsVirtualCameraLabel(
-              cameras.find(
-                (device) => device.deviceId === draftLocal.cameraDeviceId,
-              )?.label ?? "",
-            )
-          }
-          onDismiss={() => {
-            dismissObsVirtualCameraHint();
-            setObsHintDismissed(true);
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.videoQuality")}
-          </span>
-          <select
-            value={draftLocal.videoQuality}
-            onChange={(e) =>
-              patchLocal({ videoQuality: parseVideoQuality(e.target.value) })
-            }
-            className={selectClass}
-          >
-            {VIDEO_QUALITIES.map((quality) => (
-              <option key={quality} value={quality}>
-                {t(VIDEO_QUALITY_LABELS[quality])}
-              </option>
-            ))}
-          </select>
-        </label>
-        {/* The number beside the control that asks for it. Without this a
-            person can pick 720p, receive 320x240 and have no way to know. */}
-        <OutboundVideoReadout />
-        <p className="mt-1 text-xs text-paper-muted">
-          {t("settings.voice.videoQuality.hint")}
-        </p>
-      </div>
-
-      <div>
-        <label className="block">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.voice.screenFrameRate")}
-          </span>
-          <select
-            value={draftLocal.screenFrameRate}
-            onChange={(e) =>
-              patchLocal({
-                screenFrameRate: parseScreenFrameRate(e.target.value),
-              })
-            }
-            className={selectClass}
-          >
-            {SCREEN_FRAME_RATES.map((rate) => (
-              <option key={rate} value={rate}>
-                {t(SCREEN_FRAME_RATE_LABELS[rate])}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="mt-1 text-xs text-paper-muted">
-          {t("settings.voice.screenFrameRate.hint")}
-        </p>
-      </div>
-
-      <label className="flex cursor-pointer items-center gap-3">
-        <input
-          type="checkbox"
-          checked={draftLocal.muteOnJoin}
-          onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
-          className="h-4 w-4 accent-[var(--color-signal)]"
-        />
-        <span className="text-sm">{t("settings.voice.muteOnJoin")}</span>
-      </label>
-      <label className="flex cursor-pointer items-center gap-3">
-        <input
-          type="checkbox"
-          checked={draftLocal.compactPeers}
-          onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
-          className="h-4 w-4 accent-[var(--color-signal)]"
-        />
-        <span className="text-sm">{t("settings.voice.compactPeers")}</span>
-      </label>
-      <Switch
-        checked={musicAutoJoin}
-        onCheckedChange={setMusicAutoJoin}
-        label={t("settings.voice.musicAutoJoin")}
-        description={t("settings.voice.musicAutoJoinHint")}
-        className="px-0"
-      />
-      <Switch
-        checked={musicDucking}
-        onCheckedChange={setMusicDucking}
-        label={t("settings.voice.musicDuck")}
-        description={t("settings.voice.musicDuckHint")}
-        className="px-0"
-      />
-      <Switch
-        checked={autoHideControls}
-        onCheckedChange={setAutoHideStageControls}
-        label={t("settings.voice.autoHideControls")}
-        description={t("settings.voice.autoHideControlsHint")}
-        className="px-0"
-      />
-    </div>
-  );
-}
-
-function bindableMap(
-  settings: LocalSettings,
-): Record<BindableId, KeyBinding> {
-  return {
-    ...resolveShortcutBindings(settings.shortcuts, isApplePlatform()),
-    pushToTalk: settings.pushToTalkKey,
-  };
-}
-
-function KeyboardSection({
-  draftLocal,
-  patchLocal,
-  onShowOverlay,
-}: {
-  draftLocal: LocalSettings;
-  patchLocal: (partial: Partial<LocalSettings>) => void;
-  onShowOverlay: () => void;
-}) {
-  const { t } = useTranslation();
-  const isDesktop = isDesktopApp();
-  const canBindKey = useMemo(() => supportsKeyBinding(), []);
-  const bindings = useMemo(
-    () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
-    [draftLocal.shortcuts],
-  );
-  const owned = bindableMap(draftLocal);
-
-  function remap(action: ShortcutAction, binding: KeyBinding) {
-    if (findBindingConflict(owned, action, binding)) {
-      return;
-    }
-    patchLocal({
-      shortcuts: { ...draftLocal.shortcuts, [action]: binding },
-    });
+function storeSection(id: SectionId) {
+  try {
+    window.sessionStorage.setItem(SETTINGS_SECTION_STORAGE_KEY, id);
+  } catch {
+    // Storage blocked: the next load starts on Perfil, which is fine.
   }
-
-  function takenBy(action: BindableId) {
-    return (binding: KeyBinding) => {
-      const conflict = findBindingConflict(owned, action, binding);
-      return conflict ? t(ACTION_LABEL[conflict]) : null;
-    };
-  }
-
-  /** Same conflict rule as `takenBy`, widened for a `PttBinding` that might be a mouse button, which can never collide with a keyboard-only app shortcut. */
-  function pttTakenBy(binding: PttBinding) {
-    if (binding.device === "mouse") {
-      return null;
-    }
-    return takenBy("pushToTalk")(binding);
-  }
-
-  return (
-    <div className="space-y-5">
-      <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full whitespace-normal"
-          onClick={onShowOverlay}
-        >
-          {t("settings.keyboard.showMap")}
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full whitespace-normal"
-          onClick={() =>
-            patchLocal({
-              shortcuts: {},
-              pushToTalkKey: defaultPttBinding(),
-              pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
-            })
-          }
-        >
-          {t("settings.keyboard.reset")}
-        </Button>
-      </div>
-      {canBindKey ? (
-        <div className="space-y-6">
-          {SHORTCUT_GROUPS.map((group) => (
-            <section key={group.id}>
-              <h4 className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
-                {t(GROUP_LABEL[group.id])}
-              </h4>
-              <ul className="divide-y divide-ink-4/70">
-                {group.actions.map((action) => (
-                  <li key={action} className="py-3">
-                    <KeyBindingField
-                      label={t(ACTION_LABEL[action])}
-                      binding={bindings[action]}
-                      takenBy={takenBy(action)}
-                      onChange={(binding) => remap(action, binding)}
-                    />
-                  </li>
-                ))}
-                {group.id === "voice" && (
-                  <li className="py-3">
-                    <PttBindingField
-                      label={t(
-                        isDesktop
-                          ? "settings.voice.pttKeyOrMouse"
-                          : ACTION_LABEL.pushToTalk,
-                      )}
-                      binding={draftLocal.pushToTalkKey}
-                      allowMouse={isDesktop}
-                      takenBy={pttTakenBy}
-                      onChange={(binding) =>
-                        patchLocal({ pushToTalkKey: binding })
-                      }
-                    />
-                  </li>
-                )}
-              </ul>
-            </section>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-paper-muted">
-          {t("settings.voice.pttNoKeyboard")}
-        </p>
-      )}
-      <p className="text-xs text-paper-muted">{t("settings.keyboard.pttNote")}</p>
-    </div>
-  );
 }
 
-/* -------------------------------------------------------------- appearance */
+/** How long "Alterações descartadas" offers Desfazer. */
+export const DISCARD_UNDO_MS = 5000;
 
-function SettingBlock({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="space-y-2">
-      <div>
-        <h4 className="text-sm font-medium text-text">{label}</h4>
-        {hint ? (
-          <p className="mt-0.5 min-h-[2.5rem] text-xs text-text-muted">{hint}</p>
-        ) : null}
-      </div>
-      {children}
-    </section>
-  );
-}
+/** How long after Desfazer a click on Salvar, in the same spot, is ignored. */
+const UNDO_SAVE_GUARD_MS = 600;
 
-function segmentClass(selected: boolean, disabled = false): string {
-  return cn(
-    "flex h-9 items-center justify-center rounded-md px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-    selected
-      ? "bg-surface-0 text-text shadow-sm"
-      : "text-text-muted hover:text-text",
-    disabled && "cursor-not-allowed opacity-40 hover:text-text-muted",
-  );
-}
-
-const APPEARANCE_OPTIONS: {
-  value: AppearancePreference;
-  label: MessageKey;
-}[] = [
-  { value: "signal", label: "settings.appearance.preset.signal" },
-  { value: "harmony", label: "settings.appearance.preset.harmony" },
-  { value: "hearth", label: "settings.appearance.preset.hearth" },
-  { value: "night", label: "settings.appearance.preset.night" },
-];
-
-function AppearancePicker() {
-  const { t } = useTranslation();
-  const { appearance, setAppearance } = useAppearance();
-
-  function choose(next: AppearancePreference) {
-    setAppearance(next);
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = APPEARANCE_OPTIONS.findIndex(
-      (option) => option.value === appearance,
-    );
-    const nextIndex =
-      (current + step + APPEARANCE_OPTIONS.length) % APPEARANCE_OPTIONS.length;
-    choose(APPEARANCE_OPTIONS[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
-  return (
-    <SettingBlock label={t("settings.appearance.preset")}>
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.preset")}
-        className="grid grid-cols-2 gap-2"
-        onKeyDown={handleKeyDown}
-      >
-        {APPEARANCE_OPTIONS.map((option) => {
-          const selected = option.value === appearance;
-          const darkOnly = option.value === "night";
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => choose(option.value)}
-              className={cn(
-                "flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-                selected
-                  ? "border-accent bg-surface-2 text-text"
-                  : "border-border text-text-muted hover:border-border-strong hover:text-text",
-              )}
-            >
-              <span
-                aria-hidden
-                className="appearance-preview"
-                style={
-                  {
-                    "--preview-rail": `var(--swatch-${option.value}-rail)`,
-                    "--preview-list": `var(--swatch-${option.value}-list)`,
-                    "--preview-surface": `var(--swatch-${option.value}-surface)`,
-                    "--preview-accent": `var(--swatch-${option.value}-accent)`,
-                  } as CSSProperties
-                }
-              >
-                <span className="appearance-preview-rail" />
-                <span className="appearance-preview-list">
-                  <span className="appearance-preview-channel" />
-                  <span className="appearance-preview-channel" />
-                  <span className="appearance-preview-channel" />
-                </span>
-                <span className="appearance-preview-chat">
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-message" />
-                  <span className="appearance-preview-composer" />
-                </span>
-              </span>
-              <span className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{t(option.label)}</span>
-                {option.value === "signal" ? (
-                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-                    {t("settings.appearance.preset.signalDefault")}
-                  </span>
-                ) : darkOnly ? (
-                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-                    {t("settings.appearance.preset.nightOnly")}
-                  </span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-function AccentHuePicker() {
-  const { t } = useTranslation();
-  const { appearance } = useAppearance();
-  const { preference, setPreference } = useAccentHue();
-  const sliderHue = effectiveAccentHue(preference, appearance);
-  const isCustom = preference !== "default";
-
-  return (
-    <SettingBlock
-      label={t("settings.appearance.accent")}
-      hint={
-        isCustom
-          ? t("settings.appearance.accentCustomHint")
-          : t("settings.appearance.accentDefaultHint")
-      }
-    >
-      <div className="flex flex-col gap-2.5">
-        <input
-          type="range"
-          min={0}
-          max={360}
-          value={sliderHue}
-          aria-label={t("settings.appearance.accent")}
-          onChange={(event) =>
-            setPreference(Number(event.target.value) as AccentHuePreference)
-          }
-          className="accent-hue-slider"
-        />
-        <div className="flex flex-wrap items-center gap-1.5">
-          {ACCENT_SWATCHES.map((hue) => (
-            <button
-              key={hue}
-              type="button"
-              aria-label={t("settings.appearance.accentHue", { hue })}
-              aria-pressed={preference === hue}
-              onClick={() => setPreference(hue, { immediate: true })}
-              className={cn(
-                "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-                preference === hue
-                  ? "border-text"
-                  : "border-transparent hover:border-border-strong",
-              )}
-              style={{ "--swatch-hue": String(hue) } as CSSProperties}
-            />
-          ))}
-          <button
-            type="button"
-            onClick={() => setPreference("default")}
-            disabled={!isCustom}
-            className="ml-1 text-xs text-text-muted underline-offset-2 hover:text-text hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-40"
-          >
-            {t("settings.appearance.accentReset")}
-          </button>
-        </div>
-      </div>
-    </SettingBlock>
-  );
-}
-
-const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
-  { value: "light", label: "settings.appearance.theme.light" },
-  { value: "dark", label: "settings.appearance.theme.dark" },
-  { value: "system", label: "settings.appearance.theme.system" },
-];
-
-/**
- * Theme is not part of `LocalSettings`: it applies on click rather than on
- * Save, and it persists under its own key so the boot script can read it
- * without parsing the audio blob.
- */
-function ThemePicker() {
-  const { t } = useTranslation();
-  const { appearance } = useAppearance();
-  const { preference, resolved, setPreference } = useTheme();
-  const nightLocked = appearance === "night";
-  const shown = nightLocked ? "dark" : preference;
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const enabled = THEME_OPTIONS.filter(
-      (option) => !nightLocked || option.value === "dark",
-    );
-    const current = enabled.findIndex((option) => option.value === shown);
-    const nextIndex = (current + step + enabled.length) % enabled.length;
-    setPreference(enabled[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    const visualIndex = THEME_OPTIONS.findIndex(
-      (option) => option.value === enabled[nextIndex].value,
-    );
-    radios[visualIndex]?.focus();
-  }
-
-  return (
-    <SettingBlock
-      label={t("settings.appearance.theme")}
-      hint={
-        nightLocked
-          ? t("settings.appearance.themeNightLocked")
-          : preference === "system"
-            ? t("settings.appearance.themeFollowing", {
-                theme: t(
-                  resolved === "light"
-                    ? "settings.appearance.resolved.light"
-                    : "settings.appearance.resolved.dark",
-                ),
-              })
-            : t(
-                preference === "light"
-                  ? "settings.appearance.themeAlwaysLight"
-                  : "settings.appearance.themeAlwaysDark",
-              )
-      }
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.theme")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-        onKeyDown={handleKeyDown}
-      >
-        {THEME_OPTIONS.map((option) => {
-          const selected = option.value === shown;
-          const disabled = nightLocked && option.value !== "dark";
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              aria-disabled={disabled}
-              disabled={disabled}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => {
-                if (!disabled) {
-                  setPreference(option.value);
-                }
-              }}
-              className={segmentClass(selected, disabled)}
-            >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-const CONTRAST_OPTIONS: { value: ContrastPreference; label: MessageKey }[] = [
-  { value: "default", label: "settings.appearance.contrast.default" },
-  { value: "more", label: "settings.appearance.contrast.more" },
-  { value: "system", label: "settings.appearance.contrast.system" },
-];
-
-function ContrastPicker() {
-  const { t } = useTranslation();
-  const { preference, resolved, setPreference } = useContrast();
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = CONTRAST_OPTIONS.findIndex(
-      (option) => option.value === preference,
-    );
-    const nextIndex =
-      (current + step + CONTRAST_OPTIONS.length) % CONTRAST_OPTIONS.length;
-    setPreference(CONTRAST_OPTIONS[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
-  return (
-    <SettingBlock
-      label={t("settings.appearance.contrast")}
-      hint={
-        preference === "system"
-          ? t("settings.appearance.contrastFollowing", {
-              contrast: t(
-                resolved === "more"
-                  ? "settings.appearance.resolved.more"
-                  : "settings.appearance.resolved.default",
-              ),
-            })
-          : t("settings.appearance.contrastHint")
-      }
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.contrast")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-        onKeyDown={handleKeyDown}
-      >
-        {CONTRAST_OPTIONS.map((option) => {
-          const selected = option.value === preference;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => setPreference(option.value)}
-              className={segmentClass(selected)}
-            >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-const LOCALE_LABELS: Record<Locale, MessageKey> = {
-  en: "settings.appearance.language.en",
-  "pt-BR": "settings.appearance.language.ptBR",
-  es: "settings.appearance.language.es",
+const EMPTY_DRAFTS: ProfileDrafts = {
+  displayName: "",
+  username: "",
+  handle: "",
+  avatarUrl: "",
 };
 
 /**
- * The language switch `lib/locale.ts` has always been written for — it exposes
- * `setLocalePreference` with a comment saying "once there is UI to set one",
- * and this is that UI.
- *
- * Switching reloads rather than swapping strings under the mounted tree.
- * `I18nProvider` reads the locale once at boot on purpose, and Clerk's own
- * catalogue is wired at the provider in `main.tsx` — changing it in place would
- * leave the sign-in and account modals speaking the old language, which is a
- * worse answer than a reload. It is also what the legal pages already do.
- *
- * `?lang=` is dropped from the URL on the way out: it outranks the stored
- * preference, so a visitor who arrived on a `?lang=pt` link would otherwise
- * click "English" and get Portuguese back.
+ * The rail's footer on `sm` and up: who you are signed in as, the way out, and
+ * which build this is. The name is the saved account, never the draft, so an
+ * unsaved rename does not look applied. Sign out renders nothing under the dev
+ * auth bypass (see `SignOutButton`), and the card shows without it.
  */
-function LanguagePicker() {
-  const { t, locale } = useTranslation();
-
-  async function choose(next: Locale) {
-    if (next === locale) {
-      return;
-    }
-    setLocalePreference(next);
-    // Server-side too, not just this browser's localStorage: it is the one
-    // signal `server/src/services/push-copy.ts` has for which language a
-    // closed phone's push should read in, and there is no i18next there to
-    // ask instead. Immediate, not debounced — the reload two lines down
-    // would otherwise race the request and drop it.
-    //
-    // The server's enum is still `pt-BR | en` (push copy has no Spanish yet),
-    // so a Spanish reader is stored as English: an English push beats a
-    // Portuguese one, which is what an absent value defaults to.
-    queuePreferenceSync(
-      { locale: next === "es" ? "en" : next },
-      { immediate: true },
-    );
-    await getDesktop()?.setLocale?.(next);
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("lang");
-      window.location.replace(url.toString());
-    } catch {
-      window.location.reload();
-    }
-  }
-
+function RailFooter({ user }: { user: User | null }) {
   return (
-    <SettingBlock
-      label={t("settings.appearance.language")}
-      hint={t("settings.appearance.languageHint")}
-    >
-      <div
-        role="radiogroup"
-        aria-label={t("settings.appearance.language")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-      >
-        {SUPPORTED_LOCALES.map((option) => {
-          const selected = option === locale;
-          return (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => void choose(option)}
-              className={segmentClass(selected)}
-            >
-              {t(LOCALE_LABELS[option])}
-            </button>
-          );
-        })}
-      </div>
-    </SettingBlock>
-  );
-}
-
-/**
- * Launch pqp when the desktop app's platform starts.
- *
- * Desktop-only, and only where the shell can keep the promise: `getDesktop()
- * ?.platform` is a fact about the installed binary, and `loginItemSupported`
- * in the main process already refuses Linux, so this mirrors that refusal
- * here rather than showing a toggle that reports success and does nothing.
- * Absent entirely on the web and in a shell built before the bridge existed.
- */
-function DesktopStartupPicker() {
-  const { t } = useTranslation();
-  const desktop = getDesktop();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    const read = desktop?.getStartAtLogin;
-    if (typeof read !== "function") {
-      return;
-    }
-    let cancelled = false;
-    void read()
-      .then((value) => {
-        if (!cancelled) {
-          setEnabled(value === true);
-        }
-      })
-      // IPC can reject (main process gone, a handler missing on an older
-      // shell, mid-shutdown); left uncaught this was an unhandled promise
-      // rejection with the control silently never appearing (Farol review,
-      // PR 675). `enabled` stays null either way, which already hides the
-      // toggle below -- the catch only stops the rejection from going
-      // unhandled.
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          console.warn("[pqp] read start-at-login failed:", err);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [desktop]);
-
-  if (!desktop || desktop.platform === "linux" || enabled === null) {
-    return null;
-  }
-
-  function toggle(next: boolean) {
-    const write = desktop?.setStartAtLogin;
-    if (typeof write !== "function") {
-      return;
-    }
-    setPending(true);
-    void write(next)
-      .then((applied) => setEnabled(applied === true))
-      // A rejected write left the toggle spinning until `finally` cleared
-      // `pending`, but the rejection itself went unhandled with no
-      // user-visible failure state (Farol review, PR 675). `enabled` is
-      // left untouched on failure, so the Switch reverts to whatever it
-      // showed before the tap.
-      .catch((err: unknown) => {
-        console.warn("[pqp] set start-at-login failed:", err);
-      })
-      .finally(() => setPending(false));
-  }
-
-  return (
-    <div className="border-t border-border pt-6">
-      <Switch
-        checked={enabled}
-        onCheckedChange={toggle}
-        disabled={pending}
-        label={t("settings.appearance.startAtLogin")}
-        description={t("settings.appearance.startAtLoginHint")}
-        className="px-0"
-      />
-    </div>
-  );
-}
-
-function AppearanceSection({
-  showLinkEmbeds,
-  onShowLinkEmbeds,
-}: {
-  showLinkEmbeds: boolean;
-  onShowLinkEmbeds: (next: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="space-y-6">
-      <p className="text-xs text-text-muted">
-        {t("settings.appearance.syncHint")}
-      </p>
-      <ThemePicker />
-      <AppearancePicker />
-      <AccentHuePicker />
-      <ContrastPicker />
-      <div className="space-y-6 border-t border-border pt-6">
-        <LanguagePicker />
-        <ChatDisplayPicker
-          showLinkEmbeds={showLinkEmbeds}
-          onShowLinkEmbeds={onShowLinkEmbeds}
-        />
-      </div>
-      <DesktopStartupPicker />
-    </div>
-  );
-}
-
-/**
- * Preset ladders for the two numeric axes. The store is numeric (a synced
- * value from an older client may sit between rungs), so a rung is "selected"
- * when it is the nearest one.
- */
-const FONT_SIZE_PRESETS: { value: number; label: MessageKey }[] = [
-  { value: 13, label: "settings.appearance.textSize.small" },
-  { value: 15, label: "settings.appearance.textSize.default" },
-  { value: 17, label: "settings.appearance.textSize.large" },
-  { value: 20, label: "settings.appearance.textSize.larger" },
-];
-
-const GROUP_SPACING_PRESETS: { value: number; label: MessageKey }[] = [
-  { value: 0, label: "settings.appearance.spacing.tight" },
-  { value: 8, label: "settings.appearance.spacing.default" },
-  { value: 16, label: "settings.appearance.spacing.roomy" },
-];
-
-const DENSITY_OPTIONS: { value: ChatDensity; label: MessageKey }[] = [
-  { value: "cozy", label: "settings.appearance.density.cozy" },
-  { value: "compact", label: "settings.appearance.density.compact" },
-];
-
-function nearest(presets: { value: number }[], value: number): number {
-  let best = presets[0].value;
-  for (const preset of presets) {
-    if (Math.abs(preset.value - value) < Math.abs(best - value)) {
-      best = preset.value;
-    }
-  }
-  return best;
-}
-
-/**
- * One labelled row: the name on the left, a segmented control on the right,
- * stacked on a narrow dialog. Arrow keys move within the group.
- */
-function ChatOptionRow<T extends string | number>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { value: T; label: MessageKey }[];
-  value: T;
-  onChange: (next: T) => void;
-}) {
-  const { t } = useTranslation();
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (step === 0) {
-      return;
-    }
-    event.preventDefault();
-    const current = options.findIndex((option) => option.value === value);
-    const nextIndex = (current + step + options.length) % options.length;
-    onChange(options[nextIndex].value);
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[nextIndex]?.focus();
-  }
-
-  return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <span className="text-sm text-text">{label}</span>
-      <div
-        role="radiogroup"
-        aria-label={label}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5 sm:w-auto sm:min-w-[16rem]"
-        onKeyDown={handleKeyDown}
-      >
-        {options.map((option) => {
-          const selected = option.value === value;
-          return (
-            <button
-              key={String(option.value)}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => onChange(option.value)}
-              className={cn(segmentClass(selected), "h-8 px-2.5 text-xs")}
-            >
-              {t(option.label)}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ChatDisplayPicker({
-  showLinkEmbeds,
-  onShowLinkEmbeds,
-}: {
-  showLinkEmbeds: boolean;
-  onShowLinkEmbeds: (next: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const { display, setDisplay } = useChatDisplay();
-  const isDefault =
-    display.density === DEFAULT_CHAT_DISPLAY.density &&
-    display.fontSize === DEFAULT_CHAT_DISPLAY.fontSize &&
-    display.groupSpacing === DEFAULT_CHAT_DISPLAY.groupSpacing;
-
-  return (
-    <SettingBlock
-      label={t("settings.appearance.chat")}
-      hint={t("settings.appearance.chatHint")}
-    >
-      <div className="overflow-hidden rounded-lg border border-border">
-        <ChatDisplayPreview compact={display.density === "compact"} />
-        <div className="space-y-4 border-t border-border bg-surface-1 p-4">
-          <ChatOptionRow
-            label={t("settings.appearance.density")}
-            options={DENSITY_OPTIONS}
-            value={display.density}
-            onChange={(density) => setDisplay({ density }, { immediate: true })}
+    <div className="flex flex-col gap-2">
+      {user ? (
+        <div className="flex items-center gap-2 pl-2">
+          <UserAvatar
+            name={user.displayName}
+            avatarUrl={user.avatarUrl}
+            rounded="full"
+            className="h-6 w-6"
+            fallbackClassName="bg-accent text-[10px] font-bold text-on-accent"
           />
-          <ChatOptionRow
-            label={t("settings.appearance.textSize")}
-            options={FONT_SIZE_PRESETS}
-            value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
-            onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
-          />
-          <ChatOptionRow
-            label={t("settings.appearance.spacing")}
-            options={GROUP_SPACING_PRESETS}
-            value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
-            onChange={(groupSpacing) =>
-              setDisplay({ groupSpacing }, { immediate: true })
-            }
-          />
-          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex cursor-pointer items-center gap-3 text-sm">
-              <input
-                type="checkbox"
-                checked={showLinkEmbeds}
-                onChange={(e) => onShowLinkEmbeds(e.target.checked)}
-                className="h-4 w-4 accent-[var(--color-accent)]"
-              />
-              <span>{t("settings.appearance.linkPreviews")}</span>
-            </label>
-            {!isDefault && (
-              <button
-                type="button"
-                onClick={() =>
-                  setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })
-                }
-                className="-my-1 py-1 text-left text-xs text-text-muted underline-offset-2 hover:text-text hover:underline"
-              >
-                {t("settings.appearance.chatReset")}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </SettingBlock>
-  );
-}
-
-/**
- * Three messages drawn with the message list's own recipe: the same CSS
- * variables for size, line height and group gap, the same avatar column, the
- * same timestamp gutter. It reads the variables off the root, so it follows
- * the sliders live without a save. Keep the class recipe in step with
- * `MessageRow` in `message-list.tsx`.
- */
-function ChatDisplayPreview({ compact }: { compact: boolean }) {
-  const { t } = useTranslation();
-  const rows = [
-    {
-      author: t("settings.appearance.preview.author1"),
-      body: t("settings.appearance.preview.message1"),
-      time: t("settings.appearance.preview.time1"),
-      startsGroup: true,
-      mine: false,
-    },
-    {
-      author: t("settings.appearance.preview.author1"),
-      body: t("settings.appearance.preview.message2"),
-      time: t("settings.appearance.preview.time2"),
-      startsGroup: false,
-      mine: false,
-    },
-    {
-      author: t("settings.appearance.preview.author2"),
-      body: t("settings.appearance.preview.message3"),
-      time: t("settings.appearance.preview.time3"),
-      startsGroup: true,
-      mine: true,
-    },
-  ];
-  return (
-    <div
-      aria-hidden
-      className="bg-channel py-3"
-    >
-      {rows.map((row, index) => (
-        <div
-          key={index}
-          className={cn(
-            "flex items-start gap-0 px-5",
-            row.startsGroup ? "mt-[var(--chat-group-gap)] pt-1 pb-1" : "pt-px pb-px",
-            index === 0 && "mt-0",
-          )}
-        >
-          {row.startsGroup && !compact ? (
-            <div className="flex w-14 shrink-0 items-start justify-end pr-2">
-              <UserAvatar
-                name={row.author}
-                avatarUrl={null}
-                rounded="lg"
-                className="h-9 w-9"
-                fallbackClassName="bg-ink-3 text-sm"
-              />
-            </div>
-          ) : (
-            <span
-              className={cn(
-                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                compact ? "opacity-70" : "opacity-40",
-              )}
-            >
-              {row.time}
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            {row.startsGroup && (
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span
-                  className={cn(
-                    "text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
-                    row.mine ? "text-signal" : "text-paper",
-                  )}
-                >
-                  {row.author}
-                </span>
-                {!compact && (
-                  <span className="text-[12px] leading-[var(--chat-line-height)] text-paper-muted">
-                    {row.time}
-                  </span>
-                )}
-              </div>
-            )}
-            <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
-              {row.body}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ----------------------------------------------------------- notifications */
-
-const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
-  { value: "all", label: "settings.notifications.level.all" },
-  { value: "mentions", label: "settings.notifications.level.mentions" },
-  { value: "none", label: "settings.notifications.level.none" },
-];
-
-const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
-  // First: the one sound a DM makes, which until now had no switch at all —
-  // the catalogue key already existed and was unreachable.
-  { cue: "message", label: "settings.notifications.sounds.message" },
-  { cue: "mention", label: "settings.notifications.sounds.mention" },
-  { cue: "voiceJoin", label: "settings.notifications.sounds.voiceJoin" },
-  { cue: "voiceLeave", label: "settings.notifications.sounds.voiceLeave" },
-  { cue: "incomingCall", label: "settings.notifications.sounds.incomingCall" },
-  { cue: "outgoingCall", label: "settings.notifications.sounds.outgoingCall" },
-];
-
-const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
-  { id: "classic", label: "settings.notifications.sounds.ring.classic" },
-  { id: "chime", label: "settings.notifications.sounds.ring.chime" },
-  { id: "pulse", label: "settings.notifications.sounds.ring.pulse" },
-  { id: "marimba", label: "settings.notifications.sounds.ring.marimba" },
-  { id: "glass", label: "settings.notifications.sounds.ring.glass" },
-];
-
-/**
- * The account-wide notification default, plus the opt-in itself.
- *
- * Permission is requested from the button and nowhere else. Browsers penalise
- * pages that ask on load, a refusal cannot be taken back from script, and there
- * is no second prompt to fall back on — so the ask has to be worth spending.
- */
-function NotificationsSection() {
-  const { t } = useTranslation();
-  const { state, permission, enable, disable, setDefaultLevel } =
-    useNotificationSettings();
-  const sounds = useSyncExternalStore(
-    subscribeSounds,
-    getSoundState,
-    getSoundState,
-  );
-  const incomingRing = useSyncExternalStore(
-    subscribeSounds,
-    getIncomingRing,
-    getIncomingRing,
-  );
-  const active = state.desktop && permission === "granted";
-
-  return (
-    <div className="space-y-6">
-      <div>
-        {permission === "unsupported" ? (
-          <p className="text-xs text-paper-muted">
-            {t("settings.notifications.unsupported", desktopContext())}
-          </p>
-        ) : permission === "denied" ? (
-          <p className="text-xs text-warning" role="status">
-            {t("settings.notifications.denied", desktopContext())}
-          </p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant={active ? "secondary" : "default"}
-              size="sm"
-              onClick={() => (active ? disable() : void enable())}
-            >
-              {active
-                ? t("settings.notifications.turnOff")
-                : t("settings.notifications.enable")}
-            </Button>
-            <span className="text-xs text-paper-muted">
-              {active
-                ? t("settings.notifications.on")
-                : t("settings.notifications.willAsk", desktopContext())}
-            </span>
-          </div>
-        )}
-      </div>
-
-      <Field
-        label={t("settings.notifications.levelLabel")}
-        hint={t("settings.notifications.levelHint")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("settings.notifications.levelLabel")}
-          className="flex flex-wrap gap-1.5"
-        >
-          {LEVEL_OPTIONS.map((option) => {
-            const selected = option.value === state.default;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setDefaultLevel(option.value)}
-                className={chipClass(selected)}
-              >
-                {t(option.label)}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      <DirectMessagesSection />
-
-      <Field
-        label={t("settings.notifications.soundsLabel")}
-        hint={t("settings.notifications.soundsHint")}
-      >
-        <div className="space-y-2">
-          <label className="flex cursor-pointer items-start gap-3">
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-              checked={sounds.enabled}
-              onChange={(e) => setSoundEnabled(e.target.checked)}
-            />
-            <span className="text-sm">{t("settings.notifications.sounds.enabled")}</span>
-          </label>
-          {SOUND_CUE_OPTIONS.map((option) => (
-            <div key={option.cue} className="space-y-1.5">
-              <label className="flex cursor-pointer items-center gap-3 pl-7">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-[var(--color-signal)]"
-                  checked={sounds[option.cue]}
-                  disabled={!sounds.enabled}
-                  onChange={(e) =>
-                    setSoundCueEnabled(option.cue, e.target.checked)
-                  }
-                />
-                <span className="min-w-0 flex-1 text-sm">{t(option.label)}</span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={!sounds.enabled || !sounds[option.cue]}
-                  onClick={() => playCue(option.cue)}
-                >
-                  {t("settings.notifications.sounds.preview")}
-                </Button>
-              </label>
-              {option.cue === "incomingCall" ? (
-                <div className="space-y-1.5 pl-14">
-                  <p className="text-xs text-paper-muted">
-                    {t("settings.notifications.sounds.ringHint")}
-                  </p>
-                  <div
-                    role="radiogroup"
-                    aria-label={t("settings.notifications.sounds.ringHint")}
-                    className="flex flex-wrap gap-1.5"
-                  >
-                    {INCOMING_RING_OPTIONS.map((ring) => {
-                      const selected = ring.id === incomingRing;
-                      return (
-                        <button
-                          key={ring.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          disabled={!sounds.enabled || !sounds.incomingCall}
-                          onClick={() => {
-                            setIncomingRing(ring.id);
-                            playCue("incomingCall");
-                          }}
-                          className={chipClass(selected)}
-                        >
-                          {t(ring.label)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </Field>
-
-      <PushNotificationsSection />
-    </div>
-  );
-}
-
-/**
- * Web Push — notifications that reach this device with the app fully closed.
- *
- * Subscribing happens behind the button and nowhere else: it needs the
- * browser's notification permission, and both Chrome's heuristics and iOS
- * outright require the request to originate from a user gesture. Nothing here
- * runs on app start.
- *
- * On iOS the API only exists inside an installed home-screen app, so a plain
- * Safari tab gets the install instruction instead of a button that cannot
- * work.
- */
-function PushNotificationsSection() {
-  const { t } = useTranslation();
-  const [availability, setAvailability] = useState<PushAvailability | null>(null);
-  const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
-  const [subscribed, setSubscribed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const availability = getPushAvailability();
-    setAvailability(availability);
-    if (availability !== "available") {
-      return;
-    }
-    void (async () => {
-      try {
-        const [config, subscription] = await Promise.all([
-          getPushConfig(),
-          getCurrentPushSubscription(),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        setServerEnabled(config.enabled);
-        setSubscribed(subscription !== null);
-      } catch {
-        // The section renders nothing rather than a broken toggle.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const toggle = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      if (subscribed) {
-        await disablePush();
-        setSubscribed(false);
-      } else {
-        const result = await enablePush();
-        if (result === "enabled") {
-          setSubscribed(true);
-        } else if (result === "denied") {
-          setError(t("settings.push.denied", desktopContext()));
-        } else {
-          setError(t("settings.push.failed"));
-        }
-      }
-    } catch {
-      setError(t("settings.push.unreachable"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (availability === null) {
-    return null;
-  }
-
-  return (
-    <Field label={t("settings.push.title")}>
-      {availability === "needs-install" ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.needsInstall")}
-        </p>
-      ) : availability === "unsupported" ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.unsupported", desktopContext())}
-        </p>
-      ) : serverEnabled === false ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.push.notConfigured")}
-        </p>
-      ) : serverEnabled === null ? null : (
-        <>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant={subscribed ? "secondary" : "default"}
-              size="sm"
-              disabled={busy}
-              onClick={() => void toggle()}
-            >
-              {subscribed
-                ? t("settings.push.turnOff")
-                : t("settings.push.enable")}
-            </Button>
-            <span className="text-xs text-paper-muted">
-              {subscribed ? t("settings.push.on") : t("settings.push.off")}
-            </span>
-          </div>
-          {error ? (
-            <p className="mt-1.5 text-xs text-warning" role="status">
-              {error}
-            </p>
-          ) : null}
-        </>
-      )}
-    </Field>
-  );
-}
-
-/**
- * The three DM privacy choices, adjacent: the corner toast, its message
- * preview, and whether a phone notification may name the sender. Previously
- * `dmDetails` lived inside `PushNotificationsSection`, shown only once a
- * device had subscribed — but it is a stored account preference, not a fact
- * about this browser's subscription, so it belongs here with its siblings
- * and stays visible whether or not push is on for this device.
- */
-function DirectMessagesSection() {
-  const { t } = useTranslation();
-  const state = useNotificationState();
-  const [dmDetails, setDmDetails] = useState(false);
-  // Set the moment a person touches the switch, so the initial config fetch
-  // — which can resolve after that click — knows not to stomp a choice
-  // already in flight with whatever the server answered a moment earlier.
-  const touchedRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getPushConfig()
-      .then((config) => {
-        if (!cancelled && !touchedRef.current) {
-          setDmDetails(config.dmDetails);
-        }
-      })
-      .catch(() => {
-        // No push configured on this server — the switch still renders (it
-        // is a preference independent of push), just starts at its default.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const toggleDmDetails = () => {
-    touchedRef.current = true;
-    const next = !dmDetails;
-    setDmDetails(next);
-    void setPushDmDetails(next)
-      .then((saved) => setDmDetails(saved.dmDetails))
-      .catch(() => setDmDetails(!next));
-  };
-
-  return (
-    <Field label={t("settings.notifications.dm.label")}>
-      <div className="space-y-3">
-        <SwitchRow
-          label={t("settings.notifications.dm.arrivalToast")}
-          hint={t("settings.notifications.dm.arrivalToastHint")}
-          checked={state.arrivalToast}
-          onChange={setArrivalToastEnabled}
-        />
-        <SwitchRow
-          label={t("settings.notifications.dm.previewInApp")}
-          hint={t("settings.notifications.dm.previewInAppHint")}
-          checked={state.previewInApp}
-          disabled={!state.arrivalToast}
-          onChange={setPreviewInAppEnabled}
-        />
-        <SwitchRow
-          label={t("settings.push.dmDetails")}
-          hint={t("settings.push.dmDetailsHint")}
-          checked={dmDetails}
-          onChange={toggleDmDetails}
-        />
-      </div>
-      <p className="mt-3 text-xs text-paper-muted">
-        {t("settings.notifications.dndHint")}
-      </p>
-    </Field>
-  );
-}
-
-function SwitchRow({
-  label,
-  hint,
-  checked,
-  disabled = false,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <label className={cn("flex items-start gap-2 text-sm text-paper", disabled && "opacity-50")}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-accent"
-      />
-      <span>
-        {label}
-        <span className="block text-xs text-paper-muted">{hint}</span>
-      </span>
-    </label>
-  );
-}
-
-/* ----------------------------------------------------------------- privacy */
-
-const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: MessageKey }[] = [
-  { value: "everyone", label: "settings.privacy.dm.everyone" },
-  { value: "server_members", label: "settings.privacy.dm.serverMembers" },
-  { value: "nobody", label: "settings.privacy.dm.nobody" },
-];
-
-/**
- * Who may open a conversation with this account, and who has been blocked.
- *
- * Both apply the moment they are clicked rather than on Save, unlike the
- * profile fields in their own section. A privacy control that silently did
- * nothing because the dialog was dismissed with Cancel is the one failure this
- * section cannot have: the user believes they are closed off and they are not.
- *
- * The rule is enforced on the server on every attempt to open a conversation.
- * Nothing here is the enforcement — this is the switch, not the lock.
- */
-function PrivacySection({
-  user,
-  blockedUsers,
-  onUserUpdated,
-  onUnblockUser,
-}: {
-  user: User | null;
-  blockedUsers: BlockedUser[];
-  onUserUpdated: (user: User) => void;
-  onUnblockUser: (userId: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const current = user?.dmPrivacy ?? "server_members";
-
-  async function choose(value: DmPrivacy) {
-    if (!user || busy || value === current) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      onUserUpdated(await updateMe({ dmPrivacy: value }));
-    } catch (err) {
-      setError(messageOf(err, t("settings.privacy.saveFailed")));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <Field
-        label={t("settings.privacy.dmLabel")}
-        hint={t("settings.privacy.dmHint")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("settings.privacy.dmLabel")}
-          className="flex flex-wrap gap-1.5"
-        >
-          {DM_PRIVACY_OPTIONS.map((option) => {
-            const selected = option.value === current;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                disabled={busy || !user}
-                onClick={() => void choose(option.value)}
-                className={chipClass(selected)}
-              >
-                {t(option.label)}
-              </button>
-            );
-          })}
-        </div>
-        {error && (
-          <p role="alert" className="mt-1.5 text-xs text-danger">
-            {error}
-          </p>
-        )}
-      </Field>
-
-      <Field label={t("settings.privacy.blocked")}>
-        {blockedUsers.length === 0 ? (
-          <p className="text-xs text-paper-muted">
-            {t("settings.privacy.blockedEmpty")}
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {blockedUsers.map((blocked) => (
-              <li
-                key={blocked.id}
-                className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2/60"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-paper">
-                    {blocked.displayName}
-                  </p>
-                  {blocked.tag && (
-                    <p className="truncate font-mono text-[11px] text-paper-muted">
-                      {blocked.tag}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => onUnblockUser(blocked.id)}
-                >
-                  {t("settings.privacy.unblock")}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Field>
-    </div>
-  );
-}
-
-function messageOf(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
-
-/* --------------------------------------------------------------- your data */
-
-/**
- * The two rights the privacy policy promises, as buttons.
- *
- * Until these existed the only route was emailing an address and waiting for
- * somebody to run SQL by hand inside a 15-day statutory deadline. They have a
- * section of their own now rather than a footer at the end of a scroll: the
- * right to leave belongs somewhere a person can find it on purpose.
- */
-function YourDataSection({
-  user,
-  onRequestDelete,
-}: {
-  user: User | null;
-  onRequestDelete: () => void;
-}) {
-  const { t } = useTranslation();
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-
-  async function download() {
-    setExporting(true);
-    setExportError(null);
-    try {
-      const blob = await exportMyData();
-      // A Blob has no URL of its own, so one is minted just long enough for the
-      // click to fire — the same mechanism the server export uses.
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `pqp-my-data-${new Date().toISOString().slice(0, 10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setExportError(messageOf(err, t("settings.data.exportFailed")));
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void download()}
-            disabled={exporting || !user}
-          >
-            {exporting
-              ? t("settings.data.exporting")
-              : t("settings.data.export")}
-          </Button>
-          <span className="text-xs text-paper-muted">
-            {t("settings.data.exportHint")}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
+            {user.displayName}
           </span>
+          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs" />
         </div>
-        <p className="mt-1.5 text-xs text-paper-muted">
-          {t("settings.data.exportBody")}
-        </p>
-        {exportError && (
-          <p role="alert" className="mt-1.5 text-xs text-danger">
-            {exportError}
-          </p>
-        )}
-      </div>
-
-      <div className="rounded-md border border-danger/30 p-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="border border-danger/40 text-danger hover:bg-danger/10"
-            onClick={onRequestDelete}
-            disabled={!user}
-          >
-            {t("settings.data.delete")}
-          </Button>
-          <span className="text-xs text-paper-muted">
-            {t("settings.data.deleteHint")}
-          </span>
-        </div>
-      </div>
-
-      <div>
-        <p className="text-sm font-medium text-paper">{t("settings.data.legal")}</p>
-        <p className="mt-1 text-xs text-paper-muted">
-          {t("settings.data.legalHint")}
-        </p>
-        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          <li>
-            <a
-              href="/privacy"
-              target="_blank"
-              rel="noreferrer"
-              className="text-signal underline-offset-2 hover:underline"
-            >
-              {t("settings.data.privacy")}
-            </a>
-          </li>
-          <li>
-            <a
-              href="/terms"
-              target="_blank"
-              rel="noreferrer"
-              className="text-signal underline-offset-2 hover:underline"
-            >
-              {t("settings.data.terms")}
-            </a>
-          </li>
-          <li>
-            <a
-              href="/cookies"
-              target="_blank"
-              rel="noreferrer"
-              className="text-signal underline-offset-2 hover:underline"
-            >
-              {t("settings.data.cookies")}
-            </a>
-          </li>
-        </ul>
-      </div>
+      ) : null}
+      <SettingsBuildLine className="self-start" />
     </div>
   );
 }
 
-/**
- * The confirmation itself.
- *
- * Deliberately not a browser `confirm()` and deliberately not a single button.
- * The user has to read what goes and what stays, and then type their own handle
- * — the same value `deleteConfirmationMatches` checks on the server, so the
- * button being enabled and the request being accepted can never disagree.
- *
- * It states what survives as plainly as what is destroyed. A deletion screen
- * that only lists what disappears is quietly misleading: audit entries, bans
- * this account issued, and reports filed about it all remain, and somebody
- * deleting their account specifically to erase a moderation record deserves to
- * learn that here rather than afterwards.
- */
-function DeleteAccountDialog({
-  open,
-  user,
-  onCancel,
-  onDeleted,
-}: {
-  open: boolean;
-  user: User | null;
-  onCancel: () => void;
-  onDeleted: () => void;
-}) {
-  const { t } = useTranslation();
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [blockingServers, setBlockingServers] = useState<
-    BlockingOwnedServer[] | null
-  >(null);
-
-  useEffect(() => {
-    if (open) {
-      setTyped("");
-      setError(null);
-      setBlockingServers(null);
-    }
-  }, [open]);
-
-  const expected = expectedDeleteConfirmation(user?.tag);
-  const confirmed = deleteConfirmationMatches(typed, user?.tag);
-
-  async function submit() {
-    if (!confirmed || busy) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setBlockingServers(null);
-    try {
-      await deleteMyAccount(typed);
-      onDeleted();
-    } catch (err) {
-      if (err instanceof OwnedServersError) {
-        setBlockingServers(err.servers);
-        setError(null);
-      } else {
-        setError(messageOf(err, t("settings.delete.failed")));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      eyebrow={t("settings.delete.eyebrow")}
-      title={t("settings.delete.title")}
-      size="sm"
-      onClose={onCancel}
-      // A stray click on the backdrop must not be able to dismiss the one
-      // screen in the app whose next action cannot be undone.
-      closeOnBackdrop={false}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onCancel} disabled={busy}>
-            {t("settings.delete.keep")}
-          </Button>
-          <Button
-            className="bg-danger text-white hover:bg-danger/90"
-            onClick={() => void submit()}
-            disabled={!confirmed || busy}
-          >
-            {busy ? t("settings.delete.deleting") : t("settings.delete.confirm")}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4 px-5 py-4 text-sm">
-        <p className="text-paper">{t("settings.delete.lead")}</p>
-
-        <div>
-          <p className="text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.delete.whatGoes")}
-          </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-paper-muted">
-            <li>{t("settings.delete.goes.profile")}</li>
-            <li>{t("settings.delete.goes.messages")}</li>
-            <li>{t("settings.delete.goes.files")}</li>
-            <li>{t("settings.delete.goes.memberships")}</li>
-            <li>{t("settings.delete.goes.signIn")}</li>
-            <li>{t("settings.delete.goes.servers")}</li>
-          </ul>
-        </div>
-
-        <div>
-          <p className="text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.delete.whatStays")}
-          </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-paper-muted">
-            <li>{t("settings.delete.stays.moderation")}</li>
-            <li>{t("settings.delete.stays.bans")}</li>
-            <li>{t("settings.delete.stays.reports")}</li>
-          </ul>
-          <p className="mt-2 text-xs text-paper-muted">
-            {t("settings.delete.staysNote")}
-          </p>
-        </div>
-
-        {blockingServers && blockingServers.length > 0 && (
-          <div
-            role="alert"
-            className="rounded-md border border-warning/40 bg-warning/10 p-3"
-          >
-            <p className="font-medium text-paper">
-              {t("settings.delete.ownedTitle")}
-            </p>
-            <p className="mt-1 text-xs text-paper-muted">
-              {t("settings.delete.ownedBody")}
-            </p>
-            <ul className="mt-2 space-y-1">
-              {blockingServers.map((server) => (
-                <li key={server.id} className="text-sm text-paper">
-                  {server.name}{" "}
-                  <span className="text-xs text-paper-muted">
-                    {t("settings.delete.ownedMembers", {
-                      count: server.otherMemberCount,
-                    })}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <label className="block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("settings.delete.typeLabel")}
-          </span>
-          <span className="mb-1 block font-mono text-sm text-signal">
-            {expected}
-          </span>
-          <Input
-            value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            aria-label={t("settings.delete.typeAria", { handle: expected })}
-          />
-        </label>
-
-        {error && (
-          <p role="alert" className="text-sm text-danger">
-            {error}
-          </p>
-        )}
-      </div>
-    </Dialog>
-  );
+/** The day a link's rename cooldown ends, from the 429 that refused it. */
+function cooldownDay(message: string): string | null {
+  return /(\d{4}-\d{2}-\d{2})/.exec(message)?.[1] ?? null;
 }
-
-/* ----------------------------------------------------------------- profile */
-
-/**
- * Name, handle and avatar — the only part of settings that waits for Save.
- *
- * The avatar control is `AvatarPicker` rather than anything local, because
- * onboarding renders the same one; a second picker is how the two lists of
- * presets start to differ.
- */
-function ProfileSection({
-  user,
-  displayName,
-  onDisplayName,
-  username,
-  onUsername,
-  handle,
-  onHandle,
-  avatarUrl,
-  onAvatarUrl,
-  onUserUpdated,
-}: {
-  user: User | null;
-  displayName: string;
-  onDisplayName: (next: string) => void;
-  username: string;
-  onUsername: (next: string) => void;
-  handle: string;
-  onHandle: (next: string) => void;
-  avatarUrl: string;
-  onAvatarUrl: (next: string) => void;
-  onUserUpdated: (user: User) => void;
-}) {
-  const { t, locale } = useTranslation();
-  const [copied, setCopied] = useState(false);
-
-  // Null while the account has never claimed one, or once the window is over.
-  const renameAvailableAt = canRenameHandle(user?.handleChangedAt, user?.handle)
-    ? null
-    : handleRenameAvailableAt(user?.handleChangedAt, user?.handle);
-
-  const publicUrl = user?.handle ? publicProfileDisplayUrl(user.handle) : null;
-
-  function copyPublicUrl() {
-    if (!publicUrl) return;
-    void navigator.clipboard
-      ?.writeText(`https://${publicUrl}`)
-      .then(() => setCopied(true))
-      .catch(() => {
-        // No clipboard (plain http, an embedded webview). The link is right
-        // there in plain text, which is the fallback.
-      });
-  }
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <div className="space-y-5">
-      {user?.tag && (
-        <Field label={t("settings.profile.handle")}>
-          <p className="rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
-            {user.tag}
-          </p>
-        </Field>
-      )}
-
-      {/*
-        The public link, immediately under the tag it is constantly confused
-        with. Two name fields in one form is a design smell, so the two are put
-        side by side and each says what it is for: `name#1234` is how somebody
-        adds you inside the app, `pqp.gg/@name` is a page you can hand to
-        somebody who has never heard of pqp.
-
-        The claimed link is rendered as TEXT WITH A COPY BUTTON rather than as
-        the input's value, because the two are different objects: the input is a
-        thing you are editing and can abandon with Cancel, and the link is a
-        thing you own and want on your clipboard. Collapsing them would mean the
-        copy button copies a draft.
-      */}
-      <Field
-        label={t("settings.profile.publicHandle")}
-        hint={t("settings.profile.publicHandle.hint")}
-      >
-        <div className="flex items-stretch gap-0 rounded-md border border-ink-4 bg-ink focus-within:ring-2 focus-within:ring-signal/50">
-          <span className="flex select-none items-center pl-3 font-mono text-sm text-paper-muted">
-            pqp.gg/@
-          </span>
-          <input
-            value={handle}
-            maxLength={HANDLE_MAX_LENGTH}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            disabled={renameAvailableAt !== null}
-            placeholder={t("settings.profile.publicHandle.placeholder")}
-            onChange={(event) => onHandle(normalizeHandle(event.target.value))}
-            className="min-w-0 flex-1 bg-transparent px-1 py-2 font-mono text-sm text-paper outline-none placeholder:text-paper-muted/60 disabled:opacity-60"
-          />
-        </div>
-
-        {renameAvailableAt && (
-          <p className="mt-1.5 text-xs text-warning">
-            {t("settings.profile.publicHandle.cooldown", {
-              date: renameAvailableAt.toLocaleDateString(
-                intlLocale(locale),
-                { day: "numeric", month: "long", year: "numeric" },
-              ),
-            })}
-          </p>
-        )}
-
-        {publicUrl && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="rounded bg-ink-3 px-2 py-1 font-mono text-xs text-signal">
-              {publicUrl}
-            </code>
-            <button
-              type="button"
-              onClick={copyPublicUrl}
-              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
-            >
-              {copied
-                ? t("settings.profile.publicHandle.copied")
-                : t("settings.profile.publicHandle.copy")}
-            </button>
-            <a
-              href={publicProfilePath(user!.handle!)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
-            >
-              {t("settings.profile.publicHandle.view")}
-            </a>
-          </div>
-        )}
-      </Field>
-
-      {/* Above the avatar, matching the page it feeds: on `pqp.gg/@you` the
-          banner is the first thing anybody sees and the avatar overlaps it.
-          A settings form whose order contradicts the thing it edits is a form
-          people scroll past looking for the control they can already picture. */}
-      <BannerField user={user} onUserUpdated={onUserUpdated} />
-
-      <div>
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.avatar")}
-        </span>
-        <AvatarPicker
-          value={avatarUrl}
-          onChange={onAvatarUrl}
-          fallbackName={displayName}
-          labels={{
-            urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
-            urlLabel: t("settings.profile.avatar.urlLabel"),
-            presetLabel: t("settings.profile.avatar.preset"),
-            clear: t("settings.profile.avatar.clear"),
-            upload: t("settings.profile.avatar.upload"),
-            uploading: t("settings.profile.avatar.uploading"),
-          }}
-          // The claim already wrote it, so the app's copy of the account is
-          // updated here rather than waiting for Save — otherwise the sidebar
-          // keeps the old picture until the dialog closes, and Cancel would
-          // look like it undid an upload it cannot.
-          onUploaded={onUserUpdated}
-        />
-      </div>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.displayName")}
-        </span>
-        <Input
-          value={displayName}
-          maxLength={DISPLAY_NAME_MAX_LENGTH}
-          onChange={(e) => onDisplayName(e.target.value)}
-        />
-      </label>
-
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.profile.username")}
-        </span>
-        <Input
-          value={username}
-          onChange={(e) =>
-            onUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-          }
-          placeholder={t("settings.profile.usernamePlaceholder")}
-        />
-        <span className="mt-1 block text-xs text-paper-muted">
-          {t("settings.profile.usernameHint")}
-        </span>
-      </label>
-
-      {/* Said once, here, because this section is the only one where Save means
-          anything — everywhere else a control has already taken effect by the
-          time the user looks away from it. */}
-      <p className="text-xs text-paper-muted">{t("settings.profile.saveNote")}</p>
-    </div>
-  );
-}
-
-/**
- * The profile banner, uploaded and claimed the moment it is picked.
- *
- * NOT A DRAFT, unlike the three fields under it, and the asymmetry is the same
- * one `ServerIdentitySection` lives with: the bytes are already in the bucket
- * and the row already points at them, so there is nothing a later Save could
- * apply and nothing Cancel could take back. The control therefore reports what
- * HAPPENED rather than what is pending, and hands the updated account upward so
- * the preview here changes while the dialog is still open.
- *
- * The config is memoised for the life of the tab, exactly as the avatar picker
- * and the server identity section memoise theirs: storage is either configured
- * on this deployment or it is not, and re-asking every time the dialog opens is
- * a round trip somebody spends looking at a blank slot.
- */
-let bannerConfigPromise: Promise<UserBannerConfig> | null = null;
-
-function bannerUploadConfig(): Promise<UserBannerConfig> {
-  bannerConfigPromise ??= fetchUserBannerConfig().catch(() => ({
-    enabled: false,
-    maxBytes: MAX_USER_BANNER_BYTES,
-    width: USER_BANNER_WIDTH,
-    height: USER_BANNER_HEIGHT,
-  }));
-  return bannerConfigPromise;
-}
-
-function BannerField({
-  user,
-  onUserUpdated,
-}: {
-  user: User | null;
-  onUserUpdated: (user: User) => void;
-}) {
-  const { t } = useTranslation();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [busy, setBusy] = useState<"upload" | "remove" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void bannerUploadConfig().then((config) => {
-      if (!cancelled) {
-        setEnabled(config.enabled);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const bannerUrl = resolveUploadedImageUrl(user?.bannerUrl ?? null);
-
-  async function handleFile(file: File) {
-    setBusy("upload");
-    setError(null);
-    try {
-      onUserUpdated(await uploadUserBanner(file));
-    } catch (failure) {
-      setError(
-        failure instanceof ApiError || failure instanceof Error
-          ? failure.message
-          : t("settings.profile.banner.failed"),
-      );
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function handleRemove() {
-    setBusy("remove");
-    setError(null);
-    try {
-      const res = await deleteUserBanner();
-      onUserUpdated(res.user);
-    } catch (failure) {
-      setError(
-        failure instanceof ApiError || failure instanceof Error
-          ? failure.message
-          : t("settings.profile.banner.removeFailed"),
-      );
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  /** A drop goes through the same `handleFile` as the picker: same crop, same checks. */
-  function handleDrop(items: DroppedItems) {
-    const { file, folder } = firstDroppedFile(items);
-    if (file) {
-      void handleFile(file);
-    } else if (folder) {
-      setError(t("composer.dropFolder_one", { name: folder }));
-    }
-  }
-
-  return (
-    <FileDropZone
-      className="space-y-2"
-      data-profile-banner
-      mode={enabled && busy === null ? "accept" : "off"}
-      onDrop={handleDrop}
-      acceptLabel={t("chrome.dropImage")}
-      size="field"
-    >
-      <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {t("settings.profile.banner")}
-      </span>
-
-      {/* The preview is a 3:1 strip rather than a thumbnail, because that is
-          the crop the upload will apply — a square preview would show a photo
-          that is not the photo the page ends up with. */}
-      <div className="aspect-[3/1] w-full overflow-hidden rounded-lg border border-ink-4 bg-ink">
-        {bannerUrl ? (
-          <img
-            src={bannerUrl}
-            alt=""
-            className="h-full w-full object-cover"
-            decoding="async"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-paper-muted">
-            {t("settings.profile.banner.empty")}
-          </div>
-        )}
-      </div>
-
-      {!enabled ? (
-        <p className="text-xs text-paper-muted">
-          {t("settings.profile.banner.unconfigured")}
-        </p>
-      ) : (
-        <>
-          <p className="text-xs text-paper-muted">
-            {t("settings.profile.banner.hint", {
-              width: USER_BANNER_WIDTH,
-              height: USER_BANNER_HEIGHT,
-            })}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={busy !== null}
-              className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper hover:border-signal/50 disabled:opacity-60"
-              onClick={() => fileRef.current?.click()}
-            >
-              {busy === "upload"
-                ? t("settings.profile.banner.uploading")
-                : bannerUrl
-                  ? t("settings.profile.banner.replace")
-                  : t("settings.profile.banner.upload")}
-            </button>
-            {bannerUrl && (
-              <button
-                type="button"
-                disabled={busy !== null}
-                className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper-muted hover:border-danger/50 hover:text-danger disabled:opacity-60"
-                onClick={() => void handleRemove()}
-              >
-                {busy === "remove"
-                  ? t("settings.profile.banner.removing")
-                  : t("settings.profile.banner.remove")}
-              </button>
-            )}
-            <input
-              ref={fileRef}
-              type="file"
-              aria-label={t("settings.profile.banner")}
-              // A hint to the picker, never a check: the real gate is that
-              // `createImageBitmap` refuses to decode anything that is not an
-              // image, and what is uploaded is a JPEG this browser produced
-              // rather than the bytes that were chosen.
-              accept={USER_BANNER_MIME_ALLOWLIST.join(",")}
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                // Cleared before the upload, so picking the same file twice
-                // after a failure still fires a change event.
-                event.target.value = "";
-                if (file) {
-                  void handleFile(file);
-                }
-              }}
-            />
-          </div>
-        </>
-      )}
-
-      {error && (
-        <p role="alert" className="text-xs text-danger">
-          {error}
-        </p>
-      )}
-    </FileDropZone>
-  );
-}
-
-/* ------------------------------------------------------------------- modal */
-
-/**
- * The feedback box — bugs, ideas, gripes. A confirmed bug earns the caça-bugs
- * badge, which is the entire gamification budget of this feature: one fun
- * consequence, no points, no leaderboard.
- */
-function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
-  const { t } = useTranslation();
-  const [kind, setKind] = useState<FeedbackKind>("bug");
-  const [body, setBody] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (sent) {
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-paper" role="status">
-          {t("settings.feedback.done")}
-        </p>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            setSent(false);
-            setBody("");
-            setError(null);
-          }}
-        >
-          {t("settings.feedback.again")}
-        </Button>
-      </div>
-    );
-  }
-
-  const submit = async () => {
-    setSending(true);
-    setError(null);
-    try {
-      await sendFeedback({
-        kind,
-        body: body.trim(),
-        context: buildFeedbackContext(voice),
-      });
-      setSent(true);
-    } catch {
-      setError(t("settings.feedback.error"));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-paper-muted">{t("settings.feedback.intro")}</p>
-
-      <Field label={t("settings.feedback.kind.label")}>
-        <div
-          role="radiogroup"
-          aria-label={t("settings.feedback.kind.label")}
-          className="flex flex-wrap gap-1.5"
-        >
-          {FEEDBACK_KINDS.map((option) => {
-            const selected = option === kind;
-            return (
-              <button
-                key={option}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setKind(option)}
-                className={chipClass(selected)}
-              >
-                {t(FEEDBACK_KIND_LABELS[option])}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      <textarea
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        maxLength={FEEDBACK_BODY_MAX_LENGTH}
-        rows={5}
-        placeholder={t("settings.feedback.placeholder")}
-        aria-label={t("settings.section.feedback")}
-        className="w-full resize-y rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-      />
-
-      <div className="flex items-center gap-3">
-        <Button
-          size="sm"
-          disabled={sending || body.trim().length === 0}
-          onClick={() => void submit()}
-        >
-          {t("settings.feedback.send")}
-        </Button>
-        {error && (
-          <p className="text-xs text-danger" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
-      <p className="text-xs text-paper-muted">{t("settings.feedback.attached")}</p>
-    </div>
-  );
-}
-
-const FEEDBACK_KIND_LABELS: Record<FeedbackKind, MessageKey> = {
-  bug: "settings.feedback.kind.bug",
-  idea: "settings.feedback.kind.idea",
-  other: "settings.feedback.kind.other",
-};
 
 export function SettingsModal({
   open,
@@ -3945,31 +310,83 @@ export function SettingsModal({
   onLocalSave,
   onUserUpdated,
   onUnblockUser,
+  onBlockUser,
   onAudioSettingsLive,
   requestedSection = null,
   onShowShortcutOverlay,
   feedbackVoice = null,
 }: SettingsModalProps) {
-  const { t } = useTranslation();
-  const [displayName, setDisplayName] = useState("");
-  const [username, setUsername] = useState("");
-  const [handle, setHandle] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
+  const { t, locale } = useTranslation();
+  // The profile is the only staged state in Settings (spec section C). The
+  // four drafts are seeded once per open and never again from `user` while
+  // the dialog is up: an avatar upload, a banner or a DM privacy change all
+  // hand a new `user` down mid-edit, and reseeding then silently threw away a
+  // half-typed display name.
+  const [drafts, setDrafts] = useState<ProfileDrafts>(EMPTY_DRAFTS);
+  const seededRef = useRef(false);
+  // The account the drafts were last aligned with, so a change to it while
+  // the dialog is open can tell edited fields from untouched ones.
+  const savedUserRef = useRef<User | null>(null);
   const [draftLocal, setDraftLocal] = useState(localSettings);
   // Mirrors `draftLocal` so `patchLocal` can compose off the latest values
   // without doing its work inside a render-phase state updater.
   const draftRef = useRef(draftLocal);
-  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // "Salvo" in the bar for a moment after a save, then the bar goes. The
+  // count restarts the moment on a second save while the first is showing.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  // The public link is somebody else's: said under the link field in Perfil
+  // (through the shell context) and in the bar, in the reader's language.
+  const [handleError, setHandleError] = useState<string | null>(null);
+  // A close was refused while the profile was dirty. `jumped`: the refusal
+  // also moved the person to Perfil from another tab, and Perfil says why.
+  const [closeBlocked, setCloseBlocked] = useState(false);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const [closeJumped, setCloseJumped] = useState(false);
+  // What Descartar threw away, kept for Desfazer a few seconds.
+  const [discarded, setDiscarded] = useState<ProfileDrafts | null>(null);
+  const [focusGuardNonce, setFocusGuardNonce] = useState(0);
+  // The 30-day handle lock asks before a save claims or changes the link.
+  const [handleConfirm, setHandleConfirm] = useState<"claim" | "change" | null>(null);
+  // Perfil's live answer for the link being typed, with the link it is for.
+  const handleCheckRef = useRef<{ handle: string; availability: HandleAvailability }>({
+    handle: "",
+    availability: "idle",
+  });
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
   const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
+  // True once the device list has actually been read this visit, so Voz can
+  // tell "no microphone" from "still waiting on the permission prompt".
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Which section is showing. Deliberately NOT reset when the dialog closes:
   // somebody adjusting a level, listening, and coming back should land where
-  // they were rather than at the top of the tree every time.
-  const [section, setSection] = useState<SectionId>("profile");
+  // they were rather than at the top of the tree every time. A reload used to
+  // forget it, so the same reopen landed on two different tabs depending on
+  // whether the page had reloaded; it is kept for the browser tab now,
+  // written when the dialog closes or the page goes away.
+  const [section, setSection] = useState<SectionId>(readStoredSection);
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      // Just closed: this is where the next open lands.
+      storeSection(sectionRef.current);
+    }
+    wasOpenRef.current = open;
+    if (!open) {
+      return;
+    }
+    const remember = () => storeSection(sectionRef.current);
+    window.addEventListener("pagehide", remember);
+    return () => window.removeEventListener("pagehide", remember);
+  }, [open]);
   const settingsRef = useRef(localSettings);
   // Camera permission is asked once per open Settings session. Tabbing
   // through the Voice form must not blink the webcam LED on every focus.
@@ -4000,15 +417,23 @@ export function SettingsModal({
     }
   }, [canModerateInstance, section]);
 
+  // Atalhos on a phone or tablet with no mouse or trackpad mostly said
+  // "shortcuts only work with a keyboard connected", and cost a swipe on a
+  // strip that already shows three of ten tabs at a time.
+  const touchOnly = useTouchOnly();
+
   // The whole nav, minus the moderation door for every account it did not
-  // open for. Derived per render rather than mutating the module-level
-  // `SECTIONS` constant, which every other settings dialog instance shares.
+  // open for, and minus Atalhos on a touch-only device. Derived per render
+  // rather than mutating the module-level `SECTIONS` constant, which every
+  // other settings dialog instance shares.
   const visibleSections = useMemo(
     () =>
-      canModerateInstance
-        ? SECTIONS
-        : SECTIONS.filter((entry) => entry.id !== "moderation"),
-    [canModerateInstance],
+      SECTIONS.filter(
+        (entry) =>
+          (canModerateInstance || entry.id !== "moderation") &&
+          !(touchOnly && entry.id === "keyboard"),
+      ),
+    [canModerateInstance, touchOnly],
   );
 
   // A caller (or a stale sticky section from a previous session) pointing at
@@ -4028,7 +453,15 @@ export function SettingsModal({
   // The microphone is only opened while the section that shows a level meter is
   // actually on screen. Under the old single column, merely opening settings to
   // change a display name prompted for the mic.
-  const voiceVisible = settingsOpen && section === "voice";
+  const voiceVisible = settingsOpen && active.id === "voice";
+  // Read while rendering, before the new tab's notices mount: a notice that is
+  // there when a tab opens is content, and only later ones are announced.
+  const shownPaneRef = useRef<string | null>(null);
+  const shownPane = settingsOpen ? active.id : null;
+  if (shownPaneRef.current !== shownPane) {
+    shownPaneRef.current = shownPane;
+    if (shownPane !== null) markSettingsPaneShown();
+  }
   // The NOVO dot on the noise-suppression row: owed until this section has
   // been opened once, or the Voz limpa nudge card was acted on — whichever
   // comes first (`lib/voice-clean.ts`).
@@ -4070,14 +503,110 @@ export function SettingsModal({
     settingsRef.current = localSettings;
   }, [localSettings]);
 
+  // Seeded on the open transition only, or the first moment an account is
+  // there to seed from. Reset on close so the next open starts clean.
   useEffect(() => {
-    if (open && user) {
-      setDisplayName(user.displayName);
-      setUsername(user.username ?? "");
-      setHandle(user.handle ?? "");
-      setAvatarUrl(user.avatarUrl ?? "");
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (user && seededRef.current && savedUserRef.current) {
+      // The account changed while open (an upload, or this person editing
+      // their profile on another device). A field nobody touched here follows
+      // the new value; a field edited here keeps the edit. Otherwise an
+      // untouched dialog would read as dirty and Salvar would send the old
+      // values back over the other device's change.
+      const before = profileDraftsFrom(savedUserRef.current);
+      const after = profileDraftsFrom(user);
+      savedUserRef.current = user;
+      setDrafts((current) => ({
+        displayName:
+          current.displayName === before.displayName ? after.displayName : current.displayName,
+        username: current.username === before.username ? after.username : current.username,
+        handle: current.handle === before.handle ? after.handle : current.handle,
+        avatarUrl: current.avatarUrl === before.avatarUrl ? after.avatarUrl : current.avatarUrl,
+      }));
+      return;
+    }
+    if (user && !seededRef.current) {
+      seededRef.current = true;
+      savedUserRef.current = user;
+      setDrafts(profileDraftsFrom(user));
+      setSaveError(null);
+      setNameError(null);
+      setHandleError(null);
+      setCloseBlocked(false);
+      setCloseJumped(false);
+      setDiscarded(null);
+      setSavedFlash(false);
     }
   }, [open, user]);
+
+  const profileDirty = isProfileDirty(user, drafts);
+
+  // Descartar, a save or the end of the undo offer unmounts the button that
+  // had focus. Put focus on Desfazer while it is offered, so a keyboard user
+  // can take the discard back, and on the pane otherwise, so it stays inside
+  // the dialog.
+  useEffect(() => {
+    if (profileDirty || !open) {
+      return;
+    }
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) {
+      const undo = document.querySelector<HTMLButtonElement>("[data-unsaved-undo]");
+      (undo ?? scrollerRef.current)?.focus({ preventScroll: true });
+    }
+  }, [profileDirty, discarded]);
+
+  // Back to clean by any route (Descartar, a save, retyping the old value):
+  // nothing is blocking a close any more.
+  useEffect(() => {
+    if (!profileDirty) {
+      setCloseBlocked(false);
+      setCloseJumped(false);
+      setSaveError(null);
+      setHandleError(null);
+    }
+  }, [profileDirty]);
+
+  // Desfazer is offered for a few seconds, then the bar goes.
+  useEffect(() => {
+    if (!discarded) return;
+    const timer = window.setTimeout(() => setDiscarded(null), DISCARD_UNDO_MS);
+    return () => window.clearTimeout(timer);
+  }, [discarded]);
+
+  // A feedback result nobody saw belongs to this visit only.
+  useEffect(() => {
+    if (!open) return;
+    return () => endFeedbackVisit();
+  }, [open]);
+
+  // A reload or a closed browser tab would drop staged profile edits without
+  // a word, so the browser asks first while there are any. Not in the desktop
+  // app: Electron cancels the close or reload outright instead of asking,
+  // because the shell does not handle `will-prevent-unload`.
+  useEffect(() => {
+    // Not while the delete dialog is up: a deleted account reloads to the
+    // landing page, and that navigation must not stop on a leave prompt.
+    if (!open || !profileDirty || confirmingDelete || isDesktopApp()) {
+      return;
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      // Older Chromium and Safari still read this instead of preventDefault.
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [open, profileDirty, confirmingDelete]);
+
+  useEffect(() => {
+    if (!savedFlash) return;
+    const timer = window.setTimeout(() => setSavedFlash(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [savedFlash, savedCount]);
 
   // Seeded from a ref so live audio edits, which flow back in as a new
   // `localSettings` prop, do not restart the draft mid-session.
@@ -4085,9 +614,12 @@ export function SettingsModal({
     if (open) {
       setDraftLocal(settingsRef.current);
       draftRef.current = settingsRef.current;
-      setError(null);
     }
   }, [open]);
+
+  // Read when the list is loaded, which can be long after the effect ran.
+  const voiceAnalyserRef = useRef(voiceAnalyser);
+  voiceAnalyserRef.current = voiceAnalyser;
 
   useEffect(() => {
     if (!voiceVisible) {
@@ -4096,23 +628,50 @@ export function SettingsModal({
 
     let cancelled = false;
 
+    setDevicesLoaded(false);
+
+    // Only the newest read applies: a device plugged in while the first read
+    // is out starts a second, and the older answer must not land last.
+    let latestRead = 0;
     async function loadDevices() {
+      const read = ++latestRead;
+      const stale = () => cancelled || read !== latestRead;
       setDevicesError(null);
-      const granted = await ensureMediaPermission();
-      if (!granted) {
-        if (!cancelled) {
-          setDevicesError(t("settings.voice.permissionNeeded"));
+      // The probe is a capture of the default microphone. It is only there to
+      // unlock the names in the list, so it is not made when a call or the mic
+      // test already holds the microphone (a second capture can mute the first
+      // on Safari) or when the names are readable already. Being in a call is
+      // not enough: a listen-only join or an audience seat holds no microphone,
+      // and without the probe it would never be asked for one. The call's
+      // analyser is what says its microphone is open.
+      const holdsMicrophone = isMicTestRunning() || voiceAnalyserRef.current !== null;
+      if (!holdsMicrophone && !(await microphoneLabelsReadable())) {
+        const probe = await probeMicrophone();
+        // No microphone is not a refusal: the list below comes back without
+        // one and Voz says so. A busy one gets a retry, which is what the
+        // permission button does.
+        if (probe === "denied" || probe === "busy") {
+          if (!stale()) {
+            setDevicesError(
+              t(
+                probe === "busy"
+                  ? "settings.voice.micBusy"
+                  : "settings.voice.permissionNeeded",
+              ),
+            );
+          }
+          return;
         }
-        return;
       }
       const { inputs: nextInputs, outputs: nextOutputs, cameras: nextCameras } =
         await listAudioDevices();
-      if (cancelled) {
+      if (stale()) {
         return;
       }
       setInputs(nextInputs);
       setOutputs(nextOutputs);
       setCameras(nextCameras);
+      setDevicesLoaded(true);
     }
 
     void loadDevices();
@@ -4133,18 +692,24 @@ export function SettingsModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceVisible]);
 
-  async function revealCameras() {
+  async function revealCameras(alreadyGranted = false) {
     // Labels stay blank until the browser has seen a video permission.
     // Asked on focus of the camera select, not when Voice opens, so a
     // volume tweak does not light the webcam. Once per open session:
     // every Tab through this select used to open a second capture.
-    if (camerasAskedRef.current) {
-      return;
-    }
-    camerasAskedRef.current = true;
-    const granted = await ensureCameraPermission();
-    if (!granted) {
-      camerasAskedRef.current = false;
+    // `alreadyGranted` is the camera test's preview: it holds the camera, so
+    // the list is re-read without a second capture (Safari mutes the first).
+    if (alreadyGranted) {
+      camerasAskedRef.current = true;
+    } else {
+      if (camerasAskedRef.current) {
+        return;
+      }
+      camerasAskedRef.current = true;
+      const granted = await ensureCameraPermission();
+      if (!granted) {
+        camerasAskedRef.current = false;
+      }
     }
     const { cameras: nextCameras } = await listAudioDevices();
     setCameras(nextCameras);
@@ -4162,192 +727,768 @@ export function SettingsModal({
     const next = { ...draftRef.current, ...partial };
     draftRef.current = next;
     setDraftLocal(next);
-    onAudioSettingsLive?.(next);
+    if (onAudioSettingsLive) {
+      // App's handler applies AND persists (`setLocalSettings` plus
+      // `saveLocalSettings`), so this branch saves too.
+      onAudioSettingsLive(next);
+    } else {
+      // Nothing upstream is listening live (a test mounts the dialog bare),
+      // so persist here. Save used to do this; there is no Save now.
+      onLocalSave(next);
+      saveLocalSettings(next);
+    }
     // These already apply and persist locally as they are edited rather than on
     // Save, so the account copy follows the same moment. Device-only changes
     // queue nothing, and a slider drag coalesces into one request.
     queuePreferenceSync(preferencesFromLocal(partial));
   }
 
-  async function handleSave() {
-    // Checked before anything is saved. A blank name used to be dropped from
-    // the request, so the dialog closed as if it had worked and kept the old
-    // name. Device settings are not written either: a Save that fails should
-    // leave nothing half applied.
-    if (user && displayName.trim() === "") {
-      setSection("profile");
-      setError(t("settings.profile.displayNameRequired"));
+  function sameDrafts(a: ProfileDrafts, b: ProfileDrafts): boolean {
+    return (
+      a.displayName === b.displayName &&
+      a.username === b.username &&
+      a.handle === b.handle &&
+      a.avatarUrl === b.avatarUrl
+    );
+  }
+
+  function setDraft<K extends keyof ProfileDrafts>(key: K, value: ProfileDrafts[K]) {
+    setDrafts((current) => ({ ...current, [key]: value }));
+    if (key === "displayName" && value.trim() !== "") {
+      setNameError(null);
+    }
+    if (key === "handle") {
+      setHandleError(null);
+    }
+    // The bar's error was about the last attempt; an edit starts a new one.
+    setSaveError(null);
+    // Editing again is the answer to a refused close: the danger edge and
+    // the "why are we on Perfil" line go, and the bar reads as usual.
+    setCloseBlocked(false);
+    setCloseJumped(false);
+    // A new edit replaces whatever Desfazer would have brought back.
+    setDiscarded(null);
+  }
+
+  /**
+   * No confirm before it: one slip is cheap to undo. The drafts it threw away
+   * stay behind Desfazer for `DISCARD_UNDO_MS`.
+   */
+  function discardProfile() {
+    // The bar ignores it while a save runs; Cmd+S and Enter never reach here.
+    if (saving) {
+      return;
+    }
+    if (user) {
+      setDiscarded(drafts);
+      setDrafts(profileDraftsFrom(user));
+    }
+    setSaveError(null);
+    setNameError(null);
+    setHandleError(null);
+    setCloseBlocked(false);
+    setCloseJumped(false);
+  }
+
+  // Desfazer and Salvar sit at the same spot of the bar, one after the other:
+  // the second click of a double-click on Desfazer must not save the edit it
+  // just brought back.
+  const undoneAt = useRef(0);
+  function saveFromBar() {
+    if (Date.now() - undoneAt.current < UNDO_SAVE_GUARD_MS) {
+      return;
+    }
+    saveProfile();
+  }
+
+  function undoDiscard() {
+    undoneAt.current = Date.now();
+    if (discarded) {
+      setDrafts(discarded);
+    }
+    setDiscarded(null);
+    setSection("profile");
+    // Desfazer unmounts with the click; Descartar is back in its place.
+    window.setTimeout(() => {
+      (
+        document.querySelector<HTMLButtonElement>("[data-unsaved-discard]") ??
+        scrollerRef.current
+      )?.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  /**
+   * "Continuar editando" on a refused close: the guard steps down and focus
+   * goes back to the first field, for somebody who only wanted to leave and
+   * found they could not.
+   */
+  function keepEditing() {
+    setCloseBlocked(false);
+    setCloseJumped(false);
+    window.setTimeout(() => {
+      const field = scrollerRef.current?.querySelector<HTMLElement>(
+        "input:not([type=hidden]):not([type=file]):not([disabled]), textarea:not([disabled])",
+      );
+      (field ?? scrollerRef.current)?.focus({ preventScroll: false });
+    }, 0);
+  }
+
+  /**
+   * "Salvar alterações", Cmd/Ctrl+S and the handle confirm all end here. It
+   * saves the profile and nothing else (`LocalSettings` persisted as it was
+   * edited), and it does not close the dialog.
+   */
+  async function commitProfile() {
+    if (!user) {
       return;
     }
     setSaving(true);
-    setError(null);
+    setSaveError(null);
+    setHandleError(null);
+    const submitted = drafts;
+    const patch = buildProfilePatch(user, submitted);
     try {
-      onLocalSave(draftLocal);
-      saveLocalSettings(draftLocal);
-      if (user) {
-        const updated = await updateMe({
-          // Only when it changed. An account whose name predates the limit
-          // would otherwise fail every save of an unrelated field.
-          displayName:
-            displayName.trim() !== user.displayName
-              ? displayName.trim()
-              : undefined,
-          username: username.trim() || undefined,
-          avatarUrl: avatarUrl.trim() || null,
-          // Omitted rather than sent empty when the field is blank. An absent
-          // key means "leave it alone"; there is deliberately no way to
-          // RELEASE a handle from this form, because releasing one hands
-          // somebody else a URL that is already in a hundred screenshots.
-          ...(handle ? { handle } : {}),
-        });
-        onUserUpdated(updated);
-      }
-      onClose();
+      const updated = await updateMe(patch);
+      onUserUpdated(updated);
+      // The one reseed while open: the server may have normalised what was
+      // sent (a regenerated tag number), and the bar must read clean. Only
+      // when nothing was typed while the request was out: an edit made during
+      // the save is newer than this response and stays staged.
+      setDrafts((current) =>
+        sameDrafts(current, submitted) ? profileDraftsFrom(updated) : current,
+      );
+      setSavedFlash(true);
+      setSavedCount((n) => n + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.saveFailed"));
+      if (isHandleTakenError(err, patch)) {
+        // Never the server's English sentence for this one: it is the one
+        // failure a person fixes by typing, so it is said where they type.
+        const message = t("settings.unsaved.handle.taken");
+        setSection("profile");
+        setHandleError(message);
+        setSaveError(message);
+      } else {
+        const linkChanged = pendingHandleChange(user, submitted) !== null;
+        if (linkChanged && err instanceof ApiError && err.status === 400) {
+          // A link the server will not take: said under the field, in
+          // Portuguese. Only when the link is what changed: the patch re-sends
+          // an unchanged link too, and blaming it for another field's 400
+          // would point at a field that may be locked.
+          const message = t("settings.unsaved.handle.invalid");
+          setSection("profile");
+          setHandleError(message);
+          setSaveError(message);
+        } else if (
+          linkChanged &&
+          err instanceof ApiError &&
+          err.status === 429 &&
+          cooldownDay(err.message) !== null
+        ) {
+          // The 30-day rename cooldown, which names the day it ends. A 429
+          // without one is the request limiter, said in the bar below.
+          const day = cooldownDay(err.message)!;
+          const message = t("settings.profile.publicHandle.cooldown", {
+            date: new Date(`${day}T12:00:00`).toLocaleDateString(intlLocale(locale), {
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            }),
+          });
+          setSection("profile");
+          setHandleError(message);
+          setSaveError(message);
+          // The link was claimed elsewhere (another window, another device):
+          // read the account back so Perfil locks the field it now holds.
+          void fetchMe()
+            .then((fresh) => {
+              if (fresh.handle !== user.handle) onUserUpdated(fresh);
+            })
+            .catch(() => undefined);
+        } else {
+          if (err instanceof ApiError && err.status === 409 && /username/i.test(err.message)) {
+            setSaveError(t("settings.profile.usernameExhausted"));
+          } else {
+            setSaveError(
+              inlineErrorMessage(err, t("settings.saveFailed"), t("settings.status.rateLimited")),
+            );
+          }
+          if (linkChanged) {
+            // The server claims the link before it writes the rest, so a
+            // refusal of another field can leave the link already this
+            // account's (and its 30 days running). Read the account back so
+            // Perfil shows what the server holds.
+            void fetchMe()
+              .then((fresh) => {
+                if (fresh.handle !== user.handle) onUserUpdated(fresh);
+              })
+              .catch(() => undefined);
+          }
+        }
+      }
     } finally {
       setSaving(false);
     }
   }
 
+  /**
+   * A refused save points at the field it is about: Perfil comes up, the field
+   * scrolls clear of the bar and takes focus, so its error line is read with
+   * it. The line used to sit out of sight while the bar said nothing.
+   */
+  function focusProfileField(rowId: "display-name" | "public-link") {
+    window.setTimeout(() => {
+      const field = scrollerRef.current?.querySelector<HTMLInputElement>(
+        `[data-settings-row="${rowId}"] input`,
+      );
+      if (!field) return;
+      field.scrollIntoView?.({ block: "center" });
+      field.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  function saveProfile() {
+    setSaveAttempt((count) => count + 1);
+    if (!user || saving || !profileDirty) {
+      return;
+    }
+    // Checked before anything is sent. A blank name used to be dropped from
+    // the request, so the save looked like it worked and kept the old name.
+    if (!hasVisibleText(drafts.displayName)) {
+      // Said once, under the field; the bar does not repeat it.
+      setSection("profile");
+      setNameError(t("settings.profile.displayNameRequired"));
+      focusProfileField("display-name");
+      return;
+    }
+    // Only a name being changed: a saved name that already carries an
+    // invisible mark (a pasted contact name) must not block saving a link.
+    if (drafts.displayName !== user.displayName && hasBidiControl(drafts.displayName)) {
+      setSection("profile");
+      setNameError(t("settings.profile.displayNameControls"));
+      focusProfileField("display-name");
+      return;
+    }
+    // The other two fields the server checks, checked here first so the
+    // reason is said in Portuguese and nothing is sent that will bounce.
+    const username = drafts.username.trim();
+    if (username !== "" && username !== (user.username ?? "") && !usernameSchema.safeParse(username).success) {
+      setSection("profile");
+      setSaveError(t("settings.profile.usernameInvalid"));
+      return;
+    }
+    // Only a link that changed: an account whose saved picture predates the
+    // rule must still be able to rename, and every save re-sends it.
+    const avatar = drafts.avatarUrl.trim();
+    const avatarProblem =
+      avatar !== "" && avatar !== (user.avatarUrl ?? "") ? avatarLinkProblem(avatar) : null;
+    if (avatarProblem) {
+      setSection("profile");
+      setSaveError(
+        avatarProblem === "length"
+          ? t("settings.profile.avatar.urlTooLong", { max: AVATAR_URL_MAX_LENGTH })
+          : t("settings.profile.avatar.urlInvalid"),
+      );
+      return;
+    }
+    const handleChange = pendingHandleChange(user, drafts);
+    const handleRejection = handleChange ? validateHandle(drafts.handle.trim()) : null;
+    if (handleRejection !== null) {
+      // Said before the 30-day confirm, not after it: confirming a link the
+      // server will refuse is a step that only leads to an error. A reserved
+      // or blocked word fits the format, so it gets the same line the field
+      // showed while typing, not the format rule.
+      const message =
+        handleRejection === "reserved"
+          ? t("claim.reserved")
+          : handleRejection === "blocked"
+            ? t("claim.blocked")
+            : t("settings.unsaved.handle.invalid");
+      setSection("profile");
+      setHandleError(message);
+      setSaveError(message);
+      focusProfileField("public-link");
+      return;
+    }
+    // The field already said this link has an owner: the 30-day confirm
+    // would only lead to the server's 409. An answer still on its way lets
+    // the confirm through, and the save's own check catches it.
+    const checked = handleCheckRef.current;
+    if (
+      handleChange &&
+      checked.availability === "taken" &&
+      checked.handle === drafts.handle.trim()
+    ) {
+      const message = t("settings.unsaved.handle.taken");
+      setSection("profile");
+      setHandleError(message);
+      setSaveError(message);
+      focusProfileField("public-link");
+      return;
+    }
+    if (handleChange) {
+      setHandleConfirm(handleChange);
+      return;
+    }
+    void commitProfile();
+  }
+
+  /**
+   * Escape, the X and the backdrop all come here. With staged profile edits
+   * the dialog does not close: it goes to Perfil (saying why, when it came
+   * from another tab), the bar asks "Salvar ou descartar?" with a third way
+   * out, and focus lands on "Continuar editando". Not on Salvar: a second
+   * Escape and a reflex Enter used to save. Every attempt does the same.
+   */
+  /**
+   * True when staged profile edits stop the person leaving: Perfil comes up
+   * with the bar asking to save or discard. Used by close and by sign out.
+   */
+  function holdForDrafts(): boolean {
+    if (!profileDirty) {
+      return false;
+    }
+    if (active.id !== "profile") {
+      setCloseJumped(true);
+    }
+    setSection("profile");
+    setCloseBlocked(true);
+    setFocusGuardNonce((n) => n + 1);
+    return true;
+  }
+
+  function requestClose() {
+    if (holdForDrafts()) {
+      return;
+    }
+    onClose();
+  }
+
+  useEffect(() => {
+    if (focusGuardNonce === 0) return;
+    const timer = window.setTimeout(() => {
+      (
+        document.querySelector<HTMLButtonElement>("[data-unsaved-continue]") ??
+        document.querySelector<HTMLButtonElement>("[data-unsaved-save]")
+      )?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusGuardNonce]);
+
+  // Cmd+S on Apple platforms, Ctrl+S elsewhere: the same path as the button,
+  // handle confirm included. Swallowed while Settings is the top dialog even
+  // with nothing staged, so the browser's "save page" never opens over it.
+  // Read through a ref so the listener is not re-added on every keystroke.
+  const saveProfileRef = useRef(saveProfile);
+  saveProfileRef.current = saveProfile;
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    const apple = isApplePlatform();
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      const chord = apple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (!chord || event.altKey || event.shiftKey || event.key.toLowerCase() !== "s") {
+        return;
+      }
+      // The browser's "Save page" is never what anyone wants over Settings,
+      // even with a confirm stacked on top.
+      event.preventDefault();
+      // Saving only while Settings is the top dialog: a confirm stacked over
+      // it (the link lock, Conexões' disconnect) owns the decision.
+      const layers = document.querySelectorAll("[data-dialog-layer]");
+      const top = layers[layers.length - 1];
+      if (top && scrollerRef.current && !top.contains(scrollerRef.current)) {
+        return;
+      }
+      saveProfileRef.current();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [settingsOpen]);
+
+  const barVisible = profileDirty || savedFlash || discarded !== null;
+
+  // How much of the pane the floating bar covers. On a phone its buttons
+  // wrap to a second or third row, so a fixed allowance left the last group
+  // (and a focused field) under it. Measured, with the old 96px as the floor.
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [barCover, setBarCover] = useState(0);
+  useLayoutEffect(() => {
+    const frame = barVisible
+      ? paneRef.current?.querySelector<HTMLElement>("[data-unsaved-bar-frame]")
+      : null;
+    if (!frame) {
+      setBarCover(0);
+      return;
+    }
+    const measure = () => setBarCover(Math.ceil(frame.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [barVisible]);
+  const barRoom = barVisible ? Math.max(96, barCover + 16) : undefined;
+
+  // The pane is the only scroller. A section always opens at its top: the
+  // pane used to keep the previous section's offset, so Voz opened 136px down
+  // because Perfil had been scrolled 100px.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollerRef.current) {
+      scrollerRef.current.scrollTop = 0;
+    }
+  }, [section]);
+
+  // `openSection(section, rowId)`: switch, then find the row once the tab has
+  // rendered it, bring it to the middle of the pane and flash it once. Tabs
+  // that load their rows asynchronously get a second until the row shows.
+  //
+  // A row that is not on screen (Voz draws "ptt" only in push-to-talk mode)
+  // is not an error: the pane lands at the top of the section at once, the
+  // same place a plain tab switch lands, and the late row still flashes if it
+  // turns up within the second.
+  const [pendingRow, setPendingRow] = useState<{ id: string; nonce: number } | null>(null);
+  // The tab a row jump was made into: only that switch hands focus to the row.
+  const rowJumpSection = useRef<SectionId | null>(null);
+  const openSection = useCallback((next: SectionId, rowId?: string) => {
+    setSection(next);
+    rowJumpSection.current = rowId ? next : null;
+    setPendingRow(rowId ? { id: rowId, nonce: Date.now() } : null);
+  }, []);
+  useEffect(() => {
+    if (!pendingRow) {
+      return;
+    }
+    let attempts = 0;
+    let retry: number | undefined;
+    let stop: (() => void) | null = null;
+    const find = () => {
+      stop = flashSettingsRow(scrollerRef.current, pendingRow.id);
+      if (stop) {
+        return;
+      }
+      if (attempts === 0 && scrollerRef.current) {
+        scrollerRef.current.scrollTop = 0;
+      }
+      if (++attempts < 20) {
+        retry = window.setTimeout(find, 50);
+      } else {
+        // The row never mounted: land on the section itself, focusably.
+        scrollerRef.current?.focus({ preventScroll: true });
+      }
+    };
+    find();
+    return () => {
+      window.clearTimeout(retry);
+      stop?.();
+    };
+  }, [pendingRow]);
+
+  // A switch that took the focused control away with it ("Ver no Perfil" in
+  // the bar, Ajuda's "Enviar feedback pelo app") lands on the new tab's
+  // panel instead of the page. A rail click keeps focus on its tab, and a
+  // jump to a row focuses the row (above). Not on the open itself: the dialog
+  // places its own first focus.
+  const focusedSectionRef = useRef<SectionId | null>(null);
+  useEffect(() => {
+    if (!settingsOpen) {
+      focusedSectionRef.current = null;
+      return;
+    }
+    const previous = focusedSectionRef.current;
+    focusedSectionRef.current = active.id;
+    // A row jump focuses its row (above). Any later switch, "Ver no Perfil"
+    // included, is not that jump, however long ago it was made.
+    const jumpedHere = pendingRow !== null && rowJumpSection.current === active.id;
+    rowJumpSection.current = null;
+    if (previous === null || previous === active.id || jumpedHere) {
+      return;
+    }
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.isConnected) {
+      scrollerRef.current?.focus({ preventScroll: true });
+    }
+  }, [settingsOpen, active.id, pendingRow]);
+
+  // Where a tab's `SettingsHeaderActions` land. State, not a ref, so the
+  // context updates once the header has mounted.
+  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
+
+  // Every sign-out button in the dialog asks this first. Signing out revokes
+  // the session before the page leaves, so the browser's leave prompt would
+  // come too late to keep anything. Stable, read through a ref.
+  const holdForDraftsRef = useRef(holdForDrafts);
+  holdForDraftsRef.current = holdForDrafts;
+  const holdForUnsaved = useCallback(() => holdForDraftsRef.current(), []);
+
+  const shell = useMemo<SettingsShellValue>(
+    () => ({
+      profileDirty,
+      openSection,
+      headerActionsSlot,
+      profileHandleError: handleError,
+      holdForDrafts: holdForUnsaved,
+    }),
+    [profileDirty, openSection, headerActionsSlot, handleError, holdForUnsaved],
+  );
+
+  // Memoized: the rail scrolls the active tab into view whenever this list
+  // changes, and a new array on every profile keystroke re-ran that.
+  const railItems = useMemo(
+    () =>
+      visibleSections.map((entry) => ({
+        id: entry.id,
+        label: t(entry.label),
+        icon: entry.icon,
+        group: entry.group,
+        // The dot that says Perfil has edits the bar is waiting on, so the
+        // unsaved state is visible from any tab, not only from the bar.
+        dirty: entry.id === "profile" && profileDirty,
+        // Voz asks for the microphone as it opens, so arrowing past it must
+        // not open it: Enter, Space or a click does.
+        manual: entry.id === "voice",
+      })),
+    [visibleSections, t, profileDirty],
+  );
+  const groupLabels = {
+    account: t(GROUP_LABELS.account),
+    app: t(GROUP_LABELS.app),
+    support: t(GROUP_LABELS.support),
+  };
+
   return (
     <>
       <Dialog
         open={settingsOpen}
-        eyebrow={t("settings.eyebrow")}
         title={t("settings.title")}
         size="xl"
         fill
-        onClose={onClose}
-        footer={
-          <>
-            {/* `mr-auto` pushes it away from Cancel and Save. Sign out is not a
-                third way to finish editing settings, and sitting next to the
-                two buttons that are would make it look like one. */}
-            <SignOutButton className="mr-auto" />
-            <Button variant="ghost" onClick={onClose}>
-              {t("settings.cancel")}
-            </Button>
-            <Button onClick={() => void handleSave()} disabled={saving}>
-              {saving ? t("settings.saving") : t("settings.save")}
-            </Button>
-          </>
-        }
+        // 56px: the band only names the dialog, the pane title names the page.
+        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
+        onClose={requestClose}
       >
-        <div className="flex h-full min-h-0 flex-col sm:flex-row">
-          <SectionRail
-            sections={visibleSections}
-            active={section}
-            onSelect={setSection}
-            idFor={(id) => `${tabIdPrefix}-${id}`}
-            panelId={panelId}
-          />
-
-          <div
-            id={panelId}
-            role="tabpanel"
-            aria-labelledby={`${tabIdPrefix}-${section}`}
-            tabIndex={0}
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] px-5 py-5 focus-visible:outline-none"
-          >
-            <SectionHeader section={active} />
-
-            {section === "profile" && (
-              <ProfileSection
-                user={user}
-                displayName={displayName}
-                onDisplayName={setDisplayName}
-                username={username}
-                onUsername={setUsername}
-                handle={handle}
-                onHandle={setHandle}
-                avatarUrl={avatarUrl}
-                onAvatarUrl={setAvatarUrl}
-                onUserUpdated={onUserUpdated}
+        <SettingsShellContext.Provider value={shell}>
+          <SettingsAnnouncer>
+            {/* On a phone every button, button-styled link, select, input
+                and segmented option in the dialog is at least a 44px touch
+                target. The rail's tabs, the round swatches and the chips keep
+                their drawn size and grow their hit area instead (an `after`
+                inset), and switches are whole rows already. */}
+            <div className="flex h-full min-h-0 flex-col sm:flex-row max-sm:[&_button:not([role])]:min-h-11 max-sm:[&_a.inline-flex.justify-center]:min-h-11 max-sm:[&_select]:min-h-11 max-sm:[&_input:not([type=file])]:min-h-11 max-sm:[&_[role=radio]:not(.rounded-full)]:min-h-11">
+              <SectionRail
+                sections={railItems}
+                active={active.id}
+                onSelect={setSection}
+                idFor={(id) => `${tabIdPrefix}-${id}`}
+                panelId={panelId}
+                label={t("settings.nav.label")}
+                groupLabels={groupLabels}
+                footer={<RailFooter user={user} />}
+                className="h-14 sm:h-auto sm:w-60"
+                fadeEnd
               />
-            )}
 
-            {section === "connections" && <ConnectionsSection />}
+              <div
+                ref={paneRef}
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1"
+              >
+                <div
+                  ref={scrollerRef}
+                  id={panelId}
+                  role="tabpanel"
+                  aria-labelledby={`${tabIdPrefix}-${active.id}`}
+                  tabIndex={0}
+                  className={cn(
+                    "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
+                    // The footer used to carry the home-indicator inset. With the
+                    // bar up the bar carries it, and the scroller otherwise.
+                    // With the bar up, a focused field scrolls clear of it.
+                    barVisible ? "scroll-pb-24" : "safe-pb",
+                  )}
+                  style={barRoom ? { scrollPaddingBottom: barRoom } : undefined}
+                >
+                  <div
+                    className={cn(
+                      "@container mx-auto w-full px-4 pt-5 sm:px-8 sm:pt-8",
+                      // Room for the last group to scroll clear of the bar.
+                      barVisible ? "pb-24" : "pb-5 sm:pb-8",
+                      active.wide ? "max-w-none" : "max-w-[40rem]",
+                    )}
+                    style={barRoom ? { paddingBottom: barRoom } : undefined}
+                  >
+                    <SettingsPaneHeader
+                      title={t(active.label)}
+                      description={t(active.description)}
+                      actionsRef={setHeaderActionsSlot}
+                    />
 
-            {section === "voice" && (
-              <VoiceSection
-                draftLocal={draftLocal}
-                patchLocal={patchLocal}
-                inputs={inputs}
-                outputs={outputs}
-                cameras={cameras}
-                onRevealCameras={() => {
-                  void revealCameras();
-                }}
-                devicesError={devicesError}
-                voiceAnalyser={voiceAnalyser}
-                metering={voiceVisible}
-                showVoiceCleanBadge={showVoiceCleanBadge}
-              />
-            )}
+                    <SettingsSectionContext.Provider value={active.id}>
+                      <div className="space-y-6">
+                        {closeJumped && active.id === "profile" ? (
+                          <SettingsNotice tone="info" role="status">
+                            {t("settings.unsaved.jumped")}
+                          </SettingsNotice>
+                        ) : null}
+                        {active.id === "profile" && (
+                          <ProfileSection
+                            user={user}
+                            displayName={drafts.displayName}
+                            onDisplayName={(next) => setDraft("displayName", next)}
+                            displayNameError={nameError}
+                            username={drafts.username}
+                            onUsername={(next) => setDraft("username", next)}
+                            handle={drafts.handle}
+                            onHandle={(next) => setDraft("handle", next)}
+                            avatarUrl={drafts.avatarUrl}
+                            onAvatarUrl={(next) => setDraft("avatarUrl", next)}
+                            onUserUpdated={onUserUpdated}
+                            onHandleAvailability={(handle, availability) => {
+                              handleCheckRef.current = { handle, availability };
+                            }}
+                          />
+                        )}
 
-            {section === "keyboard" && (
-              <KeyboardSection
-                draftLocal={draftLocal}
-                patchLocal={patchLocal}
-                onShowOverlay={() => onShowShortcutOverlay?.()}
-              />
-            )}
+                        {active.id === "connections" && <ConnectionsSection />}
 
-            {section === "notifications" && <NotificationsSection />}
+                        {active.id === "voice" && (
+                          <VoiceSection
+                            draftLocal={draftLocal}
+                            patchLocal={patchLocal}
+                            inputs={inputs}
+                            outputs={outputs}
+                            cameras={cameras}
+                            onRevealCameras={(alreadyGranted) => {
+                              void revealCameras(alreadyGranted);
+                            }}
+                            devicesError={devicesError}
+                            devicesLoaded={devicesLoaded}
+                            voiceAnalyser={voiceAnalyser}
+                            metering={voiceVisible}
+                            showVoiceCleanBadge={showVoiceCleanBadge}
+                          />
+                        )}
 
-            {section === "appearance" && (
-              <AppearanceSection
-                showLinkEmbeds={draftLocal.showLinkEmbeds}
-                onShowLinkEmbeds={(showLinkEmbeds) =>
-                  patchLocal({ showLinkEmbeds })
-                }
-              />
-            )}
+                        {active.id === "keyboard" && (
+                          <KeyboardSection
+                            draftLocal={draftLocal}
+                            patchLocal={patchLocal}
+                            onShowOverlay={() => onShowShortcutOverlay?.()}
+                          />
+                        )}
 
-            {section === "privacy" && (
-              <PrivacySection
-                user={user}
-                blockedUsers={blockedUsers}
-                onUserUpdated={onUserUpdated}
-                onUnblockUser={onUnblockUser}
-              />
-            )}
+                        {active.id === "notifications" && <NotificationsSection />}
 
-            {section === "data" && (
-              <YourDataSection
-                user={user}
-                onRequestDelete={() => setConfirmingDelete(true)}
-              />
-            )}
+                        {active.id === "appearance" && (
+                          <AppearanceSection
+                            showLinkEmbeds={draftLocal.showLinkEmbeds}
+                            onShowLinkEmbeds={(showLinkEmbeds) =>
+                              patchLocal({ showLinkEmbeds })
+                            }
+                          />
+                        )}
 
-            {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+                        {active.id === "privacy" && (
+                          <PrivacySection
+                            user={user}
+                            blockedUsers={blockedUsers}
+                            onUserUpdated={onUserUpdated}
+                            onUnblockUser={onUnblockUser}
+                            onBlockUser={onBlockUser}
+                          />
+                        )}
 
-            {section === "help" && (
-              <HelpSection onOpenFeedback={() => setSection("feedback")} />
-            )}
+                        {active.id === "data" && (
+                          <YourDataSection
+                            user={user}
+                            onRequestDelete={() => setConfirmingDelete(true)}
+                          />
+                        )}
 
-            {section === "moderation" &&
-              (canModerateInstance ? (
-                <AllReportsSection />
-              ) : (
-                // Only reachable for the one render before the effect above
-                // bounces off this section — a deep link can land here before
-                // React has run its effects. The nav entry itself never
-                // exists for an account the flag says no to.
-                <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-                  {t("common.loading")}
-                </p>
-              ))}
+                        {active.id === "feedback" && <FeedbackSection voice={feedbackVoice} userId={user?.id ?? null} />}
 
-            {error && (
-              <p className="mt-4 text-sm text-danger" role="alert">
-                {error}
-              </p>
-            )}
-          </div>
-        </div>
+                        {active.id === "help" && (
+                          <HelpSection onOpenFeedback={() => openSection("feedback")} />
+                        )}
+
+                        {active.id === "moderation" &&
+                          (canModerateInstance ? (
+                            <AllReportsSection />
+                          ) : (
+                            // Only reachable for the one render before the effect above
+                            // bounces off this section — a deep link can land here before
+                            // React has run its effects. The nav entry itself never
+                            // exists for an account the flag says no to.
+                            <p role="status" aria-live="polite" className="text-sm text-text-tertiary">
+                              {t("common.loading")}
+                            </p>
+                          ))}
+                      </div>
+                    </SettingsSectionContext.Provider>
+                  </div>
+                </div>
+
+                <UnsavedChangesBar
+                  visible={barVisible}
+                  attempt={saveAttempt}
+                  saving={saving}
+                  saved={savedFlash && !profileDirty}
+                  blocked={closeBlocked}
+                  onKeepEditing={keepEditing}
+                  discarded={discarded !== null && !profileDirty}
+                  onUndoDiscard={undoDiscard}
+                  error={saveError}
+                  onDiscard={discardProfile}
+                  onSave={saveFromBar}
+                  onShowSource={
+                    active.id === "profile" ? undefined : () => setSection("profile")
+                  }
+                />
+              </div>
+            </div>
+          </SettingsAnnouncer>
+        </SettingsShellContext.Provider>
       </Dialog>
+
+      <ConfirmDialog
+        open={settingsOpen && handleConfirm !== null}
+        title={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claimTitle"
+            : "settings.unsaved.handle.changeTitle",
+          { handle: drafts.handle.trim() },
+        )}
+        description={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claimBody"
+            : "settings.unsaved.handle.body",
+          {
+            // The day the lock ends if this is confirmed now.
+            date: new Date(
+              Date.now() + HANDLE_RENAME_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+            ).toLocaleDateString(intlLocale(locale), {
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            }),
+          },
+        )}
+        confirmLabel={t(
+          handleConfirm === "claim"
+            ? "settings.unsaved.handle.claim"
+            : "settings.unsaved.handle.change",
+          { handle: drafts.handle.trim() },
+        )}
+        cancelLabel={t("settings.unsaved.handle.keep")}
+        destructive={false}
+        // Voltar, not the claim: Enter-to-save in the field could otherwise
+        // run straight through this and lock the link for 30 days.
+        initialFocus="cancel"
+        onConfirm={() => void commitProfile()}
+        // Runs after `onConfirm` too, so it only closes; Manter keeps the drafts
+        // and the bar exactly as they were.
+        onClose={() => setHandleConfirm(null)}
+      />
 
       <DeleteAccountDialog
         open={open && confirmingDelete}

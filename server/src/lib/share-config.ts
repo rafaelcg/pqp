@@ -33,6 +33,28 @@ import { isEnabled } from "./flags.js";
  * and asks the shell nothing. docs/DESKTOP.md §"Sharing a game: Fullscreen vs
  * Fullscreen Windowed".
  *
+ * `shareFastStartQuality`: how a screen share's picture starts, for whoever
+ * watches it and whoever sends it (`client/src/lib/share-fast-start.ts`). A
+ * viewer asks the SFU for the stage's layer before the subscription is bound,
+ * so the first picture is not the 360p copy; a presenter's share is not
+ * republished when the room crosses the large-room line, only the top layer's
+ * ceiling moves in place; and the presenter's capture really comes down to
+ * the planned height. Runtime flag `share_fast_start_quality`, default off,
+ * `SHARE_FAST_START_QUALITY` as its environment default, per-server override.
+ * Off, the client behaves exactly as before. Measured with
+ * `client/e2e/share-fast-start/`.
+ *
+ * `linuxDesktopSystemAudio`: the Linux desktop app may carry the computer's
+ * sound (minus the call) on a share. The shell builds the audio bus
+ * (`electron/lib/linux-share-audio.js`) and this is the switch that lets the
+ * page ask for it. Runtime flag `linux_desktop_system_audio`, default off,
+ * `LINUX_DESKTOP_SYSTEM_AUDIO` as its environment default, GLOBAL only: the
+ * client asks without a server and keeps one answer per page, so a per-server
+ * override would never be read. The shell still has to say it can
+ * (`capabilities.linuxShareAudio`) and the machine needs PulseAudio or
+ * PipeWire, so this does nothing in a browser, on macOS or Windows, or in an
+ * older desktop build.
+ *
  * `serverId` is the server the call is in, absent for a DM call. A value that
  * is not a uuid is read as absent rather than refused: the answer is one
  * boolean the global flag already gives anybody, and a malformed id must not
@@ -42,6 +64,8 @@ export interface ShareConfig {
   desktopShareAudioNative: boolean;
   shareHighMotionGuard: boolean;
   shareGameCaptureHint: boolean;
+  shareFastStartQuality: boolean;
+  linuxDesktopSystemAudio: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -53,5 +77,7 @@ export function shareConfigForServer(rawServerId: string | null): ShareConfig {
     desktopShareAudioNative: isEnabled("desktop_share_audio_native", { serverId }),
     shareHighMotionGuard: isEnabled("share_high_motion_guard", { serverId }),
     shareGameCaptureHint: isEnabled("share_game_capture_hint", { serverId }),
+    shareFastStartQuality: isEnabled("share_fast_start_quality", { serverId }),
+    linuxDesktopSystemAudio: isEnabled("linux_desktop_system_audio"),
   };
 }

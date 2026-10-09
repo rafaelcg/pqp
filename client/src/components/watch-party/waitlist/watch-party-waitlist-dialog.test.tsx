@@ -75,6 +75,7 @@ function serve(answers: Record<string, WatchPartyWaitlistState>) {
 async function open(
   servers: { id: string; name: string }[],
   initialServerId: string | null,
+  source: "streamers" | null = null,
 ) {
   await act(async () => {
     root = createRoot(host);
@@ -84,6 +85,7 @@ async function open(
         onClose={() => {}}
         servers={servers}
         initialServerId={initialServerId}
+        source={source}
         onReload={() => {}}
       />,
     );
@@ -242,6 +244,47 @@ describe("WatchPartyWaitlistDialog", () => {
     const post = apiFetch.mock.calls.find(([, init]) => init?.method === "POST");
     expect(JSON.parse(String(post![1].body))).toMatchObject({ serverId: null });
     expect(view()).toBe("waiting");
+  });
+
+  it("sends the streamers page's marker with a request it opened", async () => {
+    serve({ [SERVER]: state() });
+    await open([{ id: SERVER, name: "Sessão" }], SERVER, "streamers");
+    await click(document.querySelector("[data-audience-bucket='150-500']")!);
+    await click(submitButton());
+    const post = apiFetch.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post![1].body))).toMatchObject({
+      serverId: SERVER,
+      audienceBucket: "150-500",
+      source: "streamers",
+    });
+  });
+
+  it("asks a streamer with no server yet for their channel, so they can be found", async () => {
+    serve({ "": state({ canRequest: false }) });
+    await open([], null, "streamers");
+    expect(view()).toBe("serverless");
+    expect(document.body.textContent).toContain("Create one for your community");
+    const inputs = [...document.querySelectorAll("input")] as HTMLInputElement[];
+    // The channel, and not the note: a line about what to watch is the
+    // requester's, on a server.
+    expect(inputs).toHaveLength(1);
+    await type(inputs[0]!, "kick.com/zeh");
+    await click(submitButton());
+    const post = apiFetch.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post![1].body))).toMatchObject({
+      serverId: null,
+      streamChannel: "kick.com/zeh",
+      source: "streamers",
+    });
+  });
+
+  it("asks nobody else with no server for a channel, and sends no marker", async () => {
+    serve({ "": state({ canRequest: false }) });
+    await open([], null);
+    expect(document.querySelectorAll("input")).toHaveLength(0);
+    await click(submitButton());
+    const post = apiFetch.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post![1].body))).not.toHaveProperty("source");
   });
 
   it("says a server is already on instead of offering a form", async () => {

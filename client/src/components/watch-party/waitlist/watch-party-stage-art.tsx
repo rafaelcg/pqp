@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * NOT A SCREENSHOT AND NOT A STOCK PHOTO. The picture on the stage is the
  * landing page's own hero painting (a rooftop full of people at dusk, which is
  * also the whole idea), cut down to a 96 KB webp in
- * `public/images/watch-party/stage-film.webp`. Everything drawn over it is the
+ * `public/images/watch-party/stage.webp`. Everything drawn over it is the
  * real thing: `LivePill` is the badge a live party wears in the sidebar,
  * `UserAvatar` is the avatar every chat line uses, and the reactions float on
  * the same keyframe as the real ones (`live-reaction-float`). So the teaser
@@ -59,7 +59,7 @@ export function WatchPartyStageArt({
     >
       <div className="relative aspect-video min-w-0 flex-1" aria-hidden="true">
         <img
-          src="/images/watch-party/stage-film.webp"
+          src="/images/watch-party/stage.webp"
           alt=""
           width={1152}
           height={768}

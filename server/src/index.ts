@@ -25,10 +25,12 @@ import {
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
 import {
+  AUDIENCE_SWEEP_MS,
   HLS_SHARER_SWEEP_MS,
   IDLE_ALONE_SWEEP_MS,
   localVoicePeerCount,
   runVoiceReconcile,
+  sweepAudienceModes,
   sweepHlsSharersWithoutSession,
   sweepIdleAloneSeats,
   sweepVoiceChannelAccessCache,
@@ -599,6 +601,19 @@ const hlsSharerSweep = setInterval(() => {
   });
 }, HLS_SHARER_SWEEP_MS);
 hlsSharerSweep.unref?.();
+
+// Audience mode (`docs/plans/AUDIENCE_MODE.md`), for the rooms this process
+// holds a seat in: the operator's flag going off ends a session (the kill
+// switch), a stage with nobody left to run it ends, and the seats and the SFU
+// are brought back to the row (a missed frame, a join that raced a toggle, an
+// SFU update that failed). Nothing to do, and no query, while nobody here is
+// in a call.
+const audienceSweep = setInterval(() => {
+  void sweepAudienceModes().catch((error: unknown) => {
+    console.error("[voice] audience sweep failed:", error);
+  });
+}, AUDIENCE_SWEEP_MS);
+audienceSweep.unref?.();
 
 /**
  * Multi-instance chat, off by default.

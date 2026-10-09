@@ -1,5 +1,10 @@
 import { z } from "zod";
 import {
+  speakReasonSchema,
+  voiceAudienceMessageSchema,
+  voiceAudienceStateSchema,
+} from "./audience-mode.js";
+import {
   channelLiveMessageSchema,
   voiceStreamMessageSchema,
   watchLiveMessageSchema,
@@ -215,6 +220,18 @@ export const welcomeMessageSchema = z.object({
   canUseSoundboard: z.boolean().optional(),
   /** `Permission.MANAGE_SOUNDBOARD` here. Absent: the client hides Add. */
   canManageSoundboard: z.boolean().optional(),
+  /**
+   * Why `canSpeak` is false, when it is: the channel's permissions, or
+   * audience mode (`docs/plans/AUDIENCE_MODE.md`). Absent when the mic is not
+   * locked, and on a server that predates the field.
+   */
+  speakReason: speakReasonSchema.optional(),
+  /**
+   * The room's audience mode as of this welcome; null or absent is off. A
+   * resume carries it too, so a mode switched on during the gap arrives with
+   * the seat.
+   */
+  audience: voiceAudienceStateSchema.nullable().optional(),
 });
 
 export const peerJoinedMessageSchema = z.object({
@@ -600,6 +617,8 @@ export const voiceSpeakChangedMessageSchema = z.object({
   canUseSoundboard: z.boolean().optional(),
   /** `Permission.MANAGE_SOUNDBOARD`, re-resolved with the rest. Absent: unchanged. */
   canManageSoundboard: z.boolean().optional(),
+  /** Why `canSpeak` is false, when it is. Same meaning as on `welcome`. */
+  speakReason: speakReasonSchema.optional(),
 });
 
 /**
@@ -677,6 +696,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   // --- voice moderation ---
   voiceModerationMessageSchema,
   voiceSpeakChangedMessageSchema,
+  // --- audience mode --- see packages/shared/src/audience-mode.ts
+  voiceAudienceMessageSchema,
   voiceIdleWarningMessageSchema,
   voiceIdleWarningCancelledMessageSchema,
   // --- watch party ---

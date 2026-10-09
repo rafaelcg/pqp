@@ -173,6 +173,12 @@ server's **status** (`esperando` / `liberado` / `recusado`), and **desde**
 approved and declined, plus how many people expressed interest with no server
 at all (`serverless`).
 
+A request that came from the button on `pqp.gg/streamers` carries a
+**streamer** tag after the name (the row's `source`). Streamers who asked
+before they had a server are not lost in the `serverless` count: the newest
+twenty are listed by name under the table (`serverlessCampaign`), with the
+range and channel they gave, because they are somebody to write to.
+
 Two actions, both only on a waiting row:
 
 | Click | What it does | Confirmed |

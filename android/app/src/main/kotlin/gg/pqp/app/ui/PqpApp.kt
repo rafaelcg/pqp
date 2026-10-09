@@ -53,6 +53,7 @@ import gg.pqp.app.onboarding.shouldRunOnboarding
 import gg.pqp.app.onboarding.ui.ArrivalBanner
 import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
+import gg.pqp.app.push.PushPrompt
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
 import gg.pqp.app.social.ui.HomeScreen
@@ -316,6 +317,10 @@ private fun SignedInNav(
             },
         )
     }
+
+    // Notifications are on by default; on Android 13+ this is the one-time
+    // explainer that precedes the system permission dialog.
+    PushPrompt(push)
 
     // Where first run handed over: open that room, and greet the person in it.
     // Consumed once, so a later recomposition cannot navigate a second time.

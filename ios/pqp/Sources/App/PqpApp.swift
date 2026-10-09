@@ -28,6 +28,9 @@ struct PqpApp: App {
     /// cold-launched app still answer a call CallKit is already presenting.
     /// See `docs/IOS_CALLKIT.md`.
     @State private var callKit = CallKitCoordinator()
+    /// The one voice-note player. App-wide so a note keeps playing as the person
+    /// moves between screens, and so there is never a second voice under it.
+    @State private var notePlayer = VoiceNotePlayer()
     /// The only object iOS will hand an APNs device token to. SwiftUI owns its
     /// lifetime; `RootView` attaches the session to it.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var push
@@ -55,6 +58,7 @@ struct PqpApp: App {
                 .environment(voice)
                 .environment(ratings)
                 .environment(watchPartyHost)
+                .environment(notePlayer)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that
@@ -93,6 +97,7 @@ struct RootView: View {
     @Environment(CallModel.self) private var call
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
+    @Environment(VoiceNotePlayer.self) private var notePlayer
     @Environment(\.scenePhase) private var scenePhase
 
     let push: PushDelegate
@@ -252,6 +257,10 @@ struct RootView: View {
         .task { await session.restore() }
         .task { call.attach(session: session, ratings: ratings, callKit: callKit) }
         .task { voice.attachCallKit(callKit) }
+        // The player reports listens and refreshes expired links through the
+        // session, so it is wired where the session is, not by whichever chat
+        // screen happens to open first.
+        .task { notePlayer.configure(session: session) }
         #if DEBUG
         // Only ever fires under a launch argument. See
         // `CallRatingModel.offerSyntheticCallIfRequested`.

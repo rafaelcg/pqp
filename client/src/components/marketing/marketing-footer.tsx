@@ -7,6 +7,7 @@ import {
   DOWNLOAD_PAGE_PATH,
   SOURCE_REPO_URL,
 } from "@/lib/downloads";
+import { CONTACT_EMAIL } from "@/lib/help-contact";
 import { useTranslation } from "@/lib/i18n";
 import { playStoreUrl } from "@/lib/play-store";
 import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
@@ -82,6 +83,9 @@ export function MarketingFooter() {
             <Link to="/tela" className={FOOTER_LINK}>
               {t("footer.tela")}
             </Link>
+            <Link to="/streamers" className={FOOTER_LINK}>
+              {t("footer.streamers")}
+            </Link>
             {/* The footer drives to the /beta landing, not straight to
                 TestFlight: the page sells the beta and carries the honest
                 framing before the external hop. */}
@@ -133,29 +137,42 @@ export function MarketingFooter() {
             <Link to={CODE_SIGNING_PATH} className={FOOTER_LINK}>
               {t("footer.codeSigning")}
             </Link>
-            {/* The one address every legal page and security.txt already
-                give. A question about the service should not need the terms
-                opened first. */}
-            <a href="mailto:contato@pqp.gg" className={FOOTER_LINK}>
+            {/* The page that says who makes pqp, gives the one address every
+                legal page and security.txt already give, and says pqp is
+                independent. A question about the service should not need the
+                terms opened first. */}
+            <Link to="/contact" className={FOOTER_LINK}>
               {t("footer.contact")}
-            </a>
+            </Link>
           </div>
         </div>
       </div>
-      <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
-        {t("footer.copyright", { year: new Date().getFullYear() })}
-        {" · "}
-        {t("footer.madeBy")}
-        {" · "}
-        <a
-          href="https://rafael.ltd"
-          target="_blank"
-          rel="noopener"
-          className="transition-colors duration-150 hover:text-signal"
-        >
-          rafael.ltd
-        </a>
-      </p>
+      <div className="mx-auto mt-10 max-w-5xl space-y-2 text-xs text-paper-muted">
+        <p>
+          {t("footer.copyright", { year: new Date().getFullYear() })}
+          {" · "}
+          {t("footer.madeBy")}
+          {" · "}
+          <a
+            href={`mailto:${CONTACT_EMAIL}`}
+            className="transition-colors duration-150 hover:text-signal"
+          >
+            {CONTACT_EMAIL}
+          </a>
+          {" · "}
+          <a
+            href="https://rafael.ltd"
+            target="_blank"
+            rel="noopener"
+            className="transition-colors duration-150 hover:text-signal"
+          >
+            rafael.ltd
+          </a>
+        </p>
+        {/* One sentence, on every marketing page, in the reader's language. Not
+            a banner: it answers "whose is this?" for anyone who looks. */}
+        <p>{t("footer.independent")}</p>
+      </div>
     </footer>
   );
 }

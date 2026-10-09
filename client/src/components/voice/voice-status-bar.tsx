@@ -50,6 +50,11 @@ interface VoiceStatusBarProps {
    */
   listenOnly?: boolean;
   /**
+   * Locked by audience mode rather than by the channel: the strip says
+   * "Modo plateia" instead of "Só ouvindo" (`docs/plans/AUDIENCE_MODE.md`).
+   */
+  audienceLocked?: boolean;
+  /**
    * SFU readings already attached to remote peers. The mesh half is sampled
    * here; this list is how LiveKit's Excellent / Good / Poor reach the strip.
    */
@@ -117,6 +122,7 @@ export function VoiceStatusBar({
   inputMode = "voice-activity",
   isTransmitting = true,
   listenOnly = false,
+  audienceLocked = false,
   peerQualities = [],
   canStream = true,
   isCameraOn = false,
@@ -276,7 +282,7 @@ export function VoiceStatusBar({
               data-listen-only
               className="ml-1.5 min-w-0 truncate text-[10px] font-normal normal-case tracking-normal text-warning"
             >
-              {t("voice.bar.listenOnly")}
+              {audienceLocked ? t("voice.audience.badge") : t("voice.bar.listenOnly")}
             </span>
           )}
           {showPttIdle && (

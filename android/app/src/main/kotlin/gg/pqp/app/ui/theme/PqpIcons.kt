@@ -321,6 +321,17 @@ private object Lucide {
         "m2 2 20 20",
         "M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11",
     )
+    val pause by lucide(
+        // Lucide draws this as two `<rect rx="1">`, rewritten as path data.
+        "M15 4H17A1 1 0 0 1 18 5V19A1 1 0 0 1 17 20H15A1 1 0 0 1 14 19V5A1 1 0 0 1 15 4Z",
+        "M7 4H9A1 1 0 0 1 10 5V19A1 1 0 0 1 9 20H7A1 1 0 0 1 6 19V5A1 1 0 0 1 7 4Z",
+    )
+    val chevronLeft by lucide(
+        "m15 18-6-6 6-6",
+    )
+    val chevronUp by lucide(
+        "m18 15-6-6-6 6",
+    )
     val play by lucide(
         // Lucide draws this as `<polygon points="6 3 20 12 6 21 6 3"/>`.
         // Rewritten as path data because `lucide()` takes `d` strings only,
@@ -458,8 +469,13 @@ object PqpIcons {
     val Warning get() = Lucide.circleAlert
     val Attach get() = Lucide.paperclip
 
-    /** Start playing a video attachment. */
+    /** Start playing a video attachment, or a voice note. */
     val Play get() = Lucide.play
+    val Pause get() = Lucide.pause
+
+    /** The two hints on the hold-to-record gesture: slide left, slide up. */
+    val SlideLeft get() = Lucide.chevronLeft
+    val SlideUp get() = Lucide.chevronUp
 
     /** A place with channels in it. */
     val Server get() = Lucide.layers

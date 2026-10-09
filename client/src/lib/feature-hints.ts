@@ -18,6 +18,7 @@ import {
 
 export const FEATURE_HINT_IDS = [
   "callDock",
+  "watchNow",
   "watchPartyHost",
   "watchPartyViewer",
   "watchParty",
@@ -27,11 +28,15 @@ export const FEATURE_HINT_IDS = [
   "composerFormat",
   "channelPin",
   "shortcuts",
+  // Not in the attached queue: the notice is rendered by the composer itself,
+  // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
+  "voiceNoteTranscription",
 ] as const;
 
 export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
 
 export const FEATURE_HINT_STORAGE_KEYS = {
+  watchNow: "pqp:feature-hint-watch-now-2026-10",
   callDock: "pqp:feature-hint-call-dock-2026-09",
   watchPartyHost: "pqp:feature-hint-watch-party-host-2026-09",
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
@@ -45,6 +50,7 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
+  voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
 
 /** Attached to a control, not the corner. First match mounts. */
@@ -54,6 +60,11 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // lives in that dock, so "the controls are here" has to win the slot
   // before any of them can make sense. Once, for everyone.
   "callDock",
+  // A stream is live in the server somebody just arrived in, and the banner's
+  // Assistir is the one thing worth pointing at. A moment, not a state: it
+  // comes before every other tip, after the dock only because a person who
+  // is already in a call is looking at the dock, not at the strip.
+  "watchNow",
   // The two watch party hints come next and are the most specific: a person
   // setting a show up, and a person who has just landed in one. Both are
   // moments, not states, so they must not queue behind the standing "share is
@@ -184,6 +195,24 @@ export function useFeatureHintsSpent(): number {
     subscribeFeatureHintsSpent,
     featureHintsSpentVersion,
     featureHintsSpentVersion,
+  );
+}
+
+/**
+ * The banner's Assistir, once ever, for somebody who just arrived. Arrival is
+ * what makes it a newcomer's hint: a regular who has seen a hundred of these
+ * strips does not need it explained, and a card over their channel is noise.
+ */
+export function shouldOfferWatchNowHint(input: {
+  seen: boolean;
+  automated: boolean;
+  /** The banner is on screen with a stream in it. */
+  bannerVisible: boolean;
+  /** The open server is the one this person just joined, or their account is new. */
+  newcomer: boolean;
+}): boolean {
+  return (
+    !input.seen && !input.automated && input.bannerVisible && input.newcomer
   );
 }
 
@@ -351,4 +380,19 @@ export function shouldOfferChannelPinHint(input: {
 
 export function featureHintEligible(id: FeatureHintId): boolean {
   return !shouldSuppressHints() && !isFeatureHintSeen(id);
+}
+
+/**
+ * The one-time "your voice notes are transcribed" notice, shown while somebody
+ * records. It states a fact about THIS note, so all three must hold: transcripts
+ * exist where the note is going (the flag), this account allows its notes to be
+ * transcribed (`mine`; someone who already turned it off has been told), and a
+ * recording is under way.
+ */
+export function shouldOfferVoiceNoteTranscriptionNotice(input: {
+  recording: boolean;
+  transcriptionOn: boolean;
+  mine: boolean;
+}): boolean {
+  return input.recording && input.transcriptionOn && input.mine;
 }

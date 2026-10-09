@@ -13,7 +13,9 @@ import {
   permissionsUpdateSchema,
   profileUpdateSchema,
   serverRemovedSchema,
+  voiceNoteListenedSchema,
   type ChanceRequest,
+  type ChannelFanoutFrame,
   type ChatServerMessage,
   type FriendActivity,
   type MessagePreview,
@@ -21,6 +23,7 @@ import {
   type PollRequest,
   type ProfileUpdate,
   type ServerRemoved,
+  type VoiceNoteListened,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
@@ -58,6 +61,7 @@ import {
   timeoutMessage,
   type ActiveTimeout,
 } from "../services/sanctions.js";
+import { isEnabled } from "../lib/flags.js";
 import { pushChannelActivity } from "../services/push.js";
 import {
   getChannel,
@@ -91,6 +95,7 @@ import {
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
+  forEachSocketOfUser,
   SOCKET_CAPS,
   socketHasCap,
 } from "./sockets.js";
@@ -183,6 +188,7 @@ const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
 const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
+const VOICE_LISTENED_TOPIC = "chat.voice-listened";
 
 interface PresenceUser {
   id: string;
@@ -710,7 +716,7 @@ function ensureConnection(socket: WebSocket, user: DbUser): ChatConnection {
  */
 export function broadcastToChannel(
   channelId: string,
-  message: ChatServerMessage,
+  message: ChannelFanoutFrame,
   alsoSocket?: WebSocket,
 ): void {
   deliverToChannel(channelId, message, alsoSocket);
@@ -731,7 +737,7 @@ export function broadcastToChannel(
  */
 function deliverToChannel(
   channelId: string,
-  message: ChatServerMessage,
+  message: ChannelFanoutFrame,
   alsoSocket?: WebSocket,
 ): void {
   // One Buffer for the whole audience; never droppable, a message is the one
@@ -864,6 +870,50 @@ function deliverFriendActivity(
       socket.send(payload);
     }
   });
+}
+
+/**
+ * A voice note was played for the first time: tell the listener's own sockets
+ * (their other devices clear the dot) and, when the caller decided receipts
+ * are shown for this note, the author's.
+ *
+ * ADDRESSED BY ACCOUNT, NOT BY CHANNEL. The listener may have a phone on the
+ * other machine and the author is on whichever machine they happened to
+ * land on, so "deliver to the sockets I hold" is not an answer: the frame is
+ * delivered here and published on `chat.voice-listened` with its addressees,
+ * and every other instance delivers to whichever of those accounts it holds.
+ * An instance that holds none of them does nothing, which is the usual case.
+ *
+ * Fire-and-forget like `notifyFriendActivity`: the play is already committed,
+ * a dropped frame costs a dot that corrects itself on the next history read,
+ * and the HTTP answer must not wait on who has a tab open.
+ */
+export function notifyVoiceNoteListened(
+  frame: VoiceNoteListened,
+  userIds: readonly string[],
+): void {
+  if (userIds.length === 0) {
+    return;
+  }
+  deliverVoiceNoteListened(frame, userIds);
+  if (isBusEnabled()) {
+    publishToCluster(VOICE_LISTENED_TOPIC, { frame, userIds });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. */
+function deliverVoiceNoteListened(
+  frame: VoiceNoteListened,
+  userIds: readonly string[],
+): void {
+  const payload = encode(frame);
+  for (const userId of new Set(userIds)) {
+    forEachSocketOfUser(userId, (socket) => {
+      if (socket.readyState === 1) {
+        socket.send(payload);
+      }
+    });
+  }
 }
 
 /**
@@ -1647,6 +1697,14 @@ async function notifyChannelActivity(
     mentionEveryone?: boolean;
     mentionHereUserIds?: readonly string[];
     /**
+     * Accounts the message's `message_mentions` rows were written for
+     * (`mention_ids_from_db`). Absent with the flag off, and from a sibling
+     * running a build that predates it. A role mention is resolved to people
+     * only in that table, so this is how a role member's live mention flag and
+     * push learn they were addressed. Additive to the username match.
+     */
+    mentionedUserIds?: readonly string[];
+    /**
      * The redacted preview of the message that caused this activity, for a
      * conversation only. Null/absent for a server channel, an
      * attachment-only message, or a message this instance has no preview
@@ -1671,6 +1729,7 @@ async function notifyChannelActivity(
   // be both larger and slower.
   const mentioned = new Set(mentions);
   const hereIds = new Set(options?.mentionHereUserIds ?? []);
+  const recordedIds = new Set(options?.mentionedUserIds ?? []);
 
   // A conversation is small (at most nine other people), so a preference read
   // per recipient here is a handful of queries on the rare frame that carries
@@ -1736,7 +1795,8 @@ async function notifyChannelActivity(
           user.id === repliedToUserId ||
           Boolean(user.username && mentioned.has(user.username)) ||
           options?.mentionEveryone === true ||
-          hereIds.has(user.id),
+          hereIds.has(user.id) ||
+          recordedIds.has(user.id),
         ...(previewWantedBy?.has(user.id)
           ? {
               preview: options!.preview!.preview,
@@ -1764,6 +1824,12 @@ async function notifyChannelActivity(
       blockerIds: blockers,
       mentionEveryone: options?.mentionEveryone === true,
       mentionHereUserIds: options?.mentionHereUserIds ?? [],
+      mentionedUserIds: options?.mentionedUserIds ?? [],
+      // A conversation's voice note says so on the lock screen. Read off the
+      // preview, which only a conversation carries; never waits on anything.
+      voiceDurationMs: options?.preview?.isVoice
+        ? options.preview.voiceDurationMs
+        : null,
     });
   }
 }
@@ -2095,6 +2161,11 @@ async function postChannelMessageAttempt(
     }
   }
 
+  // Read once per send, on the instance that took it. The one answer decides
+  // both whether the insert reports who its rows were written for and whether
+  // that is used below, so a flip mid-send cannot split the two. Siblings do
+  // not consult the flag; they get the ids in the frame.
+  const mentionIdsFromDb = isEnabled("mention_ids_from_db");
   const dbMessage = await createMessage(
     input.channelId,
     input.author,
@@ -2102,6 +2173,7 @@ async function postChannelMessageAttempt(
     parent?.id ?? null,
     input.attachmentIds,
     {
+      collectRecipients: mentionIdsFromDb,
       mentionEveryone,
       mentionHere,
       extraUserIds: hereUserIds,
@@ -2190,6 +2262,9 @@ async function postChannelMessageAttempt(
   );
 
   const mentions = extractMentionUsernames(input.body);
+  const mentionedUserIds = mentionIdsFromDb
+    ? (dbMessage.mentionedUserIds ?? [])
+    : [];
   // Only a conversation's toast/preview reads message content — a server
   // channel's `channel-activity` frame stays exactly the notification it
   // always was (see the schema comment on `channelActivitySchema`).
@@ -2202,6 +2277,7 @@ async function postChannelMessageAttempt(
             body: message.body,
             hasAttachments: (message.attachments?.length ?? 0) > 0,
             isGifAttachment: message.attachments?.[0]?.contentType === "image/gif",
+            voiceDurationMs: message.attachments?.[0]?.voice?.durationMs ?? null,
           }),
         }
       : undefined;
@@ -2213,6 +2289,9 @@ async function postChannelMessageAttempt(
       repliedToUserId: parent?.author_id ?? null,
       mentionEveryone,
       mentionHereUserIds: hereUserIds,
+      // Left out entirely with the flag off, so the frame is byte for byte
+      // the old one.
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
       preview: preview ?? null,
     });
   }
@@ -2221,7 +2300,12 @@ async function postChannelMessageAttempt(
     input.author.id,
     mentions,
     parent?.author_id ?? null,
-    { mentionEveryone, mentionHereUserIds: hereUserIds, preview },
+    {
+      mentionEveryone,
+      mentionHereUserIds: hereUserIds,
+      mentionedUserIds,
+      preview,
+    },
   );
 
   const threadInfo = await getThreadInfo(input.channelId);
@@ -2644,12 +2728,20 @@ function asMessagePreview(
   if (authorId === null || authorName === null || preview === null) {
     return undefined;
   }
+  const voiceDurationMs =
+    record.isVoice === true &&
+    typeof record.voiceDurationMs === "number" &&
+    Number.isFinite(record.voiceDurationMs)
+      ? record.voiceDurationMs
+      : null;
   return {
     authorId,
     authorName,
     preview,
     isAttachment: record.isAttachment === true,
     isGif: record.isGif === true,
+    isVoice: voiceDurationMs !== null,
+    voiceDurationMs,
   };
 }
 
@@ -2689,7 +2781,7 @@ subscribeToCluster(BROADCAST_TOPIC, (data) => {
   ) {
     return;
   }
-  deliverToChannel(channelId, message as unknown as ChatServerMessage);
+  deliverToChannel(channelId, message as unknown as ChannelFanoutFrame);
 });
 
 subscribeToCluster(PRESENCE_TOPIC, (data, origin) => {
@@ -2771,6 +2863,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       webPush: false,
       mentionEveryone: frame?.mentionEveryone === true,
       mentionHereUserIds,
+      mentionedUserIds: asStringArray(frame?.mentionedUserIds) ?? [],
       preview: asMessagePreview(frame?.preview),
     },
   ).catch((error) => {
@@ -2847,6 +2940,22 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
     return;
   }
   deliverFriendActivity(userId, kind);
+});
+
+/**
+ * A voice note played on another instance. The frame is parsed with the schema
+ * the clients parse it with, and the addressees must survive as a list of
+ * strings: without them the only alternative is to guess who to tell, and a
+ * receipt delivered to the wrong person is worse than one not delivered.
+ */
+subscribeToCluster(VOICE_LISTENED_TOPIC, (data) => {
+  const record = asRecord(data);
+  const parsed = voiceNoteListenedSchema.safeParse(record?.frame);
+  const userIds = asStringArray(record?.userIds);
+  if (!parsed.success || !userIds) {
+    return;
+  }
+  deliverVoiceNoteListened(parsed.data, userIds);
 });
 
 /**

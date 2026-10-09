@@ -36,6 +36,13 @@ export interface MessagePreview {
   isAttachment: boolean;
   /** True when the (sole) attachment is a GIF, refining `isAttachment`. */
   isGif: boolean;
+  /**
+   * True when the message is a voice note, refining `isAttachment`. The
+   * client draws "Mensagem de voz · 0:12" from it and `voiceDurationMs`.
+   */
+  isVoice: boolean;
+  /** The note's length, set exactly when `isVoice`; null otherwise. */
+  voiceDurationMs: number | null;
 }
 
 // Applied in order. Link syntax first, so a bolded link's inner `[]` survives
@@ -79,6 +86,12 @@ export interface MessagePreviewInput {
   hasAttachments: boolean;
   /** Whether the (sole, relevant) attachment is a GIF (`content_type` `image/gif`). */
   isGifAttachment?: boolean;
+  /**
+   * The (sole) attachment's `voice.durationMs` when it is a voice note.
+   * A voice note carries no body, so it only counts on an attachment-only
+   * message.
+   */
+  voiceDurationMs?: number | null;
 }
 
 /**
@@ -92,7 +105,21 @@ export function buildMessagePreview(
 ): MessagePreview {
   const stripped = stripMarkdownForPreview(input.body);
   if (stripped.length === 0 && input.hasAttachments) {
-    return { preview: "", isAttachment: true, isGif: input.isGifAttachment === true };
+    const voiceDurationMs =
+      typeof input.voiceDurationMs === "number" ? input.voiceDurationMs : null;
+    return {
+      preview: "",
+      isAttachment: true,
+      isGif: input.isGifAttachment === true && voiceDurationMs === null,
+      isVoice: voiceDurationMs !== null,
+      voiceDurationMs,
+    };
   }
-  return { preview: truncatePreview(stripped), isAttachment: false, isGif: false };
+  return {
+    preview: truncatePreview(stripped),
+    isAttachment: false,
+    isGif: false,
+    isVoice: false,
+    voiceDurationMs: null,
+  };
 }

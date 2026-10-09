@@ -238,6 +238,13 @@
     <string name="push_settings_server_unsupported">Este servidor ainda não envia notificações para o Android.</string>
     <string name="push_settings_denied">As notificações do pqp estão desativadas nos ajustes do Android.</string>
     <string name="push_settings_working">Registrando…</string>
+    <string name="push_settings_play_services">Este celular está sem o Google Play Services (ou ele está desativado), então as notificações não chegam.</string>
+    <string name="push_settings_offline">Não deu para falar com o pqp para ativar as notificações. Tentando de novo.</string>
+    <string name="push_settings_rejected">O pqp recusou o registro deste celular. Desative e ative as notificações de novo.</string>
+    <string name="push_prompt_title">Ativar notificações?</string>
+    <string name="push_prompt_body">Receba um aviso quando alguém mencionar você, responder ou mandar uma DM com o pqp fechado. Dá para mudar quando quiser na aba Você.</string>
+    <string name="push_prompt_confirm">Ativar</string>
+    <string name="push_prompt_dismiss">Agora não</string>
 
     <!-- Você -->
     <string name="you_title">Você</string>
@@ -599,4 +606,40 @@
         <item quantity="many">%1$d pessoas lá dentro</item>
         <item quantity="other">%1$d pessoas lá dentro</item>
     </plurals>
+    <!-- Voice notes -->
+    <string name="voice_note_record">Segure para gravar uma mensagem de voz</string>
+    <string name="voice_note_hint">Segure o microfone para gravar. Solte para enviar.</string>
+    <string name="voice_note_slide_cancel">Deslize para cancelar</string>
+    <string name="voice_note_lock_hint">Deslize para cima para travar</string>
+    <string name="voice_note_locked">Travado. Você pode soltar o dedo.</string>
+    <string name="voice_note_paused">Pausado</string>
+    <string name="voice_note_discard">Descartar mensagem de voz</string>
+    <string name="voice_note_pause">Pausar gravação</string>
+    <string name="voice_note_resume">Continuar gravação</string>
+    <string name="voice_note_send">Enviar mensagem de voz</string>
+    <string name="voice_note_discarded">Áudio descartado (%1$s)</string>
+    <string name="voice_note_undo">Desfazer</string>
+    <string name="voice_note_seconds_left">faltam %1$ds</string>
+    <string name="voice_note_limit">Limite de cinco minutos. Enviamos o que você gravou.</string>
+    <string name="voice_note_in_call">Você não pode gravar áudio durante uma chamada.</string>
+    <string name="voice_note_play_in_call">Você não pode ouvir áudios durante uma chamada.</string>
+    <string name="voice_note_mic_busy">Outro app está usando o microfone.</string>
+    <string name="voice_note_play_failed">Não foi possível tocar esse áudio.</string>
+    <string name="voice_note_permission_title">Acesso ao microfone</string>
+    <string name="voice_note_permission_body">O pqp precisa do microfone para gravar sua mensagem de voz. Ele só escuta enquanto você segura o botão ou deixa a gravação travada.</string>
+    <string name="voice_note_permission_allow">Continuar</string>
+    <string name="voice_note_permission_cancel">Agora não</string>
+    <string name="voice_note_permission_denied">O acesso ao microfone está desligado. Ative nos Ajustes para gravar mensagens de voz.</string>
+    <string name="voice_note_sending">Enviando áudio %1$s…</string>
+    <string name="voice_note_failed">O áudio não subiu</string>
+    <string name="voice_note_ready">Áudio %1$s</string>
+    <string name="voice_note_retry">Tentar enviar o áudio de novo</string>
+    <string name="voice_note_remove">Remover áudio</string>
+    <string name="voice_note_card">Mensagem de voz de %1$s, %2$s</string>
+    <string name="voice_note_play">Tocar mensagem de voz</string>
+    <string name="voice_note_pause_playback">Pausar mensagem de voz</string>
+    <string name="voice_note_speed">Velocidade %1$s</string>
+    <string name="voice_note_unheard">Ainda não ouvido</string>
+    <string name="voice_note_heard">Ouviu</string>
+    <string name="voice_note_heard_at">Ouviu às %1$s</string>
 </resources>

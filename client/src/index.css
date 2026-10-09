@@ -16,6 +16,14 @@
   --color-surface-2: oklch(0.24 0.016 250);
   --color-surface-3: oklch(0.3 0.018 250);
   --color-rail: oklch(0.13 0.012 250);
+  /*
+   * A grouped box of rows on a panel (the settings kit's `SettingsGroup`).
+   * A role, not a colour: it is always surface-1 or surface-0, both of which
+   * the bench already measures text on. Dark keeps the card on surface-1 and
+   * lets the border lift it; light points it at surface-0 below, so a group is
+   * a lighter box on the grey panel instead of a faint outline.
+   */
+  --color-surface-card: var(--color-surface-1);
 
   --color-border: oklch(0.3 0.018 250);
   --color-border-strong: oklch(0.38 0.02 250);
@@ -473,6 +481,12 @@
   /* Darker than surface-1 here, unlike dark, or every skeleton disappears. */
   --color-surface-3: oklch(0.88 0.01 95);
   --color-rail: oklch(0.93 0.008 95);
+  /*
+   * Once, for every light look: harmony, hearth and night set
+   * `data-theme="light"` too, and the `var()` resolves against each look's own
+   * surface-0, which is lighter than its surface-1 in all four.
+   */
+  --color-surface-card: var(--color-surface-0);
 
   --color-border: oklch(0.86 0.01 95);
   --color-border-strong: oklch(0.74 0.012 95);
@@ -1520,6 +1534,14 @@ html[lang="es"] #pre-hero > [data-l="es"] {
 }
 
 html[data-route="other"] #pre-hero {
+  display: none;
+}
+
+/* A marketing page's no-JS body, written into #root by the edge
+   (`lib/marketing-prerender.ts`). It is for readers that run no script: the
+   head script sets `data-route` on every page, so any browser that runs it
+   hides the block before the first paint, and React replaces #root anyway. */
+html[data-route] #pre-page {
   display: none;
 }
 

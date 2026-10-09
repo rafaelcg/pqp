@@ -789,6 +789,21 @@ host's LiveKit publish is an invisible pipe while the show is live. Encerrar
 leaves that pipe so leave-voice chrome does not linger. Friends who want to
 talk use a normal voice channel.
 
+### The strip that sends people here (2026-10-05)
+
+The sidebar block is the only way the app told a member a party was live, and the
+night a brand-new server ran its first film in a plain voice channel
+(2026-10-04, Filminho) forty people sat in the call while the rest of 86 members
+asked in `#general` where the movie was. Behind the runtime flag
+`watch_now_banner` (per server, off by default) a live party, and a share in any
+voice channel, is now a strip above the conversation: who, where, how many, one
+`Assistir`. For a party the tap is `handleWatchLiveParty`, which is the sidebar
+block's own path: selecting the channel IS watching, no seat and no microphone.
+The strip reads `watchParties.byChannel` (live only) and the `channel-live`
+`watching` count, so it shows the same number as the stage and, with
+`watch_party_server_audience` on, the server's. A party the person cannot view is
+never in that map. `docs/plans/WATCH_NOW.md`, `client/src/lib/watch-now.ts`.
+
 ### One surface owns the pane
 
 A watch party channel mounts three stages into the same slot: `WatchPartyPanel`'s
@@ -4456,6 +4471,24 @@ at boot and on the click, consumed after onboarding), so a new account lands
 with the dialog open. Open Graph copy comes from `marketing-meta.ts`, pinned
 to `watchPartyPage.seo.*` by its test; the card image is the default one.
 Both words are reserved handles.
+
+`pqp.gg/streamers` (and `/criadores`, canonical `/streamers`) is the page
+outreach sends a streamer to (`pages/streamers-page.tsx`). Same list, no new
+form: its button is the same intent with `&from=streamers`
+(`STREAMERS_WAITLIST_HREF`), which survives sign-up in the same stash
+(`watch-party-waitlist:streamers`) and makes the dialog send `source:
+"streamers"`. The row keeps it in `watch_party_waitlist.source` (a closed
+list, `WATCH_PARTY_WAITLIST_SOURCES`, sticky across an edit that sends none),
+the dashboard tags the request **streamer**, and a streamer who asked before
+having a server is listed by name under the table (`serverlessCampaign` on
+`GET /api/admin/watch-party-waitlist`) instead of disappearing into the
+`serverless` count; that one is also asked for their channel. Tracking one
+outreach link per streamer is the existing acquisition parameter:
+`pqp.gg/streamers?ref=<who>` lands in `users.acquisition_ref` with
+`acquisition_landing = '/streamers'`. A reader with no JavaScript gets the
+hero, the steps and the FAQ as HTML from the edge (`marketing-prerender.ts`).
+The page never names what people watch; its FAQ says the presenter answers
+for what they share and links the terms.
 
 ## Native apps
 

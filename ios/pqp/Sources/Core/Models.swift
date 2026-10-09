@@ -263,6 +263,42 @@ struct Attachment: Codable, Identifiable, Hashable, Sendable {
     let width: Int?
     let height: Int?
     let url: String
+    /// Set only on a voice note. A `var` because receipts and the AAC copy
+    /// arrive after the message does (`voice-note-listened`, `voice-note-updated`).
+    var voice: VoiceNote?
+
+    init(
+        id: String, filename: String, contentType: String, byteSize: Int,
+        width: Int? = nil, height: Int? = nil, url: String, voice: VoiceNote? = nil
+    ) {
+        self.id = id
+        self.filename = filename
+        self.contentType = contentType
+        self.byteSize = byteSize
+        self.width = width
+        self.height = height
+        self.url = url
+        self.voice = voice
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, contentType, byteSize, width, height, url, voice
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        filename = try c.decode(String.self, forKey: .filename)
+        contentType = try c.decode(String.self, forKey: .contentType)
+        byteSize = try c.decode(Int.self, forKey: .byteSize)
+        width = try c.decodeIfPresent(Int.self, forKey: .width)
+        height = try c.decodeIfPresent(Int.self, forKey: .height)
+        url = try c.decode(String.self, forKey: .url)
+        // Lenient, unlike every other key here: a `voice` block this build
+        // cannot read must cost the card, not the message. The attachment then
+        // reads as the plain audio file it also is.
+        voice = (try? c.decodeIfPresent(VoiceNote.self, forKey: .voice)) ?? nil
+    }
 
     var isImage: Bool { contentType.hasPrefix("image/") }
     var isVideo: Bool { contentType.hasPrefix("video/") }

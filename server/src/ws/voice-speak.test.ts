@@ -274,6 +274,9 @@ describe("SPEAK in voice rooms", () => {
           canManageMusic: false,
           canUseSoundboard: false,
           canManageSoundboard: false,
+          // Why, so the client can say it on the locked mic instead of a
+          // generic "listen only" (docs/plans/AUDIENCE_MODE.md).
+          speakReason: "permission",
         },
       ]);
 

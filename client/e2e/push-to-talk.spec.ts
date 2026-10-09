@@ -260,7 +260,9 @@ test.describe("push-to-talk", () => {
     // Settings is sectioned, and the input mode lives in Voice & Video.
     await page.getByRole("tab", { name: "Voice & Video" }).click();
     await page.getByRole("radio", { name: /Push to talk/ }).check();
-    await page.getByRole("button", { name: "Cancel" }).click();
+    // Settings has no Cancel any more: everything outside Profile applies as
+    // it is changed, and Escape is how the dialog closes.
+    await page.keyboard.press("Escape");
 
     // Still in the call — the mode change is `track.enabled`, not a rejoin.
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();

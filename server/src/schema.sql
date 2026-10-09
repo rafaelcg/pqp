@@ -1005,6 +1005,122 @@ ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAM
 CREATE INDEX IF NOT EXISTS idx_message_attachments_quarantined
   ON message_attachments (quarantined_at) WHERE quarantined_at IS NOT NULL;
 
+-- ---------------------------------------------------------------- voice notes
+--
+-- A voice note is an ordinary `message_attachments` row (the bytes, the
+-- claim, the sweep, the signed reads) plus this 1:1 side row, which holds what
+-- only a note has. A side table rather than columns on the hot table: nothing
+-- here ALTERs `message_attachments`, and a later `video` note gets a sibling
+-- table of its own instead of a kind column. CASCADE, not SET NULL: this row
+-- names no object in the bucket, so it has nothing to leak, and it must go
+-- with the attachment the sweeper deletes.
+--
+-- Written in the same statement as the attachment, at mint, behind the
+-- `voice_notes` runtime flag. Every transcript and playback column is
+-- reserved for later work so that work needs no migration of this table:
+--   duration_ms           the recorder's count, what the card shows
+--   waveform              64 peaks, base64
+--   codec                 filled once the bytes have been parsed
+--   verified_duration_ms  the duration read from the container headers
+--   transcribe_allowed    the sender's consent, copied at mint (default on)
+--   transcript_*          the speech-to-text result and its provenance
+--   playback_key / _content_type  a transcoded copy for clients that cannot
+--                         play the original (reserved for iOS and WebM). It
+--                         names a bucket object, so whatever first fills it
+--                         must also teach the attachment sweeps to delete it.
+CREATE TABLE IF NOT EXISTS message_attachment_voice (
+  attachment_id UUID PRIMARY KEY REFERENCES message_attachments(id) ON DELETE CASCADE,
+  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 300 AND 300000),
+  waveform TEXT NOT NULL CHECK (octet_length(waveform) <= 128),
+  codec TEXT,
+  verified_duration_ms INTEGER CHECK (verified_duration_ms >= 0),
+  transcribe_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+  transcript_status TEXT NOT NULL DEFAULT 'none'
+    CHECK (transcript_status IN ('none', 'pending', 'done', 'no_speech', 'failed', 'unavailable')),
+  transcript_text TEXT CHECK (char_length(transcript_text) <= 4000),
+  transcript_language TEXT,
+  transcript_provider TEXT,
+  transcribed_at TIMESTAMPTZ,
+  playback_key TEXT UNIQUE,
+  playback_content_type TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Who has played a voice note, and when they first did. One row per listener:
+-- the primary key is what makes `POST /api/attachments/:id/listened`
+-- idempotent (a replay is `ON CONFLICT DO NOTHING`, and only the insert that
+-- wins sends a live frame). Filled for every channel; whether anybody else
+-- may SEE it is decided on read (a conversation of at most ten people, the
+-- author only), never by what is stored. Keyed to the attachment, not the
+-- message: it is the note that was heard, and CASCADE takes the rows with
+-- the note the sweeper or a message delete removes. user_id cascades with the
+-- account. The PK leads with attachment_id, which is the direction every read
+-- takes (one batch of notes), so no second index; deleting a user scans by
+-- user_id, and that index below keeps it from walking the table.
+CREATE TABLE IF NOT EXISTS voice_note_listens (
+  attachment_id UUID NOT NULL REFERENCES message_attachments(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  listened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (attachment_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_voice_note_listens_user
+  ON voice_note_listens (user_id);
+
+-- ---------------------------------------------------------------- speech jobs
+--
+-- The worker's queue for anything that needs the bytes of a recording:
+--   voice_note       transcribe a voice note (speech-to-text provider)
+--   voice_transcode  make the AAC copy of an Opus note (ffmpeg), into
+--                    message_attachment_voice.playback_key
+--   party_question   reserved for watch party voice questions; nothing
+--                    enqueues or claims it yet
+--
+-- Enqueued in the same transaction as the message that carries the note
+-- (`services/speech-jobs.ts`), or by the lazy request route, so a crash
+-- between "sent" and "queued" cannot happen. Claimed with FOR UPDATE SKIP
+-- LOCKED and a lease, so any number of workers can poll it, and a worker that
+-- dies mid-job leaves a row whose lease expires and is claimed again.
+-- `attempts` is bumped AT CLAIM, so a job that crashes its worker every time
+-- still runs out of attempts instead of looping forever.
+--
+-- One row per (kind, attachment) EVER: the unique index is the dedupe for an
+-- eager enqueue racing a lazy request. A finished row is kept (it is tiny and
+-- CASCADEs with the attachment) and is what a re-request is checked against.
+CREATE TABLE IF NOT EXISTS speech_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('voice_note', 'voice_transcode', 'party_question')),
+  attachment_id UUID REFERENCES message_attachments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  leased_by TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  -- ISO-639-1, set at enqueue for a short clip (the sender's locale): Whisper
+  -- guesses the language badly on a couple of seconds of audio.
+  language_hint TEXT,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ,
+  CHECK (kind = 'party_question' OR attachment_id IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_attachment
+  ON speech_jobs (kind, attachment_id) WHERE attachment_id IS NOT NULL;
+-- The claim's scan: only live rows, in the order they become due.
+CREATE INDEX IF NOT EXISTS idx_speech_jobs_due
+  ON speech_jobs (run_after, id) WHERE status IN ('queued', 'running');
+
+-- Seconds of audio sent to the speech provider per UTC day, shared by every
+-- worker, reserved atomically before each call so the daily cap
+-- (VOICE_STT_DAILY_SECONDS) means the deployment and not one process.
+CREATE TABLE IF NOT EXISTS speech_usage_daily (
+  day DATE PRIMARY KEY,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  refused INTEGER NOT NULL DEFAULT 0
+);
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows
@@ -1575,6 +1691,31 @@ CREATE TABLE IF NOT EXISTS voice_raised_hands (
   channel_id  UUID NOT NULL REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
   user_id     UUID NOT NULL,
   raised_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
+-- Audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md): a running call
+-- turned into a stage. One row while it is on. It belongs to the CALL, so it
+-- cascades with the room row, which goes when the last seat does: a forgotten
+-- audience mode cannot outlive the call it was turned on in. Two tables rather
+-- than columns on `voice_rooms`, so shipping it never takes ACCESS EXCLUSIVE
+-- on the hottest voice table (CLAUDE.md pitfall 22), and so the lifetime is
+-- stated by the cascade chain: the room goes, the mode goes; the mode goes,
+-- every invitation goes.
+CREATE TABLE IF NOT EXISTS voice_audience_mode (
+  channel_id  UUID PRIMARY KEY REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  enabled_by  UUID NOT NULL,
+  enabled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- People a host let speak while audience mode is on. Keyed on the person,
+-- like a raised hand: a socket blip or a refresh inside the resume window
+-- keeps it, leaving the call drops it (`ws/voice.ts`).
+CREATE TABLE IF NOT EXISTS voice_audience_speakers (
+  channel_id  UUID NOT NULL REFERENCES voice_audience_mode(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  granted_by  UUID NOT NULL,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (channel_id, user_id)
 );
 
@@ -4857,6 +4998,22 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
 CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
   ON watch_party_waitlist (user_id);
 
+-- Which campaign page sent the row, when one did: `streamers` is the button on
+-- `pqp.gg/streamers`. NULL is every other door (the sidebar teaser, the
+-- `/watch-party` page), which is every row written before this column. Shown
+-- on the dashboard as a tag; the API accepts only the names in
+-- `WATCH_PARTY_WAITLIST_SOURCES` and keeps an existing value when an edit
+-- sends none.
+ALTER TABLE watch_party_waitlist ADD COLUMN IF NOT EXISTS source TEXT
+  CHECK (source ~ '^[a-z0-9-]{1,32}$');
+
+-- The dashboard's newest campaign rows with no server
+-- (`serverlessCampaign`, at most 20), read on every load of the list: walked
+-- newest first and stopped at the limit, instead of sorting every match.
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_campaign
+  ON watch_party_waitlist (created_at DESC)
+  WHERE server_id IS NULL AND source IS NOT NULL;
+
 -- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
 -- A flag is only a row here once an operator has decided something about it:
 -- no row, or `enabled` NULL, means "follow the environment variable, then the
@@ -5041,3 +5198,20 @@ BEGIN
 
   INSERT INTO data_migrations (name) VALUES ('soundboard_bits_2026_10');
 END $$;
+-- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
+-- channel: when a share has been stable long enough, every API machine that saw
+-- it races one upsert on this row, and only the one that finds
+-- `last_notified_at` older than the 30 minute cooldown wins and tells people
+-- (`services/stream-alerts.ts`). The row is the arbiter, not an optimisation:
+-- two machines can both see one share when its sharer reconnects to the other
+-- inside the debounce window. Rows older than a day are deleted by the next
+-- winning claim (one tiny delete per notice, never a batch job): a row past its
+-- cooldown is only a reminder of when, and the upsert overwrites it anyway.
+CREATE TABLE IF NOT EXISTS stream_alert_channels (
+  channel_id       UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  last_notified_at TIMESTAMPTZ NOT NULL,
+  -- What the notice was for (a watch party's session id), so a broadcast that
+  -- repeats while a party stays live can never claim a second time after the
+  -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
+  start_key        TEXT
+);

@@ -14,6 +14,10 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.plus
 import okhttp3.OkHttpClient
 
@@ -81,6 +85,23 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var watchPartyHost: gg.pqp.app.watch.WatchPartyHostController
         private set
 
+    /**
+     * Whether a pqp call is live on this device. One flow, read by the voice
+     * note recorder (which refuses to open the microphone) and by the player
+     * (which refuses to take audio focus), so neither can disagree with the
+     * call about whether there is one.
+     */
+    lateinit var callActive: kotlinx.coroutines.flow.StateFlow<Boolean>
+        private set
+
+    /**
+     * Application-scoped for the reason the voice note player is one player:
+     * leaving a chat must not cut a note off halfway, and the next unheard
+     * note still has to start when this one ends.
+     */
+    lateinit var voiceNotes: gg.pqp.app.voicenotes.VoiceNotes
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -110,6 +131,21 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             scope = appScope,
         )
         watchPartyHost = gg.pqp.app.watch.WatchPartyHostController(this, session, voice, appScope)
+
+        callActive = voice.state
+            .map { it.isActive }
+            .distinctUntilChanged()
+            .stateIn(appScope, SharingStarted.Eagerly, false)
+        voiceNotes = gg.pqp.app.voicenotes.VoiceNotes(
+            context = this,
+            scope = appScope,
+            reportListened = { id -> gg.pqp.app.attachments.AttachmentApi(session.api).listened(id) },
+            freshUrl = { id -> runCatching { session.api.attachmentUrl(id) }.getOrNull() },
+            frames = session.realtime.frames,
+            myId = { (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.id },
+            callActive = callActive,
+        )
+        registerActivityLifecycleCallbacks(BackgroundPause { voiceNotes.onAppBackgrounded() })
     }
 
     /**
@@ -147,4 +183,34 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
                 }
             }
             .build()
+}
+
+/**
+ * Calls [onBackground] once the last visible Activity has stopped.
+ *
+ * A voice note is not a call: it has no foreground service and no media
+ * session, so it must not keep playing into a locked pocket. Counting started
+ * Activities (rather than listening for the screen turning off) also covers
+ * the app being swiped away to another one. A configuration change stops and
+ * restarts the Activity in the same breath, which is why that stop is not
+ * counted as leaving.
+ */
+private class BackgroundPause(private val onBackground: () -> Unit) :
+    android.app.Application.ActivityLifecycleCallbacks {
+    private var started = 0
+
+    override fun onActivityStarted(activity: android.app.Activity) {
+        started += 1
+    }
+
+    override fun onActivityStopped(activity: android.app.Activity) {
+        started = (started - 1).coerceAtLeast(0)
+        if (started == 0 && !activity.isChangingConfigurations) onBackground()
+    }
+
+    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+    override fun onActivityResumed(activity: android.app.Activity) = Unit
+    override fun onActivityPaused(activity: android.app.Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+    override fun onActivityDestroyed(activity: android.app.Activity) = Unit
 }

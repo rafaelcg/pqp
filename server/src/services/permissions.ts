@@ -506,6 +506,152 @@ async function applyChannelOverwrites(
   });
 }
 
+/**
+ * THE SAME ANSWER AS `computeMemberPermissions`, FOR MANY MEMBERS AT ONCE.
+ *
+ * The one-member path costs three queries (the membership row, the roles with
+ * the member's holdings, the channel's overwrites), the right price for one
+ * request and the wrong one for a fan-out that has to decide about a few
+ * hundred people (the start-of-stream notice, `services/stream-alerts.ts`). This
+ * reads the server's roles, the candidates' holdings and the channel's
+ * overwrites once each and runs the same pure `computePermissions` per person,
+ * so a rule changed there changes here too and there is no second copy of the
+ * overwrite order to drift.
+ *
+ * A person who is not a member of the server gets 0n, as the one-member path
+ * does. `timedOut` is handed in rather than read: that path never reads it
+ * either, its callers pass it. The result has an entry for every id asked.
+ */
+export async function computeMemberPermissionsBulk(
+  serverId: string,
+  userIds: readonly string[],
+  channel: string | PermissionChannelRef | null,
+  options: { timedOut?: ReadonlySet<string> } = {},
+): Promise<Map<string, bigint>> {
+  const out = new Map<string, bigint>();
+  if (userIds.length === 0) {
+    return out;
+  }
+  const pool = getPool();
+  const ids = [...new Set(userIds)];
+
+  let overwriteChannelId: string | null = null;
+  if (channel) {
+    if (typeof channel === "string") {
+      const effective = await pool.query<{ id: string }>(
+        `SELECT CASE
+           WHEN type = 'thread' AND parent_id IS NOT NULL THEN parent_id
+           ELSE id
+         END AS id
+           FROM channels
+          WHERE id = $1`,
+        [channel],
+      );
+      overwriteChannelId = effective.rows[0]?.id ?? channel;
+    } else {
+      overwriteChannelId =
+        channel.type === "thread" && channel.parent_id
+          ? channel.parent_id
+          : channel.id;
+    }
+  }
+
+  const [owner, members, roles, held, overwrites] = await Promise.all([
+    pool.query<{ owner_id: string }>(
+      `SELECT owner_id FROM servers WHERE id = $1`,
+      [serverId],
+    ),
+    pool.query<{ user_id: string }>(
+      `SELECT user_id FROM server_members
+        WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
+      [serverId, ids],
+    ),
+    pool.query<RoleRow>(
+      `SELECT id, permissions::text AS permissions, position, is_everyone,
+              system_key, FALSE AS held
+         FROM roles WHERE server_id = $1`,
+      [serverId],
+    ),
+    pool.query<{ user_id: string; role_id: string }>(
+      `SELECT user_id, role_id FROM member_roles
+        WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
+      [serverId, ids],
+    ),
+    overwriteChannelId
+      ? pool.query<OverwriteRow>(
+          `SELECT target_type, target_id, allow::text AS allow, deny::text AS deny
+             FROM channel_overwrites WHERE channel_id = $1`,
+          [overwriteChannelId],
+        )
+      : Promise.resolve({ rows: [] as OverwriteRow[] }),
+  ]);
+
+  const ownerId = owner.rows[0]?.owner_id ?? null;
+  const memberIds = new Set(members.rows.map((row) => row.user_id));
+  const everyone = roles.rows.find((role) => role.is_everyone);
+  const everyonePermissions = asBigInt(everyone?.permissions ?? 0);
+  const roleById = new Map(roles.rows.map((role) => [role.id, role]));
+  const heldBy = new Map<string, string[]>();
+  for (const row of held.rows) {
+    // A `member_roles` row for a role that no longer exists is dropped, as the
+    // one-member path's join drops it.
+    if (!roleById.has(row.role_id)) {
+      continue;
+    }
+    const list = heldBy.get(row.user_id);
+    if (list) {
+      list.push(row.role_id);
+    } else {
+      heldBy.set(row.user_id, [row.role_id]);
+    }
+  }
+  const everyoneOverwriteRow = overwrites.rows.find(
+    (row) => row.target_type === "role" && row.target_id === everyone?.id,
+  );
+  const everyoneOverwrite = everyoneOverwriteRow
+    ? overwriteOf(everyoneOverwriteRow)
+    : null;
+  const roleOverwriteById = new Map<string, PermissionOverwrite>();
+  const memberOverwriteById = new Map<string, PermissionOverwrite>();
+  for (const row of overwrites.rows) {
+    if (row.target_type === "member") {
+      memberOverwriteById.set(row.target_id, overwriteOf(row));
+    } else if (row.target_type === "role" && row.target_id !== everyone?.id) {
+      roleOverwriteById.set(row.target_id, overwriteOf(row));
+    }
+  }
+
+  for (const userId of ids) {
+    if (!memberIds.has(userId)) {
+      out.set(userId, 0n);
+      continue;
+    }
+    const heldIds = heldBy.get(userId) ?? [];
+    const heldIdSet = new Set(heldIds);
+    const roleOverwrites: PermissionOverwrite[] = [];
+    for (const [roleId, overwrite] of roleOverwriteById) {
+      if (heldIdSet.has(roleId)) {
+        roleOverwrites.push(overwrite);
+      }
+    }
+    out.set(
+      userId,
+      computePermissions({
+        isOwner: ownerId === userId,
+        everyonePermissions,
+        rolePermissions: heldIds.map((id) =>
+          asBigInt(roleById.get(id)?.permissions),
+        ),
+        everyoneOverwrite,
+        roleOverwrites,
+        memberOverwrite: memberOverwriteById.get(userId) ?? null,
+        timedOut: options.timedOut?.has(userId) ?? false,
+      }),
+    );
+  }
+  return out;
+}
+
 export async function memberHasPermission(
   serverId: string,
   userId: string,

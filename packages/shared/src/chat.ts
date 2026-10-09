@@ -14,6 +14,8 @@ import {
 import {
   attachmentSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  voiceNoteListenedSchema,
+  voiceNoteTranscriptSchema,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
@@ -22,6 +24,7 @@ import { communityHomeUpdateSchema } from "./community-home.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
+import { streamStartedSchema } from "./stream-alerts.js";
 import { ownStatusSchema, setIdleMessageSchema } from "./status.js";
 // --- threads ---
 import {
@@ -271,6 +274,37 @@ export type MessageRejected = z.infer<typeof messageRejectedSchema>;
 export const messageUpdateBroadcastSchema = z.object({
   type: z.literal("message-update"),
   message: broadcastMessageSchema,
+});
+
+/**
+ * A voice note's transcript settled (or was asked for and is now `pending`).
+ * Fanned out to the note's channel, so exactly the people who can hear the
+ * audio see the text. Sent only while the `voice_note_transcription` flag is
+ * on where the note lives. A client merges it into the attachment's
+ * `voice.transcript`; one that does not know it loses nothing but the live
+ * update, because the next read carries the same transcript.
+ */
+export const voiceNoteTranscriptBroadcastSchema = z.object({
+  type: z.literal("voice-note-transcript"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  attachmentId: z.string().uuid(),
+  transcript: voiceNoteTranscriptSchema,
+});
+
+/**
+ * Something about a voice note changed that a read would now show
+ * differently: today, the AAC playback copy (`voice.playbackUrl`) exists. It
+ * carries no URL, because a presigned URL belongs to a read that checked who
+ * is asking; a client that wants it refetches
+ * `GET /api/attachments/:attachmentId/url`.
+ */
+export const voiceNoteUpdatedBroadcastSchema = z.object({
+  type: z.literal("voice-note-updated"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  attachmentId: z.string().uuid(),
+  playbackReady: z.boolean(),
 });
 
 export const messageDeleteBroadcastSchema = z.object({
@@ -625,11 +659,16 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
+  // Per person, decided server side: see `stream-alerts.ts`.
+  streamStartedSchema,
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,
   // Per person too: see `moderation.ts`, and its absence from the list below.
   serverRemovedSchema,
+  // Per person too: see `voiceNoteListenedSchema`, and its absence from the
+  // list below.
+  voiceNoteListenedSchema,
 ]);
 
 /**
@@ -738,6 +777,11 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * lost the server, so no channel could reach them anyway. It names who was
  * kicked or banned by who receives it, and travels on `chat.membership` keyed
  * by user id.
+ *
+ * `voice-note-listened` is absent for the same reason: it is addressed to the
+ * listener's own sockets and, in a small conversation, the author's, and the
+ * channel relay cannot tell a receipt from a broadcast. It travels on
+ * `chat.voice-listened` keyed by user id.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",
@@ -755,11 +799,17 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // so fanning it out to everyone in the parent channel is correct.
   "thread-update",
   "poll-update",
+  // A voice note's transcript and playback copy. Addressed to the note's
+  // channel on purpose: whoever can hear the audio may read the text. They
+  // start on the worker, which has no sockets, so the relay is the ONLY way
+  // they reach anybody.
+  "voice-note-transcript",
+  "voice-note-updated",
 ] as const;
 
 export function isChatServerMessage(message: {
   type: string;
-}): message is ChatServerMessage {
+}): message is ChannelFanoutFrame {
   return (CHAT_SERVER_MESSAGE_TYPES as readonly string[]).includes(message.type);
 }
 
@@ -789,3 +839,31 @@ export type PollCloseMessage = z.infer<typeof pollCloseMessageSchema>;
 export type PollUpdateBroadcast = z.infer<typeof pollUpdateBroadcastSchema>;
 export type ChatClientMessage = z.infer<typeof chatClientMessageSchema>;
 export type ChatServerMessage = z.infer<typeof chatServerMessageSchema>;
+export type VoiceNoteTranscriptBroadcast = z.infer<
+  typeof voiceNoteTranscriptBroadcastSchema
+>;
+export type VoiceNoteUpdatedBroadcast = z.infer<
+  typeof voiceNoteUpdatedBroadcastSchema
+>;
+
+/**
+ * The voice note frames, as their own union for now.
+ *
+ * DELIBERATELY NOT YET IN `chatServerMessageSchema`. That union is what every
+ * client is typed and tested against (the web's realtime handler, Android's
+ * wire test), and both frames start dark: they are only sent while the
+ * `voice_note_transcription` / `voice_notes` flags are on, and no client
+ * handles them yet. They move into it in the PR that handles them on the web
+ * (`feat/voice-transcription-client`), which is also when Android's
+ * `WireProtocolTest` starts asking for a branch or an ignore entry. Until then
+ * the server sends them through the channel relay like any other fan-out
+ * frame, and a client that does not know them drops them.
+ */
+export const voiceNoteFrameSchema = z.discriminatedUnion("type", [
+  voiceNoteTranscriptBroadcastSchema,
+  voiceNoteUpdatedBroadcastSchema,
+]);
+export type VoiceNoteFrame = z.infer<typeof voiceNoteFrameSchema>;
+
+/** Everything the channel relay may fan out: `CHAT_SERVER_MESSAGE_TYPES`. */
+export type ChannelFanoutFrame = ChatServerMessage | VoiceNoteFrame;

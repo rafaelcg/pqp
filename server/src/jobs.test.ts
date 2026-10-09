@@ -48,6 +48,10 @@ vi.mock("./services/outgoing-webhooks.js", () => ({
 vi.mock("./services/outgoing-webhook-poller.js", () => ({
   startOutgoingWebhookPoller: vi.fn(() => ({ stop: vi.fn() })),
 }));
+// Same reasoning: `speech-worker.test.ts` pins what a tick does.
+vi.mock("./services/speech-worker.js", () => ({
+  startSpeechJobPoller: vi.fn(() => ({ stop: vi.fn(), wake: vi.fn() })),
+}));
 vi.mock("./services/channel-sessions.js", () => ({
   sendDueChannelSessionReminders: vi.fn(async () => undefined),
 }));
@@ -82,6 +86,7 @@ import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
+import { startSpeechJobPoller } from "./services/speech-worker.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
@@ -149,16 +154,26 @@ describe("cold jobs", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it("starts exactly one speech job poller, and stop() stops it", () => {
+    jobs = startColdJobs();
+    expect(startSpeechJobPoller).toHaveBeenCalledTimes(1);
+    const { stop } = vi.mocked(startSpeechJobPoller).mock.results[0]!
+      .value as { stop: () => void };
+    jobs.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
     // 15 before the watch party host sweep, which runs on the same minute
     // tick as the session reminders; 16 before the cluster rate-limit bucket
     // sweep; 17 before the server-create idempotency key prune; 19 with the
-    // Baú translation sweep (a minute, asserted below). Bump this
-    // when a job is added, and assert the new job's cadence below rather
-    // than only moving the number: a count on its own passes for a job that
-    // is registered and never fires.
-    expect(jobs.count).toBe(19);
+    // Baú translation sweep (a minute, asserted below); 20 with the speech
+    // job poller (its own test above: adaptive, not a fixed cadence). Bump
+    // this when a job is added, and assert the new job's cadence below
+    // rather than only moving the number: a count on its own passes for a
+    // job that is registered and never fires.
+    expect(jobs.count).toBe(20);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).

@@ -47,7 +47,7 @@ The role set, as defined today:
 
 | Group | Tokens |
 |---|---|
-| Surfaces | `surface-0`, `surface-1`, `surface-2`, `surface-3`, `rail` |
+| Surfaces | `surface-0`, `surface-1`, `surface-2`, `surface-3`, `rail`, `surface-card` |
 | Borders | `border`, `border-strong` |
 | Text | `text`, `text-secondary`, `text-tertiary` |
 | Accent | `accent`, `accent-hover`, `on-accent` |
@@ -90,7 +90,12 @@ do not reach for an opacity modifier.
 
 `surface-0` is the app background, `surface-1` a panel, `surface-2` a raised
 panel or a hover, `surface-3` a skeleton and the one surface that is *darker*
-than the panel in light themes. `on-accent` exists because the accent is bright
+than the panel in light themes. `surface-card` is a grouped box of rows on a
+panel (the settings kit's `SettingsGroup`, written `elevation-1 bg-surface-card`).
+It is a role, not a new colour: `surface-1` in dark, where the border lifts the
+box, and `surface-0` in every light look, so the box is lighter than the grey
+panel instead of a faint outline. It always equals a surface the bench already
+measures text on, so it adds no contrast pair. `on-accent` exists because the accent is bright
 in dark and dark in light, so a foreground on it cannot be derived from `text`.
 
 Two sets are deliberately not themed: the third-party connection marks
@@ -217,7 +222,8 @@ Who is on which level today: `Dialog`, `ContextMenu` and the default `Tooltip`
 bubble are level 3. `PromptDialog` renders a `Dialog` and inherits it. The
 tooltip's `rail` tone keeps its own darker shell (`surface-0` with a `surface-2`
 edge) and is a deliberate exception, not an un-migrated one. Nothing in `ui/`
-draws a level 1 or 2 card yet.
+draws a level 1 or 2 card yet; outside it, the settings kit's group box is level
+1 (`elevation-1 bg-surface-card`) and its unsaved-changes bar is level 2.
 
 `elevation-*` writes `box-shadow` directly, and so does a Tailwind ring. Do not
 put a focus ring and an elevation level on the same element; put the ring on the
@@ -340,6 +346,8 @@ so a variant and a size are props, not class strings.
 - **States.** Hover, `active:scale-[0.98]`, `focus-visible` ring,
   `disabled:opacity-40` with pointer events off.
 - **`asChild`.** Renders a Radix `Slot`, so a link can wear a button.
+- **Ref.** `forwardRef` to the `<button>`, so a caller can move focus to a
+  button it just revealed.
 - **Use it** for anything that performs an action. **Do not** use it for
   navigation between routes without `asChild` and a real `<a>`, and do not use
   `default` twice on the same surface.
@@ -353,10 +361,16 @@ so a variant and a size are props, not class strings.
 
 - One variant, one size (h-10). Error state is the caller's: pass
   `aria-invalid` and a `border-danger` class.
+- **`prefix`.** Fixed text drawn inside the field before the value
+  (`pqp.gg/@`), not part of the value. With a prefix the field is a box around
+  an unstyled input: the focus ring is on the box (`focus-within`), so the
+  prefix is ringed too, `className` goes on the box (`font-mono`,
+  `border-danger`), and `aria-invalid="true"` on the input turns the box's
+  border red by itself. Without a prefix the markup is the bare input.
 - **States.** Placeholder at `text-text-tertiary/70`, focus ring, disabled at 50%
   with `cursor-not-allowed`.
-- **Use it** for every text field. **Do not** use it for a multi-line value;
-  there is no Textarea yet (see Planned primitives).
+- **Use it** for every single-line text field. A multi-line value is a
+  `Textarea`.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
   it. A placeholder is not a label.
 
@@ -369,9 +383,13 @@ so a variant and a size are props, not class strings.
   assistive tech and paints only the track, for a switch that sits beside a
   row that already names the setting.
 - **States.** Track goes accent when on, surface with an inset ring when off.
-  Disabled dims the track and blocks the pointer.
+  The off knob is `text-tertiary` in dark; in every light look it is a pale
+  `surface-0` knob with a `border-strong` ring, because the grey there reads
+  as a dark dot. Disabled dims the track and blocks the pointer.
+  `dimRowWhenDisabled` dims the whole row instead (label, description and
+  track at 60%, the track not dimmed twice); the settings switch row uses it.
 - **Use it** for a list of independent settings. **Do not** use it for one of
-  many; that is a radio group, which does not exist yet.
+  many; that is a `RadioGroup`.
 - **Accessibility.** `role="switch"` with `aria-checked`. A `title` is rendered
   on a wrapper, because a disabled button never fires the hover that would
   summon it.
@@ -472,9 +490,47 @@ itself on mount and flips above the pointer when it does not fit below.
 `scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
 scrollbar would draw OS chrome over the design.
 
+### Textarea
+
+`textarea.tsx`. A multi-line text field, `forwardRef`. The `Input` recipe with
+`min-h-28 py-2 resize-y` in place of the fixed height.
+
+- **Use it** for free text that can run past one line: a feedback report, a
+  description. **Do not** use it for a single value.
+- **Accessibility.** Like `Input`, it renders no label.
+
+### RadioGroup
+
+`radio-group.tsx`. One of a few, with one keyboard model and three shapes.
+
+- **Variants.** `segmented` (two to four short options on one track),
+  `chips` (one of many, or tag-like options that wrap), `list` (two to four
+  options that each need a description: full-width rows with a radio dot,
+  meant to sit as one child of a settings group). Sizes `md` (h-8) and `sm`
+  (h-7, 12px text) for `segmented` and `chips`.
+- **Props.** `value`, `onValueChange`, `options` (`value`, `label`, optional
+  `description` and `disabled`), `label` (required, the group's accessible
+  name), `variant`, `size`, `disabled`, plus `status` (list only: drawn under
+  the checked option, for the write it started), `activation` (`auto`, or
+  `manual` where the arrows only move focus and Enter or Space selects, for an
+  expensive change like a language reload) and `fit` (segmented only: `equal`
+  cells that truncate, or `content` cells sized to their labels that wrap).
+- **States.** Selected is `bg-surface-2 font-medium text-text` on the segmented
+  track and `border-accent bg-accent-soft text-on-accent-soft` as a chip.
+  Disabled is `opacity-40` with `cursor-not-allowed`.
+- **Use it** for one of many. **Do not** give a segmented option a description;
+  the track has no room for it, so use `list`, `chips` or a choice grid.
+- **Accessibility.** `role="radiogroup"` with `aria-label`; each option is a
+  `button role="radio"` with `aria-checked`. `useRovingRadio`, exported from the
+  same file, puts only the checked option in the tab order, moves and selects
+  with the arrows on both axes (Home and End too), and skips disabled options.
+  When the checked option is disabled, the first enabled one takes the tab stop.
+
 ### Slider
 
-`slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Two variants.
+`slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Four
+variants: `scrub`, `volume`, `edge` (the compact player's fill on a panel's
+bottom border) and `hue`.
 
 - **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
@@ -482,6 +538,10 @@ scrollbar would draw OS chrome over the design.
   without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,
   used while duration is still unknown.
 - **`volume`.** A slightly thicker track with the thumb always visible.
+- **`hue`.** A colour wheel: the `--accent-track` gradient is the whole
+  track, there is no fill, and the thumb wears the current accent with an
+  `on-accent` rim. For the accent picker; it replaces the old native range
+  and its `.accent-hue-slider` CSS once Aparência moves to it.
 - **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
   Disabled is 40% opacity.
 - **Use it** for playback position and volume. **Do not** use a native
@@ -511,11 +571,8 @@ variant set, and then use it everywhere.
 
 - **Select.** Native `<select>` is used today. It draws OS chrome, which
   `color-scheme` now at least tints correctly.
-- **Radio group.** Settings builds one out of `Button`s today, and so does the
-  token sheet.
 - **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
   in PromptDialog. `CheckRow` covers the row case only.
-- **Textarea.** No multi-line field primitive exists.
 - **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
   general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
@@ -576,8 +633,12 @@ upgrade cannot silently change what a ratio means.
 flips the same attributes Settings does, every colour role with its live WCAG
 ratio against `surface-0` and `surface-1`, a chip per soft fill showing its
 `on-` foreground and the pair's own ratio, the type ramp, the spacing, radius,
-elevation and shadow-ladder samples, the motion samples, the control ladder, and
-every primitive in every variant.
+elevation and shadow-ladder samples, the motion samples, the control ladder,
+every primitive in every variant, and the settings kit
+(`client/src/components/settings/kit/`): every block a Settings tab is built
+from, on the pane surface the dialog uses. Light and dark cannot render side by
+side, because the role tokens live on `:root`; the theme switcher at the top
+flips the kit with the rest of the page.
 
 It reads every value from the live document with `getComputedStyle`, so it
 scores the theme the viewer actually has on and holds no second copy of the

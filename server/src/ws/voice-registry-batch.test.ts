@@ -286,7 +286,7 @@ describeDb("the voice handler with the registry write coalescer", () => {
     resetVoiceRoomTransports();
     backend.configured = "livekit";
     await getPool().query(
-      `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
+      `TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
     );
   });
 
@@ -379,7 +379,7 @@ describeDb("the voice handler with the registry write coalescer", () => {
     resetVoicePeers();
     resetVoiceRoomTransports();
     await getPool().query(
-      `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
+      `TRUNCATE voice_rooms, voice_audience_mode, voice_audience_speakers, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`,
     );
     const batched = await runScript();
 

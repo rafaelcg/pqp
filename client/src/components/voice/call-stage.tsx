@@ -95,6 +95,11 @@ import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
+  AudienceModeStrip,
+  AudienceModeToggle,
+  type AudienceModeHostControls,
+} from "@/components/voice/audience-mode";
+import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
   MusicStageTile,
@@ -710,6 +715,12 @@ export interface CallStageProps {
    */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /**
+   * Audience mode controls for somebody who runs the stage here
+   * (`docs/plans/AUDIENCE_MODE.md`). Absent for everybody else, and always in
+   * a conversation call.
+   */
+  audienceHost?: AudienceModeHostControls | null;
   /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
@@ -805,6 +816,7 @@ export function CallStage({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -876,6 +888,7 @@ export function CallStage({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      audienceHost={audienceHost}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
       fill={fill}
@@ -925,6 +938,7 @@ function ActiveCall({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -987,6 +1001,7 @@ function ActiveCall({
    */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  audienceHost?: AudienceModeHostControls | null;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
   fill?: boolean;
@@ -1719,6 +1734,11 @@ function ActiveCall({
             compact
             participants={roomParticipants}
             selfUserId={voiceState.self?.userId ?? null}
+            audience={
+              audienceHost && voiceState.audience
+                ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+                : null
+            }
           />
         </div>
       );
@@ -1786,6 +1806,7 @@ function ActiveCall({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      audienceHost={audienceHost}
     />
   );
 
@@ -2388,7 +2409,11 @@ function ActiveCall({
               : (statusLine ??
                 t("call.panel.inCall", { count: remotes.length + 1 }))}
             {!voiceState.canSpeak && (
-              <span className="ml-2 text-warning">{t("voice.bar.listenOnly")}</span>
+              <span className="ml-2 text-warning">
+                {voiceState.speakReason === "audience"
+                  ? t("voice.audience.badge")
+                  : t("voice.bar.listenOnly")}
+              </span>
             )}
             {declinedNames.map((name) => (
               <span key={name} className="ml-2 text-warning">
@@ -2751,6 +2776,7 @@ export function CallControls({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  audienceHost = null,
   leading = null,
   rowRef,
 }: {
@@ -2800,6 +2826,8 @@ export function CallControls({
   /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  /** Audience mode, for somebody who runs the stage. See `audience-mode.tsx`. */
+  audienceHost?: AudienceModeHostControls | null;
 }) {
   const { t } = useTranslation();
   // Probed once per mount — whether the browser has getDisplayMedia never
@@ -2878,6 +2906,9 @@ export function CallControls({
   // Watch party button below, and `set-sharing-screen` would be refused for
   // them anyway. One grant, read once, hides both.
   const listenOnly = !voiceState.canSpeak;
+  // Locked by audience mode rather than by the channel: the mic says so in
+  // those words, and the hand becomes the way to ask.
+  const audienceLocked = listenOnly && voiceState.speakReason === "audience";
   const noVideo = !voiceState.canStream;
   // The room as the roster describes it, which is where the hands are. Self
   // included: your own hand is in the same queue as everybody else's.
@@ -2887,7 +2918,14 @@ export function CallControls({
   const handRaised = voiceState.handRaisedAt !== null;
   const handLabel = handRaised
     ? t("voice.hand.lower")
-    : t("voice.hand.raise");
+    : audienceLocked
+      ? t("voice.hand.ask")
+      : t("voice.hand.raise");
+  // The toggle is offered to a host where the operator turned the feature on,
+  // and ALWAYS while it is on, so the off switch can never be hidden by a
+  // flag that changed mid-call.
+  const showAudienceToggle =
+    audienceHost !== null && (audienceHost.available || voiceState.audience !== null);
 
   const showWatchParty =
     canWatchParty &&
@@ -3020,12 +3058,30 @@ export function CallControls({
           no room for a list: the hands are still on every person's row in the
           sidebar, and the raise button below survives the squeeze because
           unlike mute it has nowhere else to live. */}
+      {/* Audience mode's line: why the mic is locked, who may talk, what
+          the media server has not confirmed yet, and what just changed. On
+          the slim bar too, since most calls never expand. */}
+      <AudienceModeStrip
+        audience={voiceState.audience}
+        change={voiceState.audienceChange}
+        speakReason={voiceState.speakReason}
+        participants={roomParticipants}
+        selfUserId={voiceState.self?.userId ?? null}
+        host={audienceHost}
+        compact={collapsed}
+        className={collapsed ? "mb-1.5 px-1" : "mb-1.5"}
+      />
       {!collapsed && (
         <RaisedHandQueue
           participants={roomParticipants}
           selfUserId={voiceState.self?.userId ?? null}
           canLowerHands={canLowerHands}
           onLowerHand={onLowerHand}
+          audience={
+            audienceHost && voiceState.audience
+              ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+              : null
+          }
           className="mb-1.5"
         />
       )}
@@ -3133,18 +3189,22 @@ export function CallControls({
       {showMute && (
         <Tooltip
           label={
-            listenOnly
-              ? t("voice.control.listenOnlyLocked")
-              : voiceState.self?.serverMuted
-                ? t("voice.control.serverMuted")
-                : voiceState.isMuted
-                  ? t("voice.control.unmute")
-                  : t("voice.control.mute")
+            audienceLocked
+              ? t("voice.audience.locked")
+              : listenOnly
+                ? t("voice.control.listenOnlyLocked")
+                : voiceState.self?.serverMuted
+                  ? t("voice.control.serverMuted")
+                  : voiceState.isMuted
+                    ? t("voice.control.unmute")
+                    : t("voice.control.mute")
           }
           detail={
-            !listenOnly && voiceState.self?.serverMuted
-              ? t("voice.serverMuted.self")
-              : undefined
+            audienceLocked
+              ? t("voice.audience.lockedDetail")
+              : !listenOnly && voiceState.self?.serverMuted
+                ? t("voice.serverMuted.self")
+                : undefined
           }
         >
           {/* Neither a listen-only lock nor a moderator's mute is this
@@ -3157,10 +3217,16 @@ export function CallControls({
               type="button"
               aria-pressed={voiceState.isMuted}
               disabled={listenOnly || voiceState.self?.serverMuted === true}
+              data-mic-toggle=""
+              data-speak-locked={
+                listenOnly ? (voiceState.speakReason ?? "permission") : undefined
+              }
               aria-label={
-                listenOnly
-                  ? t("voice.control.listenOnlyLocked")
-                  : voiceState.self?.serverMuted
+                audienceLocked
+                  ? t("voice.audience.locked")
+                  : listenOnly
+                    ? t("voice.control.listenOnlyLocked")
+                    : voiceState.self?.serverMuted
                     ? t("voice.control.serverMuted")
                     : voiceState.isMuted
                       ? t("voice.control.unmute")
@@ -3189,7 +3255,7 @@ export function CallControls({
           </span>
         </Tooltip>
       )}
-      {listenOnly && !collapsed && (
+      {listenOnly && !collapsed && !audienceLocked && (
         <span
           data-listen-only
           className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
@@ -3210,18 +3276,33 @@ export function CallControls({
             aria-pressed={handRaised}
             aria-label={handLabel}
             data-raise-hand={handRaised ? "up" : "down"}
+            data-primary={audienceLocked && !handRaised ? "" : undefined}
             className={cn(
               "flex items-center justify-center rounded-full",
               size,
               handRaised
                 ? "bg-signal/20 text-signal"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
+                : audienceLocked
+                  ? // THE AUDIENCE'S ONE ACTION. The mic beside it is locked
+                    // and says why; this is how to ask, so it is the button
+                    // that looks like a button.
+                    "bg-accent text-on-accent ring-2 ring-accent/40 hover:bg-accent-hover"
+                  : "bg-ink-3 text-paper hover:bg-ink-4",
             )}
             onClick={onToggleRaisedHand}
           >
             <Hand className={iconSize} />
           </button>
         </Tooltip>
+      )}
+      {showAudienceToggle && audienceHost && (
+        <AudienceModeToggle
+          on={voiceState.audience !== null}
+          busy={audienceHost.busy}
+          onToggle={audienceHost.onToggle}
+          size={size}
+          iconSize={iconSize}
+        />
       )}
       </CallControlGroup>
       <CallControlDivider

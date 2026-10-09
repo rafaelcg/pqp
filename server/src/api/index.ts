@@ -143,6 +143,8 @@ import {
   liveHlsTelemetryBatchSchema,
   liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
+  setVoiceAudienceSchema,
+  setVoiceAudienceSpeakerSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -241,7 +243,13 @@ import {
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
   describeChannelVoiceTransport,
+  // --- audience mode ---
+  AudienceModeError,
+  setVoiceAudienceMode,
+  setVoiceAudienceSpeaker,
 } from "../ws/voice.js";
+import { audienceModeEnabledFor } from "../voice/audience.js";
+import { voiceConfigForServer } from "../lib/voice-config.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -549,6 +557,21 @@ import {
   maxAttachmentBytes,
 } from "../services/attachments.js";
 import {
+  NoteTooLargeError,
+  messageHasNote,
+  noteEditAllowed,
+  VoiceNoteContentTypeError,
+  VoiceNotesDisabledError,
+} from "../services/voice-notes.js";
+import { recordListen, VoiceNoteNotFoundError } from "../services/voice-note-listens.js";
+import {
+  requestVoiceNoteTranscript,
+  // Same name as the listens module's error: aliased so each route maps its
+  // own not-found to a 404.
+  VoiceNoteNotFoundError as TranscriptNoteNotFoundError,
+  VoiceTranscriptionUnavailableError,
+} from "../services/voice-transcription.js";
+import {
   GifBackendError,
   isGifSearchConfigured,
   searchGifs,
@@ -650,6 +673,7 @@ import {
 import {
   ADMIN_FLAG_OVERRIDE_PATH,
   ADMIN_FLAGS_PATH,
+  isEnabled,
   listFeatureFlags,
   setFeatureFlagOverrideSchema,
   setFeatureFlagSchema,
@@ -688,6 +712,7 @@ import {
   listConversations,
   openConversation,
 } from "../services/dms.js";
+import { getStreamAlertSetting } from "../services/stream-alerts.js";
 import {
   canAccessChannel,
   findUserById,
@@ -1050,6 +1075,15 @@ const voiceLeaveLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * `POST /api/attachments/:id/transcript`, per account. A request is cheap (a
+ * row) and idempotent per note, but each NEW note it names can cost provider
+ * time, so a burst of a channel's worth of notes is fine and a script is not.
+ */
+const transcriptRequestLimiter = createRateLimiter({
+  capacity: 20,
+  refillPerSecond: 0.2,
+});
+/**
  * `request` / `withdraw` on a party's guest queue. Same shape as the mute
  * toggle's own limiter (`stateLimiter` in `ws/voice.ts`, capacity 15,
  * refill 3/s) per `docs/RAISED_HANDS.md`'s rule for a self-report of this
@@ -1078,6 +1112,18 @@ const guestRequestLimiter = createRateLimiter({
 const bulkDeleteLimiter = createRateLimiter({
   capacity: 5,
   refillPerSecond: 0.05,
+});
+/**
+ * "I played this voice note". One call per note per listener ever lands a row,
+ * so the realistic burst is a person catching up on a backlog with auto-play
+ * walking through it, a note every few seconds. Sixty covers a long backlog
+ * at once; sustained it is one a second, which is faster than notes can be
+ * heard. Keyed by user, and a replay still spends a token: the point is the
+ * request rate, not the row count.
+ */
+const listenLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 1,
 });
 
 export function resetApiRateLimits(): void {
@@ -1110,8 +1156,10 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
+  transcriptRequestLimiter.reset();
   guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
+  listenLimiter.reset();
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
   hlsSessionLookupGuard.reset();
@@ -1136,6 +1184,18 @@ class Created {
 
 function created(body: unknown): Created {
   return new Created(body);
+}
+
+/** Wrap a handler result to answer 204 with no body. */
+class NoContent {}
+
+function noContent(): NoContent {
+  return new NoContent();
+}
+
+/** Wrap a handler result to answer 202: taken, the work happens elsewhere. */
+class Accepted {
+  constructor(readonly body: unknown) {}
 }
 
 /**
@@ -2656,6 +2716,12 @@ router.get("/api/share/config", async ({ url }) =>
   shareConfigForServer(url.searchParams.get("serverId")),
 );
 
+// Voice call switches the operator flips live (`lib/voice-config.ts`):
+// whether a host in this server is offered audience mode.
+router.get("/api/voice/config", async ({ url }) =>
+  voiceConfigForServer(url.searchParams.get("serverId")),
+);
+
 // Whether the operator has forced every stale client to update
 // (`lib/client-update-config.ts`). Read per request, additive, default off.
 router.get("/api/client-update/config", async () => clientUpdateConfig());
@@ -3014,6 +3080,25 @@ router.post(
 );
 
 /**
+ * What this member gets from the start-of-stream notice in this server: the
+ * flag, their effective choice, the server's default and its member count, so
+ * the switch in the server's menu shows the real state without guessing a
+ * count (`services/stream-alerts.ts`). Members only; the choice itself is
+ * written through the preferences the client already syncs.
+ */
+router.get(
+  "/api/servers/:serverId/stream-alerts",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const setting = await getStreamAlertSetting(serverId!, user.id);
+    if (!setting) {
+      throw new NotFound("Server not found");
+    }
+    return setting;
+  },
+);
+
+/**
  * The watch party waitlist (`services/watch-party-waitlist.ts`). Every read
  * answers only the caller's own row; nothing here can list anybody else.
  */
@@ -3035,6 +3120,7 @@ router.post("/api/watch-party/waitlist", async ({ req, res, user }) => {
     audienceBucket: body.audienceBucket ?? null,
     note: body.note,
     streamChannel: body.streamChannel,
+    source: body.source ?? null,
   });
   return { entry };
 });
@@ -3475,11 +3561,28 @@ router.delete(
  *
  * `maxBytes` rides along so the client rejects an oversized file in the file
  * picker instead of discovering the deployment's own lower cap on a 413.
+ *
+ * `voiceNotes` is the `voice_notes` flag for `?serverId=` (a conversation, or
+ * no id, reads the global value), and only means anything when `enabled` is
+ * true: a note is an upload. The mint checks the same flag for the channel's
+ * own server, so a client that asked with the wrong id is refused there.
  */
-router.get("/api/attachments/config", async () => ({
-  enabled: isAttachmentsConfigured(),
-  maxBytes: maxAttachmentBytes(),
-}));
+router.get("/api/attachments/config", async ({ url }) => {
+  const serverId = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isAttachmentsConfigured(),
+    maxBytes: maxAttachmentBytes(),
+    voiceNotes: isEnabled("voice_notes", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
+    // Whether transcripts exist here at all: off hides stored ones too, so a
+    // client draws no "transcrever" control. Whether a provider is configured
+    // is the worker's business; without one a request settles `unavailable`.
+    voiceTranscription: isEnabled("voice_note_transcription", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
+  };
+});
 
 router.post(
   "/api/channels/:channelId/attachments",
@@ -3522,6 +3625,7 @@ router.post(
         // would have no box to reserve and every image would land as a reflow.
         width: body.width,
         height: body.height,
+        voice: body.voice ?? null,
       });
       return created({
         attachmentId: pending.attachment.id,
@@ -3534,6 +3638,15 @@ router.post(
           413,
           `Attachments are limited to ${error.limit} bytes`,
         );
+      }
+      if (error instanceof NoteTooLargeError) {
+        throw new HttpError(413, error.message);
+      }
+      if (error instanceof VoiceNotesDisabledError) {
+        throw new Forbidden(error.message);
+      }
+      if (error instanceof VoiceNoteContentTypeError) {
+        throw new HttpError(400, error.message);
       }
       throw error;
     }
@@ -3608,7 +3721,85 @@ router.get(
       expiresAt: new Date(
         Date.now() + attachmentUrlTtlSeconds() * 1000,
       ).toISOString(),
+      // A voice note's AAC copy, once it exists: what a client refetches on
+      // `voice-note-updated`.
+      ...(attachment.voice?.playbackUrl
+        ? { playbackUrl: attachment.voice.playbackUrl }
+        : {}),
     };
+  },
+);
+
+/**
+/**
+ * "I played this voice note." 204, idempotent: the first call records it and
+ * tells the right sockets (see `notifyVoiceNoteListened`), a replay changes
+ * nothing, and playing your own note is a no-op that still answers 204.
+ *
+ * 404 for a note the caller cannot see, an attachment that is not a voice
+ * note, and one that does not exist, all alike, as in the URL route above.
+ * There is no storage check: this reads rows, never the bucket.
+ */
+router.post(
+  "/api/attachments/:attachmentId/listened",
+  async ({ res, user }, { attachmentId }) => {
+    const key = `user:${user.id}`;
+    if (!listenLimiter.take(key)) {
+      res.setHeader("Retry-After", String(listenLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    if (!isUuid(attachmentId!)) {
+      throw new NotFound("Attachment not found");
+    }
+    try {
+      const { frame, addressees } = await recordListen(attachmentId!, user.id);
+      if (frame) {
+        notifyVoiceNoteListened(frame, addressees);
+      }
+    } catch (error) {
+      if (error instanceof VoiceNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      throw error;
+    }
+    return noContent();
+  },
+);
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued or running (the
+ * answer arrives as a `voice-note-transcript` frame on the note's channel),
+ * 200 with the stored answer once there is one, for whoever asks: the first
+ * request in a server channel pays and everybody after it reads.
+ *
+ * 404 for "no such note" and "not yours to hear" alike; 403 when the
+ * `voice_note_transcription` flag is off where the note lives, its sender did
+ * not allow transcription, the asker has `voiceTranscription.show` off, or (in
+ * a conversation) nobody but the sender reads transcripts: the same rule the
+ * eager path applies at send.
+ */
+router.post(
+  "/api/attachments/:attachmentId/transcript",
+  async ({ user }, { attachmentId }) => {
+    if (!z.string().uuid().safeParse(attachmentId).success) {
+      throw new NotFound("Voice note not found");
+    }
+    if (!transcriptRequestLimiter.take(user.id)) {
+      throw new HttpError(429, "Slow down");
+    }
+    try {
+      const result = await requestVoiceNoteTranscript(attachmentId!, user.id);
+      const body = { transcript: result.transcript };
+      return result.status === 202 ? new Accepted(body) : body;
+    } catch (error) {
+      if (error instanceof TranscriptNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      if (error instanceof VoiceTranscriptionUnavailableError) {
+        throw new Forbidden(error.message);
+      }
+      throw error;
+    }
   },
 );
 
@@ -7393,6 +7584,18 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
 
+  // A voice note travels alone, with no text beside it (the claim enforces
+  // that when it is sent); this is the same rule for the road back in.
+  if (
+    body.body.trim().length > 0 &&
+    !noteEditAllowed({
+      hasNote: await messageHasNote(messageId!),
+      body: body.body,
+    })
+  ) {
+    throw new HttpError(400, "A voice message cannot have text added to it");
+  }
+
   // Same reasoning as the block guard above: an edit is a send. Without this
   // a member posts "hi", edits it into the blocked word, and AutoMod never
   // saw it. The check reads the same rules with the same exemptions as
@@ -7660,7 +7863,7 @@ router.get(
   "/api/channels/:channelId/pins",
   async ({ user }, { channelId }) => {
     await requireChannelAccess(channelId!, user.id);
-    const messages = await listPinnedMessages(channelId!);
+    const messages = await listPinnedMessages(channelId!, user.id);
     return { messages: messages.map(mapMessage) };
   },
 );
@@ -8737,6 +8940,145 @@ router.post(
     return { ok: true };
   },
 );
+
+// ------------------------------------------------------------ audience mode
+//
+// "Modo plateia" (`docs/plans/AUDIENCE_MODE.md`): a host turns a running call
+// into a stage. Two routes, both about a ROOM rather than a person's sanction:
+//
+// - WHO: `MUTE_MEMBERS` or `MANAGE_CHANNELS` in that channel (owner and
+//   Administrator resolve to every bit). No outrank check, deliberately:
+//   neither action is a sanction, and the people who run a room (anyone with
+//   either bit) are never affected by it, so a moderator can never silence
+//   another moderator this way. The server mute keeps its outrank check.
+// - WHERE: a server's plain voice channel only. A watch party already has a
+//   stage model and this does not touch it; a DM or group call has nobody to
+//   run it.
+// - THE FLAG (`audience_mode`, per server, default off) gates turning it ON.
+//   Turning it OFF is always allowed, so the flag going off can never strand
+//   a room nobody can unmute.
+//
+// Both answer `{ audience, enforcement }`: what the room now says, and what
+// the media server did with it, so the host's control can show a mic that is
+// still open instead of claiming it worked.
+
+async function requireAudienceHost(
+  serverId: string,
+  userId: string,
+  channelId: string,
+): Promise<void> {
+  await requireServerMember(serverId, userId);
+  if (
+    (await memberHasPermission(serverId, userId, Permission.MUTE_MEMBERS, channelId)) ||
+    (await memberHasPermission(serverId, userId, Permission.MANAGE_CHANNELS, channelId))
+  ) {
+    return;
+  }
+  throw new Forbidden("You do not have permission to do that");
+}
+
+async function requireAudienceChannel(channelId: string, userId: string) {
+  const channel = await requireChannelAccess(channelId, userId);
+  if (channel.kind !== "server" || !channel.server_id) {
+    throw new NotFound("Channel not found");
+  }
+  if (channel.type !== "voice") {
+    throw new HttpError(
+      400,
+      "Audience mode is for voice channels. A watch party already has its own stage.",
+    );
+  }
+  return { ...channel, server_id: channel.server_id };
+}
+
+function audienceModeHttpError(error: unknown): never {
+  if (error instanceof AudienceModeError) {
+    throw new HttpError(409, error.message);
+  }
+  throw error;
+}
+
+router.put(
+  "/api/channels/:channelId/voice-audience",
+  async ({ req, user }, { channelId }) => {
+    const body = setVoiceAudienceSchema.parse(await readJsonBody(req));
+    const channel = await requireAudienceChannel(channelId!, user.id);
+    await requireAudienceHost(channel.server_id, user.id, channelId!);
+    if (body.enabled) {
+      if (!audienceModeEnabledFor(channel.server_id)) {
+        throw new Forbidden("Audience mode is not available on this server");
+      }
+      // Turned on from inside the call: "silence everyone but me" means the
+      // host is in it, and it keeps "nobody left who runs it" meaningful.
+      if (!(await findVoiceChannelForUser(user.id, new Set([channelId!])))) {
+        throw new HttpError(409, "Join the call first");
+      }
+    }
+    let result;
+    try {
+      result = await setVoiceAudienceMode(channelId!, body.enabled, user.id, "host");
+    } catch (error) {
+      audienceModeHttpError(error);
+    }
+    if (result.changed) {
+      // After the change, and never able to undo it or fail the answer: the
+      // room has already changed, and telling the host it did not (so they
+      // press again, find nothing to change, and no audit is ever written)
+      // is worse than a missing row. The failure is logged loudly instead.
+      try {
+        await logAudit({
+          serverId: channel.server_id,
+          actorId: user.id,
+          action: body.enabled
+            ? "channel.voice_audience_on"
+            : "channel.voice_audience_off",
+          targetType: "channel",
+          targetId: channelId!,
+          changes: [{ key: "audienceMode", old: !body.enabled, new: body.enabled }],
+        });
+      } catch (error) {
+        logEvent("voice.audienceMode.auditFailed", {
+          channelId: channelId!,
+          actorId: user.id,
+          enabled: body.enabled,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { audience: result.audience, enforcement: result.enforcement };
+  },
+);
+
+/**
+ * "Liberar o microfone" / "Silenciar": let one person in the audience speak,
+ * or stop letting them. Not audited, for the reason lowering a hand is not:
+ * calling on the next person is the ordinary running of a room. The target
+ * must hold a seat in the call (orphans in their resume window count).
+ * Idempotent.
+ */
+router.put(
+  "/api/channels/:channelId/voice-audience/speakers/:userId",
+  async ({ req, user }, { channelId, userId }) => {
+    const body = setVoiceAudienceSpeakerSchema.parse(await readJsonBody(req));
+    const channel = await requireAudienceChannel(channelId!, user.id);
+    await requireAudienceHost(channel.server_id, user.id, channelId!);
+    if (userId === user.id) {
+      throw new HttpError(400, "You already run this call");
+    }
+    if (body.allowed && !(await findVoiceChannelForUser(userId!, new Set([channelId!])))) {
+      throw new NotFound("That member is not in this call");
+    }
+    let result;
+    try {
+      result = await setVoiceAudienceSpeaker(channelId!, userId!, body.allowed, user.id);
+    } catch (error) {
+      audienceModeHttpError(error);
+    }
+    return { audience: result.audience, enforcement: result.enforcement };
+  },
+);
+
+// -------------------------------------------------------- end audience mode
 
 // ----------------------------------------------------- end voice moderation
 
@@ -10949,6 +11291,18 @@ export async function handleApi(
       sendJson(res, 201, result.body, req);
       return;
     }
+    if (result instanceof NoContent) {
+      res.writeHead(204, {
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
+      });
+      res.end();
+      return;
+    }
+    if (result instanceof Accepted) {
+      sendJson(res, 202, result.body, req);
+      return;
+    }
     // The handler streamed its own answer (a past-broadcast download). There
     // is nothing left to write, and `sendJson` would throw on a socket whose
     // head went out long ago.
@@ -11144,7 +11498,7 @@ router.patch("/api/push/settings", async ({ req, user }) => {
 // dominance — are argued in packages/shared/src/friends.ts and on the
 // `friendships` table in schema.sql; enforcement is in services/friends.ts.
 import { friendNudgeFor, friendRequestSchema } from "@pqp/shared";
-import { notifyFriendActivity } from "../ws/chat.js";
+import { notifyFriendActivity, notifyVoiceNoteListened } from "../ws/chat.js";
 import {
   acceptFriendRequest,
   FriendRequestFloodError,

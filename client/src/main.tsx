@@ -18,6 +18,7 @@ import {
   Outlet,
   Route,
   Routes,
+  useLocation,
   useParams,
 } from "react-router-dom";
 import { AppLoadingShell } from "./components/layout/app-loading-shell";
@@ -32,6 +33,7 @@ import {
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
+import { withPqpPtBrCopy } from "./lib/clerk-pt-br";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
@@ -99,6 +101,14 @@ const WatchPartyPage = lazy(() =>
   import("./pages/watch-party-page").then((m) => ({
     default: m.WatchPartyPage,
   })),
+);
+const StreamersPage = lazy(() =>
+  import("./pages/streamers-page").then((m) => ({
+    default: m.StreamersPage,
+  })),
+);
+const ContactPage = lazy(() =>
+  import("./pages/contact-page").then((m) => ({ default: m.ContactPage })),
 );
 const ApoieRoute = lazy(() =>
   import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
@@ -224,6 +234,12 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
+          {/* `/contact`: who makes pqp, the one email address, and that it is
+              independent. `/contato` is the same page canonicalised to
+              `/contact` (`marketing-meta.ts`), the `/watch-party`
+              arrangement. Both words are in RESERVED_HANDLES. */}
+          <Route path="/contact" element={<ContactPage />} />
+          <Route path="/contato" element={<ContactPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
           {/* `/tela`: the pt-BR landing for "Discord sem tela no Brasil, o
@@ -285,10 +301,22 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             separate pt-BR path to guess. */}
         <Route path="/watch-party" element={<WatchPartyPage />} />
         <Route path="/watchparty" element={<WatchPartyPage />} />
+        {/* `/streamers`: where outreach sends a streamer, and the button that
+            asks for watch party access with `from=streamers` on it. Same
+            arrangement as `/watch-party`: role tokens, follows the theme, and
+            `/criadores` is the same page canonicalised to `/streamers`
+            (`marketing-meta.ts`). Both words are in RESERVED_HANDLES. */}
+        <Route path="/streamers" element={<StreamersPage />} />
+        <Route path="/criadores" element={<StreamersPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}
         />
+        {/* `/vem/gratis`: the address an ad once pointed at. Pages answers it
+            with a 301 in `_redirects`; this covers every build served outside
+            Pages. `search` and `hash` are carried so `?lang=es` and any
+            campaign tags survive, exactly as the 301 does. */}
+        <Route path="/vem/gratis" element={<VemGratisRedirect />} />
         {/* `/ven`: the Spanish address of the same page (302 in `_redirects`).
             A full navigation, not `<Navigate>`: the locale is read once at
             boot, so only a reload with `?lang=es` switches it. */}
@@ -322,6 +350,11 @@ interface ClerkColors {
  * Clerk renders in its own default light theme otherwise, which reads as a
  * broken modal inside a dark shell.
  */
+function VemGratisRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: "/vem", search, hash }} replace />;
+}
+
 function SpanishCampaignRedirect() {
   useEffect(() => {
     window.location.replace(`/vem?lang=es${window.location.hash}`);
@@ -354,7 +387,7 @@ function useClerkLocalization(locale: Locale): ClerkLocalization {
     // neutral Latin American Spanish (es-ES says "vosotros" and "ordenador").
     const load =
       locale === "pt-BR"
-        ? () => import("@clerk/localizations/pt-BR").then((m) => m.ptBR)
+        ? () => import("@clerk/localizations/pt-BR").then((m) => withPqpPtBrCopy(m.ptBR))
         : locale === "es"
           ? () => import("@clerk/localizations/es-MX").then((m) => m.esMX)
           : null;

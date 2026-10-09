@@ -28,6 +28,13 @@ import { forEachAuthenticatedSocket, userHasAuthenticatedSocket } from "./socket
 import { hasClusterSocket } from "./status.js";
 import { logEvent } from "../lib/log.js";
 import { noteWatchPartyState } from "./watch-party-live.js";
+import { noteStreamStarted } from "../services/stream-alerts.js";
+
+/**
+ * How recent `went_live_at` must be for a broadcast to read as the party going
+ * live rather than a later change to a party that has been live a while.
+ */
+const PARTY_START_RECENT_MS = 60_000;
 import { z } from "zod";
 import {
   isBusEnabled,
@@ -386,6 +393,28 @@ export async function broadcastWatchParty(
   // fail: the mark must be set even for a party nobody is left to tell.
   // See `watch-party-live.ts` for why this exists and why it fails open.
   noteWatchPartyState(row.channel_id, row.status);
+  // THE START-OF-STREAM NOTICE FOR A PARTY IS ITS GOING LIVE, not the share
+  // that precedes it (the host rehearsing in the draft). This walk runs for
+  // every change to a party that is already live (an option, a co-host), so
+  // only a row that went live moments ago counts as a start, and only the
+  // machine that took the write: the relayed copy would arm a second timer
+  // for the same party. The claim in `services/stream-alerts.ts` is the real
+  // arbiter either way.
+  if (
+    !options.fromBus &&
+    row.status === "live" &&
+    row.went_live_at &&
+    Date.now() - row.went_live_at.getTime() < PARTY_START_RECENT_MS
+  ) {
+    noteStreamStarted({
+      channelId: row.channel_id,
+      sharerUserId: row.host_user_id,
+      sharerName: row.host_display_name,
+      kind: "party",
+      startKey: row.id,
+      partyName: row.title,
+    });
+  }
   const cohosts = await loadCohostRows(row.id).catch(() => []);
   const cohostIds = cohosts.map((c) => c.user_id);
   const cache: PermissionCache = new Map();

@@ -36,8 +36,10 @@ import {
   isVoiceRoomChannelType,
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
+  type VoiceAudienceEnforcement,
   type WatchParty,
   type WatchPartyOptions,
+  type WatchPartyWaitlistSource,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -56,6 +58,19 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
+import {
+  applyVoiceNoteListened,
+  applyVoiceNoteUpdated,
+  isVoiceNoteListenedFrame,
+  setVoiceNoteViewer,
+} from "@/lib/voice-note-player";
+import {
+  applyVoiceNoteTranscript,
+  isVoiceNoteTranscriptFrame,
+  isVoiceNoteUpdatedFrame,
+} from "@/lib/voice-note-transcript";
+import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -131,6 +146,7 @@ import {
   shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
+  shouldOfferWatchNowHint,
   useFeatureHintsSpent,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -191,6 +207,8 @@ import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions
 import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
+import type { AudienceModeHostControls } from "@/components/voice/audience-mode";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
@@ -343,6 +361,8 @@ import {
   disconnectMemberVoice,
   lowerMemberVoiceHand,
   setMemberVoiceMuted,
+  setVoiceAudienceMode,
+  setVoiceAudienceSpeaker,
   kickMember,
   setAuthTokenProvider,
   unblockUser,
@@ -379,7 +399,10 @@ import {
   takeJoinIntent,
   peekJoinIntent,
   takeWaitlistIntent,
+  takeWaitlistIntentWithSource,
+  WAITLIST_SOURCE_PARAM,
   waitlistIntentFromSearch,
+  waitlistSourceFor,
   type CreateIntent,
 } from "@/lib/handle-intent";
 import {
@@ -413,7 +436,7 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -509,6 +532,7 @@ import {
   describeActivity,
   getNotificationState,
   notifyChannelActivity,
+  notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
   unreadByServer,
@@ -540,12 +564,21 @@ import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
+import { useWatchNow, useWatchNowFlag } from "@/hooks/use-watch-now";
+import { useStreamAlertSettings } from "@/hooks/use-stream-alert-settings";
+import { WatchNowBanner } from "@/components/watch-now/watch-now-banner";
+import {
+  dismissWatchNow,
+  type WatchNowScope,
+  type WatchNowStream,
+} from "@/lib/watch-now";
 import {
   preloadHlsEngine,
   setPartyFastStart,
   shouldPreloadHlsEngine,
 } from "@/lib/party-fast-start";
 import { cameraSyncFromConfig, setWatchCameraSync } from "@/lib/camera-sync";
+import { setShareFastStartServer } from "@/lib/share-fast-start";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -623,6 +656,10 @@ const HEADER_ACTION_TILE =
  * `scheduleReconnectMessagesRefetch` below.
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
+
+/** The watch-now strip's inputs when nothing is open to attach it to. */
+const WATCH_NOW_NO_SCOPE: WatchNowScope = { kind: "server", channels: [] };
+const WATCH_NOW_ALWAYS = () => true;
 
 /** A stable empty array, so "no favorites" is the same reference every
  * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
@@ -1194,6 +1231,10 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // The voice note player remembers its speed per account.
+  useEffect(() => {
+    setVoiceNoteViewer(user?.id ?? null);
+  }, [user?.id]);
   // For callbacks that must not change identity when the account loads.
   const userIdRef = useRef<string | null>(null);
   userIdRef.current = user?.id ?? null;
@@ -1463,6 +1504,7 @@ function MainAppContent({
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
   );
+  const [wantsWatchNowHint] = useState(() => featureHintEligible("watchNow"));
   const [wantsBringFriendsHint] = useState(() =>
     featureHintEligible("bringFriends"),
   );
@@ -1896,6 +1938,14 @@ function MainAppContent({
    */
   const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
   const [pendingWaitlist, setPendingWaitlist] = useState(false);
+  /**
+   * The page whose button opened the dialog (`from=streamers`), sent with the
+   * row so the operator can tell a streamer's request apart. Only for the
+   * dialog the intent opens: closing it clears this, so the sidebar teaser
+   * opened later sends no marker.
+   */
+  const [waitlistSource, setWaitlistSource] =
+    useState<WatchPartyWaitlistSource | null>(null);
   const [waitlistApprovals, setWaitlistApprovals] = useState<
     WatchPartyApprovedCard[]
   >([]);
@@ -2355,6 +2405,8 @@ function MainAppContent({
 
   const resolveTokenRef = useRef(resolveToken);
   resolveTokenRef.current = resolveToken;
+  // Stable, because the connection check restarts when its token getter changes.
+  const doctorGetToken = useCallback(() => resolveTokenRef.current(), []);
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
   /**
@@ -2852,6 +2904,9 @@ function MainAppContent({
   );
   const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
     void handleLowerOccupantHand(userId),
+  );
+  const stableOnAudienceSpeaker = useStableCallback(
+    (userId: string, allowed: boolean) => void handleAudienceSpeaker(userId, allowed),
   );
   const stableOnKickOccupant = useStableCallback(
     (userId: string, name: string) => void handleKickOccupant(userId, name),
@@ -4358,6 +4413,7 @@ function MainAppContent({
         // them. Nothing is sent back: a tab that has been open for hours would
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
+        bindPreferenceSyncAccount(me.id);
         if (me.preferences?.appearance) {
           adoptAppearancePreference(me.preferences.appearance);
         }
@@ -4377,6 +4433,7 @@ function MainAppContent({
         if (me.preferences?.chatDisplay) {
           adoptChatDisplay(me.preferences.chatDisplay);
         }
+        adoptVoiceTranscription(me.preferences);
         const merged = applyRemotePreferences(
           loadLocalSettings(),
           me.preferences,
@@ -4495,6 +4552,19 @@ function MainAppContent({
                     { serverId: message.serverId, serverName: message.serverName },
                   ],
             );
+            return;
+          }
+          if (message.type === "stream-started") {
+            // The server already chose who hears about it; the window decides
+            // whether the OS does. Somebody looking at that very server in a
+            // window that is in front already sees the stream (the strip, and
+            // the share on the sidebar's roster); anyone else, in the app or
+            // not, is who this is for.
+            notifyStreamStarted(message, {
+              windowFocused:
+                document.visibilityState === "visible" && document.hasFocus(),
+              openServerId: selectedServerIdRef.current,
+            });
             return;
           }
           if (message.type === "channel-session-reminder") {
@@ -4622,6 +4692,27 @@ function MainAppContent({
                 },
               };
             });
+            return;
+          }
+
+          // Somebody heard a voice note: the listener's own other sockets (so
+          // the dot goes everywhere) and the author's (for "ouviu"). The store
+          // is global because the player is; no controller owns it.
+          if (isVoiceNoteListenedFrame(message)) {
+            applyVoiceNoteListened(message);
+            return;
+          }
+
+          // A transcript settled (or was asked for), and the AAC copy of a
+          // note was made. Both go to the whole channel and into stores keyed
+          // by attachment, like the receipts above: a card in the list, a
+          // thread panel or a search hit reads the same answer.
+          if (isVoiceNoteTranscriptFrame(message)) {
+            applyVoiceNoteTranscript(message);
+            return;
+          }
+          if (isVoiceNoteUpdatedFrame(message)) {
+            applyVoiceNoteUpdated(message);
             return;
           }
 
@@ -6071,11 +6162,24 @@ function MainAppContent({
       });
   }
 
+  /**
+   * The server a call is about to be in, for everything that is decided per
+   * server before the media connects. `share_fast_start_quality` is read the
+   * moment the SFU's join response lands, so its answer is asked for here,
+   * before the token request, rather than once the seat exists; a server
+   * already asked about in the last ten minutes answers from the cache.
+   */
+  function noteCallServer(serverId: string | null) {
+    voiceServerIdRef.current = serverId;
+    setShareFastStartServer(serverId);
+    prefetchShareGuardFlag(serverId);
+  }
+
   async function handleJoinVoice(
     channelId: string,
     joinOptions?: { startMuted?: boolean },
   ) {
-    voiceServerIdRef.current = selectedServerId;
+    noteCallServer(selectedServerId);
     refreshIceServers();
     // The funnel's "first thing a new account did": inert unless the wizard
     // finished in this tab, and once.
@@ -6729,7 +6833,7 @@ function MainAppContent({
   }
 
   async function joinWatchPartyAsAudience(channelId: string) {
-    voiceServerIdRef.current = selectedServerId;
+    noteCallServer(selectedServerId);
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
@@ -6816,7 +6920,7 @@ function MainAppContent({
   async function handleWatchPartyGuestGoOnAir(channelId: string) {
     await handleWatchPartyGuestAction({ action: "join" }, channelId);
     try {
-      voiceServerIdRef.current = selectedServerId;
+      noteCallServer(selectedServerId);
       await voice.join(channelId, {
         inputDeviceId: localSettings.inputDeviceId,
         inputVolume: localSettings.inputVolume,
@@ -7007,6 +7111,44 @@ function MainAppContent({
     guardVoiceJoin(channelId, () => handleJoinVoice(channelId));
   }
 
+  /**
+   * The watch-now strip's one button. `docs/plans/WATCH_NOW.md` §"The button".
+   *
+   * A watch party is watched by OPENING it, which takes no seat. A share in a
+   * voice channel is opened and joined as an audience seat: no microphone and
+   * no permission prompt (an invited stranger's first sentence in the app
+   * should not be a browser dialog), the camera off as it always starts.
+   * Already seated, the button is a way back and joins nothing. Nobody is ever
+   * joined without this tap.
+   */
+  function handleWatchNowWatch(stream: WatchNowStream) {
+    setWatchNowFailure(null);
+    watchNowSawJoin.current = false;
+    if (stream.kind === "party") {
+      void handleWatchLiveParty(stream.channelId);
+      return;
+    }
+    if (stream.kind === "call") {
+      if (stream.inRoom) {
+        // Already seated: a way back to the conversation, never a rejoin
+        // (which would rebuild the mesh under everybody in the call).
+        void selectConversation(stream.channelId);
+        return;
+      }
+      setWatchNowJoining(stream.channelId);
+      void handleConversationCall(stream.channelId, false, false, true);
+      return;
+    }
+    void selectChannel(stream.channelId);
+    if (stream.inRoom) {
+      return;
+    }
+    setWatchNowJoining(stream.channelId);
+    guardVoiceJoin(stream.channelId, () =>
+      joinWatchPartyAsAudience(stream.channelId),
+    );
+  }
+
   function voiceModerationError(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
   }
@@ -7058,6 +7200,95 @@ function MainAppContent({
    * `Permission.MUTE_MEMBERS` in that channel, the same bit the other voice
    * moderation actions use, and the server checks it again.
    */
+  // --- audience mode ("Modo plateia", docs/plans/AUDIENCE_MODE.md) ---
+  // The operator's flag for the open server, the request in flight, and what
+  // the media server did with the host's last change (who is still audible),
+  // which the strip shows until the room's own state says otherwise.
+  const voiceConfig = useVoiceConfig(selectedServerId);
+  const [audienceBusy, setAudienceBusy] = useState(false);
+  // Tied to the call and the session it answered for, so a warning from one
+  // call is never drawn over the next one.
+  const [audienceEnforcement, setAudienceEnforcement] = useState<{
+    channelId: string;
+    since: number | null;
+    enforcement: VoiceAudienceEnforcement;
+  } | null>(null);
+
+  async function handleToggleAudienceMode() {
+    const channelId = voice.getState().voiceChannelId;
+    if (!channelId || audienceBusy) {
+      return;
+    }
+    setAudienceBusy(true);
+    try {
+      const answer = await setVoiceAudienceMode(
+        channelId,
+        voice.getState().audience === null,
+      );
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("voice.audience.failed")));
+    } finally {
+      setAudienceBusy(false);
+    }
+  }
+
+  async function handleAudienceSpeaker(userId: string, allowed: boolean) {
+    const channelId = voice.getState().voiceChannelId;
+    if (!channelId || audienceBusy) {
+      return;
+    }
+    setAudienceBusy(true);
+    try {
+      const answer = await setVoiceAudienceSpeaker(channelId, userId, allowed);
+      setAudienceEnforcement({
+        channelId,
+        since: answer.audience?.since ?? null,
+        enforcement: answer.enforcement,
+      });
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("voice.audience.speakerFailed")));
+    } finally {
+      setAudienceBusy(false);
+    }
+  }
+
+  /**
+   * The host's half of audience mode for the call in this voice channel, or
+   * null for anybody who does not run the stage (`MUTE_MEMBERS` or
+   * `MANAGE_CHANNELS` here; the server checks the same bits). Never in a
+   * watch party or a conversation call.
+   */
+  function audienceHostFor(channel: { id: string; type: string }): AudienceModeHostControls | null {
+    if (
+      channel.type !== "voice" ||
+      voiceState.voiceChannelId !== channel.id ||
+      !(
+        perms.can(Permission.MUTE_MEMBERS, channel.id) ||
+        perms.can(Permission.MANAGE_CHANNELS, channel.id)
+      )
+    ) {
+      return null;
+    }
+    return {
+      available: voiceConfig.audienceMode === true,
+      busy: audienceBusy,
+      onToggle: () => void handleToggleAudienceMode(),
+      onAllow: (userId) => void handleAudienceSpeaker(userId, true),
+      onSilence: (userId) => void handleAudienceSpeaker(userId, false),
+      enforcement:
+        voiceState.audience &&
+        audienceEnforcement?.channelId === channel.id &&
+        audienceEnforcement.since === voiceState.audience.since
+          ? audienceEnforcement.enforcement
+          : null,
+    };
+  }
+
   async function handleLowerOccupantHand(userId: string) {
     if (!selectedServerId) {
       return;
@@ -7132,6 +7363,12 @@ function MainAppContent({
     channelId: string,
     ring: boolean,
     withVideo = false,
+    /**
+     * Join to WATCH a share (the watch-now strip): an audience seat, so no
+     * microphone is opened and nothing is asked of the person. Pressing the
+     * mic later is how they start talking, as on any audience seat.
+     */
+    watchOnly = false,
   ) {
     voiceServerIdRef.current = null;
     pendingVideoCallRef.current = withVideo ? channelId : null;
@@ -7144,6 +7381,7 @@ function MainAppContent({
       inputMode: localSettings.inputMode,
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
+      ...(watchOnly ? { audienceOnly: true } : {}),
     };
     if (ring) {
       await voice.joinConversationCall(channelId, options);
@@ -7896,7 +8134,7 @@ function MainAppContent({
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
     const stashedCreate = takeCreateIntent(storage);
-    const stashedWaitlist = takeWaitlistIntent(storage);
+    const stashedWaitlist = takeWaitlistIntentWithSource(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     // Read, not consumed: cleared only once the server has answered (below),
@@ -7920,11 +8158,13 @@ function MainAppContent({
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
     const waitlistIntent =
-      waitlistIntentFromSearch(location.search) || stashedWaitlist;
+      waitlistIntentFromSearch(location.search) || stashedWaitlist !== null;
     if (waitlistIntent) {
+      const source = waitlistSourceFor(location.search, stashedWaitlist);
       setPendingWaitlist(true);
+      setWaitlistSource(source);
       // Kept until the dialog opens, like the create intent above.
-      stashWaitlistIntent(storage);
+      stashWaitlistIntent(storage, Date.now(), source);
     }
     /**
      * Create community, for somebody who came to make one (a `/vem` CTA, a
@@ -7952,6 +8192,7 @@ function MainAppContent({
       params.delete("join");
       if (waitlistIntentFromSearch(location.search)) {
         params.delete(INTENT_PARAM);
+        params.delete(WAITLIST_SOURCE_PARAM);
       }
       for (const name of CREATE_INTENT_PARAMS) {
         params.delete(name);
@@ -8146,6 +8387,41 @@ function MainAppContent({
     [loadBlocks],
   );
 
+  /**
+   * Settings' block (the block-by-name form in Privacidade). The block request
+   * throws back so the row can say it failed; once the server agreed, the same
+   * refreshes as `handleBlockUser` run, so the DM list, unread counts, hidden
+   * messages and the friends list (a block ends a friendship) catch up now
+   * rather than on the next reload. A failed refresh is not a failed block.
+   */
+  const handleSettingsBlock = useCallback(
+    async (userId: string) => {
+      await blockUser(userId);
+      await Promise.allSettled([
+        loadBlocks(),
+        loadConversations({ trustSnapshot: true }),
+        friendsRef.current.refresh(),
+      ]);
+    },
+    [loadBlocks, loadConversations],
+  );
+
+  /**
+   * Settings' unblock. Unlike `handleUnblockUser`, a failure is thrown back so
+   * the Privacidade row can say it (the app's banner sits behind the dialog).
+   * Only the unblock request can fail it: the row is dropped locally once the
+   * server agreed, and the list refresh after it settles on its own, so a
+   * failed refresh never reads as a failed unblock or invites a retry.
+   */
+  const handleSettingsUnblock = useCallback(
+    async (userId: string) => {
+      await unblockUser(userId);
+      setBlockedUsers((current) => current.filter((one) => one.id !== userId));
+      void loadBlocks().catch(() => undefined);
+    },
+    [loadBlocks],
+  );
+
   const handleHideConversation = useCallback(
     async (channelId: string) => {
       try {
@@ -8183,6 +8459,121 @@ function MainAppContent({
     () => new Set(blockedUsers.map((blocked) => blocked.id)),
     [blockedUsers],
   );
+
+  // --- watch now: the strip that says a stream is live ----------------------
+  // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this
+  // client already holds (rosters, `channel-live`, the watch party map): no
+  // request, no frame, no write per viewer. Off, `useWatchNow` answers an
+  // empty list and the banner draws nothing.
+  const watchNowFlag = useWatchNowFlag(
+    selection.kind === "server" ? selectedServerId : null,
+  );
+  const watchNowScope = useMemo<WatchNowScope | null>(() => {
+    if (selection.kind === "server" && selectedServerId) {
+      return {
+        kind: "server",
+        // A switch leaves the old server's list in place for a beat.
+        channels: channels.filter(
+          (channel) => channel.serverId === selectedServerId,
+        ),
+      };
+    }
+    if (selection.kind === "dm" && selectedChannelId) {
+      return { kind: "conversation", channelId: selectedChannelId };
+    }
+    return null;
+  }, [selection.kind, selectedServerId, selectedChannelId, channels]);
+  const watchNowStreams = useWatchNow({
+    enabled: watchNowFlag && watchNowScope !== null,
+    viewerId: user?.id ?? null,
+    scope: watchNowScope ?? WATCH_NOW_NO_SCOPE,
+    occupancy: voiceState.occupancy,
+    parties: watchParties.byChannel,
+    channelLive: voiceState.channelLive,
+    blocked: blockedUserIds,
+    // CONNECT is the one gate the roster's own audience (VIEW) does not
+    // cover: a button that can only fail is worse than none. A conversation
+    // has no roles to lack. Read from THIS render's permissions, not through
+    // `stableCanConnectIn`: that one is refreshed after the render, so the
+    // render in which a newcomer's permissions arrive would still be asked
+    // with the empty ones, and the streams are only recomputed when
+    // `permissionsKey` changes (which is exactly that render).
+    canConnect:
+      watchNowScope?.kind === "conversation"
+        ? WATCH_NOW_ALWAYS
+        : (channelId: string) => perms.can(Permission.CONNECT, channelId),
+    seatedChannelId:
+      voiceState.status !== "idle" ? voiceState.voiceChannelId : null,
+    connected: connection === "online",
+    openChannelId: selectedChannelId,
+    permissionsKey: perms.can,
+  });
+  // "Avisar quando alguém transmitir": asked when a server's menu opens, so a
+  // deployment with the flag off pays nothing for it.
+  const streamAlerts = useStreamAlertSettings();
+  // The open server's `stream_start_notifications` answer arrives with the
+  // config this client already asks for; when it is on, fetch what the menu
+  // needs (the default for a person who never chose) before it is opened.
+  const streamAlertsOn = liveHlsConfig?.streamStartNotifications === true;
+  const ensureStreamAlerts = streamAlerts.ensure;
+  useEffect(() => {
+    if (streamAlertsOn && selectedServerId) {
+      ensureStreamAlerts(selectedServerId);
+    }
+  }, [streamAlertsOn, selectedServerId, ensureStreamAlerts]);
+  /** The join in flight from the strip, and why the last one failed. */
+  const [watchNowJoining, setWatchNowJoining] = useState<string | null>(null);
+  const [watchNowFailure, setWatchNowFailure] = useState<string | null>(null);
+  const watchNowSawJoin = useRef(false);
+  useEffect(() => {
+    if (!watchNowJoining) {
+      return;
+    }
+    if (voiceState.status !== "idle") {
+      watchNowSawJoin.current = true;
+    }
+    if (
+      voiceState.status === "connected" &&
+      voiceState.voiceChannelId === watchNowJoining
+    ) {
+      setWatchNowJoining(null);
+      setWatchNowFailure(null);
+      return;
+    }
+    // Only a join that STARTED and came back counts: an error left over from
+    // an earlier call must not read as this tap's answer.
+    if (
+      voiceState.status === "idle" &&
+      voiceState.error &&
+      watchNowSawJoin.current
+    ) {
+      // The join came back refused (a full room, a locked channel): say so
+      // under the strip, in the words the voice layer already chose.
+      setWatchNowFailure(voiceState.error);
+      setWatchNowJoining(null);
+    }
+  }, [
+    watchNowJoining,
+    voiceState.status,
+    voiceState.voiceChannelId,
+    voiceState.error,
+  ]);
+  useEffect(() => {
+    if (!watchNowFailure) {
+      return;
+    }
+    const timer = window.setTimeout(() => setWatchNowFailure(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [watchNowFailure]);
+  useEffect(() => {
+    if (!watchNowJoining) {
+      return;
+    }
+    // A join the guard parked behind a confirmation, or one that never
+    // answered, must not leave the button saying "Entrando" for good.
+    const timer = window.setTimeout(() => setWatchNowJoining(null), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [watchNowJoining]);
 
   // --- threads ---
   // Channel ids with unread activity, as a set for the chips. Thread unreads
@@ -8610,6 +9001,12 @@ function MainAppContent({
     channelName: string | null,
     inCall: boolean,
   ) {
+    // A live stream is the welcome: its strip says where to go, and "say oi in
+    // #general" over it is two instructions for one screen. Same call the
+    // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
+    if (surface !== "home" && watchNowStreams.length > 0) {
+      return null;
+    }
     if (
       !arrivalServerId ||
       arrivalServerId !== selectedServerId ||
@@ -8801,7 +9198,25 @@ function MainAppContent({
     voiceServerId !== null &&
     voiceServerId === selectedServerId &&
     perms.can(Permission.CREATE_INVITE);
+  /**
+   * Whose first minutes these are, for the one-time hint under the watch-now
+   * strip: they arrived in this very server in this session (an invite, a
+   * community link), or their account finished first-run in the last day.
+   * Somebody who has seen a hundred of these strips does not need it
+   * explained.
+   */
+  const watchNowNewcomer =
+    (arrivalServerId !== null && arrivalServerId === selectedServerId) ||
+    justOnboarded ||
+    isNewcomerAccount(user?.preferences?.onboardedAt);
   const attachedFeatureHint = winningFeatureHint({
+    // Under the watch-now strip, once ever, for somebody who just arrived.
+    watchNow: shouldOfferWatchNowHint({
+      seen: !wantsWatchNowHint,
+      automated: false,
+      bannerVisible: watchNowStreams.length > 0,
+      newcomer: watchNowNewcomer,
+    }),
     // Rendered by `CallControls` in the dock's hint slot; dismissed by
     // Entendi or by pressing any control in the dock.
     callDock: shouldOfferCallDockHint({
@@ -8893,6 +9308,9 @@ function MainAppContent({
         voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
       isDesktopViewport: voiceCleanDesktopViewport,
     });
+  /** A live party, or the watch-now strip: no campaign card takes the corner. */
+  const campaignsYield =
+    Boolean(selectedPartyLive) || watchNowStreams.length > 0;
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -8906,19 +9324,26 @@ function MainAppContent({
     // went to /android instead of the party. Holding only that one would hand
     // the corner to the next card in line, so the whole tail yields. The
     // update notice, a Baú post and the voice nudge are not campaigns.
-    qg: qgHintWanted && !selectedPartyLive,
+    //
+    // THE WATCH-NOW STRIP IS THE SAME CASE. While it is on screen a stream is
+    // live in this server and the strip is the one thing the newcomer is
+    // being asked to do; a corner card beside it is a second request, and the
+    // first thing a stranger is told must not be "join the QG" (2026-10-04,
+    // Filminho). It also keeps its own one-time hint, an attached card, from
+    // yielding to a campaign for the whole film.
+    qg: qgHintWanted && !campaignsYield,
     voiceClean: wantsVoiceCleanHint,
-    mobileBeta: wantsMobileBeta && !selectedPartyLive,
-    whatsNew: wantsWhatsNew && !selectedPartyLive,
+    mobileBeta: wantsMobileBeta && !campaignsYield,
+    whatsNew: wantsWhatsNew && !campaignsYield,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
-      !selectedPartyLive &&
+      !campaignsYield &&
       Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
-      !selectedPartyLive &&
+      !campaignsYield &&
       attachedFeatureHint === null,
   });
   // A DM arrival card and the bottom-right onboarding queue would collide on
@@ -9055,6 +9480,7 @@ function MainAppContent({
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
           listenOnly={!voiceState.canSpeak}
+          audienceLocked={voiceState.speakReason === "audience"}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
           )}
@@ -9133,6 +9559,7 @@ function MainAppContent({
         isDeafened={voiceState.isDeafened}
         inVoice={voiceState.status !== "idle"}
         canSpeak={voiceState.canSpeak}
+        speakReason={voiceState.speakReason}
         showUserButton={showUserButton}
         manualStatus={status.manual}
         effectiveStatus={status.effective}
@@ -9437,6 +9864,18 @@ function MainAppContent({
             }
           />
         )}
+      {/* A stream is live somewhere the person is not looking: the one strip
+          that answers "cadê o filme?". Above the arrival strip, which yields
+          to it (a live stream is the welcome). Mounted whether or not there
+          is one, so its exit can play. */}
+      <WatchNowBanner
+        streams={watchNowStreams}
+        onWatch={handleWatchNowWatch}
+        onDismiss={(stream) => dismissWatchNow(stream.key)}
+        joiningChannelId={watchNowJoining}
+        failure={watchNowFailure}
+        hintAllowed={watchNowNewcomer}
+      />
       {renderArrivalBanner(
         // A live party first, whatever kind of room it is running in.
         selectedPartyLive
@@ -10048,6 +10487,7 @@ function MainAppContent({
               selectedChannel.id,
             )}
             onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
+            audienceHost={audienceHostFor(selectedChannel)}
             compactPeers={localSettings.compactPeers}
           />
         )}
@@ -10139,6 +10579,7 @@ function MainAppContent({
             : undefined
         }
         messages={chat.getMessages()}
+        participants={activeConversation?.participants}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -10245,6 +10686,9 @@ function MainAppContent({
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
         key={selectedChannel.id}
+        voiceNotesServerId={
+          selectedChannel.kind === "server" ? selectedServerId : null
+        }
         onSend={(body, attachments) => {
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
@@ -10409,6 +10853,7 @@ function MainAppContent({
         outputVolume={localSettings.outputVolume}
         audibleScreenPeerIds={voiceState.audibleScreenPeerIds}
         serverMutedPeerIds={voiceState.serverMutedPeerIds}
+        speakLockedPeerIds={voiceState.speakLockedPeerIds}
       />
 
       {/* At the root and over everything, because the directory is a mode
@@ -10453,10 +10898,14 @@ function MainAppContent({
         open={doctorOpen}
         onClose={() => setDoctorOpen(false)}
         transport={transport}
-        getToken={() => resolveTokenRef.current()}
+        getToken={doctorGetToken}
         onSignInAgain={signInAgain}
         appVersion="web"
       />
+
+      {/* A voice note keeps playing across channels; this is its control
+          while its own card is off screen. */}
+      <VoiceNoteMiniPlayer />
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       <DmToasts
@@ -10500,7 +10949,11 @@ function MainAppContent({
           wherever the person lands, including with no server open. */}
       <WatchPartyWaitlistDialog
         open={waitlistDialogOpen}
-        onClose={() => setWaitlistDialogOpen(false)}
+        onClose={() => {
+          setWaitlistDialogOpen(false);
+          setWaitlistSource(null);
+        }}
+        source={waitlistSource}
         servers={servers.map((server) => ({ id: server.id, name: server.name }))}
         initialServerId={selectedServerId}
       />
@@ -10550,6 +11003,8 @@ function MainAppContent({
       )}
 
       <ServerRail
+        streamAlertInfo={streamAlerts.byServer}
+        onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
         phoneHidden={partyPhoneLayout}
         mobileNavOpen={mobileNavOpen}
@@ -10748,6 +11203,15 @@ function MainAppContent({
           onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
           onServerMuteOccupant={stableOnServerMuteOccupant}
           onLowerOccupantHand={stableOnLowerOccupantHand}
+          audienceSpeakerUserIds={
+            voiceState.audience &&
+            voiceState.voiceChannelId &&
+            (perms.can(Permission.MUTE_MEMBERS, voiceState.voiceChannelId) ||
+              perms.can(Permission.MANAGE_CHANNELS, voiceState.voiceChannelId))
+              ? voiceState.audience.speakerUserIds
+              : null
+          }
+          onAudienceSpeaker={stableOnAudienceSpeaker}
           onKickOccupant={stableOnKickOccupant}
           onSetPeerVolume={stableOnSetPeerVolume}
           onSetScreenVolume={stableOnSetScreenVolume}
@@ -11178,7 +11642,8 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onUnblockUser={handleSettingsUnblock}
+        onBlockUser={handleSettingsBlock}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
@@ -11717,6 +12182,7 @@ function MainAppContent({
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
+        pushToTalkOn={localSettings.inputMode === "push-to-talk"}
         onClose={() => setShortcutOverlayOpen(false)}
       />
 
