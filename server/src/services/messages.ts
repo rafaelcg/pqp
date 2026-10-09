@@ -471,6 +471,12 @@ export interface MentionWrite {
   mentionEveryone?: boolean;
   mentionHere?: boolean;
   canMentionEveryone?: boolean;
+  /**
+   * Ask `recordMentions` to hand back the ids it wrote (`mention_ids_from_db`).
+   * Off, the INSERTs carry no RETURNING and nothing is materialised, so a
+   * message that mentions a big role costs exactly what it did before.
+   */
+  collectRecipients?: boolean;
 }
 
 async function recordMentions(
@@ -487,6 +493,8 @@ async function recordMentions(
   // Everyone a row was written for, from every source below. Each INSERT is
   // `ON CONFLICT DO NOTHING ... RETURNING`, so a person already recorded by an
   // earlier source is not returned twice and the union is the set of rows.
+  const collect = extra?.collectRecipients === true;
+  const returning = collect ? "RETURNING user_id" : "";
   const recorded = new Set<string>();
   if (usernames.length > 0) {
     const inserted = await db.query<{ user_id: string }>(
@@ -509,7 +517,7 @@ async function recordMentions(
              END
          AND ${notBlockedSql("u.id", "$4")}
        ON CONFLICT DO NOTHING
-       RETURNING user_id`,
+       ${returning}`,
       [messageId, channelId, usernames, authorId],
     );
     for (const row of inserted.rows) {
@@ -546,7 +554,7 @@ async function recordMentions(
          )
          AND ${notBlockedSql("mr.user_id", "$4")}
        ON CONFLICT DO NOTHING
-       RETURNING user_id`,
+       ${returning}`,
       [
         messageId,
         channelId,
@@ -569,7 +577,7 @@ async function recordMentions(
        WHERE x.user_id <> $3
          AND ${notBlockedSql("x.user_id", "$3")}
        ON CONFLICT DO NOTHING
-       RETURNING user_id`,
+       ${returning}`,
       [messageId, extraIds, authorId],
     );
     for (const row of inserted.rows) {
@@ -587,7 +595,7 @@ async function recordMentions(
      WHERE parent.id = $2 AND parent.author_id <> $3
        AND ${notBlockedSql("parent.author_id", "$3")}
      ON CONFLICT DO NOTHING
-     RETURNING user_id`,
+     ${returning}`,
     [messageId, reply.parentId, reply.authorId],
   );
   for (const row of answered.rows) {

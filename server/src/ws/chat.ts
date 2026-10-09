@@ -2161,6 +2161,11 @@ async function postChannelMessageAttempt(
     }
   }
 
+  // Read once per send, on the instance that took it. The one answer decides
+  // both whether the insert reports who its rows were written for and whether
+  // that is used below, so a flip mid-send cannot split the two. Siblings do
+  // not consult the flag; they get the ids in the frame.
+  const mentionIdsFromDb = isEnabled("mention_ids_from_db");
   const dbMessage = await createMessage(
     input.channelId,
     input.author,
@@ -2168,6 +2173,7 @@ async function postChannelMessageAttempt(
     parent?.id ?? null,
     input.attachmentIds,
     {
+      collectRecipients: mentionIdsFromDb,
       mentionEveryone,
       mentionHere,
       extraUserIds: hereUserIds,
@@ -2256,11 +2262,7 @@ async function postChannelMessageAttempt(
   );
 
   const mentions = extractMentionUsernames(input.body);
-  // Read here, once, on the instance that took the send, and carried to the
-  // siblings in the frame: they never consult the flag themselves, so a flip
-  // that has reached one machine and not yet the other cannot make the two
-  // halves of one message disagree about who was mentioned.
-  const mentionedUserIds = isEnabled("mention_ids_from_db")
+  const mentionedUserIds = mentionIdsFromDb
     ? (dbMessage.mentionedUserIds ?? [])
     : [];
   // Only a conversation's toast/preview reads message content — a server
