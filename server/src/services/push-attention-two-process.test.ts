@@ -25,7 +25,29 @@ import { WebSocket } from "ws";
  */
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-const describeDb = DATABASE_URL ? describe : describe.skip;
+
+/**
+ * This suite TRUNCATEs, like every database suite here (CLAUDE.md: point
+ * TEST_DATABASE_URL at a copy). It also refuses a database that is not on this
+ * machine, so a production URL left in the environment can never be the one
+ * it wipes. CI's Postgres is a local service container.
+ */
+function isLocalDatabase(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+const describeDb = isLocalDatabase(DATABASE_URL) ? describe : describe.skip;
+
+/** Every child spawned, so `afterAll` stops them even when a startup threw. */
+const spawned: ChildProcess[] = [];
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TSX = join(SERVER_DIR, "node_modules", ".bin", "tsx");
@@ -85,6 +107,7 @@ async function startApi(name: string): Promise<Api> {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  spawned.push(child);
   const log: string[] = [];
   child.stdout?.on("data", (chunk: Buffer) => log.push(chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => log.push(chunk.toString()));
@@ -102,16 +125,17 @@ async function startApi(name: string): Promise<Api> {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  await stopChild(child);
   throw new Error(`${name} never became healthy:\n${log.join("")}`);
 }
 
-async function stopApi(api: Api | undefined): Promise<void> {
-  if (!api || api.child.exitCode !== null) {
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  const exited = new Promise<void>((resolve) => api.child.once("exit", () => resolve()));
-  api.child.kill("SIGTERM");
-  const timer = setTimeout(() => api.child.kill("SIGKILL"), 10_000);
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill("SIGTERM");
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
   await exited;
   clearTimeout(timer);
 }
@@ -184,7 +208,9 @@ describeDb("push attention gate across two API processes", () => {
     for (const socket of sockets) {
       socket.close();
     }
-    await Promise.all([stopApi(a), stopApi(b)]);
+    // Every child, not just `a` and `b`: if one startup threw, the other may
+    // be running with nothing assigned.
+    await Promise.all(spawned.map((child) => stopChild(child)));
   }, 30_000);
 
   /**
