@@ -181,7 +181,7 @@ describe("voice notes", () => {
           durationMs: 12_000,
           waveform,
           listenedByMe: true,
-          listenedBy: [ATTACHMENT_ID],
+          listenedBy: [{ userId: ATTACHMENT_ID, listenedAt: "2026-10-08T20:00:00.000Z" }],
           transcript: { status: "done", text: "oi", language: "pt" },
         },
       }).success,

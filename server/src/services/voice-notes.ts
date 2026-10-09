@@ -123,3 +123,33 @@ export function noteShapeAllowed(input: {
     input.body.trim().length === 0
   );
 }
+
+/**
+ * The edit rule. A note travels alone with no text, and that has to survive
+ * the message being edited later: the claim refuses text beside a note, so an
+ * edit that adds some would be the same message by another road. An edit that
+ * leaves the body empty is the no-op it looks like and stays legal.
+ */
+export function noteEditAllowed(input: {
+  hasNote: boolean;
+  body: string;
+}): boolean {
+  return !input.hasNote || input.body.trim().length === 0;
+}
+
+/**
+ * Does this message carry a note? Asked of the table rather than of the
+ * attachments a read returns, because that read leaves out a stored file when
+ * storage is not configured, and an edit must not become possible on a note
+ * just because its bytes cannot be signed right now.
+ */
+export async function messageHasNote(messageId: string): Promise<boolean> {
+  const { rows } = await getPool().query(
+    `SELECT 1 FROM message_attachments a
+     JOIN message_attachment_voice v ON v.attachment_id = a.id
+     WHERE a.message_id = $1
+     LIMIT 1`,
+    [messageId],
+  );
+  return rows.length > 0;
+}

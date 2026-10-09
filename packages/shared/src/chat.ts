@@ -14,6 +14,7 @@ import {
 import {
   attachmentSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  voiceNoteListenedSchema,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
@@ -633,6 +634,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyWaitlistApprovedSchema,
   // Per person too: see `moderation.ts`, and its absence from the list below.
   serverRemovedSchema,
+  // Per person too: see `voiceNoteListenedSchema`, and its absence from the
+  // list below.
+  voiceNoteListenedSchema,
 ]);
 
 /**
@@ -741,6 +745,11 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * lost the server, so no channel could reach them anyway. It names who was
  * kicked or banned by who receives it, and travels on `chat.membership` keyed
  * by user id.
+ *
+ * `voice-note-listened` is absent for the same reason: it is addressed to the
+ * listener's own sockets and, in a small conversation, the author's, and the
+ * channel relay cannot tell a receipt from a broadcast. It travels on
+ * `chat.voice-listened` keyed by user id.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",

@@ -290,6 +290,13 @@ class WireProtocolTest {
         // send in the lost server is already refused by the API, so nothing
         // leaks; the live drop and its one-line reason are a follow-up.
         "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
+        // Somebody played a voice note: the listener's other devices clear the
+        // dot, and the author of a small conversation's note sees "ouviu".
+        // Voice notes ship dark behind `voice_notes` and the phone has no
+        // recorder or note card yet (a note shows as a plain audio file), so
+        // there is no dot or receipt for the frame to update. The same state
+        // is on every history read, so nothing goes stale.
+        "voice-note-listened" to "no voice note card on the phone yet; listen state is on every history read",
     )
 
     /**

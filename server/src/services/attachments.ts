@@ -28,6 +28,7 @@ import {
 } from "./content-scan.js";
 import { createAutomatedReport } from "./reports.js";
 import { isChannelMember } from "./users.js";
+import { overlayListens } from "./voice-note-listens.js";
 import { assertVoiceNoteMintAllowed, isNoteAttachment } from "./voice-notes.js";
 
 /**
@@ -771,9 +772,15 @@ export function toPublicAttachment(row: DbAttachment): Attachment {
  * by `created_at` instead reads back mint order, and mints race: an image waits
  * on a decode before it mints, so a message sent as photo then clip comes back
  * as clip then photo.
+ *
+ * `viewerId` is for the per-viewer part of a voice note (`listenedByMe`, and
+ * on the author's copy `listenedBy`; see `overlayListens`). Without it those
+ * fields are simply absent, which is what a broadcast to a whole channel
+ * carries: one copy cannot know who is reading it.
  */
 export async function listAttachmentsForMessages(
   messageIds: string[],
+  viewerId?: string,
 ): Promise<Map<string, Attachment[]>> {
   const byMessage = new Map<string, Attachment[]>();
   if (messageIds.length === 0) {
@@ -807,6 +814,9 @@ export async function listAttachmentsForMessages(
     byMessage.set(row.message_id!, list);
   }
 
+  if (viewerId) {
+    await overlayListens([...byMessage.values()].flat(), viewerId);
+  }
   return byMessage;
 }
 

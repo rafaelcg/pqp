@@ -38,7 +38,7 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
-import { noteShapeAllowed } from "./voice-notes.js";
+import { noteShapeAllowed, voiceNotesEnabledForChannel } from "./voice-notes.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -240,7 +240,7 @@ async function hydrate(
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       // Cache-only — a history read must never trigger a network fetch on
       // someone else's behalf, so a link nobody has posted before yet simply
       // shows no embed until whoever's create/edit request resolves one.
@@ -678,6 +678,17 @@ async function insertMessage(
       body: deckAction ? "deck" : storedBody,
     })
   ) {
+    return null;
+  }
+
+  // The flag again, at the claim. The mint checked it, but a note minted
+  // while it was on can sit unclaimed for up to an hour, and turning
+  // `voice_notes` off has to stop those too: it is the off switch, and a
+  // switch that leaves already-minted notes deliverable is not one. Refused
+  // the same way the shape rule is, with nothing claimed, so the note falls
+  // to the sweeper. Only asked when a note is in the send, so no other message
+  // pays for it.
+  if (requestedNotes > 0 && !(await voiceNotesEnabledForChannel(channelId))) {
     return null;
   }
 
@@ -1152,7 +1163,7 @@ async function hydrateOne(
 ): Promise<HydratedMessage> {
   const [reactions, attachments, embeds, threads, polls] = await Promise.all([
     listReactionsForMessages([message.id], viewerId),
-    listAttachmentsForMessages([message.id]),
+    listAttachmentsForMessages([message.id], viewerId),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
@@ -1277,6 +1288,7 @@ export async function unpinMessage(
  */
 export async function listPinnedMessages(
   channelId: string,
+  viewerId?: string,
 ): Promise<HydratedMessage[]> {
   const result = await getPool().query<DbMessage>(
     `${MESSAGE_SELECT}
@@ -1288,7 +1300,7 @@ export async function listPinnedMessages(
   const [reactionsByMessage, attachmentsByMessage, embedsByMessage, pollsByMessage] =
     await Promise.all([
       listReactionsForMessages(messageIds),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       listEmbedsForMessages(result.rows),
       listPollsForMessages(messageIds),
     ]);
