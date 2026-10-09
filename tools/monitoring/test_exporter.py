@@ -225,7 +225,11 @@ class RenderGrowthMetricsTests(unittest.TestCase):
                     "web": {"sent": 30, "failed": 2, "pruned": 1},
                     "apns": {"sent": 5, "failed": 0, "pruned": 0},
                     "fcm": {"sent": 7, "failed": 1, "pruned": 0},
-                }
+                },
+                "pushSkipped": {
+                    "message": {"live_socket": 14, "dnd": 1},
+                    "call": {"live_socket": 2, "no_subscription": 3},
+                },
             },
             streamQuality={
                 "samplesAccepted": 12,
@@ -284,6 +288,11 @@ class RenderGrowthMetricsTests(unittest.TestCase):
         body = exporter.render(self._payload())
         self.assertIn('pqp_api_push_delivery_total{platform="web",outcome="sent"} 30', body)
         self.assertIn('pqp_api_push_delivery_total{platform="fcm",outcome="failed"} 1', body)
+
+    def test_push_skipped(self):
+        body = exporter.render(self._payload())
+        self.assertIn('pqp_api_push_skipped_total{kind="message",reason="live_socket"} 14', body)
+        self.assertIn('pqp_api_push_skipped_total{kind="call",reason="no_subscription"} 3', body)
 
     def test_stream_quality_fps_bitrate_resolution_and_limitation_reason(self):
         body = exporter.render(self._payload())
@@ -703,6 +712,9 @@ class MergeAdminMetricsTests(unittest.TestCase):
                 "pushDelivery": {
                     "web": {"sent": 10, "failed": 1, "pruned": 0},
                 },
+                "pushSkipped": {
+                    "message": {"live_socket": 4},
+                },
             },
         }
 
@@ -722,6 +734,7 @@ class MergeAdminMetricsTests(unittest.TestCase):
         merged = exporter.merge_admin_metrics([a, b])
         self.assertEqual(merged["product"]["pushDelivery"]["web"]["sent"], 20)
         self.assertEqual(merged["product"]["pushDelivery"]["web"]["failed"], 2)
+        self.assertEqual(merged["product"]["pushSkipped"]["message"]["live_socket"], 8)
 
     def test_messages_and_activation_are_not_doubled(self):
         # Different replicas, same DB -- identical DB-derived numbers, which

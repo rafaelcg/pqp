@@ -145,7 +145,7 @@ dedup do the work.
 top-level block on the payload as one of:
 
 - **ADDITIVE** -- process-local in-memory counters, summed across replicas:
-  `calls`, `streamQuality`, `product.pushDelivery`, `dbTx`, `dbQueries`,
+  `calls`, `streamQuality`, `product.pushDelivery`, `product.pushSkipped`, `dbTx`, `dbQueries`,
   `readCache`, `presence`, and the in-memory counter fields of `voice.*` /
   `liveHls.*` (join/ring outcomes, push send outcomes, registry writes,
   roster frames, running egress/session counts, lifecycle totals).
