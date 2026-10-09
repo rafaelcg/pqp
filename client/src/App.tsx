@@ -384,6 +384,8 @@ import {
   takeInviteRef,
   takeJoinIntent,
   peekJoinIntent,
+  peekLiveChannelIntent,
+  takeLiveChannelIntent,
   takeWaitlistIntent,
   takeWaitlistIntentWithSource,
   WAITLIST_SOURCE_PARAM,
@@ -499,7 +501,8 @@ import {
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
-import { pickLivePartyChannel } from "@/lib/live-party-landing";
+import { pickArrivalPartyChannel } from "@/lib/live-party-landing";
+import { LivePreviewPanel } from "@/components/live-preview/live-preview-panel";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -753,6 +756,10 @@ function ClerkAppGate() {
   const invitePreview = useSignedOutInvitePreview(
     isLoaded && !isSignedIn ? location.pathname : null,
   );
+  // The code again, for the live preview's listing (`invitePreview` carries
+  // no code, on purpose: it is the public body).
+  const inviteRoute = parseAppRoute(location.pathname);
+  const inviteCode = inviteRoute?.kind === "invite" ? inviteRoute.code : null;
   const desktop = getDesktop();
   const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
   const [waiting, setWaiting] = useState(false);
@@ -1082,6 +1089,26 @@ function ClerkAppGate() {
                   <p className="mt-4 max-w-sm text-pretty text-paper-muted">
                     {t("signedOut.invite.body")}
                   </p>
+                  {/* "Ao vivo agora · Assistir" when the invite opens a
+                      community whose live preview is on (the server only
+                      marks it then) and a watch party is live. Its sign-up
+                      keeps this invite path as the redirect, so the join
+                      happens exactly as it would from the button below. */}
+                  {invitePreview.livePreview && inviteCode && !canDesktopAuth ? (
+                    <div className="mt-6 w-full">
+                      <LivePreviewPanel
+                        source={{ kind: "invite", code: inviteCode }}
+                        landing="/app"
+                        surface="invite"
+                        onSignUpIntent={() => noteSignupCta("gate", "")}
+                        renderSignUp={(button) => (
+                          <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
+                            {button}
+                          </SignUpButton>
+                        )}
+                      />
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -5721,6 +5748,12 @@ function MainAppContent({
        * fetched, so a join during a show opens the show.
        */
       liveParties?: readonly WatchParty[],
+      /**
+       * The channel a signed-out live preview was showing this person
+       * (`peekLiveChannelIntent`). Wins over the party order when it is in
+       * this server's list, and the stash is spent only then.
+       */
+      preferredChannelId: string | null = null,
     ) => {
       setChannelsLoading(true);
       beginChannelLoad(serverId);
@@ -5746,8 +5779,11 @@ function MainAppContent({
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
         const liveParty = liveParties
-          ? pickLivePartyChannel(liveParties, list)
+          ? pickArrivalPartyChannel(liveParties, list, preferredChannelId)
           : null;
+        if (liveParty !== null && liveParty === preferredChannelId) {
+          takeLiveChannelIntent(browserStorage());
+        }
         const land = liveParty
           ? { id: liveParty }
           : pickServerLandingTarget(
@@ -7456,7 +7492,13 @@ function MainAppContent({
       ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId, liveParties);
+      // A join that came out of the signed-out live preview lands back on the
+      // film the person was watching (`lib/live-preview.ts`).
+      await loadChannels(
+        serverId,
+        liveParties,
+        peekLiveChannelIntent(browserStorage()),
+      );
     },
     [loadChannels],
   );

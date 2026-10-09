@@ -1,8 +1,17 @@
 import { SignUpButton, SignedIn, SignedOut, useClerk } from "@clerk/clerk-react";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import {
+  cloneElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   monthStampToDate,
   publicCommunityDisplayUrl,
@@ -14,6 +23,10 @@ import { CommunityAboutText } from "@/components/communities/community-about-tex
 import { CommunityFeaturedMedia } from "@/components/communities/community-featured-media";
 import { HeroMosaic } from "@/components/communities/hero-mosaic";
 import { CommunityOfficialLinks } from "@/components/communities/community-official-links";
+import {
+  LivePreviewPanel,
+  type LivePreviewSignUpButton,
+} from "@/components/live-preview/live-preview-panel";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -22,6 +35,7 @@ import { fetchPublicCommunity } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { intentStorage, stashJoinIntent } from "@/lib/handle-intent";
+import { devSignedOutPreview } from "@/lib/live-preview";
 import {
   noteSignupCta,
   shouldResumeSignUp,
@@ -262,6 +276,39 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
     noteSignupCta(COMMUNITY_SURFACE, community.slug);
   };
   const appHref = `/app?join=${encodeURIComponent(community.slug)}`;
+  const navigate = useNavigate();
+
+  /**
+   * The signed-out live preview ("Ao vivo agora · Assistir"), only when the
+   * API marked this community (`livePreview`, the per-server flag) and only
+   * for somebody signed out. Its sign-up carries the same join intent as the
+   * button below, plus the channel they were watching. Under the dev auth
+   * bypass nobody is signed out, so `devSignedOutPreview` (dev builds only)
+   * draws it anyway and its button goes straight to `/app?join=`.
+   */
+  const devSignedOut = bypass && devSignedOutPreview();
+  const previewPanel = community.livePreview ? (
+    <LivePreviewPanel
+      source={{ kind: "community", slug: community.slug }}
+      landing={publicCommunityPath(community.slug)}
+      surface="community"
+      onSignUpIntent={rememberIntent}
+      renderSignUp={(button: LivePreviewSignUpButton) =>
+        devSignedOut ? (
+          cloneElement(button, {
+            onClick: (event: MouseEvent) => {
+              button.props.onClick?.(event);
+              navigate(appHref);
+            },
+          })
+        ) : (
+          <SignUpButton mode="modal" forceRedirectUrl={appHref}>
+            {button}
+          </SignUpButton>
+        )
+      }
+    />
+  ) : null;
 
   // Seeded from the slug rather than the name, for the reason the profile's is
   // seeded from the handle: a name can be edited at any moment, and the
@@ -354,6 +401,15 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
               )}
             </div>
           </div>
+
+          {previewPanel && (devSignedOut || !bypass) && (
+            <div
+              className={cn("mt-8", !reduced && "animate-rise")}
+              style={stagger(2)}
+            >
+              {devSignedOut ? previewPanel : <SignedOut>{previewPanel}</SignedOut>}
+            </div>
+          )}
 
           {/* About and links fill the poster column, the same width the
               featured 16:9 below them takes, and sit closer to each other
