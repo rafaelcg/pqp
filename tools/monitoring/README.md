@@ -286,6 +286,11 @@ counter is a **rolling-window gauge** (24 h or 7 d, or "right now"): it falls
 as old rows age out, so `rate()` and `increase()` are wrong on it. Use them
 only on `pqp_api_voice_notes_refusal_total`.
 
+The refusal counter is summed across replicas like `calls`, so it shares that
+caveat: if a replica's scrape is missing for a run (see
+`pqp_api_metrics_replicas_scraped`), the sum dips and `increase()` reads it as a
+reset. It is a diagnostic panel, not an alert input.
+
 **The failure-rate alert is on a 24 h window, on purpose and with a cost.**
 Voice-note volume is far too low for a 1 h window to hold five settled jobs, so
 anything shorter would either never reach the volume floor or flap on one bad

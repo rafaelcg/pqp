@@ -736,11 +736,11 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=\"ok\"}) / clamp_min(sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=~\"ok|failed\"}), 1)",
+          "expr": "sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=\"ok\"}) / sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=~\"ok|failed\"})",
           "legendFormat": "{{kind}}"
         }
       ],
-      "description": "ok / (ok + failed) over the trailing 24h, skipped left out. Meaningless at tiny volume: one failure in three jobs reads 67%. The alert needs at least 5 settled jobs."
+      "description": "ok / (ok + failed) over the trailing 24h, skipped left out. Meaningless at tiny volume: one failure in three jobs reads 67%. Division by zero gives no data, so a kind with no settled jobs shows nothing instead of 0%. The alert needs at least 5 settled jobs."
     },
     {
       "id": 19,
