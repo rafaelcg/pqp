@@ -1,4 +1,5 @@
 import {
+  createContext,
   useCallback,
   useEffect,
   useMemo,
@@ -232,6 +233,13 @@ function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
   }, [paneRef]);
   return floats;
 }
+
+/**
+ * Whether the chat under the stage carries the music bar right now. A phone
+ * held sideways gives the bar room from the picture, and the stage then
+ * drops its people strip so the picture is not the only thing that shrinks.
+ */
+export const ChatMusicContext = createContext(false);
 
 const NO_CHAT_NEED = { need: 0, music: 0 };
 
@@ -749,7 +757,9 @@ export function CallSplit({
               : { height: stagePx }
         }
       >
-        {stage}
+        <ChatMusicContext.Provider value={musicNeed > 0}>
+          {stage}
+        </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
             Twitch put theirs, instead of a full-height strip at the edge. */}
         {collapsed === "chat" && (

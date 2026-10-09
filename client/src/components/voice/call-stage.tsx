@@ -113,6 +113,7 @@ import {
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
+import { ChatMusicContext } from "@/components/layout/call-split";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -1586,8 +1587,15 @@ function ActiveCall({
   // The people strip is on the stage. With the bar floating over the stage
   // (fullscreen, a phone held sideways, the chat hidden) the strip has to
   // stop above the bar's band, or it covers mute and hang-up.
+  // Sideways with the chat shown and a track playing, the picture gives the
+  // chat's music bar its height (`stageHeightClass`). The strip and the band
+  // it keeps for the bar would take the rest, so the strip steps aside and
+  // the bar floats on the picture.
+  const musicGivesWay = smallLandscape && barFloats && !immersive.immersive;
+  const chatMusic = useContext(ChatMusicContext);
   const stripDrawn =
     showStrip &&
+    !(musicGivesWay && chatMusic) &&
     !soloPerson &&
     !soloTile &&
     !soloMusic &&
@@ -2214,8 +2222,7 @@ function ActiveCall({
                 musicPictureOnly,
                 // Sideways with the chat beside the floating bar, not under
                 // the takeover, where the chat is not on screen at all.
-                musicGivesWay:
-                  smallLandscape && barFloats && !immersive.immersive,
+                musicGivesWay,
               }),
       )}
       onPointerMove={(event) => {
