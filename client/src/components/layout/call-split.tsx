@@ -6,6 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -232,6 +233,8 @@ function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
   return floats;
 }
 
+const NO_CHAT_NEED = { need: 0, music: 0 };
+
 /**
  * The least height the chat pane can be given without cutting its composer
  * off: its header and the composer at its current size. No transcript is
@@ -242,16 +245,19 @@ function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
  * the stage it carries the call's whole row of controls, and opening the
  * music queue puts a panel above it. A fixed floor sized for an empty
  * composer let a tall stage push both under the bottom of the window.
+ *
+ * `music` is the part of that which is the music bar in the composer, which
+ * a picture with the controls floating on it still makes room for.
  */
 function useChatPaneNeed(
   ref: RefObject<HTMLDivElement | null>,
   enabled: boolean,
-): number {
-  const [need, setNeed] = useState(0);
+): { need: number; music: number } {
+  const [need, setNeed] = useState(NO_CHAT_NEED);
   useEffect(() => {
     const pane = ref.current;
     if (!enabled || !pane) {
-      setNeed(0);
+      setNeed(NO_CHAT_NEED);
       return;
     }
     const watched = new Set<Element>();
@@ -259,7 +265,8 @@ function useChatPaneNeed(
     const read = () => {
       const header = pane.querySelector<HTMLElement>('[data-testid="call-split-chat-header"]');
       const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
-      for (const element of [header, composer]) {
+      const music = composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
+      for (const element of [header, composer, music]) {
         if (element && resize && !watched.has(element)) {
           resize.observe(element);
           watched.add(element);
@@ -268,7 +275,12 @@ function useChatPaneNeed(
       const next = composer
         ? Math.ceil((header?.offsetHeight ?? 0) + composer.offsetHeight)
         : 0;
-      setNeed((previous) => (previous === next ? previous : next));
+      const nextMusic = composer ? Math.ceil(music?.offsetHeight ?? 0) : 0;
+      setNeed((previous) =>
+        previous.need === next && previous.music === nextMusic
+          ? previous
+          : { need: next, music: nextMusic },
+      );
     };
     if (typeof ResizeObserver !== "undefined") {
       resize = new ResizeObserver(read);
@@ -351,7 +363,10 @@ export function CallSplit({
       : preference.side
     : preference.stacked;
   const container = sideBySide ? width : height;
-  const chatNeed = useChatPaneNeed(chatPaneRef, !sideBySide);
+  const { need: chatNeed, music: musicNeed } = useChatPaneNeed(
+    chatPaneRef,
+    !sideBySide,
+  );
   // Stacked, the chat's floor is whatever its composer needs right now, so a
   // panel opening above the composer takes its room from the stage.
   const bounds = useMemo(() => {
@@ -416,7 +431,8 @@ export function CallSplit({
   // Not while the call's controls float on the stage (a phone held
   // sideways with a picture, takeover or not): the picture keeps its height
   // and the chat takes what is left. Squeezing it for the composer shrank
-  // it to nothing.
+  // it to nothing. The music bar is the exception, and the stage's own
+  // height rule takes care of it (`--chat-music-h` below).
   const barFloats = useStageBarFloats(stagePaneRef);
   const canSqueeze =
     !sizedByChoice &&
@@ -725,7 +741,9 @@ export function CallSplit({
         )}
         style={
           stagePx === null
-            ? undefined
+            ? musicNeed > 0
+              ? ({ "--chat-music-h": `${musicNeed}px` } as CSSProperties)
+              : undefined
             : sideBySide
               ? { width: stagePx }
               : { height: stagePx }

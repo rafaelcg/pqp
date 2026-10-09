@@ -163,6 +163,31 @@ describe("stageHeightClass", () => {
     expect(rule).toContain("h-[68svh]");
     expect(rule).not.toContain("calc(");
   });
+
+  /*
+   * A phone held sideways keeps its picture and gives the chat what is
+   * left, but a playing track's bar would push the message box off the
+   * screen. The picture gives up the bar's height, and never more than half.
+   */
+  it("gives way to the chat's music bar sideways, down to half", () => {
+    const rule = stageHeightClass({
+      anyVideo: true,
+      musicPictureOnly: false,
+      musicGivesWay: true,
+    });
+    expect(rule).toContain("var(--chat-music-h,0px)");
+    expect(rule).toContain("max(68svh,280px)/2");
+  });
+
+  it("never gives way for music when the stage shows no picture", () => {
+    expect(
+      stageHeightClass({
+        anyVideo: true,
+        musicPictureOnly: true,
+        musicGivesWay: true,
+      }),
+    ).toContain("38svh");
+  });
 });
 
 describe("camera solo ids", () => {

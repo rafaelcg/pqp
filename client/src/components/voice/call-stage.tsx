@@ -2209,7 +2209,14 @@ function ActiveCall({
               // floor, because the floor is enforced in `clampSplit` against
               // the live pane: a second one here would fight it.
               "h-full min-h-0"
-            : stageHeightClass({ anyVideo, musicPictureOnly }),
+            : stageHeightClass({
+                anyVideo,
+                musicPictureOnly,
+                // Sideways with the chat beside the floating bar, not under
+                // the takeover, where the chat is not on screen at all.
+                musicGivesWay:
+                  smallLandscape && barFloats && !immersive.immersive,
+              }),
       )}
       onPointerMove={(event) => {
         // Touch "moves" are scrolls and drags, answered on pointer up.
