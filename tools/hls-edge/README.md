@@ -895,7 +895,9 @@ secret and no deploy. Two things keep the window meaning what it says:
   and the master playlist's `allowPartyPass: false`), so there is no `?pp=` for
   this Worker to fall back to once the `?t=` is gone.
 - The conventional session URL is still forwarded to the API, which re-checks
-  the flag and the channel on every master request.
+  the flag and the channel on every master request. Rendition requests carrying
+  a preview token get no preview-only refusal at the origin, so a coalesced
+  fetch that happens to carry one can never hand a member a 404 or a 429.
 
 A revocation does not reach a preview token through `HLS_REVOKED_USERS` (it
 names no account); its own expiry, at most `LIVE_PREVIEW_SECONDS`, is the bound.

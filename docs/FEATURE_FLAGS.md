@@ -331,8 +331,12 @@ is asked to sign up. Design, limits and the local test recipe:
 - **Also needs `COMMUNITIES_ENABLED`.** The flag never widens past communities.
 - **The numbers stay in the environment:** `LIVE_PREVIEW_SECONDS` (default 300,
   clamped to 30 to 3600) and `LIVE_PREVIEW_RESET_HOURS` (default 24).
-- **Switching it off cuts every running preview** on the next playlist fetch
-  (about two seconds), not at the end of each window.
+- **Switching it off stops new previews at once, and running ones within the
+  window.** The start route and the master playlist (fetched once per player)
+  refuse straight away. A rendition poll is not re-checked, because the edge
+  Worker shares one origin fetch per rung between preview viewers and members,
+  so a preview-only refusal there would reach members. The bound for a player
+  already running is its token's expiry: at most `LIVE_PREVIEW_SECONDS`.
 
 Turn it on for one community: `PUT /api/admin/flag-overrides
 { key: "live_preview", serverId, enabled: true }`, or controles → interruptores.

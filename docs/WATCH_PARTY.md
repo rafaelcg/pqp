@@ -3590,8 +3590,16 @@ The preview token shares the viewer token's key so the edge Worker
 (`tools/hls-edge/`) plays it with no new secret and no Worker deploy, and
 enforces its expiry on every request it answers. On this origin it opens one
 door: the playlist proxy's header-less capability door, which asks for it by
-name and then re-checks the flag, the community and @everyone's VIEW (facts
-cached 15 s per channel, the flag read live). Every other reader of a viewer
+name. On the session URL (the master playlist, fetched once per player) it then
+re-checks the flag, the community and @everyone's VIEW (facts cached 15 s per
+channel, the flag read live) and takes an address bucket. On a rendition it
+does not: the edge coalesces every viewer's rendition poll into one origin
+fetch carrying whichever token missed the cache, and shares the answer, so a
+preview-only refusal there would reach the members polling the same rung. A
+rendition names nobody, so a valid, unexpired preview token is enough for it.
+**So switching the flag off, or a channel going private, stops new previews and
+new players at once, and running players within the window**
+(`LIVE_PREVIEW_SECONDS`), not within a playlist poll. Every other reader of a viewer
 token (`verifyHlsViewerToken`, `decodeHlsViewerToken`, the replay proxy, the
 downloads, the telemetry routes) refuses purpose `preview` unless it opts in.
 A preview viewer also gets:
