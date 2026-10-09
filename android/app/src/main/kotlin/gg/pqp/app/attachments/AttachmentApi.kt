@@ -24,6 +24,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 data class AttachmentConfig(
     val enabled: Boolean = false,
     val maxBytes: Long = DEFAULT_MAX_ATTACHMENT_BYTES,
+    /**
+     * The `voice_notes` runtime flag for the `?serverId=` asked about. Dark by
+     * default and absent from a server that predates the feature, both of
+     * which read as "no microphone button".
+     */
+    val voiceNotes: Boolean = false,
 )
 
 /** Body of `POST /api/channels/:channelId/attachments`. */
@@ -34,6 +40,16 @@ data class CreateAttachmentRequest(
     val byteSize: Long,
     val width: Int? = null,
     val height: Int? = null,
+    /** Present only for a voice note. Left off the wire when null. */
+    val voice: CreateVoiceNote? = null,
+)
+
+/** The `voice` block of a mint request (`createVoiceNoteSchema`). */
+@Serializable
+data class CreateVoiceNote(
+    val durationMs: Long,
+    /** 64 peaks, base64. */
+    val waveform: String,
 )
 
 @Serializable
@@ -56,8 +72,41 @@ data class CreateAttachmentResponse(
  */
 class AttachmentApi(private val api: ApiClient) {
 
-    suspend fun config(): AttachmentConfig =
-        api.decode(api.execute(Request.Builder().url(api.url("/api/attachments/config")).get()))
+    /**
+     * [serverId] is what the `voice_notes` flag is read for: a server channel
+     * passes its server, a conversation passes nothing and gets the global
+     * value. Asking with the wrong id is not a way around the flag, because
+     * the mint checks it again for the channel's own server.
+     */
+    suspend fun config(serverId: String? = null): AttachmentConfig =
+        api.decode(
+            api.execute(
+                Request.Builder()
+                    .url(
+                        api.url(
+                            "/api/attachments/config",
+                            if (serverId != null) mapOf("serverId" to serverId) else emptyMap(),
+                        ),
+                    )
+                    .get(),
+            ),
+        )
+
+    /**
+     * Tell the server this person has played a voice note.
+     *
+     * Idempotent on the server, so a retry after a flaky answer is harmless,
+     * and the answer is a 204 with nothing to decode. A refusal (the caller
+     * cannot see the message) throws like any other call; the player treats
+     * that as "not recorded" and nothing else.
+     */
+    suspend fun listened(attachmentId: String) {
+        api.execute(
+            Request.Builder()
+                .url(api.url("/api/attachments/$attachmentId/listened"))
+                .post("{}".toRequestBody(ApiClient.JSON_MEDIA_TYPE)),
+        ).close()
+    }
 
     suspend fun mint(
         channelId: String,

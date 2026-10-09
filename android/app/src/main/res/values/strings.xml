@@ -606,4 +606,40 @@
         <item quantity="one">%1$d person inside</item>
         <item quantity="other">%1$d people inside</item>
     </plurals>
+    <!-- Voice notes -->
+    <string name="voice_note_record">Hold to record a voice message</string>
+    <string name="voice_note_hint">Hold the microphone to record. Let go to send.</string>
+    <string name="voice_note_slide_cancel">Slide to cancel</string>
+    <string name="voice_note_lock_hint">Slide up to lock</string>
+    <string name="voice_note_locked">Locked. You can lift your finger.</string>
+    <string name="voice_note_paused">Paused</string>
+    <string name="voice_note_discard">Discard voice message</string>
+    <string name="voice_note_pause">Pause recording</string>
+    <string name="voice_note_resume">Resume recording</string>
+    <string name="voice_note_send">Send voice message</string>
+    <string name="voice_note_discarded">Voice message discarded (%1$s)</string>
+    <string name="voice_note_undo">Undo</string>
+    <string name="voice_note_seconds_left">%1$ds left</string>
+    <string name="voice_note_limit">Five minute limit reached. Sent what you had.</string>
+    <string name="voice_note_in_call">You can’t record a voice message during a call.</string>
+    <string name="voice_note_play_in_call">You can’t play voice messages during a call.</string>
+    <string name="voice_note_mic_busy">Another app is using the microphone.</string>
+    <string name="voice_note_play_failed">That voice message wouldn’t play.</string>
+    <string name="voice_note_permission_title">Microphone access</string>
+    <string name="voice_note_permission_body">pqp needs the microphone to record your voice message. It only listens while you hold the button or have a recording locked.</string>
+    <string name="voice_note_permission_allow">Continue</string>
+    <string name="voice_note_permission_cancel">Not now</string>
+    <string name="voice_note_permission_denied">Microphone access is off. Turn it on in Settings to record voice messages.</string>
+    <string name="voice_note_sending">Sending voice message %1$s…</string>
+    <string name="voice_note_failed">Voice message did not upload</string>
+    <string name="voice_note_ready">Voice message %1$s</string>
+    <string name="voice_note_retry">Try the voice message again</string>
+    <string name="voice_note_remove">Remove voice message</string>
+    <string name="voice_note_card">Voice message from %1$s, %2$s</string>
+    <string name="voice_note_play">Play voice message</string>
+    <string name="voice_note_pause_playback">Pause voice message</string>
+    <string name="voice_note_speed">Playback speed %1$s</string>
+    <string name="voice_note_unheard">Not heard yet</string>
+    <string name="voice_note_heard">Heard</string>
+    <string name="voice_note_heard_at">Heard at %1$s</string>
 </resources>

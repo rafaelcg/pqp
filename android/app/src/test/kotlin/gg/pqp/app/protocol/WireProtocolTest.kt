@@ -46,7 +46,26 @@ class WireProtocolTest {
      * that it never cries wolf.
      */
     private val declared: Set<String> by lazy {
-        RepoSources.sharedFrameTypeLiterals() + handshakeFrames
+        RepoSources.sharedFrameTypeLiterals() + handshakeFrames + announcedAheadOfShared
+    }
+
+    /**
+     * Frames this build handles that `packages/shared` does not declare **yet**.
+     *
+     * Empty. When a client ships a frame ahead of the server PR that adds its
+     * schema, name it here; the next test fails the day shared declares it, so
+     * the entry is deleted rather than left to excuse a typo.
+     */
+    private val announcedAheadOfShared = emptySet<String>()
+
+    @Test
+    fun `a frame announced ahead of shared is removed from the list once shared declares it`() {
+        assertEquals(
+            "These frames are now declared in packages/shared/src. Delete them from " +
+                "announcedAheadOfShared so the handled-frames check reads them from the schema.",
+            emptySet<String>(),
+            announcedAheadOfShared.intersect(RepoSources.sharedFrameTypeLiterals()),
+        )
     }
 
     @Test
@@ -290,13 +309,6 @@ class WireProtocolTest {
         // send in the lost server is already refused by the API, so nothing
         // leaks; the live drop and its one-line reason are a follow-up.
         "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
-        // Somebody played a voice note: the listener's other devices clear the
-        // dot, and the author of a small conversation's note sees "ouviu".
-        // Voice notes ship dark behind `voice_notes` and the phone has no
-        // recorder or note card yet (a note shows as a plain audio file), so
-        // there is no dot or receipt for the frame to update. The same state
-        // is on every history read, so nothing goes stale.
-        "voice-note-listened" to "no voice note card on the phone yet; listen state is on every history read",
     )
 
     /**
