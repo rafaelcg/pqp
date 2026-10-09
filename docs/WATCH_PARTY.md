@@ -3526,21 +3526,57 @@ runtime flag `live_preview` (`LIVE_PREVIEW`), default off.
 ### What the visitor sees
 
 1. On `pqp.gg/c/<slug>`, or on the signed-out invite gate for a community
-   invite, a strip: "Ao vivo agora · #canal" and an "Assistir" button. It shows
-   only while the flag is on for that community and a watch party is live.
-2. "Assistir" asks for a date of birth with the account gate's own fields,
-   wording and threshold (`MINIMUM_AGE_YEARS`). The check runs on the device
-   with the shared `isAtLeastYearsOld`. The date is never sent and never
-   stored; only the verdict is remembered (for the tab when adult, for a day on
-   the device when not).
-3. Under the threshold: no media request at all, and a line that watching on
-   pqp needs an account, which is also 18+.
-4. Adult: the film plays in the page, muted until tapped, with a countdown.
-   A "Criar conta" button is always under the picture.
-5. When the window ends, "Sua prévia acabou" and the sign-up. After sign-up the
-   account joins the community (the `?join=<slug>` intent, or the invite path)
-   and opens the channel it was watching (`stashLiveChannelIntent`, read by
-   `refreshAfterJoin` through `pickArrivalPartyChannel`).
+   invite, a big live card: the community's banner (never the stream), the
+   live badge, the account count, a play button, "Acontecendo agora em
+   #canal", the party's title, "Assistir agora" and "Prévia de N minutos, sem
+   criar conta". On the community page it takes the banner's place at the top.
+   It shows only while the flag is on for that community and a watch party is
+   live.
+2. "Assistir agora" opens the live page over the site and asks for a date of
+   birth in a sheet, with the account gate's own fields and threshold
+   (`MINIMUM_AGE_YEARS`). The check runs on the device with the shared
+   `isAtLeastYearsOld`. The date is never sent and never stored; only the
+   verdict is remembered (for the tab when adult, for a day on the device
+   when not).
+3. Under the threshold: no media request at all, a line that watching on pqp
+   needs an account, which is also 18+, and no sign-up anywhere on the page.
+4. Adult: the live page. The player (muted until tapped, full screen, a
+   countdown bar that turns to the warning colour in the last 30 s), the
+   party's title, the community with "Entrar na comunidade" and Share, an
+   about card, the next sessions with "Me avisa", and a locked chat. On a
+   phone the last three are tabs, and a sticky bar holds the countdown and
+   "Criar conta e continuar assistindo".
+5. When the window ends, "Sua prévia acabou" in a sheet with Clerk's own
+   sign-up form inline. After sign-up the account joins the community (the
+   `?join=<slug>` intent, or the invite path) and opens the channel it was
+   watching (`stashLiveChannelIntent`, read by `refreshAfterJoin` through
+   `pickArrivalPartyChannel`).
+
+Every way to an account is pqp's Clerk sign-up, never a form of ours: the
+inline `<SignUp>` in the end sheet and in the chat card, and the modal the
+home page opens for every other button. All of them carry the same redirect
+for sign-up and sign-in. The stashes run before the modal opens, and on the
+first touch of the inline form. An inline sign-up that leaves the page (a
+provider, an email link) comes back on `#/sso-callback` or another `#/...`
+step, and `ClerkSignUpReturn` reopens the form in a sheet to finish it.
+
+### What the listing tells the page
+
+`GET /api/public/live-preview/communities/:slug` (and `.../invites/:code`)
+answers, only while the flag is on for that community:
+
+- per live channel, the party's **title** (`channel_sessions.title`, null
+  without a party row) and the **account count** the app's live card shows:
+  accounts on the playlist that hold no seat, plus accounts holding one. A
+  count, never who. Preview visitors are never in it. Bounded at 500 ms, and
+  absent when it could not be read in time;
+- **upcoming**: at most three scheduled sessions, soonest first, only on
+  public watch party channels @everyone can VIEW, with the title, the start
+  and the channel name. No host, creator, description, cover or reminder
+  count.
+
+The community's tagline, category and member count come from
+`GET /api/public/communities/:slug`, which already publishes them.
 
 Umami events: `live_preview_view`, `live_preview_age_declined`,
 `live_preview_play`, `live_preview_ended`, `live_preview_signup`. The account is
@@ -3607,8 +3643,12 @@ A preview viewer also gets:
 - **No party pass.** `stampPreviewStream` never adds `?pp=`, and the master
   playlist leaves it off for a preview token. The edge falls back to `?pp=`
   once `?t=` expires, so a pass would turn five minutes into six hours.
-- **No camera, no presenter id, no viewer count, no seat, no socket, no chat.**
-  The stream is `{ hlsUrl, startedAt, mode, partTargetMs }` and nothing else.
+- **No camera, no presenter id, no seat, no socket, no chat.** The stream is
+  `{ hlsUrl, startedAt, mode, partTargetMs }` and nothing else. The page never
+  draws the presenter's camera. Known limit: the token is bound to the
+  channel and the session, not to a rung, so a visitor who builds the camera
+  rendition's URL (`.../cam360p30`) by hand can fetch it on the origin. It is
+  not refused there on purpose, for the edge coalescing reason above.
 - **A valid Bearer always wins** (pitfall 16): a signed-in page that still holds
   a preview token is served on its own account.
 
