@@ -25,6 +25,7 @@ import {
   ClerkLivePreviewAuth,
   ClerkSignUpReturn,
   devLivePreviewAuth,
+  hasClerkReturnHash,
   type LivePreviewAuth,
 } from "@/components/live-preview/live-preview-auth";
 import {
@@ -64,6 +65,10 @@ export function ResumeSignUp({ slug, appHref }: { slug: string; appHref: string 
   useEffect(() => {
     if (tried.current || !clerk.loaded) return;
     tried.current = true;
+    // An inline sign-up from the live preview coming back on its own `#/...`
+    // step is finished by `ClerkSignUpReturn`; a modal on top would be a
+    // second form for the same sign-up.
+    if (hasClerkReturnHash()) return;
     const signUp = clerk.client?.signUp;
     if (
       !shouldResumeSignUp({

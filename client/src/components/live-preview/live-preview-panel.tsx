@@ -12,6 +12,7 @@ import { BetaTag } from "@/components/ui/beta-tag";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useMediaQuery } from "@/components/ui/use-media-query";
 import {
   BirthDateFields,
   EMPTY_DATE_PARTS,
@@ -70,6 +71,9 @@ import {
 import { LivePreviewPlayer } from "./live-preview-player";
 
 export type { LivePreviewCommunity } from "./live-preview-parts";
+
+/** Tailwind's `lg`: the chat becomes a column beside the player from here up. */
+const LG_UP_QUERY = "(min-width: 1024px)";
 
 /** How often the listing is asked again: what is live, the titles, the count. */
 const LISTING_REFRESH_MS = 30_000;
@@ -131,6 +135,10 @@ export function LivePreviewPanel({
   const [endedSheet, setEndedSheet] = useState(true);
   const [tab, setTab] = useState<Tab>("chat");
   const [now, setNow] = useState(() => Date.now());
+  // The chat column is CSS-hidden under `lg`, but hidden still mounts, and a
+  // second Clerk form (its own captcha and hash router) has no business
+  // running invisibly on a phone. So its sign-up is built only from `lg` up.
+  const wide = useMediaQuery(LG_UP_QUERY);
   const viewTracked = useRef(false);
   const endTracked = useRef(false);
   const restarts = useRef(0);
@@ -547,7 +555,9 @@ export function LivePreviewPanel({
             // One Clerk form on screen at a time: while the end sheet is
             // open it has the form, and the column only says why.
             signUp={
-              offers && !(phase.kind === "ended" && endedSheet) ? signUpBlock("chat") : undefined
+              wide && offers && !(phase.kind === "ended" && endedSheet)
+                ? signUpBlock("chat")
+                : undefined
             }
           />
         </aside>

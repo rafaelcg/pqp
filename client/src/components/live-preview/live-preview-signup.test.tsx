@@ -2,7 +2,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { devLivePreviewAuth, type LivePreviewAuth } from "./live-preview-auth";
+import {
+  devLivePreviewAuth,
+  hasClerkReturnHash,
+  type LivePreviewAuth,
+} from "./live-preview-auth";
 import { SignUpBlock } from "./live-preview-parts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -80,5 +84,17 @@ describe("SignUpBlock", () => {
     expect(buttons).toHaveLength(2);
     act(() => buttons[0]!.click());
     expect(onSignUp).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an inline sign-up coming back to the page", () => {
+  it("is recognised on Clerk's own return steps and nothing else", () => {
+    expect(hasClerkReturnHash("#/sso-callback")).toBe(true);
+    expect(hasClerkReturnHash("#/sso-callback?__clerk_status=x")).toBe(true);
+    expect(hasClerkReturnHash("#/continue")).toBe(true);
+    expect(hasClerkReturnHash("#/verify-email-address")).toBe(true);
+    expect(hasClerkReturnHash("")).toBe(false);
+    expect(hasClerkReturnHash("#about")).toBe(false);
+    expect(hasClerkReturnHash("#/factor-one")).toBe(false);
   });
 });

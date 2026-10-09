@@ -39,11 +39,17 @@ export interface LivePreviewAuth {
 const INLINE_APPEARANCE = {
   // Style objects rather than utility classes: Clerk's own styles outrank a
   // class of the same specificity, and `display: none` has to win.
+  //
+  // Clerk draws a field's and a provider button's border as a box shadow
+  // OUTSIDE the element. Its card box clips its contents (`overflow: hidden`),
+  // so with the card's padding taken away those edges were cut off. The box
+  // stops clipping and the card keeps a few pixels of room on every side.
   elements: {
     rootBox: { width: "100%" },
     cardBox: {
       width: "100%",
       maxWidth: "none",
+      overflow: "visible",
       border: "none",
       borderRadius: 0,
       boxShadow: "none",
@@ -51,13 +57,21 @@ const INLINE_APPEARANCE = {
     },
     card: {
       width: "100%",
-      padding: 0,
+      overflow: "visible",
+      padding: "4px",
       border: "none",
       boxShadow: "none",
       background: "transparent",
     },
+    // A finger, not a pointer: every control at least 44 px tall here, the
+    // rule the rest of the preview keeps. The provider buttons share one
+    // height so Apple, Google and Twitch line up side by side.
+    socialButtonsBlockButton: { minHeight: "44px" },
+    socialButtonsIconButton: { minHeight: "44px" },
+    formFieldInput: { minHeight: "44px" },
+    formButtonPrimary: { minHeight: "44px" },
     header: { display: "none" },
-    footer: { background: "transparent" },
+    footer: { background: "transparent", overflow: "visible" },
     footerAction: { display: "none" },
   },
 };
@@ -134,6 +148,17 @@ export function ClerkLivePreviewAuth({
 const CLERK_RETURN_HASH = /^#\/(sso-callback|continue|verify)/;
 
 /**
+ * Whether this page load is an inline sign-up coming back. The community
+ * page's `ResumeSignUp` (which reopens the MODAL on its code step after a
+ * phone reload) checks this and stands aside, so the two never both open.
+ */
+export function hasClerkReturnHash(
+  hash: string = typeof window === "undefined" ? "" : window.location.hash,
+): boolean {
+  return CLERK_RETURN_HASH.test(hash);
+}
+
+/**
  * Finishes an inline sign-up that left the page: a provider (Google, Apple,
  * Twitch) sends the browser back here on `#/sso-callback`, and a missing
  * field or an email link can come back on `#/continue` or `#/verify...`. The
@@ -145,9 +170,7 @@ const CLERK_RETURN_HASH = /^#\/(sso-callback|continue|verify)/;
  */
 export function ClerkSignUpReturn({ redirectUrl }: { redirectUrl: string }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(
-    () => typeof window !== "undefined" && CLERK_RETURN_HASH.test(window.location.hash),
-  );
+  const [open, setOpen] = useState(() => hasClerkReturnHash());
   if (!open) {
     return null;
   }
