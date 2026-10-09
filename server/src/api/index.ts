@@ -11424,6 +11424,10 @@ router.get("/api/push/config", async ({ user }) => {
     enabled,
     publicKey: enabled ? getVapidPublicKey() : null,
     apns: isApnsEnabled(),
+    // Runtime flag, global, off by default: the desktop app's banners start on,
+    // DMs and servers get their own default level, and the browser offers a
+    // one-time card. Client behaviour only; read per request.
+    desktopNotifyDefaultOn: isEnabled("desktop_notify_default_on"),
     // The Android app's gate. Absent until now, it defaulted false on the
     // client (see `gg.pqp.app.push.PushApi`), so an already-installed build
     // starts offering notifications the moment this answers true, no update

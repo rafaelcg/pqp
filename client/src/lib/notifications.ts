@@ -17,11 +17,15 @@ import type {
   NotificationPreferences,
 } from "@pqp/shared";
 import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
-import { getDesktop } from "@/lib/desktop";
+import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { shouldShowArrivalToast } from "@/lib/dm-toast-queue";
+import {
+  isDesktopNotifyDefaultOnEnabled,
+  onNotifyDefaultsChange,
+} from "@/lib/notify-defaults-config";
 import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { playActivitySound, playCue } from "@/lib/sounds";
+import { getSoundState, playActivitySound, playCue } from "@/lib/sounds";
 
 export type { NotificationLevel };
 
@@ -46,8 +50,26 @@ export interface NotificationState {
    * only be asked for again from a real click.
    */
   desktop: boolean;
-  /** Applies wherever neither the channel nor its server says otherwise. */
+  /**
+   * The person has touched the banner switch at least once. `desktop` alone
+   * cannot say: every save writes every field, so `desktop: false` is mostly
+   * "never asked". With `desktop_notify_default_on` the desktop app reads the
+   * switch as ON until this is true (`desktopBannersEnabled`).
+   */
+  desktopChosen: boolean;
+  /**
+   * Applies wherever neither the channel nor its server says otherwise. Kept
+   * for every client that predates the split below, and it keeps meaning both
+   * until a person sets either of the two that follow.
+   */
   default: NotificationLevel;
+  /** DMs and group conversations. Null: follow `default`. */
+  dmDefault: NotificationLevel | null;
+  /**
+   * Server channels. Null: follow `default` when it was a choice, else
+   * "mentions" (with `desktop_notify_default_on`; see `resolveNotificationLevel`).
+   */
+  serverDefault: NotificationLevel | null;
   servers: Record<string, NotificationLevel>;
   channels: Record<string, NotificationLevel>;
   /** The MSN-style arrival card for a conversation message. Default true. */
@@ -75,7 +97,10 @@ export type NotificationPermissionState =
 
 const DEFAULT_STATE: NotificationState = {
   desktop: false,
+  desktopChosen: false,
   default: "all",
+  dmDefault: null,
+  serverDefault: null,
   servers: {},
   channels: {},
   arrivalToast: true,
@@ -119,7 +144,10 @@ function fromPreferences(
 ): NotificationState {
   return {
     desktop: preferences.desktop ?? base.desktop,
+    desktopChosen: preferences.desktopChosen ?? base.desktopChosen,
     default: preferences.default ?? base.default,
+    dmDefault: preferences.dmDefault ?? base.dmDefault,
+    serverDefault: preferences.serverDefault ?? base.serverDefault,
     servers: readLevelMap(preferences.servers),
     channels: readLevelMap(preferences.channels),
     arrivalToast: preferences.arrivalToast ?? base.arrivalToast,
@@ -138,7 +166,12 @@ function fromPreferences(
 function toPreferences(current: NotificationState): NotificationPreferences {
   return {
     desktop: current.desktop,
+    desktopChosen: current.desktopChosen,
     default: current.default,
+    // Only a choice is written: an absent key is how the server (and every
+    // other device) tells "never set" from "set to all".
+    ...(current.dmDefault ? { dmDefault: current.dmDefault } : {}),
+    ...(current.serverDefault ? { serverDefault: current.serverDefault } : {}),
     servers: current.servers,
     channels: current.channels,
     arrivalToast: current.arrivalToast,
@@ -160,7 +193,10 @@ function readStored(): NotificationState {
     const record = parsed as Record<string, unknown>;
     return {
       desktop: record.desktop === true,
+      desktopChosen: record.desktopChosen === true,
       default: isLevel(record.default) ? record.default : DEFAULT_STATE.default,
+      dmDefault: isLevel(record.dmDefault) ? record.dmDefault : null,
+      serverDefault: isLevel(record.serverDefault) ? record.serverDefault : null,
       servers: readLevelMap(record.servers),
       channels: readLevelMap(record.channels),
       arrivalToast: record.arrivalToast !== false,
@@ -209,6 +245,17 @@ function commit(next: NotificationState, { sync }: { sync: boolean }): void {
   }
 }
 
+// A flip of `desktop_notify_default_on` changes what every level resolves to
+// without changing a byte of the stored state, so the readers (rail, channel
+// menus, settings) would keep drawing the old answer. A new identity and a
+// notification of the listeners is what makes them read it again.
+onNotifyDefaultsChange(() => {
+  state = { ...state };
+  for (const listener of listeners) {
+    listener();
+  }
+});
+
 /** Set or, with `null`, fall back to whatever this server would have inherited. */
 function withLevel(
   map: Record<string, NotificationLevel>,
@@ -228,6 +275,16 @@ export function setDefaultNotificationLevel(level: NotificationLevel): void {
   commit({ ...state, default: level }, { sync: true });
 }
 
+/** Direct messages and group conversations. */
+export function setDmDefaultNotificationLevel(level: NotificationLevel): void {
+  commit({ ...state, dmDefault: level }, { sync: true });
+}
+
+/** Server channels. */
+export function setServerDefaultNotificationLevel(level: NotificationLevel): void {
+  commit({ ...state, serverDefault: level }, { sync: true });
+}
+
 export function setServerNotificationLevel(
   serverId: string,
   level: NotificationLevel | null,
@@ -243,7 +300,9 @@ export function setChannelNotificationLevel(
 }
 
 export function setDesktopNotificationsEnabled(enabled: boolean): void {
-  commit({ ...state, desktop: enabled }, { sync: true });
+  // Any press on the switch is a choice, including the one that turns it off:
+  // that is what stops the desktop app's "on until you say" from coming back.
+  commit({ ...state, desktop: enabled, desktopChosen: true }, { sync: true });
 }
 
 export function setArrivalToastEnabled(enabled: boolean): void {
@@ -287,11 +346,34 @@ export function adoptNotificationPreferences(
 /**
  * The level that actually applies. Most specific wins: the channel names it,
  * else the server it belongs to, else the account default.
+ *
+ * With `desktop_notify_default_on` the account default is two: one for
+ * conversations and one for servers. The migration is on read, nothing is
+ * rewritten:
+ *
+ * - a conversation: `dmDefault`, else `default` (which is "all" until chosen);
+ * - a server channel: `serverDefault`, else `default` WHEN IT WAS A CHOICE,
+ *   else "mentions". A stored `default: "all"` does not count as one: every
+ *   save writes every field, so it cannot be told from the initial value, and
+ *   treating it as a choice would turn every message in every server into a
+ *   banner the day the desktop app starts showing them.
+ *
+ * Flag off, it is `default` for both, exactly as before.
  */
 export function resolveNotificationLevel(
   current: NotificationState,
   serverId: string | null,
   channelId: string | null,
+): NotificationLevel {
+  return resolveLevel(current, serverId, channelId, "mentions");
+}
+
+function resolveLevel(
+  current: NotificationState,
+  serverId: string | null,
+  channelId: string | null,
+  /** What a server channel reads when nobody chose anything. */
+  impliedServerLevel: NotificationLevel,
 ): NotificationLevel {
   if (channelId) {
     const channel = current.channels[channelId];
@@ -305,7 +387,41 @@ export function resolveNotificationLevel(
       return server;
     }
   }
-  return current.default;
+  if (!isDesktopNotifyDefaultOnEnabled()) {
+    return current.default;
+  }
+  if (isConversationChannel(serverId, channelId)) {
+    return dmDefaultLevel(current);
+  }
+  return serverDefaultLevel(current, impliedServerLevel);
+}
+
+/** The account-wide level for conversations, as the settings screen shows it. */
+export function dmDefaultLevel(current: NotificationState): NotificationLevel {
+  return current.dmDefault ?? current.default;
+}
+
+/** The account-wide level for server channels, as the settings screen shows it. */
+export function serverDefaultLevel(
+  current: NotificationState,
+  implied: NotificationLevel = "mentions",
+): NotificationLevel {
+  return (
+    current.serverDefault ??
+    (current.default === "all" ? null : current.default) ??
+    implied
+  );
+}
+
+/** A conversation belongs to no server; the directory says which kind it is. */
+function isConversationChannel(
+  serverId: string | null,
+  channelId: string | null,
+): boolean {
+  if (serverId !== null || channelId === null) {
+    return false;
+  }
+  return (directory.get(channelId)?.kind ?? "server") !== "server";
 }
 
 /** Whether an id carries a level of its own, i.e. shows "Reset" in its menu. */
@@ -508,6 +624,28 @@ export function describeActivity(
 
 // --------------------------------------------------------------- permissions
 
+/**
+ * Whether OS banners are on for this device.
+ *
+ * The person's own switch (`desktop`), except in the desktop app with
+ * `desktop_notify_default_on`, where it reads ON until they have touched it:
+ * the shell already grants the permission (`electron/main.js`), so a switch
+ * that starts off there only hides a feature that works. A banner still needs
+ * a granted permission and every level, mute and Do Not Disturb rule on top.
+ */
+export function desktopBannersEnabled(
+  current: NotificationState = state,
+): boolean {
+  if (current.desktop) {
+    return true;
+  }
+  return (
+    isDesktopNotifyDefaultOnEnabled() &&
+    !current.desktopChosen &&
+    isDesktopApp()
+  );
+}
+
 export function notificationPermission(): NotificationPermissionState {
   if (typeof window === "undefined" || !("Notification" in window)) {
     return "unsupported";
@@ -582,6 +720,85 @@ export function onActivityToast(
   return () => {
     toastListeners.delete(listener);
   };
+}
+
+// ---------------------------------------------------------------- the offer
+
+/**
+ * "Ativar notificações", the browser's one-time card.
+ *
+ * Banners are opt-in behind a switch in Settings that almost nobody finds
+ * (19 of 7,012 accounts), and a browser may not ask for the permission
+ * unprompted. The moment it is worth asking is the one where it would have
+ * mattered: a DM or a mention arrived while the tab was hidden and nothing told
+ * the person. This only records that moment; `NotifyOfferHint` draws the card
+ * when they come back, and the click on it is the gesture the permission needs.
+ */
+export interface NotifyOfferInput {
+  flagOn: boolean;
+  /** The desktop app already has banners and a granted permission. */
+  inDesktopApp: boolean;
+  bannersOn: boolean;
+  permission: NotificationPermissionState;
+  documentVisible: boolean;
+  kind: ChannelKind;
+  mentions: number;
+}
+
+/** Pure so the rule can be read, and tested, on its own. */
+export function shouldQueueNotifyOffer(input: NotifyOfferInput): boolean {
+  if (!input.flagOn || input.inDesktopApp || input.bannersOn) {
+    return false;
+  }
+  // "default" only: granted without the switch is a Settings state to fix there,
+  // and denied is final from the page's side, so a card would be a dead button.
+  if (input.permission !== "default") {
+    return false;
+  }
+  if (input.documentVisible) {
+    return false;
+  }
+  const addressedToYou = input.kind !== "server" || input.mentions > 0;
+  return addressedToYou;
+}
+
+let notifyOfferPending = false;
+
+export function getNotifyOfferPending(): boolean {
+  return notifyOfferPending;
+}
+
+export function dismissNotifyOffer(): void {
+  if (!notifyOfferPending) {
+    return;
+  }
+  notifyOfferPending = false;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+function noteNotifyOffer(activity: ChannelActivity, documentVisible: boolean): void {
+  if (notifyOfferPending) {
+    return;
+  }
+  if (
+    !shouldQueueNotifyOffer({
+      flagOn: isDesktopNotifyDefaultOnEnabled(),
+      inDesktopApp: isDesktopApp(),
+      bannersOn: desktopBannersEnabled(),
+      permission: notificationPermission(),
+      documentVisible,
+      kind: activity.kind ?? "server",
+      mentions: activity.mentions,
+    })
+  ) {
+    return;
+  }
+  notifyOfferPending = true;
+  for (const listener of listeners) {
+    listener();
+  }
 }
 
 export interface NotificationDecision {
@@ -661,6 +878,19 @@ export function openNotificationTarget(path: string): void {
   routeTo?.(path);
 }
 
+/**
+ * What the desktop shell is told about the banner's own sound.
+ *
+ * `true` while the app's sounds are on: the app plays its cue (or deliberately
+ * none), and an OS sound on top would double it. `false` when the person turned
+ * app sounds off, so the OS banner makes its own noise instead of arriving
+ * silent; the OS keeps its Do Not Disturb and its volume. A shell that predates
+ * the field ignores it and stays silent, as before.
+ */
+export function appPlaysSounds(): boolean {
+  return getSoundState().enabled;
+}
+
 function describe(burst: Burst): { title: string; body: string } {
   const { activity } = burst;
   // `#` says "a channel in a server". A conversation's label is a person's
@@ -694,7 +924,7 @@ function deliver(burst: Burst): void {
   if (desktop?.notify) {
     // The main process can raise the window on click, which a renderer-side
     // `window.focus()` cannot do from behind another app.
-    desktop.notify({ title, body, tag: channelId, path });
+    desktop.notify({ title, body, tag: channelId, path, silent: appPlaysSounds() });
     return;
   }
 
@@ -789,7 +1019,7 @@ export function notifyIncomingCall(
 
   const desktop = getDesktop();
   if (desktop?.notify) {
-    desktop.notify({ title, body, tag, path });
+    desktop.notify({ title, body, tag, path, silent: appPlaysSounds() });
     return;
   }
 
@@ -853,12 +1083,13 @@ export function notifyStreamStarted(
   if (state.streamAlerts[frame.serverId] === false) {
     return false;
   }
-  if (
-    resolveNotificationLevel(state, frame.serverId, frame.channelId) !== "all"
-  ) {
+  // "All unless the person said otherwise": a server nobody chose a level for
+  // reads as "mentions" for ordinary messages (`desktop_notify_default_on`),
+  // and that default is about messages, not about a stream starting.
+  if (resolveLevel(state, frame.serverId, frame.channelId, "all") !== "all") {
     return false;
   }
-  if (!state.desktop || notificationPermission() !== "granted") {
+  if (!desktopBannersEnabled() || notificationPermission() !== "granted") {
     return false;
   }
   const title =
@@ -883,7 +1114,13 @@ export function notifyStreamStarted(
     // draw it): that is not the notice being over, so the web path is tried
     // after it, and a rejected promise is caught rather than left unhandled.
     try {
-      const sent: unknown = desktop.notify({ title, body, tag, path });
+      const sent: unknown = desktop.notify({
+        title,
+        body,
+        tag,
+        path,
+        silent: appPlaysSounds(),
+      });
       if (sent && typeof (sent as Promise<unknown>).catch === "function") {
         (sent as Promise<unknown>).catch(() => {
           void showWebStreamNotice(title, body, tag, path);
@@ -945,7 +1182,7 @@ function flush(channelId: string): void {
   // focused and visible when it arrived, which is exactly the condition under
   // which no OS banner belongs on screen either.
   if (
-    state.desktop &&
+    desktopBannersEnabled() &&
     notificationPermission() === "granted" &&
     !burst.toastShownForBurst
   ) {
@@ -1024,6 +1261,9 @@ export function notifyChannelActivity(
   ) {
     return;
   }
+
+  // It would have interrupted, so this is the moment worth offering the switch.
+  noteNotifyOffer(activity, context.documentVisible);
 
   const showToast =
     state.arrivalToast &&
@@ -1106,6 +1346,7 @@ export function notifyOpenChannelMessage(
 
 /** Drop pending bursts, e.g. when the app shell unmounts on sign-out. */
 export function resetNotificationBursts(): void {
+  notifyOfferPending = false;
   for (const burst of bursts.values()) {
     if (burst.timer !== null) {
       clearTimeout(burst.timer);

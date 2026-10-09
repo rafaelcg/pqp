@@ -91,6 +91,7 @@ import {
   pushDeliverySnapshot,
   type PushDelivery,
 } from "./push-metrics.js";
+import { pushSkippedSnapshot, type PushSkipped } from "./push-skips.js";
 import {
   hlsTelemetryActivity,
   type HlsTelemetryActivity,
@@ -1033,6 +1034,15 @@ export interface AdminMetrics {
      * — the one an alert watches). See `services/push-metrics.ts`.
      */
     pushDelivery: PushDelivery;
+    /**
+     * PUSHES NOT SENT, per kind (message / call / stream / reminder / waitlist)
+     * and the first rule that refused each recipient (live_socket, blocked,
+     * dnd, muted, level, no_subscription, transport_off). Cumulative since
+     * boot, per instance, summed by the exporter like `pushDelivery`. The
+     * `push.skipped` log line carries the same answer per person, rate
+     * limited. See `services/push-skips.ts`.
+     */
+    pushSkipped: PushSkipped;
   };
 
   /**
@@ -1812,6 +1822,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         fcm: Number(productCounts.rows[0]?.push_fcm ?? 0),
       },
       pushDelivery: pushDeliverySnapshot(),
+      pushSkipped: pushSkippedSnapshot(),
     },
 
     imports: {
