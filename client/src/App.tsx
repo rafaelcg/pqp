@@ -113,6 +113,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
@@ -154,6 +155,8 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
+import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import {
   dismissPartyNewcomerStrip,
@@ -539,7 +542,10 @@ import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
-import { useChannelNotifications } from "@/hooks/use-notifications";
+import {
+  useChannelNotifications,
+  useNotifyOfferReady,
+} from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
 import { setDraftsAccount } from "@/lib/composer-drafts";
@@ -1519,6 +1525,13 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The one-time "Ativar notificações" card. Like the cargos card it decides
+  // for itself whether it was seen, and the queue has to know too: a card that
+  // wants the corner and never draws would hold every tip behind it.
+  const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
+    () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
+  );
+  const notifyOfferReady = useNotifyOfferReady();
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
@@ -8618,6 +8631,8 @@ function MainAppContent({
     ],
     [channels, conversations],
   );
+  // `desktop_notify_default_on`, re-asked with the other runtime flags.
+  useEffect(() => startNotifyDefaultsConfig(), []);
   useChannelNotifications({ channels: notificationChannels, unread });
 
   /**
@@ -9308,6 +9323,8 @@ function MainAppContent({
     // first thing a stranger is told must not be "join the QG" (2026-10-04,
     // Filminho). It also keeps its own one-time hint, an attached card, from
     // yielding to a campaign for the whole film.
+    // A moment, not a campaign, but still a nudge: not over a live film.
+    notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
     qg: qgHintWanted && !campaignsYield,
     voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta && !campaignsYield,
@@ -11990,6 +12007,10 @@ function MainAppContent({
         }
       />
 
+      <NotifyOfferHint
+        enabled={effectiveCornerHint === "notifyOffer"}
+        onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}
         onDismiss={() => setWantsCargosHint(false)}

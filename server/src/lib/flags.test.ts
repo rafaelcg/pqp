@@ -90,6 +90,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   watch_now_banner: (raw) => raw === "true",
   stream_start_notifications: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  desktop_notify_default_on: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   voice_notes: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
