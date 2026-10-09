@@ -784,6 +784,12 @@ test("voiceNoteHealth: the flag off with nothing sent is off, not healthy", () =
   assert.equal(voiceNoteHealth(voiceNotes(), FLAG_OFF).state, "ok");
   // Without the flags block there is no claim that it is off.
   assert.equal(voiceNoteHealth(quiet, undefined).state, "ok");
+  // Off does not hide a problem left over from before: a stuck job is still bad.
+  const stuck = voiceNotes({
+    usage: { minted7d: 0, sent7d: 0 },
+    health: { queue: { transcode: queueStats({ oldestQueuedSeconds: 900 }), transcription: queueStats() } }
+  });
+  assert.equal(voiceNoteHealth(stuck, FLAG_OFF).state, "bad");
 });
 
 test("ageLabel: seconds, minutes, then hours", () => {

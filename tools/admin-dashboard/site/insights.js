@@ -680,7 +680,9 @@
         var q = (health.queue || {})[k] || {};
         return (Number(q.queued) || 0) + (Number(q.running) || 0) > 0;
       });
-    var state = offEverywhere && !busy ? "off" : worst;
+    // Off only while there is nothing to flag: a failure or a stuck job from
+    // before it was switched off is still an alert.
+    var state = offEverywhere && !busy && worst === "ok" ? "off" : worst;
     return { state: state, queue: queue, rate: rate, budget: budget, items: items };
   }
 
