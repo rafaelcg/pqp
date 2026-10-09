@@ -298,6 +298,7 @@ import {
 import {
   offerSoundboardPlay,
   soundboardPlayAllowed,
+  noteRemoteSoundboardPlay,
   soundboardRoomFull,
 } from "./soundboard.js";
 import { resolvePlayableSound } from "../services/soundboard.js";
@@ -9371,7 +9372,7 @@ export async function handleVoiceMessage(
     ) {
       return;
     }
-    if (soundboardRoomFull(peer.voiceChannelId)) {
+    if (soundboardRoomFull(peer.voiceChannelId, Date.now(), peer.userId)) {
       return;
     }
     const sound = await resolvePlayableSound(
@@ -12495,6 +12496,7 @@ subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
     return;
   }
   noteClusterFrameReceived();
+  noteRemoteSoundboardPlay({ channelId: frame.channelId, userId: frame.userId });
   broadcastToRoom(frame.channelId, frame);
 });
 

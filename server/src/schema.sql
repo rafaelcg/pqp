@@ -5136,6 +5136,22 @@ CREATE TABLE IF NOT EXISTS soundboard_sounds (
 CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
   ON soundboard_sounds (server_id, created_at);
 
+-- A signed upload nobody has claimed yet. Durable and shared, so the cap of
+-- 24 holds across both API machines and a deploy cannot lose the record of an
+-- object that still has to be swept. The claim deletes its row in the same
+-- transaction that inserts the sound; the sweep deletes the row first and the
+-- object after, so exactly one of them ever owns a given file.
+CREATE TABLE IF NOT EXISTS soundboard_pending_uploads (
+  storage_key TEXT PRIMARY KEY,
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_server
+  ON soundboard_pending_uploads (server_id);
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_expiry
+  ON soundboard_pending_uploads (expires_at);
+
 -- One object, one row. An earlier revision of this table could claim the
 -- same key twice. Drop the later row before the unique index, or a database
 -- that already has those rows fails to boot. The kept row still points at

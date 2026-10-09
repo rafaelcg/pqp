@@ -1,4 +1,13 @@
-import { SOUNDBOARD_ROOM_CONCURRENCY } from "@pqp/shared";
+import {
+  SOUNDBOARD_MAX_DURATION_MS,
+  SOUNDBOARD_ROOM_CONCURRENCY,
+} from "@pqp/shared";
+
+/**
+ * How many clips one person may have sounding at once. Without it a single
+ * seated member holds every room slot with 5 s clips and silences the rest.
+ */
+export const SOUNDBOARD_USER_CONCURRENCY = 3;
 
 /**
  * Who may start a clip, and how many may be sounding.
@@ -7,10 +16,11 @@ import { SOUNDBOARD_ROOM_CONCURRENCY } from "@pqp/shared";
  * holds the peer. This module is the rest: the bit, a moderator mute, and
  * the overlap cap. A refused play is silence. Nothing is stored.
  *
- * The cap is per process. Two API machines can each admit
- * `SOUNDBOARD_ROOM_CONCURRENCY` at once, the same way live reactions fold
- * a window on each machine. A play is a moment, and a shared counter would
- * be a database write on every click.
+ * The caps are per process, but a play the other machine admitted is noted
+ * here too (`noteRemoteSoundboardPlay`, from the cluster frame), so each
+ * machine's count follows the whole room and the cap holds across `api-a` and
+ * `api-b` up to a frame's travel time. A shared counter would be a database
+ * write on every click.
  */
 
 export interface SoundboardPlayGate {
@@ -47,9 +57,41 @@ function livePlays(channelId: string, now: number): ActivePlay[] {
   return plays;
 }
 
-/** True when this room is already at the overlap cap. */
-export function soundboardRoomFull(channelId: string, now = Date.now()): boolean {
-  return livePlays(channelId, now).length >= SOUNDBOARD_ROOM_CONCURRENCY;
+/**
+ * True when this room is at the overlap cap, or (with `userId`) when this
+ * person already has `SOUNDBOARD_USER_CONCURRENCY` clips sounding.
+ */
+export function soundboardRoomFull(
+  channelId: string,
+  now = Date.now(),
+  userId?: string,
+): boolean {
+  const plays = livePlays(channelId, now);
+  if (plays.length >= SOUNDBOARD_ROOM_CONCURRENCY) {
+    return true;
+  }
+  return (
+    userId !== undefined &&
+    plays.filter((play) => play.userId === userId).length >=
+      SOUNDBOARD_USER_CONCURRENCY
+  );
+}
+
+/**
+ * Count a play another machine admitted. Never refuses: the sender already
+ * did, and its listeners hear it either way. It only makes this machine's
+ * next local offer see the same room. The frame carries no duration, so the
+ * longest clip is assumed.
+ */
+export function noteRemoteSoundboardPlay(input: {
+  channelId: string;
+  userId: string;
+  now?: number;
+}): void {
+  const now = input.now ?? Date.now();
+  const plays = livePlays(input.channelId, now);
+  plays.push({ userId: input.userId, endsAt: now + SOUNDBOARD_MAX_DURATION_MS });
+  active.set(input.channelId, plays);
 }
 
 /** Drop finished plays in rooms that have gone quiet. */
@@ -66,8 +108,9 @@ if (typeof setInterval === "function") {
 /**
  * Take a slot in this room.
  *
- * False only when the room is already full. The same person may overlap
- * their own clips. The caller must not fan out a false.
+ * False when the room is full or this person is at their own cap. The same
+ * person may still overlap a few of their own clips. The caller must not fan
+ * out a false.
  */
 export function offerSoundboardPlay(input: {
   channelId: string;
@@ -77,7 +120,7 @@ export function offerSoundboardPlay(input: {
 }): boolean {
   sweepSoundboardPlays(input.now);
   const plays = livePlays(input.channelId, input.now);
-  if (plays.length >= SOUNDBOARD_ROOM_CONCURRENCY) {
+  if (soundboardRoomFull(input.channelId, input.now, input.userId)) {
     return false;
   }
   plays.push({

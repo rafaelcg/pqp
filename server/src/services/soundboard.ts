@@ -119,7 +119,17 @@ const playableCache = new Map<
 >();
 const PLAYABLE_TTL_MS = 30_000;
 
+const PLAYABLE_CACHE_MAX = 500;
+
 function rememberPlayable(serverId: string, sound: PlayableSound): void {
+  if (playableCache.size >= PLAYABLE_CACHE_MAX) {
+    // Insertion order: drop the oldest entry so a long-lived process that has
+    // seen many sounds does not grow without bound.
+    const oldest = playableCache.keys().next().value;
+    if (oldest !== undefined) {
+      playableCache.delete(oldest);
+    }
+  }
   playableCache.set(sound.id, { serverId, sound, at: Date.now() });
 }
 
@@ -175,55 +185,61 @@ export async function resolvePlayableSound(
   return sound;
 }
 
-const pendingUploads = new Map<string, { serverId: string; expiresAt: number }>();
-
 /**
- * Drop a signed upload that nobody claimed.
+ * Give up on a signed upload: forget its pending row, then delete the object.
  *
- * The pending map lives on one API process. The claim often lands on the
- * other. Never delete an object a row already points at.
+ * The pending row is the ownership token. Whoever deletes it owns the file,
+ * so a claim that already took the row (it deletes it in the transaction that
+ * inserts the sound) is never raced: this finds nothing and leaves the object
+ * alone. The S3 call is outside any transaction and holds no pooled client.
  */
 async function dropUnclaimedObject(key: string): Promise<void> {
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-    // Same lock claim takes, so a sweep cannot delete a file between the
-    // insert and the commit on the other API machine.
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [key]);
-    const kept = await client.query(
-      `SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`,
-      [key],
-    );
-    if ((kept.rowCount ?? 0) > 0) {
-      await client.query("COMMIT");
-      pendingUploads.delete(key);
-      return;
-    }
+  const taken = await getPool().query(
+    `DELETE FROM soundboard_pending_uploads WHERE storage_key = $1`,
+    [key],
+  );
+  if ((taken.rowCount ?? 0) > 0) {
     await deleteObject(key);
-    await client.query("COMMIT");
-    pendingUploads.delete(key);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
   }
 }
 
-async function sweepPendingUploads(now: number): Promise<void> {
-  const due = [...pendingUploads.entries()].filter(
-    ([, row]) => row.expiresAt <= now,
+/** Past its signature plus this, an upload is abandoned: nothing will claim it. */
+const PENDING_GRACE_SECONDS = 60;
+const SWEEP_BATCH = 50;
+
+/**
+ * Sweep abandoned uploads, on whichever machine runs first. `SKIP LOCKED`
+ * means two machines never take the same row. A failed object delete puts the
+ * row back a minute later rather than leaking the file.
+ */
+export async function sweepPendingUploads(): Promise<number> {
+  const due = await getPool().query<{ storage_key: string; server_id: string }>(
+    `DELETE FROM soundboard_pending_uploads
+      WHERE storage_key IN (
+        SELECT storage_key FROM soundboard_pending_uploads
+         WHERE expires_at <= NOW() - make_interval(secs => $1)
+         ORDER BY expires_at
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING storage_key, server_id`,
+    [PENDING_GRACE_SECONDS, SWEEP_BATCH],
   );
-  for (const [key, row] of due) {
+  for (const row of due.rows) {
     try {
-      await dropUnclaimedObject(key);
+      await deleteObject(row.storage_key);
     } catch {
-      pendingUploads.set(key, {
-        serverId: row.serverId,
-        expiresAt: now + 60_000,
-      });
+      await getPool()
+        .query(
+          `INSERT INTO soundboard_pending_uploads (storage_key, server_id, expires_at)
+           VALUES ($1, $2, NOW() + make_interval(secs => $3))
+           ON CONFLICT (storage_key) DO NOTHING`,
+          [row.storage_key, row.server_id, PENDING_GRACE_SECONDS * 2],
+        )
+        .catch(() => undefined);
     }
   }
+  return due.rows.length;
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -237,18 +253,11 @@ function isUniqueViolation(error: unknown): boolean {
 
 if (typeof setInterval === "function") {
   setInterval(() => {
-    void sweepPendingUploads(Date.now());
-  }, 60_000).unref?.();
-}
-
-function pendingUploadCount(serverId: string, now: number): number {
-  let count = 0;
-  for (const row of pendingUploads.values()) {
-    if (row.serverId === serverId && row.expiresAt > now) {
-      count += 1;
+    if (!isStorageConfigured()) {
+      return;
     }
-  }
-  return count;
+    void sweepPendingUploads().catch(() => undefined);
+  }, 60_000).unref?.();
 }
 
 export async function createSoundboardUpload(input: {
@@ -262,22 +271,41 @@ export async function createSoundboardUpload(input: {
   if (input.byteSize <= 0 || input.byteSize > SOUNDBOARD_MAX_BYTES) {
     throw new SoundboardError("too_big");
   }
-  const now = Date.now();
-  // Cleanup stays off this request. Expired signatures no longer count.
-  void sweepPendingUploads(now);
-  const count = await getPool().query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
-    [input.serverId],
-  );
-  if (
-    Number(count.rows[0]?.n ?? 0) + pendingUploadCount(input.serverId, now) >=
-    SOUNDBOARD_MAX_SOUNDS
-  ) {
-    throw new SoundboardError("slots");
-  }
   const key = soundboardObjectKey(input.serverId, input.contentType);
-  const expiresAtMs = now + UPLOAD_URL_TTL_SECONDS * 1000;
-  pendingUploads.set(key, { serverId: input.serverId, expiresAt: expiresAtMs });
+  const expiresAtMs = Date.now() + UPLOAD_URL_TTL_SECONDS * 1000;
+  // One statement under the server row lock, so two requests cannot both pass
+  // a count of 23, and the count is the whole cluster's: stored sounds plus
+  // unexpired pending uploads.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT id FROM servers WHERE id = $1 FOR UPDATE`, [
+      input.serverId,
+    ]);
+    const count = await client.query<{ n: string }>(
+      `SELECT (
+         (SELECT COUNT(*) FROM soundboard_sounds WHERE server_id = $1) +
+         (SELECT COUNT(*) FROM soundboard_pending_uploads
+           WHERE server_id = $1 AND expires_at > NOW())
+       )::text AS n`,
+      [input.serverId],
+    );
+    if (Number(count.rows[0]?.n ?? 0) >= SOUNDBOARD_MAX_SOUNDS) {
+      await client.query("ROLLBACK");
+      throw new SoundboardError("slots");
+    }
+    await client.query(
+      `INSERT INTO soundboard_pending_uploads (storage_key, server_id, expires_at)
+       VALUES ($1, $2, $3)`,
+      [key, input.serverId, new Date(expiresAtMs)],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
   return {
     key,
     uploadUrl: presignPut(
@@ -337,22 +365,45 @@ export async function claimSoundboardSound(input: {
   }
 
   const volume = input.volume ?? 1;
+  // Set when the claim loses its slot: the file is dropped once the pooled
+  // client is back, never while it is held.
+  let dropAfter = false;
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-      input.key,
-    ]);
     await client.query(`SELECT id FROM servers WHERE id = $1 FOR UPDATE`, [
       input.serverId,
     ]);
+    // The pending row is the ticket. Taking it here is what keeps the sweep
+    // from deleting the object under this insert; no row means the sweep
+    // took it, or an earlier claim of the same key already finished.
+    const ticket = await client.query(
+      `DELETE FROM soundboard_pending_uploads
+        WHERE storage_key = $1 AND server_id = $2`,
+      [input.key, input.serverId],
+    );
+    if ((ticket.rowCount ?? 0) === 0) {
+      const done = await client.query<SoundRow>(
+        `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+                duration_ms, volume
+           FROM soundboard_sounds
+          WHERE storage_key = $1 AND server_id = $2`,
+        [input.key, input.serverId],
+      );
+      await client.query("ROLLBACK");
+      const row = done.rows[0];
+      if (!row) {
+        throw new SoundboardError("missing");
+      }
+      return toSound(row);
+    }
     const count = await client.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
       [input.serverId],
     );
     if (Number(count.rows[0]?.n ?? 0) >= SOUNDBOARD_MAX_SOUNDS) {
       await client.query("ROLLBACK");
-      await dropUnclaimedObject(input.key).catch(() => undefined);
+      dropAfter = true;
       throw new SoundboardError("slots");
     }
     const inserted = await client.query<SoundRow>(
@@ -376,7 +427,6 @@ export async function claimSoundboardSound(input: {
       ],
     );
     await client.query("COMMIT");
-    pendingUploads.delete(input.key);
     return toSound(inserted.rows[0]!);
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -384,6 +434,7 @@ export async function claimSoundboardSound(input: {
       throw error;
     }
     if (isUniqueViolation(error)) {
+      // Another claim of the same key committed first. Answer with its row.
       const existing = await getPool().query<SoundRow>(
         `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
                 duration_ms, volume
@@ -393,22 +444,17 @@ export async function claimSoundboardSound(input: {
       );
       const row = existing.rows[0];
       if (row) {
-        pendingUploads.delete(input.key);
         return toSound(row);
       }
       throw new SoundboardError("missing");
     }
-    const kept = await getPool()
-      .query(`SELECT 1 FROM soundboard_sounds WHERE storage_key = $1`, [
-        input.key,
-      ])
-      .catch(() => null);
-    if (kept && (kept.rowCount ?? 0) === 0) {
-      await dropUnclaimedObject(input.key).catch(() => undefined);
-    }
+    // Rolled back, so the pending row is still there: the sweep owns the file.
     throw error;
   } finally {
     client.release();
+    if (dropAfter) {
+      await dropUnclaimedObject(input.key).catch(() => undefined);
+    }
   }
 }
 
@@ -444,23 +490,21 @@ export async function deleteSoundboardSound(
   serverId: string,
   soundId: string,
 ): Promise<boolean> {
+  // Row first: if the object delete then fails the clip is gone from the
+  // board and the file is only an orphan, not a clip that shows and is silent.
   const result = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key
-       FROM soundboard_sounds
-      WHERE id = $1 AND server_id = $2`,
+    `DELETE FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2
+      RETURNING storage_key`,
     [soundId, serverId],
   );
   const key = result.rows[0]?.storage_key;
+  forgetPlayable(soundId);
   if (!key) {
     return false;
   }
   if (isStorageConfigured()) {
-    await deleteObject(key);
+    await deleteObject(key).catch(() => undefined);
   }
-  await getPool().query(
-    `DELETE FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
-    [soundId, serverId],
-  );
-  forgetPlayable(soundId);
   return true;
 }

@@ -3525,6 +3525,9 @@ router.patch(
   "/api/servers/:serverId/soundboard/:soundId",
   async ({ req, user }, { serverId, soundId }) => {
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
     const body = updateSoundboardSoundSchema.parse(await readJsonBody(req));
     const sound = await updateSoundboardSound({
       serverId,
@@ -3544,6 +3547,9 @@ router.delete(
   "/api/servers/:serverId/soundboard/:soundId",
   async ({ user }, { serverId, soundId }) => {
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
     const removed = await deleteSoundboardSound(serverId, soundId);
     if (!removed) {
       throw new NotFound("Sound not found");
