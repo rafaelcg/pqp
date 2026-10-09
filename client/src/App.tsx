@@ -555,6 +555,7 @@ import {
 } from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
+import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
@@ -2385,6 +2386,22 @@ function MainAppContent({
     stored: user?.preferences?.status ?? null,
     sendIdle: useCallback(
       (idle: boolean) => transport.sendChat({ type: "set-idle", idle }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
+
+  /**
+   * Whether this window is in front of the person (visible and focused, with a
+   * grace before "background"), for the server's push attention gate: a tab
+   * left in the background or a minimised desktop window no longer keeps the
+   * phone quiet. Re-announced on every reconnect, like idle, because the
+   * server forgets it with the socket. See `lib/attention.ts`.
+   */
+  useAttentionReport({
+    sendAttention: useCallback(
+      (foreground: boolean) =>
+        transport.sendChat({ type: "set-attention", foreground }),
       [transport],
     ),
     connected: connection === "online",
