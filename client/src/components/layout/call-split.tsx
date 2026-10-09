@@ -243,8 +243,11 @@ export const ChatMusicContext = createContext(false);
 
 const NO_CHAT_NEED = { need: 0, music: 0, fila: 0 };
 
-/** The least an open music queue is cut to: about its add field. */
-const FILA_MIN_ROOM_PX = 64;
+/**
+ * The least an open music queue is cut to: its header, with the close
+ * button. Below that the panel scrolls inside itself.
+ */
+const FILA_MIN_ROOM_PX = 40;
 
 /**
  * The least height the chat pane can be given without cutting its composer
@@ -279,8 +282,21 @@ function useChatPaneNeed(
       const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
       const music = composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
       const fila = music?.querySelector<HTMLElement>('[data-music-fila="sheet"]') ?? null;
-      for (const element of [header, composer, music, fila]) {
-        if (element && resize && !watched.has(element)) {
+      // The queue and the music bar come and go: let go of what left, so a
+      // long call that opens the queue again and again holds no old panels.
+      const present = new Set<Element>(
+        [header, composer, music, fila].filter(
+          (element): element is HTMLElement => element !== null,
+        ),
+      );
+      for (const element of watched) {
+        if (!present.has(element)) {
+          resize?.unobserve(element);
+          watched.delete(element);
+        }
+      }
+      for (const element of present) {
+        if (resize && !watched.has(element)) {
           resize.observe(element);
           watched.add(element);
         }
