@@ -252,14 +252,17 @@ function warm(url: string, id: string): Promise<AudioBuffer | null> {
   if (pending) {
     return pending;
   }
-  const task = (async () => {
+  // A server switch drops the entry from `loading`; a load that finishes
+  // after that must not put its buffer back, or it escapes the custom cap.
+  let task: Promise<AudioBuffer | null> | null = null;
+  task = (async () => {
     try {
       const response = await fetch(url);
       if (!response.ok) {
         return null;
       }
       const buffer = await decodeAudioBuffer(await response.arrayBuffer());
-      if (buffer) {
+      if (buffer && loading.get(id) === task) {
         buffers.set(id, buffer);
         evictCustomBuffers();
       }
@@ -267,7 +270,9 @@ function warm(url: string, id: string): Promise<AudioBuffer | null> {
     } catch {
       return null;
     } finally {
-      loading.delete(id);
+      if (loading.get(id) === task) {
+        loading.delete(id);
+      }
     }
   })();
   loading.set(id, task);
