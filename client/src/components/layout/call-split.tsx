@@ -376,8 +376,19 @@ export function CallSplit({
   // that height fits again, rather than re-measured: once the pane sizes it,
   // the stage's measured height is the pane's answer, not its own.
   const [squeezedFrom, setSqueezedFrom] = useState<number | null>(null);
+  // Also when the pane is too short to offer a divider at all (a phone held
+  // sideways while a call rings, before any picture brings the full-screen
+  // takeover): the stage's own height rule then filled the pane and pushed
+  // the composer, with hang-up in it, below the screen.
   const canSqueeze =
-    !sizedByChoice && resizable && !sideBySide && chatNeed > 0;
+    !sizedByChoice &&
+    !sideBySide &&
+    chatNeed > 0 &&
+    shape === "expanded" &&
+    collapsed === "none" &&
+    container > 0;
+  // The divider is only drawn when the pane is resizable.
+  const squeezeGap = resizable ? CALL_SPLIT_DIVIDER_PX : 0;
   // A new width means a new natural height for the picture (a 16:9 share in
   // a narrower pane is shorter), so the held height is measured again.
   const squeezeWidthRef = useRef(width);
@@ -395,24 +406,28 @@ export function CallSplit({
     if (squeezedFrom === null) {
       if (
         naturalStage.height > 0 &&
-        naturalStage.height + CALL_SPLIT_DIVIDER_PX + chatNeed > container
+        naturalStage.height + squeezeGap + chatNeed > container
       ) {
         setSqueezedFrom(naturalStage.height);
       }
-    } else if (squeezedFrom + CALL_SPLIT_DIVIDER_PX + chatNeed <= container) {
+    } else if (squeezedFrom + squeezeGap + chatNeed <= container) {
       setSqueezedFrom(null);
     }
-  }, [canSqueeze, chatNeed, container, naturalStage.height, squeezedFrom]);
+  }, [canSqueeze, chatNeed, container, naturalStage.height, squeezedFrom, squeezeGap]);
   const squeezed = canSqueeze && squeezedFrom !== null;
   const sized = sizedByChoice || squeezed;
   const stagePx = !sized
     ? null
     : squeezed
-      ? clampSplit({
-          fraction: splitFraction(squeezedFrom ?? 0, container),
-          container,
-          ...bounds,
-        })
+      ? resizable
+        ? clampSplit({
+            fraction: splitFraction(squeezedFrom ?? 0, container),
+            container,
+            ...bounds,
+          })
+        : // No divider and no minimums to share: the composer keeps what it
+          // needs, the stage takes the rest.
+          Math.max(0, Math.min(squeezedFrom ?? 0, container - chatNeed))
       : phoneShort
       ? phoneShortStageHeight(container)
       : phoneFloor

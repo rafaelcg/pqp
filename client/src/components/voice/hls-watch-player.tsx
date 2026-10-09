@@ -2983,6 +2983,9 @@ export function HlsWatchPlayer({
   // nor focus inside it reaches the bar's own handlers: it holds the chrome
   // up itself while it is open, the way the quality menu does.
   const [cameraLayoutOpen, setCameraLayoutOpen] = useState(false);
+  // The bar's ⋯ (fill, picture-in-picture) holds the bar up while open, like
+  // the camera layout picker: on touch the pointer leaves on pointerup.
+  const [playerMoreOpen, setPlayerMoreOpen] = useState(false);
   // The QUICK cluster's own menu-open flag (below), read by nothing --
   // `Menu` wants a setter to report into, and this deliberately does NOT
   // feed `useIdleChrome`'s `pinned` the way `cameraLayoutOpen` above does.
@@ -2995,7 +2998,7 @@ export function HlsWatchPlayer({
   const [, setQuickCameraLayoutOpen] = useState(false);
   const chrome = useIdleChrome(
     layout === "cinema" && hasFrame,
-    qualityOpen || cameraLayoutOpen || barHovered || barFocused,
+    qualityOpen || cameraLayoutOpen || playerMoreOpen || barHovered || barFocused,
   );
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
@@ -3882,7 +3885,12 @@ export function HlsWatchPlayer({
                 last. */}
             {bottomActions}
             {playerMoreItems.length > 0 ? (
-              <Menu align="end" side="top" items={playerMoreItems}>
+              <Menu
+                align="end"
+                side="top"
+                items={playerMoreItems}
+                onOpenChange={setPlayerMoreOpen}
+              >
                 <button
                   type="button"
                   data-testid="hls-more"
