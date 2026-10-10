@@ -19,6 +19,7 @@ import {
 import {
   communityHomeTranslationModel,
   communityHomeTranslator,
+  communityHomeTranslatorFor,
   isCommunityHomeTranslationOn,
   refundTranslationBudget,
   reserveTranslationBudget,
@@ -480,7 +481,7 @@ async function translateOnce(
   if (source.lang === lang) {
     return "skipped:same_language";
   }
-  const translator = communityHomeTranslator();
+  const translator = await communityHomeTranslatorFor(source.server_id);
   if (!translator) {
     return skipped(postId, lang, "no_key");
   }

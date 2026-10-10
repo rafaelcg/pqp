@@ -615,6 +615,35 @@ describeDb("Baú video subtitles", () => {
     expect((await jobs(post.id))[0]!.status).toBe("queued");
   });
 
+  it("the brand reaches the model as a placeholder and comes back as the author's words", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    await runCaptionJob();
+    const cues = [
+      { start: 0, end: 2, text: "que é o QG do pqp" },
+      { start: 3, end: 5, text: "entre em pqp.gg, fale com @rafa" },
+    ];
+    await getPool().query(
+      `UPDATE community_home_post_captions SET cues = $2::jsonb, source_hash = 'brand' WHERE post_id = $1 AND is_source`,
+      [post.id, JSON.stringify(cues)],
+    );
+    await translationOn();
+    const sent: string[] = [];
+    translate.translator.translate = async (texts, _from, to) => {
+      sent.push(...texts);
+      // A model that "helpfully" translates whatever pqp it is shown.
+      return { texts: texts.map((t) => `[${to}] ${t.replace(/pqp/gi, "WTF")}`) };
+    };
+    expect(await captions.translateCommunityHomeCaptions(post.id, "en")).toBe("done");
+    expect(sent.join(" ")).not.toMatch(/pqp/i);
+    const en = (await tracks(post.id)).find((t) => t.lang === "en")!;
+    expect(en.cues.map((c) => c.text)).toEqual([
+      "[en] que é o QG do pqp",
+      "[en] entre em pqp.gg, fale com @rafa",
+    ]);
+  });
+
   it("translation turned off between two batches: the second is never sent", async () => {
     await captionsOn();
     const { post } = await publishVideo();

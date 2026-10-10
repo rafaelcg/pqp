@@ -13,6 +13,7 @@ import { logEvent } from "../lib/log.js";
 import { createOpenRouterChatTranslator } from "../speech/translators/openrouter-chat.js";
 import type { Translator } from "../speech/types.js";
 import { detectLanguage } from "./lang-detect.js";
+import { withBrandGuard } from "./translation-brand-guard.js";
 
 /**
  * Automatic translation of published Baú posts.
@@ -183,6 +184,42 @@ export function communityHomeTranslator(): Translator | null {
   return getTranslator();
 }
 
+/**
+ * The translator for one server's text, wrapped so the brand ("pqp", "pqp.gg",
+ * "QG do pqp", "Baú"), @handles, URLs, `#channel` tokens and the server's own
+ * name reach the model as placeholders and come back untouched
+ * (`translation-brand-guard.ts`). Posts and subtitles both go through here.
+ * Null without a key.
+ */
+export async function communityHomeTranslatorFor(
+  serverId: string,
+): Promise<Translator | null> {
+  const base = getTranslator();
+  if (!base) {
+    return null;
+  }
+  let names: string[] = [];
+  try {
+    const { rows } = await getPool().query<{ name: string | null }>(
+      `SELECT name FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    const name = rows[0]?.name?.trim();
+    if (name) {
+      names = [name];
+    }
+  } catch {
+    // The name is a second line of defence; the brand words do not need it.
+  }
+  return withBrandGuard(base, {
+    names,
+    onKept: (count) => {
+      stats.brandNamesKept += count;
+      logEvent("communityHome.translation.brandNamesKept", { count });
+    },
+  });
+}
+
 /** The key (or a test translator) is present, so a job can actually run. */
 export function isCommunityHomeTranslationConfigured(): boolean {
   return getTranslator() !== null;
@@ -203,6 +240,7 @@ const stats = {
   discardedStale: 0,
   truncated: 0,
   channelRefsKept: 0,
+  brandNamesKept: 0,
   providerRetries: 0,
   charsSent: 0,
   costUsd: 0,
@@ -227,6 +265,7 @@ export interface CommunityHomeTranslationMetrics {
   truncated: number;
   /** Fields left in the author's words because a `#channel` reference did not survive translation. */
   channelRefsKept: number;
+  brandNamesKept: number;
   providerRetries: number;
   charsSent: number;
   costUsd: number;
@@ -563,7 +602,7 @@ async function translateOnce(
   if (!isCommunityHomeTranslationOn(post.server_id)) {
     return skip("flag_off", postId, lang, "skippedFlagOff");
   }
-  const translator = getTranslator();
+  const translator = await communityHomeTranslatorFor(post.server_id);
   if (!translator) {
     return skip("no_key", postId, lang, "skippedNoKey");
   }

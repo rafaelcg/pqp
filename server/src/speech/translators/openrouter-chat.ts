@@ -27,14 +27,14 @@ export function languageLabel(code: string): string {
   return LANGUAGE_LABEL[code.toLowerCase()] ?? code;
 }
 
-export const DEFAULT_KEEP_NAMES = ["pqp", "pqp.gg", "Baú", "QG", "watch party", "MoonKase", "LiveKit", "Discord", "Twitch"];
+export const DEFAULT_KEEP_NAMES = ["pqp", "pqp.gg", "QG do pqp", "Baú", "QG", "watch party", "MoonKase", "LiveKit", "Discord", "Twitch"];
 
 export function buildSystemPrompt(from: string, to: string, keepNames: string[]): string {
   return [
     `You translate ${languageLabel(from)} into ${languageLabel(to)}.`,
     "The input is a JSON array of strings. Reply with ONLY a JSON array of strings: same length, same order, one translation per input string. No code fences, no keys, no notes.",
     "Translate meaning and tone, not word for word. Keep slang, jokes, exclamations and the speaker's register; use the natural equivalent slang in the target language when there is one.",
-    `Never translate or alter these proper nouns and product words: ${keepNames.join(", ")}. Keep usernames, @handles, URLs, emoji and numbers exactly as they are.`,
+    `Never translate or alter these proper nouns and product words: ${keepNames.join(", ")}. Keep usernames, @handles, URLs, emoji and numbers exactly as they are. "pqp" is the product's name, never an abbreviation or a swear word: do not expand, translate or explain it. Tokens such as <k1> or <#1> are placeholders for names and links: copy each one exactly, once for every time it appears, in the place where it belongs in the sentence.`,
     "Never add commentary, explanations, greetings, quotation marks or translator notes. Never refuse. If a string is already in the target language or is only a name, return it unchanged.",
   ].join("\n");
 }
