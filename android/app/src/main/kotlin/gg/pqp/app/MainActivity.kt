@@ -75,6 +75,25 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Home or recents while a Baú video plays full screen: Picture in Picture
+     * on Android 8 to 11 (12 and later enter by themselves, see `BauPip`).
+     * Armed by the full screen player alone, so every other screen leaves the
+     * app exactly as before.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        gg.pqp.app.bau.ui.BauPip.onUserLeaveHint(this)
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        gg.pqp.app.bau.ui.BauPip.inPip = isInPictureInPictureMode
+    }
+
+    /**
      * A tap while the app is already running. `MainActivity` is launched
      * SINGLE_TOP from the notification, so the second tap arrives here instead
      * of creating a second Activity.
