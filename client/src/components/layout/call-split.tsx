@@ -333,11 +333,26 @@ function useChatPaneNeed(
       typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver(readSoon);
-    mutation?.observe(pane, { childList: true, subtree: true });
+    // `hidden` too: a pane shown again measured zero while it was hidden.
+    mutation?.observe(pane, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["hidden"],
+    });
+    // Without ResizeObserver nothing reports a composer that grows when the
+    // window narrows or turns, so a window resize asks again.
+    const onWindowResize = resize ? null : readSoon;
+    if (onWindowResize) {
+      window.addEventListener("resize", onWindowResize);
+    }
     read();
     return () => {
       resize?.disconnect();
       mutation?.disconnect();
+      if (onWindowResize) {
+        window.removeEventListener("resize", onWindowResize);
+      }
       if (frame !== null) {
         cancelAnimationFrame(frame);
       }
