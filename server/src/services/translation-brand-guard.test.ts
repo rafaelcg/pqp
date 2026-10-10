@@ -105,10 +105,24 @@ describe("brand guard", () => {
     expect(out.texts[0]).toBe("Oi pqp");
   });
 
-  it("passes a literal <k1> in the source through untouched", async () => {
-    const t = withBrandGuard(helpful);
+  it("a literal <k1> in the source does not switch the guard off for the rest of the text", async () => {
+    const seen: string[] = [];
+    const t = withBrandGuard({
+      id: "spy",
+      async translate(texts) {
+        seen.push(...texts);
+        return { texts: texts.map((x) => x.replace(/^/, "[en] ")) };
+      },
+    });
     const out = await t.translate(["código <k1> do pqp"], "pt", "en");
-    expect(out.texts[0]).toBe("código <k1> do WTF");
+    expect(seen[0]).not.toMatch(/pqp/);
+    expect(out.texts[0]).toBe("[en] código <k1> do pqp");
+  });
+
+  it("restores placeholder numbers above 999", () => {
+    const text = Array.from({ length: 1001 }, () => "pqp").join(" ");
+    const g = protectBrandNames([text]);
+    expect(g.restore([g.texts[0]!])[0]).toBe(text);
   });
 
   it("returns a misaligned answer unchanged so the caller can reject it", async () => {

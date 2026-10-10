@@ -27,6 +27,9 @@ const WORD = "\\p{L}\\p{N}_";
 /** Longer, more specific spans first: the alternation takes the first that fits. */
 function buildPattern(extraNames: string[]): RegExp {
   const parts: string[] = [
+    // A literal `<k1>` in the source: protected like any other span, so it
+    // can never be mistaken for one of ours.
+    "<k\\d+>",
     // URLs, minus the punctuation that ends a sentence around them.
     "https?:\\/\\/[^\\s<>\"']*[^\\s<>\"'.,;:!?)\\]]",
     // @handles, not the tail of an e-mail address.
@@ -68,7 +71,7 @@ function spanAllowed(span: string, extraNames: string[]): boolean {
   return true;
 }
 
-const PLACEHOLDER = /<k(\d{1,3})>/g;
+const PLACEHOLDER = /<k(\d+)>/g;
 
 function placeholderNumbers(text: string): number[] {
   return [...text.matchAll(PLACEHOLDER)].map((m) => Number(m[1])).sort((a, b) => a - b);
@@ -88,12 +91,6 @@ export function protectBrandNames(texts: string[], extraNames: string[] = []): P
   const out = texts.map((text, i) => {
     const mine: string[] = [];
     spans[i] = mine;
-    // A source that already holds `<k1>` as literal text cannot be told apart
-    // from a placeholder: send it as it is and keep it as it is.
-    if (/<k\d{1,3}>/.test(text)) {
-      expected[i] = [-1];
-      return text;
-    }
     const protectedText = text.replace(new RegExp(pattern), (span) => {
       if (!spanAllowed(span, extraNames)) return span;
       mine.push(span);
@@ -109,7 +106,6 @@ export function protectBrandNames(texts: string[], extraNames: string[] = []): P
       return out.map((_, i) => {
         const answer = translated[i];
         if (answer === undefined) return null;
-        if (expected[i]![0] === -1) return answer;
         const mine = spans[i]!;
         const found = placeholderNumbers(answer);
         const want = expected[i]!;
