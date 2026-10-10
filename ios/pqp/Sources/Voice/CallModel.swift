@@ -736,6 +736,9 @@ final class CallModel {
                 self.localCamera = nil
                 self.isCameraOn = false
                 try? await voice.startAudio()
+                // New track, same person: carry their mute onto it before the
+                // rejoin can send a packet (see VoiceModel.apply(.ready)).
+                await voice.setMuted(self.isMuted)
                 await session?.realtime.joinVoice(
                     channelId: conversationId, declaresResume: declaresResume
                 )

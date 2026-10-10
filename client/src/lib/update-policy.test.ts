@@ -3,6 +3,7 @@ import {
   AUTO_RELOAD_COOLDOWN_MS,
   DEFAULT_MAX_STALE_MS,
   IDLE_RELOAD_MS,
+  LEFT_CALL_RELOAD_MS,
   autoReloadAllowed,
   decideUpdateAction,
   isBlockingUpdate,
@@ -93,6 +94,40 @@ describe("decideUpdateAction", () => {
       expect(decide({ forced: true, inCall: true })).toBe("banner");
       expect(decide({ forced: true, inCall: false })).toBe("block");
     });
+  });
+});
+
+describe("safe moments", () => {
+  it("reloads a hidden tab at once, unless it is watching a party or in a call", () => {
+    expect(decide({ hidden: true })).toBe("auto-reload");
+    expect(decide({ hidden: true, typing: true })).toBe("auto-reload");
+    expect(decide({ hidden: true, watching: true })).toBe("banner");
+    expect(decide({ hidden: true, inCall: true })).toBe("banner");
+    expect(decide({ hidden: true, autoReloadAllowed: false })).toBe("banner");
+  });
+
+  it("reloads right after a hangup, unless somebody is typing", () => {
+    expect(decide({ sinceCallEndedMs: 0 })).toBe("auto-reload");
+    expect(decide({ sinceCallEndedMs: LEFT_CALL_RELOAD_MS - 1 })).toBe("auto-reload");
+    expect(decide({ sinceCallEndedMs: LEFT_CALL_RELOAD_MS })).toBe("banner");
+    expect(decide({ sinceCallEndedMs: 0, typing: true })).toBe("banner");
+    expect(decide({ sinceCallEndedMs: null })).toBe("banner");
+  });
+});
+
+describe("critical", () => {
+  it("reloads even in a call, while typing or watching", () => {
+    expect(decide({ critical: true, forced: true, inCall: true })).toBe("auto-reload");
+    expect(decide({ critical: true, typing: true, watching: true })).toBe("auto-reload");
+  });
+
+  it("falls back to the blocking screen when a reload for this build did not land", () => {
+    expect(decide({ critical: true, inCall: true, autoReloadAllowed: false })).toBe("block");
+  });
+
+  it("puts the blocking screen up in a call too", () => {
+    expect(isBlockingUpdate({ stale: true, forced: true, critical: true }, true)).toBe(true);
+    expect(isBlockingUpdate({ stale: false, forced: true, critical: true }, true)).toBe(false);
   });
 });
 
