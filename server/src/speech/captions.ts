@@ -62,8 +62,12 @@ export function splitCueText(text: string, max = CAPTION_CUE_CHARS): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const out: string[] = [];
   let line = "";
-  for (const word of words) {
-    const piece = word.length > max ? word.slice(0, max) : word;
+  // A run longer than a cue (a language written without spaces, a long URL)
+  // is cut into cue-sized pieces, every character kept.
+  const pieces = words.flatMap((word) =>
+    word.length > max ? Array.from({ length: Math.ceil(word.length / max) }, (_, i) => word.slice(i * max, (i + 1) * max)) : [word],
+  );
+  for (const piece of pieces) {
     if (!line) {
       line = piece;
     } else if (line.length + 1 + piece.length <= max) {

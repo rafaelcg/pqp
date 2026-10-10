@@ -509,7 +509,11 @@ export async function runSpeechJobsTick(): Promise<number> {
   );
   let captions = 0;
   if (kinds.includes("community_home_captions") && !captionsInFlight) {
-    const [job] = await claimSpeechJobs(["community_home_captions"], 1);
+    // Its own failure must not strand the voice jobs claimed just above.
+    const [job] = await claimSpeechJobs(["community_home_captions"], 1).catch((error: unknown) => {
+      console.error("[speech] captions claim failed:", error instanceof Error ? error.message : error);
+      return [];
+    });
     if (job) {
       captions = 1;
       captionsInFlight = runJob(job).finally(() => {

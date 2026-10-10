@@ -187,6 +187,13 @@ describe("translated cues", () => {
     expect(parseStoredCues("nope")).toEqual([]);
   });
 
+  it("splitCueText keeps every character of a run longer than a cue", () => {
+    const run = "あ".repeat(200);
+    const pieces = splitCueText(run, 84);
+    expect(pieces.join("")).toBe(run);
+    expect(pieces.every((p) => p.length <= 84)).toBe(true);
+  });
+
   it("splitCueText never returns an empty piece", () => {
     expect(splitCueText("  ")).toEqual([]);
     expect(splitCueText("a ".repeat(100), 10).every((p) => p.length > 0 && p.length <= 10)).toBe(true);

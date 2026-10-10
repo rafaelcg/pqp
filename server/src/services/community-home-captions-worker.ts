@@ -110,7 +110,49 @@ async function readWindow(pcmPath: string, startMs: number, endMs: number): Prom
   }
 }
 
+/**
+ * Before every window: is this job still ours, and does the post still play
+ * this file? An edit that replaced or removed the video deletes the job row;
+ * an unpublish leaves it. Either way not one more second of that sound goes
+ * to the provider.
+ */
+async function stillWanted(job: SpeechJob, mediaKey: string): Promise<"yes" | "lost" | "gone"> {
+  const { rows } = await getPool().query<{ ours: boolean; current: boolean }>(
+    `SELECT TRUE AS ours,
+            (p.status = 'published' AND p.media_storage_key = $3) AS current
+       FROM speech_jobs j
+       JOIN community_home_posts p ON p.id = j.post_id
+      WHERE j.id = $1 AND j.leased_by = $2 AND j.status = 'running'`,
+    [job.id, job.leased_by, mediaKey],
+  );
+  if (!rows[0]) return "lost";
+  return rows[0].current ? "yes" : "gone";
+}
+
+/** Never throws: anything unexpected is a retry with backoff, like a voice note. */
 export async function runCommunityHomeCaptionsJob(job: SpeechJob): Promise<void> {
+  try {
+    await runJobOnce(job);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    noteCaptionError(message);
+    const next = await retrySpeechJobLater(job, message).catch(() => "lost" as const);
+    logEvent("communityHome.captions.failed", {
+      postId: job.post_id,
+      attempt: job.attempts,
+      next,
+      error: message.slice(0, 200),
+    });
+    if (next === "retrying") {
+      bumpCaptionStat("retried");
+    } else if (next === "gave-up") {
+      bumpCaptionStat("failed");
+      await settleWithoutTrack(job, message, "failed").catch(() => undefined);
+    }
+  }
+}
+
+async function runJobOnce(job: SpeechJob): Promise<void> {
   const postId = job.post_id;
   const post = postId ? await loadPost(postId) : null;
   if (!post || post.status !== "published" || post.media_kind !== "video" || !post.media_storage_key) {
@@ -204,6 +246,17 @@ export async function runCommunityHomeCaptionsJob(job: SpeechJob): Promise<void>
     let language: string | undefined;
     for (const window of windows) {
       const audio = await readWindow(pcmPath, window.startMs, window.endMs);
+      const wanted = await stillWanted(job, mediaKey);
+      if (wanted === "lost") {
+        bumpCaptionStat("lostLease");
+        return;
+      }
+      if (wanted === "gone") {
+        bumpCaptionStat("skippedGone");
+        logEvent("communityHome.captions.skipped", { postId: post.id, reason: "video-changed" });
+        await settleWithoutTrack(job, "gone");
+        return;
+      }
       if (!isCommunityHomeCaptionsOn(post.server_id)) {
         // Spent budget stays spent; nothing more leaves the box.
         await dropForFlagOff(job, post.id);
@@ -240,17 +293,6 @@ export async function runCommunityHomeCaptionsJob(job: SpeechJob): Promise<void>
     bumpCaptionStat("done");
     logEvent("communityHome.captions.done", { postId: post.id, language: sourceLang, cues: cues.length, seconds });
     await translateCaptionsEverywhere(post.id, post.server_id, sourceLang);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    noteCaptionError(message);
-    const next = await retrySpeechJobLater(job, message);
-    logEvent("communityHome.captions.failed", { postId: post.id, attempt: job.attempts, next, error: message.slice(0, 200) });
-    if (next === "retrying") {
-      bumpCaptionStat("retried");
-    } else if (next === "gave-up") {
-      bumpCaptionStat("failed");
-      await settleWithoutTrack(job, message, "failed");
-    }
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }

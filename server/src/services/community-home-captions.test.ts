@@ -563,6 +563,104 @@ describeDb("Baú video subtitles", () => {
     expect(claim.rows[0]?.claimed_by).toBe("someone-else");
   });
 
+  it("a video replaced mid-job: not one more window goes to the provider", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    const real = stt.provider.transcribe;
+    stt.provider.transcribe = async (audio, opts) => {
+      // What the edit does in its transaction when the video changes.
+      await getPool().query(`DELETE FROM speech_jobs WHERE post_id = $1`, [post.id]);
+      return real(audio, opts);
+    };
+    await runCaptionJob();
+    expect(stt.calls).toHaveLength(1);
+    expect(await tracks(post.id)).toEqual([]);
+  });
+
+  it("a post unpublished mid-job: the rest is not sent and the job settles as gone", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    const real = stt.provider.transcribe;
+    stt.provider.transcribe = async (audio, opts) => {
+      await getPool().query(`UPDATE community_home_posts SET status = 'draft' WHERE id = $1`, [post.id]);
+      return real(audio, opts);
+    };
+    await runCaptionJob();
+    expect(stt.calls).toHaveLength(1);
+    expect(await jobs(post.id)).toEqual([{ status: "done", last_error: "gone", attempts: 1 }]);
+  });
+
+  it("a database error before the work starts puts the job back with backoff", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    const pool = getPool();
+    const realQuery = pool.query.bind(pool);
+    let failed = false;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+      if (!failed && typeof text === "string" && text.includes("FROM community_home_posts WHERE id = $1")) {
+        failed = true;
+        return Promise.reject(new Error("connection reset"));
+      }
+      return (realQuery as (...a: unknown[]) => unknown)(text, ...rest);
+    }) as never);
+    try {
+      await runCaptionJob();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failed).toBe(true);
+    expect((await jobs(post.id))[0]!.status).toBe("queued");
+  });
+
+  it("translation turned off between two batches: the second is never sent", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    await runCaptionJob();
+    const cues = Array.from({ length: 70 }, (_, i) => ({ start: i * 2, end: i * 2 + 1.5, text: `fala ${i}` }));
+    await getPool().query(
+      `UPDATE community_home_post_captions SET cues = $2::jsonb, source_hash = 'seventy' WHERE post_id = $1 AND is_source`,
+      [post.id, JSON.stringify(cues)],
+    );
+    await translationOn();
+    let batches = 0;
+    translate.translator.translate = async (texts, _from, to) => {
+      batches += 1;
+      await translationOn(false);
+      return { texts: texts.map((t) => `[${to}] ${t}`) };
+    };
+    expect(await captions.translateCommunityHomeCaptions(post.id, "en")).toBe("skipped:flag_off");
+    expect(batches).toBe(1);
+    expect((await tracks(post.id)).map((t) => t.lang)).toEqual(["pt"]);
+    const usage = await getPool().query<{ chars: string }>(`SELECT chars::text FROM community_home_translation_usage`);
+    expect(Number(usage.rows[0]!.chars)).toBe(cues.slice(0, 60).reduce((n, c) => n + c.text.length, 0));
+  });
+
+  it("a reader's request does not retry a translation that is in backoff", async () => {
+    await captionsOn();
+    const { post } = await publishVideo();
+    await vi.waitFor(async () => expect(await jobs(post.id)).toHaveLength(1));
+    await runCaptionJob();
+    await translationOn();
+    const source = await getPool().query<{ source_hash: string }>(
+      `SELECT source_hash FROM community_home_post_captions WHERE post_id = $1 AND is_source`,
+      [post.id],
+    );
+    await getPool().query(
+      `INSERT INTO community_home_caption_translation_jobs (post_id, lang, source_hash, attempts, retry_at)
+       VALUES ($1, 'en', $2, 1, NOW() + interval '10 minutes')`,
+      [post.id, source.rows[0]!.source_hash],
+    );
+    const res = await captionTracks(member, post.id, "en");
+    expect(res.body.tracks.map((t) => t.lang)).toEqual(["pt"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await captions.waitForCaptionTranslationsForTests();
+    expect(translate.calls.filter((c) => c.texts.includes("frase 0"))).toEqual([]);
+  });
+
   it("a claim lost half way keeps only the batches sent and gives the rest of the budget back", async () => {
     await captionsOn();
     const { post } = await publishVideo();

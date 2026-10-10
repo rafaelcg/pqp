@@ -171,6 +171,7 @@ export function resetCommunityHomeCaptionsForTests(): void {
     else stats[key] = 0;
   }
   inFlightTranslations.clear();
+  readKicks.clear();
 }
 
 // ------------------------------------------------------------------- enqueue
@@ -314,7 +315,7 @@ export async function loadCaptionTracks(
     if (translated) {
       tracks.push({ lang, source: false, auto: true, vtt: toWebVtt(parseStoredCues(translated.cues)) });
     } else {
-      void runCaptionTranslationOnce(post.id, lang);
+      void kickTranslationFromRead(post.id, lang, source.source_hash);
     }
   }
   return tracks;
@@ -562,6 +563,14 @@ async function translateOnce(
       lost = true;
       break;
     }
+    // Consent, again, at the provider boundary: an operator who turns either
+    // switch off while this waited on the database stops the next batch. No
+    // await between this check and the call.
+    if (!isCommunityHomeCaptionsOn(source.server_id) || !isCommunityHomeTranslationOn(source.server_id)) {
+      await settleBudget(sentChars);
+      await releaseCaptionClaim(postId, lang);
+      return skipped(postId, lang, "flag_off");
+    }
     try {
       const result = await translator.translate(
         batch,
@@ -601,28 +610,34 @@ async function translateOnce(
     return failTranslation(postId, lang, claim.attempts, error);
   }
 
-  // A new transcription (or a new video) may have landed while the model
-  // worked: this translation is of the old one, so it is thrown away.
-  const now = await loadSourceTrack(postId);
-  if (!now || now.source_hash !== source.source_hash || now.media_key !== source.media_key) {
+  // From here on the money is spent; a database error writing the result
+  // must still release the claim (with backoff), not hold it for a lease.
+  try {
+    // A new transcription (or a new video) may have landed while the model
+    // worked: this translation is of the old one, so it is thrown away.
+    const now = await loadSourceTrack(postId);
+    if (!now || now.source_hash !== source.source_hash || now.media_key !== source.media_key) {
+      await releaseCaptionClaim(postId, lang);
+      return skipped(postId, lang, "source_changed");
+    }
+    if (!(await renewCaptionClaim(postId, lang))) {
+      return skipped(postId, lang, "claimed");
+    }
+    await getPool().query(
+      `INSERT INTO community_home_post_captions
+         (post_id, lang, is_source, media_key, cues, source_lang, source_hash, made_by, created_at)
+       VALUES ($1, $2, FALSE, $3, $4::jsonb, $5, $6, $7, NOW())
+       ON CONFLICT (post_id, lang) DO UPDATE
+          SET is_source = FALSE, media_key = EXCLUDED.media_key, cues = EXCLUDED.cues,
+              source_lang = EXCLUDED.source_lang, source_hash = EXCLUDED.source_hash,
+              made_by = EXCLUDED.made_by, created_at = NOW()
+        WHERE NOT community_home_post_captions.is_source`,
+      [postId, lang, source.media_key, JSON.stringify(out), source.lang, source.source_hash, communityHomeTranslationModel()],
+    );
     await releaseCaptionClaim(postId, lang);
-    return skipped(postId, lang, "source_changed");
+  } catch (error) {
+    return failTranslation(postId, lang, claim.attempts, error);
   }
-  if (!(await renewCaptionClaim(postId, lang))) {
-    return skipped(postId, lang, "claimed");
-  }
-  await getPool().query(
-    `INSERT INTO community_home_post_captions
-       (post_id, lang, is_source, media_key, cues, source_lang, source_hash, made_by, created_at)
-     VALUES ($1, $2, FALSE, $3, $4::jsonb, $5, $6, $7, NOW())
-     ON CONFLICT (post_id, lang) DO UPDATE
-        SET is_source = FALSE, media_key = EXCLUDED.media_key, cues = EXCLUDED.cues,
-            source_lang = EXCLUDED.source_lang, source_hash = EXCLUDED.source_hash,
-            made_by = EXCLUDED.made_by, created_at = NOW()
-      WHERE NOT community_home_post_captions.is_source`,
-    [postId, lang, source.media_key, JSON.stringify(out), source.lang, source.source_hash, communityHomeTranslationModel()],
-  );
-  await releaseCaptionClaim(postId, lang);
   stats.translated += 1;
   logEvent("communityHome.captions.translation.done", { postId, lang, cues: out.length, chars });
   return "done";
@@ -636,7 +651,7 @@ async function failTranslation(
 ): Promise<CaptionTranslationOutcome> {
   const message = error instanceof Error ? error.message : String(error);
   const retryInSeconds = CAPTION_BACKOFF_BASE_SECONDS * 3 ** (attempts - 1);
-  await releaseCaptionClaim(postId, lang, { error: message, retryInSeconds });
+  await releaseCaptionClaim(postId, lang, { error: message, retryInSeconds }).catch(() => undefined);
   stats.translationFailed += 1;
   stats.lastError = message.slice(0, 300);
   logEvent("communityHome.captions.translation.failed", {
@@ -647,6 +662,48 @@ async function failTranslation(
     error: message.slice(0, 200),
   });
   return "failed";
+}
+
+/** A reader's request asks for a missing translation at most this often per (post, language) and process. */
+const READ_KICK_COOLDOWN_MS = 60_000;
+const readKicks = new Map<string, number>();
+
+/**
+ * A reader asked for a language that has no current track: ask for one in the
+ * background, but cheaply. A popular video read a thousand times while its
+ * translation is in backoff or given up must not reload and parse its cues a
+ * thousand times, so the claim row's own gate is read first (one indexed row,
+ * no cues), and each process asks at most once a minute per pair.
+ */
+async function kickTranslationFromRead(
+  postId: string,
+  lang: CommunityHomeTranslationLang,
+  sourceHash: string,
+): Promise<void> {
+  const key = `${postId}:${lang}`;
+  const now = Date.now();
+  if ((readKicks.get(key) ?? 0) > now - READ_KICK_COOLDOWN_MS || inFlightTranslations.has(key)) return;
+  readKicks.set(key, now);
+  if (readKicks.size > 2_000) {
+    for (const [k, at] of readKicks) if (at <= now - READ_KICK_COOLDOWN_MS) readKicks.delete(k);
+  }
+  try {
+    if (!communityHomeTranslator()) return;
+    const blocked = await getPool().query(
+      `SELECT 1 FROM community_home_caption_translation_jobs
+        WHERE post_id = $1 AND lang = $2 AND source_hash = $3
+          AND (attempts >= $4 OR retry_at > NOW()
+               OR claimed_at > NOW() - make_interval(secs => $5))`,
+      [postId, lang, sourceHash, CAPTION_TRANSLATION_MAX_ATTEMPTS, CAPTION_CLAIM_LEASE_SECONDS],
+    );
+    if ((blocked.rowCount ?? 0) > 0) return;
+    await runCaptionTranslationOnce(postId, lang);
+  } catch (error) {
+    console.error(
+      "[community-home] captions read-time translation failed:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /** One (post, language) at a time per process; a second ask while it runs is a no-op. */
