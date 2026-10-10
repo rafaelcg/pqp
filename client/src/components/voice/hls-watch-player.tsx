@@ -3221,7 +3221,9 @@ export function HlsWatchPlayer({
       className={cn(
         // `@container/watch`: side by side stacks by the PLAYER's width, not
         // the window's (`CAMERA_SIDE_*_CLASS`).
-        "@container/watch relative h-full w-full bg-black",
+        // Everything drawn here sits on the black stage, so the player's
+        // text is the on-video colour in every theme rather than the page's.
+        "@container/watch relative h-full w-full bg-black [--color-paper:var(--color-on-media)] [--color-paper-muted:var(--color-on-media-muted)]",
         cinema && fullscreen?.active && chrome.hidden && "cursor-none",
         !cinema && "group",
         className,
@@ -3691,7 +3693,10 @@ export function HlsWatchPlayer({
                 }
                 updateVolume(next);
               }}
-              className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
+              // A narrow player (a phone held upright) has no room for the
+              // slider beside the rest of the bar, and a phone has volume
+              // buttons; mute stays.
+              className="hidden h-1 w-20 cursor-pointer accent-signal @min-[30rem]/watch:block sm:w-24"
             />
             </div>
             {isVod ? (
@@ -3727,19 +3732,22 @@ export function HlsWatchPlayer({
               <button
                 type="button"
                 data-testid="watch-stage-jump-live"
-                className="flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-[11px] font-semibold uppercase tracking-wide text-paper/80 hover:bg-paper/15 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                className="flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-2 text-[11px] font-semibold uppercase tracking-wide text-paper/80 hover:bg-paper/15 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
                 onClick={paused ? togglePlay : jumpToLive}
               >
                 <span
                   aria-hidden="true"
-                  className="h-2 w-2 rounded-full bg-paper/50"
+                  className="h-2 w-2 shrink-0 rounded-full bg-paper/50"
                 />
-                {t("voice.hls.jumpToLive")}
+                <span className="truncate">{t("voice.hls.jumpToLive")}</span>
               </button>
             ) : (
+              // Not on a narrow player: there it wrapped onto two lines over
+              // the mute button. The page header and the player's top line
+              // already say the party is live.
               <span
                 data-testid="watch-stage-live"
-                className="flex h-8 items-center gap-1.5 px-2 text-[11px] font-semibold uppercase tracking-wide text-paper"
+                className="hidden h-8 items-center gap-1.5 whitespace-nowrap px-2 text-[11px] font-semibold uppercase tracking-wide text-paper @min-[36rem]/watch:flex"
               >
                 <span
                   aria-hidden="true"

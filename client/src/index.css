@@ -135,6 +135,16 @@
   --color-flag-es-red: #aa151b;
   --color-flag-es-yellow: #f1bf00;
 
+  /*
+   * Text and icons drawn ON a video: the watch party player's bar, its live
+   * chip and its viewer count. A film is dark whatever the app's theme, so
+   * these do not retint. Light on the black stage in every theme, the way
+   * any video player draws its controls; in the light theme the player's
+   * controls used to inherit near-black text and vanish into the picture.
+   */
+  --color-on-media: oklch(0.97 0.005 95);
+  --color-on-media-muted: oklch(0.8 0.008 95);
+
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
   --font-sans:

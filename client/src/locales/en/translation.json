@@ -3528,6 +3528,7 @@
   "qaUi.group.status": "Status",
   "qaUi.group.code": "Code",
   "qaUi.group.state": "State",
+  "qaUi.group.media": "On video",
   "qaUi.group.soft": "Soft surfaces",
   "qaUi.soft.sample": "Text on this fill",
   "qaUi.elevation.note": "Each level is a surface, an edge and a shadow together. In dark themes the surface step and the hairline do most of the work.",

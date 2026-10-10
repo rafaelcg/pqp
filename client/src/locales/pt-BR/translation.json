@@ -3528,6 +3528,7 @@
   "qaUi.group.status": "Status",
   "qaUi.group.code": "Código",
   "qaUi.group.state": "Estado",
+  "qaUi.group.media": "Sobre o vídeo",
   "qaUi.group.soft": "Superfícies suaves",
   "qaUi.soft.sample": "Texto sobre este preenchimento",
   "qaUi.elevation.note": "Cada nível é uma superfície, uma borda e uma sombra juntas. Nos temas escuros, o degrau de superfície e o fio da borda fazem quase todo o trabalho.",
