@@ -988,6 +988,9 @@ export type PinCommunityHomePostRequest = z.infer<
  * opened the feed, their own excluded. */
 export const communityHomeUnreadResponseSchema = z.object({
   count: z.number().int().nonnegative(),
+  /** When the newest unread post went live (ISO), null with nothing unread.
+   * Absent from an API that predates it, which a client reads as "unknown". */
+  newestAt: z.string().nullable().optional(),
 });
 
 export type CommunityHomeUnreadResponse = z.infer<
@@ -999,6 +1002,10 @@ export type CommunityHomeUnreadResponse = z.infer<
  * out. What the server rail reads. */
 export const communityHomeUnreadAllResponseSchema = z.object({
   servers: z.record(z.string(), z.number().int().positive()),
+  /** Per server, when its newest unread post went live (ISO). A server in
+   * `servers` is in here too; an API that predates it omits the field. It is
+   * what decides whether the "New" chip on the Baú row is still earned. */
+  newest: z.record(z.string(), z.string()).optional(),
 });
 
 export type CommunityHomeUnreadAllResponse = z.infer<

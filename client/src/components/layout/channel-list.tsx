@@ -344,6 +344,11 @@ interface ChannelListProps {
   communityHomeShowNew?: boolean;
   /** Unread published posts. Outranks the "New" chip: a number says more. */
   communityHomeUnread?: number;
+  /**
+   * The newest unread post is under 24 h old: the row wears a pulsing "New"
+   * chip beside the lime count. Unknown age is false, never true.
+   */
+  communityHomeUnreadFresh?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
   /**
@@ -446,6 +451,7 @@ export const ChannelList = memo(function ChannelList({
   communityHomeEnabled = false,
   communityHomeShowNew = false,
   communityHomeUnread = 0,
+  communityHomeUnreadFresh = false,
   communityHomeSelected = false,
   onSelectCommunityHome,
   members = [],
@@ -635,6 +641,7 @@ export const ChannelList = memo(function ChannelList({
               server={server}
               selected={communityHomeSelected}
               unread={communityHomeUnread}
+              fresh={communityHomeUnreadFresh}
               showNew={communityHomeShowNew}
               compact
               onSelect={onSelectCommunityHome}
@@ -1568,6 +1575,7 @@ export const ChannelList = memo(function ChannelList({
                   server={server}
                   selected={communityHomeSelected}
                   unread={communityHomeUnread}
+                  fresh={communityHomeUnreadFresh}
                   showNew={communityHomeShowNew}
                   onSelect={() => {
                     onSelectCommunityHome();
@@ -2322,18 +2330,24 @@ function CommunityHomeFace({
 function CommunityHomeUnreadBadge({
   count,
   compact,
+  pushRight = true,
 }: {
   count: number;
   compact?: boolean;
+  /** Takes the row's free space; false when a chip before it already did. */
+  pushRight?: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <span
       data-community-home-unread
       className={cn(
-        "min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper",
+        // Lime, the brand signal: a new Baú post is news, not a mention, so
+        // it never borrows the red the mention counts use.
+        "min-w-4 rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink",
         compact && "absolute -right-1 -top-1",
-        !compact && "ml-auto shrink-0",
+        !compact && "shrink-0",
+        !compact && pushRight && "ml-auto",
       )}
       aria-label={t("communityHome.badge.unread", { count })}
     >
@@ -2351,6 +2365,7 @@ function CommunityHomeNavButton({
   server,
   selected,
   unread,
+  fresh = false,
   showNew,
   compact = false,
   onSelect,
@@ -2358,6 +2373,8 @@ function CommunityHomeNavButton({
   server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
   selected: boolean;
   unread: number;
+  /** The newest unread post is under 24 h old. */
+  fresh?: boolean;
   showNew: boolean;
   compact?: boolean;
   onSelect: () => void;
@@ -2389,7 +2406,24 @@ function CommunityHomeNavButton({
         </span>
       )}
       {unread > 0 ? (
-        <CommunityHomeUnreadBadge count={unread} compact={compact} />
+        <>
+          {/* A different chip from the discovery one below: that says "you
+              have never opened this", this says "something just landed".
+              The pulse is motion-safe, so reduced motion gets a still chip. */}
+          {!compact && fresh && (
+            <span
+              data-community-home-fresh
+              className="ml-auto shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal motion-safe:animate-pulse"
+            >
+              {t("communityHome.badge.new")}
+            </span>
+          )}
+          <CommunityHomeUnreadBadge
+            count={unread}
+            compact={compact}
+            pushRight={!fresh}
+          />
+        </>
       ) : (
         !compact &&
         showNew && (

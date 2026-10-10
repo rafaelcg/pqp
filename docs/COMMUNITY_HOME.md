@@ -126,7 +126,11 @@ for what would replace it.
   not seen (`GET …/home/unread`; own posts never count, and the VIP filter
   matches the feed so the badge cannot promise a post the feed will not
   show). Opening the live feed stamps `community_home_reads` and clears it.
-  The count outranks the "New" chip: a number says more.
+  The count is lime (the brand signal, not the mention red) and outranks the
+  discovery "New" chip: a number says more. While the newest unread post is
+  under 24 h old it also wears a pulsing "New" chip (still under
+  `prefers-reduced-motion`), a different chip from the discovery one, driven by
+  `newestAt` on the unread reads; an API that does not send it shows no chip.
   Landing (`client/src/lib/community-home/landing.ts`): a **community**
   always lands on this pane (identity header, then the feed). A private hall
   still needs the server's own Baú opt-in. If the instance flag or the
@@ -151,14 +155,22 @@ for what would replace it.
   keep today's feed with no identity header. One channel-list row, still
   called Baú.
 - **Server rail** (web): an unread Baú post lights the white pip on that
-  server's icon, the same one an unread channel lights, and never a number: the
-  red count on an icon is for mentions, and a staff post is news, not a message
-  addressed to you. A muted server stays silent, as for channels. One read
-  (`GET /api/community-home/unread`, `{ servers: { [id]: count } }`, only
-  servers whose owner turned Baú on) feeds every icon; it is re-asked on any
-  `community-home-update` frame and when you move between servers. The open
-  server's own number still comes from `…/home/unread` and drives the row and
-  the corner card (`client/src/lib/community-home/rail-unread.ts`).
+  server's icon, as an unread channel does, and adds the Baú's own cue in lime
+  (the brand signal): a count at the icon's corner, capped at "9+". The red
+  count on an icon stays for mentions ("addressed to you"), so when the server
+  has mentions the red count keeps the corner and the Baú moves to a lime ring
+  and glow around the icon instead: one corner, one meaning, no second badge to
+  read. A muted server stays silent, as for channels. The tab title and app
+  badge count mentions only, so the Baú is not in them. One read
+  (`GET /api/community-home/unread`, `{ servers: { [id]: count }, newest: { [id]: iso } }`,
+  only servers whose owner turned Baú on) feeds every icon; it is re-asked on
+  any `community-home-update` frame and when you move between servers. The open
+  server's own number still comes from `…/home/unread` (`{ count, newestAt }`)
+  and drives the row and the corner card
+  (`client/src/lib/community-home/rail-unread.ts`).
+- **iOS and Android** read the aggregate for a lime count on the server tile
+  (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
+  too. Neither list carries mention counts, so there is no ring there.
 - **Push** on a new post, behind the runtime flag `bau_post_push` (default off,
   per server, see below).
 - **Live corner card** when a post is published while you are in that

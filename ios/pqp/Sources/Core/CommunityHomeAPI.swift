@@ -42,6 +42,17 @@ extension APIClient {
         return response.count
     }
 
+    /// Unread Baú posts for EVERY server in one read: what the hub needs to
+    /// badge a server tile whose channel list is not open. Servers with nothing
+    /// unread are absent. Nil on any failure, so a caller can tell "nothing is
+    /// unread" (an empty map) from "could not ask" and keep what it showed.
+    func communityHomeUnreadAll() async -> [String: Int]? {
+        guard let response: CommunityHomeUnreadAllResponse = try? await get("/api/community-home/unread") else {
+            return nil
+        }
+        return response.servers
+    }
+
     /// "I have seen the Baú", recorded server-side, which is what the badge on
     /// every device counts from. Without this call a person who read the Baú
     /// on their phone kept a permanent unread badge on the web, because the

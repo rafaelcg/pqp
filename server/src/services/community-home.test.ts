@@ -613,14 +613,23 @@ describeDb("community home (Baú)", () => {
 
   it("counts posts a person has not seen, ignores their own, and clears on read", async () => {
     const unread = () =>
-      call<{ count: number }>(member, "GET", `${base()}/unread`);
+      call<{ count: number; newestAt: string | null }>(
+        member,
+        "GET",
+        `${base()}/unread`,
+      );
 
     // Nothing published yet.
     expect((await unread()).body.count).toBe(0);
+    expect((await unread()).body.newestAt).toBeNull();
 
     await publish({ title: "Um", body: "x" });
     await publish({ title: "Dois", body: "y" });
     expect((await unread()).body.count).toBe(2);
+    // The time of the newest one, for the "New" chip's 24 hour window.
+    const newestAt = (await unread()).body.newestAt;
+    expect(newestAt).not.toBeNull();
+    expect(Math.abs(Date.now() - Date.parse(newestAt!))).toBeLessThan(60_000);
 
     // Opening the feed is reading it.
     expect((await call(member, "POST", `${base()}/read`)).status).toBe(200);

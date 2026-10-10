@@ -177,6 +177,16 @@ data class CreateBauCommentRequest(val body: String)
 @Serializable
 data class BauUnreadResponse(val count: Int = 0)
 
+/**
+ * `GET /api/community-home/unread`: the same count for every server this
+ * person is in whose owner turned the Baú on, servers with nothing unread left
+ * out. What the server list reads. The API also sends `newest` (when each
+ * server's newest unread post went live), which only the web's "New" chip
+ * needs; it is ignored here.
+ */
+@Serializable
+data class BauUnreadAllResponse(val servers: Map<String, Int> = emptyMap())
+
 /** `POST /api/servers/:id/home/read` answers `{ ok: true }` and nothing else. */
 @Serializable
 data class BauReadResponse(val ok: Boolean = true)

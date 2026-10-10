@@ -4556,7 +4556,7 @@ router.delete(
 router.get("/api/community-home/unread", async ({ user }) => {
   requireCommunityHome();
   try {
-    return { servers: await countUnreadCommunityHomePostsAllServers(user.id) };
+    return await countUnreadCommunityHomePostsAllServers(user.id);
   } catch (error) {
     mapCommunityHomeError(error);
   }
@@ -4573,7 +4573,7 @@ router.get(
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      return { count: await countUnreadCommunityHomePosts(serverId!, user.id) };
+      return await countUnreadCommunityHomePosts(serverId!, user.id);
     } catch (error) {
       mapCommunityHomeError(error);
     }

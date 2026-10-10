@@ -217,6 +217,11 @@ struct CommunityHomeCommentsResponse: Codable, Sendable { let comments: [Communi
 struct CommunityHomeCommentResponse: Codable, Sendable { let comment: CommunityHomeComment }
 struct CommunityHomeLikeResponse: Codable, Sendable { let liked: Bool; let likeCount: Int }
 struct CommunityHomeUnreadResponse: Codable, Sendable { let count: Int }
+/// `GET /api/community-home/unread`: every server at once, servers with nothing
+/// unread left out. The API also sends `newest` (when each server's newest
+/// unread post went live); only the web's "New" chip uses it, so it is not
+/// decoded here.
+struct CommunityHomeUnreadAllResponse: Codable, Sendable { let servers: [String: Int] }
 
 /// YouTube links, the one media kind that is a URL rather than an object.
 ///

@@ -32,7 +32,10 @@ import {
   useChannelNotificationLevel,
   useNotificationState,
 } from "@/hooks/use-notifications";
-import { railServerIndicator } from "@/lib/community-home/rail-unread";
+import {
+  formatBauBadge,
+  railServerIndicator,
+} from "@/lib/community-home/rail-unread";
 import { useTranslation } from "@/lib/i18n";
 import { setServerStreamAlerts } from "@/lib/notifications";
 import { conversationTitle } from "@/lib/conversations";
@@ -56,8 +59,9 @@ interface ServerRailProps {
   serverUnread: Record<string, UnreadState>;
   /**
    * Unread Baú posts per server (`GET /api/community-home/unread`), servers
-   * with none absent. Lights the same white pip an unread channel does, never
-   * a number: a red count on the icon stays for mentions (`railServerIndicator`).
+   * with none absent. Lights the white pip like any unread channel and adds
+   * the Baú's own cue: a lime count at the corner, or a lime ring when the
+   * red mention count already holds the corner (`railServerIndicator`).
    */
   serverBauUnread?: Record<string, number>;
   /** True while the conversation view is what the sidebar is showing. */
@@ -279,7 +283,8 @@ export function ServerRail({
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
-        const { mentions, hasUnread, bauOnly } = railServerIndicator({
+        const { mentions, hasUnread, bauOnly, bauCue, bauCount } =
+          railServerIndicator({
           totals,
           bauUnread: serverBauUnread?.[server.id] ?? 0,
           muted,
@@ -377,7 +382,13 @@ export function ServerRail({
                   ? "bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
                 muted && !selected && "opacity-50",
+                // The Baú's ring: only when a red mention count holds the
+                // corner. The glow is the same signal token, so it follows
+                // the theme's accent.
+                bauCue === "ring" &&
+                  "ring-2 ring-signal ring-offset-2 ring-offset-rail shadow-[0_0_12px_1px_color-mix(in_oklab,var(--color-signal)_55%,transparent)]",
               )}
+              data-bau-cue={bauCue === "none" ? undefined : bauCue}
             >
               <RailPill
                 kind={selected ? "selected" : hasUnread ? "unread" : "none"}
@@ -391,6 +402,17 @@ export function ServerRail({
               </span>
               {mentions > 0 && (
                 <RailCountBadge count={mentions} tone="danger" />
+              )}
+              {/* THE BAÚ'S OWN COUNT, in lime, where the mention count would
+                  be. A mention wins the corner (it is addressed to you); the
+                  Baú then falls back to the ring on the button. */}
+              {bauCue === "count" && (
+                <RailCountBadge
+                  count={bauCount}
+                  tone="signal"
+                  label={formatBauBadge(bauCount)}
+                  dataBau
+                />
               )}
               {/* A SHOW IS ON IN HERE. The one thing a rail bubble did not
                   say: a member sitting in another server had no way to
@@ -411,9 +433,11 @@ export function ServerRail({
                 <span className="sr-only">
                   {mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })
-                    : bauOnly
-                      ? t("chrome.unreadBauSr")
-                      : t("chrome.unreadMessagesSr")}
+                    : bauCue === "count"
+                      ? t("chrome.unreadBauCountSr", { count: bauCount })
+                      : bauOnly
+                        ? t("chrome.unreadBauSr")
+                        : t("chrome.unreadMessagesSr")}
                 </span>
               )}
             </button>
@@ -692,11 +716,16 @@ function RailCountBadge({
   tone,
   corner = "top",
   dataFriendRequests = false,
+  label,
+  dataBau = false,
 }: {
   count: number;
   tone: "danger" | "signal";
   corner?: "top" | "bottom";
   dataFriendRequests?: boolean;
+  /** Shown instead of the 99+ capped count (the Baú caps at 9+). */
+  label?: string;
+  dataBau?: boolean;
 }) {
   if (count <= 0) {
     return null;
@@ -707,13 +736,14 @@ function RailCountBadge({
       key={count}
       aria-hidden="true"
       {...(dataFriendRequests ? { "data-friend-requests": count } : {})}
+      {...(dataBau ? { "data-bau-count": count } : {})}
       className={cn(
         "absolute right-[-5px] flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
         corner === "top" ? "top-[-5px]" : "bottom-[-5px]",
         tone === "danger" ? "bg-danger text-paper" : "bg-signal text-ink",
       )}
     >
-      {formatBadgeCount(count)}
+      {label ?? formatBadgeCount(count)}
     </span>
   );
 }

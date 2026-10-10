@@ -66,40 +66,55 @@ afterEach(() => {
 });
 
 describe("ServerRail with an unread Baú", () => {
-  it("lights the pip on a server that is not open, with no number", () => {
+  it("shows a lime count at the corner on a server that is not open", () => {
     const html = rail({ serverBauUnread: { [S1]: 3 } });
     const lit = buttonFor(html, "Filminho");
     expect(lit).toContain("bg-paper");
-    expect(lit).toContain("new post in Ba");
-    expect(lit).not.toContain("animate-badge-pop");
+    expect(lit).toContain("data-bau-count=\"3\"");
+    expect(lit).toContain("bg-signal text-ink");
+    expect(lit).not.toContain("bg-danger");
+    expect(lit).toContain("3 new posts in Ba");
+    expect(lit).not.toContain("ring-signal");
     const quiet = buttonFor(html, "Outro");
-    expect(quiet).not.toContain("new post in Ba");
+    expect(quiet).not.toContain("data-bau-count");
     expect(quiet).not.toContain("bg-paper group-hover");
   });
 
-  it("keeps the red number for mentions even when the Baú is unread too", () => {
+  it("caps the lime count at 9+", () => {
+    const html = rail({ serverBauUnread: { [S1]: 40 } });
+    const lit = buttonFor(html, "Filminho");
+    expect(lit).toContain(">9+<");
+    expect(lit).toContain("40 new posts in Ba");
+  });
+
+  it("gives the corner to the red mention count and rings the icon in lime instead", () => {
     const html = rail({
       serverBauUnread: { [S1]: 3 },
       serverUnread: { [S1]: { count: 5, mentions: 2 } },
     });
     const lit = buttonFor(html, "Filminho");
+    expect(lit).toContain("bg-danger");
     expect(lit).toContain("animate-badge-pop");
-    expect(lit).not.toContain("new post in Ba");
+    expect(lit).not.toContain("data-bau-count");
+    expect(lit).toContain("ring-signal");
+    expect(lit).toContain('data-bau-cue="ring"');
   });
 
   it("says nothing for a muted server", () => {
     setServerNotificationLevel(S1, "none");
     const html = rail({ serverBauUnread: { [S1]: 3 } });
     const muted = buttonFor(html, "Filminho");
-    expect(muted).not.toContain("new post in Ba");
+    expect(muted).not.toContain("data-bau-count");
+    expect(muted).not.toContain("data-bau-cue");
     expect(muted).not.toContain("bg-paper group-hover");
     expect(muted).toContain("opacity-50");
   });
 
-  it("draws the open server as selected, not as unread", () => {
+  it("draws the open server as selected, and still counts its unread posts", () => {
     const html = rail({ selectedServerId: S1, serverBauUnread: { [S1]: 3 } });
     const open = buttonFor(html, "Filminho");
     expect(open).toContain("bg-signal");
     expect(open).not.toContain("bg-paper group-hover");
+    expect(open).toContain("data-bau-count");
   });
 });

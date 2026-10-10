@@ -633,22 +633,28 @@ describeDb("Baú new post push", () => {
         [second.server.id, owner.id],
       );
 
-      const res = await call<{ servers: Record<string, number> }>(
-        member,
-        "GET",
-        "/api/community-home/unread",
-      );
+      const res = await call<{
+        servers: Record<string, number>;
+        newest: Record<string, string>;
+      }>(member, "GET", "/api/community-home/unread");
       expect(res.status).toBe(200);
       expect(res.body.servers).toEqual({ [serverId]: 2 });
+      // The newest unread post's time rides along, one entry per counted server.
+      expect(Object.keys(res.body.newest)).toEqual([serverId]);
+      expect(Number.isNaN(Date.parse(res.body.newest[serverId]!))).toBe(false);
 
       // Opening the feed clears it.
       await call(member, "POST", `/api/servers/${serverId}/home/read`);
-      const after = await call<{ servers: Record<string, number> }>(
+      const after = await call<{
+        servers: Record<string, number>;
+        newest: Record<string, string>;
+      }>(
         member,
         "GET",
         "/api/community-home/unread",
       );
       expect(after.body.servers).toEqual({});
+      expect(after.body.newest).toEqual({});
     });
 
     it("404s with the instance flag off", async () => {
