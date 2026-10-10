@@ -71,6 +71,46 @@
         }
       }
     },
+    "%lld comments" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld comment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld comments"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld comentário"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld comentários"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld in this channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -87,6 +127,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld no baralho"
+          }
+        }
+      }
+    },
+    "%lld likes" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld like"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld likes"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld curtida"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld curtidas"
+                }
+              }
+            }
           }
         }
       }
@@ -637,6 +717,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Baú"
+          }
+        }
+      }
+    },
+    "BAÚ" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "BAÚ"
+          }
+        }
+      }
+    },
+    "Baú post: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Post do Baú: %@"
           }
         }
       }
@@ -2061,6 +2161,16 @@
         }
       }
     },
+    "in the Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no Baú"
+          }
+        }
+      }
+    },
     "Incoming call" : {
       "localizations" : {
         "pt-BR" : {
@@ -2317,6 +2427,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Carregando…"
+          }
+        }
+      }
+    },
+    "Locked" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trancado"
           }
         }
       }
@@ -2607,6 +2727,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Baralho novo · %lld no baralho"
+          }
+        }
+      }
+    },
+    "New in the Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Novidade no Baú"
           }
         }
       }
@@ -3081,6 +3211,16 @@
         }
       }
     },
+    "Open in Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver no Baú"
+          }
+        }
+      }
+    },
     "Open source. Self-host it, or use the hosted one. Same product either way." : {
       "localizations" : {
         "pt-BR" : {
@@ -3237,6 +3377,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mensagens fixadas nunca são apagadas."
+          }
+        }
+      }
+    },
+    "Pinned post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Post fixado"
           }
         }
       }

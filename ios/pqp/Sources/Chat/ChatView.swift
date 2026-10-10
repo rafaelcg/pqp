@@ -1027,6 +1027,29 @@ struct MessageRow: View {
     /// A webhook has no account behind it, so there is nobody to open.
     private var isPerson: Bool { !message.isWebhook }
 
+    @Environment(SessionStore.self) private var session
+    /// The card for a Baú post link in this message; `.loading` until asked.
+    @State private var bauState: BauCardState = .loading
+
+    /// The same-instance Baú permalink this message gets a card for, if any.
+    /// A blocked message gets none: it is hidden, not unfurled.
+    private var bauSelection: BauShare.Selection? {
+        message.blocked ? nil : BauShare.selectCardLink(in: message.body)
+    }
+
+    private var bauCardShown: Bool {
+        if case .ok = bauState { return bauSelection != nil }
+        return false
+    }
+
+    /// The card replaces the link while it loads and once it shows; the words
+    /// the sender wrote stay. When the viewer may not see the post the body is
+    /// untouched, so the plain link is exactly what it was.
+    private var displayBody: String {
+        guard let bauSelection, bauState != .unavailable else { return message.body }
+        return BauShare.strippingLink(bauSelection.link, from: message.body)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             if isGrouped {
@@ -1094,14 +1117,18 @@ struct MessageRow: View {
                         .accessibilityLabel(Text("GIF"))
                 } else if let chance = message.chance {
                     ChanceCard(chance: chance)
-                } else if !message.body.isEmpty {
+                } else if !displayBody.isEmpty {
                     // Deliberately NOT `.textSelection(.enabled)`: selectable
                     // text eats the long press, and the long press is now how
                     // the whole action menu is reached. "Copy text" is in that
                     // menu, which is the errand selection was serving anyway.
-                    MessageBodyText(body: message.body)
+                    MessageBodyText(body: displayBody)
                         .font(Typography.body)
                         .foregroundStyle(Palette.paper)
+                }
+
+                if let bauSelection {
+                    BauPostCardSlot(link: bauSelection.link, state: bauState)
                 }
 
                 ForEach(message.attachments) { attachment in
@@ -1112,7 +1139,13 @@ struct MessageRow: View {
                     }
                 }
 
-                ForEach(message.embeds, id: \.url) { embed in
+                // The card is the preview of a Baú link; a generic unfurl of
+                // the same URL beside it would say the same thing twice.
+                // Only the Baú link's own unfurl is dropped; a different URL in
+                // the same message keeps its preview.
+                ForEach(message.embeds.filter { embed in
+                    !(bauCardShown && URL(string: embed.url).flatMap { BauShare.inAppTarget(for: $0) } != nil)
+                }, id: \.url) { embed in
                     EmbedCard(embed: embed)
                 }
 
@@ -1138,6 +1171,20 @@ struct MessageRow: View {
         // visibly "yours already" while the round trip completes.
         .opacity(message.isPending ? 0.55 : 1)
         .animation(Motion.standard, value: message.isPending)
+        .task(id: bauSelection?.link.ref) { await loadBauCard() }
+    }
+
+    private func loadBauCard() async {
+        guard let ref = bauSelection?.link.ref else { return }
+        bauState = .loading
+        let api = session.api
+        let card = await BauCardStore.shared.card(
+            serverId: ref.serverId, postId: ref.postId, lang: BauShare.cardLanguage()
+        ) { serverId, postId, lang in
+            try await api.communityHomePostCard(serverId: serverId, postId: postId, lang: lang)
+        }
+        guard !Task.isCancelled else { return }
+        bauState = card.map(BauCardState.ok) ?? .unavailable
     }
 }
 
@@ -1160,6 +1207,20 @@ struct MessageBodyText: View {
             markdown: raw,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else { return AttributedString(raw) }
+        // A pasted Baú permalink is not a markdown link, so nothing would
+        // answer a tap on it. Mark it as one; the app's `openURL` handler
+        // routes it into the Baú instead of Safari.
+        let plain = String(parsed.characters)
+        for link in BauShare.findLinks(in: plain)
+        where BauShare.isOwnInstanceOrigin(link.origin, currentOrigin: BauShare.currentWebOrigin) {
+            let lower = parsed.characters.index(
+                parsed.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: link.range.lowerBound))
+            let upper = parsed.characters.index(
+                parsed.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: link.range.upperBound))
+            if parsed[lower..<upper].runs.allSatisfy({ $0.link == nil }) {
+                parsed[lower..<upper].link = URL(string: link.url)
+            }
+        }
         // Links get the accent so they are visibly tappable on the dark ground.
         for run in parsed.runs where run.link != nil {
             parsed[run.range].foregroundColor = Palette.signal

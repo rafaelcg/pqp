@@ -25,6 +25,10 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// "this server" and lands on the Baú by itself; here it has to be named,
     /// because the phone opens a server on its channel list.
     case bau(serverId: String)
+    /// A Baú post (Community Home), what a Baú post card in chat opens:
+    /// `/app/server/<sid>/bau/<postId>`. The channel list is the landing and it
+    /// pushes the Baú scrolled to the post. `/bau` with no post is `.bau`.
+    case bauPost(serverId: String, postId: String)
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -79,6 +83,15 @@ enum DeepLink {
         case 3 where segments[0] == "server" && segments[2] == "home":
             let serverId = segments[1]
             return serverId.isEmpty ? nil : .bau(serverId: serverId)
+        case 3 where segments[0] == "server" && segments[2] == "bau":
+            let serverId = segments[1]
+            return serverId.isEmpty ? nil : .bau(serverId: serverId.lowercased())
+
+        case 4 where segments[0] == "server" && segments[2] == "bau":
+            let serverId = segments[1]
+            let postId = segments[3]
+            guard !serverId.isEmpty, !postId.isEmpty else { return nil }
+            return .bauPost(serverId: serverId.lowercased(), postId: postId.lowercased())
 
         case 4 where segments[0] == "server" && segments[2] == "channel":
             let serverId = segments[1]

@@ -680,6 +680,7 @@ final class SessionStore {
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.
         await ReadCache.shared.clear()
+        await BauCardStore.shared.clear()
         currentUser = nil
         phase = .onboarding
     }

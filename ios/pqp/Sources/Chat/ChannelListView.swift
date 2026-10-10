@@ -19,11 +19,20 @@ struct ChannelListView: View {
     /// A new-post push was tapped: open the Baú once the list knows whether
     /// this server has one (see `openBauIfAsked`).
     let opensBau: Bool
+    /// Set when a Baú post link brought us here: push the Baú on top of this
+    /// list, scrolled to the post it names.
+    let initialBau: BauFocus?
 
-    init(server: Server, initialChannel: Channel? = nil, opensBau: Bool = false) {
+    init(
+        server: Server,
+        initialChannel: Channel? = nil,
+        opensBau: Bool = false,
+        initialBau: BauFocus? = nil
+    ) {
         self.server = server
         self.initialChannel = initialChannel
         self.opensBau = opensBau
+        self.initialBau = initialBau
         _current = State(initialValue: server)
     }
 
@@ -113,6 +122,8 @@ struct ChannelListView: View {
     /// `NavigationLink`s, which do not need a binding.
     @State private var openedChannel: Channel?
     @State private var hasSeededInitialChannel = false
+    @State private var openedBau: BauFocus?
+    @State private var hasSeededInitialBau = false
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -332,6 +343,9 @@ struct ChannelListView: View {
                 CommunityHomeView(server: current, config: config)
             }
         }
+        .navigationDestination(item: $openedBau) { focus in
+            CommunityHomeView(server: current, config: communityHome ?? .off, focusPostId: focus.postId)
+        }
         // Deferred by one appearance on purpose. A `navigationDestination` can
         // only serve a push once the view carrying it is *in* the stack, and on
         // a restored launch this view is itself being pushed in the same
@@ -346,6 +360,29 @@ struct ChannelListView: View {
             // stage a navigation the user did not make.
             transaction.disablesAnimations = true
             withTransaction(transaction) { openedChannel = initialChannel }
+        }
+        // A Baú link: the same one-appearance delay as above, and the flag is
+        // asked first (memoised, so usually free) because a server whose Baú
+        // is off must land on its channel list rather than on a screen that
+        // can only 404.
+        .task {
+            guard let initialBau, !hasSeededInitialBau else { return }
+            hasSeededInitialBau = true
+            // `communityHomeConfig()` answers "off" on any failure and only
+            // remembers a real answer, so a dead network at launch would
+            // drop the link. Ask a few times before settling for the list.
+            for delay in [0.0, 1.5, 4.0] {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                guard !Task.isCancelled else { return }
+                let config = await session.api.communityHomeConfig()
+                guard !Task.isCancelled else { return }
+                if config.enabled {
+                    if communityHome == nil { communityHome = config }
+                    guard current.communityHomeEnabled else { return }
+                    openedBau = initialBau
+                    return
+                }
+            }
         }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }
