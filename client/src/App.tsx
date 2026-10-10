@@ -1754,6 +1754,13 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // A Baú permalink (or a card in chat) names a post to scroll to. The nonce
+  // makes following the same card twice scroll twice.
+  const [communityHomeFocus, setCommunityHomeFocus] = useState<{
+    serverId: string;
+    postId: string;
+    nonce: number;
+  } | null>(null);
   // A ticket for every fetch of the open server's channel list that the
   // `channels-update` refetch has to order itself against. Only the newest
   // ticket may write the list, so two quick frames (a create and a rename a
@@ -4542,7 +4549,8 @@ function MainAppContent({
         // bootstrap's `onReady` openChannel(initial) can overwrite the deep
         // link's landing (Home, or first text) and leave "Pick a channel".
         const deepLink = parseAppRoute(window.location.pathname);
-        const deepLinksServer = deepLink?.kind === "channel";
+        const deepLinksServer =
+          deepLink?.kind === "channel" || deepLink?.kind === "home";
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
         // A conversation link owns the navigation outright: opening a server
@@ -7629,6 +7637,31 @@ function MainAppContent({
   );
 
   /**
+   * Apply a `/app/server/<id>/bau[/<postId>]` target: open the server on its
+   * Baú and, with a post id, scroll to that post. A server with Baú off (or a
+   * server this account is not in) lands wherever the plain server link would,
+   * and no focus is set, so a dead card never leaves a stale highlight.
+   */
+  const applyHomeRoute = useCallback(
+    async (
+      serverId: string,
+      postId: string | null,
+      linkedAt: number = Date.now(),
+    ) => {
+      await applyChannelRoute(serverId, null, null, linkedAt);
+      const target = serversRef.current.find((server) => server.id === serverId);
+      if (postId && target?.communityHomeEnabled === true) {
+        setCommunityHomeFocus((previous) => ({
+          serverId,
+          postId,
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
+      }
+    },
+    [applyChannelRoute],
+  );
+
+  /**
    * Apply a `/app/dm[/<channelId>]` target.
    *
    * The list is refetched first rather than trusted from state, because this is
@@ -7706,6 +7739,12 @@ function MainAppContent({
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
     (communityHomeFeedLive || selectedIsCommunity);
+  useEffect(() => {
+    // Leaving the Baú spends the focus: coming back later is not a follow.
+    if (!communityHomeOpen) {
+      setCommunityHomeFocus((current) => (current ? null : current));
+    }
+  }, [communityHomeOpen]);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -7996,6 +8035,10 @@ function MainAppContent({
       return;
     }
     const linkedAt = linkFollowedAt(location.state);
+    if (target.kind === "home") {
+      void applyHomeRoute(target.serverId, target.postId, linkedAt);
+      return;
+    }
     if (target.kind === "conversation") {
       void applyConversationRoute(
         target.channelId,
@@ -11506,6 +11549,16 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            canSendInChannel={(channelId) =>
+              perms.serverBits === 0n ||
+              perms.can(Permission.SEND_MESSAGES, channelId)
+            }
+            focusPostId={
+              communityHomeFocus?.serverId === selectedServer.id
+                ? communityHomeFocus.postId
+                : null
+            }
+            focusNonce={communityHomeFocus?.nonce ?? 0}
           />
         )}
 

@@ -15,6 +15,8 @@ import {
  *   /app/server/<sid>/channel/<cid>     → { kind: "channel", serverId, channelId }
  *   /app/server/<sid>/channel/<cid>/message/<mid>
  *                                       → …and highlight that message
+ *   /app/server/<sid>/bau               → { kind: "home", serverId, postId: null }
+ *   /app/server/<sid>/bau/<postId>      → { kind: "home", serverId, postId }
  *   /app/dm                             → { kind: "conversation", channelId: null }
  *   /app/dm/<channelId>                 → { kind: "conversation", channelId }
  *   /app/dm/<cid>/message/<mid>         → …and highlight that message
@@ -39,6 +41,15 @@ export type AppRouteTarget =
       /** Null for the conversation list with nothing open in it. */
       channelId: string | null;
       messageId: string | null;
+    }
+  | {
+      /**
+       * The server's Baú (Community Home), optionally scrolled to one post.
+       * The Baú is not a channel, so it has a segment of its own.
+       */
+      kind: "home";
+      serverId: string;
+      postId: string | null;
     }
   | { kind: "invite"; code: string }
   | { kind: "connection-callback"; provider: ConnectionProvider };
@@ -73,6 +84,14 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
         channelId && nested === "message" && second
           ? decodeURIComponent(second)
           : null,
+    };
+  }
+
+  if (section === "server" && first && nested === "bau" && !deeper) {
+    return {
+      kind: "home",
+      serverId: decodeURIComponent(first),
+      postId: second ? decodeURIComponent(second) : null,
     };
   }
 
@@ -120,6 +139,12 @@ export function channelRoutePath(
 ): string {
   const base = `/app/server/${encodeURIComponent(serverId)}`;
   return channelId ? `${base}/channel/${encodeURIComponent(channelId)}` : base;
+}
+
+/** Inverse of {@link parseAppRoute} for the Baú case. */
+export function homeRoutePath(serverId: string, postId?: string | null): string {
+  const base = `/app/server/${encodeURIComponent(serverId)}/bau`;
+  return postId ? `${base}/${encodeURIComponent(postId)}` : base;
 }
 
 /** Inverse of {@link parseAppRoute} for the conversation case. */
@@ -218,6 +243,11 @@ export function signedOutRedirectPath(pathname: string): string {
   }
   if (target.kind === "connection-callback") {
     return connectionCallbackPath(target.provider);
+  }
+  // A shared Baú post: dropping the post id here would sign somebody up for a
+  // link that promised one specific thing and land them on the server's door.
+  if (target.kind === "home") {
+    return homeRoutePath(target.serverId, target.postId);
   }
   // Both remaining kinds can carry a message permalink, and that is the form
   // people actually paste at each other — dropping the message id here would

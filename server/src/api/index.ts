@@ -132,6 +132,8 @@ import {
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createCommunityHomePostSchema,
+  publishCommunityHomePostSchema,
+  shareCommunityHomePostSchema,
   communityHomeCommentBodySchema,
   parseCommunityHomeBody,
   parseCommunityHomeTeaser,
@@ -375,6 +377,13 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import {
+  getCommunityHomePostCard,
+  safeShareOrigin,
+  shareCommunityHomePost,
+  type ShareFailure,
+} from "../services/community-home-share.js";
+import { resolveRedirectOrigin } from "../services/connections.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -4262,6 +4271,64 @@ function takeHomeBudget(
   }
 }
 
+/**
+ * Post the card for a post that just went live into a channel of the same
+ * server. Best effort by design: a publish is the point, the announcement is
+ * the garnish, so a channel the author cannot send in, a slow mode, AutoMod or
+ * a database blip must never turn a published post into an error.
+ */
+async function announceHomePost(
+  req: IncomingMessage,
+  user: DbUser,
+  serverId: string,
+  postId: string,
+  channelId: string | null | undefined,
+): Promise<boolean> {
+  if (!channelId) {
+    return false;
+  }
+  try {
+    const result = await shareCommunityHomePost({
+      author: user,
+      serverId,
+      postId,
+      channelId,
+      // A retried publish must not post the card twice.
+      nonce: `bau:${postId}`,
+      origin: safeShareOrigin(
+        resolveRedirectOrigin(
+          typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        ),
+      ),
+    });
+    return result.ok;
+  } catch (error) {
+    console.error("[community-home] announce failed:", error);
+    return false;
+  }
+}
+
+function throwShareFailure(reason: ShareFailure): never {
+  switch (reason) {
+    case "no-post":
+      throw new NotFound("Post not found");
+    case "no-access":
+      throw new NotFound("Channel not found");
+    case "cannot-send":
+      throw new Forbidden("You cannot send messages in that channel");
+    case "slow-mode":
+      throw new HttpError(429, "Slow down");
+    case "blocked":
+      throw new HttpError(422, "This message was blocked by AutoMod");
+    case "bad-channel":
+      throw new HttpError(400, "Pick a text channel of this server");
+    default:
+      // The chat could not take it right now (database breaker, an unknown
+      // refusal): a retry is the right answer, so not a 4xx.
+      throw new HttpError(503, "Could not post the card, try again");
+  }
+}
+
 function requireCommunityHome(): void {
   if (!isCommunityHomeEnabled()) {
     throw new NotFound("Not found");
@@ -4405,6 +4472,63 @@ router.get(
 );
 
 /**
+ * The small card a chat message with this post's permalink is drawn as. Same
+ * authorization as the feed (membership, then the lock), so a reader who may
+ * not open the post gets 404 or the locked teaser and the client falls back to
+ * the plain link. Drafts and scheduled posts are 404 even for staff.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/card",
+  async ({ url, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const card = await getCommunityHomePostCard(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { card };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * Staff: post a normal chat message carrying the post's permalink into a text
+ * channel of the same server, as the caller. The chat's own send path decides
+ * whether the caller may speak there.
+ */
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/share",
+  async ({ req, res, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(homePostLimiter, res, user.id);
+    const body = shareCommunityHomePostSchema.parse(await readJsonBody(req));
+    const result = await shareCommunityHomePost({
+      author: user,
+      serverId: serverId!,
+      postId: postId!,
+      channelId: body.channelId,
+      message: body.message ?? null,
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+      origin: safeShareOrigin(
+        resolveRedirectOrigin(
+          typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        ),
+      ),
+    });
+    if (!result.ok) {
+      throwShareFailure(result.reason);
+    }
+    return { ok: true };
+  },
+);
+
+/**
  * Staff, read only: what each language's reader is shown for this post, and
  * whether it is still current. Behind MANAGE_SERVER, and the post is looked up
  * through the same read as the feed first, so an id from another server (or a
@@ -4450,7 +4574,17 @@ router.post(
         scheduleTimezone: raw.scheduleTimezone ?? null,
       });
       await notifyHome(serverId!);
-      return created({ post });
+      const announced =
+        post.status === "published"
+          ? await announceHomePost(
+              req,
+              user,
+              serverId!,
+              post.id,
+              raw.announceChannelId,
+            )
+          : false;
+      return created({ post, announced });
     } catch (error) {
       if (error instanceof z.ZodError) {
         throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
@@ -4566,13 +4700,24 @@ router.post(
 
 router.post(
   "/api/servers/:serverId/home/posts/:postId/publish",
-  async ({ user }, { serverId, postId }) => {
+  async ({ req, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    // The body is optional: older clients publish with none.
+    const options = publishCommunityHomePostSchema.parse(
+      await readJsonBody(req),
+    );
     try {
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
-      return { post };
+      const announced = await announceHomePost(
+        req,
+        user,
+        serverId!,
+        post.id,
+        options.announceChannelId,
+      );
+      return { post, announced };
     } catch (error) {
       mapCommunityHomeError(error);
     }

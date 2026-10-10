@@ -25,7 +25,9 @@ import type {
   ServerCommunityHomeConfig,
   UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
+  CommunityHomePostCard,
   CommunityHomePostResponse,
+  ShareCommunityHomePostRequest,
   CommunityHomePostsResponse,
   CommunityHomePostTranslationsResponse,
   CreateCommunityHomeCommentRequest,
@@ -2029,10 +2031,41 @@ export const fetchCommunityHomePost = (serverId: string, postId: string) =>
     `/api/servers/${serverId}/home/posts/${postId}`,
   );
 
+/** `announced` is true when the card also landed in `announceChannelId`. */
 export const createCommunityHomePost = (
   serverId: string,
   body: CreateCommunityHomePostRequest,
-) => post<CommunityHomePostResponse>(`/api/servers/${serverId}/home/posts`, body);
+) =>
+  post<CommunityHomePostResponse & { announced?: boolean }>(
+    `/api/servers/${serverId}/home/posts`,
+    body,
+  );
+
+/**
+ * The small card a chat message with this post's permalink is drawn as. A
+ * 404 means "not yours to see": the caller falls back to the plain link.
+ */
+export const fetchCommunityHomePostCard = (
+  serverId: string,
+  postId: string,
+  lang?: string,
+) =>
+  apiFetch<{ card: CommunityHomePostCard }>(
+    `/api/servers/${serverId}/home/posts/${postId}/card${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
+/** Staff: post the permalink (so the card) into a text channel of the server. */
+export const shareCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: ShareCommunityHomePostRequest,
+) =>
+  post<{ ok: boolean }>(
+    `/api/servers/${serverId}/home/posts/${postId}/share`,
+    body,
+  );
 
 export const updateCommunityHomePost = (
   serverId: string,
@@ -2066,9 +2099,16 @@ export const pinCommunityHomePost = (
     body,
   );
 
-export const publishCommunityHomePost = (serverId: string, postId: string) =>
-  post<CommunityHomePostResponse>(
+export const publishCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  options?: { announceChannelId?: string | null },
+) =>
+  post<CommunityHomePostResponse & { announced?: boolean }>(
     `/api/servers/${serverId}/home/posts/${postId}/publish`,
+    options?.announceChannelId
+      ? { announceChannelId: options.announceChannelId }
+      : undefined,
   );
 
 export const unpublishCommunityHomePost = (serverId: string, postId: string) =>

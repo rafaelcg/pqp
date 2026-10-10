@@ -60,6 +60,12 @@ import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import { MessageBody } from "@/components/chat/message-body";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
+import { BauPostCard } from "@/components/chat/bau-post-card";
+import {
+  selectBauCardLink,
+  stripBauLink,
+  useBauCard,
+} from "@/lib/community-home/share-card";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { ThreadChip } from "@/components/chat/thread-chip";
 import {
@@ -2664,10 +2670,31 @@ const MessageRow = memo(function MessageRow({
   streamBadges = null,
   zebra = false,
 }: MessageRowProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
   const compact = useChatDisplay().display.density === "compact";
   const { message, startsGroup, dayLabel } = row;
+  // A Baú post pasted here is drawn as a card. The server decides whether this
+  // reader may see it; until it answers (and if it refuses) the link stays.
+  const bauSelection = useMemo(
+    () =>
+      selectBauCardLink(
+        message.body,
+        typeof window === "undefined" ? null : window.location.origin,
+      ),
+    [message.body],
+  );
+  const bauState = useBauCard(bauSelection?.link ?? null, locale, currentUserId);
+  // While the card is (about to be) there, the pasted URL is not repeated
+  // above it: what is left is the sender's own words, or nothing.
+  const bauCardShown =
+    bauSelection !== null &&
+    (bauState.status === "ok" || bauState.status === "loading");
+  const shownBody =
+    bauSelection && bauCardShown
+      ? stripBauLink(message.body, bauSelection.link)
+      : message.body;
+  const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
   const mentionsYou = messageMentionsYou(
     message,
@@ -3307,7 +3334,7 @@ const MessageRow = memo(function MessageRow({
                       onVote={(optionId) => onVotePoll?.(message.id, optionId)}
                       onClose={() => onClosePoll?.(message.id)}
                     />
-                  ) : message.body ? (
+                  ) : message.body && !hideBodyForBauCard ? (
                     <div
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
@@ -3316,7 +3343,7 @@ const MessageRow = memo(function MessageRow({
                     >
                       {streamAuthor}
                       <MessageBody
-                        body={message.body}
+                        body={shownBody}
                         currentUsername={currentUsername}
                       />
                       {attachments.length === 0 && (
@@ -3355,7 +3382,10 @@ const MessageRow = memo(function MessageRow({
                         {t("chat.attachmentUnavailable")}
                       </p>
                     )}
-                  {showLinkEmbeds && message.embeds?.[0] && (
+                  {bauSelection && (
+                    <BauPostCard link={bauSelection.link} state={bauState} />
+                  )}
+                  {showLinkEmbeds && message.embeds?.[0] && bauState.status !== "ok" && (
                     <EmbedCard embed={message.embeds[0]} />
                   )}
                   {message.webhookEmbeds.map((embed, index) => (

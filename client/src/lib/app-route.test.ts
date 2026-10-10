@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   channelRoutePath,
   conversationRoutePath,
+  homeRoutePath,
   linkFollowedAt,
   messageLinkState,
   messageRoutePath,
@@ -233,6 +234,49 @@ describe("signedOutRedirectPath", () => {
     for (const input of hostile) {
       expect(signedOutRedirectPath(input).startsWith("/app")).toBe(true);
     }
+  });
+});
+
+describe("parseAppRoute: Baú", () => {
+  it("reads the Baú of a server, with and without a post", () => {
+    expect(parseAppRoute("/app/server/s1/bau")).toEqual({
+      kind: "home",
+      serverId: "s1",
+      postId: null,
+    });
+    expect(parseAppRoute("/app/server/s1/bau/p1")).toEqual({
+      kind: "home",
+      serverId: "s1",
+      postId: "p1",
+    });
+  });
+
+  it("is not a channel, and anything deeper is not a Baú link", () => {
+    expect(parseAppRoute("/app/server/s1/bau/p1/extra")).toEqual({
+      kind: "channel",
+      serverId: "s1",
+      channelId: null,
+      messageId: null,
+    });
+    expect(parseAppRoute("/app/server/s1/channel/bau")?.kind).toBe("channel");
+  });
+
+  it("round-trips what homeRoutePath emits, ids that need escaping included", () => {
+    expect(homeRoutePath("s1")).toBe("/app/server/s1/bau");
+    for (const post of ["p1", "p/1 2", null]) {
+      expect(parseAppRoute(homeRoutePath("s 1", post))).toEqual({
+        kind: "home",
+        serverId: "s 1",
+        postId: post,
+      });
+    }
+  });
+
+  it("survives sign-up: a logged-out visitor lands on the post, not the door", () => {
+    expect(signedOutRedirectPath("/app/server/s1/bau/p1")).toBe(
+      "/app/server/s1/bau/p1",
+    );
+    expect(signedOutRedirectPath("/app/server/s1/bau")).toBe("/app/server/s1/bau");
   });
 });
 
