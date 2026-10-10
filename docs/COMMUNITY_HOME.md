@@ -282,8 +282,10 @@ vertical one, everything else the main one. Runtime flag
   is not the main file twice. On PATCH, omitted keeps the cut while the main
   file stays the same; replacing or clearing the main media drops it (it was an
   edit of the old video); `null` removes it. A removed or replaced cut, and
-  both files of a deleted post, lose their object and their upload row after
-  COMMIT.
+  both files of a deleted post (main media included), are handed to the
+  orphan sweep inside the same transaction (upload row unclaimed and
+  unverified), then deleted right after COMMIT without the answer waiting on
+  it. Whatever that quick cleanup does not finish, the sweep does.
 - **Reads.** `media.mobile` = `{ name, contentType, byteSize, url }`, inside
   `media`, so a locked viewer (who gets no media) never gets it. Flag off: the
   field is null and every client plays the main video; stored cuts are kept,

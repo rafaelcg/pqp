@@ -956,50 +956,54 @@ async function claimMobileRendition(
 }
 
 /**
- * Drop the object and the upload row of a stored file the post no longer
- * points at. Only ever called after COMMIT: a rolled-back write must not have
- * deleted the object the row still names.
- *
- * Never throws. The post write it follows has already committed, and a
- * cleanup hiccup must not turn that into an error the author retries.
- *
- * The object goes first and the row only after it: the row is the one handle
- * anything has on the object. When the storage delete fails, the row is
- * handed to the orphan sweep instead (unclaimed and unverified is exactly what
- * `sweepOrphanedCommunityHomeMedia` looks for), so the object gets another try
- * rather than sitting in the bucket with nothing pointing at it.
+ * Hand stored files the post no longer points at to the orphan sweep, INSIDE
+ * the write that stops pointing at them. Unclaimed and unverified is exactly
+ * what `sweepOrphanedCommunityHomeMedia` deletes (object, then row), so from
+ * the COMMIT on, every such file has a durable retry whatever happens next: a
+ * failed storage delete, storage switched off, the process stopping before
+ * the quick cleanup below runs.
  */
-async function forgetStoredMedia(key: string, what: string): Promise<void> {
-  try {
-    if (isStorageConfigured()) {
-      try {
-        await deleteObject(key);
-      } catch (error) {
-        console.error(
-          `[community-home] failed to delete ${what}, left to the orphan sweep:`,
-          error instanceof Error ? error.message : error,
-        );
-        await getPool().query(
-          `UPDATE community_home_media_uploads
-              SET claimed_post_id = NULL, verified_at = NULL
-            WHERE storage_key = $1`,
-          [key],
-        );
-        return;
-      }
-    }
-    // The FK only nulls `claimed_post_id`, and the orphan sweep skips verified
-    // rows, so without this the upload row would outlive its post forever.
-    await getPool().query(
-      `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
-      [key],
-    );
-  } catch (error) {
-    console.error(
-      `[community-home] cleanup of ${what} failed:`,
-      error instanceof Error ? error.message : error,
+async function handOffStoredMedia(
+  client: PoolClient,
+  keys: (string | null | undefined)[],
+): Promise<string[]> {
+  const live = keys.filter((key): key is string => Boolean(key));
+  if (live.length > 0) {
+    await client.query(
+      `UPDATE community_home_media_uploads
+          SET claimed_post_id = NULL, verified_at = NULL
+        WHERE storage_key = ANY($1::text[])`,
+      [live],
     );
   }
+  return live;
+}
+
+/**
+ * The quick path after COMMIT: delete the object, then its (already handed
+ * off) upload row, so the bucket is clean now instead of at the next sweep.
+ * Best effort and never throws: anything it does not finish, the sweep does.
+ */
+async function forgetStoredMedia(keys: string[]): Promise<void> {
+  if (!isStorageConfigured()) {
+    return;
+  }
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        await deleteObject(key);
+        await getPool().query(
+          `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
+          [key],
+        );
+      } catch (error) {
+        console.error(
+          "[community-home] media cleanup left to the orphan sweep:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }),
+  );
 }
 
 function emptyMedia(): MediaFields {
@@ -1388,22 +1392,18 @@ export async function updateCommunityHomePost(
         mobile.mobile_media_storage_key,
       ],
     );
-    await client.query("COMMIT");
-    // Only after COMMIT: a rolled-back edit must not have deleted the object
-    // the row still points at. Not awaited: the author's answer does not wait
-    // on the bucket. `forgetStoredMedia` never throws, and a storage delete
-    // that fails is handed to the orphan sweep, which is the durable retry.
-    void Promise.all([
-      previousKey &&
-      previousKey !== media.media_storage_key &&
-      isStorageConfigured()
-        ? forgetStoredMedia(previousKey, "replaced media object")
-        : null,
-      previousMobileKey &&
+    // Files this edit stops pointing at go to the orphan sweep in the same
+    // transaction, so a rolled-back edit never loses the object the row still
+    // names, and a committed one never loses track of the file it dropped.
+    const dropped = await handOffStoredMedia(client, [
+      previousKey !== media.media_storage_key ? previousKey : null,
       previousMobileKey !== mobile.mobile_media_storage_key
-        ? forgetStoredMedia(previousMobileKey, "replaced mobile version")
+        ? previousMobileKey
         : null,
     ]);
+    await client.query("COMMIT");
+    // Not awaited: the author's answer does not wait on the bucket.
+    void forgetStoredMedia(dropped);
     if (row.status === "published") {
       // An edit of a live post: the old translations are now stale by hash
       // (readers get the original in the meantime); make new ones.
@@ -1566,29 +1566,38 @@ export async function deleteCommunityHomePost(
   if (!canManage) {
     throw new CommunityHomeError("forbidden", "Staff only");
   }
-  const result = await getPool().query<{
-    media_storage_key: string | null;
-    mobile_media_storage_key: string | null;
-  }>(
-    `DELETE FROM community_home_posts
-      WHERE id = $1 AND server_id = $2
-      RETURNING media_storage_key, mobile_media_storage_key`,
-    [postId, serverId],
-  );
-  const deleted = result.rows[0];
-  if (!deleted) {
-    throw new CommunityHomeError("not_found", "Post not found");
-  }
   // Both stored files go with the post: the main media and its phone cut.
-  // Not awaited, for the same reason as on an edit (see above).
-  void Promise.all([
-    deleted.media_storage_key
-      ? forgetStoredMedia(deleted.media_storage_key, "media object")
-      : null,
-    deleted.mobile_media_storage_key
-      ? forgetStoredMedia(deleted.mobile_media_storage_key, "mobile version")
-      : null,
-  ]);
+  // Handed to the orphan sweep in the same transaction as the delete (see
+  // `handOffStoredMedia`), then cleaned up right away without waiting.
+  const client = await getPool().connect();
+  let dropped: string[];
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{
+      media_storage_key: string | null;
+      mobile_media_storage_key: string | null;
+    }>(
+      `DELETE FROM community_home_posts
+        WHERE id = $1 AND server_id = $2
+        RETURNING media_storage_key, mobile_media_storage_key`,
+      [postId, serverId],
+    );
+    const deleted = result.rows[0];
+    if (!deleted) {
+      throw new CommunityHomeError("not_found", "Post not found");
+    }
+    dropped = await handOffStoredMedia(client, [
+      deleted.media_storage_key,
+      deleted.mobile_media_storage_key,
+    ]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  void forgetStoredMedia(dropped);
 }
 
 export async function listCommunityHomeComments(

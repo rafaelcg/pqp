@@ -53,6 +53,8 @@ const stored = new Map<string, { bytes: Buffer; contentType: string }>();
 const deleted: string[] = [];
 /** Keys whose storage delete fails, to prove the row is kept for a retry. */
 const failDeletes = new Set<string>();
+/** Keys whose storage delete never answers: the process "stops" mid-cleanup. */
+const hangDeletes = new Set<string>();
 
 vi.mock("../lib/s3.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/s3.js")>()),
@@ -68,6 +70,9 @@ vi.mock("../lib/s3.js", async (importOriginal) => ({
   getObjectPrefix: async (key: string, length: number) =>
     stored.get(key)?.bytes.subarray(0, length) ?? null,
   deleteObject: async (key: string) => {
+    if (hangDeletes.has(key)) {
+      return new Promise<void>(() => {});
+    }
     if (failDeletes.has(key)) {
       throw new Error("storage unreachable");
     }
@@ -161,6 +166,7 @@ describeDb("community home mobile rendition", () => {
     stored.clear();
     deleted.length = 0;
     failDeletes.clear();
+    hangDeletes.clear();
     process.env.COMMUNITY_HOME_ENABLED = "true";
     process.env.COMMUNITY_HOME_VIP_ENABLED = "true";
     process.env.BAU_MOBILE_RENDITION = "true";
@@ -479,6 +485,37 @@ describeDb("community home mobile rendition", () => {
     );
     expect(await sweepOrphanedCommunityHomeMedia()).toBe(1);
     expect(deleted).toEqual([cut.key]);
+  });
+
+  it("a deleted post's files are already the sweep's when the answer comes back", async () => {
+    const main = await upload("video/mp4", MP4, "main.mp4");
+    const cut = await upload("video/mp4", MP4, "cut.mp4");
+    const created = await publish({
+      mediaUploadId: main.uploadId,
+      mobileMediaUploadId: cut.uploadId,
+    });
+    // The quick cleanup never finishes, as if the process stopped mid-way.
+    hangDeletes.add(main.key);
+    hangDeletes.add(cut.key);
+    const res = await call(
+      owner,
+      "DELETE",
+      `/api/servers/${serverId}/home/posts/${created.body.post.id}`,
+    );
+    expect(res.status).toBe(200);
+    const rows = await getPool().query<{
+      storage_key: string;
+      claimed_post_id: string | null;
+      verified_at: Date | null;
+    }>(
+      `SELECT storage_key, claimed_post_id, verified_at
+         FROM community_home_media_uploads ORDER BY storage_key`,
+    );
+    expect(rows.rows).toEqual(
+      [main.key, cut.key]
+        .sort()
+        .map((key) => ({ storage_key: key, claimed_post_id: null, verified_at: null })),
+    );
   });
 
   it("a locked viewer gets no media at all, so no cut either", async () => {
