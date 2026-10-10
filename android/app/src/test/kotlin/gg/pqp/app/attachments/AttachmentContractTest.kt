@@ -140,12 +140,13 @@ class AttachmentContractTest {
 
     /**
      * `POST /api/channels/:channelId/attachments` still takes the five fields
-     * this client fills in, under these names.
+     * this client fills in, under these names. `voice` is the optional voice
+     * note block, which this client never sends.
      */
     @Test
     fun `the mint request shape matches`() {
         assertEquals(
-            listOf("filename", "contentType", "byteSize", "width", "height"),
+            listOf("filename", "contentType", "byteSize", "width", "height", "voice"),
             RepoSources.objectKeys(shared, "createAttachmentSchema"),
         )
         assertEquals(

@@ -4,7 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -191,8 +193,17 @@ data class Attachment(
     val height: Int? = null,
     /** Presigned and expiring. Re-mint through `/api/attachments/:id/url`. */
     val url: String,
+    /**
+     * Set only on a voice note, absent on every other attachment and on every
+     * row an older server sent. Null is the ordinary case, and a note whose
+     * block failed to decode degrades to the plain audio chip it always was.
+     */
+    val voice: VoiceNote? = null,
 ) {
     val isImage: Boolean get() = contentType.startsWith("image/")
+
+    /** A voice note: audio bytes plus the block the card draws from. */
+    val isVoiceNote: Boolean get() = voice != null && contentType.startsWith("audio/")
 
     /**
      * Media that needs a player rather than a decoder.
@@ -215,6 +226,48 @@ data class Attachment(
     val isAnimatedImage: Boolean
         get() = contentType == "image/gif" || contentType == "image/webp"
 }
+
+/**
+ * The `voice` block of a stored attachment (`voiceNoteSchema` in
+ * `packages/shared/src/attachments.ts`).
+ *
+ * Every field but the first two arrives with later server work, so each one
+ * defaults and the whole block is tolerant: a server that predates receipts
+ * sends neither `listenedByMe` nor `listenedBy`, and a note must still draw.
+ *
+ * `listenedBy` is kept as raw JSON because the contract moved while this was
+ * being written: the schema on `main` lists user ids, and the listens contract
+ * lists `{userId, listenedAt}` objects. [listeners] reads either, so a build
+ * does not stop decoding messages the day the server picks one.
+ */
+@Serializable
+data class VoiceNote(
+    val durationMs: Long = 0,
+    /** 64 peaks, one byte each, base64. Decoded by `decodeWaveform`. */
+    val waveform: String = "",
+    val listenedByMe: Boolean = false,
+    val listenedBy: List<JsonElement>? = null,
+) {
+    /** Who has heard it, as far as the server was willing to say. */
+    val listeners: List<NoteListener>
+        get() = listenedBy.orEmpty().mapNotNull { element ->
+            when (element) {
+                is JsonPrimitive ->
+                    element.contentOrNull?.let { NoteListener(it, null) }
+
+                is JsonObject -> {
+                    val id = (element["userId"] as? JsonPrimitive)?.contentOrNull
+                    val at = (element["listenedAt"] as? JsonPrimitive)?.contentOrNull
+                    id?.let { NoteListener(it, at) }
+                }
+
+                else -> null
+            }
+        }
+}
+
+/** One person who played a note, and when if the server said. */
+data class NoteListener(val userId: String, val listenedAt: String?)
 
 /**
  * `GET /api/attachments/:id/url`: a freshly presigned read URL.

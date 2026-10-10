@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import mainSource from "../main.tsx?raw";
 import { POSTS as BLOG_POSTS } from "./blog/posts";
@@ -66,6 +68,20 @@ describe("isUnknownSpaPath", () => {
     ]) {
       expect(isUnknownSpaPath(path), path).toBe(false);
     }
+  });
+
+  it("recognises every standalone page in public/", () => {
+    // Pages serves `public/x.html` at `/x`. Unknown, the middleware turns that
+    // real file into a 404, which is how three diagnostic pages failed every
+    // service worker install from 2026-09-30 to 2026-10-10 while they were
+    // precached.
+    const publicDir = fileURLToPath(new URL("../../public", import.meta.url));
+    const pages = readdirSync(publicDir, { recursive: true })
+      .map(String)
+      .filter((file) => file.endsWith(".html"))
+      .map((file) => `/${file.replace(/\\/g, "/").replace(/\.html$/, "")}`);
+    expect(pages.length).toBeGreaterThan(0);
+    expect(pages.filter((path) => isUnknownSpaPath(path))).toEqual([]);
   });
 
   it("calls a real post known and an invented slug unknown", () => {

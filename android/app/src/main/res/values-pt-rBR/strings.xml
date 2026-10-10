@@ -119,6 +119,21 @@
     <string name="bau_comment_placeholder">Escreve um comentário</string>
     <string name="bau_comment_submit">Comentar</string>
     <string name="bau_comment_failed">Não deu pra comentar.</string>
+    <string name="bau_card_cta">Ver no Baú</string>
+    <string name="bau_card_untitled">Novidade no Baú</string>
+    <string name="bau_card_aria">Post do Baú: %1$s</string>
+    <string name="bau_card_by">%1$s · no Baú</string>
+    <string name="bau_card_video">Vídeo</string>
+    <string name="bau_card_locked">Trancado</string>
+    <string name="bau_card_pinned">Fixado</string>
+    <plurals name="bau_card_likes">
+        <item quantity="one">%1$d curtida</item>
+        <item quantity="other">%1$d curtidas</item>
+    </plurals>
+    <plurals name="bau_card_comments">
+        <item quantity="one">%1$d comentário</item>
+        <item quantity="other">%1$d comentários</item>
+    </plurals>
     <string name="bau_comments_off">Comentários desligados neste post.</string>
     <string name="bau_media_file">Arquivo</string>
     <string name="bau_media_image">Imagem</string>
@@ -128,6 +143,43 @@
     <string name="bau_media_tiktok">Ver no TikTok</string>
     <string name="bau_media_instagram">Ver no Instagram</string>
     <string name="bau_media_unavailable">Mídia indisponível agora.</string>
+    <string name="bau_compose_open">Publica no Baú</string>
+    <string name="bau_compose_title">Novo post</string>
+    <string name="bau_compose_close">Fechar</string>
+    <string name="bau_compose_publish">Publicar</string>
+    <string name="bau_compose_title_hint">Título</string>
+    <string name="bau_compose_body_hint">Escreve algo</string>
+    <string name="bau_channel_unavailable">#canal-indisponível</string>
+    <string name="bau_channel_open">Abrir #%1$s</string>
+    <string name="bau_compose_channel_picker">Linkar um canal</string>
+    <string name="bau_compose_attach">Adiciona uma foto ou vídeo</string>
+    <string name="bau_compose_link_hint">Ou cola um link do YouTube, Twitch, TikTok ou Instagram</string>
+    <string name="bau_compose_link_ok">Link do %1$s. Aparece no post.</string>
+    <string name="bau_compose_remove">Tirar</string>
+    <string name="bau_compose_uploading">Enviando…</string>
+    <string name="bau_compose_upload_failed">Não deu pra enviar. Tira e tenta de novo.</string>
+    <string name="bau_compose_err_needs_title">Põe um título pra publicar.</string>
+    <string name="bau_compose_err_needs_content">Escreve algo, ou adiciona uma foto, vídeo ou link.</string>
+    <string name="bau_compose_err_title_long">O título passa de %1$d caracteres.</string>
+    <string name="bau_compose_err_body_long">O texto está grande demais pra um post.</string>
+    <string name="bau_compose_err_one_source">Um post leva um arquivo ou um link, não os dois.</string>
+    <string name="bau_compose_err_bad_link">Isso não parece um link do YouTube, Twitch, TikTok ou Instagram.</string>
+    <string name="bau_compose_err_uploading">Espera o envio terminar.</string>
+    <string name="bau_compose_pick_unreadable">Não deu pra ler esse arquivo.</string>
+    <string name="bau_compose_pick_unsupported">Usa PNG, JPEG, WebP, GIF, MP4 ou WebM.</string>
+    <string name="bau_compose_pick_too_large">Esse arquivo passa de 100 MB.</string>
+    <string name="bau_compose_refused_not_staff">Só quem gerencia o servidor pode publicar no Baú.</string>
+    <string name="bau_compose_refused_unavailable">O Baú não está disponível neste servidor agora.</string>
+    <string name="bau_compose_refused_too_large">Esse arquivo é grande demais pro Baú.</string>
+    <string name="bau_compose_refused_slow_down">Calma, tenta de novo daqui a pouco.</string>
+    <string name="bau_compose_refused_no_storage">Este servidor não aceita foto ou vídeo agora. Link ou texto ainda funcionam.</string>
+    <string name="bau_compose_refused_network">Não deu pra falar com o servidor. Tenta de novo.</string>
+    <string name="bau_compose_refused_unconfirmed">Não deu pra confirmar o post. Dá uma olhada no Baú antes de tentar de novo.</string>
+    <string name="bau_compose_refused_invalid">Não deu pra publicar. %1$s</string>
+    <string name="bau_compose_refused_generic">Não deu pra publicar. Tenta de novo.</string>
+    <string name="bau_compose_discard_title">Descartar este post?</string>
+    <string name="bau_compose_discard">Descartar</string>
+    <string name="bau_compose_keep_writing">Continuar escrevendo</string>
 
     <!-- Anexos -->
     <string name="attachment_animated_image">%1$s, animado</string>
@@ -238,6 +290,13 @@
     <string name="push_settings_server_unsupported">Este servidor ainda não envia notificações para o Android.</string>
     <string name="push_settings_denied">As notificações do pqp estão desativadas nos ajustes do Android.</string>
     <string name="push_settings_working">Registrando…</string>
+    <string name="push_settings_play_services">Este celular está sem o Google Play Services (ou ele está desativado), então as notificações não chegam.</string>
+    <string name="push_settings_offline">Não deu para falar com o pqp para ativar as notificações. Tentando de novo.</string>
+    <string name="push_settings_rejected">O pqp recusou o registro deste celular. Desative e ative as notificações de novo.</string>
+    <string name="push_prompt_title">Ativar notificações?</string>
+    <string name="push_prompt_body">Receba um aviso quando alguém mencionar você, responder ou mandar uma DM com o pqp fechado. Dá para mudar quando quiser na aba Você.</string>
+    <string name="push_prompt_confirm">Ativar</string>
+    <string name="push_prompt_dismiss">Agora não</string>
 
     <!-- Você -->
     <string name="you_title">Você</string>
@@ -599,4 +658,40 @@
         <item quantity="many">%1$d pessoas lá dentro</item>
         <item quantity="other">%1$d pessoas lá dentro</item>
     </plurals>
+    <!-- Voice notes -->
+    <string name="voice_note_record">Segure para gravar uma mensagem de voz</string>
+    <string name="voice_note_hint">Segure o microfone para gravar. Solte para enviar.</string>
+    <string name="voice_note_slide_cancel">Deslize para cancelar</string>
+    <string name="voice_note_lock_hint">Deslize para cima para travar</string>
+    <string name="voice_note_locked">Travado. Você pode soltar o dedo.</string>
+    <string name="voice_note_paused">Pausado</string>
+    <string name="voice_note_discard">Descartar mensagem de voz</string>
+    <string name="voice_note_pause">Pausar gravação</string>
+    <string name="voice_note_resume">Continuar gravação</string>
+    <string name="voice_note_send">Enviar mensagem de voz</string>
+    <string name="voice_note_discarded">Áudio descartado (%1$s)</string>
+    <string name="voice_note_undo">Desfazer</string>
+    <string name="voice_note_seconds_left">faltam %1$ds</string>
+    <string name="voice_note_limit">Limite de cinco minutos. Enviamos o que você gravou.</string>
+    <string name="voice_note_in_call">Você não pode gravar áudio durante uma chamada.</string>
+    <string name="voice_note_play_in_call">Você não pode ouvir áudios durante uma chamada.</string>
+    <string name="voice_note_mic_busy">Outro app está usando o microfone.</string>
+    <string name="voice_note_play_failed">Não foi possível tocar esse áudio.</string>
+    <string name="voice_note_permission_title">Acesso ao microfone</string>
+    <string name="voice_note_permission_body">O pqp precisa do microfone para gravar sua mensagem de voz. Ele só escuta enquanto você segura o botão ou deixa a gravação travada.</string>
+    <string name="voice_note_permission_allow">Continuar</string>
+    <string name="voice_note_permission_cancel">Agora não</string>
+    <string name="voice_note_permission_denied">O acesso ao microfone está desligado. Ative nos Ajustes para gravar mensagens de voz.</string>
+    <string name="voice_note_sending">Enviando áudio %1$s…</string>
+    <string name="voice_note_failed">O áudio não subiu</string>
+    <string name="voice_note_ready">Áudio %1$s</string>
+    <string name="voice_note_retry">Tentar enviar o áudio de novo</string>
+    <string name="voice_note_remove">Remover áudio</string>
+    <string name="voice_note_card">Mensagem de voz de %1$s, %2$s</string>
+    <string name="voice_note_play">Tocar mensagem de voz</string>
+    <string name="voice_note_pause_playback">Pausar mensagem de voz</string>
+    <string name="voice_note_speed">Velocidade %1$s</string>
+    <string name="voice_note_unheard">Ainda não ouvido</string>
+    <string name="voice_note_heard">Ouviu</string>
+    <string name="voice_note_heard_at">Ouviu às %1$s</string>
 </resources>

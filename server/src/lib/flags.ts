@@ -275,6 +275,44 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (translationEnabled)",
   },
+  bau_mobile_rendition: {
+    description:
+      "Versão pro celular dos vídeos do Baú: quem posta anexa um segundo corte (vertical) e o celular toca esse.",
+    env: "BAU_MOBILE_RENDITION",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the feed and post reads hydrate posts of
+    // one server, and create / update are routes under `/servers/:id`.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
+  },
+  bau_post_push: {
+    description:
+      "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
+    env: "BAU_POST_PUSH",
+    parseEnv: exactTrue,
+    // Off: a push is the one Baú surface that interrupts people who are not
+    // looking at the app. Turned on one server at a time first (its override),
+    // then everybody. Needs `community_home` and a configured push transport.
+    codeDefault: false,
+    // The fan-out starts from a post, and a post has a server.
+    perServer: true,
+  },
+  community_home_video_captions: {
+    description:
+      "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",
+    env: "COMMUNITY_HOME_VIDEO_CAPTIONS",
+    parseEnv: exactTrue,
+    // Off: it sends a video's sound to a third party (Cloudflare Workers AI,
+    // outside Brazil) and costs money per minute. One server first.
+    codeDefault: false,
+    // Every reader works from a post, and a post has a server: the enqueue at
+    // publish and in the sweep, the worker before it calls the provider (a
+    // flip mid-queue drops the job with no call), and every read. Off also
+    // HIDES stored captions, so it is a kill switch like voice_note_transcription.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (captions)",
+  },
   desktop_share_audio_native: {
     description:
       "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",
@@ -400,6 +438,82 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
   },
+  desktop_notify_default_on: {
+    description:
+      "Notificações padrão (só cliente: no app desktop o banner do sistema já vem ligado, DMs e servidores têm níveis padrão separados, e o servidor fica em só menções; no navegador, depois da primeira DM ou menção com a aba escondida, aparece um cartão único pra ativar).",
+    env: "DESKTOP_NOTIFY_DEFAULT_ON",
+    parseEnv: exactTrue,
+    // Off until it has been checked on a real desktop build: turning it on
+    // changes what banners an account that never opened the settings gets.
+    codeDefault: false,
+    // `GET /api/push/config` has no server in hand and the client keeps one
+    // answer per page: a per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/push/config (desktopNotifyDefaultOn)",
+  },
+  voice_notes: {
+    description:
+      "Mensagens de voz: segurar o microfone no chat grava e manda um áudio com a duração e a onda, como no WhatsApp.",
+    env: "VOICE_NOTES",
+    parseEnv: exactTrue,
+    // Off until the recorder has been used on a real server: one server
+    // first (its override), then everybody. See the voice notes plan.
+    codeDefault: false,
+    // Every reader knows the server: the mint checks the channel's server
+    // (a conversation reads the global value), and the client asks
+    // `GET /api/attachments/config?serverId=` with the server it is in.
+    // Off also stops new notes being minted, so it is the kill switch; notes
+    // already sent stay readable.
+    perServer: true,
+    clientVia: "GET /api/attachments/config?serverId= (voiceNotes)",
+  },
+  voice_note_transcription: {
+    description:
+      "Transcrição de mensagens de voz: o texto aparece embaixo do áudio. Em conversa sai na hora; em canal de servidor só quando alguém pede.",
+    env: "VOICE_NOTE_TRANSCRIPTION",
+    parseEnv: exactTrue,
+    // Off: it sends audio to a third party (Cloudflare Workers AI) and costs
+    // money per minute. One server first, then everybody.
+    codeDefault: false,
+    // Every reader knows the note, and so its channel's server: the enqueue at
+    // send, the worker before it calls the provider (a flip mid-queue costs
+    // nothing), the lazy request route and every read. A conversation reads
+    // the global value. Off also HIDES stored transcripts on read, so it is a
+    // real kill switch and not just "stop making new ones".
+    perServer: true,
+    // Served as `voiceTranscription` on `GET /api/attachments/config?serverId=`,
+    // but no client reads it yet, so no `clientVia`: the contract test
+    // (`flag-client-contract.test.ts`) would rightly fail a field nobody
+    // reads. The client PR that reads it adds the line back.
+  },
+  notify_open_channel: {
+    description:
+      "Aviso do canal aberto (só cliente: com a janela minimizada, escondida ou sem foco, uma mensagem no canal ou na conversa que está aberta vira banner do sistema, respeitando nível, mudo e não perturbe).",
+    env: "NOTIFY_OPEN_CHANNEL",
+    parseEnv: exactTrue,
+    // Off until it has been checked on a real desktop: the open channel used to
+    // be the one place that never raised a banner, so turning it on changes
+    // what a blurred window does for everybody who has banners enabled.
+    codeDefault: false,
+    // The client asks `GET /api/push/config`, which has no server in hand, and
+    // keeps one answer per page: a per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/push/config (notifyOpenChannel)",
+  },
+  push_attention_gate: {
+    description:
+      "Push pelo que a pessoa está olhando: o celular recebe a notificação a menos que um app ou aba esteja na frente dela e ativo. Desligado, qualquer conexão aberta em qualquer lugar (uma aba esquecida, o desktop minimizado) cala o celular.",
+    env: "PUSH_ATTENTION_GATE",
+    parseEnv: exactTrue,
+    // Off until the clients that report attention are out (web and desktop
+    // first) and `pushSkipped` / `pushAttentionPassed` have been read on a
+    // real day. A socket that never reports it counts as foreground unless
+    // idle, so turning this on cannot double-notify an old build.
+    codeDefault: false,
+    // Global: the decision is about a person's sockets, not about a server,
+    // and the call and DM paths have no server at all.
+    perServer: false,
+  },
   client_force_update: {
     description:
       "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
@@ -408,6 +522,17 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
     clientVia: "GET /api/client-update/config (forceUpdate)",
+  },
+  mention_ids_from_db: {
+    description:
+      "Menção de cargo (@cargo) avisa de verdade: o selo ao vivo e o push usam as pessoas que a mensagem registrou, não só o @usuário digitado (desligado: só quem foi citado pelo nome recebe).",
+    env: "MENTION_IDS_FROM_DB",
+    parseEnv: exactTrue,
+    // Off until a role mention has been seen to notify on a real server.
+    codeDefault: false,
+    // Read once per send, on the instance that took it, where the server is
+    // known but a conversation has no roles: global on purpose.
+    perServer: false,
   },
 } as const satisfies Record<string, FlagDefinition>;
 

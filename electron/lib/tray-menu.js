@@ -70,11 +70,57 @@ function trayTooltip(state, t) {
 }
 
 /**
- * Should the close button hide to the tray instead of closing?
- * Only during a call, only when the preference is on, never while quitting.
+ * Is a system tray likely to exist where we are?
+ *
+ * Windows and macOS always have one. On Linux `new Tray()` does not throw on a
+ * desktop with no tray host, it just draws nothing, and a window hidden "to the
+ * tray" there cannot be got back. Stock GNOME ships no tray, so it counts as
+ * none unless the session says it is Ubuntu (which ships the appindicator
+ * extension). A GNOME with the extension added by hand loses only the
+ * signed-in hide, never anything it had before.
  */
-function shouldHideToTray({ inCall, keepInTray, quitting }) {
-  return quitting !== true && inCall === true && keepInTray === true;
+function trayLikelyAvailable(platform, env = process.env) {
+  if (platform !== "linux") {
+    return true;
+  }
+  const tokens = String(env.XDG_CURRENT_DESKTOP || "")
+    .toLowerCase()
+    .split(":")
+    .filter(Boolean);
+  return !(tokens.includes("gnome") && !tokens.includes("ubuntu"));
+}
+
+/**
+ * Should the close button hide to the tray instead of closing?
+ *
+ * Never while quitting, never with the preference off. During a call on any
+ * platform (quitting hangs up). While signed in, on Windows and Linux only:
+ * that is where closing the last window quits the app, and macOS keeps its
+ * own convention of living on in the dock. Linux additionally needs a tray
+ * that can be seen, or the window would be hidden with no way back.
+ * `signedIn` unset (a renderer that predates the signal) counts as false.
+ */
+function shouldHideToTray({
+  inCall,
+  keepInTray,
+  quitting,
+  signedIn,
+  platform,
+  trayAvailable,
+}) {
+  if (quitting === true || keepInTray !== true) {
+    return false;
+  }
+  if (inCall === true) {
+    return true;
+  }
+  if (signedIn !== true) {
+    return false;
+  }
+  if (platform === "win32") {
+    return true;
+  }
+  return platform === "linux" && trayAvailable !== false;
 }
 
 /** Narrow whatever the renderer sent to the three booleans the tray reads. */
@@ -91,5 +137,6 @@ module.exports = {
   buildTrayTemplate,
   trayTooltip,
   shouldHideToTray,
+  trayLikelyAvailable,
   normalizeVoiceState,
 };

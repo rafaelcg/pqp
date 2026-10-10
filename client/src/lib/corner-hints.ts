@@ -15,18 +15,21 @@
  *     outside App; see `lib/update-prompt-state.ts` for how it reports in)
  *  2. communityHomePost — a live Baú publish in the open server; not a
  *     campaign, so it beats the first-run cards and yields only to update
- *  3. qg — the house, first-run
- *  4. voiceClean — the one-time Voz limpa nudge, above the user bar; after
+ *  3. notifyOffer — a DM or mention reached a hidden tab and banners are off;
+ *     a moment rather than a campaign (`lib/notifications.ts`, `NotifyOfferHint`)
+ *  4. qg — the house, first-run
+ *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
- *  5. mobileBeta — phone browsers only; the campaign for the native apps
- *  6. whatsNew — Novidades now lives on the rail
- *  7. cargos — staff who can manage roles
- *  8. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *  6. mobileBeta — phone browsers only; the campaign for the native apps
+ *  7. whatsNew — Novidades now lives on the rail
+ *  8. cargos — staff who can manage roles
+ *  9. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
   "update",
   "communityHomePost",
+  "notifyOffer",
   "qg",
   "voiceClean",
   "mobileBeta",

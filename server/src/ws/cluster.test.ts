@@ -472,6 +472,74 @@ describe("status across two instances", () => {
     expect(a.status.resolveStatus(userId)).toBe("idle");
   });
 
+  it("carries attention across: a backgrounded tab on B stops counting on A", async () => {
+    // The push attention gate decides on whichever instance the message was
+    // posted to; the person's sockets can be anywhere.
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const theirTab = recordingSocket();
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+    expect(a.status.hasAttentiveSocket(userId)).toBe(true);
+
+    await b.chat.handleChatMessage(
+      { socket: theirTab.socket, user: asUser(userId) },
+      { type: "set-attention", foreground: false },
+    );
+    expect(a.status.hasAttentiveSocket(userId)).toBe(false);
+    // Still connected, which is what the gate-off rule keeps reading.
+    expect(a.status.hasClusterSocket(userId)).toBe(true);
+
+    await b.chat.handleChatMessage(
+      { socket: theirTab.socket, user: asUser(userId) },
+      { type: "set-attention", foreground: true },
+    );
+    expect(a.status.hasAttentiveSocket(userId)).toBe(true);
+  });
+
+  it("an attentive socket on B outweighs a background one on A, both ways round", async () => {
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const desktopOnA = recordingSocket();
+    const tabOnB = recordingSocket();
+    await a.status.registerStatusSocket(desktopOnA.socket, userId);
+    await b.status.registerStatusSocket(tabOnB.socket, userId);
+    a.status.setSocketAttention(desktopOnA.socket, false);
+
+    expect(a.status.hasAttentiveSocket(userId)).toBe(true);
+    b.status.setSocketAttention(tabOnB.socket, false);
+    expect(a.status.hasAttentiveSocket(userId)).toBe(false);
+    expect(b.status.hasAttentiveSocket(userId)).toBe(false);
+  });
+
+  it("reads a contribution from an older build (no attentive field) as foreground unless idle", async () => {
+    // A rolling deploy puts both builds on one bus. The old one never heard
+    // of attention, so every socket it holds is undeclared: !idle is exactly
+    // what the new build would have said for them.
+    const active = randomUUID();
+    const idle = randomUUID();
+    const a = await bootInstance();
+    for (const listener of [...hub.listeners]) {
+      listener({
+        origin: "old-build",
+        topic: "status.presence",
+        data: {
+          kind: "snapshot",
+          hello: false,
+          users: {
+            [active]: { manual: "online", idle: false },
+            [idle]: { manual: "online", idle: true },
+          },
+        },
+      });
+    }
+
+    expect(a.status.hasAttentiveSocket(active)).toBe(true);
+    expect(a.status.hasClusterSocket(idle)).toBe(true);
+    expect(a.status.hasAttentiveSocket(idle)).toBe(false);
+  });
+
   it("delivers a manual status set on one instance to the socket on the other", async () => {
     // THE FAILURE THIS EXISTS FOR. An HTTP request lands wherever the load
     // balancer sends it, which has nothing to do with where the person's socket

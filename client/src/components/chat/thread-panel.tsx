@@ -405,6 +405,7 @@ export function ThreadPanel({
       <MessageComposer
         // Remount per thread, same reason the main composer keys by channel.
         key={thread.channelId}
+        voiceNotesServerId={serverId}
         onSend={(body, attachments) => {
           controller.sendMessage(body, replyTarget, attachments);
           setReplyTarget(null);

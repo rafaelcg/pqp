@@ -31,6 +31,7 @@ function makeScope(options: {
   fetchImpl?: (request: unknown) => Promise<unknown>;
   shell?: unknown;
   timeoutMs?: number;
+  clients?: { postMessage: (message: unknown) => void }[];
 }) {
   const listeners: Record<string, Listener[]> = {};
   const fetched: unknown[] = [];
@@ -55,6 +56,12 @@ function makeScope(options: {
     clearTimeout,
     addEventListener: (type: string, listener: Listener) => {
       (listeners[type] ??= []).push(listener);
+    },
+    clients: {
+      matchAll: async (opts: { type?: string; includeUncontrolled?: boolean }) => {
+        expect(opts).toEqual({ type: "window", includeUncontrolled: true });
+        return options.clients ?? [];
+      },
     },
   };
   scope.self = scope;
@@ -217,5 +224,84 @@ describe("what it leaves alone", () => {
     for (const path of ["/", "/app", "/app/dm", "/@rafa", "/c/valorant", "/tela", "/robots"]) {
       expect(await t.navigate(`https://pqp.gg${path}`)).toBeDefined();
     }
+  });
+});
+
+describe("a failed install says why", () => {
+  /** Dispatch `install`, then pass `work` to waitUntil the way Workbox does. */
+  function install(t: ReturnType<typeof makeScope>, ...work: Promise<unknown>[]) {
+    const extended: Promise<unknown>[] = [];
+    const event = {
+      waitUntil(promise: Promise<unknown>) {
+        extended.push(promise);
+      },
+    };
+    for (const listener of t.listeners.install ?? []) {
+      listener(event);
+    }
+    for (const promise of work) {
+      event.waitUntil(promise);
+    }
+    return extended;
+  }
+
+  function precacheError(url: string, status: number) {
+    return Object.assign(new Error("bad-precaching-response"), {
+      name: "bad-precaching-response",
+      details: { url, status },
+    });
+  }
+
+  it("posts the failing path, status and reason to every page, then still fails", async () => {
+    const posted: unknown[] = [];
+    const page = { postMessage: (message: unknown) => posted.push(message) };
+    const t = makeScope({ clients: [page, page] });
+    const error = precacheError("https://pqp.gg/robots.txt?__WB_REVISION__=abc", 404);
+
+    const [extended] = install(t, Promise.reject(error));
+
+    await expect(extended).rejects.toBe(error);
+    expect(posted).toHaveLength(2);
+    expect(posted[0]).toEqual({
+      type: "PQP_SW_INSTALL_FAILED",
+      build: "abc123",
+      reason: "bad-precaching-response",
+      path: "/robots.txt",
+      status: 404,
+    });
+  });
+
+  it("reports once when several promises of the same install reject", async () => {
+    const posted: unknown[] = [];
+    const t = makeScope({ clients: [{ postMessage: (m: unknown) => posted.push(m) }] });
+    const extended = install(
+      t,
+      Promise.reject(precacheError("https://pqp.gg/a.js", 404)),
+      Promise.reject(precacheError("https://pqp.gg/b.js", 500)),
+    );
+    await Promise.allSettled(extended);
+    expect(posted).toHaveLength(1);
+  });
+
+  it("posts nothing for an install that succeeds", async () => {
+    const posted: unknown[] = [];
+    const t = makeScope({ clients: [{ postMessage: (m: unknown) => posted.push(m) }] });
+    const [extended] = install(t, Promise.resolve("done"));
+    await expect(extended).resolves.toBe("done");
+    expect(posted).toEqual([]);
+  });
+
+  it("an error with no details still reports its name", async () => {
+    const posted: unknown[] = [];
+    const t = makeScope({ clients: [{ postMessage: (m: unknown) => posted.push(m) }] });
+    const [extended] = install(t, Promise.reject(new TypeError("Failed to fetch")));
+    await expect(extended).rejects.toThrow("Failed to fetch");
+    expect(posted).toEqual([
+      { type: "PQP_SW_INSTALL_FAILED", build: "abc123", reason: "TypeError", path: "", status: 0 },
+    ]);
+  });
+
+  it("is not in the legacy fixture", () => {
+    expect(swBuildScript("x", { navigation: false })).not.toContain("PQP_SW_INSTALL_FAILED");
   });
 });

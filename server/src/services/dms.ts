@@ -392,6 +392,7 @@ interface DmRow {
   last_message_author_name: string | null;
   last_message_has_attachments: boolean | null;
   last_message_first_attachment_type: string | null;
+  last_message_voice_duration_ms: number | null;
 }
 
 /**
@@ -457,7 +458,8 @@ export async function listConversations(
               lastmsg.author_id AS last_message_author_id,
               lastmsg.author_name AS last_message_author_name,
               lastmsg.has_attachments AS last_message_has_attachments,
-              lastmsg.first_attachment_type AS last_message_first_attachment_type
+              lastmsg.first_attachment_type AS last_message_first_attachment_type,
+              lastmsg.voice_duration_ms AS last_message_voice_duration_ms
        FROM counts
        LEFT JOIN LATERAL (
          SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id,
@@ -471,7 +473,13 @@ export async function listConversations(
                   WHERE ma2.message_id = lm.id
                   ORDER BY ma2.position ASC, ma2.created_at ASC
                   LIMIT 1
-                ) AS first_attachment_type
+                ) AS first_attachment_type,
+                (
+                  SELECT v.duration_ms FROM message_attachments ma3
+                  JOIN message_attachment_voice v ON v.attachment_id = ma3.id
+                  WHERE ma3.message_id = lm.id
+                  LIMIT 1
+                ) AS voice_duration_ms
          FROM messages lm
          JOIN users u2 ON u2.id = lm.author_id
          WHERE lm.channel_id = counts.channel_id
@@ -513,6 +521,7 @@ export async function listConversations(
               body: row.last_message_body ?? "",
               hasAttachments: row.last_message_has_attachments === true,
               isGifAttachment: row.last_message_first_attachment_type === "image/gif",
+              voiceDurationMs: row.last_message_voice_duration_ms,
             }),
           }
         : null,

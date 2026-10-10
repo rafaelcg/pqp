@@ -71,6 +71,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   community_home_translation: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  bau_mobile_rendition: (raw) => raw === "true",
+  community_home_video_captions: (raw) => raw === "true",
+  bau_post_push: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
@@ -78,6 +82,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   watch_camera_sync: (raw) => raw === "true",
   watch_party_server_audience: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  push_attention_gate: (raw) => raw === "true",
   share_high_motion_guard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   share_game_capture_hint: (raw) => raw === "true",
@@ -89,6 +95,15 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   audience_mode: (raw) => raw === "true",
   watch_now_banner: (raw) => raw === "true",
   stream_start_notifications: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  desktop_notify_default_on: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  voice_notes: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  voice_note_transcription: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  notify_open_channel: (raw) => raw === "true",
+  mention_ids_from_db: (raw) => raw === "true",
 };
 
 const SAMPLES = [

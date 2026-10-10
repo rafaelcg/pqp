@@ -187,6 +187,12 @@ offering the button. It is still a wasted upload, so pass the key.
 instance, which the hosted API will reject. The live value is the
 `VITE_CLERK_PUBLISHABLE_KEY` GitHub secret that `deploy-web.yml` uses.
 
+**Push needs a file, not a key.** The release workflow writes
+`android/app/google-services.json` from the base64 `GOOGLE_SERVICES_JSON` secret
+(the same one `android.yml` uses). Without it the bundle builds with push off.
+It must name the Firebase project the server's `FCM_PROJECT_ID` points at, and
+carry the `gg.pqp.app` client. See "Push on the Play build" in `docs/ANDROID.md`.
+
 Verified on a device against an R8-shrunk signed release build: with the key,
 Clerk's `AuthView` renders in full. The Clerk SDK survives the shrinker with the
 ProGuard rules as they stand.

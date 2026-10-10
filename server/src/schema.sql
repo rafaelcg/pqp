@@ -1005,6 +1005,138 @@ ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAM
 CREATE INDEX IF NOT EXISTS idx_message_attachments_quarantined
   ON message_attachments (quarantined_at) WHERE quarantined_at IS NOT NULL;
 
+-- ---------------------------------------------------------------- voice notes
+--
+-- A voice note is an ordinary `message_attachments` row (the bytes, the
+-- claim, the sweep, the signed reads) plus this 1:1 side row, which holds what
+-- only a note has. A side table rather than columns on the hot table: nothing
+-- here ALTERs `message_attachments`, and a later `video` note gets a sibling
+-- table of its own instead of a kind column. CASCADE, not SET NULL: this row
+-- names no object in the bucket, so it has nothing to leak, and it must go
+-- with the attachment the sweeper deletes.
+--
+-- Written in the same statement as the attachment, at mint, behind the
+-- `voice_notes` runtime flag. Every transcript and playback column is
+-- reserved for later work so that work needs no migration of this table:
+--   duration_ms           the recorder's count, what the card shows
+--   waveform              64 peaks, base64
+--   codec                 filled once the bytes have been parsed
+--   verified_duration_ms  the duration read from the container headers
+--   transcribe_allowed    the sender's consent, copied at mint (default on)
+--   transcript_*          the speech-to-text result and its provenance
+--   playback_key / _content_type  a transcoded copy for clients that cannot
+--                         play the original (reserved for iOS and WebM). It
+--                         names a bucket object, so whatever first fills it
+--                         must also teach the attachment sweeps to delete it.
+CREATE TABLE IF NOT EXISTS message_attachment_voice (
+  attachment_id UUID PRIMARY KEY REFERENCES message_attachments(id) ON DELETE CASCADE,
+  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 300 AND 300000),
+  waveform TEXT NOT NULL CHECK (octet_length(waveform) <= 128),
+  codec TEXT,
+  verified_duration_ms INTEGER CHECK (verified_duration_ms >= 0),
+  transcribe_allowed BOOLEAN NOT NULL DEFAULT TRUE,
+  transcript_status TEXT NOT NULL DEFAULT 'none'
+    CHECK (transcript_status IN ('none', 'pending', 'done', 'no_speech', 'failed', 'unavailable')),
+  transcript_text TEXT CHECK (char_length(transcript_text) <= 4000),
+  transcript_language TEXT,
+  transcript_provider TEXT,
+  transcribed_at TIMESTAMPTZ,
+  playback_key TEXT UNIQUE,
+  playback_content_type TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Who has played a voice note, and when they first did. One row per listener:
+-- the primary key is what makes `POST /api/attachments/:id/listened`
+-- idempotent (a replay is `ON CONFLICT DO NOTHING`, and only the insert that
+-- wins sends a live frame). Filled for every channel; whether anybody else
+-- may SEE it is decided on read (a conversation of at most ten people, the
+-- author only), never by what is stored. Keyed to the attachment, not the
+-- message: it is the note that was heard, and CASCADE takes the rows with
+-- the note the sweeper or a message delete removes. user_id cascades with the
+-- account. The PK leads with attachment_id, which is the direction every read
+-- takes (one batch of notes), so no second index; deleting a user scans by
+-- user_id, and that index below keeps it from walking the table.
+CREATE TABLE IF NOT EXISTS voice_note_listens (
+  attachment_id UUID NOT NULL REFERENCES message_attachments(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  listened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (attachment_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_voice_note_listens_user
+  ON voice_note_listens (user_id);
+
+-- The operator metrics read "notes minted in the last 24 hours / 7 days" and
+-- "first plays in the last 24 hours" (`services/voice-note-metrics.ts`). Both
+-- are time windows over tables that only grow, and neither has another index
+-- that leads with time, so without these each refresh of the dashboard would
+-- read every note ever sent.
+CREATE INDEX IF NOT EXISTS idx_message_attachment_voice_created
+  ON message_attachment_voice (created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_note_listens_listened
+  ON voice_note_listens (listened_at);
+
+-- ---------------------------------------------------------------- speech jobs
+--
+-- The worker's queue for anything that needs the bytes of a recording:
+--   voice_note       transcribe a voice note (speech-to-text provider)
+--   voice_transcode  make the AAC copy of an Opus note (ffmpeg), into
+--                    message_attachment_voice.playback_key
+--   party_question   reserved for watch party voice questions; nothing
+--                    enqueues or claims it yet
+--
+-- Enqueued in the same transaction as the message that carries the note
+-- (`services/speech-jobs.ts`), or by the lazy request route, so a crash
+-- between "sent" and "queued" cannot happen. Claimed with FOR UPDATE SKIP
+-- LOCKED and a lease, so any number of workers can poll it, and a worker that
+-- dies mid-job leaves a row whose lease expires and is claimed again.
+-- `attempts` is bumped AT CLAIM, so a job that crashes its worker every time
+-- still runs out of attempts instead of looping forever.
+--
+-- One row per (kind, attachment) EVER: the unique index is the dedupe for an
+-- eager enqueue racing a lazy request. A finished row is kept (it is tiny and
+-- CASCADEs with the attachment) and is what a re-request is checked against.
+CREATE TABLE IF NOT EXISTS speech_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('voice_note', 'voice_transcode', 'party_question')),
+  attachment_id UUID REFERENCES message_attachments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  leased_by TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  -- ISO-639-1, set at enqueue for a short clip (the sender's locale): Whisper
+  -- guesses the language badly on a couple of seconds of audio.
+  language_hint TEXT,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ,
+  CHECK (kind = 'party_question' OR attachment_id IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_attachment
+  ON speech_jobs (kind, attachment_id) WHERE attachment_id IS NOT NULL;
+-- The claim's scan: only live rows, in the order they become due.
+CREATE INDEX IF NOT EXISTS idx_speech_jobs_due
+  ON speech_jobs (run_after, id) WHERE status IN ('queued', 'running');
+-- What settled lately, for the operator metrics' success rate and latency
+-- ("jobs finished in the last 24 hours"). Partial like the one above, and for
+-- the same reason: the rows that are neither done nor failed have no
+-- `finished_at` and are the other index's.
+CREATE INDEX IF NOT EXISTS idx_speech_jobs_finished
+  ON speech_jobs (finished_at) WHERE status IN ('done', 'failed');
+
+-- Seconds of audio sent to the speech provider per UTC day, shared by every
+-- worker, reserved atomically before each call so the daily cap
+-- (VOICE_STT_DAILY_SECONDS) means the deployment and not one process.
+CREATE TABLE IF NOT EXISTS speech_usage_daily (
+  day DATE PRIMARY KEY,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  refused INTEGER NOT NULL DEFAULT 0
+);
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows
@@ -3866,6 +3998,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_community_home_posts_pinned_one
   ON community_home_posts (server_id)
   WHERE pinned_at IS NOT NULL;
 
+-- WHEN A PUBLISHED POST HAS BEEN ANNOUNCED BY PUSH (`bau_post_push`,
+-- services/community-home-push.ts). Stamped by one UPDATE ... RETURNING, so the
+-- machine that gets the row back is the only one that sends: exactly once
+-- across API instances, across the publish route and the sweep, and across an
+-- unpublish followed by a publish. Stamped even when nothing is sent, so
+-- turning the flag on never announces what was published while it was off.
+-- The existing published posts are backfilled ONCE, in the block that adds the
+-- column, because this file runs on every boot and a plain UPDATE here would
+-- also swallow the pushes of posts published just before a restart.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'community_home_posts'
+       AND column_name = 'push_claimed_at'
+  ) THEN
+    ALTER TABLE community_home_posts ADD COLUMN push_claimed_at TIMESTAMPTZ;
+    UPDATE community_home_posts
+       SET push_claimed_at = COALESCE(published_at, NOW())
+     WHERE status = 'published';
+  END IF;
+END $$;
+
+-- The sweep asks "any published post nobody has announced?" every 30 s across
+-- every server; this keeps that a lookup of the (almost always empty) set.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_unannounced
+  ON community_home_posts (published_at)
+  WHERE status = 'published' AND push_claimed_at IS NULL;
+
 -- How far each person has read this server's Baú. Mirrors `channel_reads`:
 -- one row per (server, person), stamped when the feed is opened. The unread
 -- count is derived from it, never stored, so it cannot drift.
@@ -3915,6 +4077,36 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
+
+-- The phone cut of a post's uploaded video: the vertical (9:16) edit a phone
+-- plays instead of the landscape one. A second stored object on the same row,
+-- through the same mint / PUT / claim and the same size, type and HEAD checks
+-- as the main media, so its upload row is the same kind of row and the orphan
+-- sweep and the delete path treat it the same way. NULL on every post that
+-- does not have one. Only ever set when media_kind = 'video', and always a
+-- video itself (the service enforces both; the CHECK is the backstop). Served
+-- only while the runtime flag `bau_mobile_rendition` is on for the server.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_name TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_content_type TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_byte_size BIGINT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_storage_key TEXT;
+
+-- Added once, never dropped and re-added: a re-add re-validates every row
+-- under a strong lock on each schema run.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_posts_mobile_media_check'
+       AND conrelid = 'community_home_posts'::regclass
+  ) THEN
+    ALTER TABLE community_home_posts
+      ADD CONSTRAINT community_home_posts_mobile_media_check
+      CHECK (mobile_media_storage_key IS NULL OR media_kind = 'video');
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
@@ -3972,6 +4164,89 @@ CREATE TABLE IF NOT EXISTS community_home_translation_usage (
   day DATE PRIMARY KEY,
   chars BIGINT NOT NULL DEFAULT 0,
   requests INTEGER NOT NULL DEFAULT 0
+);
+
+-- Automatic subtitles of an uploaded Baú video, behind the runtime flag
+-- `community_home_video_captions` (services/community-home-captions.ts).
+--
+-- The worker's job is a `speech_jobs` row like a voice note's, keyed by the
+-- POST rather than an attachment: the column and the kind are added here,
+-- after `community_home_posts` exists, because speech_jobs is created long
+-- before it. The constraint rewrites are guarded so a boot that finds them
+-- already in place takes no lock on the table.
+ALTER TABLE speech_jobs ADD COLUMN IF NOT EXISTS post_id UUID
+  REFERENCES community_home_posts(id) ON DELETE CASCADE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%community_home_captions%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_kind_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_kind_check CHECK (
+      kind IN ('voice_note', 'voice_transcode', 'party_question', 'community_home_captions')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_check'
+       AND pg_get_constraintdef(oid) LIKE '%post_id%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_check CHECK (
+      kind = 'party_question' OR attachment_id IS NOT NULL OR post_id IS NOT NULL
+    );
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- One captions job per post EVER, like one transcription per note: the
+-- enqueue's dedupe. Replacing a post's video deletes the row, so the next
+-- enqueue (or the sweep) makes a fresh one for the new file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_post
+  ON speech_jobs (kind, post_id) WHERE post_id IS NOT NULL;
+
+-- The tracks. One row per (post, language): the transcription itself
+-- (`is_source`) and its translations, cues as JSONB ({start, end, text},
+-- seconds) because a translation swaps the words and keeps the timings, and
+-- the WebVTT is rendered on read. `media_key` is the object the sound came
+-- from: a read serves only rows whose key is still the post's, so a replaced
+-- video never shows the old subtitles even before anything deletes them.
+-- `source_hash` is md5 of the source cues (`captionCuesHash`): a translated
+-- row made from an older transcription is stale and not served.
+CREATE TABLE IF NOT EXISTS community_home_post_captions (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  is_source BOOLEAN NOT NULL,
+  media_key TEXT NOT NULL,
+  cues JSONB NOT NULL,
+  source_lang TEXT,
+  source_hash TEXT NOT NULL,
+  -- The speech provider for the source, the translation model otherwise.
+  made_by TEXT NOT NULL,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, lang)
+);
+
+-- The claim for one caption translation, the same shape and the same reason
+-- as community_home_translation_jobs: a translation is a network call, never
+-- made in a transaction, and two processes must not both pay for it.
+CREATE TABLE IF NOT EXISTS community_home_caption_translation_jobs (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  PRIMARY KEY (post_id, lang)
 );
 
 -- Watch party scheduling: an admin/mod announces the next session on a

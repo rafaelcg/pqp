@@ -100,6 +100,8 @@ interface DoctorInput {
   fetchImpl?: typeof fetch;
   peerConnection?: typeof RTCPeerConnection;
   iceServers?: () => Promise<RTCIceServer[]>;
+  /** Called as each check lands, so a dialog can fill its rows one by one. */
+  onResult?: (result: CheckResult) => void;
 }
 
 async function timed<T>(
@@ -175,6 +177,10 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
     input.peerConnection ??
     (typeof RTCPeerConnection === "undefined" ? undefined : RTCPeerConnection);
   const results: CheckResult[] = [];
+  const push = (result: CheckResult) => {
+    results.push(result);
+    input.onResult?.(result);
+  };
 
   // 1. Is the API reachable at all over HTTPS? An `/api` route rather than
   // `/health`: only `/api/*` answers with CORS headers, and without them a
@@ -186,7 +192,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
       STEP_TIMEOUT_MS,
     ),
   );
-  results.push({
+  push({
     id: "api",
     verdict: api.value ? "ok" : "fail",
     detail: api.value ? `HTTP ${api.value.status}` : describeError(api.error),
@@ -198,7 +204,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
     withTimeout(input.getToken(), STEP_TIMEOUT_MS),
   );
   const hasToken = Boolean(token.value);
-  results.push({
+  push({
     id: "token",
     verdict: hasToken ? "ok" : "fail",
     detail: token.value
@@ -212,7 +218,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
   // 3. The realtime socket, as the transport sees it right now.
   const status = input.transport.getStatus();
   const lastClose = input.transport.getLastClose();
-  results.push({
+  push({
     id: "socket",
     verdict: status === "online" ? "ok" : "fail",
     detail:
@@ -223,8 +229,8 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
 
   // 4 + 5. Can this network reach a STUN server and a TURN relay?
   if (!Peer) {
-    results.push({ id: "stun", verdict: "skip", detail: "no WebRTC", ms: 0 });
-    results.push({ id: "turn", verdict: "skip", detail: "no WebRTC", ms: 0 });
+    push({ id: "stun", verdict: "skip", detail: "no WebRTC", ms: 0 });
+    push({ id: "turn", verdict: "skip", detail: "no WebRTC", ms: 0 });
   } else {
     let servers: RTCIceServer[] = [];
     if (hasToken) {
@@ -252,7 +258,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
         STEP_TIMEOUT_MS,
       ),
     );
-    results.push({
+    push({
       id: "stun",
       verdict: stun.value?.srflx ? "ok" : "fail",
       detail: stun.value
@@ -261,7 +267,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
       ms: stun.ms,
     });
     if (turnServers.length === 0) {
-      results.push({
+      push({
         id: "turn",
         verdict: "skip",
         detail: hasToken ? "no relay configured" : "no token",
@@ -271,7 +277,7 @@ export async function runConnectionChecks(input: DoctorInput): Promise<DoctorRep
       const turn = await timed(() =>
         probeIce(Peer, turnServers, "relay", STEP_TIMEOUT_MS),
       );
-      results.push({
+      push({
         id: "turn",
         verdict: turn.value?.relay ? "ok" : "fail",
         detail: turn.value ? `relay=${turn.value.relay}` : describeError(turn.error),

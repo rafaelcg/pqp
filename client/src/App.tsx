@@ -58,6 +58,19 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
+import {
+  applyVoiceNoteListened,
+  applyVoiceNoteUpdated,
+  isVoiceNoteListenedFrame,
+  setVoiceNoteViewer,
+} from "@/lib/voice-note-player";
+import {
+  applyVoiceNoteTranscript,
+  isVoiceNoteTranscriptFrame,
+  isVoiceNoteUpdatedFrame,
+} from "@/lib/voice-note-transcript";
+import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -107,6 +120,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
@@ -148,6 +162,8 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
+import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import {
   dismissPartyNewcomerStrip,
@@ -321,6 +337,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchCommunityHomeUnreadAll,
   fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
@@ -401,6 +418,7 @@ import {
 } from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
+import { startNotifyConfig } from "@/lib/notify-config";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -423,7 +441,7 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -500,6 +518,9 @@ import {
   mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
+  bauIsFresh,
+  withServerBauNewest,
+  withServerBauUnread,
 } from "@/lib/community-home";
 import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -523,6 +544,7 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
 import {
@@ -535,9 +557,13 @@ import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
-import { useChannelNotifications } from "@/hooks/use-notifications";
+import {
+  useChannelNotifications,
+  useNotifyOfferReady,
+} from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
+import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
@@ -1219,6 +1245,10 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // The voice note player remembers its speed per account.
+  useEffect(() => {
+    setVoiceNoteViewer(user?.id ?? null);
+  }, [user?.id]);
   // For callbacks that must not change identity when the account loads.
   const userIdRef = useRef<string | null>(null);
   userIdRef.current = user?.id ?? null;
@@ -1511,6 +1541,13 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The one-time "Ativar notificações" card. Like the cargos card it decides
+  // for itself whether it was seen, and the queue has to know too: a card that
+  // wants the corner and never draws would hold every tip behind it.
+  const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
+    () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
+  );
+  const notifyOfferReady = useNotifyOfferReady();
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
@@ -1784,6 +1821,37 @@ function MainAppContent({
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  /**
+   * Unread Baú posts for EVERY server, for the rail's icons. The open server's
+   * own count above drives the sidebar row and the corner card; this is the
+   * same number for the servers whose channel list is not on screen.
+   */
+  const [communityHomeUnreadByServer, setCommunityHomeUnreadByServer] =
+    useState<Record<string, number>>({});
+  /**
+   * When each server's newest unread Baú post went live (ISO), for the "New"
+   * chip's 24 hour window. Servers with nothing unread are absent, and so is
+   * every server on an API that predates the field.
+   */
+  const [communityHomeNewestByServer, setCommunityHomeNewestByServer] =
+    useState<Record<string, string>>({});
+  /**
+   * Re-renders once a minute while the open server has unread Baú posts, so the
+   * row's "New" chip lets go at 24 h instead of waiting for some other render.
+   */
+  const [communityHomeFreshTick, setCommunityHomeFreshTick] = useState(0);
+  useEffect(() => {
+    if (communityHomeUnread <= 0) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => setCommunityHomeFreshTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [communityHomeUnread]);
+  /** Bumped by every Baú frame, for any server, to re-read the map above. */
+  const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
   const communityHomeUnreadServerRef = useRef<string | null>(null);
   const communityHomeUpdateNudgeRef = useRef(0);
@@ -2370,6 +2438,22 @@ function MainAppContent({
   });
 
   /**
+   * Whether this window is in front of the person (visible and focused, with a
+   * grace before "background"), for the server's push attention gate: a tab
+   * left in the background or a minimised desktop window no longer keeps the
+   * phone quiet. Re-announced on every reconnect, like idle, because the
+   * server forgets it with the socket. See `lib/attention.ts`.
+   */
+  useAttentionReport({
+    sendAttention: useCallback(
+      (foreground: boolean) =>
+        transport.sendChat({ type: "set-attention", foreground }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
+
+  /**
    * The status hook, through a ref: the socket handler is installed once per
    * connection and must not be rebuilt each time the account changes it.
    */
@@ -2396,6 +2480,8 @@ function MainAppContent({
 
   const resolveTokenRef = useRef(resolveToken);
   resolveTokenRef.current = resolveToken;
+  // Stable, because the connection check restarts when its token getter changes.
+  const doctorGetToken = useCallback(() => resolveTokenRef.current(), []);
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
   /**
@@ -2537,6 +2623,14 @@ function MainAppContent({
   // (the teaser, the camera size, a server switched on) shows without a
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
+  // The notification switches (`notify_open_channel`) ride the same refresh.
+  // Only with an account: `/api/push/config` needs a token, and a signed-out
+  // page (or one still resolving `/api/me`) would be answered with a 401.
+  const notifyConfigUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyConfigUserId ? startNotifyConfig() : undefined),
+    [notifyConfigUserId],
+  );
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -4402,6 +4496,7 @@ function MainAppContent({
         // them. Nothing is sent back: a tab that has been open for hours would
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
+        bindPreferenceSyncAccount(me.id);
         if (me.preferences?.appearance) {
           adoptAppearancePreference(me.preferences.appearance);
         }
@@ -4421,6 +4516,7 @@ function MainAppContent({
         if (me.preferences?.chatDisplay) {
           adoptChatDisplay(me.preferences.chatDisplay);
         }
+        adoptVoiceTranscription(me.preferences);
         const merged = applyRemotePreferences(
           loadLocalSettings(),
           me.preferences,
@@ -4679,6 +4775,27 @@ function MainAppContent({
                 },
               };
             });
+            return;
+          }
+
+          // Somebody heard a voice note: the listener's own other sockets (so
+          // the dot goes everywhere) and the author's (for "ouviu"). The store
+          // is global because the player is; no controller owns it.
+          if (isVoiceNoteListenedFrame(message)) {
+            applyVoiceNoteListened(message);
+            return;
+          }
+
+          // A transcript settled (or was asked for), and the AAC copy of a
+          // note was made. Both go to the whole channel and into stores keyed
+          // by attachment, like the receipts above: a card in the list, a
+          // thread panel or a search hit reads the same answer.
+          if (isVoiceNoteTranscriptFrame(message)) {
+            applyVoiceNoteTranscript(message);
+            return;
+          }
+          if (isVoiceNoteUpdatedFrame(message)) {
+            applyVoiceNoteUpdated(message);
             return;
           }
 
@@ -4946,6 +5063,8 @@ function MainAppContent({
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
+            // Any server's frame, the open one included: the rail's icons.
+            setCommunityHomeAllNudge((n) => n + 1);
             return;
           }
 
@@ -7752,6 +7871,12 @@ function MainAppContent({
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast(null);
       const serverId = selectedServerId;
+      setCommunityHomeUnreadByServer((current) =>
+        withServerBauUnread(current, serverId, 0),
+      );
+      setCommunityHomeNewestByServer((current) =>
+        withServerBauNewest(current, serverId, null),
+      );
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -7772,9 +7897,15 @@ function MainAppContent({
     const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
     void fetchCommunityHomeUnread(selectedServerId)
-      .then(({ count }) => {
+      .then(({ count, newestAt }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          setCommunityHomeUnreadByServer((current) =>
+            withServerBauUnread(current, selectedServerId, count),
+          );
+          setCommunityHomeNewestByServer((current) =>
+            withServerBauNewest(current, selectedServerId, count > 0 ? newestAt : null),
+          );
           communityHomeUnreadRef.current = count;
           communityHomeUnreadBaselineRef.current = true;
           if (
@@ -7808,6 +7939,88 @@ function MainAppContent({
     communityHomeOpen,
     selectedServerId,
     communityHomeUpdateNudge,
+  ]);
+
+  /**
+   * Unread Baú posts for every server, for the rail.
+   *
+   * The sidebar effect above only knows the server that is open, so before this
+   * a post published in any other server left its icon untouched. One request
+   * for all of them, re-asked when a Baú frame arrives (debounced: a staff
+   * member publishing three posts is one read), when the set of servers with a
+   * Baú changes, and when the person moves between servers (a feed they just
+   * left has been stamped read by then). The open server's own entry is not
+   * trusted from here: the rail draws it as selected anyway, and the sidebar
+   * effect owns its number.
+   */
+  const bauServerKey = servers
+    .filter((row) => row.communityHomeEnabled === true)
+    .map((row) => row.id)
+    .join(",");
+  useEffect(() => {
+    if (!communityHomeFeatureOn || bauServerKey === "") {
+      setCommunityHomeUnreadByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      setCommunityHomeNewestByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    // The first read waits a beat so a burst of frames is one request; a read
+    // that fails is retried with a bounded backoff, so a blip does not leave a
+    // new post's pip off until the next frame or navigation.
+    const delays = [250, 5_000, 20_000, 60_000];
+    const attempt = (n: number): void => {
+      timer = window.setTimeout(() => {
+        void fetchCommunityHomeUnreadAll()
+          .then(({ servers: counts, newest }) => {
+            if (cancelled) {
+              return;
+            }
+            setCommunityHomeNewestByServer((current) => {
+              const next = { ...(newest ?? {}) };
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+            setCommunityHomeUnreadByServer((current) => {
+              const next = { ...counts };
+              // The server whose feed is open has just been stamped read; a
+              // read that raced the stamp must not light its icon on leaving.
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+          })
+          .catch(() => {
+            // Keep what is on screen (no pip is better than a wrong one) and
+            // ask again, a few times.
+            if (!cancelled && n + 1 < delays.length) {
+              attempt(n + 1);
+            }
+          });
+      }, delays[n]);
+    };
+    attempt(0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    communityHomeFeatureOn,
+    bauServerKey,
+    communityHomeAllNudge,
+    selectedServerId,
+    communityHomeOpen,
   ]);
 
   /**
@@ -8406,6 +8619,41 @@ function MainAppContent({
     [loadBlocks],
   );
 
+  /**
+   * Settings' block (the block-by-name form in Privacidade). The block request
+   * throws back so the row can say it failed; once the server agreed, the same
+   * refreshes as `handleBlockUser` run, so the DM list, unread counts, hidden
+   * messages and the friends list (a block ends a friendship) catch up now
+   * rather than on the next reload. A failed refresh is not a failed block.
+   */
+  const handleSettingsBlock = useCallback(
+    async (userId: string) => {
+      await blockUser(userId);
+      await Promise.allSettled([
+        loadBlocks(),
+        loadConversations({ trustSnapshot: true }),
+        friendsRef.current.refresh(),
+      ]);
+    },
+    [loadBlocks, loadConversations],
+  );
+
+  /**
+   * Settings' unblock. Unlike `handleUnblockUser`, a failure is thrown back so
+   * the Privacidade row can say it (the app's banner sits behind the dialog).
+   * Only the unblock request can fail it: the row is dropped locally once the
+   * server agreed, and the list refresh after it settles on its own, so a
+   * failed refresh never reads as a failed unblock or invites a retry.
+   */
+  const handleSettingsUnblock = useCallback(
+    async (userId: string) => {
+      await unblockUser(userId);
+      setBlockedUsers((current) => current.filter((one) => one.id !== userId));
+      void loadBlocks().catch(() => undefined);
+    },
+    [loadBlocks],
+  );
+
   const handleHideConversation = useCallback(
     async (channelId: string) => {
       try {
@@ -8443,6 +8691,11 @@ function MainAppContent({
     () => new Set(blockedUsers.map((blocked) => blocked.id)),
     [blockedUsers],
   );
+  // The open channel's banner (`notify_open_channel`) has to skip the same
+  // authors the server skips for every other channel's activity.
+  useEffect(() => {
+    setNotificationBlockedAuthors(blockedUserIds);
+  }, [blockedUserIds]);
 
   // --- watch now: the strip that says a stream is live ----------------------
   // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this
@@ -8624,7 +8877,22 @@ function MainAppContent({
     ],
     [channels, conversations],
   );
+  // `desktop_notify_default_on`, re-asked with the other runtime flags.
+  // Only with an account: `/api/push/config` needs a token, and a page still
+  // resolving `/api/me` would be answered with a 401.
+  const notifyDefaultsUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
+    [notifyDefaultsUserId],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
+  // The desktop shell hides to the tray on close (Windows, Linux) only while
+  // somebody is signed in, so it has to be told when that stops being true:
+  // this shell is only mounted for a signed-in session, and unmounts with it.
+  useEffect(() => {
+    getDesktop()?.setSignedIn?.(true);
+    return () => getDesktop()?.setSignedIn?.(false);
+  }, []);
 
   /**
    * Unread per server icon.
@@ -9314,6 +9582,8 @@ function MainAppContent({
     // first thing a stranger is told must not be "join the QG" (2026-10-04,
     // Filminho). It also keeps its own one-time hint, an attached card, from
     // yielding to a campaign for the whole film.
+    // A moment, not a campaign, but still a nudge: not over a live film.
+    notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
     qg: qgHintWanted && !campaignsYield,
     voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta && !campaignsYield,
@@ -10635,6 +10905,7 @@ function MainAppContent({
             : undefined
         }
         messages={chat.getMessages()}
+        participants={activeConversation?.participants}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -10741,6 +11012,9 @@ function MainAppContent({
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
         key={selectedChannel.id}
+        voiceNotesServerId={
+          selectedChannel.kind === "server" ? selectedServerId : null
+        }
         onSend={(body, attachments) => {
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
@@ -10950,10 +11224,14 @@ function MainAppContent({
         open={doctorOpen}
         onClose={() => setDoctorOpen(false)}
         transport={transport}
-        getToken={() => resolveTokenRef.current()}
+        getToken={doctorGetToken}
         onSignInAgain={signInAgain}
         appVersion="web"
       />
+
+      {/* A voice note keeps playing across channels; this is its control
+          while its own card is off screen. */}
+      <VoiceNoteMiniPlayer />
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       <DmToasts
@@ -11059,6 +11337,7 @@ function MainAppContent({
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
+        serverBauUnread={communityHomeUnreadByServer}
         homeSelected={
           selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
         }
@@ -11280,6 +11559,15 @@ function MainAppContent({
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
+          communityHomeUnreadFresh={
+            communityHomeFreshTick >= 0 &&
+            communityHomeUnread > 0 &&
+            bauIsFresh(
+              selectedServerId
+                ? communityHomeNewestByServer[selectedServerId]
+                : null,
+            )
+          }
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}
@@ -11690,7 +11978,8 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onUnblockUser={handleSettingsUnblock}
+        onBlockUser={handleSettingsBlock}
         onAudioSettingsLive={handleAudioSettingsLive}
         feedbackVoice={{
           inCall: voiceState.status === "connected",
@@ -12062,6 +12351,10 @@ function MainAppContent({
         }
       />
 
+      <NotifyOfferHint
+        enabled={effectiveCornerHint === "notifyOffer"}
+        onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}
         onDismiss={() => setWantsCargosHint(false)}
@@ -12228,6 +12521,7 @@ function MainAppContent({
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
+        pushToTalkOn={localSettings.inputMode === "push-to-talk"}
         onClose={() => setShortcutOverlayOpen(false)}
       />
 

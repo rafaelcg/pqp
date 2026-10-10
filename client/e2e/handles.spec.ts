@@ -85,13 +85,18 @@ test.describe("public handles", () => {
     await openSettingsProfile(page);
 
     const panel = page.getByRole("tabpanel");
-    // The field and the link are two different objects on purpose — the input
-    // is a draft, the code block is what you own. Both have to be there.
+    // The address prefix and the claimed handle read as one link in the field,
+    // and the copy action beside it acts on the saved link, never a draft.
     await expect(panel.getByText("pqp.gg/@", { exact: true })).toBeVisible();
-    await expect(panel.getByText(`pqp.gg/@${HANDLE}`)).toBeVisible();
+    await expect(panel.getByPlaceholder("yourname")).toHaveValue(HANDLE);
     await expect(
       panel.getByRole("button", { name: "Copy link" }),
     ).toBeVisible();
+    // The saved link is written out beside the actions, apart from the field
+    // (which holds a draft once the 30 days pass): it is what Copy link copies.
+    await expect(panel.locator("[data-owned-public-link]")).toHaveText(
+      `pqp.gg/@${HANDLE}`,
+    );
   });
 
   test("claiming from Settings is refused a second time inside the window", async ({

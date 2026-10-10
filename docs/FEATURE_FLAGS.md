@@ -111,7 +111,24 @@ default off; automatic translation of Baú posts, which also needs
 `OPENROUTER_API_KEY` on the API: no key, no translation, no error; served to
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
+`BAU_POST_PUSH` (`bau_post_push`, **per server**, default off, born as a flag):
+a push when a Baú post goes live, to members who have not muted the server;
+never the author, members-only posts only to people who can open them. Server
+only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
+`docs/COMMUNITY_HOME.md` §"Push on a new post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
+(`community_home_video_captions`, **per server**, default off), automatic
+subtitles on videos uploaded to the Baú. It sends the video's sound to the
+speech provider (Cloudflare Workers AI), so it goes on one server first. Read at
+the enqueue (publish and the minute sweep, which is also the backfill for videos
+already posted), by the worker before every provider call (a flip mid-queue
+drops the job with no call), and on every read: **off hides stored subtitles
+too**. Served as `captions` on each post of `GET /api/servers/:id/home/posts`.
+The translated track also needs `community_home_translation` on for the server.
+Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
+it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
+`docs/COMMUNITY_HOME.md` §"Video subtitles".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one
@@ -132,6 +149,13 @@ party: turn it on for one test server (the server's override), then globally.
 Off, the camera plays loose exactly as before: nothing writes its rate or its
 position, and nothing reads the film's clock. Only `true` turns the variable
 on. An API older than the flag sends no field, which the client reads as off.
+
+Born as a flag (no old reader): `BAU_MOBILE_RENDITION` (`bau_mobile_rendition`,
+default off, **per server**), a second, vertical cut of a Baú video that phones
+play instead of the main one. Served to the composer as `mobileRenditionEnabled`
+on `GET /api/servers/:id/home/posts`. Off, a write that names a cut is refused
+and reads leave `media.mobile` null, so everyone plays the main video; stored
+cuts are kept. See `docs/COMMUNITY_HOME.md` §"A phone cut of a video".
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
@@ -263,6 +287,103 @@ now" feature (`docs/plans/WATCH_NOW.md`):
   (`notifications.streamAlerts[serverId]`), at most 500 recipients per notice.
   `GET /api/admin/metrics` -> `streamAlerts` counts every stage and every
   reason a person was skipped. Decision code: `server/src/services/stream-alerts.ts`.
+
+Born as a flag (no old reader): `DESKTOP_NOTIFY_DEFAULT_ON`
+(`desktop_notify_default_on`, default off, **global only**), client-only. OS banners
+were opt-in behind a switch that defaults to off (19 of 7,012 accounts had it on),
+and one account default covered both DMs and servers. With the flag on, served as
+`desktopNotifyDefaultOn` on `GET /api/push/config`:
+
+- **Desktop app:** the banner switch reads ON until the person touches it
+  (`notifications.desktopChosen`). The shell already auto-grants the permission.
+- **Split defaults:** `notifications.dmDefault` (falls back to `default`, then
+  "all") and `notifications.serverDefault` (falls back to `default`, then
+  **"mentions"**), so a plain message in a server is not a banner by default.
+  The legacy `default` keeps meaning both until a person sets either. Migrated on
+  read, no `UPDATE`. A stored `default: "all"` does not count as a choice for
+  servers: the client wrote it on every save, so it cannot be told apart from the
+  initial value. Stream-start notices keep their old "all unless muted" reading.
+- **Browser:** the first DM or mention that arrives while the tab is hidden, with
+  the permission still undecided, leaves a one-time card ("Ativar notificações")
+  for when the person comes back (`components/layout/notify-offer-hint.tsx`).
+- **Server push:** `resolvePushLevel` honours an explicit `dmDefault` /
+  `serverDefault`; an account that set neither resolves exactly as before.
+
+Born as a flag (no old reader): `VOICE_NOTES` (`voice_notes`, default off,
+**per server**), voice notes in chat. A note is an ordinary attachment plus a
+`message_attachment_voice` side row; the flag is checked at mint against the
+channel's own server (a conversation reads the global value), so off is the
+kill switch for new notes while notes already sent stay readable. Served as
+`voiceNotes` on `GET /api/attachments/config?serverId=`. Turn it on for one
+server with `PUT /api/admin/flag-overrides { key: "voice_notes", serverId,
+enabled: true }` or from controles → interruptores. The rules beside it (byte
+budget per second, a note travels alone with no text) are in
+`server/src/services/voice-notes.ts`.
+
+Born as a flag (no old reader): `VOICE_NOTE_TRANSCRIPTION`
+(`voice_note_transcription`, default off, **per server**), the text under a
+voice note. It sends audio out of Brazil (Cloudflare Workers AI), so it goes
+on one server first. Read at four places, all of which know the note's
+server (a conversation reads the global value): the enqueue at send (eager
+in conversations only), the worker right before it would call the provider
+(a flip mid-queue drops the job with no call and no budget spent), the lazy
+`POST /api/attachments/:id/transcript` (403 when off), and every read: **off
+hides stored transcripts too**, so it is a kill switch and not just "stop
+making new ones". Served as `voiceTranscription` on
+`GET /api/attachments/config?serverId=`. Producing text also needs
+`VOICE_STT_PROVIDER` and its key on the worker; without them a transcript
+settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
+flag: it runs for every webm/ogg note while `voice_notes` is on.
+
+Born as a flag (no old reader): `NOTIFY_OPEN_CHANNEL` (`notify_open_channel`,
+default off, **global only**), client-only. The server sends no `channel-activity`
+for a channel a socket has open, so the open channel never raised an OS banner,
+even with the window minimised behind a game. With the flag on, a
+`message-broadcast` from somebody else in the open channel (or conversation)
+goes through the ordinary banner path when the window is hidden, minimised or
+without focus (`notifyOpenChannelWhileAway` in `client/src/lib/notifications.ts`):
+levels, channel and server mutes, Do Not Disturb, blocked authors, the desktop
+opt-in and the 10 s burst coalescing all apply. A window that is visible and
+focused stays quiet, as before. Served as `notifyOpenChannel` on
+`GET /api/push/config`; an open tab follows on the next config refresh (focus or
+10 min). Global on purpose: that endpoint has no server in hand, so a
+per-server override would never be read.
+
+Born as a flag (no old reader): `MENTION_IDS_FROM_DB` (`mention_ids_from_db`,
+default off, **global**), role mentions that actually notify. `recordMentions`
+always wrote `message_mentions` rows for the members of a mentioned role (the
+badge after a refresh), but the live `channel-activity` `mention` flag and the
+push recipient list matched the typed tokens against usernames only, so `@mods`
+reached nobody while the message was fresh. With the flag on, `createMessage`
+returns the ids the rows were written for (`mentionedUserIds`), the sending
+instance reads the flag once, and both the local fan-out and the
+`chat.activity` cluster frame carry the ids, so the sibling machine never
+consults the flag and cannot disagree. The ids are unioned with the username
+match, never replacing it; @everyone, @here, mute levels, DND, blocks and
+membership are decided exactly as before. Off, the frame is byte for byte the
+old one. Pinned on real Postgres with two instances on the bus by
+`server/src/ws/role-mention-recipients.test.ts`.
+
+Born as a flag (no old reader): `PUSH_ATTENTION_GATE` (`push_attention_gate`,
+default off, **global only**), which decides whether an open connection silences
+the phone. Off is the old rule: any socket anywhere in the cluster suppresses
+every push (message, call ring, stream start), so a forgotten tab or a minimised
+desktop window kept every phone quiet. On, the server pushes unless at least one
+of the account's sockets is **foreground and not idle**. Foreground is the
+client's own report, the `set-attention { foreground }` frame (web and desktop:
+visible and focused, with a grace before "background"); idle is the old
+`set-idle`. Both ride the status registry's cluster snapshot, so a socket on
+api-a answers for a push decided on api-b. A socket that never sends
+`set-attention` (every phone build today, every bundle from before the frame)
+counts as **foreground unless idle**: iOS already reports idle when it goes to
+the background, Android keeps today's behaviour until it sends the frame, and no
+old client can start getting a push on top of its own banner. Global because
+the decision is about a person's sockets and the DM and call paths have no
+server. Read it on `GET /api/admin/metrics`: `product.pushAttentionPassed` counts
+connected people the gate let through (zero while off), and
+`product.pushSkipped.*.attentive_socket` replaces `live_socket` once it is on.
+Decision code: `socketRefusal` in `server/src/services/push.ts` and
+`socketIsAttentive` in `server/src/ws/status.ts`.
 
 Staying environment-only, on purpose:
 

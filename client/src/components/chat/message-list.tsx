@@ -56,6 +56,7 @@ import { useChatDisplay } from "@/hooks/use-chat-display";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
+import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import { MessageBody } from "@/components/chat/message-body";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
@@ -220,6 +221,12 @@ const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
 interface MessageListProps {
   messages: ChatMessage[];
+  /**
+   * The people in a conversation, for the names on voice note receipts
+   * ("Dede ouviu"). A listener who never wrote in the conversation is not
+   * among the message authors, so the authors alone cannot name them.
+   */
+  participants?: readonly { id: string; displayName: string }[];
   /**
    * The reader owns this server and is alone in it. The empty channel then
    * says so and offers the invite, instead of telling nobody to say hi.
@@ -486,6 +493,7 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
  */
 export const MessageList = memo(function MessageList({
   messages,
+  participants,
   onCopyOwnerInvite,
   currentUserId,
   currentUsername = null,
@@ -1658,11 +1666,45 @@ export const MessageList = memo(function MessageList({
   }, [loadNewer, loadOlder]);
   handleScrollRef.current = handleScroll;
 
+  // Who a voice note's "ouviu" names: the conversation's participants, then
+  // the authors on screen. A stable function over a ref, so a new message
+  // does not re-render every voice note card through the context; a card
+  // reads the names when its own receipts change, which is when it needs them.
+  // The map is built lazily, once per new list, on the first receipt asked.
+  const voiceNoteNamesRef = useRef<{
+    participants: typeof participants;
+    messages: ChatMessage[];
+    names: Map<string, string> | null;
+  }>({ participants, messages, names: null });
+  if (
+    voiceNoteNamesRef.current.participants !== participants ||
+    voiceNoteNamesRef.current.messages !== messages
+  ) {
+    voiceNoteNamesRef.current = { participants, messages, names: null };
+  }
+  const voiceNoteNames = useCallback((userId: string) => {
+    const source = voiceNoteNamesRef.current;
+    if (!source.names) {
+      const names = new Map<string, string>();
+      for (const one of source.messages) {
+        if (one.authorName) {
+          names.set(one.authorId, one.authorName);
+        }
+      }
+      for (const one of source.participants ?? []) {
+        names.set(one.id, one.displayName);
+      }
+      source.names = names;
+    }
+    return source.names.get(userId) ?? null;
+  }, []);
+
   if (isLoading) {
     return <MessageListSkeleton />;
   }
 
   return (
+    <VoiceNoteNamesContext.Provider value={voiceNoteNames}>
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
@@ -2089,6 +2131,7 @@ export const MessageList = memo(function MessageList({
         </button>
       )}
     </div>
+    </VoiceNoteNamesContext.Provider>
   );
 });
 
@@ -3283,7 +3326,17 @@ const MessageRow = memo(function MessageRow({
                   ) : null}
                   {attachments.length > 0 && (
                     <div>
-                      <AttachmentGrid attachments={attachments} />
+                      <AttachmentGrid
+                        attachments={attachments}
+                        voiceMessage={{
+                          channelId: message.channelId,
+                          messageId: message.id,
+                          createdAt: message.createdAt,
+                          authorId: message.authorId,
+                          authorName: message.authorName,
+                          isMine,
+                        }}
+                      />
                       <EditedMarker editedAt={message.editedAt} />
                     </div>
                   )}

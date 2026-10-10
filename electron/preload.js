@@ -513,6 +513,9 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
       body: typeof payload.body === "string" ? payload.body : "",
       tag: typeof payload.tag === "string" ? payload.tag : "",
       path: typeof payload.path === "string" ? payload.path : "/app",
+      // true: the app plays its own cue, keep the banner silent. false: app
+      // sounds are off, let the OS sound play. Absent: older renderer, silent.
+      ...(typeof payload.silent === "boolean" ? { silent: payload.silent } : {}),
     });
   },
 
@@ -637,6 +640,15 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
       muted: state.muted === true,
       deafened: state.deafened === true,
     });
+  },
+
+  /**
+   * Whether somebody is signed in. On Windows and Linux the close button hides
+   * to the tray while this is true, and closes as it always did while it is
+   * not. Never sent means false.
+   */
+  setSignedIn(signedIn) {
+    ipcRenderer.send("pqp:signed-in", signedIn === true);
   },
 
   /** Mute, deafen and leave from the tray menu. */

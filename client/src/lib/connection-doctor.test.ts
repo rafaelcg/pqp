@@ -66,4 +66,17 @@ describe("runConnectionChecks", () => {
     expect(report.results[0]).toMatchObject({ id: "api", verdict: "fail" });
     expect(report.advice).toBe("apiUnreachable");
   });
+
+  it("hands each check over as it lands, in order, before the report is done", async () => {
+    const seen: string[] = [];
+    const report = await runConnectionChecks({
+      transport,
+      getToken: async () => null,
+      fetchImpl: (async () => ({ ok: true, status: 401 })) as unknown as typeof fetch,
+      peerConnection: undefined,
+      onResult: (result) => seen.push(result.id),
+    });
+    expect(seen).toEqual(report.results.map((x) => x.id));
+    expect(seen.slice(0, 3)).toEqual(["api", "token", "socket"]);
+  });
 });

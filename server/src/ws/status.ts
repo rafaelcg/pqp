@@ -53,13 +53,75 @@ interface StatusContribution {
   manual: ManualStatus;
   /** True only when every socket this instance holds for the user is idle. */
   idle: boolean;
+  /**
+   * True when at least one socket this instance holds for the user is in front
+   * of them (`socketIsAttentive`). The push attention gate reads this, merged
+   * across the cluster, instead of "has a socket at all".
+   *
+   * An older build on the bus (a rolling deploy) sends no `attentive`; it is
+   * read as `!idle`, which is exactly what this field would be for sockets that
+   * never declared attention, i.e. every socket such a build holds.
+   */
+  attentive: boolean;
+}
+
+/**
+ * What one connection has told us about the person behind it. Both fields are
+ * the client's own report; nothing here is measured by the server.
+ */
+interface SocketSignals {
+  /** `set-idle`: no input for `IDLE_AFTER_MS`. */
+  idle: boolean;
+  /**
+   * `set-attention`: whether the client is in front of the person. `null`
+   * until the socket says, which is forever for every build that predates the
+   * frame. See `socketIsAttentive` for what null means.
+   */
+  foreground: boolean | null;
 }
 
 interface LocalEntry {
-  /** socket → whether that client has reported itself idle. */
-  sockets: Map<WebSocket, boolean>;
+  /** socket → what that client has reported. */
+  sockets: Map<WebSocket, SocketSignals>;
   manual: ManualStatus;
 }
+
+/**
+ * IS THIS CONNECTION IN FRONT OF SOMEBODY? Foreground and not idle.
+ *
+ * A SOCKET THAT NEVER DECLARED ATTENTION COUNTS AS FOREGROUND UNLESS IDLE.
+ * That is the safe reading for every build already installed, chosen per
+ * client rather than in the abstract:
+ *
+ * - iOS reports `set-idle: true` the moment it goes to the background (and
+ *   again after a reconnect while backgrounded), so a backgrounded iPhone
+ *   already stops counting, and a foregrounded one keeps suppressing the push
+ *   its own banner would duplicate.
+ * - Android sends neither frame. Read as foreground, a backgrounded Android
+ *   socket keeps suppressing push until it times out, which is today's
+ *   behaviour exactly: no regression, and no new double notification while
+ *   the app is open. The real fix for it is the phone sending `set-attention`.
+ * - A web or desktop bundle from before this frame reports idle after ten
+ *   minutes, so its forgotten tab stops silencing the phone after ten
+ *   minutes instead of never.
+ *
+ * The other reading, "undeclared is background", would buzz the phone of
+ * everybody actively typing in a tab that has not reloaded yet, and banner
+ * over an open iPhone app for every message in another conversation: the
+ * double notification is the regression a rollout must not have.
+ */
+export function socketIsAttentive(signals: SocketSignals): boolean {
+  return !signals.idle && signals.foreground !== false;
+}
+
+/**
+ * Signals that arrived before the socket was in the registry. Registration
+ * waits on one preferences read and `ready` does not wait for it, so a client
+ * that reports its state straight after `ready` (as every client does on a
+ * reconnect) can beat it. Kept per socket and applied when it registers;
+ * a WeakMap so a socket that never registers leaves nothing behind.
+ */
+const pendingSignals = new WeakMap<WebSocket, Partial<SocketSignals>>();
 
 /** Users with at least one socket on THIS process. */
 const local = new Map<string, LocalEntry>();
@@ -103,6 +165,7 @@ const STATUS_TTL_MS = 60_000;
 interface Merged {
   manual: ManualStatus;
   idle: boolean;
+  attentive: boolean;
 }
 
 /**
@@ -132,13 +195,15 @@ function strongerManual(a: ManualStatus, b: ManualStatus): ManualStatus {
 
 function fold(into: Merged | undefined, next: StatusContribution): Merged {
   if (!into) {
-    return { manual: next.manual, idle: next.idle };
+    return { manual: next.manual, idle: next.idle, attentive: next.attentive };
   }
   return {
     manual: strongerManual(into.manual, next.manual),
     // Idle everywhere or idle nowhere: a person typing in one tab is not away
     // because another tab has been open and untouched since this morning.
     idle: into.idle && next.idle,
+    // Same direction: one screen in front of them is enough.
+    attentive: into.attentive || next.attentive,
   };
 }
 
@@ -166,13 +231,16 @@ function externalStatus(merged: Merged | undefined): UserStatus {
 
 function localContribution(entry: LocalEntry): StatusContribution {
   let idle = entry.sockets.size > 0;
-  for (const socketIsIdle of entry.sockets.values()) {
-    if (!socketIsIdle) {
+  let attentive = false;
+  for (const signals of entry.sockets.values()) {
+    if (!signals.idle) {
       idle = false;
-      break;
+    }
+    if (socketIsAttentive(signals)) {
+      attentive = true;
     }
   }
-  return { manual: entry.manual, idle };
+  return { manual: entry.manual, idle, attentive };
 }
 
 /**
@@ -232,6 +300,17 @@ export function isPresentForHere(userId: string): boolean {
  */
 export function hasClusterSocket(userId: string): boolean {
   return mergedFor(userId) !== undefined;
+}
+
+/**
+ * IS ANY OF THIS ACCOUNT'S SOCKETS, ANYWHERE IN THE CLUSTER, IN FRONT OF THEM?
+ * Foreground and not idle (`socketIsAttentive`), merged across instances the
+ * same way as `hasClusterSocket`: the laptop on machine A answers for a push
+ * decided on machine B. Invisible users included, for the reason
+ * `hasClusterSocket` gives: hidden is not absent.
+ */
+export function hasAttentiveSocket(userId: string): boolean {
+  return mergedFor(userId)?.attentive === true;
 }
 
 /**
@@ -303,7 +382,12 @@ function publishUser(userId: string): void {
 
 function addSocket(entry: LocalEntry, socket: WebSocket, userId: string): void {
   socketOwner.set(socket, userId);
-  entry.sockets.set(socket, false);
+  const early = pendingSignals.get(socket);
+  pendingSignals.delete(socket);
+  entry.sockets.set(socket, {
+    idle: early?.idle ?? false,
+    foreground: early?.foreground ?? null,
+  });
   publishUser(userId);
 }
 
@@ -373,6 +457,7 @@ export function unregisterStatusSocket(socket: WebSocket): void {
     return;
   }
   socketOwner.delete(socket);
+  pendingSignals.delete(socket);
   const entry = local.get(userId);
   if (!entry) {
     return;
@@ -388,20 +473,51 @@ export function unregisterStatusSocket(socket: WebSocket): void {
   publishUser(userId);
 }
 
-/** A client reporting that its user went quiet, or came back. */
-export function setSocketIdle(socket: WebSocket, idle: boolean): void {
+/**
+ * Record one signal from a client. Before the socket is registered it is kept
+ * for `addSocket` (see `pendingSignals`); after, it is applied and announced
+ * only if it changed something.
+ */
+function setSocketSignal<K extends keyof SocketSignals>(
+  socket: WebSocket,
+  field: K,
+  value: NonNullable<SocketSignals[K]>,
+): void {
   const userId = socketOwner.get(socket);
   if (!userId) {
+    if (socket.readyState === 1) {
+      pendingSignals.set(socket, { ...pendingSignals.get(socket), [field]: value });
+    }
     return;
   }
   const entry = local.get(userId);
-  if (!entry || entry.sockets.get(socket) === idle) {
+  const signals = entry?.sockets.get(socket);
+  if (!entry || !signals || signals[field] === value) {
     // Unchanged: say nothing. A client that re-sends the same value — a
     // reconnect replaying its queue, a buggy timer — must not cost a bus frame.
     return;
   }
-  entry.sockets.set(socket, idle);
-  publishUser(userId);
+  const before = localContribution(entry);
+  signals[field] = value;
+  const after = localContribution(entry);
+  // A second tab going to the background while the first is still in front
+  // changes nothing anybody else can see, and costs no frame.
+  if (before.idle !== after.idle || before.attentive !== after.attentive) {
+    publishUser(userId);
+  }
+}
+
+/** A client reporting that its user went quiet, or came back. */
+export function setSocketIdle(socket: WebSocket, idle: boolean): void {
+  setSocketSignal(socket, "idle", idle);
+}
+
+/**
+ * A client reporting whether it is in front of its user (`set-attention`).
+ * Same rules as `setSocketIdle`: per socket, dies with it, announced on change.
+ */
+export function setSocketAttention(socket: WebSocket, foreground: boolean): void {
+  setSocketSignal(socket, "foreground", foreground);
 }
 
 /**
@@ -503,7 +619,13 @@ function asContribution(value: unknown): StatusContribution | null {
   if (!manual.success || typeof record.idle !== "boolean") {
     return null;
   }
-  return { manual: manual.data, idle: record.idle };
+  return {
+    manual: manual.data,
+    idle: record.idle,
+    // Absent from a build that predates the field: see `StatusContribution`.
+    attentive:
+      typeof record.attentive === "boolean" ? record.attentive : !record.idle,
+  };
 }
 
 function snapshotUsers(): Record<string, StatusContribution> {

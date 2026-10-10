@@ -226,4 +226,62 @@ describe("ChannelList Community Home row", () => {
     expect(html).toContain("data-community-home-unread");
     expect(html).toContain(">2<");
   });
+
+  it("the unread count is lime, never the red a mention uses", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeUnread={3}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    const badge = /<span[^>]*data-community-home-unread[^>]*>/.exec(html)?.[0] ?? "";
+    expect(badge).toContain("bg-signal");
+    expect(badge).not.toContain("bg-danger");
+  });
+
+  it("a post under 24 hours old adds a pulsing New chip beside the count", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeUnread={3}
+        communityHomeUnreadFresh
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    const chip = /<span[^>]*data-community-home-fresh[^>]*>/.exec(html)?.[0] ?? "";
+    expect(chip).toContain("motion-safe:animate-pulse");
+    expect(html).toMatch(/data-community-home-fresh[^>]*>New</);
+    expect(html).toContain(">3<");
+  });
+
+  it("an older unread post keeps the count and drops the chip", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeUnread={3}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).not.toContain("data-community-home-fresh");
+    expect(html).toContain(">3<");
+  });
+
+  it("fresh with nothing unread draws nothing: the discovery chip stays its own thing", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeShowNew
+        communityHomeUnread={0}
+        communityHomeUnreadFresh
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).not.toContain("data-community-home-fresh");
+    expect(html).toContain(">New<");
+  });
 });

@@ -93,18 +93,27 @@ import {
   youtubePosterUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomePost,
   type CommunityHomeViewerMode,
   type CommunityHomeVisibility,
   type UploadedHomeMedia,
 } from "@/lib/community-home";
+import { toDisplayBody, toStoredBody } from "@/lib/community-home/channel-refs";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  ChannelPickerHint,
+  ChannelRefsProvider,
+  ChannelText,
+  useChannelPicker,
+} from "./community-home-channel-refs";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
+import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
 import {
   ComposeTranslationNote,
@@ -791,7 +800,21 @@ export function PostCard({
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
       {showMedia && post.media ? (
-        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+        <UnlockedMedia
+          media={post.media}
+          flush
+          reserveCorner={showStaffMenu}
+          captions={
+            post.captions && !isPreview
+              ? {
+                  serverId: post.serverId,
+                  postId: post.id,
+                  sourceLang: post.captions.sourceLang,
+                  durationMs: post.captions.durationMs,
+                }
+              : null
+          }
+        />
       ) : null}
       {showStaffMenu && (
         <div
@@ -979,7 +1002,7 @@ export function PostCard({
           <>
             {summary && summary !== view.title?.trim() && (
               <p className="mt-3 break-words text-sm leading-relaxed text-text">
-                {summary}
+                <ChannelText text={summary} />
               </p>
             )}
             <LockedBodyBlur />
@@ -1005,7 +1028,7 @@ export function PostCard({
                 </div>
               ) : (
                 <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-text">
-                  {view.body}
+                  <ChannelText text={view.body} />
                 </p>
               ))}
           </>
@@ -1087,7 +1110,27 @@ type ComposeState = {
   /** Media already on the post being edited, until replaced or removed. */
   existingMedia: CommunityHomeMedia | null;
   clearMedia: boolean;
+  /** The vertical cut picked in this session, not yet on a post. */
+  mobileUpload: UploadedHomeMedia | null;
+  /** Local preview of `mobileUpload`, an object URL. */
+  mobilePreviewUrl: string | null;
+  /** The vertical cut already on the post being edited. */
+  existingMobile: CommunityHomeMobileRendition | null;
+  /** The author removed the cut on the post. */
+  clearMobile: boolean;
 };
+
+/**
+ * What every change of the MAIN media does to the phone cut: forget it. The
+ * cut is a second edit of one particular video, and the server drops it too
+ * when the main file changes.
+ */
+const NO_MOBILE = {
+  mobileUpload: null,
+  mobilePreviewUrl: null,
+  existingMobile: null,
+  clearMobile: false,
+} as const;
 
 const emptyCompose = (): ComposeState => ({
   editingId: null,
@@ -1102,9 +1145,13 @@ const emptyCompose = (): ComposeState => ({
   uploadPreviewUrl: null,
   existingMedia: null,
   clearMedia: false,
+  ...NO_MOBILE,
 });
 
-function composeFromPost(post: CommunityHomePost): ComposeState {
+function composeFromPost(
+  post: CommunityHomePost,
+  channels: readonly Channel[],
+): ComposeState {
   // A reader in another language is served a translation in `title` / `body`
   // / `teaser`; staff edit the author's own words, which ride along.
   const own = displayFields(post, true);
@@ -1113,14 +1160,45 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     editingId: post.id,
     editingStatus: post.status,
     title: own.title ?? "",
-    body: own.body ?? "",
+    // `<#id>` becomes a readable `#name` in the textarea; `run` converts back.
+    body: toDisplayBody(own.body ?? "", channels),
     teaser: own.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
     youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
     existingMedia:
       post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
+    existingMobile: post.media?.mobile ?? null,
   };
+}
+
+/** The main media is an uploaded video, which is what a phone cut goes beside. */
+function composeMainIsVideo(state: ComposeState): boolean {
+  if (state.upload) {
+    return state.upload.kind === "video";
+  }
+  return !state.clearMedia && state.existingMedia?.kind === "video";
+}
+
+/** Which main video the composer holds: the session upload, else the post's own. */
+function composeMainKey(state: ComposeState): string {
+  return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
+/** The cut as the composer shows it: picked now, else the one on the post. */
+function composeMobile(state: ComposeState): CommunityHomeMobileRendition | null {
+  if (!composeMainIsVideo(state)) {
+    return null;
+  }
+  if (state.mobileUpload) {
+    return {
+      name: state.mobileUpload.name,
+      contentType: state.mobileUpload.contentType,
+      byteSize: state.mobileUpload.byteSize,
+      url: state.mobilePreviewUrl,
+    };
+  }
+  return state.clearMobile ? null : state.existingMobile;
 }
 
 function composeHasFileMedia(state: ComposeState): boolean {
@@ -1143,7 +1221,13 @@ function composeYoutubeUrlForSubmit(state: ComposeState): string | null {
 }
 
 /** The post the preview renders, built from what is typed so far. */
-function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
+function previewPost(
+  state: ComposeState,
+  me: PublicUser,
+  serverId: string,
+  isOwner: boolean,
+  channels: readonly Channel[],
+): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
   const embed = communityHomeEmbedMedia(composeEmbedUrl(state));
   if (embed) {
@@ -1157,9 +1241,10 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       url: state.uploadPreviewUrl,
       youtubeUrl: null,
       twitchUrl: null,
+      mobile: composeMobile(state),
     };
   } else if (state.existingMedia && !state.clearMedia) {
-    media = state.existingMedia;
+    media = { ...state.existingMedia, mobile: composeMobile(state) };
   }
   const now = new Date().toISOString();
   return {
@@ -1168,7 +1253,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     author: me,
     authorBadge: isOwner ? "owner" : "staff",
     title: state.title.trim() || null,
-    body: state.body,
+    body: toStoredBody(state.body, channels),
     teaser: state.visibility === "members" ? state.teaser.trim() || null : null,
     visibility: state.visibility,
     status: "published",
@@ -1190,6 +1275,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     createdAt: now,
     updatedAt: now,
     translation: null,
+    captions: null,
   };
 }
 
@@ -1204,6 +1290,8 @@ function ComposeCard({
   vipEnabled,
   mediaEnabled,
   translationEnabled,
+  mobileRenditionEnabled,
+  channels,
   onDone,
   onCancelEdit,
 }: {
@@ -1216,6 +1304,10 @@ function ComposeCard({
   mediaEnabled: boolean;
   /** Readers in other languages are served an automatic translation here. */
   translationEnabled: boolean;
+  /** `bau_mobile_rendition` is on here: offer a vertical cut beside a video. */
+  mobileRenditionEnabled: boolean;
+  /** Channels the author can see: the `#` picker lists these. */
+  channels: readonly Channel[];
   onDone: (post: CommunityHomePost, action: ComposeAction) => void;
   onCancelEdit: () => void;
 }) {
@@ -1231,6 +1323,18 @@ function ComposeCard({
   const uploadAbort = useRef<AbortController | null>(null);
   const nextPick = useMemo(createPickSequence, []);
   const timezone = useMemo(browserTimezone, []);
+  const channelPicker = useChannelPicker({
+    value: state.body,
+    channels,
+    onInsert: (next, caret) => {
+      setState((prev) => ({ ...prev, body: next }));
+      window.setTimeout(() => {
+        const field = bodyRef.current;
+        field?.focus();
+        field?.setSelectionRange(caret, caret);
+      }, 0);
+    },
+  });
 
   const hasMedia =
     composeHasFileMedia(state) || Boolean(composeEmbedUrl(state));
@@ -1246,6 +1350,15 @@ function ComposeCard({
       }
     };
   }, [state.uploadPreviewUrl]);
+
+  useEffect(() => {
+    const url = state.mobilePreviewUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [state.mobilePreviewUrl]);
 
   async function pickFile(file: File | null) {
     if (!file) {
@@ -1304,6 +1417,7 @@ function ComposeCard({
         uploadPreviewUrl: previewUrl,
         youtubeUrl: "",
         clearMedia: true,
+        ...NO_MOBILE,
       }));
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -1326,6 +1440,7 @@ function ComposeCard({
       uploadPreviewUrl: null,
       youtubeUrl: "",
       clearMedia: true,
+      ...NO_MOBILE,
     }));
   }
 
@@ -1343,6 +1458,17 @@ function ComposeCard({
       return;
     }
     const youtubeUrl = composeYoutubeUrlForSubmit(state);
+    // The textarea holds `#name`; the API stores `<#id>` so a rename never
+    // breaks the link and the body never carries a name a reader may not see.
+    const storedBody = toStoredBody(state.body, channels);
+    if (storedBody.length > COMMUNITY_HOME_BODY_MAX) {
+      setError(
+        t("communityHome.compose.tooLongWithChannels", {
+          max: COMMUNITY_HOME_BODY_MAX,
+        }),
+      );
+      return;
+    }
     let scheduledIso: string | null = null;
     if (action === "schedule") {
       const when = new Date(scheduleAt);
@@ -1357,6 +1483,11 @@ function ComposeCard({
       const teaser =
         vipEnabled && state.visibility === "members" ? state.teaser.trim() || null : null;
       const visibility: CommunityHomeVisibility = vipEnabled ? state.visibility : "free";
+      // Only beside an uploaded video; a stale pick never rides along.
+      const mobileUploadId =
+        composeMainIsVideo(state) && state.mobileUpload
+          ? state.mobileUpload.uploadId
+          : null;
       let post: CommunityHomePost;
       if (state.editingId) {
         const { post: updated } = await updateCommunityHomePost(
@@ -1364,7 +1495,7 @@ function ComposeCard({
           state.editingId,
           {
             title: state.title.trim() || null,
-            body: state.body,
+            body: storedBody,
             teaser,
             visibility,
             commentsEnabled: state.commentsEnabled,
@@ -1375,6 +1506,13 @@ function ComposeCard({
                 : state.clearMedia
                   ? { clearMedia: true }
                   : {}),
+            // Omitted keeps the cut on the post (the server drops it with a
+            // replaced main video by itself); null removes it.
+            ...(mobileUploadId
+              ? { mobileMediaUploadId: mobileUploadId }
+              : state.clearMobile
+                ? { mobileMediaUploadId: null }
+                : {}),
           },
         );
         post = updated;
@@ -1391,11 +1529,12 @@ function ComposeCard({
       } else {
         const { post: created } = await createCommunityHomePost(serverId, {
           title: state.title.trim() || null,
-          body: state.body,
+          body: storedBody,
           teaser,
           visibility,
           commentsEnabled: state.commentsEnabled,
           mediaUploadId: state.upload?.uploadId ?? null,
+          mobileMediaUploadId: mobileUploadId,
           youtubeUrl,
           status:
             action === "publish"
@@ -1420,7 +1559,7 @@ function ComposeCard({
 
   const editing = Boolean(state.editingId);
   const editingPublished = state.editingStatus === "published";
-  const preview = previewPost(state, me, serverId, isOwner);
+  const preview = previewPost(state, me, serverId, isOwner, channels);
 
   async function handleClose() {
     if (busy) {
@@ -1490,18 +1629,35 @@ function ComposeCard({
           placeholder={t("communityHome.compose.titlePlaceholder")}
           data-home-compose-title
         />
-        <textarea
-          ref={bodyRef}
-          className="w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-          rows={4}
-          value={state.body}
-          maxLength={COMMUNITY_HOME_BODY_MAX}
-          onChange={(event) =>
-            setState((prev) => ({ ...prev, body: event.target.value }))
-          }
-          placeholder={t("communityHome.compose.placeholder")}
-          data-home-compose-body
-        />
+        <div className="relative">
+          <textarea
+            ref={bodyRef}
+            className="w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            rows={4}
+            value={state.body}
+            maxLength={COMMUNITY_HOME_BODY_MAX}
+            onChange={(event) => {
+              const field = event.target;
+              setState((prev) => ({ ...prev, body: field.value }));
+              channelPicker.syncCaret(field);
+            }}
+            onKeyDown={(event) => {
+              channelPicker.handleKeyDown(event);
+            }}
+            onKeyUp={(event) => {
+              if (
+                ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              ) {
+                channelPicker.syncCaret(event.currentTarget);
+              }
+            }}
+            onClick={(event) => channelPicker.syncCaret(event.currentTarget)}
+            placeholder={t("communityHome.compose.placeholder")}
+            aria-autocomplete="list"
+            data-home-compose-body
+          />
+          {channelPicker.menu}
+        </div>
         <div className="relative mb-2 mt-1 flex items-center">
           <button
             type="button"
@@ -1513,6 +1669,7 @@ function ComposeCard({
           >
             <Smile className="h-4 w-4" aria-hidden />
           </button>
+          <ChannelPickerHint className="ml-2" />
           {emojiOpen && (
             <EmojiPickerPanel
               onSelect={(emoji) => {
@@ -1587,6 +1744,7 @@ function ComposeCard({
                   upload: youtubeUrl ? null : prev.upload,
                   uploadPreviewUrl: youtubeUrl ? null : prev.uploadPreviewUrl,
                   clearMedia: youtubeUrl ? true : prev.clearMedia,
+                  ...(youtubeUrl ? NO_MOBILE : {}),
                 }));
               }}
               placeholder="https://youtu.be/…"
@@ -1620,6 +1778,42 @@ function ComposeCard({
               {t("communityHome.compose.clearMedia")}
             </button>
           </p>
+        )}
+
+        {mobileRenditionEnabled && mediaEnabled && composeMainIsVideo(state) && (
+          <ComposeMobileRendition
+            // Keyed by the main video: a new main file remounts the picker,
+            // which aborts a cut still uploading for the old one, so it can
+            // never land beside a video it was not cut from.
+            key={composeMainKey(state)}
+            serverId={serverId}
+            current={composeMobile(state)}
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  mobileUpload: uploaded,
+                  mobilePreviewUrl: previewUrl,
+                  clearMobile: false,
+                };
+              });
+            }}
+            onRemove={() =>
+              setState((prev) => ({
+                ...prev,
+                mobileUpload: null,
+                mobilePreviewUrl: null,
+                clearMobile: true,
+              }))
+            }
+          />
         )}
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-paper-muted">
@@ -1974,6 +2168,7 @@ export function CommunityHomeFeed({
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [mobileRenditionEnabled, setMobileRenditionEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [staffTab, setStaffTab] = useState<StaffTab>("feed");
@@ -2014,6 +2209,7 @@ export function CommunityHomeFeed({
         setPosts(feed.posts);
         setDrafts(staff.posts);
         setTranslationEnabled(feed.translationEnabled === true);
+        setMobileRenditionEnabled(feed.mobileRenditionEnabled === true);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setPosts([]);
@@ -2213,7 +2409,7 @@ export function CommunityHomeFeed({
   }
 
   function beginEdit(post: CommunityHomePost) {
-    setCompose(composeFromPost(post));
+    setCompose(composeFromPost(post, channels));
     setStaffTab("compose");
   }
 
@@ -2389,6 +2585,11 @@ export function CommunityHomeFeed({
     ) : null;
 
   return (
+    <ChannelRefsProvider
+      serverId={serverId}
+      channels={channels}
+      onOpenChannel={onOpenChannel}
+    >
     <div className="flex min-h-0 flex-1 flex-col" data-community-home-feed>
       {showPaneHeader && (
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
@@ -2526,6 +2727,8 @@ export function CommunityHomeFeed({
                 vipEnabled={vipEnabled}
                 mediaEnabled={mediaEnabled}
                 translationEnabled={translationEnabled}
+                mobileRenditionEnabled={mobileRenditionEnabled}
+                channels={channels}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());
@@ -2750,5 +2953,6 @@ export function CommunityHomeFeed({
         onClose={() => setIdentityDiscardOpen(false)}
       />
     </div>
+    </ChannelRefsProvider>
   );
 }

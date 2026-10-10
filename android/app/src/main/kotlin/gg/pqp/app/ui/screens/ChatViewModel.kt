@@ -8,6 +8,7 @@ import gg.pqp.app.attachments.AttachmentConfig
 import gg.pqp.app.attachments.AttachmentFiles
 import gg.pqp.app.attachments.AttachmentRefusal
 import gg.pqp.app.attachments.CreateAttachmentRequest
+import gg.pqp.app.attachments.CreateVoiceNote
 import gg.pqp.app.attachments.PendingAttachment
 import gg.pqp.app.attachments.attachmentIdsFor
 import gg.pqp.app.attachments.refuseAttachment
@@ -17,15 +18,35 @@ import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
+import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.VoiceNote
 import gg.pqp.app.ui.chat.ChatMarkdown
 import gg.pqp.app.ui.chat.ComposerTarget
 import gg.pqp.app.ui.chat.MentionCandidate
 import gg.pqp.app.ui.chat.MessagePermissions
 import gg.pqp.app.ui.chat.PinnedMessages
+import gg.pqp.app.voicenotes.DiscardedNote
+import gg.pqp.app.voicenotes.MediaNoteRecorder
+import gg.pqp.app.voicenotes.NoteRecorder
+import gg.pqp.app.voicenotes.PeakNormalizer
+import gg.pqp.app.voicenotes.RecordedNote
+import gg.pqp.app.voicenotes.RecordingRefusal
+import gg.pqp.app.voicenotes.RecordingUi
+import gg.pqp.app.voicenotes.UNDO_WINDOW_MS
+import gg.pqp.app.voicenotes.VOICE_NOTE_CONTENT_TYPE
+import gg.pqp.app.voicenotes.VOICE_NOTE_FILENAME
+import gg.pqp.app.voicenotes.VOICE_NOTE_MAX_DURATION_MS
+import gg.pqp.app.voicenotes.VOICE_NOTE_MIN_DURATION_MS
+import gg.pqp.app.voicenotes.VoiceNotice
+import gg.pqp.app.voicenotes.noteByteBudget
+import gg.pqp.app.voicenotes.recordingRefusal
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -141,6 +162,18 @@ data class ChatState(
     val attachments: List<PendingAttachment> = emptyList(),
     /** The last refusal, for the composer to say out loud. Cleared on the next pick. */
     val attachmentRefusal: AttachmentRefusal? = null,
+    /**
+     * Whether the microphone button may appear: attachments are configured,
+     * the `voice_notes` flag is on for this channel's server, and this surface
+     * can record at all. Dark everywhere until the flag is flipped.
+     */
+    val voiceNotesEnabled: Boolean = false,
+    /** A note being recorded right now, or [RecordingUi.Idle]. */
+    val recording: RecordingUi = RecordingUi.Idle,
+    /** Something to say once as a toast. Cleared by [ChatViewModel.clearVoiceNotice]. */
+    val voiceNotice: VoiceNotice? = null,
+    /** A note thrown away that can still be taken back, for a few seconds. */
+    val discardedNote: DiscardedNote? = null,
     /** New message, a reply to one, or an edit of one. */
     val composer: ComposerTarget = ComposerTarget.New,
     /** Newest pin first. Empty until [ChatViewModel.loadPins] has answered. */
@@ -192,6 +225,16 @@ class ChatViewModel(
      * what decides who may delete and pin here, and whose names `@` offers.
      */
     private val serverId: String? = null,
+    /**
+     * The microphone, or null on a surface that cannot record (and in tests).
+     * Injected for the reason [files] is.
+     */
+    private val recorder: NoteRecorder? = null,
+    /**
+     * Whether a pqp call is live. Read at the moment of recording rather than
+     * captured, because it changes for the whole life of this object.
+     */
+    private val callActive: () -> Boolean = { false },
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
@@ -429,10 +472,14 @@ class ChatViewModel(
      */
     private suspend fun loadAttachmentConfig() {
         if (files == null) return
-        val config = runCatching { attachmentApi.config() }.getOrDefault(AttachmentConfig())
+        val config = runCatching { attachmentApi.config(serverId) }.getOrDefault(AttachmentConfig())
         _state.value = _state.value.copy(
             attachmentsEnabled = config.enabled,
             maxAttachmentBytes = config.maxBytes,
+            // A note is an upload, so the flag only means anything with
+            // storage behind it; and a surface with no recorder cannot offer
+            // one whatever the server says.
+            voiceNotesEnabled = config.enabled && config.voiceNotes && recorder != null,
         )
     }
 
@@ -495,6 +542,8 @@ class ChatViewModel(
         width: Int?,
         height: Int?,
         bytes: ByteArray,
+        voice: CreateVoiceNote? = null,
+        autoSend: Boolean = true,
     ) {
         val minted = runCatching {
             val response = attachmentApi.mint(
@@ -505,6 +554,7 @@ class ChatViewModel(
                     byteSize = byteSize,
                     width = width,
                     height = height,
+                    voice = voice,
                 ),
             )
             // The type declared here is the one signed into the URL, so the PUT
@@ -523,9 +573,19 @@ class ChatViewModel(
                 }
             },
         )
+
+        // A recorded note goes the moment it is up: there is nothing to
+        // review once it has been held, and nothing to add, because the
+        // server refuses a voice note that carries text or a second file.
+        if (voice != null && minted != null && autoSend) {
+            send("", (session.phase.value as? SessionPhase.Ready)?.me)
+        }
     }
 
     fun removeAttachment(localId: String) {
+        _state.value.attachments.firstOrNull { it.localId == localId }
+            ?.takeIf { it.isVoiceNote }
+            ?.let { deleteLocalNote(it.uri) }
         _state.value = _state.value.copy(
             attachments = _state.value.attachments.filterNot { it.localId == localId },
             attachmentRefusal = null,
@@ -562,8 +622,253 @@ class ChatViewModel(
                 local.width,
                 local.height,
                 local.bytes,
+                attachment.voice,
             )
         }
+    }
+
+    // --- voice notes ---
+
+    private var recordingJob: Job? = null
+    private var undoJob: Job? = null
+    private var discarded: RecordedNote? = null
+
+    /**
+     * The finger went down on the microphone. True when a recording began.
+     *
+     * Every refusal is decided here and not in the composable, so the rules
+     * live beside the recorder they protect: no recording while a pqp call is
+     * live (the microphone is the call's, and this must never change how it
+     * sounds), none while editing, none when the flag is off, and not twice.
+     */
+    fun startRecording(): Boolean {
+        val mic = recorder ?: return false
+        val current = _state.value
+        when (
+            recordingRefusal(
+                enabled = current.voiceNotesEnabled,
+                alreadyRecording = current.recording is RecordingUi.Active,
+                editing = current.composer is ComposerTarget.Edit,
+                callActive = callActive(),
+            )
+        ) {
+            null -> Unit
+            RecordingRefusal.CallActive -> {
+                _state.value = current.copy(voiceNotice = VoiceNotice.CallActive)
+                return false
+            }
+            else -> return false
+        }
+        if (!mic.start()) {
+            _state.value = current.copy(voiceNotice = VoiceNotice.MicBusy)
+            return false
+        }
+        dropDiscarded()
+        _state.value = _state.value.copy(
+            recording = RecordingUi.Active(0L, locked = false, paused = false, levels = emptyList()),
+            voiceNotice = null,
+        )
+        recordingJob = viewModelScope.launch {
+            while (isActive) {
+                delay(MediaNoteRecorder.SAMPLE_INTERVAL_MS)
+                recordingTick()
+            }
+        }
+        return true
+    }
+
+    private fun recordingTick() {
+        val mic = recorder ?: return
+        val active = _state.value.recording as? RecordingUi.Active ?: return
+        if (callActive()) {
+            // A call connected under the recording. The call keeps its
+            // microphone; the note is dropped, not sent half-finished.
+            abortRecording()
+            _state.value = _state.value.copy(voiceNotice = VoiceNotice.CallActive)
+            return
+        }
+        val amplitude = mic.sample()
+        val elapsed = mic.elapsedMs()
+        if (elapsed >= VOICE_NOTE_MAX_DURATION_MS - LIMIT_MARGIN_MS) {
+            finishRecording(limit = true)
+            return
+        }
+        val levels = if (active.paused) {
+            active.levels
+        } else {
+            (active.levels + amplitude / PeakNormalizer.MAX_AMPLITUDE.toFloat()).takeLast(LIVE_LEVELS)
+        }
+        _state.value = _state.value.copy(recording = active.copy(elapsedMs = elapsed, levels = levels))
+    }
+
+    /** Slid up: hands-free from here. */
+    fun lockRecording() {
+        val active = _state.value.recording as? RecordingUi.Active ?: return
+        _state.value = _state.value.copy(recording = active.copy(locked = true))
+    }
+
+    fun pauseRecording() {
+        val active = _state.value.recording as? RecordingUi.Active ?: return
+        if (!active.locked || active.paused) return
+        recorder?.pause()
+        _state.value = _state.value.copy(recording = active.copy(paused = true))
+    }
+
+    fun resumeRecording() {
+        val active = _state.value.recording as? RecordingUi.Active ?: return
+        if (!active.paused) return
+        recorder?.resume()
+        _state.value = _state.value.copy(recording = active.copy(paused = false))
+    }
+
+    /**
+     * Stop and send. A note under the minimum is a tap, not a message: it is
+     * dropped with a hint about how the gesture works, and nothing is sent.
+     */
+    fun finishRecording(limit: Boolean = false) {
+        val mic = recorder ?: return
+        if (_state.value.recording !is RecordingUi.Active) return
+        recordingJob?.cancel()
+        val note = mic.stop()
+        _state.value = _state.value.copy(recording = RecordingUi.Idle)
+
+        if (note == null || note.durationMs < VOICE_NOTE_MIN_DURATION_MS) {
+            note?.file?.delete()
+            _state.value = _state.value.copy(voiceNotice = VoiceNotice.TooShort)
+            return
+        }
+        if (note.file.length() > noteByteBudget(note.durationMs)) {
+            // The server would refuse this at mint. A file that large for its
+            // length is a broken encode, and uploading it first would only
+            // move the refusal to after the wait.
+            note.file.delete()
+            return
+        }
+        if (limit) _state.value = _state.value.copy(voiceNotice = VoiceNotice.LimitReached)
+        attachRecordedNote(note)
+    }
+
+    /**
+     * Throw the recording away, but keep the file for a few seconds. The mock
+     * calls it "cinco segundos pra desfazer", and a slide to cancel is the
+     * easiest gesture on the screen to make by accident.
+     */
+    fun cancelRecording() {
+        val mic = recorder ?: return
+        if (_state.value.recording !is RecordingUi.Active) return
+        recordingJob?.cancel()
+        val note = mic.stop()
+        _state.value = _state.value.copy(recording = RecordingUi.Idle)
+        if (note == null || note.durationMs < VOICE_NOTE_MIN_DURATION_MS) {
+            note?.file?.delete()
+            return
+        }
+        dropDiscarded()
+        discarded = note
+        _state.value = _state.value.copy(discardedNote = DiscardedNote(note.durationMs))
+        undoJob = viewModelScope.launch {
+            delay(UNDO_WINDOW_MS)
+            dropDiscarded()
+        }
+    }
+
+    /** The trash button on the locked panel: gone, with the same short undo. */
+    fun discardRecording() = cancelRecording()
+
+    /** Take back a note thrown away in the last few seconds. */
+    fun undoDiscard() {
+        val note = discarded ?: return
+        undoJob?.cancel()
+        discarded = null
+        _state.value = _state.value.copy(discardedNote = null)
+        attachRecordedNote(note, sendNow = false)
+    }
+
+    private fun dropDiscarded() {
+        undoJob?.cancel()
+        discarded?.file?.delete()
+        discarded = null
+        if (_state.value.discardedNote != null) {
+            _state.value = _state.value.copy(discardedNote = null)
+        }
+    }
+
+    /** Stop and delete with no undo: used when the recording must not survive. */
+    private fun abortRecording() {
+        recordingJob?.cancel()
+        recorder?.cancel()
+        _state.value = _state.value.copy(recording = RecordingUi.Idle)
+    }
+
+    /**
+     * The screen went to the background. A recording cannot continue there (the
+     * system silences a background microphone), so a locked one is paused where
+     * the person can pick it up, and one still being held is dropped, because
+     * the finger that was holding it is gone.
+     */
+    fun onStopped() {
+        val active = _state.value.recording as? RecordingUi.Active ?: return
+        if (active.locked) pauseRecording() else cancelRecording()
+    }
+
+    fun clearVoiceNotice() {
+        if (_state.value.voiceNotice != null) {
+            _state.value = _state.value.copy(voiceNotice = null)
+        }
+    }
+
+    /**
+     * Put a finished note in the composer as an attachment and upload it.
+     *
+     * It goes through the same chip as a picked file, so a failed upload gets
+     * the retry the chip already has, and the same readiness rule keeps a send
+     * from naming an object that was never PUT. [sendNow] is false for an
+     * undone discard: taking a note back puts it where the person can look at
+     * it, and sending something they just threw away on their behalf would be
+     * the wrong default.
+     */
+    private fun attachRecordedNote(note: RecordedNote, sendNow: Boolean = true) {
+        val voice = CreateVoiceNote(note.durationMs, PeakNormalizer.encode(note.amplitudes))
+        val size = note.file.length()
+        val localId = UUID.randomUUID().toString()
+        val pendingNote = PendingAttachment(
+            localId = localId,
+            uri = "file://" + note.file.absolutePath,
+            filename = VOICE_NOTE_FILENAME,
+            contentType = VOICE_NOTE_CONTENT_TYPE,
+            byteSize = size,
+            voice = voice,
+        )
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments + pendingNote,
+            attachmentRefusal = null,
+        )
+        viewModelScope.launch {
+            val bytes = withContext(Dispatchers.IO) { runCatching { note.file.readBytes() }.getOrNull() }
+            if (bytes == null) {
+                _state.value = _state.value.copy(
+                    attachments = _state.value.attachments.map {
+                        if (it.localId == localId) it.copy(failed = true) else it
+                    },
+                )
+                return@launch
+            }
+            upload(
+                localId,
+                VOICE_NOTE_CONTENT_TYPE,
+                VOICE_NOTE_FILENAME,
+                size,
+                null,
+                null,
+                bytes,
+                voice,
+                autoSend = sendNow,
+            )
+        }
+    }
+
+    private fun deleteLocalNote(uri: String) {
+        if (uri.startsWith("file://")) runCatching { java.io.File(uri.removePrefix("file://")).delete() }
     }
 
     fun dismissAttachmentRefusal() {
@@ -1014,6 +1319,11 @@ class ChatViewModel(
                         contentType = attachment.contentType,
                         byteSize = attachment.byteSize,
                         url = attachment.uri,
+                        // The card can draw from the local file before the
+                        // server has answered, the way a picture does.
+                        voice = attachment.voice?.let {
+                            VoiceNote(durationMs = it.durationMs, waveform = it.waveform)
+                        },
                     )
                 }
             },
@@ -1083,6 +1393,10 @@ class ChatViewModel(
     private var lastTypingAt = 0L
 
     override fun onCleared() {
+        // An abandoned recording must not keep the microphone open.
+        recordingJob?.cancel()
+        recorder?.cancel()
+        dropDiscarded()
         // Named, because there is more than one chat surface now and the
         // subscription is one per connection. See RealtimeClient.leaveChannel.
         session.realtime.leaveChannel(channelId)
@@ -1110,6 +1424,16 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+
+        /** How many input levels the locked panel's live waveform keeps. */
+        private const val LIVE_LEVELS = 48
+
+        /**
+         * Stop this far short of the cap, so the recorder's own timer and ours
+         * never race to end the same file. The note is still within the
+         * server's five minutes and the loss is a tenth of a second.
+         */
+        private const val LIMIT_MARGIN_MS = 100L
         private const val GIF_SEARCH_DEBOUNCE_MS = 300L
 
         /** Only for the optimistic row; the server writes the real excerpt. */
@@ -1145,10 +1469,12 @@ class ChatViewModel(
             files: AttachmentFiles? = null,
             slowmodeSeconds: Int = 0,
             serverId: String? = null,
+            recorder: NoteRecorder? = null,
+            callActive: () -> Boolean = { false },
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId, files, slowmodeSeconds, serverId) as T
+                ChatViewModel(session, channelId, files, slowmodeSeconds, serverId, recorder, callActive) as T
         }
     }
 }

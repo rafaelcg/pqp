@@ -16,9 +16,23 @@ struct ChannelListView: View {
     /// somewhere real instead of on an empty stack.
     let initialChannel: Channel?
 
-    init(server: Server, initialChannel: Channel? = nil) {
+    /// A new-post push was tapped: open the Baú once the list knows whether
+    /// this server has one (see `openBauIfAsked`).
+    let opensBau: Bool
+    /// Set when a Baú post link brought us here: push the Baú on top of this
+    /// list, scrolled to the post it names.
+    let initialBau: BauFocus?
+
+    init(
+        server: Server,
+        initialChannel: Channel? = nil,
+        opensBau: Bool = false,
+        initialBau: BauFocus? = nil
+    ) {
         self.server = server
         self.initialChannel = initialChannel
+        self.opensBau = opensBau
+        self.initialBau = initialBau
         _current = State(initialValue: server)
     }
 
@@ -35,6 +49,8 @@ struct ChannelListView: View {
     /// re-reads it, after `CommunityHomeView` has told the server it was
     /// read.
     @State private var bauUnread = 0
+    @State private var showingBau = false
+    @State private var hasOpenedBauFromPush = false
     /**
      Channels with a picture on them right now, from `channel-live`.
 
@@ -106,6 +122,8 @@ struct ChannelListView: View {
     /// `NavigationLink`s, which do not need a binding.
     @State private var openedChannel: Channel?
     @State private var hasSeededInitialChannel = false
+    @State private var openedBau: BauFocus?
+    @State private var hasSeededInitialBau = false
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -217,7 +235,11 @@ struct ChannelListView: View {
                         // hint so nobody opens it expecting to type.
                         if showsBau, let config = communityHome {
                             NavigationLink {
-                                CommunityHomeView(server: current, config: config)
+                                CommunityHomeView(
+                                    server: current,
+                                    config: config,
+                                    chatDestination: { AnyView(chat(for: $0)) }
+                                )
                             } label: {
                                 BauRow(unread: bauUnread)
                             }
@@ -320,6 +342,14 @@ struct ChannelListView: View {
             }
         }
         .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
+        .navigationDestination(isPresented: $showingBau) {
+            if let config = communityHome {
+                CommunityHomeView(server: current, config: config, chatDestination: { AnyView(chat(for: $0)) })
+            }
+        }
+        .navigationDestination(item: $openedBau) { focus in
+            CommunityHomeView(server: current, config: communityHome ?? .off, focusPostId: focus.postId, chatDestination: { AnyView(chat(for: $0)) })
+        }
         // Deferred by one appearance on purpose. A `navigationDestination` can
         // only serve a push once the view carrying it is *in* the stack, and on
         // a restored launch this view is itself being pushed in the same
@@ -334,6 +364,29 @@ struct ChannelListView: View {
             // stage a navigation the user did not make.
             transaction.disablesAnimations = true
             withTransaction(transaction) { openedChannel = initialChannel }
+        }
+        // A Baú link: the same one-appearance delay as above, and the flag is
+        // asked first (memoised, so usually free) because a server whose Baú
+        // is off must land on its channel list rather than on a screen that
+        // can only 404.
+        .task {
+            guard let initialBau, !hasSeededInitialBau else { return }
+            hasSeededInitialBau = true
+            // `communityHomeConfig()` answers "off" on any failure and only
+            // remembers a real answer, so a dead network at launch would
+            // drop the link. Ask a few times before settling for the list.
+            for delay in [0.0, 1.5, 4.0] {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                guard !Task.isCancelled else { return }
+                let config = await session.api.communityHomeConfig()
+                guard !Task.isCancelled else { return }
+                if config.enabled {
+                    if communityHome == nil { communityHome = config }
+                    guard current.communityHomeEnabled else { return }
+                    openedBau = initialBau
+                    return
+                }
+            }
         }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }
@@ -538,6 +591,18 @@ struct ChannelListView: View {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
         }
         await refreshBauUnread()
+    }
+
+    /// The push for a new post lands here with `opensBau`. Once, and only if
+    /// this server's Baú is actually on: a tap that outlived the owner's switch
+    /// stays on the channel list instead of opening a screen that cannot load.
+    /// The push has no animation of its own, same as a restored channel.
+    private func openBauIfAsked() {
+        guard opensBau, !hasOpenedBauFromPush, showsBau else { return }
+        hasOpenedBauFromPush = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { showingBau = true }
     }
 
     /// Only asked while the row is drawn: the route 404s when the instance
@@ -760,6 +825,7 @@ struct ChannelListView: View {
         if communityHome == nil {
             communityHome = await session.api.communityHomeConfig()
         }
+        openBauIfAsked()
         // A previous load's retry loop (a pull-to-refresh while one was
         // mid-backoff, say) must not keep running alongside this fresh one.
         availabilityRetryTask?.cancel()
@@ -1017,8 +1083,10 @@ private struct CommunityBanner: View {
 /// a second line: the one thing a person needs to know before tapping is that
 /// this is not a place to type.
 struct BauRow: View {
-    /// Posts not yet seen. Never a mention: the Baú has no @, so the badge is
-    /// the quiet one.
+    /// Posts not yet seen. Never a mention (the Baú has no @), but lime all the
+    /// same: it was the quiet grey badge, and that made the feature the product
+    /// leads with the least eventful row in the list. `isMention` on the badge
+    /// is how it asks for the signal colour.
     var unread: Int = 0
 
     var body: some View {
@@ -1042,7 +1110,7 @@ struct BauRow: View {
             Spacer()
 
             if unread > 0 {
-                UnreadBadge(count: unread)
+                UnreadBadge(count: unread, isMention: true)
             }
         }
         .padding(.horizontal, 14)

@@ -41,6 +41,7 @@ test.afterAll(async () => {
 
 test.beforeEach(() => {
   server.pin("/sw.js", null);
+  server.fail("/robots.txt", null);
   server.serve(oldDir);
 });
 
@@ -347,6 +348,135 @@ test("offline, a navigation is still answered: the precached shell is the fallba
   await context.setOffline(true);
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await context.close();
+});
+
+// ------------------------------------------------- the worker can install at all
+
+/**
+ * Found on 2026-10-10: production's worker could not install, in any browser.
+ * Three standalone pages in `public/` were precached, Pages answers `/x.html`
+ * with a 308 to `/x`, and the edge middleware turned `/x` into a 404 because
+ * no SPA route knew it. One non-200 entry fails Workbox's install, so the new
+ * worker went redundant on every deploy, and a person whose worker predated
+ * the network-first handler kept getting the old build on every plain reload
+ * (a hard reload skips the worker, so it showed the new one).
+ */
+
+/** The URLs the built worker precaches, as it would request them. */
+function precacheUrls(dir: string): string[] {
+  const sw = readFileSync(path.join(dir, "sw.js"), "utf8");
+  return [...sw.matchAll(/\{url:"([^"]+)",revision:/g)].map((m) => `/${m[1]!}`);
+}
+
+test("every precached URL answers 200 at the edge", async ({ page }) => {
+  server.serve(newDir);
+  const urls = precacheUrls(newDir);
+  expect(urls.length).toBeGreaterThan(20);
+  const failed: string[] = [];
+  for (const url of urls) {
+    const response = await page.request.get(`${server.origin}${url}`);
+    if (response.status() !== 200) {
+      failed.push(`${url} ${response.status()}`);
+    }
+  }
+  expect(failed).toEqual([]);
+});
+
+test("a fresh worker installs and activates", async ({ browser }) => {
+  server.serve(newDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  const states = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const worker = registration.installing ?? registration.waiting ?? registration.active!;
+    const seen = [worker.state];
+    await new Promise<void>((resolve) => {
+      if (worker.state === "activated") {
+        resolve();
+        return;
+      }
+      worker.addEventListener("statechange", () => {
+        seen.push(worker.state);
+        if (worker.state === "activated" || worker.state === "redundant") {
+          resolve();
+        }
+      });
+    });
+    return seen;
+  });
+  expect(states.at(-1)).toBe("activated");
+  await context.close();
+});
+
+test("a failed install tells the page which file broke it", async ({ browser }) => {
+  server.serve(newDir);
+  // `robots.txt` is precached with a revision, so a 404 on it fails the install.
+  server.fail("/robots.txt", 404);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  const result = await page.evaluate(async () => {
+    const messages: unknown[] = [];
+    navigator.serviceWorker.addEventListener("message", (event) => messages.push(event.data));
+    navigator.serviceWorker.startMessages();
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const worker = registration.installing ?? registration.waiting ?? registration.active!;
+    await new Promise<void>((resolve) => {
+      if (worker.state === "redundant") {
+        resolve();
+        return;
+      }
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "redundant" || worker.state === "activated") {
+          resolve();
+        }
+      });
+    });
+    // The message is posted before the install fails; give delivery a moment.
+    for (let i = 0; i < 20 && messages.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { state: worker.state, messages };
+  });
+  expect(result.state).toBe("redundant");
+  expect(result.messages).toContainEqual({
+    type: "PQP_SW_INSTALL_FAILED",
+    build: NEW,
+    reason: "bad-precaching-response",
+    path: "/robots.txt",
+    status: 404,
+  });
+  await context.close();
+});
+
+test("a person on a worker from before the fix: a plain reload reaches the new build", async ({
+  browser,
+}) => {
+  server.serve(legacyDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  // The legacy worker does not claim the page it installed from: one reload
+  // puts the page under it, as for anybody who came back the next day.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", "fixture-legacy");
+
+  server.serve(newDir);
+  await expect
+    .poll(
+      async () => {
+        // Cmd+R, then read the build the page booted (set once the bundle runs).
+        await page.reload();
+        await page.waitForFunction(() => !!document.documentElement.dataset.pqpBuild);
+        return buildOf(page);
+      },
+      { timeout: 30_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe(NEW);
   await context.close();
 });
 

@@ -17,6 +17,7 @@ import { listBlocks } from "./blocks.js";
 import { exportAttachments, type ExportAttachment } from "./export.js";
 import { getPreferences } from "./preferences.js";
 import { toPublicUserSummary } from "./users.js";
+import { ATTACHMENT_OBJECT_KEYS, ATTACHMENT_VOICE_JOIN } from "./voice-notes.js";
 
 /** Same ceiling and batch size as the server export, and for the same reason:
  * one HTTP response must not hold an unbounded number of rows in memory. */
@@ -847,9 +848,12 @@ export async function deleteAccount(
  * those bytes.
  */
 async function accountAttachmentKeys(userId: string): Promise<string[]> {
+  // With a voice note's AAC copy, which the cascade would otherwise orphan.
   const result = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments
-     WHERE uploader_id = $1 AND storage_key IS NOT NULL`,
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+     FROM message_attachments a
+     ${ATTACHMENT_VOICE_JOIN}
+     WHERE a.uploader_id = $1 AND a.storage_key IS NOT NULL`,
     [userId],
   );
   return result.rows.map((row) => row.storage_key);

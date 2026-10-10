@@ -17,27 +17,20 @@ describe("Voz limpa copy", () => {
     );
   });
 
-  it("only the Settings description is allowed to name RNNoise", () => {
-    expect(en["settings.voice.processing.noise.advancedHint"]).toContain(
-      "RNNoise",
-    );
-    expect(ptBR["settings.voice.processing.noise.advancedHint"]).toContain(
-      "RNNoise",
-    );
+  it("explains Voz limpa in one line, without naming the engine", () => {
+    // The Settings line used to carry "(RNNoise)". The approved copy says what
+    // it does and what it costs instead.
     expect(ptBR["settings.voice.processing.noise.advancedHint"]).toBe(
-      "Cancelamento de ruído avançado (RNNoise). Usa um pouco mais de CPU.",
+      "Voz limpa: filtro avançado, tira até teclado e cachorro. Usa mais processador e pode cortar o começo de algumas palavras.",
     );
   });
 
-  it("never names RNNoise outside that one description", () => {
-    const exempt = new Set([
-      "settings.voice.processing.noise.advancedHint",
-    ]);
+  it("never names RNNoise in any UI string", () => {
     for (const [key, value] of [
       ...Object.entries(en),
       ...Object.entries(ptBR),
     ]) {
-      if (exempt.has(key) || typeof value !== "string") {
+      if (typeof value !== "string") {
         continue;
       }
       expect(value, `key "${key}" names RNNoise`).not.toMatch(/rnnoise/i);

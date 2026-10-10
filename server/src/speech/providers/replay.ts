@@ -5,6 +5,8 @@ export interface ReplayCue {
   start: number;
   end: number;
   text: string;
+  /** Passed through as the segment's, so a test can drive the no-speech drop. */
+  noSpeechProb?: number;
 }
 
 export interface ReplayOptions {

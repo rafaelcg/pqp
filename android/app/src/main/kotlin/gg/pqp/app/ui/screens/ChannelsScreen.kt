@@ -505,9 +505,11 @@ fun ChannelsScreen(
  * second line: the one thing a person needs to know before tapping is that
  * this is not a place to type.
  *
- * The badge is the quiet one. A new post is "there is something here", which
- * the number already says by existing; the lime is kept for a mention, and
- * nothing in the Baú can mention anybody.
+ * The badge is lime, the brand signal. It used to be the quiet grey one, on
+ * the reasoning that a new post is not a mention, and that made the feature
+ * the product leads with the least eventful row in the list. Lime still never
+ * means "someone is talking to you" here (the Baú cannot mention anybody); it
+ * means "the staff put something new in the chest".
  */
 @Composable
 private fun BauRow(unread: Int, onClick: () -> Unit) {
@@ -554,7 +556,7 @@ private fun BauRow(unread: Int, onClick: () -> Unit) {
             Spacer(Modifier.width(Spacing.sm))
             CountBadge(
                 count = unread,
-                loud = false,
+                loud = true,
                 modifier = Modifier.testTag("channels.bau.unread"),
             )
         }

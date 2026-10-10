@@ -15,6 +15,9 @@ export function Switch({
   title,
   className,
   hideLabel = false,
+  dimRowWhenDisabled = false,
+  busy = false,
+  unavailable = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
@@ -28,19 +31,44 @@ export function Switch({
    * sits beside a row that already names the setting.
    */
   hideLabel?: boolean;
+  /**
+   * Disabled dims the whole row (label, description and track together)
+   * instead of the track alone. For a settings row, where a full-contrast
+   * label beside a dimmed track reads as a setting that still works.
+   */
+  dimRowWhenDisabled?: boolean;
+  /**
+   * A write is running: looks and reads as unavailable (`aria-disabled`,
+   * `aria-busy`) and ignores clicks, but keeps focus, which `disabled` would
+   * drop on the page.
+   */
+  busy?: boolean;
+  /**
+   * Cannot be changed right now for a reason said beside it (the browser
+   * blocked the permission): reads and behaves like `busy` but is not
+   * announced as busy, and keeps focus where `disabled` would drop it.
+   */
+  unavailable?: boolean;
 }) {
+  const inert = busy || unavailable;
+  const dimRow = (Boolean(disabled) || inert) && dimRowWhenDisabled;
   const control = (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-disabled={inert || undefined}
+      aria-busy={busy || undefined}
       disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
+      onClick={() => {
+        if (!inert) onCheckedChange(!checked);
+      }}
       className={cn(
         "flex w-full justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-        disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
+        disabled || inert ? "cursor-not-allowed" : "hover:bg-surface-2",
+        dimRow && "opacity-60",
         className,
       )}
     >
@@ -61,13 +89,18 @@ export function Switch({
           "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-[var(--duration-fast)]",
           description && "mt-0.5",
           checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
-          disabled && "opacity-50",
+          disabled && !dimRow && "opacity-50",
         )}
       >
         <span
           className={cn(
             "absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-[var(--duration-fast)]",
-            checked ? "translate-x-4 bg-on-accent" : "bg-text-tertiary",
+            // Off: a mid-grey knob in dark. In every light look that grey is a
+            // dark dot on a pale track, so light draws a pale knob with an
+            // outline instead, the way a native light switch does.
+            checked
+              ? "translate-x-4 bg-on-accent"
+              : "bg-text-tertiary [:root[data-theme=light]_&]:bg-surface-0 [:root[data-theme=light]_&]:ring-1 [:root[data-theme=light]_&]:ring-border-strong",
           )}
         />
       </span>

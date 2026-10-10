@@ -15,7 +15,42 @@ export function supportsAudioOutputSelection(): boolean {
   );
 }
 
-export async function ensureMediaPermission(): Promise<boolean> {
+/**
+ * What opening the microphone came to:
+ * - `granted`: it opened (and was closed again).
+ * - `denied`: the person or the browser said no. The only case that is about
+ *   permission, so the only one "Permitir microfone" can fix.
+ * - `none`: this machine has no microphone to open.
+ * - `busy`: there is one and it would not start, usually because another app
+ *   holds it.
+ */
+export type MicProbe = "granted" | "denied" | "none" | "busy";
+
+/**
+ * Tells a refusal from a missing or busy microphone by the error's name. An
+ * error with no name we know is read as a refusal, which is what every failure
+ * was read as before the names were told apart.
+ */
+export function classifyMicError(error: unknown): Exclude<MicProbe, "granted"> {
+  const name =
+    typeof error === "object" && error !== null && "name" in error
+      ? String((error as { name: unknown }).name)
+      : "";
+  switch (name) {
+    case "NotFoundError":
+    case "OverconstrainedError":
+    case "DevicesNotFoundError":
+      return "none";
+    case "NotReadableError":
+    case "TrackStartError":
+    case "AbortError":
+      return "busy";
+    default:
+      return "denied";
+  }
+}
+
+export async function probeMicrophone(): Promise<MicProbe> {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
@@ -24,10 +59,44 @@ export async function ensureMediaPermission(): Promise<boolean> {
     for (const track of stream.getTracks()) {
       track.stop();
     }
-    return true;
+    return "granted";
+  } catch (error) {
+    return classifyMicError(error);
+  }
+}
+
+export async function ensureMediaPermission(): Promise<boolean> {
+  return (await probeMicrophone()) === "granted";
+}
+
+/**
+ * Whether the browser already shows microphone names, which it does only once
+ * the microphone was allowed (or is open right now). Then a list can be read
+ * without opening a capture of its own. Reads the raw list: `listAudioDevices`
+ * fills blank names in, which would answer yes to everything.
+ */
+export async function microphoneLabelsReadable(): Promise<boolean> {
+  try {
+    const devices = (await navigator.mediaDevices?.enumerateDevices?.()) ?? [];
+    return devices.some((device) => device.kind === "audioinput" && device.label !== "");
   } catch {
     return false;
   }
+}
+
+let micTestRunning = false;
+
+/**
+ * Set while Voz's "Ouvir meu microfone" holds the microphone. The shell reads
+ * it before it probes the microphone for a device list, because a second
+ * capture of the default microphone can mute the first on Safari.
+ */
+export function setMicTestRunning(running: boolean): void {
+  micTestRunning = running;
+}
+
+export function isMicTestRunning(): boolean {
+  return micTestRunning;
 }
 
 /** Same job as the mic prompt, for webcam labels. */

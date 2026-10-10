@@ -355,12 +355,15 @@ import {
   claimCommunityHomeMediaUpload,
   CommunityHomeError,
   countUnreadCommunityHomePosts,
+  countUnreadCommunityHomePostsAllServers,
   markCommunityHomeRead,
   setCommunityHomePostPinned,
   createCommunityHomePost,
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isBauMobileRenditionOn,
+  getCommunityHomePostCaptions,
   isCommunityHomeEnabled,
   isCommunityHomeMediaConfigured,
   isCommunityHomeVipEnabled,
@@ -374,6 +377,7 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -557,6 +561,22 @@ import {
   maxAttachmentBytes,
 } from "../services/attachments.js";
 import {
+  NoteTooLargeError,
+  messageHasNote,
+  noteEditAllowed,
+  recordVoiceNoteRefusal,
+  VoiceNoteContentTypeError,
+  VoiceNotesDisabledError,
+} from "../services/voice-notes.js";
+import { recordListen, VoiceNoteNotFoundError } from "../services/voice-note-listens.js";
+import {
+  requestVoiceNoteTranscript,
+  // Same name as the listens module's error: aliased so each route maps its
+  // own not-found to a 404.
+  VoiceNoteNotFoundError as TranscriptNoteNotFoundError,
+  VoiceTranscriptionUnavailableError,
+} from "../services/voice-transcription.js";
+import {
   GifBackendError,
   isGifSearchConfigured,
   searchGifs,
@@ -658,6 +678,7 @@ import {
 import {
   ADMIN_FLAG_OVERRIDE_PATH,
   ADMIN_FLAGS_PATH,
+  isEnabled,
   listFeatureFlags,
   setFeatureFlagOverrideSchema,
   setFeatureFlagSchema,
@@ -1059,6 +1080,15 @@ const voiceLeaveLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * `POST /api/attachments/:id/transcript`, per account. A request is cheap (a
+ * row) and idempotent per note, but each NEW note it names can cost provider
+ * time, so a burst of a channel's worth of notes is fine and a script is not.
+ */
+const transcriptRequestLimiter = createRateLimiter({
+  capacity: 20,
+  refillPerSecond: 0.2,
+});
+/**
  * `request` / `withdraw` on a party's guest queue. Same shape as the mute
  * toggle's own limiter (`stateLimiter` in `ws/voice.ts`, capacity 15,
  * refill 3/s) per `docs/RAISED_HANDS.md`'s rule for a self-report of this
@@ -1087,6 +1117,18 @@ const guestRequestLimiter = createRateLimiter({
 const bulkDeleteLimiter = createRateLimiter({
   capacity: 5,
   refillPerSecond: 0.05,
+});
+/**
+ * "I played this voice note". One call per note per listener ever lands a row,
+ * so the realistic burst is a person catching up on a backlog with auto-play
+ * walking through it, a note every few seconds. Sixty covers a long backlog
+ * at once; sustained it is one a second, which is faster than notes can be
+ * heard. Keyed by user, and a replay still spends a token: the point is the
+ * request rate, not the row count.
+ */
+const listenLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 1,
 });
 
 export function resetApiRateLimits(): void {
@@ -1119,8 +1161,10 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
+  transcriptRequestLimiter.reset();
   guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
+  listenLimiter.reset();
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
   hlsSessionLookupGuard.reset();
@@ -1145,6 +1189,18 @@ class Created {
 
 function created(body: unknown): Created {
   return new Created(body);
+}
+
+/** Wrap a handler result to answer 204 with no body. */
+class NoContent {}
+
+function noContent(): NoContent {
+  return new NoContent();
+}
+
+/** Wrap a handler result to answer 202: taken, the work happens elsewhere. */
+class Accepted {
+  constructor(readonly body: unknown) {}
 }
 
 /**
@@ -3390,11 +3446,28 @@ router.get("/api/music/related", async (ctx) => {
  *
  * `maxBytes` rides along so the client rejects an oversized file in the file
  * picker instead of discovering the deployment's own lower cap on a 413.
+ *
+ * `voiceNotes` is the `voice_notes` flag for `?serverId=` (a conversation, or
+ * no id, reads the global value), and only means anything when `enabled` is
+ * true: a note is an upload. The mint checks the same flag for the channel's
+ * own server, so a client that asked with the wrong id is refused there.
  */
-router.get("/api/attachments/config", async () => ({
-  enabled: isAttachmentsConfigured(),
-  maxBytes: maxAttachmentBytes(),
-}));
+router.get("/api/attachments/config", async ({ url }) => {
+  const serverId = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isAttachmentsConfigured(),
+    maxBytes: maxAttachmentBytes(),
+    voiceNotes: isEnabled("voice_notes", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
+    // Whether transcripts exist here at all: off hides stored ones too, so a
+    // client draws no "transcrever" control. Whether a provider is configured
+    // is the worker's business; without one a request settles `unavailable`.
+    voiceTranscription: isEnabled("voice_note_transcription", {
+      serverId: serverId.success ? serverId.data : null,
+    }),
+  };
+});
 
 router.post(
   "/api/channels/:channelId/attachments",
@@ -3437,6 +3510,7 @@ router.post(
         // would have no box to reserve and every image would land as a reflow.
         width: body.width,
         height: body.height,
+        voice: body.voice ?? null,
       });
       return created({
         attachmentId: pending.attachment.id,
@@ -3449,6 +3523,15 @@ router.post(
           413,
           `Attachments are limited to ${error.limit} bytes`,
         );
+      }
+      if (error instanceof NoteTooLargeError) {
+        throw new HttpError(413, error.message);
+      }
+      if (error instanceof VoiceNotesDisabledError) {
+        throw new Forbidden(error.message);
+      }
+      if (error instanceof VoiceNoteContentTypeError) {
+        throw new HttpError(400, error.message);
       }
       throw error;
     }
@@ -3523,7 +3606,85 @@ router.get(
       expiresAt: new Date(
         Date.now() + attachmentUrlTtlSeconds() * 1000,
       ).toISOString(),
+      // A voice note's AAC copy, once it exists: what a client refetches on
+      // `voice-note-updated`.
+      ...(attachment.voice?.playbackUrl
+        ? { playbackUrl: attachment.voice.playbackUrl }
+        : {}),
     };
+  },
+);
+
+/**
+/**
+ * "I played this voice note." 204, idempotent: the first call records it and
+ * tells the right sockets (see `notifyVoiceNoteListened`), a replay changes
+ * nothing, and playing your own note is a no-op that still answers 204.
+ *
+ * 404 for a note the caller cannot see, an attachment that is not a voice
+ * note, and one that does not exist, all alike, as in the URL route above.
+ * There is no storage check: this reads rows, never the bucket.
+ */
+router.post(
+  "/api/attachments/:attachmentId/listened",
+  async ({ res, user }, { attachmentId }) => {
+    const key = `user:${user.id}`;
+    if (!listenLimiter.take(key)) {
+      res.setHeader("Retry-After", String(listenLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    if (!isUuid(attachmentId!)) {
+      throw new NotFound("Attachment not found");
+    }
+    try {
+      const { frame, addressees } = await recordListen(attachmentId!, user.id);
+      if (frame) {
+        notifyVoiceNoteListened(frame, addressees);
+      }
+    } catch (error) {
+      if (error instanceof VoiceNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      throw error;
+    }
+    return noContent();
+  },
+);
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued or running (the
+ * answer arrives as a `voice-note-transcript` frame on the note's channel),
+ * 200 with the stored answer once there is one, for whoever asks: the first
+ * request in a server channel pays and everybody after it reads.
+ *
+ * 404 for "no such note" and "not yours to hear" alike; 403 when the
+ * `voice_note_transcription` flag is off where the note lives, its sender did
+ * not allow transcription, the asker has `voiceTranscription.show` off, or (in
+ * a conversation) nobody but the sender reads transcripts: the same rule the
+ * eager path applies at send.
+ */
+router.post(
+  "/api/attachments/:attachmentId/transcript",
+  async ({ user }, { attachmentId }) => {
+    if (!z.string().uuid().safeParse(attachmentId).success) {
+      throw new NotFound("Voice note not found");
+    }
+    if (!transcriptRequestLimiter.take(user.id)) {
+      throw new HttpError(429, "Slow down");
+    }
+    try {
+      const result = await requestVoiceNoteTranscript(attachmentId!, user.id);
+      const body = { transcript: result.transcript };
+      return result.status === 202 ? new Accepted(body) : body;
+    } catch (error) {
+      if (error instanceof TranscriptNoteNotFoundError) {
+        throw new NotFound(error.message);
+      }
+      if (error instanceof VoiceTranscriptionUnavailableError) {
+        throw new Forbidden(error.message);
+      }
+      throw error;
+    }
   },
 );
 
@@ -4198,7 +4359,11 @@ router.get(
         user.id,
         url.searchParams.get("lang"),
       );
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4212,7 +4377,11 @@ router.get(
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4232,6 +4401,34 @@ router.get(
         url.searchParams.get("lang"),
       );
       return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The automatic subtitles of a post's uploaded video, as WebVTT: the source
+ * track and, when there is a current one, its translation into `?lang=` (the
+ * reader's UI locale). Any member who may play the video may read them: the
+ * post goes through the same read as the feed, so a draft, another server's
+ * post or a members-only video the viewer cannot open answers with no tracks
+ * or a 404, never with words. `tracks: []` when the flag is off for the server
+ * or nothing has been made yet.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/captions",
+  async ({ url, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const tracks = await getCommunityHomePostCaptions(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { tracks };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4277,12 +4474,16 @@ router.post(
         visibility: raw.visibility,
         commentsEnabled: raw.commentsEnabled !== false,
         mediaUploadId: raw.mediaUploadId ?? null,
+        mobileMediaUploadId: raw.mobileMediaUploadId ?? null,
         youtubeUrl: raw.youtubeUrl ?? null,
         status: raw.status,
         scheduledAt: raw.scheduledAt ?? null,
         scheduleTimezone: raw.scheduleTimezone ?? null,
       });
       await notifyHome(serverId!);
+      // A post created as published is announced by push (flag permitting).
+      // Not awaited: it never fails the publish, and it never throws.
+      void pushPendingCommunityHomePosts(serverId!);
       return created({ post });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -4316,6 +4517,7 @@ router.patch(
         mediaUploadId: raw.mediaUploadId,
         youtubeUrl: raw.youtubeUrl,
         clearMedia: raw.clearMedia,
+        mobileMediaUploadId: raw.mobileMediaUploadId,
       });
       await notifyHome(serverId!);
       return { post };
@@ -4344,6 +4546,23 @@ router.delete(
 );
 
 /**
+ * The Baú badge for EVERY server this person is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one
+ * (the per-server route below answers only the one asked about, and the rail
+ * would otherwise need a request per server). Only servers whose owner turned
+ * the Baú on are counted, and only servers with something unread appear, so
+ * the answer is usually `{ servers: {} }`.
+ */
+router.get("/api/community-home/unread", async ({ user }) => {
+  requireCommunityHome();
+  try {
+    return await countUnreadCommunityHomePostsAllServers(user.id);
+  } catch (error) {
+    mapCommunityHomeError(error);
+  }
+});
+
+/**
  * The Baú badge: how many posts this person has not seen. Its own endpoint
  * rather than a field on the feed, because the sidebar row needs the number
  * without loading the posts.
@@ -4354,7 +4573,7 @@ router.get(
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      return { count: await countUnreadCommunityHomePosts(serverId!, user.id) };
+      return await countUnreadCommunityHomePosts(serverId!, user.id);
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4404,6 +4623,7 @@ router.post(
     try {
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
+      void pushPendingCommunityHomePosts(serverId!);
       return { post };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -7308,6 +7528,19 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
 
+  // A voice note travels alone, with no text beside it (the claim enforces
+  // that when it is sent); this is the same rule for the road back in.
+  if (
+    body.body.trim().length > 0 &&
+    !noteEditAllowed({
+      hasNote: await messageHasNote(messageId!),
+      body: body.body,
+    })
+  ) {
+    recordVoiceNoteRefusal("edit-text-beside-note");
+    throw new HttpError(400, "A voice message cannot have text added to it");
+  }
+
   // Same reasoning as the block guard above: an edit is a send. Without this
   // a member posts "hi", edits it into the blocked word, and AutoMod never
   // saw it. The check reads the same rules with the same exemptions as
@@ -7575,7 +7808,7 @@ router.get(
   "/api/channels/:channelId/pins",
   async ({ user }, { channelId }) => {
     await requireChannelAccess(channelId!, user.id);
-    const messages = await listPinnedMessages(channelId!);
+    const messages = await listPinnedMessages(channelId!, user.id);
     return { messages: messages.map(mapMessage) };
   },
 );
@@ -11003,6 +11236,18 @@ export async function handleApi(
       sendJson(res, 201, result.body, req);
       return;
     }
+    if (result instanceof NoContent) {
+      res.writeHead(204, {
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
+      });
+      res.end();
+      return;
+    }
+    if (result instanceof Accepted) {
+      sendJson(res, 202, result.body, req);
+      return;
+    }
     // The handler streamed its own answer (a past-broadcast download). There
     // is nothing left to write, and `sendJson` would throw on a socket whose
     // head went out long ago.
@@ -11118,11 +11363,19 @@ router.get("/api/push/config", async ({ user }) => {
     enabled,
     publicKey: enabled ? getVapidPublicKey() : null,
     apns: isApnsEnabled(),
+    // Runtime flag, global, off by default: the desktop app's banners start on,
+    // DMs and servers get their own default level, and the browser offers a
+    // one-time card. Client behaviour only; read per request.
+    desktopNotifyDefaultOn: isEnabled("desktop_notify_default_on"),
     // The Android app's gate. Absent until now, it defaulted false on the
     // client (see `gg.pqp.app.push.PushApi`), so an already-installed build
     // starts offering notifications the moment this answers true, no update
     // required.
     fcm: isFcmEnabled(),
+    // Runtime flag, global, off by default: the open channel raises an OS
+    // banner while the window is away. Read per request, so a flip reaches an
+    // open tab on its next config refresh (`lib/config-refresh.ts`).
+    notifyOpenChannel: isEnabled("notify_open_channel"),
     ...(await getPushSettings(user.id)),
   };
 });
@@ -11198,7 +11451,7 @@ router.patch("/api/push/settings", async ({ req, user }) => {
 // dominance — are argued in packages/shared/src/friends.ts and on the
 // `friendships` table in schema.sql; enforcement is in services/friends.ts.
 import { friendNudgeFor, friendRequestSchema } from "@pqp/shared";
-import { notifyFriendActivity } from "../ws/chat.js";
+import { notifyFriendActivity, notifyVoiceNoteListened } from "../ws/chat.js";
 import {
   acceptFriendRequest,
   FriendRequestFloodError,

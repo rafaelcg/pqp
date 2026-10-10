@@ -12,6 +12,8 @@ const root = cva(
         volume: "h-4",
         /** Compact player: the fill sits on the panel's bottom border. */
         edge: "h-3 items-end",
+        /** A colour wheel: the track is the gradient, there is no fill. */
+        hue: "h-5",
       },
     },
     defaultVariants: {
@@ -26,6 +28,7 @@ const track = cva("relative w-full grow overflow-hidden", {
       scrub: "h-0.5 rounded-full bg-surface-3",
       volume: "h-1 rounded-full bg-surface-3",
       edge: "h-0.5 bg-border",
+      hue: "h-2 rounded-full bg-[image:var(--accent-track)]",
     },
   },
   defaultVariants: {
@@ -43,6 +46,7 @@ const thumb = cva(
         volume: "h-3 w-3",
         edge:
           "h-3 w-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        hue: "h-4 w-4 border-2 border-on-accent bg-accent",
       },
     },
     defaultVariants: {
@@ -72,8 +76,10 @@ export interface SliderProps
 /**
  * One-dimensional value. `scrub` is a thin track whose thumb appears on
  * hover or focus. `volume` keeps the thumb visible. `edge` is the same
- * fill sitting on a panel's bottom border. `readOnly` draws the fill without
- * a thumb and does not seek.
+ * fill sitting on a panel's bottom border. `hue` is a colour wheel: the
+ * `--accent-track` gradient as the track, no fill, and a thumb in the current
+ * accent with an `on-accent` rim. `readOnly` draws the fill without a thumb and
+ * does not seek.
  */
 export function Slider({
   className,
@@ -142,12 +148,16 @@ export function Slider({
       {...props}
     >
       <SliderPrimitive.Track className={track({ variant })}>
-        <SliderPrimitive.Range className="absolute h-full bg-accent" />
+        {/* A hue has no "amount", so nothing fills up to the thumb: the
+            gradient is the whole track and the thumb wears the colour. */}
+        {variant === "hue" ? null : (
+          <SliderPrimitive.Range className="absolute h-full bg-accent" />
+        )}
       </SliderPrimitive.Track>
       {/* The name goes on the thumb: it is the element with `role="slider"`,
           and Radix leaves a single thumb unnamed otherwise. */}
       <SliderPrimitive.Thumb
-        className={thumb({ variant })}
+        className={cn(thumb({ variant }))}
         aria-label={ariaLabel}
         aria-valuetext={ariaValueText}
       />

@@ -7,6 +7,7 @@ import {
   isImageContentType,
   type AttachmentContentType,
   type CreateAttachmentRequest,
+  type CreateVoiceNote,
 } from "@pqp/shared";
 import { createAttachment, fetchAttachmentConfig } from "@/lib/api";
 
@@ -69,6 +70,65 @@ export function loadAttachmentConfig(): Promise<AttachmentConfig> {
   return probe;
 }
 
+/**
+ * Whether the composer may offer the mic here: storage is configured AND the
+ * `voice_notes` flag is on for this server (a conversation passes null and
+ * reads the global value). Remembered per server for a few minutes rather than
+ * per page load like the rest of the config: the flag is the kill switch, and
+ * a tab open all evening should notice it being turned off without a reload.
+ */
+const VOICE_NOTES_TTL_MS = 5 * 60 * 1000;
+interface VoiceNoteFlags {
+  notes: boolean;
+  transcription: boolean;
+}
+const voiceNoteProbes = new Map<string, { at: number; answer: Promise<VoiceNoteFlags> }>();
+
+function loadVoiceNoteFlags(serverId: string | null): Promise<VoiceNoteFlags> {
+  const key = serverId ?? "";
+  const cached = voiceNoteProbes.get(key);
+  if (cached && Date.now() - cached.at < VOICE_NOTES_TTL_MS) {
+    return cached.answer;
+  }
+  const answer = fetchAttachmentConfig(serverId)
+    .then((config) => {
+      const notes = config.enabled === true && config.voiceNotes === true;
+      return {
+        notes,
+        // A transcript only exists for a note, so it needs both flags.
+        transcription: notes && config.voiceTranscription === true,
+      };
+    })
+    .catch(() => {
+      // A failed probe is not an answer: forget it, so the next composer
+      // mount asks again instead of hiding the mic for five minutes.
+      if (voiceNoteProbes.get(key)?.answer === answer) {
+        voiceNoteProbes.delete(key);
+      }
+      return { notes: false, transcription: false };
+    });
+  voiceNoteProbes.set(key, { at: Date.now(), answer });
+  return answer;
+}
+
+export function loadVoiceNotesEnabled(serverId: string | null): Promise<boolean> {
+  return loadVoiceNoteFlags(serverId).then((flags) => flags.notes);
+}
+
+/**
+ * Whether voice notes sent here are transcribed (the `voice_note_transcription`
+ * flag, per server; a conversation reads the global value). Same cache and
+ * the same five minutes as `loadVoiceNotesEnabled`.
+ */
+export function loadVoiceTranscriptionEnabled(serverId: string | null): Promise<boolean> {
+  return loadVoiceNoteFlags(serverId).then((flags) => flags.transcription);
+}
+
+/** For tests: forget every cached answer. */
+export function resetVoiceNoteProbesForTests(): void {
+  voiceNoteProbes.clear();
+}
+
 // ---------------------------------------------------------------- selection
 
 /** A file that passed every local check, ready to upload. */
@@ -114,6 +174,8 @@ const EXTENSION_BY_TYPE: Record<string, string> = {
   "audio/mpeg": "mp3",
   "audio/ogg": "ogg",
   "audio/wav": "wav",
+  "audio/mp4": "m4a",
+  "audio/webm": "weba",
   "application/pdf": "pdf",
   "text/plain": "txt",
 };
@@ -373,7 +435,12 @@ function putObject(
 export async function uploadAttachment(
   channelId: string,
   selected: AcceptedFile,
-  options: { signal: AbortSignal; onProgress?: (fraction: number) => void },
+  options: {
+    signal: AbortSignal;
+    onProgress?: (fraction: number) => void;
+    /** A voice note's duration and waveform, sent with the mint. */
+    voice?: CreateVoiceNote;
+  },
 ): Promise<UploadedAttachment> {
   if (options.signal.aborted) {
     throw new AttachmentAbortError();
@@ -410,6 +477,7 @@ export async function uploadAttachment(
     contentType: selected.contentType,
     byteSize: selected.file.size,
     ...measured,
+    ...(options.voice ? { voice: options.voice } : {}),
   };
 
   const minted = await createAttachment(
@@ -455,4 +523,6 @@ export interface OutgoingAttachment {
   width: number | null;
   height: number | null;
   previewUrl: string;
+  /** Set on a voice note, so the optimistic bubble draws the card at once. */
+  voice?: CreateVoiceNote;
 }

@@ -32,6 +32,7 @@ import {
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
+import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
@@ -46,6 +47,7 @@ import {
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
+import { startSpeechJobPoller } from "./services/speech-worker.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -165,6 +167,21 @@ async function sweepCommunityHomeTranslation(): Promise<void> {
   }
 }
 
+/**
+ * Every minute too: queues subtitles for Baú videos on servers with
+ * `community_home_video_captions` on that have none (which is also how videos
+ * published before the flag get them), and translates source tracks that
+ * miss a current translation. With the flag off everywhere it is an
+ * in-memory check.
+ */
+async function sweepCommunityHomeVideoCaptions(): Promise<void> {
+  try {
+    await sweepCommunityHomeCaptions();
+  } catch (error) {
+    console.error("[community-home] captions sweep failed:", error);
+  }
+}
+
 /** A registered job's own cleanup. Most are `clearInterval` on a plain
  *  timer; the outgoing webhook poller's is its own `stop()` (see below) —
  *  same list, same accounting, one shape. */
@@ -243,8 +260,23 @@ export function startColdJobs(): ColdJobs {
       "community-home-translation",
       sweepCommunityHomeTranslation,
     ),
+    every(
+      COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
+      "community-home-captions",
+      sweepCommunityHomeVideoCaptions,
+    ),
     (() => {
       const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);
+      return () => poller.stop();
+    })(),
+    // Voice note transcription and AAC transcodes (`speech_jobs`). Same
+    // adaptive shape as the webhook outbox: fast while there is work, 30 s
+    // when idle, woken by the NOTIFY the message transaction sends on enqueue.
+    // A process without storage claims nothing, and one without ffmpeg claims
+    // no transcode, so the API and a worker built from the API image never
+    // take a job they cannot finish.
+    (() => {
+      const poller = startSpeechJobPoller();
       return () => poller.stop();
     })(),
     every(

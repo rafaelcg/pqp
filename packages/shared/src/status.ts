@@ -88,6 +88,30 @@ export const setIdleMessageSchema = z.object({
 export type SetIdleMessage = z.infer<typeof setIdleMessageSchema>;
 
 /**
+ * "This client is in front of the person" / "it is not". Like `set-idle`, it is
+ * scoped to the socket that sent it and dies with it, and it is sent on a
+ * transition (and once after every (re)connect), never on a timer.
+ *
+ * WHAT IT IS FOR. Push used to be suppressed whenever the account held any
+ * socket anywhere, so a forgotten tab or an Electron window minimised all day
+ * silenced every phone. With `push_attention_gate` on, the server pushes unless
+ * at least one of the account's sockets is foreground AND not idle. A socket
+ * that never sends this frame is read as foreground unless idle, which is what
+ * every build before this frame already behaved like (see
+ * `server/src/ws/status.ts`, `socketIsAttentive`).
+ *
+ * The web client's rule: foreground is "the document is visible and the window
+ * has focus", and losing either is reported after a short grace so switching
+ * windows for a second does not flip it.
+ */
+export const setAttentionMessageSchema = z.object({
+  type: z.literal("set-attention"),
+  foreground: z.boolean(),
+});
+
+export type SetAttentionMessage = z.infer<typeof setAttentionMessageSchema>;
+
+/**
  * "Your own status is now this", sent to the account's OWN sockets and nobody
  * else's.
  *

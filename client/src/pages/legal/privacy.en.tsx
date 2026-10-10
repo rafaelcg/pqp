@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "29 September 2026",
+  updated: "8 October 2026",
   sections: [
     {
       id: "intro",
@@ -863,6 +863,18 @@ export const privacyEn: LegalDocument = {
               or ExpressTURN as fallback, plus Google and Cloudflare public
               STUN — voice connection setup and relay, as described above.
             </li>
+            <li>
+              <strong>Cloudflare Workers AI</strong>: transcription of voice
+              messages, when transcription is on. The message&apos;s audio goes
+              to Cloudflare, which runs the speech recognition model (Whisper)
+              and sends back the text. It only happens if whoever sent the
+              message left transcription on: it starts on, and it can be turned
+              off. In a conversation, the audio is transcribed as soon as it is
+              sent, if somebody in the conversation wants to see the text. In a
+              server channel, only when somebody asks. The text is stored with
+              the message and deleted with it. Cloudflare runs the model outside
+              Brazil.
+            </li>
           </ul>
           <p>Some third parties are contacted by your browser directly:</p>
           <ul>
@@ -981,6 +993,14 @@ export const privacyEn: LegalDocument = {
               Watch party recordings, and the nightly backups of our whole
               database (messages included), are stored in Cloudflare R2 in its
               Eastern North America location.
+            </li>
+            <li>
+              When voice message transcription is on, the message&apos;s audio
+              leaves Brazil: it goes to Cloudflare Workers AI, which runs the
+              model outside the country, typically in the United States or
+              Europe. That is an international transfer of personal data (LGPD
+              art. 33), and it rests on the same basis as the others, just
+              below.
             </li>
           </ul>
           <p>

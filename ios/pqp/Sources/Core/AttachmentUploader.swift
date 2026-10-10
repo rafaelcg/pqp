@@ -4,6 +4,20 @@ import UIKit
 struct AttachmentConfig: Decodable, Sendable {
     let enabled: Bool
     let maxBytes: Int
+    /// The `voice_notes` flag for the server asked about (`?serverId=`), or the
+    /// global value for a conversation. Absent on a server that predates voice
+    /// notes, which reads as off. Only means anything when `enabled` is true:
+    /// a note is an upload.
+    let voiceNotes: Bool?
+
+    var offersVoiceNotes: Bool { enabled && voiceNotes == true }
+}
+
+/// The `voice` block of a mint request: the recorder's own measurements.
+struct VoiceMintBlock: Encodable, Sendable, Equatable {
+    let durationMs: Int
+    /// 64 peaks, base64.
+    let waveform: String
 }
 
 /// A file picked locally and on its way up.
@@ -14,6 +28,9 @@ struct PendingAttachment: Identifiable, Sendable {
     let data: Data
     let width: Int?
     let height: Int?
+    /// Set for a voice note; rides on the mint so the server can budget the
+    /// bytes against the duration.
+    var voice: VoiceMintBlock? = nil
     var progress: Double = 0
     /// Set once the mint succeeds; this is what goes on `message-create`.
     var attachmentId: String?
@@ -59,6 +76,7 @@ actor AttachmentUploader {
             let byteSize: Int
             let width: Int?
             let height: Int?
+            let voice: VoiceMintBlock?
         }
 
         let mint: MintResponse = try await api.post(
@@ -68,7 +86,8 @@ actor AttachmentUploader {
                 contentType: pending.contentType,
                 byteSize: pending.byteSize,
                 width: pending.width,
-                height: pending.height
+                height: pending.height,
+                voice: pending.voice
             )
         )
 
@@ -101,6 +120,16 @@ extension APIClient {
         let config: AttachmentConfig = try await get("/api/attachments/config")
         attachmentConfigCache = config
         return config
+    }
+
+    /// The attachment config as THIS conversation sees it. Not memoised, unlike
+    /// `attachmentConfig()`: `voiceNotes` is a runtime flag an operator flips
+    /// per server with no deploy, so the answer has to be read each time a
+    /// conversation opens. `serverId` is nil for a conversation, which reads the
+    /// global value.
+    func attachmentConfig(serverId: String?) async throws -> AttachmentConfig {
+        let query = serverId.map { [URLQueryItem(name: "serverId", value: $0)] } ?? []
+        return try await get("/api/attachments/config", query: query)
     }
 
     /// A freshly signed URL for an attachment whose presigned link has expired.

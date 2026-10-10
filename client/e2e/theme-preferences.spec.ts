@@ -40,7 +40,7 @@ test.describe("stage 3 — preferences follow the user", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
     await page
-      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radiogroup", { name: /^(mode|modo)$/i })
       .getByRole("radio", { name: /light|claro/i })
       .click();
 
@@ -185,7 +185,7 @@ test.describe("stage 3 — preferences follow the user", () => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
-    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+    await page.getByRole("radio", { name: /^(cyan|ciano)$/i }).click();
 
     await expect
       .poll(async () => (await readPreferences()).accentHue, { timeout: 10_000 })

@@ -34,6 +34,26 @@ class DeepLinkTest {
     }
 
     @Test
+    fun `the new Bau post push path opens the Bau`() {
+        // buildCommunityHomePostPayload: `/app/server/<id>/home`. The web client
+        // reads it as "this server" and lands on the Bau; the phone names it.
+        assertEquals(DeepLinkTarget.Bau("srv-1"), DeepLink.target("/app/server/srv-1/home"))
+        assertEquals(
+            DeepLinkTarget.Bau("srv-1"),
+            DeepLink.target("https://pqp.gg/app/server/srv-1/home"),
+        )
+        assertEquals(DeepLinkTarget.Bau("srv-1"), DeepLink.target("/app/server/srv-1/home/"))
+        // A server with no channel is still just the server, and nothing else
+        // under it is a Bau.
+        assertEquals(DeepLinkTarget.Server("srv-1"), DeepLink.target("/app/server/srv-1"))
+        assertEquals(DeepLinkTarget.Server("srv-1"), DeepLink.target("/app/server/srv-1/homes"))
+        assertEquals(
+            DeepLinkTarget.Server("srv-1"),
+            DeepLink.target("/app/server/srv-1/home/post-1"),
+        )
+    }
+
+    @Test
     fun `the fallback path a mention with no server produces is not a target`() {
         // buildPushPayload emits a bare "/app" when a server-kind channel has
         // somehow no server id. There is nowhere for that to land.

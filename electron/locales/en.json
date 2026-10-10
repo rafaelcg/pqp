@@ -48,7 +48,7 @@
   "tray.undeafen": "Undeafen",
   "tray.leave": "Leave call",
   "tray.show": "Show pqp",
-  "tray.keepInTray": "Keep in tray while in a call",
+  "tray.keepInTray": "Keep in tray when closing the window",
   "tray.quit": "Quit pqp",
   "tray.tooltipIdle": "pqp",
   "tray.tooltipLive": "pqp - mic on",

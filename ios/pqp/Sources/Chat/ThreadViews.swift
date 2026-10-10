@@ -90,9 +90,11 @@ extension View {
     /// A modifier rather than inline code so `ChatView` gains one line for the
     /// whole navigation. `ChatView` keys its model by channel id and a thread
     /// id is a channel id, so the pushed screen needs no thread-specific state.
-    func threadDestination(_ target: Binding<ThreadSummary?>) -> some View {
+    func threadDestination(_ target: Binding<ThreadSummary?>, serverId: String? = nil) -> some View {
         navigationDestination(item: target) { thread in
-            ChatView(channelId: thread.channelId, title: thread.name)
+            // Only the id travels, for the per-server flags (voice notes): the
+            // rank in `server` would switch on moderation a thread never had.
+            ChatView(channelId: thread.channelId, title: thread.name, flagsServerId: serverId)
         }
     }
 }

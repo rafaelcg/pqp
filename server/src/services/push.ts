@@ -4,6 +4,7 @@ import type { ChannelKind, UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { getPreferences, mergePreferences } from "./preferences.js";
 import {
+  buildCommunityHomePostPushCopy,
   buildConversationPushCopy,
   buildStreamStartedPushCopy,
   resolvePushLocale,
@@ -11,9 +12,17 @@ import {
   type PushLocale,
   type StreamAlertLocale,
 } from "./push-copy.js";
-import { isInvisible, resolveStatus } from "../ws/status.js";
+import { hasAttentiveSocket, hasClusterSocket } from "../ws/status.js";
+import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { notePush } from "./push-metrics.js";
+import {
+  notePushAttentionPassed,
+  notePushSkipped,
+  type PushSkipContext,
+  type PushSkipKind,
+  type PushSkipReason,
+} from "./push-skips.js";
 import {
   type ApnsConfig,
   isApnsEnabled,
@@ -58,8 +67,12 @@ import {
  * WHO GETS A PUSH IS NOT DECIDED HERE. `notifyChannelActivity` in ws/chat.ts
  * already answers "who deserves to hear about this message" — audience,
  * blocks, mentions — and this module is handed its conclusions. What is
- * decided here is only the push-specific narrowing: no live socket anywhere,
- * not on do-not-disturb, and a per-channel level that allows it.
+ * decided here is only the push-specific narrowing: no live socket anywhere
+ * (with `push_attention_gate` on, no socket that is in front of the person;
+ * see `socketRefusal`), not on do-not-disturb, and a per-channel level that
+ * allows it. Every one of
+ * those that refuses somebody says so: `push-skips.ts` counts it on
+ * `GET /api/admin/metrics` and logs `push.skipped` with the reason.
  *
  * PUSHES FIRE ON THE ORIGIN INSTANCE ONLY. A user with no socket is on no
  * instance, so if the cluster-bus copy of the activity fan-out also pushed,
@@ -548,24 +561,124 @@ export function setPushSenderForTests(next: PushSender | null): void {
 }
 
 /**
- * "Is this person connected anywhere in the cluster?" — the status registry
- * already merges every instance's contribution, so this is one in-memory read.
+ * Where this person's sockets stand, cluster-wide: none at all, connected but
+ * with nothing in front of them, or at least one screen in front of them
+ * (foreground and not idle, `socketIsAttentive` in ws/status.ts). The status
+ * registry already merges every instance's contribution, so this is two
+ * in-memory reads, whichever machine holds the socket.
  *
- * `resolveStatus` alone is not the answer: it reports `offline` for an
- * *invisible* user who is very much connected and reading the channel live, and
+ * Invisible users count as connected: they are reading the channel live, and
  * pushing their phone as well would double-notify exactly the people who asked
- * to be least visible. Hence the second check.
+ * to be least visible. `hasClusterSocket` says so already.
  */
-function registryHasLiveSocket(userId: string): boolean {
-  return resolveStatus(userId) !== "offline" || isInvisible(userId);
+export type SocketPresence = "none" | "background" | "attentive";
+
+function registrySocketPresence(userId: string): SocketPresence {
+  if (!hasClusterSocket(userId)) {
+    return "none";
+  }
+  return hasAttentiveSocket(userId) ? "attentive" : "background";
 }
 
-let hasLiveSocket: (userId: string) => boolean = registryHasLiveSocket;
+let socketPresence: (userId: string) => SocketPresence = registrySocketPresence;
 
+/**
+ * Test seam, the old boolean shape: `true` is a socket in front of them, which
+ * is what "connected" meant to every test written before the attention gate.
+ */
 export function setLiveSocketProbeForTests(
   next: ((userId: string) => boolean) | null,
 ): void {
-  hasLiveSocket = next ?? registryHasLiveSocket;
+  socketPresence = next
+    ? (userId) => (next(userId) ? "attentive" : "none")
+    : registrySocketPresence;
+}
+
+/** Test seam with the whole answer, for the attention gate's cases. */
+export function setSocketPresenceProbeForTests(
+  next: ((userId: string) => SocketPresence) | null,
+): void {
+  socketPresence = next ?? registrySocketPresence;
+}
+
+/**
+ * DOES A SOCKET STAND IN THE WAY OF THIS PUSH? Null means no.
+ *
+ * Gate off (the default, and every deployment before it): any socket anywhere
+ * blocks, the rule that let one forgotten tab or a minimised desktop window
+ * silence every phone the account owns.
+ *
+ * Gate on (`push_attention_gate`): only a socket in front of the person blocks.
+ * A connection that is backgrounded, hidden, unfocused past its grace, or idle
+ * no longer speaks for them, so the phone is told.
+ */
+export function socketRefusal(
+  presence: SocketPresence,
+  attentionGate: boolean,
+): Extract<PushSkipReason, "live_socket" | "attentive_socket"> | null {
+  if (presence === "none") {
+    return null;
+  }
+  if (!attentionGate) {
+    return "live_socket";
+  }
+  return presence === "attentive" ? "attentive_socket" : null;
+}
+
+/** Read once per fan-out, so one decision never straddles a flip. */
+function attentionGateOn(): boolean {
+  return isEnabled("push_attention_gate");
+}
+
+/**
+ * Whether `userId` gets past the socket rule, counting the refusal, or (gate
+ * on) the connected person the old rule would have refused and this one lets
+ * through: `pushAttentionPassed`, the number that says the gate is working.
+ */
+function passesSocketRule(
+  userId: string,
+  attentionGate: boolean,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): boolean {
+  const presence = socketPresence(userId);
+  const refusal = socketRefusal(presence, attentionGate);
+  if (refusal) {
+    notePushSkipped(kind, refusal, userId, skipContext);
+    return false;
+  }
+  if (presence !== "none") {
+    notePushAttentionPassed(kind);
+  }
+  return true;
+}
+
+/** The ids the socket rule lets through; the rest are counted as skips. */
+function splitOnLiveSocket(
+  userIds: readonly string[],
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): string[] {
+  const attentionGate = attentionGateOn();
+  return userIds.filter((userId) =>
+    passesSocketRule(userId, attentionGate, kind, skipContext),
+  );
+}
+
+/** Drop (and count) everybody whose stored status is do-not-disturb. */
+function withoutDnd(
+  userIds: readonly string[],
+  preferences: ReadonlyMap<string, UserPreferences>,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext,
+): string[] {
+  return userIds.filter((userId) => {
+    if (preferences.get(userId)?.status === "dnd") {
+      notePushSkipped(kind, "dnd", userId, skipContext);
+      return false;
+    }
+    return true;
+  });
 }
 
 // --------------------------------------------------------------- decisions
@@ -597,19 +710,32 @@ export interface PushDecisionInput {
  *   requirement one of this feature: mentions, replies and DMs only.
  */
 export function shouldPush(input: PushDecisionInput): boolean {
+  return pushRefusal(input) === null;
+}
+
+/**
+ * The same matrix as `shouldPush`, saying which rule refused: null means push.
+ * `push-skips.ts` counts the answer, so the order of these checks is also the
+ * order the skip reasons are attributed in.
+ */
+export function pushRefusal(
+  input: PushDecisionInput,
+): Extract<PushSkipReason, "dnd" | "muted" | "level"> | null {
   if (input.manualStatus === "dnd") {
-    return false;
+    return "dnd";
   }
   if (input.level === "none") {
-    return false;
+    return "muted";
   }
   if (input.mention) {
-    return true;
+    return null;
   }
   if (input.channelKind !== "server") {
-    return input.level === "all";
+    return input.level === "all" ? null : "level";
   }
-  return false;
+  // A plain server-channel message. Unreachable from `sendChannelPush`, whose
+  // candidates for a server channel are only the mentioned and the replied-to.
+  return "level";
 }
 
 /**
@@ -633,7 +759,12 @@ export function resolvePushLevel(
       return serverLevel;
     }
   }
-  return notifications?.default ?? "all";
+  // No server: a conversation. The split defaults are an explicit choice, so
+  // an account that never made one resolves through `default` exactly as it
+  // always did, and a server's plain message still never pushes whatever this
+  // says (`shouldPush`).
+  const split = serverId ? notifications?.serverDefault : notifications?.dmDefault;
+  return split ?? notifications?.default ?? "all";
 }
 
 // ----------------------------------------------------------------- payload
@@ -667,6 +798,8 @@ export interface PushPayloadInput {
    * mention/reply push stays English, unchanged by this field.
    */
   locale: PushLocale;
+  /** A conversation voice note's length; conversation copy only. */
+  voiceDurationMs?: number | null;
 }
 
 export interface PushPayload {
@@ -720,6 +853,7 @@ export function buildPushPayload(input: PushPayloadInput): PushPayload {
     dmDetails: input.dmDetails,
     mentionOrReply: input.mention || input.reply,
     authorName: input.authorName ? truncateLabel(input.authorName) : null,
+    voiceDurationMs: input.voiceDurationMs ?? null,
   });
   return { title: copy.title, body: copy.body, path, tag };
 }
@@ -749,6 +883,18 @@ export interface ChannelPushEvent {
   blockerIds: ReadonlySet<string>;
   mentionEveryone?: boolean;
   mentionHereUserIds?: readonly string[];
+  /**
+   * Accounts a `message_mentions` row exists for (`mention_ids_from_db`), which
+   * is where a role mention becomes people. Empty with the flag off. Unioned
+   * with the username match, never replacing it.
+   */
+  mentionedUserIds?: readonly string[];
+  /**
+   * Set when the message is a voice note in a conversation: the push says
+   * "Mensagem de voz · 0:12" instead of the plain copy. A length, never the
+   * audio or a transcript.
+   */
+  voiceDurationMs?: number | null;
 }
 
 /**
@@ -813,6 +959,11 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       mentioned.add(userId);
     }
   }
+  for (const userId of event.mentionedUserIds ?? []) {
+    if (audience.has(userId)) {
+      mentioned.add(userId);
+    }
+  }
   const replied =
     event.repliedToUserId && audience.has(event.repliedToUserId)
       ? event.repliedToUserId
@@ -827,12 +978,22 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       ? [...new Set([...mentioned, ...(replied ? [replied] : [])])]
       : audience.userIds;
 
-  const offline = candidateIds.filter(
-    (userId) =>
-      userId !== event.authorId &&
-      !event.blockerIds.has(userId) &&
-      !hasLiveSocket(userId),
-  );
+  const skipContext: PushSkipContext = { channelId: event.channelId };
+  const attentionGate = attentionGateOn();
+  const offline: string[] = [];
+  for (const userId of candidateIds) {
+    if (userId === event.authorId) {
+      continue;
+    }
+    if (event.blockerIds.has(userId)) {
+      notePushSkipped("message", "blocked", userId, skipContext);
+      continue;
+    }
+    if (!passesSocketRule(userId, attentionGate, "message", skipContext)) {
+      continue;
+    }
+    offline.push(userId);
+  }
   if (offline.length === 0) {
     return;
   }
@@ -850,12 +1011,17 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
 
   const recipients = offline.filter((userId) => {
     const settings = preferences.get(userId) ?? null;
-    return shouldPush({
+    const refusal = pushRefusal({
       mention: mentioned.has(userId) || userId === replied,
       channelKind: audience.kind,
       manualStatus: settings?.status,
       level: resolvePushLevel(settings, audience.serverId, event.channelId),
     });
+    if (refusal) {
+      notePushSkipped("message", refusal, userId, skipContext);
+      return false;
+    }
+    return true;
   });
   if (recipients.length === 0) {
     return;
@@ -900,6 +1066,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
         serverName: names.server_name,
         authorName: names.author_name,
         locale: resolvePushLocale((settings as { locale?: unknown } | null)?.locale),
+        voiceDurationMs: event.voiceDurationMs ?? null,
       }),
     );
   }
@@ -909,6 +1076,8 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
     (userId) => payloads.get(userId),
     transports,
     MESSAGE_DELIVERY,
+    "message",
+    skipContext,
   );
 }
 
@@ -948,6 +1117,10 @@ async function deliverToUsers(
   payloadFor: (userId: string) => PushPayload | undefined,
   transports: PushTransports,
   delivery: PushDeliveryOptions,
+  kind: PushSkipKind,
+  skipContext: PushSkipContext = {},
+  /** Called once, after the subscription read and before the first send. */
+  beforeSend?: () => void,
 ): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
     `SELECT ${SUBSCRIPTION_COLUMNS}
@@ -956,6 +1129,27 @@ async function deliverToUsers(
     [userIds],
   );
 
+  // The last two "why not" answers (`push-skips.ts`): a person with no device
+  // on file at all, and a person whose every device is on a leg this
+  // deployment has not configured (an FCM token on an instance with no FCM
+  // key). Both used to end the fan-out in silence.
+  const withRows = new Set<string>();
+  const reachable = new Set<string>();
+  for (const subscription of subscriptions.rows) {
+    withRows.add(subscription.user_id);
+    if (hasConfiguredLeg(subscription, transports)) {
+      reachable.add(subscription.user_id);
+    }
+  }
+  for (const userId of userIds) {
+    if (!withRows.has(userId)) {
+      notePushSkipped(kind, "no_subscription", userId, skipContext);
+    } else if (!reachable.has(userId)) {
+      notePushSkipped(kind, "transport_off", userId, skipContext);
+    }
+  }
+
+  beforeSend?.();
   await Promise.all(
     subscriptions.rows.map(async (subscription) => {
       const payload = payloadFor(subscription.user_id);
@@ -972,6 +1166,25 @@ async function deliverToUsers(
       }
       await deliverWebPush(subscription, payload, transports.vapid, delivery);
     }),
+  );
+}
+
+/** Whether the leg this row needs is configured, mirroring each leg's own guard. */
+function hasConfiguredLeg(
+  subscription: StoredPushSubscription,
+  transports: PushTransports,
+): boolean {
+  if (subscription.platform === "apns") {
+    return Boolean(transports.apns && subscription.token);
+  }
+  if (subscription.platform === "fcm") {
+    return Boolean(transports.fcm && subscription.token);
+  }
+  return Boolean(
+    transports.vapid &&
+      subscription.endpoint &&
+      subscription.p256dh &&
+      subscription.auth,
   );
 }
 
@@ -1260,7 +1473,8 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
     return;
   }
 
-  const offline = event.rungUserIds.filter((userId) => !hasLiveSocket(userId));
+  const skipContext: PushSkipContext = { conversationId: event.conversationId };
+  const offline = splitOnLiveSocket(event.rungUserIds, "call", skipContext);
   if (offline.length === 0) {
     return;
   }
@@ -1275,9 +1489,7 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
-  const recipients = offline.filter(
-    (userId) => preferences.get(userId)?.status !== "dnd",
-  );
+  const recipients = withoutDnd(offline, preferences, "call", skipContext);
   if (recipients.length === 0) {
     return;
   }
@@ -1288,7 +1500,14 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
     kind: event.kind,
     callerName: event.callerName,
   });
-  await deliverToUsers(recipients, () => payload, transports, CALL_DELIVERY);
+  await deliverToUsers(
+    recipients,
+    () => payload,
+    transports,
+    CALL_DELIVERY,
+    "call",
+    skipContext,
+  );
 }
 
 // ------------------------------------------------------------ watch party session reminders
@@ -1353,6 +1572,8 @@ export async function sendChannelSessionReminderPush(
     () => payload,
     transports,
     SESSION_REMINDER_DELIVERY,
+    "reminder",
+    { channelId: event.channelId },
   );
 }
 
@@ -1417,7 +1638,8 @@ export async function sendStreamStartedPush(
   if (!transports) {
     return 0;
   }
-  const offline = event.userIds.filter((userId) => !hasLiveSocket(userId));
+  const skipContext: PushSkipContext = { channelId: event.channelId };
+  const offline = splitOnLiveSocket(event.userIds, "stream", skipContext);
   if (offline.length === 0) {
     return 0;
   }
@@ -1429,9 +1651,7 @@ export async function sendStreamStartedPush(
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
-  const recipients = offline.filter(
-    (userId) => preferences.get(userId)?.status !== "dnd",
-  );
+  const recipients = withoutDnd(offline, preferences, "stream", skipContext);
   if (recipients.length === 0) {
     return 0;
   }
@@ -1446,6 +1666,8 @@ export async function sendStreamStartedPush(
       ),
     transports,
     STREAM_START_DELIVERY,
+    "stream",
+    skipContext,
   );
   return recipients.length;
 }
@@ -1554,6 +1776,7 @@ export function pushWatchPartyWaitlistApproved(
         ),
       transports,
       SESSION_REMINDER_DELIVERY,
+      "waitlist",
     );
   })().catch((error: unknown) => {
     console.error(
@@ -1561,4 +1784,125 @@ export function pushWatchPartyWaitlistApproved(
       error,
     );
   });
+}
+
+// ------------------------------------------------------------ Baú new post
+
+/**
+ * A new post in a server's Baú, as `services/community-home-push.ts` concluded
+ * it. WHO MAY BE TOLD IS NOT DECIDED HERE: `recipients` maps each person to the
+ * titles of the posts THEY can open (never the author, never a members-only
+ * post for somebody who would only see the lock, never somebody who blocked
+ * the author), and this narrows it by the three things only a push can see:
+ * a socket in front of the person (the live corner card is that notice), a
+ * stored do-not-disturb, and the server's notification level.
+ */
+export interface CommunityHomePostPush {
+  serverId: string;
+  serverName: string;
+  recipients: ReadonlyMap<string, readonly (string | null)[]>;
+}
+
+/**
+ * The level a Baú post reads for one person in one server. Not
+ * `resolvePushLevel`: a Baú has no channel, and a staff post is not chat
+ * noise, so the account-wide "mentions" default that
+ * `desktop_notify_default_on` writes for servers must not silence it. What
+ * does: an explicit `none` at the server, or a `none` default (a mute, the
+ * same word the rail dims its icon for), and an explicit per-server
+ * `mentions`, which the person chose for this server in particular.
+ */
+export function resolveBauPushLevel(
+  settings: UserPreferences | null,
+  serverId: string,
+): "all" | "mentions" | "none" {
+  const notifications = settings?.notifications;
+  const explicit = notifications?.servers?.[serverId];
+  if (explicit) {
+    return explicit;
+  }
+  const fallback = notifications?.serverDefault ?? notifications?.default;
+  return fallback === "none" ? "none" : "all";
+}
+
+export function buildCommunityHomePostPayload(
+  event: Pick<CommunityHomePostPush, "serverId" | "serverName">,
+  titles: readonly (string | null)[],
+  locale: StreamAlertLocale,
+): PushPayload {
+  const copy = buildCommunityHomePostPushCopy({
+    locale,
+    serverName: truncateLabel(event.serverName),
+    titles: titles.map((title) => (title ? truncateLabel(title) : null)),
+  });
+  return {
+    title: copy.title,
+    body: copy.body,
+    // The web client lands on the Baú for a server URL with no channel, and
+    // both phones parse `/home` as "this server's Baú" (`DeepLink`).
+    path: `/app/server/${event.serverId}/home`,
+    // One live notification per server: a second post replaces the first
+    // instead of stacking.
+    tag: `bau:${event.serverId}`,
+  };
+}
+
+/** The awaitable pipeline. Returns how many people it tried to push. */
+export async function sendCommunityHomePostPush(
+  event: CommunityHomePostPush,
+  /**
+   * Called once, after the preference and subscription reads and right before
+   * the first send, which is the first thing that can reach a device. A
+   * caller that wants to hand its claim back on failure uses it to know which
+   * side of that line a rejection fell on: before it, nothing was sent and a
+   * retry is safe; after it, a retry could tell somebody twice.
+   */
+  beforeDelivery?: () => void,
+): Promise<number> {
+  const transports = readTransports();
+  if (!transports || event.recipients.size === 0) {
+    return 0;
+  }
+  const skipContext: PushSkipContext = { serverId: event.serverId };
+  const offline = splitOnLiveSocket([...event.recipients.keys()], "bau", skipContext);
+  if (offline.length === 0) {
+    return 0;
+  }
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences
+     WHERE user_id = ANY($1::uuid[])`,
+    [offline],
+  );
+  const preferences = new Map<string, UserPreferences>(
+    preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  const notDnd = withoutDnd(offline, preferences, "bau", skipContext);
+  const recipients = notDnd.filter((userId) => {
+    const level = resolveBauPushLevel(preferences.get(userId) ?? null, event.serverId);
+    if (level === "all") {
+      return true;
+    }
+    notePushSkipped("bau", level === "none" ? "muted" : "level", userId, skipContext);
+    return false;
+  });
+  if (recipients.length === 0) {
+    return 0;
+  }
+  await deliverToUsers(
+    recipients,
+    (userId) =>
+      buildCommunityHomePostPayload(
+        event,
+        event.recipients.get(userId) ?? [],
+        resolveStreamAlertLocale(
+          (preferences.get(userId) as { locale?: unknown } | undefined)?.locale,
+        ),
+      ),
+    transports,
+    MESSAGE_DELIVERY,
+    "bau",
+    skipContext,
+    beforeDelivery,
+  );
+  return recipients.length;
 }

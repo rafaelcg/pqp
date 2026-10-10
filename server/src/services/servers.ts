@@ -18,6 +18,7 @@ import {
   recordServerIdempotencyKey,
 } from "./idempotency-keys.js";
 import { detachDeletedChannelsFromOutgoingWebhooks } from "./outgoing-webhooks.js";
+import { ATTACHMENT_OBJECT_KEYS, ATTACHMENT_VOICE_JOIN } from "./voice-notes.js";
 import {
   applyPrivateChannelOverwrites,
   bumpPermissionsVersion,
@@ -95,9 +96,13 @@ async function channelAttachmentKeys(channelId: string): Promise<string[]> {
   if (!isStorageConfigured()) {
     return [];
   }
+  // `ATTACHMENT_OBJECT_KEYS`, not `storage_key`: a voice note's AAC copy is a
+  // second object, and the cascade takes the only row that names it too.
   const result = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments
-     WHERE channel_id = $1
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+     FROM message_attachments a
+     ${ATTACHMENT_VOICE_JOIN}
+     WHERE a.channel_id = $1
      LIMIT ${MAX_DELETED_OBJECTS}`,
     [channelId],
   );
@@ -110,9 +115,10 @@ async function serverAttachmentKeys(serverId: string): Promise<string[]> {
     return [];
   }
   const result = await getPool().query<{ storage_key: string }>(
-    `SELECT a.storage_key
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
      FROM message_attachments a
      JOIN channels c ON c.id = a.channel_id
+     ${ATTACHMENT_VOICE_JOIN}
      WHERE c.server_id = $1
      LIMIT ${MAX_DELETED_OBJECTS}`,
     [serverId],

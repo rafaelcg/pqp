@@ -76,6 +76,18 @@ async function call<T = Record<string, unknown>>(
   return { status: response.status, body: (text ? JSON.parse(text) : {}) as T };
 }
 
+/** `product.pushSkipped` for one kind before anything was refused. */
+const ZERO_SKIPS = {
+  live_socket: 0,
+  attentive_socket: 0,
+  blocked: 0,
+  dnd: 0,
+  muted: 0,
+  level: 0,
+  no_subscription: 0,
+  transport_off: 0,
+};
+
 interface MetricsBody {
   generatedAt: string;
   cacheTtlSeconds: number;
@@ -186,6 +198,8 @@ interface MetricsBody {
       "web" | "apns" | "fcm",
       { sent: number; failed: number; pruned: number }
     >;
+    pushSkipped: Record<string, Record<string, number>>;
+    pushAttentionPassed: Record<string, number>;
   };
   imports: {
     discord: {
@@ -458,6 +472,15 @@ describeDb("GET /api/admin/metrics", () => {
         apns: { sent: 0, failed: 0, pruned: 0 },
         fcm: { sent: 0, failed: 0, pruned: 0 },
       },
+      pushSkipped: {
+        message: ZERO_SKIPS,
+        call: ZERO_SKIPS,
+        stream: ZERO_SKIPS,
+        reminder: ZERO_SKIPS,
+        waitlist: ZERO_SKIPS,
+        bau: ZERO_SKIPS,
+      },
+      pushAttentionPassed: { message: 0, call: 0, stream: 0, reminder: 0, waitlist: 0, bau: 0 },
     });
 
     // The two human messages are both in a server channel, so the DM/group

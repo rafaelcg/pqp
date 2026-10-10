@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  classifyMicError,
+  microphoneLabelsReadable,
+  probeMicrophone,
   buildAudioConstraints,
   defaultMicProcessing,
   sameMicProcessing,
@@ -99,5 +102,87 @@ describe("sameMicProcessing", () => {
     expect(sameMicProcessing(base, { ...base, noiseSuppression: "off" })).toBe(
       false,
     );
+  });
+});
+
+describe("classifyMicError", () => {
+  const named = (name: string) => Object.assign(new Error(name), { name });
+
+  it("tells no microphone from a refusal", () => {
+    expect(classifyMicError(named("NotFoundError"))).toBe("none");
+    expect(classifyMicError(named("OverconstrainedError"))).toBe("none");
+    expect(classifyMicError(named("DevicesNotFoundError"))).toBe("none");
+    expect(classifyMicError(named("NotAllowedError"))).toBe("denied");
+    expect(classifyMicError(named("SecurityError"))).toBe("denied");
+    expect(classifyMicError(named("PermissionDeniedError"))).toBe("denied");
+  });
+
+  it("tells a busy microphone from a refusal", () => {
+    expect(classifyMicError(named("NotReadableError"))).toBe("busy");
+    expect(classifyMicError(named("TrackStartError"))).toBe("busy");
+  });
+
+  it("reads anything it does not know as a refusal, as every failure was before", () => {
+    expect(classifyMicError(new Error("denied"))).toBe("denied");
+    expect(classifyMicError("nope")).toBe("denied");
+    expect(classifyMicError(null)).toBe("denied");
+  });
+});
+
+describe("probeMicrophone", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("closes the capture it opened", async () => {
+    const stop = vi.fn();
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: async () => ({ getTracks: () => [{ stop }] }),
+      },
+    });
+    expect(await probeMicrophone()).toBe("granted");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("says what the failure was", async () => {
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: async () => {
+          throw Object.assign(new Error("none"), { name: "NotFoundError" });
+        },
+      },
+    });
+    expect(await probeMicrophone()).toBe("none");
+  });
+});
+
+describe("microphoneLabelsReadable", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const withDevices = (devices: Array<{ kind: string; label: string }>) =>
+    vi.stubGlobal("navigator", {
+      mediaDevices: { enumerateDevices: async () => devices },
+    });
+
+  it("is true once the browser shows a microphone name", async () => {
+    withDevices([{ kind: "audioinput", label: "Built-in Mic" }]);
+    expect(await microphoneLabelsReadable()).toBe(true);
+  });
+
+  it("is false while the names are blank, which listAudioDevices would fill in", async () => {
+    withDevices([{ kind: "audioinput", label: "" }]);
+    expect(await microphoneLabelsReadable()).toBe(false);
+  });
+
+  it("does not count a camera's name", async () => {
+    withDevices([{ kind: "videoinput", label: "FaceTime HD" }]);
+    expect(await microphoneLabelsReadable()).toBe(false);
+  });
+
+  it("is false when the list cannot be read", async () => {
+    vi.stubGlobal("navigator", {});
+    expect(await microphoneLabelsReadable()).toBe(false);
   });
 });

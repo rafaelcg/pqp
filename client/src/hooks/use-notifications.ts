@@ -6,7 +6,12 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { getDesktop } from "@/lib/desktop";
 import { translateMessage } from "@/lib/i18n";
 import {
+  isDesktopNotifyDefaultOnEnabled,
+  onNotifyDefaultsChange,
+} from "@/lib/notify-defaults-config";
+import {
   getNotificationState,
+  getNotifyOfferPending,
   hasNotificationOverride,
   lookupChannel,
   notificationPermission,
@@ -17,6 +22,8 @@ import {
   setChannelNotificationLevel,
   setDefaultNotificationLevel,
   setDesktopNotificationsEnabled,
+  setDmDefaultNotificationLevel,
+  setServerDefaultNotificationLevel,
   setNotificationNavigator,
   setServerNotificationLevel,
   setUnreadBadge,
@@ -37,6 +44,50 @@ export function useNotificationState(): NotificationState {
     subscribeNotifications,
     getNotificationState,
     getNotificationState,
+  );
+}
+
+/** `desktop_notify_default_on`, re-read when a config refresh flips it. */
+export function useDesktopNotifyDefaultOn(): boolean {
+  return useSyncExternalStore(
+    onNotifyDefaultsChange,
+    isDesktopNotifyDefaultOnEnabled,
+    isDesktopNotifyDefaultOnEnabled,
+  );
+}
+
+/**
+ * Whether the one-time "Ativar notificações" card has something to offer right
+ * now: a DM or mention reached a hidden tab, the person is back, and the
+ * browser can still be asked. The permission itself can only be asked for from
+ * the click on the card.
+ */
+export function useNotifyOfferReady(): boolean {
+  const pending = useSyncExternalStore(
+    subscribeNotifications,
+    getNotifyOfferPending,
+    getNotifyOfferPending,
+  );
+  const flagOn = useDesktopNotifyDefaultOn();
+  const state = useNotificationState();
+  const [visible, setVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
+  useEffect(() => {
+    const read = () => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", read);
+    window.addEventListener("focus", read);
+    return () => {
+      document.removeEventListener("visibilitychange", read);
+      window.removeEventListener("focus", read);
+    };
+  }, []);
+  return (
+    flagOn &&
+    pending &&
+    visible &&
+    !state.desktop &&
+    notificationPermission() === "default"
   );
 }
 
@@ -129,7 +180,17 @@ export interface NotificationSettings {
   /** Requests the browser permission — only ever call this from a click. */
   enable: () => Promise<void>;
   disable: () => void;
+  /**
+   * Reads the browser permission again. Something other than the system
+   * switch can change it (the push prompt asks for the same permission), and
+   * there is no event for it.
+   */
+  refreshPermission: () => void;
   setDefaultLevel: (level: NotificationLevel) => void;
+  /** With `desktop_notify_default_on`: the level for conversations. */
+  setDmDefaultLevel: (level: NotificationLevel) => void;
+  /** With `desktop_notify_default_on`: the level for server channels. */
+  setServerDefaultLevel: (level: NotificationLevel) => void;
 }
 
 /**
@@ -155,12 +216,19 @@ export function useNotificationSettings(): NotificationSettings {
     setDesktopNotificationsEnabled(false);
   }, []);
 
+  const refreshPermission = useCallback(() => {
+    setPermission(notificationPermission());
+  }, []);
+
   return {
     state,
     permission,
     enable,
     disable,
+    refreshPermission,
     setDefaultLevel: setDefaultNotificationLevel,
+    setDmDefaultLevel: setDmDefaultNotificationLevel,
+    setServerDefaultLevel: setServerDefaultNotificationLevel,
   };
 }
 

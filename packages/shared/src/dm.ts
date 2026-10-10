@@ -103,6 +103,12 @@ export const dmSummarySchema = z.object({
       isAttachment: z.boolean(),
       /** Refines `isAttachment`: the sole attachment was a GIF, not a file. */
       isGif: z.boolean(),
+      /**
+       * Refines `isAttachment`: the message is a voice note. Optional for the
+       * same mixed-version reason as `lastMessage` itself.
+       */
+      isVoice: z.boolean().optional(),
+      voiceDurationMs: z.number().int().nonnegative().nullable().optional(),
     })
     .nullable()
     .optional(),

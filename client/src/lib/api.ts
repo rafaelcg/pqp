@@ -7,6 +7,7 @@ import type {
   AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
+  VoiceNoteTranscriptResponse,
   AuditLogPage,
   AvatarConfig,
   BlockListResponse,
@@ -19,6 +20,7 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  CommunityHomeUnreadAllResponse,
   CommunityHomeUnreadResponse,
   PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
@@ -27,6 +29,7 @@ import type {
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
   CommunityHomePostTranslationsResponse,
+  CommunityHomeCaptionsResponse,
   CreateCommunityHomeCommentRequest,
   CreateCommunityHomeMediaUploadRequest,
   CreateCommunityHomeMediaUploadResponse,
@@ -607,7 +610,11 @@ export async function exportMyData(): Promise<Blob> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(response.status, body.error ?? "Export failed");
+    throw new ApiError(
+      response.status,
+      body.error ?? "Export failed",
+      parseRetryAfterMs(response.headers.get("Retry-After")),
+    );
   }
   return response.blob();
 }
@@ -970,9 +977,53 @@ export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
  * Whether this deployment has object storage, so the paperclip can be hidden.
  * `maxBytes` is optional: a server that only reports `enabled` leaves the client
  * on the shared ceiling, which is the value it would have enforced anyway.
+ *
+ * `voiceNotes` is the `voice_notes` flag, answered per server when asked with
+ * `?serverId=`; a conversation asks without one and gets the global value.
  */
-export const fetchAttachmentConfig = () =>
-  apiFetch<{ enabled: boolean; maxBytes?: number }>("/api/attachments/config");
+export const fetchAttachmentConfig = (serverId?: string | null) =>
+  apiFetch<{
+    enabled: boolean;
+    maxBytes?: number;
+    voiceNotes?: boolean;
+    /** The `voice_note_transcription` flag, answered the same way as `voiceNotes`. */
+    voiceTranscription?: boolean;
+  }>(
+    serverId
+      ? `/api/attachments/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/attachments/config",
+  );
+
+/**
+ * "I heard this voice note." Idempotent on the server and answered with 204,
+ * which `apiFetch` (JSON only) would report as an error, so this is a bare
+ * request that only cares whether it went out.
+ */
+export async function markVoiceNoteListened(attachmentId: string): Promise<void> {
+  try {
+    await apiFetch<unknown>(`/api/attachments/${attachmentId}/listened`, {
+      method: "POST",
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 204) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Ask for a voice note's transcript. 202 while it is queued (the answer comes
+ * later as a `voice-note-transcript` frame), 200 once there is a settled one;
+ * both carry `{ transcript }`, whose `status` says which. 403 means the flag is
+ * off here, the sender did not allow it, or a preference says no; 404 means the
+ * note is not one the caller can hear; 429 is the per-account limiter. Callers
+ * read the status off the thrown `ApiError`.
+ */
+export const requestVoiceNoteTranscript = (attachmentId: string) =>
+  post<VoiceNoteTranscriptResponse>(
+    `/api/attachments/${attachmentId}/transcript`,
+  );
 
 /**
  * Reserve a row and get a presigned PUT for it. The storage key is chosen by
@@ -1971,6 +2022,22 @@ export const fetchCommunityHomeTranslations = (
     `/api/servers/${serverId}/home/posts/${postId}/translations`,
   );
 
+/**
+ * The automatic subtitles of a post's video as WebVTT: the source track and,
+ * when one exists, its translation into `lang` (the reader's UI locale).
+ * Authorised like the video itself; `tracks: []` when there are none.
+ */
+export const fetchCommunityHomeCaptions = (
+  serverId: string,
+  postId: string,
+  lang?: string,
+) =>
+  apiFetch<CommunityHomeCaptionsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/captions${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
 /** Staff-only: drafts + scheduled, never mixed into the published feed. */
 export const fetchCommunityHomeDrafts = (serverId: string) =>
   apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/drafts`);
@@ -2001,6 +2068,14 @@ export const deleteCommunityHomePost = (serverId: string, postId: string) =>
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
   apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/**
+ * Unread Baú posts for every server this account is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one.
+ * Servers with nothing unread are absent.
+ */
+export const fetchCommunityHomeUnreadAll = () =>
+  apiFetch<CommunityHomeUnreadAllResponse>("/api/community-home/unread");
 
 /** Stamp the feed read up to now. Fire and forget; the badge is not truth. */
 export const markCommunityHomeRead = (serverId: string) =>

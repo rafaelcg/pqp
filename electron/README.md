@@ -227,9 +227,26 @@ renderer mirrors its call state back with `pqpDesktop.setVoiceState`, which is
 what repaints the icon.
 
 Closing the window **during a call** hides to the tray instead of quitting,
-because quitting hangs up. Out of a call, and whenever the tray checkbox is
-off, close behaves as it always did. The preference lives in
+because quitting hangs up. On **Windows and Linux** it also hides **while
+signed in** (the renderer reports that with `pqpDesktop.setSignedIn`; until a
+renderer does, only the in-call rule applies). The tray's "Show pqp" (pt-BR
+"Abrir o pqp") brings the window back and "Quit pqp" ("Sair do pqp") really
+quits. macOS keeps its usual dock behaviour out of a call. Linux skips the
+signed-in hide on stock GNOME, where no tray host exists and the window would
+have no way back (`trayLikelyAvailable` in `lib/tray-menu.js`); if the tray
+cannot be created at all, close simply closes. Whenever the tray checkbox is
+off, close behaves as it always did. The preference (default on) lives in
 `userData/tray.json` and is toggled from the tray menu.
+
+## Notifications
+
+`showNotification` in `main.js` builds the OS banner from
+`lib/notify-options.js`. The optional `silent` field of `pqpDesktop.notify`
+decides the sound: `true` (the app plays its own cue) or absent (older
+renderer) keeps the banner silent, `false` (app sounds off) lets the OS play
+its own. On Windows `app.setAppUserModelId` is called at startup with
+`build.appId` from `package.json` (`gg.pqp.app`), which is what makes a toast
+carry the "pqp" name and icon.
 
 ## Screen sharing
 

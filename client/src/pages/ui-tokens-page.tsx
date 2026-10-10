@@ -28,6 +28,7 @@ import {
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { SettingsKitSheet } from "@/pages/ui-settings-kit-sheet";
 
 /**
  * The token sheet: every role token and every ui/ primitive on one page, in
@@ -664,6 +665,9 @@ export function UiTokensPage() {
         </Section>
         <Section title={t("qaUi.section.primitives")}>
           <PrimitiveSheet />
+        </Section>
+        <Section title={t("qaUi.section.kit")} note={t("qaUi.kit.note")}>
+          <SettingsKitSheet />
         </Section>
       </main>
     </TooltipProvider>

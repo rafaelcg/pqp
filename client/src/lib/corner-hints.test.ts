@@ -33,6 +33,16 @@ describe("winningCornerHint", () => {
     );
   });
 
+  it("puts the notification offer after a waiting build and a Baú post, before the QG", () => {
+    expect(winningCornerHint({ notifyOffer: true, qg: true, cargos: true })).toBe(
+      "notifyOffer",
+    );
+    expect(winningCornerHint({ update: true, notifyOffer: true })).toBe("update");
+    expect(
+      winningCornerHint({ communityHomePost: true, notifyOffer: true }),
+    ).toBe("communityHomePost");
+  });
+
   it("a waiting build beats every campaign", () => {
     expect(winningCornerHint({ update: true, qg: true, whatsNew: true })).toBe(
       "update",

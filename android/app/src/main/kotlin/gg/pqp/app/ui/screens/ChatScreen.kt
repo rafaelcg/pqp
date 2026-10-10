@@ -63,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -111,6 +112,14 @@ import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.chat.MentionAutocomplete
 import gg.pqp.app.ui.chat.MentionCandidate
 import gg.pqp.app.ui.chat.MessageBody
+import gg.pqp.app.ui.chat.BauCardState
+import gg.pqp.app.ui.chat.BauPostCardSkeleton
+import gg.pqp.app.ui.chat.BauPostCardView
+import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.ui.chat.LocalOpenBauPost
+import gg.pqp.app.ui.chat.rememberBauCardState
+import gg.pqp.app.bau.BauPostRef
+import gg.pqp.app.bau.BauShare
 import gg.pqp.app.ui.chat.MessagePermissions
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
@@ -121,6 +130,21 @@ import gg.pqp.app.ui.media.InlineGif
 import gg.pqp.app.ui.media.MessageAttachment
 import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.voicenotes.DiscardedNote
+import gg.pqp.app.voicenotes.MediaNoteRecorder
+import gg.pqp.app.voicenotes.NoteNotice
+import gg.pqp.app.voicenotes.RecordingUi
+import gg.pqp.app.voicenotes.VoiceNoteQueue
+import gg.pqp.app.voicenotes.ui.DiscardedStrip
+import gg.pqp.app.voicenotes.ui.LockHint
+import gg.pqp.app.voicenotes.ui.LockedRecordingPanel
+import gg.pqp.app.voicenotes.ui.MicHoldButton
+import gg.pqp.app.voicenotes.ui.RecordingBar
+import gg.pqp.app.voicenotes.ui.VoiceDraftChip
+import gg.pqp.app.voicenotes.ui.VoiceNoteContext
+import gg.pqp.app.voicenotes.ui.VoiceNoticeToast
+import gg.pqp.app.voicenotes.ui.rememberMicrophoneAsk
+import gg.pqp.app.voicenotes.ui.rememberVoiceNotes
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.ui.theme.TabularFigures
@@ -178,10 +202,23 @@ fun ChatScreen(
     // Built from the application context, so the reader outlives this
     // composition without holding the Activity that started it.
     val files = remember(context) { ContentAttachmentFiles(context) }
+    val app = remember(context) { context.applicationContext as? gg.pqp.app.PqpApplication }
+    val recorder = remember(context) { MediaNoteRecorder(context) }
     val model: ChatViewModel = viewModel(
         key = channelId,
-        factory = ChatViewModel.factory(session, channelId, files, slowmodeSeconds, serverId),
+        factory = ChatViewModel.factory(
+            session,
+            channelId,
+            files,
+            slowmodeSeconds,
+            serverId,
+            recorder = recorder,
+            // Read at the moment of use: whether a call is live changes for
+            // the whole life of this screen.
+            callActive = { app?.callActive?.value == true },
+        ),
     )
+    val voiceNotes = rememberVoiceNotes()
     val state by model.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
@@ -205,7 +242,28 @@ fun ChatScreen(
         // looking connected and receive nothing.
         model.resubscribe()
 
-        onStopOrDispose { VisibleChannel.leave(channelId) }
+        onStopOrDispose {
+            VisibleChannel.leave(channelId)
+            // A recording cannot go on in the background; see onStopped.
+            model.onStopped()
+        }
+    }
+
+    // The player continues into the next unheard note of the run it started in,
+    // so it is handed this transcript whenever it changes. Nothing is queued
+    // for a channel with no voice notes in it.
+    LaunchedEffect(state.messages, voiceNotes) {
+        voiceNotes?.updateQueue(channelId, VoiceNoteQueue.entriesOf(state.messages))
+    }
+    VoiceNoticeToast(state.voiceNotice, model::clearVoiceNotice)
+    LaunchedEffect(voiceNotes) {
+        voiceNotes?.notices?.collect { notice ->
+            val message = when (notice) {
+                NoteNotice.CallActive -> R.string.voice_note_play_in_call
+                NoteNotice.PlayFailed -> R.string.voice_note_play_failed
+            }
+            android.widget.Toast.makeText(context, context.getString(message), android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     val listState = rememberLazyListState()
@@ -400,6 +458,18 @@ fun ChatScreen(
                     onAttach = model::attach,
                     onRemoveAttachment = model::removeAttachment,
                     onRetryAttachment = model::retryAttachment,
+                    voiceNotesEnabled = state.voiceNotesEnabled,
+                    recording = state.recording,
+                    discardedNote = state.discardedNote,
+                    onStartRecording = model::startRecording,
+                    onLockRecording = model::lockRecording,
+                    onCancelRecording = model::cancelRecording,
+                    onFinishRecording = model::finishRecording,
+                    onTogglePauseRecording = {
+                        val active = state.recording as? RecordingUi.Active
+                        if (active?.paused == true) model.resumeRecording() else model.pauseRecording()
+                    },
+                    onUndoDiscard = model::undoDiscard,
                 )
             }
         },
@@ -463,6 +533,7 @@ fun ChatScreen(
                                         message = message,
                                         grouped = !startsDay && shouldGroup(previous, message),
                                         selfUsername = me?.username,
+                                        selfId = me?.id,
                                         onOpenActions = { acting = message },
                                         onToggleReaction = { emoji ->
                                             model.toggleReaction(message.id, emoji, me)
@@ -700,6 +771,8 @@ private fun MessageRow(
     grouped: Boolean,
     /** The reader's own `username`, so a mention of them can be marked. */
     selfUsername: String?,
+    /** The reader's id, so a voice note of theirs knows it is theirs. */
+    selfId: String?,
     onOpenActions: () -> Unit,
     onToggleReaction: (String) -> Unit,
     api: ApiClient,
@@ -817,16 +890,61 @@ private fun MessageRow(
                 Spacer(Modifier.height(Spacing.xs))
                 ChanceCard(message.chance)
             } else if (message.body.isNotEmpty()) {
-                MessageBody(
-                    body = message.body,
-                    editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
-                    selfUsername = selfUsername,
-                )
+                // A Baú post address on this instance is drawn as a card. While
+                // the card loads, and once it is shown, the raw URL is hidden
+                // (the words around it stay); when the server says the reader
+                // may not see the post, the message is exactly what it was.
+                val bauSelection = remember(message.body) { BauShare.select(message.body) }
+                val bauCard = rememberBauCardState(api, bauSelection)
+                val openBau = LocalOpenBauPost.current
+                val shownBody = when {
+                    bauSelection == null || bauCard is BauCardState.Unavailable -> message.body
+                    bauSelection.linkOnly -> ""
+                    else -> BauShare.stripLink(message.body, bauSelection.link)
+                }
+                if (shownBody.isNotEmpty() || message.editedAt != null) {
+                    MessageBody(
+                        body = shownBody,
+                        editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
+                        selfUsername = selfUsername,
+                    )
+                }
+                when (bauCard) {
+                    is BauCardState.Loading -> {
+                        Spacer(Modifier.height(Spacing.xs))
+                        BauPostCardSkeleton()
+                    }
+                    is BauCardState.Ready -> {
+                        Spacer(Modifier.height(Spacing.xs))
+                        BauPostCardView(
+                            card = bauCard.card,
+                            onOpen = {
+                                openBau(
+                                    BauPostTarget(
+                                        BauPostRef(bauCard.card.serverId, bauCard.card.postId),
+                                        bauCard.card.serverName,
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    else -> Unit
+                }
             }
 
             message.attachments.forEach { attachment ->
                 Spacer(Modifier.height(Spacing.sm))
-                MessageAttachment(attachment = attachment, api = api)
+                MessageAttachment(
+                    attachment = attachment,
+                    api = api,
+                    voiceNote = VoiceNoteContext(
+                        messageId = message.id,
+                        channelId = message.channelId,
+                        authorId = message.authorId,
+                        authorName = message.authorName,
+                        isMine = selfId != null && message.authorId == selfId,
+                    ),
+                )
             }
 
             ReactionRow(message.reactions, onToggleReaction)
@@ -1040,6 +1158,15 @@ private fun Composer(
     onAttach: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onRetryAttachment: (String) -> Unit,
+    voiceNotesEnabled: Boolean,
+    recording: RecordingUi,
+    discardedNote: DiscardedNote?,
+    onStartRecording: () -> Boolean,
+    onLockRecording: () -> Unit,
+    onCancelRecording: () -> Unit,
+    onFinishRecording: () -> Unit,
+    onTogglePauseRecording: () -> Unit,
+    onUndoDiscard: () -> Unit,
 ) {
     // The slow mode countdown, ticked here because a number that changes while
     // somebody looks at it has to be redrawn by something, and the view model
@@ -1092,6 +1219,18 @@ private fun Composer(
         label = "composer-send-content",
     )
 
+    // Voice notes. The microphone takes the send button's place while there is
+    // nothing to send, and keeps its place in the tree for the whole hold: it is
+    // the node reading the finger, and a node that leaves mid-gesture ends it.
+    val askMic = rememberMicrophoneAsk()
+    val voiceDraft = attachments.firstOrNull { it.isVoiceNote }
+    val recordingActive = recording as? RecordingUi.Active
+    val holding = recordingActive != null && !recordingActive.locked
+    val micSlot = voiceNotesEnabled && !editing && voiceDraft == null && waitSeconds == 0 &&
+        (readiness == ComposerReadiness.Empty || holding)
+    var cancelProgress by remember { mutableFloatStateOf(0f) }
+    var lockProgress by remember { mutableFloatStateOf(0f) }
+
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(
             modifier = Modifier
@@ -1101,15 +1240,24 @@ private fun Composer(
         ) {
             SendRefusalLine(sendRefusal, waitSeconds)
             AttachmentRefusalLine(refusal, maxAttachmentBytes)
-            AttachmentStrip(attachments, onRemoveAttachment, onRetryAttachment)
-            Row(
+            DiscardedStrip(discardedNote, onUndoDiscard)
+            AttachmentStrip(attachments.filterNot { it.isVoiceNote }, onRemoveAttachment, onRetryAttachment)
+            if (recordingActive != null && recordingActive.locked) {
+                LockedRecordingPanel(
+                    active = recordingActive,
+                    onDiscard = onCancelRecording,
+                    onTogglePause = onTogglePauseRecording,
+                    onSend = onFinishRecording,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                )
+            } else Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-            if (attachmentsEnabled) {
+            if (attachmentsEnabled && !holding && voiceDraft == null) {
                 IconButton(
                     onClick = { picker.launch(ATTACHMENT_MIME_ALLOWLIST.toTypedArray()) },
                     enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
@@ -1126,7 +1274,7 @@ private fun Composer(
             // bytes stay with the provider and the server mints a row that
             // points at them. So this button is gated on the GIF key alone,
             // never on `attachmentsEnabled`.
-            if (gifsEnabled) {
+            if (gifsEnabled && !holding && voiceDraft == null) {
                 IconButton(
                     onClick = onOpenGifs,
                     enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
@@ -1139,7 +1287,16 @@ private fun Composer(
                     )
                 }
             }
-            TextField(
+            if (recordingActive != null && !recordingActive.locked) {
+                RecordingBar(recordingActive, cancelProgress, Modifier.weight(1f))
+            } else if (voiceDraft != null) {
+                VoiceDraftChip(
+                    attachment = voiceDraft,
+                    onRetry = { onRetryAttachment(voiceDraft.localId) },
+                    onRemove = { onRemoveAttachment(voiceDraft.localId) },
+                    modifier = Modifier.weight(1f),
+                )
+            } else TextField(
                 value = value,
                 onValueChange = onValueChange,
                 placeholder = {
@@ -1179,7 +1336,18 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
             )
-            FilledIconButton(
+            if (micSlot) MicHoldButton(
+                holding = holding,
+                lockProgress = lockProgress,
+                onPress = { askMic() && onStartRecording() },
+                onLock = onLockRecording,
+                onCancel = onCancelRecording,
+                onSend = onFinishRecording,
+                onProgress = { cancel, lock ->
+                    cancelProgress = cancel
+                    lockProgress = lock
+                },
+            ) else FilledIconButton(
                 onClick = onSend,
                 // `readiness`, not "is there text". A message may be nothing
                 // but a picture, and it may not go while an upload is still

@@ -170,6 +170,22 @@ COMMUNITIES_ENABLED / COMMUNITY_HOME_ENABLED / COMMUNITY_HOME_VIP_ENABLED
 WS_COMPRESSION
 ```
 
+**`/opt/pqp/worker.env`** (same 0600 `pqp:pqp`, optional) holds what only
+the `worker` container may see, read by it on top of `.env`. Today that is
+voice note transcription, which the API never calls itself:
+
+```
+VOICE_STT_PROVIDER              none | workers-ai | groq
+CLOUDFLARE_AI_ACCOUNT_ID / CLOUDFLARE_AI_API_TOKEN   (workers-ai)
+GROQ_API_KEY                                         (groq)
+VOICE_STT_DAILY_SECONDS         optional, default 36000
+```
+
+No file means no provider: transcripts settle "unavailable" and nothing else
+changes. The `worker` service runs the `<sha>-worker` image (the Dockerfile's
+`worker` target, which adds ffmpeg for the voice note AAC copy);
+`deploy-api-vultr.yml` pushes it beside the plain tag.
+
 `TRUST_PROXY=true` still means exactly one hop, same as `fly.toml`'s
 comment — that hop is now Caddy on this box, not fly-proxy. That hop is only
 trustworthy if Caddy itself is configured to trust it: Caddy's
@@ -391,6 +407,32 @@ If the two Postgres instances have diverged (writes landed on the Vultr
 database that Fly's never saw), rollback also means reconciling or accepting
 data loss — the same warning `docs/deploy-fly.md` gives about Railway.
 Decide the cutover window with that in mind, same as the Fly migration was.
+
+### Rolling back a deploy on the box, and the worker's image
+
+The workflow's own rollback (a failed deploy re-runs `pqp-deploy $PREV`),
+and a hand rollback (`sudo /usr/local/bin/pqp-deploy <older sha>`), both run
+against the compose.yaml the failed deploy already installed. That file runs
+the worker from `<sha>-worker` (the Dockerfile's `worker` target, which adds
+ffmpeg for the voice note transcode), and no commit from before that target
+existed has such a tag. So `pqp-deploy` asks the registry first
+(`docker manifest inspect ghcr.io/rafaelcg/pqp-api:<sha>-worker`, after the
+GHCR login) and exports `WORKER_IMAGE_TAG`:
+
+- the tag exists: `WORKER_IMAGE_TAG=<sha>-worker`, the normal case;
+- it does not: `WORKER_IMAGE_TAG=<sha>`, the plain API image, and the deploy
+  log says `worker-image=<sha> (no <sha>-worker in the registry: the worker
+  falls back to the API image, without ffmpeg ...)`. Everything runs as before
+  except voice note transcodes, which stay queued, because a process without
+  ffmpeg never claims one, until a deploy brings the `-worker` image back.
+
+compose.yaml reads `${WORKER_IMAGE_TAG:-${APP_IMAGE_TAG:?...}-worker}`, so any
+historical sha is a valid rollback target. A manual `docker compose up` on the
+box without the script still resolves the worker to `<APP_IMAGE_TAG>-worker`,
+and still refuses to parse at all without `APP_IMAGE_TAG`. If you hand-recreate
+the worker for a pre-worker-image sha, set `WORKER_IMAGE_TAG=<sha>` yourself.
+A registry outage during the check reads as "no tag" and also falls back,
+which costs transcodes and nothing else.
 
 ## 8. Routine operations
 

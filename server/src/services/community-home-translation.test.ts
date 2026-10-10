@@ -319,7 +319,15 @@ describeDb("Baú translation", () => {
       // The model was asked from Portuguese, never into it.
       expect(fake.calls.map((c) => `${c.from}>${c.to}`).sort()).toEqual(["pt>en", "pt>es"]);
       // Title and body went in one call each, no teaser on a free post.
-      expect(fake.calls[0]!.texts).toEqual([PT_TITLE, PT_BODY]);
+      // The brand never reaches the model: "Baú", "QG" and "pqp" went out as
+      // placeholders, and came back as the author's own words.
+      expect(fake.calls[0]!.texts).toEqual([
+        "Novidade no <k1> do <k2>",
+        "Olá pessoal! O <k1> agora traduz os posts do <k2> automaticamente, então você escreve no seu idioma e a galera lê no deles.",
+      ]);
+      const en = stored.find((r) => r.lang === "en")!;
+      expect(en.title).toBe(`[en] ${PT_TITLE}`);
+      expect(en.body).toBe(`[en] ${PT_BODY}`);
     });
 
     it("an English post is not translated into English", async () => {
@@ -392,6 +400,51 @@ describeDb("Baú translation", () => {
       expect(fake.calls).toHaveLength(0);
       await publishDueCommunityHomePosts();
       await untilTranslated(res.body.post.id);
+    });
+
+    describe("#channel references", () => {
+      const CH = "11111111-2222-4333-8444-555555555555";
+      const CH2 = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+      const BODY = `Testa aí e manda um áudio no <#${CH}> dizendo o que achou, ou no <#${CH2}> se preferir. Valeu, pessoal!`;
+
+      it("never sends an id to the model and gives it back in the translation", async () => {
+        const post = await publish({ body: BODY });
+        await untilTranslated(post.id);
+        // The model saw numbered placeholders, never a uuid.
+        for (const call of fake.calls) {
+          expect(call.texts.join("\n")).not.toContain(CH);
+          expect(call.texts[1]).toContain("<#1>");
+          expect(call.texts[1]).toContain("<#2>");
+        }
+        const en = (await feed(member, "en")).body.posts[0]!;
+        expect(en.body).toBe(
+          `[en] ${BODY}`,
+        );
+        // The original block still carries the author's own tokens.
+        expect(en.translation!.original.body).toBe(BODY);
+      });
+
+      it("keeps the author's words for a field whose placeholder the model dropped", async () => {
+        fake.translator.translate = async (texts, _from, to) => ({
+          texts: texts.map((t) => `[${to}] ${t.replace(/<#\d+>/g, "")}`),
+          costUsd: 0.001,
+        });
+        const post = await publish({ body: BODY });
+        await untilTranslated(post.id);
+        const en = (await feed(member, "en")).body.posts[0]!;
+        // Title translated, body left as written rather than published with no link.
+        expect(en.title).toBe(`[en] ${PT_TITLE}`);
+        expect(en.body).toBe(BODY);
+        expect((await tr.communityHomeTranslationMetrics()).channelRefsKept).toBeGreaterThan(0);
+      });
+
+      it("a body that is only a reference has no words to translate", async () => {
+        const post = await publish({ body: `<#${CH}>` });
+        await untilTranslated(post.id);
+        expect(fake.calls.every((c) => c.texts.length === 1)).toBe(true);
+        const en = (await feed(member, "en")).body.posts[0]!;
+        expect(en.body).toBe(`<#${CH}>`);
+      });
     });
 
     it("a GIF-only body is carried over, not sent to the model", async () => {
@@ -654,7 +707,8 @@ describeDb("Baú translation", () => {
       const post = await publish({ title: PT_TITLE, body: long.slice(0, 3900) });
       await untilTranslated(post.id);
       const sent = fake.calls[0]!.texts;
-      expect(sent.join("").length).toBeLessThanOrEqual(400 + 8);
+      // (the brand placeholders are not part of the cap)
+      expect(sent.join("").replace(/<k\d+>/g, "").length).toBeLessThanOrEqual(400 + 8);
       expect(sent[sent.length - 1]!.endsWith("[…]")).toBe(true);
       expect((await tr.communityHomeTranslationMetrics()).truncated).toBeGreaterThan(0);
     });

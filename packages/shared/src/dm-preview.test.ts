@@ -76,6 +76,8 @@ describe("buildMessagePreview", () => {
       preview: "bora hoje?",
       isAttachment: false,
       isGif: false,
+      isVoice: false,
+      voiceDurationMs: null,
     });
   });
 
@@ -88,6 +90,8 @@ describe("buildMessagePreview", () => {
       preview: "",
       isAttachment: true,
       isGif: false,
+      isVoice: false,
+      voiceDurationMs: null,
     });
   });
 
@@ -106,14 +110,14 @@ describe("buildMessagePreview", () => {
       hasAttachments: true,
       isGifAttachment: true,
     });
-    expect(gif).toEqual({ preview: "", isAttachment: true, isGif: true });
+    expect(gif).toEqual({ preview: "", isAttachment: true, isGif: true, isVoice: false, voiceDurationMs: null });
 
     const file = buildMessagePreview({
       body: "",
       hasAttachments: true,
       isGifAttachment: false,
     });
-    expect(file).toEqual({ preview: "", isAttachment: true, isGif: false });
+    expect(file).toEqual({ preview: "", isAttachment: true, isGif: false, isVoice: false, voiceDurationMs: null });
   });
 
   it("a caption alongside an attachment is real text, not the attachment label", () => {
@@ -125,7 +129,31 @@ describe("buildMessagePreview", () => {
       preview: "olha essa foto",
       isAttachment: false,
       isGif: false,
+      isVoice: false,
+      voiceDurationMs: null,
     });
+  });
+
+  it("marks a voice note and carries its duration", () => {
+    expect(
+      buildMessagePreview({ body: "", hasAttachments: true, voiceDurationMs: 12_400 }),
+    ).toEqual({
+      preview: "",
+      isAttachment: true,
+      isGif: false,
+      isVoice: true,
+      voiceDurationMs: 12_400,
+    });
+  });
+
+  it("a duration on a message with text is not a voice note", () => {
+    const result = buildMessagePreview({
+      body: "oi",
+      hasAttachments: true,
+      voiceDurationMs: 12_400,
+    });
+    expect(result.isVoice).toBe(false);
+    expect(result.voiceDurationMs).toBeNull();
   });
 
   it("truncates to 140 chars end to end", () => {

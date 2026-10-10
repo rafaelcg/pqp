@@ -78,7 +78,7 @@ test.describe("stage 2 — light and system", () => {
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
 
     const light = page
-      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radiogroup", { name: /^(mode|modo)$/i })
       .getByRole("radio", { name: /light|claro/i });
     await expect(light).toBeVisible();
     await light.click();
@@ -253,7 +253,7 @@ test.describe("stage 2 — light and system", () => {
 
     expect(await themeAttr(page)).toBe("dark");
     const light = page
-      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radiogroup", { name: /^(mode|modo)$/i })
       .getByRole("radio", { name: /light|claro/i });
     await expect(light).toBeDisabled();
 
@@ -268,9 +268,68 @@ test.describe("stage 2 — light and system", () => {
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
     await expect(
       page
-        .getByRole("radiogroup", { name: /brightness|claridade/i })
+        .getByRole("radiogroup", { name: /^(mode|modo)$/i })
         .getByRole("radio", { name: /light|claro/i }),
     ).toBeDisabled();
+  });
+
+  test("leaving night brings back the mode from before it", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    const mode = page.getByRole("radiogroup", { name: /^(mode|modo)$/i });
+    await mode.getByRole("radio", { name: /light|claro/i }).click();
+    await expect.poll(() => themeAttr(page)).toBe("light");
+
+    await page.getByRole("radio", { name: /night|noite/i }).click();
+    await expect.poll(() => themeAttr(page)).toBe("dark");
+
+    // A locked option explains itself instead of doing nothing.
+    const light = mode.getByRole("radio", { name: /light|claro/i });
+    await expect(light).toHaveAttribute("aria-disabled", "true");
+    // `force`: Playwright treats aria-disabled as "not enabled", a person can click.
+    await light.click({ force: true });
+    await expect(page.getByRole("tooltip")).toHaveText(
+      /night only exists in dark|noite só existe no escuro/i,
+    );
+    expect(await themeAttr(page)).toBe("dark");
+
+    await page.getByRole("radio", { name: /classic|clássico/i }).click();
+    await expect.poll(() => themeAttr(page)).toBe("light");
+    await expect(
+      mode.getByRole("radio", { name: /light|claro/i }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("the accent has a from-the-look choice and a named reset", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    const fromLook = page.getByRole("radio", { name: /from look|do visual/i });
+    await expect(fromLook).toHaveAttribute("aria-checked", "true");
+    const reset = page.getByRole("button", {
+      name: /back to the look's color|voltar à cor do visual/i,
+    });
+    await expect(reset).toHaveCount(0);
+
+    await page.getByRole("radio", { name: /^(cyan|ciano)$/i }).click();
+    await expect(fromLook).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByRole("slider", { name: /accent|destaque/i })).toHaveAttribute(
+      "aria-valuemax",
+      "359",
+    );
+
+    await reset.click();
+    await expect(fromLook).toHaveAttribute("aria-checked", "true");
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+      )
+      .toBe("");
   });
 
   test("choosing an accent hue applies it and survives a reload", async ({
@@ -280,7 +339,7 @@ test.describe("stage 2 — light and system", () => {
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
 
-    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+    await page.getByRole("radio", { name: /^(cyan|ciano)$/i }).click();
 
     await expect
       .poll(() =>
@@ -352,10 +411,10 @@ test.describe("stage 2 — light and system", () => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
-    const theme = page.getByRole("radiogroup", { name: /brightness|claridade/i });
+    const theme = page.getByRole("radiogroup", { name: /^(mode|modo)$/i });
     await theme.getByRole("radio", { name: /light|claro/i }).click();
     await theme.getByRole("radio", { name: /dark|escuro/i }).click();
-    await theme.getByRole("radio", { name: /system|sistema/i }).click();
+    await theme.getByRole("radio", { name: /automatic|autom/i }).click();
 
     expect(errors).toEqual([]);
   });

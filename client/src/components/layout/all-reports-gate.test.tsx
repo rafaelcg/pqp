@@ -32,6 +32,9 @@ vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
 const { SettingsModal, defaultLocalSettings } = await import(
   "./settings-modal"
 );
+// The app mounts one `TooltipProvider` at its root; Settings tabs may use
+// `Tooltip`, which throws without one.
+const { TooltipProvider } = await import("@/components/ui/tooltip");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -63,16 +66,18 @@ async function mount(user: User) {
   root = createRoot(host);
   await act(async () => {
     root!.render(
-      <SettingsModal
-        open
-        user={user}
-        localSettings={defaultLocalSettings}
-        blockedUsers={[]}
-        onClose={() => {}}
-        onLocalSave={() => {}}
-        onUserUpdated={() => {}}
-        onUnblockUser={() => {}}
-      />,
+      <TooltipProvider>
+        <SettingsModal
+          open
+          user={user}
+          localSettings={defaultLocalSettings}
+          blockedUsers={[]}
+          onClose={() => {}}
+          onLocalSave={() => {}}
+          onUserUpdated={() => {}}
+          onUnblockUser={() => {}}
+        />
+      </TooltipProvider>,
     );
   });
 }

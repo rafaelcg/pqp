@@ -9,6 +9,7 @@ export * from "./chat.js";
 export * from "./chat-text.js";
 export * from "./communities.js";
 export * from "./community-home.js";
+export * from "./community-home-channel-refs.js";
 export * from "./connections.js";
 export * from "./depoimentos.js";
 export * from "./discord-import.js";
