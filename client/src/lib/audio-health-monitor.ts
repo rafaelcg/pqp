@@ -394,6 +394,9 @@ export function createAudioHealthMonitor(deps: {
           tracker.cleared("playbackBlocked");
         }
         await restartPeers(peers);
+        if (mine !== generation) {
+          return;
+        }
         inbound.reset();
       } else if (current === "mic") {
         const view = deps.view();
