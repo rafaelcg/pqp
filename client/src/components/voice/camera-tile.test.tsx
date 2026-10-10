@@ -101,13 +101,15 @@ describe("CameraTile", () => {
         pinned
       />,
     );
-    expect(html).toContain('aria-label="Unpin"');
+    // Pin lives in the tile's "⋯" (its rows only render once it opens), so
+    // what has to be on the tile is the way into it.
+    expect(html).toContain('data-testid="tile-more"');
   });
 
   /**
    * A tile that draws a person and offers no way to turn them down is the bug
    * a 510-member community's moderator reported: the control was there, under
-   * a hover, and he never found it. The button is what makes it findable, so
+   * a hover, and he never found it. The slider on the picture is what makes it findable, so
    * losing it is a regression a test has to catch.
    */
   it("offers this person's sound from the tile itself", () => {
@@ -117,8 +119,8 @@ describe("CameraTile", () => {
         youLabel="(you)"
       />,
     );
-    expect(html).toContain('data-testid="peer-audio-open"');
-    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+    expect(html).toContain('data-picture-volume="voice"');
+    expect(html).toContain('type="range"');
   });
 
   it("has no volume button on our own tile, which has no knob behind it", () => {
@@ -128,7 +130,7 @@ describe("CameraTile", () => {
         youLabel="(you)"
       />,
     );
-    expect(html).not.toContain('data-testid="peer-audio-open"');
+    expect(html).not.toContain('data-testid="picture-volume"');
   });
 
   it("keeps Retry on the picture rather than behind the menu", () => {
@@ -344,11 +346,30 @@ describe("fill or fit", () => {
       render(
         <CameraTile person={person({ stream: fakeStream })} youLabel="(you)" />,
       ),
-    ).toContain('data-testid="tile-fit"');
+    ).toContain("data-tile-fit=");
     // Nothing to crop, so no control that would appear to do nothing.
     expect(
       render(<CameraTile person={person()} youLabel="(you)" />),
-    ).not.toContain('data-testid="tile-fit"');
+    ).not.toContain("data-tile-fit=");
+  });
+
+  it("gives a share one control row along its bottom, and an HLS share none of its own", () => {
+    // A share over WebRTC draws the row itself.
+    const direct = render(
+      <ScreenTileFrame tile={screenTile} isFullscreen={false} onToggleFullscreen={() => {}} />,
+    );
+    expect(direct).toContain("data-share-row");
+    expect(direct).toContain('data-testid="share-fullscreen"');
+    // A share that arrives as HLS hands "⋯" and fullscreen to its player's
+    // own bottom row, so the tile must not draw a second one on top of it.
+    const hls = render(
+      <ScreenTileFrame
+        tile={{ ...screenTile, hlsUrl: "/api/voice/hls-playlist/c/1" }}
+        isFullscreen={false}
+        onToggleFullscreen={() => {}}
+      />,
+    );
+    expect(hls).not.toContain("data-share-row");
   });
 
   it("says which way it is set, for a test and for a screen reader", () => {

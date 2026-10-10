@@ -370,7 +370,14 @@ export function MusicFila({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {/* At least a row of a non-empty queue stays in sight when the panel
+            is cut short and scrolls as a whole. */}
+        <div
+          className={cn(
+            "flex-1 overflow-y-auto px-2 py-2",
+            queue.length > 0 ? "min-h-12" : "min-h-0",
+          )}
+        >
           {queue.length > 0 && (
             <div>
               <p
@@ -442,7 +449,16 @@ export function MusicFila({
         <section
           data-music-fila="sheet"
           aria-label={t("music.fila")}
-          className="flex max-h-[min(28rem,50dvh)] min-h-0 flex-col"
+          // `--fila-room` is what the call split has left under the stage,
+          // so a long queue scrolls instead of pushing the composer away.
+          // Cut that short, the whole panel scrolls rather than letting its
+          // add field spill over the player below it. Not while the field's
+          // first-run card shows: it hangs out of the panel and a scroll
+          // container would cut it in half.
+          className={cn(
+            "flex max-h-[min(28rem,50dvh,var(--fila-room,28rem))] min-h-0 flex-col",
+            !fieldHintEnabled && "overflow-y-auto overscroll-contain",
+          )}
         >
           {panel}
         </section>

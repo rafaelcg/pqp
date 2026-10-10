@@ -1405,7 +1405,8 @@ describe("MusicComposer", () => {
     expect(html).toContain("data-music-fila=\"sheet\"");
     expect(html).not.toContain("data-music-fila=\"drawer\"");
     expect(html).not.toContain("w-60");
-    expect(html).toContain("max-h-[min(28rem,50dvh)]");
+    expect(html).toContain("max-h-[min(28rem,50dvh,var(--fila-room,28rem))]");
+    expect(html).toContain("overflow-y-auto overscroll-contain");
     expect(html).not.toContain("data-music-composer-start");
     expect(html).not.toContain("data-music-fila-play");
     expect(html).toContain("data-music-autoplay");

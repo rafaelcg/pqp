@@ -1,10 +1,13 @@
 import {
+  createContext,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -22,6 +25,7 @@ import {
   CALL_SPLIT_STEP_COARSE_PX,
   CALL_SPLIT_STEP_PX,
   clampSplit,
+  fitToPictureDelta,
   nudgeSplit,
   effectiveOrientation,
   resolveCollapsed,
@@ -149,11 +153,20 @@ export interface CallSplitChatHeader {
     active: string;
     onSelect: (id: string) => void;
   };
+  /**
+   * The channel's own tools (pins, settings, the member list), when the page
+   * header that normally carries them has stood down for the call stage.
+   */
+  actions?: ReactNode;
 }
 
 export interface CallSplitState {
   active: boolean;
   canSideBySide: boolean;
+  /** The chat pane is put away, and its header with it. */
+  chatHidden: boolean;
+  /** The video pane is put away ("Esconder o vídeo"). */
+  stageHidden: boolean;
 }
 
 export interface PaneSize {
@@ -190,6 +203,149 @@ function usePaneSize(ref: RefObject<HTMLDivElement | null>): PaneSize {
   return size;
 }
 
+/**
+ * Whether the call's controls float on the stage (the stage marks itself
+ * `data-bar-floats`): fullscreen, a phone held sideways with a picture on,
+ * the chat hidden. The composer then carries no controls and gives up no
+ * room for them.
+ */
+function useStageBarFloats(paneRef: RefObject<HTMLDivElement | null>): boolean {
+  const [floats, setFloats] = useState(false);
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) {
+      return;
+    }
+    const read = () =>
+      setFloats(pane.querySelector("[data-bar-floats]") !== null);
+    read();
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+    const observer = new MutationObserver(read);
+    observer.observe(pane, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-bar-floats"],
+    });
+    return () => observer.disconnect();
+  }, [paneRef]);
+  return floats;
+}
+
+/**
+ * Whether the chat under the stage carries the music bar right now. A phone
+ * held sideways gives the bar room from the picture, and the stage then
+ * drops its people strip so the picture is not the only thing that shrinks.
+ */
+export const ChatMusicContext = createContext(false);
+
+const NO_CHAT_NEED = { need: 0, music: 0, fila: 0 };
+
+/**
+ * The least an open music queue is cut to: its header, with the close
+ * button. Below that the panel scrolls inside itself.
+ */
+const FILA_MIN_ROOM_PX = 40;
+
+/**
+ * The least height the chat pane can be given without cutting its composer
+ * off: its header and the composer at its current size. No transcript is
+ * reserved on top: a panel the person just opened may cover the messages for
+ * as long as it is open, but it may not push the composer off the window.
+ *
+ * Not a constant, because the composer is not one size. With a picture on
+ * the stage it carries the call's whole row of controls, and opening the
+ * music queue puts a panel above it. A fixed floor sized for an empty
+ * composer let a tall stage push both under the bottom of the window.
+ *
+ * `music` is the part of that which is the music bar in the composer, which
+ * a picture with the controls floating on it still makes room for, and
+ * `fila` the open queue inside it, the one part that can scroll.
+ */
+function useChatPaneNeed(
+  ref: RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+): { need: number; music: number; fila: number } {
+  const [need, setNeed] = useState(NO_CHAT_NEED);
+  useEffect(() => {
+    const pane = ref.current;
+    if (!enabled || !pane) {
+      setNeed(NO_CHAT_NEED);
+      return;
+    }
+    const watched = new Set<Element>();
+    let resize: ResizeObserver | null = null;
+    const read = () => {
+      const header = pane.querySelector<HTMLElement>('[data-testid="call-split-chat-header"]');
+      const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
+      const music = composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
+      const fila = music?.querySelector<HTMLElement>('[data-music-fila="sheet"]') ?? null;
+      // The queue and the music bar come and go: let go of what left, so a
+      // long call that opens the queue again and again holds no old panels.
+      const present = new Set<Element>(
+        [header, composer, music, fila].filter(
+          (element): element is HTMLElement => element !== null,
+        ),
+      );
+      for (const element of watched) {
+        if (!present.has(element)) {
+          resize?.unobserve(element);
+          watched.delete(element);
+        }
+      }
+      for (const element of present) {
+        if (resize && !watched.has(element)) {
+          resize.observe(element);
+          watched.add(element);
+        }
+      }
+      const next = composer
+        ? Math.ceil((header?.offsetHeight ?? 0) + composer.offsetHeight)
+        : 0;
+      const nextMusic = composer ? Math.ceil(music?.offsetHeight ?? 0) : 0;
+      const nextFila = composer ? Math.ceil(fila?.offsetHeight ?? 0) : 0;
+      setNeed((previous) =>
+        previous.need === next &&
+        previous.music === nextMusic &&
+        previous.fila === nextFila
+          ? previous
+          : { need: next, music: nextMusic, fila: nextFila },
+      );
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      resize = new ResizeObserver(read);
+    }
+    // The composer mounts after the pane, and a channel switch replaces it.
+    // The pane also holds the transcript, so a busy channel mutates it all
+    // the time: at most one read per frame, not one per message.
+    let frame: number | null = null;
+    const readSoon = () => {
+      if (frame === null) {
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          read();
+        });
+      }
+    };
+    const mutation =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(readSoon);
+    mutation?.observe(pane, { childList: true, subtree: true });
+    read();
+    return () => {
+      resize?.disconnect();
+      mutation?.disconnect();
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
+    };
+  }, [ref, enabled]);
+  return need;
+}
+
 export function CallSplit({
   shape,
   kind = "call",
@@ -204,6 +360,7 @@ export function CallSplit({
 }: CallSplitProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const stagePaneRef = useRef<HTMLDivElement>(null);
+  const chatPaneRef = useRef<HTMLDivElement>(null);
   const measured = usePaneSize(paneRef);
   // The stage's own size, measured, for the case where nobody has dragged yet
   // and it is still sizing itself. That number is what the divider reports and
@@ -238,7 +395,19 @@ export function CallSplit({
       : preference.side
     : preference.stacked;
   const container = sideBySide ? width : height;
-  const bounds = splitBounds(orientation, kind);
+  const {
+    need: chatNeed,
+    music: musicNeed,
+    fila: filaHeight,
+  } = useChatPaneNeed(chatPaneRef, !sideBySide);
+  // Stacked, the chat's floor is whatever its composer needs right now, so a
+  // panel opening above the composer takes its room from the stage.
+  const bounds = useMemo(() => {
+    const fixed = splitBounds(orientation, kind);
+    return sideBySide
+      ? fixed
+      : { ...fixed, minChat: Math.max(fixed.minChat, chatNeed) };
+  }, [orientation, kind, sideBySide, chatNeed]);
 
   // Two different questions, and conflating them is how a default gets
   // rewritten by accident.
@@ -281,10 +450,91 @@ export function CallSplit({
   // off the screen, which is the whole thing this is for. There the stage
   // simply takes under half and there is no divider to offer.
   const phoneShort = phoneNarrow && !resizable && container > 0;
-  const sized = (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+  const sizedByChoice =
+    (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+  // A stage still on its own height rule that leaves the composer too little
+  // room. Held at the height it had when that happened, and released only once
+  // that height fits again, rather than re-measured: once the pane sizes it,
+  // the stage's measured height is the pane's answer, not its own.
+  const [squeezedFrom, setSqueezedFrom] = useState<number | null>(null);
+  // Also when the pane is too short to offer a divider at all (a phone held
+  // sideways while a call rings, before any picture brings the full-screen
+  // takeover): the stage's own height rule then filled the pane and pushed
+  // the composer, with hang-up in it, below the screen.
+  // Not while the call's controls float on the stage (a phone held
+  // sideways with a picture, takeover or not): the picture keeps its height
+  // and the chat takes what is left. Squeezing it for the composer shrank
+  // it to nothing. The music bar is the exception, and the stage's own
+  // height rule takes care of it (`--chat-music-h` below).
+  const barFloats = useStageBarFloats(stagePaneRef);
+  const canSqueeze =
+    !sizedByChoice &&
+    !sideBySide &&
+    chatNeed > 0 &&
+    shape === "expanded" &&
+    collapsed === "none" &&
+    container > 0 &&
+    (resizable || !barFloats);
+  // The divider is only drawn when the pane is resizable.
+  const squeezeGap = resizable ? CALL_SPLIT_DIVIDER_PX : 0;
+  // The open music queue is the one part of the composer that scrolls. A
+  // long one pushed the message box and the call's controls below the
+  // window, so it gets what the pane has left once the stage keeps its
+  // minimum (or its current size, when it is not the expanded stage), and
+  // scrolls inside that.
+  const stageFloor =
+    collapsed === "stage"
+      ? 0
+      : shape === "expanded"
+        ? bounds.minStage
+        : naturalStage.height;
+  const filaRoom =
+    !sideBySide && filaHeight > 0 && container > 0
+      ? Math.max(
+          FILA_MIN_ROOM_PX,
+          container - squeezeGap - stageFloor - (chatNeed - filaHeight),
+        )
+      : null;
+  // A new width means a new natural height for the picture (a 16:9 share in
+  // a narrower pane is shorter), so the held height is measured again.
+  const squeezeWidthRef = useRef(width);
+  useEffect(() => {
+    if (squeezeWidthRef.current !== width) {
+      squeezeWidthRef.current = width;
+      setSqueezedFrom(null);
+    }
+  }, [width]);
+  useEffect(() => {
+    if (!canSqueeze) {
+      setSqueezedFrom(null);
+      return;
+    }
+    if (squeezedFrom === null) {
+      if (
+        naturalStage.height > 0 &&
+        naturalStage.height + squeezeGap + chatNeed > container
+      ) {
+        setSqueezedFrom(naturalStage.height);
+      }
+    } else if (squeezedFrom + squeezeGap + chatNeed <= container) {
+      setSqueezedFrom(null);
+    }
+  }, [canSqueeze, chatNeed, container, naturalStage.height, squeezedFrom, squeezeGap]);
+  const squeezed = canSqueeze && squeezedFrom !== null;
+  const sized = sizedByChoice || squeezed;
   const stagePx = !sized
     ? null
-    : phoneShort
+    : squeezed
+      ? resizable
+        ? clampSplit({
+            fraction: splitFraction(squeezedFrom ?? 0, container),
+            container,
+            ...bounds,
+          })
+        : // No divider and no minimums to share: the composer keeps what it
+          // needs, the stage takes the rest.
+          Math.max(0, Math.min(squeezedFrom ?? 0, container - chatNeed))
+      : phoneShort
       ? phoneShortStageHeight(container)
       : phoneFloor
         ? clampSplit({
@@ -315,9 +565,11 @@ export function CallSplit({
   // rule inside a pane it has entirely to itself, and the person who asked
   // for the call to fill the pane gets a band of empty pane under it.
   const fills = sized || collapsed === "chat";
+  const chatHidden = collapsed === "chat";
+  const stageHidden = collapsed === "stage";
   useEffect(() => {
-    onSplitStateChange?.({ active: fills, canSideBySide });
-  }, [fills, canSideBySide, onSplitStateChange]);
+    onSplitStateChange?.({ active: fills, canSideBySide, chatHidden, stageHidden });
+  }, [fills, canSideBySide, chatHidden, stageHidden, onSplitStateChange]);
 
   const setCollapsed = useCallback(
     (next: CallSplitCollapsed) => {
@@ -391,8 +643,55 @@ export function CallSplit({
     applyPx(drag.startPx + moved, true);
   };
 
+  // Double-click (or Enter) snaps the stage to the picture: no black bands
+  // above and below, or at the sides. Measured on the largest picture with a
+  // size, then measured again after the layout settles, because with more
+  // than one tile the picture does not grow one for one with the stage.
+  const fitToPicture = () => {
+    if (!resizable) {
+      return;
+    }
+    let passes = 0;
+    const step = () => {
+      const pane = stagePaneRef.current;
+      const video = pane
+        ? Array.from(pane.querySelectorAll("video"))
+            .filter((element) => element.videoWidth > 0)
+            .map((element) => ({ element, box: element.getBoundingClientRect() }))
+            .sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)[0]
+        : undefined;
+      if (!video) {
+        return;
+      }
+      const delta = fitToPictureDelta({
+        boxWidth: video.box.width,
+        boxHeight: video.box.height,
+        videoWidth: video.element.videoWidth,
+        videoHeight: video.element.videoHeight,
+        sideBySide,
+      });
+      if (Math.abs(delta) < 2) {
+        return;
+      }
+      // From the stage's size as laid out now, not a running total: a pass
+      // the minimums clamped must not carry its overshoot into the next.
+      const box = pane!.getBoundingClientRect();
+      applyPx((sideBySide ? box.width : box.height) + delta, true);
+      passes += 1;
+      if (passes < 3) {
+        requestAnimationFrame(() => requestAnimationFrame(step));
+      }
+    };
+    step();
+  };
+
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!resizable) {
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      fitToPicture();
       return;
     }
     const step = event.shiftKey
@@ -414,13 +713,17 @@ export function CallSplit({
       return;
     }
     event.preventDefault();
+    // From where the divider is drawn, and clamped by the live floors (the
+    // composer's measured height included), the same as a drag: a stored
+    // fraction past what can be drawn made presses look dead.
+    const nudged = nudgeSplit({
+      fraction: splitFraction(dividerAt, container),
+      container,
+      orientation,
+      deltaPx,
+    });
     commitFraction(
-      nudgeSplit({
-        fraction: fraction ?? splitFraction(dividerAt, container),
-        container,
-        orientation,
-        deltaPx,
-      }),
+      splitFraction(clampSplit({ fraction: nudged, container, ...bounds }), container),
       true,
     );
   };
@@ -489,13 +792,22 @@ export function CallSplit({
         )}
         style={
           stagePx === null
-            ? undefined
+            ? musicNeed > 0
+              ? ({ "--chat-music-h": `${musicNeed}px` } as CSSProperties)
+              : undefined
             : sideBySide
               ? { width: stagePx }
               : { height: stagePx }
         }
       >
-        {stage}
+        {/* Not for a stage the person sized by dragging: there the music
+            bar takes nothing from the picture. A squeeze counts, because
+            the bar is part of what the squeeze makes room for. */}
+        <ChatMusicContext.Provider
+          value={musicNeed > 0 && (stagePx === null || squeezed)}
+        >
+          {stage}
+        </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
             Twitch put theirs, instead of a full-height strip at the edge. */}
         {collapsed === "chat" && (
@@ -523,14 +835,21 @@ export function CallSplit({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onKeyDown={onKeyDown}
+          onDoubleClick={fitToPicture}
         />
       ) : null}
       {/* Same reasoning for the transcript: unmounting it would lose the
           scroll position and re-fetch the page on every restore. */}
       <div
+        ref={chatPaneRef}
         data-call-split-chat=""
         hidden={collapsed === "chat"}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
+        style={
+          filaRoom === null
+            ? undefined
+            : ({ "--fila-room": `${filaRoom}px` } as CSSProperties)
+        }
       >
         {chatHeader && shape !== "none" && (
           <ChatPaneHeader
@@ -570,6 +889,7 @@ function SplitDivider({
   onPointerUp,
   onPointerCancel,
   onKeyDown,
+  onDoubleClick,
 }: {
   sideBySide: boolean;
   dragging: boolean;
@@ -581,6 +901,7 @@ function SplitDivider({
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  onDoubleClick: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -631,6 +952,7 @@ function SplitDivider({
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
           onKeyDown={onKeyDown}
+          onDoubleClick={onDoubleClick}
         >
           <span
             aria-hidden="true"
@@ -715,6 +1037,14 @@ function ChatPaneHeader({
           </span>
         )}
       </span>
+      {header.actions && (
+        <span
+          data-call-split-chat-actions=""
+          className="flex shrink-0 items-center gap-0.5"
+        >
+          {header.actions}
+        </span>
+      )}
       {header.orientation?.canToggle && !videoHidden && (
         <Tooltip
           label={

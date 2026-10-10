@@ -429,6 +429,7 @@ import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy"
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
+  favoritesCollapseKey,
   favoritesForServer,
   writeFavoritesForServer,
 } from "@/lib/channel-favorites";
@@ -497,8 +498,9 @@ import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-au
 import {
   channelListRetryDelayMs,
   createChannelListTickets,
-  vanishedChannelFallback,
+  vanishedChannelDecision,
 } from "@/lib/channel-list-refresh";
+import { useCollapsedCategories } from "@/lib/collapsed-categories";
 import {
   onConnectionCheckRequest,
   onSettingsRequest,
@@ -1629,6 +1631,8 @@ function MainAppContent({
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
+    chatHidden: false,
+    stageHidden: false,
   });
   /**
    * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
@@ -1654,7 +1658,9 @@ function MainAppContent({
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
-      previous.canSideBySide === next.canSideBySide
+      previous.canSideBySide === next.canSideBySide &&
+      previous.chatHidden === next.chatHidden &&
+      previous.stageHidden === next.stageHidden
         ? previous
         : next,
     );
@@ -1700,6 +1706,7 @@ function MainAppContent({
     useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
+  const collapsedCategories = useCollapsedCategories();
   useEffect(() => {
     setChannelSidebar(loadChannelSidebarPreference());
   }, []);
@@ -1778,7 +1785,9 @@ function MainAppContent({
     },
     [],
   );
-  const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
+  const refreshChannelListRef = useRef<
+    (serverId: string, confirmingVanishedId?: string | null) => void
+  >(() => {});
   /**
    * Servers a navigation is loading the channel list for, with how many. While
    * one is in flight `selectedChannelIdRef` may still name the channel of the
@@ -4927,7 +4936,19 @@ function MainAppContent({
                   fetched,
                   listTicket,
                 );
-                if (listIsCurrent) {
+                // The open channel missing from this list is not proof it is
+                // gone, so the list is not written (it would drop that row
+                // from the sidebar) and the `channels-update` path decides,
+                // with its own second list a second later.
+                const vanished =
+                  listIsCurrent &&
+                  !channelLoadsRef.current.has(message.serverId) &&
+                  vanishedChannelDecision(
+                    list,
+                    selectedChannelIdRef.current,
+                    null,
+                  ).action === "confirm";
+                if (listIsCurrent && !vanished) {
                   channelListTickets.wrote(listTicket);
                   setChannels(list);
                 }
@@ -4950,19 +4971,17 @@ function MainAppContent({
                     ),
                   );
                 }
-                const current = selectedChannelIdRef.current;
-                if (
-                  listIsCurrent &&
-                  !channelLoadsRef.current.has(message.serverId) &&
-                  current &&
-                  !list.some((channel) => channel.id === current)
-                ) {
-                  const next =
-                    list.find((channel) => channel.type === "text") ?? list[0];
-                  if (next) {
-                    setSelectedChannelId(next.id);
-                    selectedChannelIdRef.current = next.id;
-                  }
+                // One fallback path, which moves the URL with the selection:
+                // a fresh `channels-update` refetch, which confirms on its own
+                // timer before anybody is sent elsewhere.
+                if (vanished) {
+                  console.warn("[pqp] channel.vanished", {
+                    serverId: message.serverId,
+                    channelId: selectedChannelIdRef.current,
+                    step: "suspected",
+                    via: "permissions-update",
+                  });
+                  refreshChannelListRef.current(message.serverId);
                 }
               })
               .catch(() => {
@@ -5570,7 +5589,11 @@ function MainAppContent({
    * retry: either would stop the open server's own refresh, and nothing
    * would start it again.
    */
-  function refreshChannelList(serverId: string, failedTries = 0) {
+  function refreshChannelList(
+    serverId: string,
+    failedTries = 0,
+    confirmingVanishedId: string | null = null,
+  ) {
     if (selectedServerIdRef.current !== serverId) {
       return;
     }
@@ -5588,26 +5611,64 @@ function MainAppContent({
         if (!current()) {
           return;
         }
-        channelListTickets.wrote(ticket);
         // Started before a channel this reader just created: keep it, or
         // the fallback below would take them off the channel they made.
         const list = channelListTickets.withCreated(serverId, fetched, ticket);
+        // Deleted under the person reading it: open another channel the same
+        // way a click would, so the transcript and the composer follow, not
+        // just the highlighted row. Only once a second list agrees
+        // (`vanishedChannelDecision`).
+        // Not while a navigation is loading this server: the selection is
+        // then still the previous server's channel (or a DM), which this
+        // list never had. That load picks the landing itself.
+        const decision = channelLoadsRef.current.has(serverId)
+          ? { action: "stay" as const }
+          : vanishedChannelDecision(
+              list,
+              selectedChannelIdRef.current,
+              confirmingVanishedId,
+            );
+        if (decision.action === "confirm") {
+          // Not written: a list that may be missing a channel by mistake
+          // would drop its row from the sidebar until the next fetch.
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "confirming",
+            via: "channels-update",
+          });
+          // A second apart, so one bad moment on the server cannot answer
+          // twice. A newer refetch cancels this one and confirms afresh.
+          const confirmId = decision.channelId;
+          channelListRetryTimerRef.current = setTimeout(() => {
+            channelListRetryTimerRef.current = null;
+            if (current()) {
+              refreshChannelList(serverId, 0, confirmId);
+            }
+          }, 1000);
+          return;
+        }
+        channelListTickets.wrote(ticket);
         if (channelListStaleRef.current === serverId) {
           channelListStaleRef.current = null;
         }
         setChannels(list);
-        // Deleted under the person reading it: open another channel the same
-        // way a click would, so the transcript and the composer follow, not
-        // just the highlighted row.
-        // Not while a navigation is loading this server: the selection is
-        // then still the previous server's channel (or a DM), which this
-        // list never had. That load picks the landing itself.
-        const fallback = channelLoadsRef.current.has(serverId)
-          ? { vanished: false as const }
-          : vanishedChannelFallback(list, selectedChannelIdRef.current);
-        if (fallback.vanished) {
-          if (fallback.nextId) {
-            void selectChannelRef.current(fallback.nextId, serverId);
+        if (confirmingVanishedId && decision.action === "stay") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: confirmingVanishedId,
+            step: "back-in-list",
+          });
+        }
+        if (decision.action === "leave") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "leaving",
+            nextId: decision.nextId,
+          });
+          if (decision.nextId) {
+            void selectChannelRef.current(decision.nextId, serverId);
           } else {
             setSelectedChannelId(null);
             selectedChannelIdRef.current = null;
@@ -5626,13 +5687,14 @@ function MainAppContent({
         channelListRetryTimerRef.current = setTimeout(() => {
           channelListRetryTimerRef.current = null;
           if (current()) {
-            refreshChannelList(serverId, failedTries + 1);
+            refreshChannelList(serverId, failedTries + 1, confirmingVanishedId);
           }
         }, delay);
       },
     );
   }
-  refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
+  refreshChannelListRef.current = (serverId, confirmingVanishedId) =>
+    refreshChannelList(serverId, 0, confirmingVanishedId ?? null);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
   const selectConversation = useCallback(
@@ -9741,6 +9803,156 @@ function MainAppContent({
     </>
   );
 
+  /**
+   * THE CALL STAGE TAKES THE PAGE HEADER'S ROW in a server voice call when
+   * everything the header says is already on screen: the channel list is
+   * expanded beside the stage, so it names the room and lists its people,
+   * and the chat pane's own header (under the stage) carries the channel's
+   * tools instead. Anything else keeps the header: a phone (its nav button
+   * lives there), a folded list, the call docked in the composer, the chat
+   * put away, or not being in this channel's call at all.
+   */
+  // The room's row is really on screen: the list is expanded AND the room is
+  // not folded away inside a collapsed category. Both the stage (which then
+  // drops the room's name and the row of people) and the header read this
+  // one flag, so they cannot disagree about where the room is named.
+  // A favorited room is listed only under Favoritos, not in its category,
+  // so that section's fold is the one that hides it.
+  const roomIsFavorite = Boolean(
+    selectedChannel &&
+      selectedServerId &&
+      favoritesForServer(
+        user?.preferences?.favoriteChannels,
+        selectedServerId,
+      ).includes(selectedChannel.id),
+  );
+  // A watch party channel is never a row in the list (it has its own
+  // surface), so the list never names one.
+  const roomListedAsRow = !(
+    selectedChannel &&
+    isWatchPartyChannelsEnabled() &&
+    isWatchPartyChannelType(selectedChannel.type)
+  );
+  const voiceRoomRowVisible =
+    columnLayout &&
+    !sidebarIconsOnly &&
+    roomListedAsRow &&
+    (roomIsFavorite
+      ? !collapsedCategories.has(favoritesCollapseKey(selectedServerId!))
+      : !(
+          selectedChannel?.parentId &&
+          collapsedCategories.has(selectedChannel.parentId)
+        ));
+  const voiceStageOwnsHeader = Boolean(
+    selectedChannel &&
+      selectedChannel.kind === "server" &&
+      isVoiceRoomChannelType(selectedChannel.type) &&
+      !partyOwnsHeader &&
+      voiceState.voiceChannelId === selectedChannel.id &&
+      voiceState.status !== "idle" &&
+      voiceRoomRowVisible &&
+      stageShape === "expanded" &&
+      !splitState.chatHidden,
+  );
+
+  const channelHeaderTools = selectedChannel ? (
+    <>
+          {isChannelSessionScheduleEnabled() &&
+            canManageChannels &&
+            selectedChannel.kind === "server" &&
+            selectedChannel.type === "voice" && (
+            <Tooltip label={t("watchPartySchedule.header.schedule")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-schedule-session-button
+                aria-label={t("watchPartySchedule.header.schedule")}
+                onClick={() => setScheduleSheetOpen(true)}
+              >
+                <CalendarClock className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip label={t("chrome.pins")}>
+            <button
+              type="button"
+              className={HEADER_ACTION_TILE}
+              onClick={() => setPinsOpen(true)}
+            >
+              <Pin className="h-4 w-4" />
+            </button>
+          </Tooltip>
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.watchPartyHistory")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-watch-party-history=""
+                aria-label={t("chrome.watchPartyHistory")}
+                onClick={() =>
+                  setWatchPartyHistoryChannelId(selectedChannel.id)
+                }
+              >
+                <History className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {(canManageChannels || canManageRoles) &&
+            selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.channelSettings")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
+                onClick={() =>
+                  setChannelSettings({
+                    channelId: selectedChannel.id,
+                    section: canManageChannels ? "overview" : "permissions",
+                    forceAdvanced: false,
+                  })
+                }
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {/* The roster toggle, last in the row — the same position and the
+              same icon Discord puts it in, because that is where the muscle
+              memory of everybody arriving from Discord already points. Shown at
+              every width: below the column breakpoint it opens the list as a
+              drawer rather than not at all. */}
+          {memberSidebarAvailable && (
+            <Tooltip label={t("memberList.toggle")}>
+              <button
+                type="button"
+                aria-pressed={memberSidebar.open && !openThread}
+                data-member-sidebar-toggle=""
+                className={cn(
+                  HEADER_ACTION_TILE,
+                  memberSidebar.open && !openThread && "text-paper",
+                )}
+                onClick={() => {
+                  // A thread occupies the same right column as the roster. The
+                  // button still means "show me the people": close the thread
+                  // first, and open the list if it was already hidden.
+                  if (openThread) {
+                    closeThreadPanel();
+                    if (!memberSidebar.open) {
+                      memberSidebar.toggle();
+                    }
+                    return;
+                  }
+                  memberSidebar.toggle();
+                }}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+    </>
+  ) : null;
+
   const chatPane = selectedChannel ? (
     <FileDropZone
       className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -9758,7 +9970,7 @@ function MainAppContent({
           : undefined
       }
     >
-      {!partyOwnsHeader && (
+      {!partyOwnsHeader && !voiceStageOwnsHeader && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -9897,100 +10109,9 @@ function MainAppContent({
             })()}
           {/* The side-by-side / stacked switch moved into the chat pane's
               own header (2026-09-13), beside the hide controls it belongs
-              with. */}
-          {isChannelSessionScheduleEnabled() &&
-            canManageChannels &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" && (
-            <Tooltip label={t("watchPartySchedule.header.schedule")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-schedule-session-button
-                aria-label={t("watchPartySchedule.header.schedule")}
-                onClick={() => setScheduleSheetOpen(true)}
-              >
-                <CalendarClock className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <Pin className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.watchPartyHistory")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-watch-party-history=""
-                aria-label={t("chrome.watchPartyHistory")}
-                onClick={() =>
-                  setWatchPartyHistoryChannelId(selectedChannel.id)
-                }
-              >
-                <History className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {(canManageChannels || canManageRoles) &&
-            selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.channelSettings")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-settings=""
-                aria-label={t("chrome.channelSettings")}
-                onClick={() =>
-                  setChannelSettings({
-                    channelId: selectedChannel.id,
-                    section: canManageChannels ? "overview" : "permissions",
-                    forceAdvanced: false,
-                  })
-                }
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {/* The roster toggle, last in the row — the same position and the
-              same icon Discord puts it in, because that is where the muscle
-              memory of everybody arriving from Discord already points. Shown at
-              every width: below the column breakpoint it opens the list as a
-              drawer rather than not at all. */}
-          {memberSidebarAvailable && (
-            <Tooltip label={t("memberList.toggle")}>
-              <button
-                type="button"
-                aria-pressed={memberSidebar.open && !openThread}
-                data-member-sidebar-toggle=""
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  memberSidebar.open && !openThread && "text-paper",
-                )}
-                onClick={() => {
-                  // A thread occupies the same right column as the roster. The
-                  // button still means "show me the people": close the thread
-                  // first, and open the list if it was already hidden.
-                  if (openThread) {
-                    closeThreadPanel();
-                    if (!memberSidebar.open) {
-                      memberSidebar.toggle();
-                    }
-                    return;
-                  }
-                  memberSidebar.toggle();
-                }}
-              >
-                <Users className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
+              with. The channel's own tools are `channelHeaderTools`, shared
+              with that header for when this one stands down. */}
+          {channelHeaderTools}
         </div>
       </header>
       )}
@@ -10320,11 +10441,13 @@ function MainAppContent({
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
-        // No header while the call is docked in the composer: the header
-        // exists to sit between a stage and the transcript, and there is
-        // no stage above the transcript then.
-        chatHeader={callDockOnScreen ? undefined : {
+        // No header while the stage is folded into the composer's strip:
+        // the header exists to sit between a stage and the transcript, and
+        // there is no stage above the transcript then. A stage showing
+        // pictures keeps it even though its controls are docked.
+        chatHeader={stageShape === "compact" ? undefined : {
           title: t("chat.paneTitle"),
+          actions: voiceStageOwnsHeader ? channelHeaderTools : undefined,
           tabs: partyOwnsHeader
             ? {
                 items: [
@@ -10600,6 +10723,13 @@ function MainAppContent({
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+            onDismissError={() => voice.dismissError()}
+            // The expanded channel list already lists this room's people.
+            roomListOnScreen={voiceRoomRowVisible}
+            // The chat pane is put away, and the composer the controls dock into
+            // with it.
+            composerHidden={splitState.chatHidden}
+            stageHidden={splitState.stageHidden}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10625,6 +10755,8 @@ function MainAppContent({
             }
             onDismissShare={(peerId) => voice.dismissShare(peerId)}
             onWatchShare={(peerId) => voice.watchShare(peerId)}
+            onDismissCamera={(peerId) => voice.dismissCamera(peerId)}
+            onWatchCamera={(peerId) => voice.watchCamera(peerId)}
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}
@@ -10657,6 +10789,11 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          composerHidden={splitState.chatHidden}
+          stageHidden={splitState.stageHidden}
+          onDismissError={() => voice.dismissError()}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}

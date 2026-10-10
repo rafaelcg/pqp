@@ -1,6 +1,14 @@
 import { Check, SlidersHorizontal } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { Tooltip } from "@/components/ui/tooltip";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
+import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { InboundVideoReadout } from "@/components/voice/inbound-video-readout";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -156,6 +164,16 @@ export function VideoQualityMenu({
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const portalHost = useFullscreenPortalHost();
+  // Where the panel sits, in viewport pixels. It is portalled out of the bar:
+  // in the composer's strip the stage above is a separate box whose own
+  // layers (the people strip) drew over a panel hanging up into it, and took
+  // the clicks meant for it.
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(
+    null,
+  );
   const receiveQuality = useReceiveQuality();
   const receiveReason = useReceiveQualityReason();
   const qualities = availableVideoQualities({ participantCount, hlsLive });
@@ -170,13 +188,20 @@ export function VideoQualityMenu({
       return;
     }
     function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         onOpenChange(false);
       }
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onOpenChange(false);
+        // Back to the button the panel hung from, since the panel is
+        // portalled to the end of the page.
+        buttonRef.current?.focus();
       }
     }
     document.addEventListener("mousedown", onPointerDown);
@@ -186,6 +211,133 @@ export function VideoQualityMenu({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open, onOpenChange]);
+
+  // Above the button, centred on it, and kept inside the window. Measured
+  // again on resize and scroll, since the bar can move under an open panel.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null);
+      return;
+    }
+    const measure = () => {
+      const anchor = rootRef.current?.getBoundingClientRect();
+      const panel = panelRef.current;
+      if (!anchor || !panel) {
+        return;
+      }
+      const width = panel.offsetWidth;
+      const margin = 8;
+      const centre = anchor.left + anchor.width / 2;
+      const left = Math.min(
+        Math.max(centre - width / 2, margin),
+        window.innerWidth - width - margin,
+      );
+      const top = Math.max(anchor.top - panel.offsetHeight - margin, margin);
+      setPlace((previous) =>
+        previous && previous.left === left && previous.top === top
+          ? previous
+          : { left, top },
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    // The panel grows after it opens (the live readout fills in), and it
+    // must grow upward, never down over its own button.
+    const grown =
+      typeof ResizeObserver === "undefined" || !panelRef.current
+        ? null
+        : new ResizeObserver(measure);
+    if (grown && panelRef.current) {
+      grown.observe(panelRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+      grown?.disconnect();
+    };
+  }, [open]);
+
+  // Closed by a pick (the rows close it themselves) or by focus leaving:
+  // focus was inside the panel, which is gone now, so it goes back to the
+  // button rather than to the top of the page. A close caused by a press on
+  // something else leaves focus with that something.
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      const active = document.activeElement;
+      if (!active || active === document.body) {
+        buttonRef.current?.focus();
+      }
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  // Arrow keys, Home and End move between the rows, as in every other menu
+  // here; Tab out of the panel closes it.
+  const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const rows = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        '[role="menuitemradio"], [role="menuitem"]',
+      ),
+    );
+    if (rows.length === 0) {
+      return;
+    }
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    let next: number | null = null;
+    if (event.key === "ArrowDown") next = at < 0 ? 0 : (at + 1) % rows.length;
+    else if (event.key === "ArrowUp") next = at <= 0 ? rows.length - 1 : at - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = rows.length - 1;
+    if (next !== null) {
+      event.preventDefault();
+      rows[next]?.focus();
+    }
+  };
+  const onPanelBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    const to = event.relatedTarget as Node | null;
+    if (to) {
+      if (!event.currentTarget.contains(to) && !rootRef.current?.contains(to)) {
+        onOpenChange(false);
+      }
+      return;
+    }
+    // No target: Tab off the last row left the page (the browser's own UI).
+    // Checked a frame later, since a click inside also blurs with no target.
+    const panel = event.currentTarget;
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        !panel.contains(active) &&
+        !rootRef.current?.contains(active)
+      ) {
+        onOpenChange(false);
+      }
+      if (!document.hasFocus()) {
+        onOpenChange(false);
+      }
+    });
+  };
+
+  // Focus goes into the panel when it opens: it is portalled to the end of
+  // the page, so Tab from the button would never reach it. The ticked row
+  // first, else the panel's first control.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      const target =
+        panel?.querySelector<HTMLElement>('[aria-checked="true"]') ??
+        panel?.querySelector<HTMLElement>("button");
+      target?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
   // The button's own name changes with the role, because it is the first
   // thing read and the last thing a screen-reader user hears before opening
@@ -210,11 +362,21 @@ export function VideoQualityMenu({
 
   return (
     <div ref={rootRef} className="relative">
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
+          ref={panelRef}
           role="menu"
+          onKeyDown={onPanelKeyDown}
+          onBlur={onPanelBlur}
           aria-label={label}
-          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className="fixed z-[100] w-64 max-w-[80vw] rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          // Hidden for the one frame before it is measured, so it never
+          // flashes at the window's corner.
+          style={
+            place
+              ? { left: place.left, top: place.top }
+              : { left: 0, top: 0, visibility: "hidden" }
+          }
         >
           {isSendingVideo && (
             <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
@@ -380,13 +542,15 @@ export function VideoQualityMenu({
               />
             </div>
           </div>
-        </div>
+        </div>,
+        portalHost ?? document.body,
       )}
       {/* The tooltip carries the same sentence the old `title` did, minus the
           one-second wait and plus keyboard focus. It closes on the press that
           opens the menu, so the two never stack on top of each other. */}
       <Tooltip label={label}>
       <button
+        ref={buttonRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}

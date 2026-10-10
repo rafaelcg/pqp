@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PeerAudioMenu, PeerAudioMenuButton } from "./peer-audio-menu";
+import { PeerAudioMenu, PictureVolume } from "./peer-audio-menu";
 
 /**
  * The one panel that carries a person's sound.
@@ -93,20 +93,31 @@ describe("PeerAudioMenu", () => {
   });
 });
 
-describe("PeerAudioMenuButton", () => {
-  it("says whose sound it opens, and that it opens something", () => {
+describe("PictureVolume", () => {
+  it("draws the slider on the picture, named for the sound it sets", () => {
     const html = render(
-      <PeerAudioMenuButton name="Ana" open={false} onToggle={() => {}} />,
+      <PictureVolume
+        name="Ana"
+        kind="share"
+        track={{ volume: 0.4, onSetVolume: () => {} }}
+      />,
     );
-    expect(html).toContain('data-testid="peer-audio-open"');
-    expect(html).toContain('aria-haspopup="dialog"');
-    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+    expect(html).toContain('data-picture-volume="share"');
+    expect(html).toContain('type="range"');
+    expect(html).toContain("Screen share volume for Ana");
+    expect(html).toContain("Mute Ana&#x27;s screen share");
   });
 
-  it("shows a silenced person as silenced without opening anything", () => {
+  it("shows a silenced person as silenced, and offers to bring them back", () => {
     const html = render(
-      <PeerAudioMenuButton name="Ana" open={false} onToggle={() => {}} muted />,
+      <PictureVolume
+        name="Ana"
+        kind="voice"
+        track={{ volume: 0, onSetVolume: () => {} }}
+      />,
     );
     expect(html).toContain("text-danger");
+    expect(html).toContain("Unmute Ana");
+    expect(html).not.toContain("aria-pressed");
   });
 });

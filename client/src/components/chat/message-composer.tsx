@@ -1442,6 +1442,7 @@ export function MessageComposer({
 
   return (
     <form
+      data-chat-composer=""
       onSubmit={(event) => void handleSubmit(event)}
       className={COMPOSER_FORM_CLASS}
     >

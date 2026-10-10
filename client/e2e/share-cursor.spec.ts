@@ -84,6 +84,20 @@ async function joinLobby(page: Page): Promise<void> {
 const storedPreference = (page: Page) =>
   page.evaluate(() => localStorage.getItem("pqp:share-cursor"));
 
+/**
+ * The cursor preference lives in the call bar's "Mais". Its row names the
+ * action, so the label says which way it is set: "Hide…" while the pointer
+ * goes out, "Show…" once it is hidden.
+ */
+async function cursorRow(page: Page) {
+  await page.getByTestId("call-more").first().click();
+  return page.getByRole("menuitem", { name: /the mouse pointer/ });
+}
+
+async function closeMenu(page: Page) {
+  await page.keyboard.press("Escape");
+}
+
 test("the cursor preference is remembered across a reload", async ({
   page,
 }) => {
@@ -91,26 +105,23 @@ test("the cursor preference is remembered across a reload", async ({
   await openApp(page);
   await joinLobby(page);
 
-  const toggle = page.getByTestId("share-cursor-toggle");
-  // Shown, because presenting is the default and the person has to be able to
-  // find the thing that changes it.
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // Offered, because presenting is the default and the person has to be able
+  // to find the thing that changes it.
+  const row = await cursorRow(page);
+  await expect(row).toHaveText(/Hide the mouse pointer/);
+  await row.click();
   expect(await storedPreference(page)).toBe("hide");
+  await expect(await cursorRow(page)).toHaveText(/Show the mouse pointer/);
+  await closeMenu(page);
 
   await leaveVoiceIfConnected(page);
   await page.reload();
   await joinLobby(page);
 
   // The claim: still hidden, without being re-armed. A session-only store
-  // would come back "false" here and pass every unit test on the way.
-  await expect(page.getByTestId("share-cursor-toggle")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  // would come back to "Hide…" here and pass every unit test on the way.
+  await expect(await cursorRow(page)).toHaveText(/Show the mouse pointer/);
+  await closeMenu(page);
   await leaveVoiceIfConnected(page);
 });
 
@@ -122,7 +133,7 @@ test("a screen share says so when it carries the cursor anyway", async ({
   await openApp(page);
   await joinLobby(page);
 
-  await page.getByTestId("share-cursor-toggle").click();
+  await (await cursorRow(page)).click();
   await page.getByRole("button", { name: "Share your screen" }).click();
   await expect(page.getByText("You are presenting")).toBeVisible({
     timeout: 20_000,
@@ -147,10 +158,8 @@ test("a share nobody asked to hide the cursor on says nothing", async ({
 
   // Presenting: the pointer is the content. A warning on every share anybody
   // ever starts is how a true warning gets trained into background noise.
-  await expect(page.getByTestId("share-cursor-toggle")).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
+  await expect(await cursorRow(page)).toHaveText(/Hide the mouse pointer/);
+  await closeMenu(page);
   await page.getByRole("button", { name: "Share your screen" }).click();
   await expect(page.getByText("You are presenting")).toBeVisible({
     timeout: 20_000,
