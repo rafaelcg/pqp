@@ -378,6 +378,9 @@ enum WatchOrientation {
         /// A Baú video in the system's full screen (`BauVideoSession`). One
         /// per presentation, like the shared screen's.
         case bauVideo(UUID)
+        /// The DM call stage while a camera fills it
+        /// (`callStageAllowsLandscape`). One stage per app, so no id.
+        case callStage
     }
 
     private static var owners: Set<Owner> = []
@@ -470,6 +473,14 @@ enum WatchOrientation {
     static func enterBauVideo(_ id: UUID) { enter(.bauVideo(id)) }
 
     static func leaveBauVideo(_ id: UUID) { leave(.bauVideo(id)) }
+
+    /// A camera fills the DM call stage, so the call may turn with the phone.
+    /// Idempotent both ways, so the stage can simply state what it wants on
+    /// every change rather than track what it asked for last.
+    static func setCallStage(_ allowed: Bool) {
+        guard allowed != owners.contains(.callStage) else { return }
+        if allowed { enter(.callStage) } else { leave(.callStage) }
+    }
 
     /// Safety net for the one thing a view's own `onDisappear` cannot be
     /// trusted with: the room or the call ending underneath a fullscreen, so
