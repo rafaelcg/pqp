@@ -31,6 +31,26 @@ final class DeepLinkTests: XCTestCase {
         )
     }
 
+    /// The path `buildCommunityHomePostPayload` puts on a new-Baú-post push.
+    /// The web client reads the same string as "this server" and lands on the
+    /// Baú; the phone has to name it.
+    func testTheNewBauPostPushPathOpensTheBau() {
+        XCTAssertEqual(
+            DeepLink.target(path: "/app/server/srv-1/home"),
+            .bau(serverId: "srv-1")
+        )
+        XCTAssertEqual(DeepLink.target(path: "/server/srv-1/home/"), .bau(serverId: "srv-1"))
+        XCTAssertEqual(
+            DeepLink.target(url: URL(string: "https://pqp.gg/app/server/srv-1/home")!),
+            .bau(serverId: "srv-1")
+        )
+        // A server with no channel is still just the server.
+        XCTAssertEqual(DeepLink.target(path: "/app/server/srv-1"), .server(id: "srv-1"))
+        // Nothing else under a server is a Baú.
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/homes"))
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/home/post-1"))
+    }
+
     /// `/app` is the payload's fallback when a server channel push has no
     /// server id. It means "the hub", which is where the app already is.
     func testTheBareAppPathAsksForNothing() {

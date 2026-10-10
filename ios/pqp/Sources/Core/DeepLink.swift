@@ -2,7 +2,7 @@ import Foundation
 
 /// Somewhere in the app a link or a notification is asking to go.
 ///
-/// The same four cases serve three inputs — a universal link, a `pqp://` URL,
+/// The same five cases serve three inputs — a universal link, a `pqp://` URL,
 /// and the `path` a push payload carries — because all three are the *web
 /// client's own routes*. `server/src/services/push.ts` builds that path with
 /// `/app/dm/<id>` and `/app/server/<sid>/channel/<cid>`, the web SPA parses it
@@ -19,6 +19,12 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// A whole server, with no channel picked out. Where a redeemed invite
     /// lands, since joining tells us the server and nothing else.
     case server(id: String)
+    /// A server's Baú, from the push for a new post
+    /// (`/app/server/<sid>/home`, built by `buildCommunityHomePostPayload` in
+    /// `server/src/services/push.ts`). The web client reads the same path as
+    /// "this server" and lands on the Baú by itself; here it has to be named,
+    /// because the phone opens a server on its channel list.
+    case bau(serverId: String)
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -69,6 +75,10 @@ enum DeepLink {
         case 2 where segments[0] == "server":
             let serverId = segments[1]
             return serverId.isEmpty ? nil : .server(id: serverId)
+
+        case 3 where segments[0] == "server" && segments[2] == "home":
+            let serverId = segments[1]
+            return serverId.isEmpty ? nil : .bau(serverId: serverId)
 
         case 4 where segments[0] == "server" && segments[2] == "channel":
             let serverId = segments[1]

@@ -37,6 +37,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
+import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
@@ -686,6 +687,14 @@ private fun SignedInNav(
     }
 }
 
+/** The two yeses the Baú row needs (see `ChannelsScreen`), asked for a push tap. */
+internal suspend fun bauIsOn(session: SessionStore, serverId: String): Boolean {
+    if (!CommunityHomeConfigs.resolve(session.api).enabled) {
+        return false
+    }
+    return session.servers.value.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
+}
+
 /**
  * Land a notification tap on the thing it is about.
  *
@@ -731,6 +740,19 @@ private suspend fun navigateToPush(
 
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
+
+        // The push for a new Baú post. The channel list first, with the Baú on
+        // top of it, so back lands on the server like it does for a channel.
+        // Only when this server's Baú is actually on (the instance flag and the
+        // owner's switch, the two the row itself needs): a tap that outlived
+        // the switch stays on the list rather than opening a screen that 404s.
+        is DeepLinkTarget.Bau -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            if (bauIsOn(session, target.serverId)) {
+                nav.navigate(BauRoute(target.serverId, name))
+            }
+        }
 
         // A conversation id IS a channel id, but it is not a *channel* route:
         // a conversation's app bar is a person's name and opening one moves a

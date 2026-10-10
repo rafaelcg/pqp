@@ -39,7 +39,7 @@ enum PushPresentation {
             return channelId != visibleChannelId
         case .channel(_, let channelId):
             return channelId != visibleChannelId
-        case .invite, .server, .none:
+        case .invite, .server, .bau, .none:
             return true
         }
     }

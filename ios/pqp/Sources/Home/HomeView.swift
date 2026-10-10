@@ -42,13 +42,19 @@ struct HomeView: View {
     struct RestoredChannel: Hashable {
         let server: Server
         let channel: Channel?
+        /// Open the server's Baú on arrival (a new-post push was tapped).
+        var opensBau: Bool = false
     }
 
     var body: some View {
         NavigationStack {
             HubView(model: model, openedConversation: $openedConversation)
                 .navigationDestination(item: $restoredChannel) { restored in
-                    ChannelListView(server: restored.server, initialChannel: restored.channel)
+                    ChannelListView(
+                        server: restored.server,
+                        initialChannel: restored.channel,
+                        opensBau: restored.opensBau
+                    )
                 }
         }
         .tint(Palette.signal)
@@ -132,6 +138,13 @@ struct HomeView: View {
         case .server(let serverId):
             guard let server = await resolveServer(serverId) else { return }
             restoredChannel = RestoredChannel(server: server, channel: nil)
+
+        case .bau(let serverId):
+            // The channel list first, with the Baú pushed on top of it, so back
+            // lands on the server and not on an empty stack. If the server's
+            // Baú is off by now the list simply stays.
+            guard let server = await resolveServer(serverId) else { return }
+            restoredChannel = RestoredChannel(server: server, channel: nil, opensBau: true)
         }
     }
 
