@@ -82,6 +82,44 @@ describe("loadBauCard", () => {
     expect(fetchCard).toHaveBeenCalledTimes(1);
   });
 
+  it("never serves one account's card to another", async () => {
+    fetchCard.mockResolvedValue({ card: CARD });
+    await loadBauCard(SERVER, POST, "en", Date.now, "user-a");
+    await loadBauCard(SERVER, POST, "en", Date.now, "user-b");
+    expect(fetchCard).toHaveBeenCalledTimes(2);
+    await loadBauCard(SERVER, POST, "en", Date.now, "user-a");
+    expect(fetchCard).toHaveBeenCalledTimes(2);
+  });
+
+  it("caps how many card requests are in flight at once", async () => {
+    let live = 0;
+    let peak = 0;
+    const releases: Array<() => void> = [];
+    fetchCard.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          live += 1;
+          peak = Math.max(peak, live);
+          releases.push(() => {
+            live -= 1;
+            resolve({ card: CARD });
+          });
+        }),
+    );
+    const loads = Array.from({ length: 10 }, (_, i) =>
+      loadBauCard(SERVER, `post-${i}`, "en"),
+    );
+    await Promise.resolve();
+    expect(live).toBeLessThanOrEqual(4);
+    while (releases.length > 0) {
+      releases.shift()!();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    await Promise.all(loads);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(fetchCard).toHaveBeenCalledTimes(10);
+  });
+
   it("a refusal is null (the link stays plain) and is cached briefly", async () => {
     fetchCard.mockRejectedValue(new Error("404"));
     let now = 1000;

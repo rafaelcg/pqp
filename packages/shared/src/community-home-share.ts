@@ -93,11 +93,17 @@ export const communityHomePostCardSchema = z.object({
   serverName: z.string(),
   title: z.string().nullable(),
   teaser: z.string().nullable(),
-  author: z.object({
-    id: z.string().uuid(),
-    displayName: z.string(),
-    avatarUrl: z.string().nullable(),
-  }),
+  /**
+   * Null on a locked card: who wrote a members-only post is part of what the
+   * lock withholds, exactly as the feed shows a locked reader no author.
+   */
+  author: z
+    .object({
+      id: z.string().uuid(),
+      displayName: z.string(),
+      avatarUrl: z.string().nullable(),
+    })
+    .nullable(),
   mediaKind: communityHomeMediaKindSchema.nullable(),
   /**
    * An image or a video file URL the viewer may load (a signed GET), or a
@@ -120,6 +126,12 @@ export const shareCommunityHomePostSchema = z.object({
   channelId: z.string().uuid(),
   /** Optional words above the link. */
   message: z.string().max(1500).optional().nullable(),
+  /**
+   * One per dialog attempt. The chat's own send de-duplicates on it, so a
+   * retry after a lost response returns the message that already went out
+   * instead of posting a second card.
+   */
+  nonce: z.string().min(1).max(64).optional(),
 });
 
 export type ShareCommunityHomePostRequest = z.infer<

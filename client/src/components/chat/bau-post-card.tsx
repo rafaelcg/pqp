@@ -1,6 +1,6 @@
 import type { BauPostLink, CommunityHomePostCard } from "@pqp/shared";
 import { Archive, ArrowRight, Heart, Lock, MessageCircle, Pin, Play } from "lucide-react";
-import { useCallback, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -40,6 +40,37 @@ export function posterKind(
   return null;
 }
 
+/**
+ * True once the element has come within a screenful of the viewport (and
+ * stays true). A channel with several shared videos must not open a media
+ * request per card on load: the first frame is fetched when the card is near.
+ * Without IntersectionObserver (old webview, test DOM) it is simply true.
+ */
+function useNearViewport<T extends Element>() {
+  const ref = useRef<T>(null);
+  const [near, setNear] = useState(
+    () => typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    const node = ref.current;
+    if (near || !node) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [near]);
+  return [ref, near] as const;
+}
+
 export function BauPostCardView({
   card,
   href,
@@ -51,6 +82,7 @@ export function BauPostCardView({
 }) {
   const { t } = useTranslation();
   const poster = posterKind(card);
+  const [posterRef, near] = useNearViewport<HTMLDivElement>();
   const playable = card.mediaKind !== null && PLAYABLE.has(card.mediaKind);
   const title = card.title?.trim() || t("bauCard.untitled");
   return (
@@ -65,12 +97,13 @@ export function BauPostCardView({
       )}
     >
       <div
+        ref={posterRef}
         className={cn(
           "relative overflow-hidden bg-surface-2",
           poster ? "aspect-video" : "h-16",
         )}
       >
-        {poster === "image" && card.mediaUrl && (
+        {poster === "image" && card.mediaUrl && near && (
           <img
             src={card.mediaUrl}
             alt=""
@@ -83,7 +116,7 @@ export function BauPostCardView({
             )}
           />
         )}
-        {poster === "video" && card.mediaUrl && (
+        {poster === "video" && card.mediaUrl && near && (
           <video
             // `#t=0.001` makes iOS Safari paint the first frame without play.
             src={`${card.mediaUrl}#t=0.001`}
@@ -145,20 +178,32 @@ export function BauPostCardView({
           </p>
         )}
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
-          <UserAvatar
-            name={card.author.displayName}
-            avatarUrl={card.author.avatarUrl}
-            className="h-5 w-5"
-            rounded="full"
-            fallbackClassName="bg-surface-3 text-[10px] text-text"
-          />
-          <span className="min-w-0 truncate">
-            <span className="font-medium text-text-secondary">
-              {card.author.displayName}
+          {card.author ? (
+            <>
+              <UserAvatar
+                name={card.author.displayName}
+                avatarUrl={card.author.avatarUrl}
+                className="h-5 w-5"
+                rounded="full"
+                fallbackClassName="bg-surface-3 text-[10px] text-text"
+              />
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-text-secondary">
+                  {card.author.displayName}
+                </span>
+                {" · "}
+                {t("bauCard.inBau")}
+              </span>
+            </>
+          ) : (
+            <span className="min-w-0 truncate">
+              <span className="font-medium text-text-secondary">
+                {card.serverName}
+              </span>
+              {" · "}
+              {t("bauCard.inBau")}
             </span>
-            {" · "}
-            {t("bauCard.inBau")}
-          </span>
+          )}
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
             {card.likeCount > 0 && (
               <span

@@ -82,6 +82,33 @@ type Entry = {
 };
 
 const cache = new Map<string, Entry>();
+
+/**
+ * At most this many card requests in flight. A channel full of shared posts
+ * would otherwise open one request per distinct post at once.
+ */
+const MAX_CONCURRENT_FETCHES = 4;
+let inFlight = 0;
+const waiting: Array<() => void> = [];
+
+function withSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      inFlight += 1;
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          inFlight -= 1;
+          waiting.shift()?.();
+        });
+    };
+    if (inFlight < MAX_CONCURRENT_FETCHES) {
+      run();
+    } else {
+      waiting.push(run);
+    }
+  });
+}
 /** Long enough to scroll a channel back and forth, short enough for a like count. */
 const OK_TTL_MS = 60_000;
 /** A refusal is cached too, or a 404 card would be refetched on every render. */
@@ -98,8 +125,12 @@ export function loadBauCard(
   postId: string,
   lang?: string,
   now: () => number = Date.now,
+  viewerId: string | null = null,
 ): Promise<CommunityHomePostCard | null> {
-  const key = `${serverId}:${postId}:${lang ?? ""}`;
+  // The viewer is part of the key: what the server answers is decided per
+  // person (membership, the VIP lock), so a second account on the same tab
+  // must never be served the first one's card.
+  const key = `${viewerId ?? ""}:${serverId}:${postId}:${lang ?? ""}`;
   const hit = cache.get(key);
   if (hit) {
     const ttl = hit.value === null ? MISS_TTL_MS : OK_TTL_MS;
@@ -110,7 +141,7 @@ export function loadBauCard(
   const entry: Entry = {
     at: now(),
     value: undefined,
-    promise: fetchCommunityHomePostCard(serverId, postId, lang)
+    promise: withSlot(() => fetchCommunityHomePostCard(serverId, postId, lang))
       .then((res) => res.card)
       // 4xx: not ours to show. Offline or 5xx: a plain link for now, and the
       // short miss TTL lets the next render try again.
@@ -141,19 +172,23 @@ export type BauCardState =
 export function useBauCard(
   link: BauPostLink | null,
   lang?: string,
+  viewerId: string | null = null,
 ): BauCardState {
   const serverId = link?.serverId ?? null;
   const postId = link?.postId ?? null;
   const [state, setState] = useState<{ key: string; value: BauCardState } | null>(
     null,
   );
-  const key = serverId && postId ? `${serverId}:${postId}:${lang ?? ""}` : null;
+  const key =
+    serverId && postId
+      ? `${viewerId ?? ""}:${serverId}:${postId}:${lang ?? ""}`
+      : null;
   useEffect(() => {
     if (!serverId || !postId || !key) {
       return;
     }
     let cancelled = false;
-    void loadBauCard(serverId, postId, lang).then((card) => {
+    void loadBauCard(serverId, postId, lang, Date.now, viewerId).then((card) => {
       if (cancelled) {
         return;
       }
@@ -165,7 +200,7 @@ export function useBauCard(
     return () => {
       cancelled = true;
     };
-  }, [serverId, postId, lang, key]);
+  }, [serverId, postId, lang, key, viewerId]);
   if (!key) {
     return { status: "idle" };
   }

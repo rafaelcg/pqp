@@ -1,5 +1,5 @@
 import type { Channel } from "@pqp/shared";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,6 +12,12 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  * send path decides whether the caller may speak there; a refusal is shown in
  * the dialog, under the field, with what was typed still in it.
  */
+
+function newNonce(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export function shareErrorKey(error: unknown): MessageKey {
   if (error instanceof ApiError) {
@@ -50,15 +56,26 @@ export function CommunityHomeShareDialog({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One key per opening of the dialog. Chat de-duplicates on it, so a retry
+  // after a lost response gets the message that already went out back instead
+  // of a second card.
+  const nonceRef = useRef("");
+  // The channel list can change under an open dialog (a rename, a new
+  // channel): initialise on open only, so a pending send stays pending and
+  // what was typed stays typed.
+  const initialRef = useRef({ channels, defaultChannelId });
+  initialRef.current = { channels, defaultChannelId };
 
   useEffect(() => {
     if (open) {
-      setChannelId(defaultChannelId ?? channels[0]?.id ?? "");
+      const initial = initialRef.current;
+      setChannelId(initial.defaultChannelId ?? initial.channels[0]?.id ?? "");
       setMessage("");
       setBusy(false);
       setError(null);
+      nonceRef.current = newNonce();
     }
-  }, [open, defaultChannelId, channels]);
+  }, [open]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -69,10 +86,15 @@ export function CommunityHomeShareDialog({
     setBusy(true);
     setError(null);
     try {
-      await shareCommunityHomePost(serverId, postId, {
+      const result = await shareCommunityHomePost(serverId, postId, {
         channelId: target.id,
         message: message.trim() || null,
+        nonce: nonceRef.current,
       });
+      if (!result.ok) {
+        setError(t("communityHome.share.error.generic"));
+        return;
+      }
       onShared(target);
     } catch (err) {
       setError(t(shareErrorKey(err)));
