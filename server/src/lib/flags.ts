@@ -286,6 +286,18 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
   },
+  bau_post_push: {
+    description:
+      "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
+    env: "BAU_POST_PUSH",
+    parseEnv: exactTrue,
+    // Off: a push is the one Baú surface that interrupts people who are not
+    // looking at the app. Turned on one server at a time first (its override),
+    // then everybody. Needs `community_home` and a configured push transport.
+    codeDefault: false,
+    // The fan-out starts from a post, and a post has a server.
+    perServer: true,
+  },
   community_home_video_captions: {
     description:
       "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",

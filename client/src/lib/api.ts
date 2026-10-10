@@ -20,6 +20,7 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  CommunityHomeUnreadAllResponse,
   CommunityHomeUnreadResponse,
   PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
@@ -2067,6 +2068,14 @@ export const deleteCommunityHomePost = (serverId: string, postId: string) =>
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
   apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/**
+ * Unread Baú posts for every server this account is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one.
+ * Servers with nothing unread are absent.
+ */
+export const fetchCommunityHomeUnreadAll = () =>
+  apiFetch<CommunityHomeUnreadAllResponse>("/api/community-home/unread");
 
 /** Stamp the feed read up to now. Fire and forget; the badge is not truth. */
 export const markCommunityHomeRead = (serverId: string) =>

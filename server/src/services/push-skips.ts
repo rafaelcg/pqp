@@ -20,10 +20,17 @@ import { logEvent } from "../lib/log.js";
  *
  * Cumulative, in-process, per instance, all keys pre-seeded to zero: the same
  * convention as `push-metrics.ts`, so the exporter sums it across replicas.
- * Bounded cardinality: 5 kinds x 8 reasons.
+ * Bounded cardinality: 6 kinds x 8 reasons.
  */
 
-export type PushSkipKind = "message" | "call" | "stream" | "reminder" | "waitlist";
+export type PushSkipKind =
+  | "message"
+  | "call"
+  | "stream"
+  | "reminder"
+  | "waitlist"
+  /** A new Baú post (`bau_post_push`). */
+  | "bau";
 
 export type PushSkipReason =
   /** A live socket anywhere in the cluster (the rule this module was built to expose). */
@@ -52,6 +59,7 @@ export const PUSH_SKIP_KINDS: readonly PushSkipKind[] = [
   "stream",
   "reminder",
   "waitlist",
+  "bau",
 ];
 
 export const PUSH_SKIP_REASONS: readonly PushSkipReason[] = [
@@ -144,6 +152,8 @@ export interface PushSkipContext {
   channelId?: string;
   /** The conversation a call push was about. */
   conversationId?: string;
+  /** The server a Baú post push was about. */
+  serverId?: string;
 }
 
 /** Record that `userId` was not pushed, and why. Never throws. */
@@ -176,6 +186,7 @@ export function notePushSkipped(
     userId,
     channelId: context.channelId,
     conversationId: context.conversationId,
+    serverId: context.serverId,
     suppressed: window?.suppressed || undefined,
     dropped: dropped || undefined,
   });

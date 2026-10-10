@@ -32,6 +32,7 @@ import {
   useChannelNotificationLevel,
   useNotificationState,
 } from "@/hooks/use-notifications";
+import { railServerIndicator } from "@/lib/community-home/rail-unread";
 import { useTranslation } from "@/lib/i18n";
 import { setServerStreamAlerts } from "@/lib/notifications";
 import { conversationTitle } from "@/lib/conversations";
@@ -53,6 +54,12 @@ interface ServerRailProps {
    * from the activity frames' own server ids.
    */
   serverUnread: Record<string, UnreadState>;
+  /**
+   * Unread Baú posts per server (`GET /api/community-home/unread`), servers
+   * with none absent. Lights the same white pip an unread channel does, never
+   * a number: a red count on the icon stays for mentions (`railServerIndicator`).
+   */
+  serverBauUnread?: Record<string, number>;
   /** True while the conversation view is what the sidebar is showing. */
   homeSelected: boolean;
   /** Unread across every conversation, which has no server icon to land on. */
@@ -148,6 +155,7 @@ export function ServerRail({
   servers,
   selectedServerId,
   serverUnread,
+  serverBauUnread,
   homeSelected,
   homeUnread,
   friendRequestCount = 0,
@@ -271,9 +279,11 @@ export function ServerRail({
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
-        const mentions = muted ? 0 : (totals?.mentions ?? 0);
-        const hasUnread =
-          !muted && !!totals && (totals.count > 0 || mentions > 0);
+        const { mentions, hasUnread, bauOnly } = railServerIndicator({
+          totals,
+          bauUnread: serverBauUnread?.[server.id] ?? 0,
+          muted,
+        });
 
         const items: ContextMenuItemDef[] = [
           {
@@ -401,7 +411,9 @@ export function ServerRail({
                 <span className="sr-only">
                   {mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })
-                    : t("chrome.unreadMessagesSr")}
+                    : bauOnly
+                      ? t("chrome.unreadBauSr")
+                      : t("chrome.unreadMessagesSr")}
                 </span>
               )}
             </button>

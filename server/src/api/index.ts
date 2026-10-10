@@ -355,6 +355,7 @@ import {
   claimCommunityHomeMediaUpload,
   CommunityHomeError,
   countUnreadCommunityHomePosts,
+  countUnreadCommunityHomePostsAllServers,
   markCommunityHomeRead,
   setCommunityHomePostPinned,
   createCommunityHomePost,
@@ -376,6 +377,7 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -4479,6 +4481,9 @@ router.post(
         scheduleTimezone: raw.scheduleTimezone ?? null,
       });
       await notifyHome(serverId!);
+      // A post created as published is announced by push (flag permitting).
+      // Not awaited: it never fails the publish, and it never throws.
+      void pushPendingCommunityHomePosts(serverId!);
       return created({ post });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -4541,6 +4546,23 @@ router.delete(
 );
 
 /**
+ * The Baú badge for EVERY server this person is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one
+ * (the per-server route below answers only the one asked about, and the rail
+ * would otherwise need a request per server). Only servers whose owner turned
+ * the Baú on are counted, and only servers with something unread appear, so
+ * the answer is usually `{ servers: {} }`.
+ */
+router.get("/api/community-home/unread", async ({ user }) => {
+  requireCommunityHome();
+  try {
+    return { servers: await countUnreadCommunityHomePostsAllServers(user.id) };
+  } catch (error) {
+    mapCommunityHomeError(error);
+  }
+});
+
+/**
  * The Baú badge: how many posts this person has not seen. Its own endpoint
  * rather than a field on the feed, because the sidebar row needs the number
  * without loading the posts.
@@ -4601,6 +4623,7 @@ router.post(
     try {
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
+      void pushPendingCommunityHomePosts(serverId!);
       return { post };
     } catch (error) {
       mapCommunityHomeError(error);

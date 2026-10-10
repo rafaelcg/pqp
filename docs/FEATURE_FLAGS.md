@@ -111,6 +111,11 @@ default off; automatic translation of Baú posts, which also needs
 `OPENROUTER_API_KEY` on the API: no key, no translation, no error; served to
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
+`BAU_POST_PUSH` (`bau_post_push`, **per server**, default off, born as a flag):
+a push when a Baú post goes live, to members who have not muted the server;
+never the author, members-only posts only to people who can open them. Server
+only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
+`docs/COMMUNITY_HOME.md` §"Push on a new post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
 (`community_home_video_captions`, **per server**, default off), automatic

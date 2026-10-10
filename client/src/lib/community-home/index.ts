@@ -31,6 +31,11 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  railServerIndicator,
+  withServerBauUnread,
+  type RailServerIndicator,
+} from "./rail-unread";
+export {
   applyCommunityHomeRead,
   applyCommunityHomeSwitch,
   mergeServerUpdate,

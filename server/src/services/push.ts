@@ -4,6 +4,7 @@ import type { ChannelKind, UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { getPreferences, mergePreferences } from "./preferences.js";
 import {
+  buildCommunityHomePostPushCopy,
   buildConversationPushCopy,
   buildStreamStartedPushCopy,
   resolvePushLocale,
@@ -1118,6 +1119,8 @@ async function deliverToUsers(
   delivery: PushDeliveryOptions,
   kind: PushSkipKind,
   skipContext: PushSkipContext = {},
+  /** Called once, after the subscription read and before the first send. */
+  beforeSend?: () => void,
 ): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
     `SELECT ${SUBSCRIPTION_COLUMNS}
@@ -1146,6 +1149,7 @@ async function deliverToUsers(
     }
   }
 
+  beforeSend?.();
   await Promise.all(
     subscriptions.rows.map(async (subscription) => {
       const payload = payloadFor(subscription.user_id);
@@ -1780,4 +1784,125 @@ export function pushWatchPartyWaitlistApproved(
       error,
     );
   });
+}
+
+// ------------------------------------------------------------ Baú new post
+
+/**
+ * A new post in a server's Baú, as `services/community-home-push.ts` concluded
+ * it. WHO MAY BE TOLD IS NOT DECIDED HERE: `recipients` maps each person to the
+ * titles of the posts THEY can open (never the author, never a members-only
+ * post for somebody who would only see the lock, never somebody who blocked
+ * the author), and this narrows it by the three things only a push can see:
+ * a socket in front of the person (the live corner card is that notice), a
+ * stored do-not-disturb, and the server's notification level.
+ */
+export interface CommunityHomePostPush {
+  serverId: string;
+  serverName: string;
+  recipients: ReadonlyMap<string, readonly (string | null)[]>;
+}
+
+/**
+ * The level a Baú post reads for one person in one server. Not
+ * `resolvePushLevel`: a Baú has no channel, and a staff post is not chat
+ * noise, so the account-wide "mentions" default that
+ * `desktop_notify_default_on` writes for servers must not silence it. What
+ * does: an explicit `none` at the server, or a `none` default (a mute, the
+ * same word the rail dims its icon for), and an explicit per-server
+ * `mentions`, which the person chose for this server in particular.
+ */
+export function resolveBauPushLevel(
+  settings: UserPreferences | null,
+  serverId: string,
+): "all" | "mentions" | "none" {
+  const notifications = settings?.notifications;
+  const explicit = notifications?.servers?.[serverId];
+  if (explicit) {
+    return explicit;
+  }
+  const fallback = notifications?.serverDefault ?? notifications?.default;
+  return fallback === "none" ? "none" : "all";
+}
+
+export function buildCommunityHomePostPayload(
+  event: Pick<CommunityHomePostPush, "serverId" | "serverName">,
+  titles: readonly (string | null)[],
+  locale: StreamAlertLocale,
+): PushPayload {
+  const copy = buildCommunityHomePostPushCopy({
+    locale,
+    serverName: truncateLabel(event.serverName),
+    titles: titles.map((title) => (title ? truncateLabel(title) : null)),
+  });
+  return {
+    title: copy.title,
+    body: copy.body,
+    // The web client lands on the Baú for a server URL with no channel, and
+    // both phones parse `/home` as "this server's Baú" (`DeepLink`).
+    path: `/app/server/${event.serverId}/home`,
+    // One live notification per server: a second post replaces the first
+    // instead of stacking.
+    tag: `bau:${event.serverId}`,
+  };
+}
+
+/** The awaitable pipeline. Returns how many people it tried to push. */
+export async function sendCommunityHomePostPush(
+  event: CommunityHomePostPush,
+  /**
+   * Called once, after the preference and subscription reads and right before
+   * the first send, which is the first thing that can reach a device. A
+   * caller that wants to hand its claim back on failure uses it to know which
+   * side of that line a rejection fell on: before it, nothing was sent and a
+   * retry is safe; after it, a retry could tell somebody twice.
+   */
+  beforeDelivery?: () => void,
+): Promise<number> {
+  const transports = readTransports();
+  if (!transports || event.recipients.size === 0) {
+    return 0;
+  }
+  const skipContext: PushSkipContext = { serverId: event.serverId };
+  const offline = splitOnLiveSocket([...event.recipients.keys()], "bau", skipContext);
+  if (offline.length === 0) {
+    return 0;
+  }
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences
+     WHERE user_id = ANY($1::uuid[])`,
+    [offline],
+  );
+  const preferences = new Map<string, UserPreferences>(
+    preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  const notDnd = withoutDnd(offline, preferences, "bau", skipContext);
+  const recipients = notDnd.filter((userId) => {
+    const level = resolveBauPushLevel(preferences.get(userId) ?? null, event.serverId);
+    if (level === "all") {
+      return true;
+    }
+    notePushSkipped("bau", level === "none" ? "muted" : "level", userId, skipContext);
+    return false;
+  });
+  if (recipients.length === 0) {
+    return 0;
+  }
+  await deliverToUsers(
+    recipients,
+    (userId) =>
+      buildCommunityHomePostPayload(
+        event,
+        event.recipients.get(userId) ?? [],
+        resolveStreamAlertLocale(
+          (preferences.get(userId) as { locale?: unknown } | undefined)?.locale,
+        ),
+      ),
+    transports,
+    MESSAGE_DELIVERY,
+    "bau",
+    skipContext,
+    beforeDelivery,
+  );
+  return recipients.length;
 }
