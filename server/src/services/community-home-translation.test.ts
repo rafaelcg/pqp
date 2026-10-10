@@ -319,7 +319,15 @@ describeDb("Baú translation", () => {
       // The model was asked from Portuguese, never into it.
       expect(fake.calls.map((c) => `${c.from}>${c.to}`).sort()).toEqual(["pt>en", "pt>es"]);
       // Title and body went in one call each, no teaser on a free post.
-      expect(fake.calls[0]!.texts).toEqual([PT_TITLE, PT_BODY]);
+      // The brand never reaches the model: "Baú", "QG" and "pqp" went out as
+      // placeholders, and came back as the author's own words.
+      expect(fake.calls[0]!.texts).toEqual([
+        "Novidade no <k1> do <k2>",
+        "Olá pessoal! O <k1> agora traduz os posts do <k2> automaticamente, então você escreve no seu idioma e a galera lê no deles.",
+      ]);
+      const en = stored.find((r) => r.lang === "en")!;
+      expect(en.title).toBe(`[en] ${PT_TITLE}`);
+      expect(en.body).toBe(`[en] ${PT_BODY}`);
     });
 
     it("an English post is not translated into English", async () => {
@@ -699,7 +707,8 @@ describeDb("Baú translation", () => {
       const post = await publish({ title: PT_TITLE, body: long.slice(0, 3900) });
       await untilTranslated(post.id);
       const sent = fake.calls[0]!.texts;
-      expect(sent.join("").length).toBeLessThanOrEqual(400 + 8);
+      // (the brand placeholders are not part of the cap)
+      expect(sent.join("").replace(/<k\d+>/g, "").length).toBeLessThanOrEqual(400 + 8);
       expect(sent[sent.length - 1]!.endsWith("[…]")).toBe(true);
       expect((await tr.communityHomeTranslationMetrics()).truncated).toBeGreaterThan(0);
     });

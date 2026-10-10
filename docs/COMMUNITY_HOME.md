@@ -460,6 +460,28 @@ only because the key is sent to it).
   found nothing missing the sweep rescans only every 10 minutes (or at once when
   the flag's servers change); a publish or an edit never waits for it.
 
+- *Brand and names never reach the model.* Both the post translator and the
+  subtitle translator go through `communityHomeTranslatorFor` ->
+  `server/src/services/translation-brand-guard.ts`. "pqp" (standalone word,
+  any case), "pqp.gg", "QG do pqp", "Baú", "QG", URLs, @handles, `#channel`
+  tokens and the server's own name are swapped for placeholders (`<k1>`) before
+  the call and put back after it, so the product name cannot be "helpfully"
+  translated (it once came back as "WTF", because "pqp" is also a pt-BR swear).
+  A string whose placeholders did not all come back keeps the author's words
+  (`communityHomeTranslation.brandNamesKept`). The system prompt says the same
+  as a second line of defence. Translations stored before this change keep
+  their old text; to make them again for one post (the sweep redoes the post
+  text within about ten minutes, the subtitles on the next read):
+
+  ```sql
+  BEGIN;
+  DELETE FROM community_home_post_translations     WHERE post_id = '<post id>' AND NOT same_language;
+  DELETE FROM community_home_translation_jobs      WHERE post_id = '<post id>';
+  DELETE FROM community_home_post_captions         WHERE post_id = '<post id>' AND NOT is_source;
+  DELETE FROM community_home_caption_translation_jobs WHERE post_id = '<post id>';
+  COMMIT;
+  ```
+
 **What is never translated.** Comments (a follow-up), the author's name,
 the cover, media, anything in a draft or scheduled post (it is translated when
 it goes live). A members-only post is translated like any other, but the lock
