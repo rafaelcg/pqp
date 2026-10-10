@@ -438,3 +438,39 @@ server's override) or `PUT /api/admin/flag-overrides
 token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
+
+## `newcomer_invite_moment` (global, client presentation only)
+
+"Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,
+global, born as a flag). The client learns it from `GET /api/onboarding/config`
+as `inviteMoment`, asked once the age gate has passed (every `/api` route is
+403 before that) and again on every config refresh
+(`client/src/lib/newcomer-invite.ts`). Two behaviours:
+
+- **The strip.** In the arrival strip's slot, under a public community's
+  channel or Baú header: one line and a **Chamar amigos** button that opens
+  Criar sala with "Sala de {nome}" in the field. The dialog ends on the invite
+  link and the pastes, tagged `?ref=chama`, so the joins it brings are counted
+  apart in `server_members.join_ref`. Shown to an account whose first-run
+  finished in the last 7 days, with no friends and no sent requests, that is in
+  nothing but public communities it does not own (the QG it was placed in, or a
+  streamer's community). Never over a live party or a watch-now strip.
+  "Agora não" is remembered in `pqp:newcomer-invite-2026-10`.
+- **The hub checklist stops counting the placed community.** The first-run
+  card's "server" row is done only with a room of your own or a private one you
+  were invited to (`ownRoomCount`). Before, the QG placement ticked it on the
+  first request, so the only surface that offered Criar said there was nothing
+  left to do.
+
+Why, from production on 2026-10-10 (accounts created in the 14 days before):
+organic accounts placed in the QG whose own room got a second member came back
+the next day at 35%, invited accounts at 26%, and organic accounts with nobody
+of their own at 12 to 13%. Half of the QG-only accounts did nothing at all and
+3% of those came back. Measure it with Umami (`newcomer_invite_view`,
+`newcomer_invite_click`, `newcomer_invite_dismiss`) and with
+`SELECT COUNT(*) FROM server_members WHERE join_ref = 'chama'`.
+
+Turn it on from controles → interruptores or `PUT /api/admin/flags
+{ key: "newcomer_invite_moment", enabled: true }`. Open tabs follow on the next
+config refresh (focus or 10 min).
+

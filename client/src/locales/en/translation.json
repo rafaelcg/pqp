@@ -4701,5 +4701,10 @@
   "communityHome.share.error.generic": "Could not post the card. Try again.",
   "communityHome.compose.announce": "Announce in #{channel}",
   "communityHome.compose.announceHint": "Posts a card with a button that opens this post.",
-  "communityHome.compose.announceFailed": "Published. The card could not be posted in #{channel}."
+  "communityHome.compose.announceFailed": "Published. The card could not be posted in #{channel}.",
+  "newcomerInvite.title": "Bring your friends here",
+  "newcomerInvite.body": "Make a room just for your group and send them the link.",
+  "newcomerInvite.action": "Invite friends",
+  "newcomerInvite.later": "Not now",
+  "newcomerInvite.roomName": "{name}'s room"
 }

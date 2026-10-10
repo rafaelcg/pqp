@@ -456,6 +456,16 @@ import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
+import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import {
+  dismissNewcomerInvite,
+  isNewcomerInviteDismissed,
+  isRecentNewcomer,
+  newcomerInviteVisible,
+  ownRoomCount,
+  startNewcomerInviteConfig,
+  useNewcomerInviteMoment,
+} from "@/lib/newcomer-invite";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import {
@@ -1302,6 +1312,14 @@ function MainAppContent({
    * effect beside the arrival intents).
    */
   const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
+  /**
+   * What the newcomer invite strip hands Criar sala: a name already in the
+   * field and the `?ref=chama` its invite link carries. Null for every other
+   * door, and cleared when the dialog closes.
+   */
+  const [createServerPrefill, setCreateServerPrefill] = useState<{
+    name: string;
+  } | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -1372,6 +1390,12 @@ function MainAppContent({
   const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
     isPartyNewcomerStripDismissed(),
   );
+  // `newcomer_invite_moment`: the "chama teus amigos" strip was closed on
+  // this device. Read once; the write is `dismissNewcomerInvite`.
+  const [newcomerInviteClosed, setNewcomerInviteClosed] = useState(() =>
+    isNewcomerInviteDismissed(),
+  );
+  const newcomerInviteMomentOn = useNewcomerInviteMoment();
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -8866,6 +8890,15 @@ function MainAppContent({
     () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
     [notifyDefaultsUserId],
   );
+  // `newcomer_invite_moment`, same refresh pass. Asked only once the age
+  // gate has passed: before that every `/api` route answers 403, and the
+  // account this strip is for is exactly the one that just passed it, in this
+  // very session, with no focus change to trigger a refresh afterwards.
+  const newcomerInviteUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
+    [newcomerInviteUserId],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
@@ -9225,6 +9258,35 @@ function MainAppContent({
   }
 
   /**
+   * `newcomer_invite_moment` (`lib/newcomer-invite.ts`): somebody new, with
+   * no friends and no room of their own, standing in a public community (the
+   * QG they were placed in). Off, this is false and nothing differs.
+   */
+  const newcomerInvite = newcomerInviteVisible({
+    flagOn: newcomerInviteMomentOn,
+    // `justOnboarded` for the session that just finished the wizard, whose
+    // local `user` does not carry `onboardedAt` yet (see `partyNewcomerFacts`).
+    newcomer:
+      justOnboarded || isRecentNewcomer(user?.preferences?.onboardedAt),
+    friendsLoaded: !friends.loading && friends.error === null,
+    friendCount: friends.data.friends.length + friends.data.outgoing.length,
+    ownRooms: ownRoomCount(servers, user?.id ?? null),
+    inCommunity: selectedServer?.isCommunity === true,
+    partyLive: Boolean(selectedPartyLive),
+    dismissed: newcomerInviteClosed,
+  });
+  function openNewcomerInviteCreate() {
+    const first = (user?.displayName ?? "").trim().split(/\s+/)[0] ?? "";
+    setCreateServerPrefill({
+      name: first
+        ? t("newcomerInvite.roomName", { name: first }).slice(0, 100)
+        : "",
+    });
+    setCreateServerStart({ mode: "name", source: null });
+    setShowCreateServer(true);
+  }
+
+  /**
    * The arrival banner for whatever is on screen, or nothing. One builder for
    * the two places it mounts (the channel pane and the community home), so
    * the rule deciding what it says lives in `arrivalVariant` and nowhere else.
@@ -9239,6 +9301,19 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A newcomer alone in a public community: the one thing that changes that
+    // is bringing somebody, so this strip takes the arrival strip's place.
+    if (surface !== "party" && newcomerInvite) {
+      return (
+        <NewcomerInviteStrip
+          onInvite={openNewcomerInviteCreate}
+          onDismiss={() => {
+            dismissNewcomerInvite();
+            setNewcomerInviteClosed(true);
+          }}
+        />
+      );
     }
     if (
       !arrivalServerId ||
@@ -11571,7 +11646,12 @@ function MainAppContent({
               user
                 ? {
                     user,
-                    serverCount: servers.length,
+                    // With `newcomer_invite_moment` on, a public community
+                    // you were placed in (the QG) is not "a server": the row
+                    // stays open and keeps offering Criar.
+                    serverCount: newcomerInviteMomentOn
+                      ? ownRoomCount(servers, user.id)
+                      : servers.length,
                     onCreateServer: () => setShowCreateServer(true),
                     onJoinServer: () => setInviteMode("join"),
                     onImportDiscord: () =>
@@ -11965,9 +12045,12 @@ function MainAppContent({
         open={showCreateServer}
         startMode={createServerStart.mode}
         startSource={createServerStart.source}
+        startName={createServerPrefill?.name ?? null}
+        inviteRef={createServerPrefill ? "chama" : "convite"}
         onClose={() => {
           setShowCreateServer(false);
           setCreateServerStart({ mode: "name", source: null });
+          setCreateServerPrefill(null);
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           // Their own room, empty but for them: the owner banner and the
