@@ -1393,6 +1393,7 @@
   "voice.share.tickAudio": "Elige una pestaña de Chrome y marca “Compartir también el audio de la pestaña” para mandar el sonido.",
   "voice.share.linuxAudioHint": "En Linux, el sonido solo se comparte cuando compartes una pestaña de Chrome y marcas Compartir también el audio de la pestaña. Una ventana o la pantalla completa se quedan sin sonido.",
   "voice.share.linuxAudioHint_desktop": "En Linux, la app de escritorio no puede mandar el sonido de la computadora en ningún tipo de compartir. Abre pqp en el navegador y comparte una pestaña de Chrome si el sonido importa.",
+  "voice.share.linuxAudioHint_flatpak": "En la versión Flatpak de pqp, el sonido de la computadora no va con lo que compartes: el sandbox no deja que la app saque la llamada del sonido. Si el sonido importa, instala el .deb o el AppImage de pqp.gg, o comparte una pestaña de Chrome desde el navegador.",
   "voice.share.linuxAudioHint.dismiss": "Cerrar consejo",
   "voice.share.systemAudioOn": "El sonido de esta computadora se comparte: juegos, música, lo que esté sonando. La llamada no se incluye.",
   "voice.share.systemAudioOff": "Sonido de la computadora desactivado. Una pestaña de Chrome igual manda su propio sonido.",
@@ -4769,5 +4770,10 @@
   "communityHome.share.error.generic": "No se pudo publicar la tarjeta. Inténtalo de nuevo.",
   "communityHome.compose.announce": "Anunciar en #{channel}",
   "communityHome.compose.announceHint": "Publica una tarjeta con un botón que abre este post.",
-  "communityHome.compose.announceFailed": "Publicado. No se pudo publicar la tarjeta en #{channel}."
+  "communityHome.compose.announceFailed": "Publicado. No se pudo publicar la tarjeta en #{channel}.",
+  "newcomerInvite.title": "Trae a tus amigos",
+  "newcomerInvite.body": "Crea una sala solo para tu grupo y mándales el enlace.",
+  "newcomerInvite.action": "Invitar amigos",
+  "newcomerInvite.later": "Ahora no",
+  "newcomerInvite.roomName": "Sala de {name}"
 }

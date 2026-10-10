@@ -32,6 +32,7 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const { isFlatpak } = require("./lib/flatpak");
 const {
   clearWebCache,
   clearWebCacheIfShellUpdated,
@@ -1200,8 +1201,17 @@ function runLinuxAudioTool(tool, args) {
   });
 }
 
+/**
+ * The Flathub build (`flatpak/gg.pqp.pqp.yml`). Inside it the shell builds no
+ * share audio bus: the call is told apart from other apps by process id, and
+ * in the sandbox those are pqp's own namespace ids, which another Flatpak's
+ * streams can report too. Not offered rather than half working; the page shows
+ * the Flatpak copy instead (`capabilities.flatpak`). See `lib/flatpak.js`.
+ */
+const runningInFlatpak = isFlatpak();
+
 const linuxShareAudio =
-  process.platform === "linux"
+  process.platform === "linux" && !runningInFlatpak
     ? createLinuxShareAudio({
         onActive: setLinuxShareAudioMarker,
         onReport: writeLinuxShareAudioReport,
@@ -1552,6 +1562,7 @@ function createWindow(appUrl, allowedOrigin) {
       additionalArguments: [
         `--pqp-shell-version=${app.getVersion()}`,
         `--pqp-can-exclude-own-audio=${canExcludeOwnAudioOnThisOs() ? "1" : "0"}`,
+        `--pqp-flatpak=${runningInFlatpak ? "1" : "0"}`,
       ],
     },
   });

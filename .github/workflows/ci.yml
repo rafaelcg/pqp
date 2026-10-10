@@ -154,6 +154,12 @@ jobs:
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
+      # The Flatpak release bump (flatpak/bump.mjs) is outside the workspace
+      # too, and `.github/workflows/flatpak-manifest.yml` runs it unattended
+      # on every published desktop release.
+      - name: Test Flatpak scripts
+        run: node --test flatpak/*.test.mjs
+
       # Same reason as the monitor scripts above, with a sharper edge: this one
       # decides whether merging drops every live WebSocket. It used to be a
       # `grep` inside deploy-api-fly.yml, where the only way to learn what it

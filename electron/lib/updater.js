@@ -1,5 +1,6 @@
 const { app, dialog } = require("electron");
 const { t } = require("./i18n");
+const { isFlatpak } = require("./flatpak");
 
 /**
  * Shell auto-update, over electron-updater / GitHub Releases.
@@ -44,6 +45,14 @@ function initAutoUpdate(getWindow) {
   // would log a failure on each `pnpm electron:dev`.
   if (!app.isPackaged) {
     log("skipped: not a packaged build");
+    return;
+  }
+  // Flathub ships the updates for the Flatpak build, and electron-updater
+  // there would pick its .deb updater, which needs pkexec and a writable /opt
+  // the sandbox does not have: a download every six hours and a "restart to
+  // update" that does nothing.
+  if (isFlatpak()) {
+    log("skipped: running as a Flatpak, Flathub updates this build");
     return;
   }
   if (process.env.PQP_DISABLE_AUTO_UPDATE === "1") {
