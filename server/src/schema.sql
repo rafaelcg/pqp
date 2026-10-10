@@ -4136,6 +4136,89 @@ CREATE TABLE IF NOT EXISTS community_home_translation_usage (
   requests INTEGER NOT NULL DEFAULT 0
 );
 
+-- Automatic subtitles of an uploaded Baú video, behind the runtime flag
+-- `community_home_video_captions` (services/community-home-captions.ts).
+--
+-- The worker's job is a `speech_jobs` row like a voice note's, keyed by the
+-- POST rather than an attachment: the column and the kind are added here,
+-- after `community_home_posts` exists, because speech_jobs is created long
+-- before it. The constraint rewrites are guarded so a boot that finds them
+-- already in place takes no lock on the table.
+ALTER TABLE speech_jobs ADD COLUMN IF NOT EXISTS post_id UUID
+  REFERENCES community_home_posts(id) ON DELETE CASCADE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%community_home_captions%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_kind_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_kind_check CHECK (
+      kind IN ('voice_note', 'voice_transcode', 'party_question', 'community_home_captions')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_check'
+       AND pg_get_constraintdef(oid) LIKE '%post_id%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_check CHECK (
+      kind = 'party_question' OR attachment_id IS NOT NULL OR post_id IS NOT NULL
+    );
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- One captions job per post EVER, like one transcription per note: the
+-- enqueue's dedupe. Replacing a post's video deletes the row, so the next
+-- enqueue (or the sweep) makes a fresh one for the new file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_post
+  ON speech_jobs (kind, post_id) WHERE post_id IS NOT NULL;
+
+-- The tracks. One row per (post, language): the transcription itself
+-- (`is_source`) and its translations, cues as JSONB ({start, end, text},
+-- seconds) because a translation swaps the words and keeps the timings, and
+-- the WebVTT is rendered on read. `media_key` is the object the sound came
+-- from: a read serves only rows whose key is still the post's, so a replaced
+-- video never shows the old subtitles even before anything deletes them.
+-- `source_hash` is md5 of the source cues (`captionCuesHash`): a translated
+-- row made from an older transcription is stale and not served.
+CREATE TABLE IF NOT EXISTS community_home_post_captions (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  is_source BOOLEAN NOT NULL,
+  media_key TEXT NOT NULL,
+  cues JSONB NOT NULL,
+  source_lang TEXT,
+  source_hash TEXT NOT NULL,
+  -- The speech provider for the source, the translation model otherwise.
+  made_by TEXT NOT NULL,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, lang)
+);
+
+-- The claim for one caption translation, the same shape and the same reason
+-- as community_home_translation_jobs: a translation is a network call, never
+-- made in a transaction, and two processes must not both pay for it.
+CREATE TABLE IF NOT EXISTS community_home_caption_translation_jobs (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  PRIMARY KEY (post_id, lang)
+);
+
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
 -- the session flips live on its own when somebody starts sharing (see

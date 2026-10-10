@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { createWriteStream } from "node:fs";
 
 /**
  * S3-compatible object storage: presigned URLs for the browser, plus the two
@@ -625,6 +626,79 @@ export async function getObjectPrefix(
     await reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks).subarray(0, length);
+}
+
+/**
+ * A whole object, streamed to a file on disk, for a job that has to hand the
+ * bytes to ffmpeg (a Baú video's sound, for subtitles). Never buffered in
+ * memory. Refuses past `maxBytes` (the file is left for the caller's
+ * temporary directory to remove). Null when the object is not there; throws
+ * a `StorageError` for anything else.
+ */
+export async function downloadObjectToFile(
+  key: string,
+  path: string,
+  maxBytes: number,
+  timeoutMs = 5 * 60_000,
+): Promise<{ bytes: number } | null> {
+  const url = signRequest({
+    method: "GET",
+    key,
+    ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+  }).url;
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    throw new StorageError(error instanceof Error ? error.message : "Storage unreachable");
+  }
+  if (response.status === 404 || !response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 404) {
+      return null;
+    }
+    throw new StorageError(`Storage returned HTTP ${response.status} for GET`);
+  }
+  const out = createWriteStream(path);
+  // A disk error must reject this call, not crash the process as an
+  // unhandled 'error' event.
+  let writeError: Error | null = null;
+  out.on("error", (error) => {
+    writeError = error;
+  });
+  const reader = response.body.getReader();
+  let bytes = 0;
+  try {
+    while (true) {
+      if (writeError) throw writeError;
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (bytes > maxBytes) {
+        throw new StorageError(`object is larger than ${maxBytes} bytes`);
+      }
+      if (!out.write(value)) {
+        await new Promise<void>((resolve) => {
+          out.once("drain", resolve);
+          out.once("error", () => resolve());
+        });
+      }
+    }
+  } catch (error) {
+    throw error instanceof StorageError
+      ? error
+      : new StorageError(error instanceof Error ? error.message : "Storage unreachable");
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    await new Promise<void>((resolve) => {
+      if (out.destroyed) resolve();
+      else out.end(() => resolve());
+    });
+  }
+  if (writeError) {
+    throw new StorageError((writeError as Error).message);
+  }
+  return { bytes };
 }
 
 /** Idempotent: an object that is already gone is a success, not an error. */

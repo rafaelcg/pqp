@@ -362,6 +362,7 @@ import {
   deleteCommunityHomePost,
   getCommunityHomePost,
   isBauMobileRenditionOn,
+  getCommunityHomePostCaptions,
   isCommunityHomeEnabled,
   isCommunityHomeMediaConfigured,
   isCommunityHomeVipEnabled,
@@ -4398,6 +4399,34 @@ router.get(
         url.searchParams.get("lang"),
       );
       return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The automatic subtitles of a post's uploaded video, as WebVTT: the source
+ * track and, when there is a current one, its translation into `?lang=` (the
+ * reader's UI locale). Any member who may play the video may read them: the
+ * post goes through the same read as the feed, so a draft, another server's
+ * post or a members-only video the viewer cannot open answers with no tracks
+ * or a 404, never with words. `tracks: []` when the flag is off for the server
+ * or nothing has been made yet.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/captions",
+  async ({ url, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const tracks = await getCommunityHomePostCaptions(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { tracks };
     } catch (error) {
       mapCommunityHomeError(error);
     }

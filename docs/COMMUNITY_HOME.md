@@ -17,7 +17,9 @@ Staging is the proving ground. Production has the flags unset.
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
 A third switch, `community_home_translation`, is a **runtime flag** (per
-server, default off) and is described in "Translation" below.
+server, default off) and is described in "Translation" below. A fourth,
+`community_home_video_captions` (per server, default off), puts automatic
+subtitles on uploaded videos; see "Video subtitles".
 
 **Plus one per-server switch.** With the instance flag on, each server still
 starts with Baú off. An owner turns it on in **Server settings**, the same
@@ -426,6 +428,102 @@ right after a publish, the worker runs the minute sweep.) The sweep
 translates what is already published within a minute (newest first, bounded by
 the daily budget). Turning the flag off is instant and keeps the stored rows.
 
+## Video subtitles
+
+A video uploaded to the Baú gets automatic subtitles in the language it was
+spoken in, and a translation of them into the reader's language, so the owner's
+launch video in Portuguese can be followed in English or Spanish. Uploaded
+videos only: YouTube, Twitch, TikTok and Instagram bring their own.
+
+**Switches.** `community_home_video_captions`, a runtime flag, **per server**,
+default off (env default `COMMUNITY_HOME_VIDEO_CAPTIONS`). It sends the video's
+sound to the speech provider (Cloudflare Workers AI, outside Brazil), so it goes
+on one server first. Off is a kill switch: no new jobs, a queued job is dropped
+before any call, and stored subtitles are hidden on every read. The translated
+track also needs `community_home_translation` on for that server (same
+provider, same consent as the post text). Producing anything needs
+`VOICE_STT_PROVIDER` and its key on the worker, and ffmpeg (the worker image
+has it; a process without ffmpeg never claims the job).
+
+**Pipeline** (`server/src/services/community-home-captions*.ts`,
+`server/src/speech/captions.ts`):
+
+1. Publishing a video post (now, scheduled, or editing in a new video) queues
+   a `speech_jobs` row of kind `community_home_captions`, keyed by `post_id`.
+   The minute sweep (`jobs.ts`) queues any published video on a flagged server
+   that has no job, which is also the backfill.
+2. The worker runs one captions job at a time, in a lane of its own so voice
+   notes never wait behind a long video: it streams the video to a temporary
+   file, ffmpeg takes the first audio stream as 16 kHz mono PCM (at most
+   `COMMUNITY_HOME_CAPTIONS_MAX_SECONDS`, default 1800), reserves the length
+   (overlaps included) from the shared daily speech budget
+   (`VOICE_STT_DAILY_SECONDS`, `speech_usage_daily`), and sends 30 s windows
+   with 1 s of overlap, one at a time, as WAV. The language Whisper hears in
+   the first window with words is held for the rest. The flag is asked again
+   before every call.
+3. The windows are stitched (`stitchWindows`), Whisper's silence and loops are
+   dropped, long lines are cut into two-line cues, and the result is stored as
+   the source track in `community_home_post_captions` (cues as JSONB, the
+   storage key of the video they came from, md5 of the cues).
+4. Each other UI language (`en`, `pt`, `es`) gets a translation of the cue
+   **text only**, in batches, through the post translator
+   (`communityHomeTranslator`, same model, same daily character budget, same
+   claim and backoff shape in `community_home_caption_translation_jobs`). The
+   timings are never sent and never change. The worker does it right after the
+   transcription; the minute sweep and a reader's request (on whichever process
+   has `OPENROUTER_API_KEY`) catch anything missed.
+
+**Reading.** `post.captions` is `{ sourceLang, langs }` when there is a current
+source track (null for a locked viewer, for anything but an uploaded video, and
+with the flag off). The words come from
+`GET /api/servers/:id/home/posts/:postId/captions?lang=<reader locale>`, which
+answers `{ tracks: [{ lang, source, auto, vtt }] }` (the source and, when
+current, the reader's language). It goes through the same read as the feed, so
+a draft, another server's post or a members-only video the viewer cannot open
+has no subtitles. The web player fetches them when the reader first comes near
+the player, gives them to `<track kind="subtitles">` as `blob:` URLs (a track
+cannot send the Authorization header), and draws the current cue above its own
+bar. Subtitles start **on** when the video's language differs from the
+reader's and **off** otherwise; the CC button flips them, and that choice is
+remembered in this browser (`pqp:community-home-captions`). In the iPhone's
+native fullscreen the browser draws them itself.
+
+**A replaced video** loses its job and its tracks in the edit's transaction,
+and a read only serves tracks whose storage key is still the post's, so new
+pictures never get old words. A worker that was mid-job on the old file loses
+its fence and writes nothing.
+
+**Backfill.** Turning the flag on for a server is the backfill: the minute
+sweep queues every published video there, newest first, five per minute. A
+job that settled as `no-provider` or `over-budget` is offered again after an
+hour. To make one post again by hand (a better provider, a gave-up job):
+`DELETE FROM speech_jobs WHERE kind = 'community_home_captions' AND post_id = '<id>'`
+and the next sweep queues it.
+
+**Cost.** Workers AI Whisper is 0.000513 USD per audio minute, so a 3 minute
+video is about 0.0016 USD (3.1 minutes billed with the overlaps) and 186 s of
+the 36,000 s daily budget. Translating its cues (roughly 2,500 characters) into
+two languages is about a third of a cent with flash-lite.
+
+**Counters.** `communityHomeCaptions` on `GET /api/admin/metrics`: jobs done,
+skipped and failed in the last 24 h and what is queued or running (from the
+database, so it covers the worker), how many videos have a track and how many
+translations exist, and this process's own counters. Logs say why at every
+step: `communityHome.captions.enqueued`, `.skipped` (`flag-off`,
+`no-provider`, `over-budget`), `.noSpeech`, `.done`, `.failed`, and
+`communityHome.captions.translation.done | skipped | failed`.
+
+**Native apps** do not show subtitles yet. AVPlayer only takes external
+WebVTT through an HLS wrapper or an `AVMutableComposition`, and ExoPlayer
+through a `SubtitleConfiguration`; the endpoint above is what they will read.
+**The phone cut** (`bau_mobile_rendition`, the vertical second file of a
+post) is transcribed once, through the main video: the tracks are keyed to the
+post and the main video's storage key. The web player shows them on the cut
+too, but only while the cut's length is within 1.5 s of what was transcribed
+(`post.captions.durationMs`), so a cut that was edited differently shows no
+subtitles rather than lines at the wrong moment. Transcribing the cut on its
+own would be the follow-up if authors start posting different edits.
+
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
@@ -468,6 +566,16 @@ the expected shape of a self-host without storage, not a bug.
   never reaches a reader who cannot open it, two machines racing for one
   claim, edit invalidation, the daily budget, per-post truncation, backoff and
   give up, the sweep and the per-server flag, the staff list.
+- `server/src/services/community-home-captions.test.ts` (real Postgres) and
+  `server/src/speech/captions.test.ts`: flag off means no job and no words,
+  publish to source track to translations with the same timings to WebVTT,
+  the lock, the flag asked again before the provider, the budget, a replaced
+  video, the sweep as backfill, and the worker tick through the real ffmpeg
+  when the machine has it.
+- `client/src/components/community-home/community-home-media-captions.test.tsx`
+  and `client/src/lib/community-home/captions.test.ts`: when the player asks,
+  the `<track>` elements, which track is live, on by default only for another
+  language, the CC button and what it remembers.
 - `client/e2e/community-home-translation.spec.ts`: the real pipeline against a
   stub chat endpoint, the reader's toggle (and that it sticks), a phone, the
   staff note and per-language list.

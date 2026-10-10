@@ -766,6 +766,66 @@ export type CommunityHomePostTranslationsResponse = z.infer<
   typeof communityHomePostTranslationsResponseSchema
 >;
 
+/**
+ * Automatic subtitles of an uploaded Baú video (`community_home_video_captions`).
+ * On the post only as "there are some, in these languages": the cues travel
+ * through `GET .../home/posts/:postId/captions?lang=`, which is authorised
+ * like the video itself, so a feed of fifty posts does not carry fifty
+ * transcripts.
+ */
+export const communityHomePostCaptionsSchema = z.object({
+  /** What Whisper heard (ISO-639-1 when it could tell, e.g. `pt`). */
+  sourceLang: z.string(),
+  /**
+   * Tracks the captions route will answer with for the language this post
+   * was read in: always the source, plus a translation into the reader's
+   * language when one is current.
+   */
+  langs: z.array(z.string()),
+  /**
+   * Length of the sound that was transcribed. A player showing another file
+   * of the same post (the phone cut) uses it to check the subtitles still fit.
+   */
+  durationMs: z.number().int().nonnegative().nullable().default(null),
+});
+
+export type CommunityHomePostCaptions = z.infer<
+  typeof communityHomePostCaptionsSchema
+>;
+
+/** Seconds, from the start of the video. */
+export const communityHomeCaptionCueSchema = z.object({
+  start: z.number().nonnegative(),
+  end: z.number().nonnegative(),
+  text: z.string(),
+});
+
+export type CommunityHomeCaptionCue = z.infer<
+  typeof communityHomeCaptionCueSchema
+>;
+
+export const communityHomeCaptionTrackSchema = z.object({
+  lang: z.string(),
+  /** True for the transcription itself, false for a translation of it. */
+  source: z.boolean(),
+  /** Machine made (speech-to-text, then machine translation). Always true today. */
+  auto: z.boolean(),
+  /** A complete WebVTT file, ready for a `<track>` (through a blob URL). */
+  vtt: z.string(),
+});
+
+export type CommunityHomeCaptionTrack = z.infer<
+  typeof communityHomeCaptionTrackSchema
+>;
+
+export const communityHomeCaptionsResponseSchema = z.object({
+  tracks: z.array(communityHomeCaptionTrackSchema),
+});
+
+export type CommunityHomeCaptionsResponse = z.infer<
+  typeof communityHomeCaptionsResponseSchema
+>;
+
 export const communityHomePostSchema = z.object({
   id: z.string().uuid(),
   serverId: z.string().uuid(),
@@ -818,6 +878,12 @@ export const communityHomePostSchema = z.object({
    * parses) when the reader sees the author's own words.
    */
   translation: communityHomePostTranslationSchema.nullable().default(null),
+  /**
+   * Automatic subtitles for an uploaded video, when the server has them on
+   * and they exist. Null for a locked viewer (the same lock as `media`), for
+   * anything that is not an uploaded video, and from an older API.
+   */
+  captions: communityHomePostCaptionsSchema.nullable().default(null),
 });
 
 export type CommunityHomePost = z.infer<typeof communityHomePostSchema>;

@@ -286,6 +286,21 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
   },
+  community_home_video_captions: {
+    description:
+      "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",
+    env: "COMMUNITY_HOME_VIDEO_CAPTIONS",
+    parseEnv: exactTrue,
+    // Off: it sends a video's sound to a third party (Cloudflare Workers AI,
+    // outside Brazil) and costs money per minute. One server first.
+    codeDefault: false,
+    // Every reader works from a post, and a post has a server: the enqueue at
+    // publish and in the sweep, the worker before it calls the provider (a
+    // flip mid-queue drops the job with no call), and every read. Off also
+    // HIDES stored captions, so it is a kill switch like voice_note_transcription.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (captions)",
+  },
   desktop_share_audio_native: {
     description:
       "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",

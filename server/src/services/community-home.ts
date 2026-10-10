@@ -14,11 +14,13 @@ import {
   sniffCommunityHomeImageType,
   youtubePosterUrl,
   type CommunityHomeAuthorBadge,
+  type CommunityHomeCaptionTrack,
   type CommunityHomeComment,
   type CommunityHomeContentType,
   type CommunityHomeMedia,
   type CommunityHomeMobileRendition,
   type CommunityHomePost,
+  type CommunityHomePostCaptions,
   type CommunityHomePostStatus,
   type CommunityHomeTranslationLang,
   type CommunityHomeVisibility,
@@ -47,6 +49,12 @@ import {
   translationSourceHash,
   type TranslationReadRow,
 } from "./community-home-translation.js";
+import {
+  forgetCommunityHomeCaptions,
+  loadCaptionAvailability,
+  loadCaptionTracks,
+  scheduleCommunityHomeCaptions,
+} from "./community-home-captions.js";
 import { toPublicUserSummary } from "./users.js";
 
 /** The allowlisted content types a Baú image may be stored under. */
@@ -471,6 +479,7 @@ function toPost(
   authorCaps: { canManage: boolean; isOwner: boolean } | null,
   translationRow: TranslationReadRow | null = null,
   translationLang: CommunityHomeTranslationLang | null = null,
+  captions: CommunityHomePostCaptions | null = null,
 ): CommunityHomePost {
   // `locked` is decided from the post and the viewer ALONE, before any
   // translation is looked at, and every field below that a lock strips is
@@ -533,6 +542,12 @@ function toPost(
           },
         }
       : null,
+    // The same lock as `media`: subtitles are words from the video, and a
+    // viewer who may not play the video may not read them either.
+    captions:
+      !locked && row.media_kind === "video" && row.status === "published"
+        ? captions
+        : null,
   };
 }
 
@@ -549,7 +564,7 @@ async function hydratePosts(
   // failed read costs the translation, never the feed.
   const wantLang =
     lang !== null && isCommunityHomeTranslationOn(serverId) ? lang : null;
-  const [teasers, badges, translations] = await Promise.all([
+  const [teasers, badges, translations, captions] = await Promise.all([
     loadCommentTeasers(
       rows.map((r) => r.id),
       caps.viewerId,
@@ -570,6 +585,18 @@ async function hydratePosts(
           return new Map<string, TranslationReadRow>();
         })
       : Promise.resolve(new Map<string, TranslationReadRow>()),
+    // Only published uploaded videos can have subtitles; a failed read costs
+    // the subtitles, never the feed.
+    loadCaptionAvailability(
+      rows.filter((r) => r.media_kind === "video" && r.status === "published"),
+      lang,
+    ).catch((error: unknown) => {
+      console.error(
+        "[community-home] captions read failed:",
+        error instanceof Error ? error.message : error,
+      );
+      return new Map<string, CommunityHomePostCaptions>();
+    }),
   ]);
   return rows.map((row) =>
     toPost(
@@ -579,6 +606,7 @@ async function hydratePosts(
       badges.get(row.author_id) ?? null,
       translations.get(row.id) ?? null,
       wantLang,
+      captions.get(row.id) ?? null,
     ),
   );
 }
@@ -773,6 +801,34 @@ export async function getCommunityHomePost(
     normalizeCommunityHomeLang(lang),
   );
   return post!;
+}
+
+/**
+ * The subtitle tracks of one post's video, as WebVTT, for the reader's
+ * language. Authorised exactly like the video: the post is read through the
+ * same path as the feed (drafts and scheduled posts are staff only, a
+ * members-only post a viewer cannot open has no media and so no subtitles),
+ * and only what that read says is playable is served.
+ */
+export async function getCommunityHomePostCaptions(
+  serverId: string,
+  postId: string,
+  viewerId: string,
+  lang?: string | null,
+): Promise<CommunityHomeCaptionTrack[]> {
+  const reader = normalizeCommunityHomeLang(lang);
+  const post = await getCommunityHomePost(serverId, postId, viewerId, reader);
+  if (!post.captions || post.media?.kind !== "video") {
+    return [];
+  }
+  const { rows } = await getPool().query<{ media_storage_key: string | null }>(
+    `SELECT media_storage_key FROM community_home_posts WHERE id = $1 AND server_id = $2`,
+    [postId, serverId],
+  );
+  return loadCaptionTracks(
+    { id: postId, server_id: serverId, media_storage_key: rows[0]?.media_storage_key ?? null },
+    reader,
+  );
 }
 
 type MediaFields = {
@@ -1195,6 +1251,7 @@ export async function createCommunityHomePost(
       // After COMMIT, and not awaited: the translation is a network call and
       // a publish never waits for it or fails because of it.
       void scheduleCommunityHomeTranslation(postId, serverId);
+      void scheduleCommunityHomeCaptions(postId, serverId);
     }
     return getCommunityHomePost(serverId, postId, authorId);
   } catch (error) {
@@ -1401,6 +1458,12 @@ export async function updateCommunityHomePost(
         ? previousMobileKey
         : null,
     ]);
+    const videoChanged = previousKey !== media.media_storage_key;
+    if (videoChanged) {
+      // Subtitles belong to a file. In the same transaction as the swap, so
+      // no read can pair the new video with the old words.
+      await forgetCommunityHomeCaptions(client, postId);
+    }
     await client.query("COMMIT");
     // Not awaited: the author's answer does not wait on the bucket.
     void forgetStoredMedia(dropped);
@@ -1408,6 +1471,9 @@ export async function updateCommunityHomePost(
       // An edit of a live post: the old translations are now stale by hash
       // (readers get the original in the meantime); make new ones.
       void scheduleCommunityHomeTranslation(postId, serverId);
+      if (videoChanged) {
+        void scheduleCommunityHomeCaptions(postId, serverId);
+      }
     }
     return getCommunityHomePost(serverId, postId, actorId);
   } catch (error) {
@@ -1464,6 +1530,7 @@ export async function publishCommunityHomePost(
     [postId, serverId],
   );
   void scheduleCommunityHomeTranslation(postId, serverId);
+  void scheduleCommunityHomeCaptions(postId, serverId);
   return getCommunityHomePost(serverId, postId, actorId);
 }
 
@@ -1968,6 +2035,7 @@ export async function publishDueCommunityHomePosts(
   for (const row of result.rows) {
     // A scheduled post going live is a publish like any other. Not awaited.
     void scheduleCommunityHomeTranslation(row.id, row.server_id);
+    void scheduleCommunityHomeCaptions(row.id, row.server_id);
   }
   return [...new Set(result.rows.map((r) => r.server_id))];
 }

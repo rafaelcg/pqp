@@ -16,6 +16,10 @@ import {
   type CommunityHomeTranslationMetrics,
 } from "./community-home-translation.js";
 import {
+  communityHomeCaptionsMetrics,
+  type CommunityHomeCaptionsMetrics,
+} from "./community-home-captions.js";
+import {
   communityColumns,
   communityTag,
   type CommunityColumns,
@@ -325,6 +329,14 @@ export interface AdminMetrics {
    * answers is "is it translating, and why not".
    */
   communityHomeTranslation: CommunityHomeTranslationMetrics;
+  /**
+   * Baú video subtitles (`services/community-home-captions.ts`): captions jobs
+   * done, skipped (no provider, over budget, no speech, no audio) and failed
+   * in the last 24 hours and what is queued or running, from the database so
+   * it covers the worker; how many videos have a track and how many
+   * translations exist; and this process's own counters.
+   */
+  communityHomeCaptions: CommunityHomeCaptionsMetrics;
   /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
@@ -1185,6 +1197,7 @@ type CachedMetrics = Omit<
   | "cluster"
   | "flags"
   | "communityHomeTranslation"
+  | "communityHomeCaptions"
   | "streamAlerts"
 >;
 
@@ -1952,15 +1965,23 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions, flags, communityHomeTranslation] =
-    await Promise.all([
-      getCachedMetrics(),
-      checkReady(),
-      readSfuStats(),
-      sfuRegionsReport(),
-      featureFlagMetrics(),
-      communityHomeTranslationMetrics(),
-    ]);
+  const [
+    payload,
+    ready,
+    sfu,
+    sfuRegions,
+    flags,
+    communityHomeTranslation,
+    communityHomeCaptions,
+  ] = await Promise.all([
+    getCachedMetrics(),
+    checkReady(),
+    readSfuStats(),
+    sfuRegionsReport(),
+    featureFlagMetrics(),
+    communityHomeTranslationMetrics(),
+    communityHomeCaptionsMetrics(),
+  ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
   return {
@@ -1974,6 +1995,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfuRegions,
     flags,
     communityHomeTranslation,
+    communityHomeCaptions,
     streamAlerts: streamAlertMetrics(),
   };
 }

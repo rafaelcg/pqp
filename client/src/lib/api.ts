@@ -28,6 +28,7 @@ import type {
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
   CommunityHomePostTranslationsResponse,
+  CommunityHomeCaptionsResponse,
   CreateCommunityHomeCommentRequest,
   CreateCommunityHomeMediaUploadRequest,
   CreateCommunityHomeMediaUploadResponse,
@@ -2018,6 +2019,22 @@ export const fetchCommunityHomeTranslations = (
 ) =>
   apiFetch<CommunityHomePostTranslationsResponse>(
     `/api/servers/${serverId}/home/posts/${postId}/translations`,
+  );
+
+/**
+ * The automatic subtitles of a post's video as WebVTT: the source track and,
+ * when one exists, its translation into `lang` (the reader's UI locale).
+ * Authorised like the video itself; `tracks: []` when there are none.
+ */
+export const fetchCommunityHomeCaptions = (
+  serverId: string,
+  postId: string,
+  lang?: string,
+) =>
+  apiFetch<CommunityHomeCaptionsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/captions${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
   );
 
 /** Staff-only: drafts + scheduled, never mixed into the published feed. */
