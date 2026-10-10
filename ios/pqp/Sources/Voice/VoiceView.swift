@@ -74,7 +74,8 @@ struct VoiceView: View {
                 notices
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
-                    errorMessage: model.screenShare.errorMessage
+                    errorMessage: model.screenShare.errorMessage,
+                    isPictureOnly: model.transport == .mesh
                 )
                 if channel.isWatchParty {
                     WatchPartyHostControls(channel: channel, shareCleared: $watchPartyShareCleared)
@@ -307,6 +308,14 @@ struct VoiceView: View {
     }
 
     private func controlRow(side: CGFloat, spacing: CGFloat) -> some View {
+        controlButtons(side: side, spacing: spacing)
+            // Room for the share control's caption, which hangs below its
+            // circle. Reserved whether or not the control shows, so the row
+            // does not jump when a grant arrives mid-call.
+            .padding(.bottom, ScreenShareControlButton.captionReserve)
+    }
+
+    private func controlButtons(side: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
             // Locked, not hidden, on a listen-only seat: a microphone that
             // is simply absent reads as a broken screen, while a dimmed one
@@ -397,7 +406,8 @@ struct VoiceView: View {
                     isSharing: model.screenShare.isSharing,
                     identifier: "voice.share",
                     side: side,
-                    onTap: { model.screenShare.noteTapped() }
+                    onTap: { model.screenShare.noteTapped() },
+                    showsCaption: true
                 )
                 .opacity(model.status == .connected ? 1 : 0.4)
                 .allowsHitTesting(model.status == .connected)

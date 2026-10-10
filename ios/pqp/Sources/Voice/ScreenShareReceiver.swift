@@ -14,13 +14,21 @@ final class ScreenShareReceiver: @unchecked Sendable {
     typealias FrameHandler = @Sendable (UncheckedBox<CVPixelBuffer>, Int) -> Void
 
     private let onFrame: FrameHandler
+    /// App audio from the broadcast, on the socket's own queue. Not hopped to
+    /// the main actor: about 43 buffers a second whose only destination is an
+    /// audio mixer that is thread safe, so the hop would buy latency and
+    /// nothing else.
+    private let onAudio: AudioHandler?
     private var server: ScreenShareSocketServer?
     private var pool: CVPixelBufferPool?
     private var poolSize: (width: Int, height: Int) = (0, 0)
     private var synthetic: Task<Void, Never>?
 
-    init(onFrame: @escaping FrameHandler) {
+    typealias AudioHandler = @Sendable (ScreenShareAudioFrame) -> Void
+
+    init(onFrame: @escaping FrameHandler, onAudio: AudioHandler? = nil) {
         self.onFrame = onFrame
+        self.onAudio = onAudio
     }
 
     deinit { server?.stop(); synthetic?.cancel() }
@@ -35,8 +43,13 @@ final class ScreenShareReceiver: @unchecked Sendable {
     func start(socketURL: URL? = ScreenShareWire.socketURL()) -> Bool {
         stop()
         guard let socketURL else { return false }
-        let server = ScreenShareSocketServer { [weak self] header, payload in
-            self?.deliver(header: header, payload: payload)
+        let server = ScreenShareSocketServer { [weak self] message in
+            switch message {
+            case .video(let frame):
+                self?.deliver(header: frame.header, payload: frame.payload)
+            case .audio(let frame):
+                self?.onAudio?(frame)
+            }
         }
         guard server.start(at: socketURL) else { return false }
         self.server = server

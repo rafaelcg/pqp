@@ -17,19 +17,27 @@ import Foundation
 /// pass and a moment of app-side jitter is absorbed rather than felt, and small
 /// enough that it cannot become a queue measured in seconds, which is the whole
 /// thing blocking writes exist to prevent.
-final class ScreenShareSocketClient {
+final class ScreenShareSocketClient: @unchecked Sendable {
     private var descriptor: Int32 = -1
+    /// ReplayKit calls the extension for video and for app audio on threads of
+    /// its own choosing, and both write here. A stream socket has no message
+    /// boundaries, so two writers interleaving would put half an audio buffer
+    /// inside a picture and desynchronise the link for good. Every member that
+    /// touches the descriptor takes this.
+    private let lock = NSLock()
 
     /// Roughly one and a half 720p NV12 frames. Requested, not demanded: the
     /// kernel clamps to its own maximum and a refusal is not worth failing over.
     private static let sendBufferBytes: Int32 = 2 * 1024 * 1024
 
-    var isConnected: Bool { descriptor >= 0 }
+    var isConnected: Bool { lock.withLock { descriptor >= 0 } }
 
     /// Opens the connection. False means the app is not listening — which is the
     /// normal case when a broadcast is started while the app is not in a call.
     func connect(to url: URL) -> Bool {
-        close()
+        lock.lock()
+        defer { lock.unlock() }
+        closeLocked()
         guard var address = sockaddrUn(for: url.path) else { return false }
         let socketDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketDescriptor >= 0 else { return false }
@@ -84,6 +92,22 @@ final class ScreenShareSocketClient {
         luma: UnsafeRawBufferPointer,
         chroma: UnsafeRawBufferPointer
     ) -> WriteOutcome {
+        write(header: header, regions: [luma, chroma])
+    }
+
+    /// Writes one buffer of app audio: its header, then its samples.
+    ///
+    /// Dropped rather than queued when the socket is full, exactly like a
+    /// picture: a gap of 20 ms in a game's sound is far less noticeable than a
+    /// broadcast whose audio drifts further behind its picture every time the
+    /// app is busy.
+    func write(header: Data, payload: UnsafeRawBufferPointer) -> WriteOutcome {
+        write(header: header, regions: [payload])
+    }
+
+    private func write(header: Data, regions: [UnsafeRawBufferPointer]) -> WriteOutcome {
+        lock.lock()
+        defer { lock.unlock() }
         guard descriptor >= 0 else { return .failed }
         // Not writable at all means the app has stopped reading: its own queue
         // is full and ours is about to be. Better to skip this frame than to
@@ -91,7 +115,7 @@ final class ScreenShareSocketClient {
         // behind it.
         guard isWritable() else { return .dropped }
         return header.withUnsafeBytes { headerBytes -> WriteOutcome in
-            for region in [headerBytes, luma, chroma] where region.count > 0 {
+            for region in [headerBytes] + regions where region.count > 0 {
                 guard writeAll(region) else { return .failed }
             }
             return .sent
@@ -127,6 +151,10 @@ final class ScreenShareSocketClient {
     }
 
     func close() {
+        lock.withLock { closeLocked() }
+    }
+
+    private func closeLocked() {
         guard descriptor >= 0 else { return }
         Darwin.close(descriptor)
         descriptor = -1
@@ -148,7 +176,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     private var listenDescriptor: Int32 = -1
     private var clientDescriptor: Int32 = -1
     private var parser = ScreenShareFrameParser()
-    private let onFrame: @Sendable (ScreenShareFrameHeader, Data) -> Void
+    private let onMessage: @Sendable (ScreenShareMessage) -> Void
     /// Held across reads rather than allocated per read. A 720p frame is ~1.38
     /// MB, so at 30 fps this loop runs a few hundred times a second and a fresh
     /// buffer each time would be pure garbage.
@@ -166,8 +194,8 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     /// receive buffer makes the sender block whatever the sender asked for.
     private static let receiveBufferBytes: Int32 = 2 * 1024 * 1024
 
-    init(onFrame: @escaping @Sendable (ScreenShareFrameHeader, Data) -> Void) {
-        self.onFrame = onFrame
+    init(onMessage: @escaping @Sendable (ScreenShareMessage) -> Void) {
+        self.onMessage = onMessage
     }
 
     deinit { stop() }
@@ -252,14 +280,14 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             Darwin.read(descriptor, raw.baseAddress, raw.count)
         }
         if read > 0 {
-            guard let frames = parser.append(Data(chunk[0..<read])) else {
+            guard let messages = parser.append(Data(chunk[0..<read])) else {
                 // Out of sync. Dropping the connection makes the extension
                 // reconnect with a fresh stream, which is the only recovery
                 // worth having on a link only this app writes to.
                 dropClient()
                 return
             }
-            for frame in frames { onFrame(frame.header, frame.payload) }
+            for message in messages { onMessage(message) }
             return
         }
         if read < 0 && (errno == EAGAIN || errno == EINTR) { return }

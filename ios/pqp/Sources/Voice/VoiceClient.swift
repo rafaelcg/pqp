@@ -419,10 +419,10 @@ actor VoiceClient {
             scale: videoScaleFactor(
                 for: videoQuality,
                 sourceLines: screenCaptureLines,
-                // The extension caps the long side, so an upright phone screen
-                // arrives with about that many lines. A guess is only in force
-                // until the first frame lands and re-tunes for real.
-                fallbackLines: ScreenShareWire.maxLongSide
+                // The extension holds the short side at 720, so an upright
+                // phone screen arrives with about this many lines. A guess is
+                // only in force until the first frame lands and re-tunes for real.
+                fallbackLines: ScreenShareWire.typicalLongSide
             )
         )
     }

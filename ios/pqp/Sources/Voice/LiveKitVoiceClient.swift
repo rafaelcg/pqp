@@ -44,6 +44,12 @@ actor LiveKitVoiceClient {
 
     private var isMuted = false
     private var isDeafened = false
+    /// A share of ours is live here, so its sound is riding the microphone
+    /// track. See `SfuMicrophoneRouting` for what that changes about a mute.
+    private var isAppAudioLive = false
+    /// A moderator's mute on our own seat, from the roster. Never worked
+    /// around, not even to keep a share's sound going.
+    private var isSelfServerMuted = false
     private var localCamera: LocalVideoTrack?
     /// Attached to our own camera track to count frames. Kept here because a
     /// track holds its renderers strongly and this one has to come off again.
@@ -171,6 +177,9 @@ actor LiveKitVoiceClient {
             if isMuted {
                 try await room.localParticipant.setMicrophone(enabled: false)
             }
+            // A share that went live before this microphone existed (a seat
+            // that was given SPEAK mid-share) wants its sound through it.
+            if isAppAudioLive { await applyMicrophoneRouting() }
             return .published
         } catch {
             let reason = String(describing: error)
@@ -246,8 +255,39 @@ actor LiveKitVoiceClient {
         if !muted, microphonePublication(in: room) == nil {
             return await publishMicrophone(muted: false)
         }
-        _ = try? await room.localParticipant.setMicrophone(enabled: !muted)
+        await applyMicrophoneRouting()
         return nil
+    }
+
+    /// Our own seat's moderator mute, as the roster says it. Idempotent, so the
+    /// models can hand it every roster frame.
+    func setSelfServerMuted(_ muted: Bool) async {
+        guard muted != isSelfServerMuted else { return }
+        isSelfServerMuted = muted
+        await applyMicrophoneRouting()
+    }
+
+    /// Puts the microphone track and the mixer where `SfuMicrophoneRouting`
+    /// says, in the order that never lets the microphone through by accident:
+    /// silenced in the mixer BEFORE the track is turned on, and the mixer only
+    /// restored AFTER the track is turned off.
+    ///
+    /// Never publishes a microphone. A seat without one (listen-only) has no
+    /// track for a share's sound to ride, and asking for a publish the server
+    /// has withheld would only be a refusal in the log.
+    private func applyMicrophoneRouting() async {
+        let routing = SfuMicrophoneRouting.resolve(
+            muted: isMuted, appAudioLive: isAppAudioLive, serverMuted: isSelfServerMuted
+        )
+        let mixer = AudioManager.shared.mixer
+        guard let room, room.connectionState == .connected,
+              microphonePublication(in: room) != nil else {
+            mixer.micVolume = 1
+            return
+        }
+        if routing.micVolume == 0 { mixer.micVolume = 0 }
+        _ = try? await room.localParticipant.setMicrophone(enabled: routing.trackEnabled)
+        if routing.micVolume > 0 { mixer.micVolume = 1 }
     }
 
     /// Silences everyone else. The mic is the caller's to mute alongside, and
@@ -359,7 +399,7 @@ actor LiveKitVoiceClient {
     /// extension JPEG-encode every frame at the screen's full size and the
     /// app decode it again, inside a process iOS kills at about 50 MB, and it
     /// would link LiveKit and its WebRTC build into that process. The bridge
-    /// this app already has scales to `ScreenShareWire.maxLongSide`, clocks
+    /// this app already has scales to `ScreenShareWire.maxShortSide`, clocks
     /// to 30 fps and allocates nothing per frame, and it feeds the mesh from
     /// the same socket. So the same NV12 buffers are handed to a
     /// `BufferCapturer` track, which is the SDK's door for exactly this
@@ -370,9 +410,14 @@ actor LiveKitVoiceClient {
     /// `group.gg.pqp.app`), and it listens for Darwin notifications our
     /// extension never posts. That is inert: `setScreenShare(enabled:)` is
     /// never called, so nothing here ever reaches `BroadcastManager`.
-    func startScreenShare(quality: VideoQuality) -> Bool {
+    func startScreenShare(quality: VideoQuality) async -> Bool {
         guard let room, room.connectionState == .connected else { return false }
         if localScreen != nil { return true }
+        // The share's sound: the extension forwards it whatever the room, and
+        // this is the only place the gate opens. See `ScreenShareAppAudio`.
+        isAppAudioLive = true
+        ScreenShareAppAudio.shared.setOpen(true)
+        await applyMicrophoneRouting()
         let plan = sfuScreenPlan(quality: quality, participantCount: participantCount)
         let track = LocalVideoTrack.createBufferTrack(
             name: Track.screenShareVideoName,
@@ -448,6 +493,13 @@ actor LiveKitVoiceClient {
     }
 
     func stopScreenShare() async {
+        // Sound first: the gate shuts before the picture goes, and a mute that
+        // was only holding the microphone at zero becomes a real one again.
+        ScreenShareAppAudio.shared.setOpen(false)
+        if isAppAudioLive {
+            isAppAudioLive = false
+            await applyMicrophoneRouting()
+        }
         screenPublish?.cancel()
         screenPublish = nil
         screenPlan = nil
@@ -468,6 +520,17 @@ actor LiveKitVoiceClient {
     // MARK: - Teardown
 
     func disconnect() async {
+        // The mixer and the gate are process-wide and outlive this room, so
+        // the next call must not inherit a zeroed microphone or an open gate.
+        // Only when it was this room that set them: the voice channel and the
+        // DM call each own one of these clients, and the idle one being
+        // cleared must not reach into the live one's share.
+        if isAppAudioLive {
+            ScreenShareAppAudio.shared.setOpen(false)
+            AudioManager.shared.mixer.micVolume = 1
+        }
+        isAppAudioLive = false
+        isSelfServerMuted = false
         let room = self.room
         self.room = nil
         bridge = nil
