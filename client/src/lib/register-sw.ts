@@ -92,27 +92,23 @@ export function installCauseAttributes(message: unknown): Record<string, string>
  * reported at once, and an outcome is reported on its own only if no cause
  * arrived within `waitMs` either side of it.
  *
- * Every open tab sees both signals. The worker marks one tab's message
- * `report: true` and the rest `report: false`; a tab told `false` stays quiet,
- * its fallback included, so one failed install is one event.
+ * This is per tab. Every open tab sees both signals; `onceAcrossTabs` makes
+ * them one event.
  */
 export function installFailureReporter(
   report: (attributes: Record<string, string>) => void,
   waitMs = INSTALL_CAUSE_WAIT_MS,
 ): { cause: (message: unknown) => void; failed: () => void } {
   let lastReportAt = Number.NEGATIVE_INFINITY;
-  const send = (attributes: Record<string, string> | null) => {
+  const send = (attributes: Record<string, string>) => {
     lastReportAt = Date.now();
-    if (attributes) {
-      report(attributes);
-    }
+    report(attributes);
   };
   return {
     cause(message) {
       const attributes = installCauseAttributes(message);
       if (attributes && Date.now() - lastReportAt >= waitMs) {
-        // Another tab was chosen to report this one: settle without sending.
-        send((message as { report?: unknown }).report === false ? null : attributes);
+        send(attributes);
       }
     },
     failed() {
@@ -124,6 +120,50 @@ export function installFailureReporter(
       }, waitMs);
     },
   };
+}
+
+/** How long one tab's report of a failure keeps the other tabs from repeating it. */
+export const INSTALL_REPORT_DEDUPE_MS = 60_000;
+
+const REPORTED_PREFIX = "pqp:sw-install-reported:";
+
+/**
+ * Runs `fn` in at most one tab per `key` per `windowMs`.
+ *
+ * A failed install is seen by every open tab of the origin. The first tab to
+ * take the Web Lock for `key` writes the time to `localStorage` and reports;
+ * a tab that finds a recent time stays quiet. Without Web Locks the storage
+ * check alone still dedupes everything but an exact tie. Without storage
+ * (private mode, blocked site data) every tab reports: a duplicate is better
+ * than a failure nobody hears about.
+ */
+export async function onceAcrossTabs(
+  key: string,
+  fn: () => void,
+  windowMs = INSTALL_REPORT_DEDUPE_MS,
+): Promise<void> {
+  const name = `${REPORTED_PREFIX}${key}`;
+  const run = () => {
+    try {
+      const at = Number(localStorage.getItem(name));
+      if (at && Date.now() - at < windowMs) {
+        return;
+      }
+      localStorage.setItem(name, String(Date.now()));
+    } catch {
+      // No storage: report from this tab anyway.
+    }
+    fn();
+  };
+  try {
+    if (navigator.locks?.request) {
+      await navigator.locks.request(name, async () => run());
+      return;
+    }
+  } catch {
+    // Locks refused: fall through to the storage check alone.
+  }
+  run();
 }
 
 /** Longest a first-time visitor to the marketing home page goes unregistered. */
@@ -210,7 +250,8 @@ export function registerServiceWorker(
         }
         const installFailure = installFailureReporter((attributes) => {
           console.warn("[pwa] service worker install failed", attributes);
-          reportFaroEvent("pwa_sw_install_failed", attributes);
+          const key = [attributes.build, attributes.path, attributes.status, attributes.reason].join("|");
+          void onceAcrossTabs(key, () => reportFaroEvent("pwa_sw_install_failed", attributes));
         });
         // Reporting must never stand between the page and its worker.
         try {

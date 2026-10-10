@@ -268,31 +268,7 @@ describe("a failed install says why", () => {
       reason: "bad-precaching-response",
       path: "/robots.txt",
       status: 404,
-      report: true,
     });
-  });
-
-  it("asks exactly one page to report: the focused one, else a visible one", async () => {
-    const posted: { name: string; report: boolean }[] = [];
-    const page = (name: string, extra: Record<string, unknown>) => ({
-      ...extra,
-      postMessage: (m: unknown) => {
-        posted.push({ name, report: (m as { report: boolean }).report });
-      },
-    });
-    const t = makeScope({
-      clients: [
-        page("hidden", { visibilityState: "hidden" }),
-        page("visible", { visibilityState: "visible" }),
-        page("focused", { focused: true, visibilityState: "visible" }),
-      ],
-    });
-    await Promise.allSettled(install(t, Promise.reject(precacheError("https://pqp.gg/a.js", 404))));
-    expect(posted).toEqual([
-      { name: "hidden", report: false },
-      { name: "visible", report: false },
-      { name: "focused", report: true },
-    ]);
   });
 
   it("reports once when several promises of the same install reject", async () => {
@@ -321,7 +297,7 @@ describe("a failed install says why", () => {
     const [extended] = install(t, Promise.reject(new TypeError("Failed to fetch")));
     await expect(extended).rejects.toThrow("Failed to fetch");
     expect(posted).toEqual([
-      { type: "PQP_SW_INSTALL_FAILED", build: "abc123", reason: "TypeError", path: "", status: 0, report: true },
+      { type: "PQP_SW_INSTALL_FAILED", build: "abc123", reason: "TypeError", path: "", status: 0 },
     ]);
   });
 

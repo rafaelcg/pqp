@@ -7,6 +7,7 @@ import {
   HOME_REGISTER_DELAY_MS,
   installCauseAttributes,
   installFailureReporter,
+  onceAcrossTabs,
   registerServiceWorker,
   watchInstallFailures,
 } from "./register-sw";
@@ -214,15 +215,6 @@ describe("installFailureReporter", () => {
     expect(report.mock.calls).toEqual([[{ reason: "unknown", path: "", status: "0", build: "" }]]);
   });
 
-  it("stays quiet, fallback included, in a tab the worker did not choose", () => {
-    const report = vi.fn();
-    const r = installFailureReporter(report, 3000);
-    r.cause({ ...cause, report: false });
-    r.failed();
-    vi.advanceTimersByTime(5000);
-    expect(report).not.toHaveBeenCalled();
-  });
-
   it("ignores messages that are not ours", () => {
     const report = vi.fn();
     const r = installFailureReporter(report);
@@ -236,5 +228,69 @@ describe("installFailureReporter", () => {
     expect(
       installCauseAttributes({ type: "PQP_SW_INSTALL_FAILED", path: "x".repeat(500), status: "404" }),
     ).toEqual({ reason: "unknown", path: "x".repeat(200), status: "0", build: "" });
+  });
+});
+
+describe("onceAcrossTabs", () => {
+  function stubStorage() {
+    const data = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, v),
+    });
+    return data;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("runs once for two tabs reporting the same failure, through the lock", async () => {
+    stubStorage();
+    let chain = Promise.resolve();
+    const names: string[] = [];
+    vi.stubGlobal("navigator", {
+      locks: {
+        // One queue for every caller, like a real exclusive lock.
+        request: (name: string, cb: () => Promise<void>) => {
+          names.push(name);
+          chain = chain.then(cb);
+          return chain;
+        },
+      },
+    });
+    const fn = vi.fn();
+    await Promise.all([onceAcrossTabs("b1|/robots.txt|404", fn), onceAcrossTabs("b1|/robots.txt|404", fn)]);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(names[0]).toBe("pqp:sw-install-reported:b1|/robots.txt|404");
+  });
+
+  it("dedupes on storage alone without Web Locks, and runs again after the window", async () => {
+    stubStorage();
+    vi.stubGlobal("navigator", {});
+    const fn = vi.fn();
+    await onceAcrossTabs("k", fn, 1000);
+    await onceAcrossTabs("k", fn, 1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 1001);
+    await onceAcrossTabs("k", fn, 1000);
+    vi.useRealTimers();
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("still reports when storage throws", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    vi.stubGlobal("navigator", {});
+    const fn = vi.fn();
+    await onceAcrossTabs("k", fn);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });
