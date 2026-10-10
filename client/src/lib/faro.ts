@@ -47,6 +47,37 @@ export interface FaroEnv {
   VITE_FARO_APP_NAME?: string;
   /** App version — the deployed commit SHA on the hosted build. Defaults to `dev`. */
   VITE_FARO_APP_VERSION?: string;
+  /** Share of sessions reported, 0 to 1. Defaults to `DEFAULT_SESSION_SAMPLE_RATE`. */
+  VITE_FARO_SESSION_SAMPLE_RATE?: string;
+}
+
+/**
+ * Share of browser sessions that report anything at all. Sampling is per
+ * session in Faro: a sampled-out session sends nothing (errors included), a
+ * sampled-in one sends everything, so a session is never half there.
+ *
+ * WHY NOT 1. The Grafana Cloud stack is on the free tier: 50,000 frontend
+ * sessions a month, and past that the collector answers 402 to EVERY request
+ * until the month turns over. October 2026 used 50,000 by the 9th (about 6,300
+ * sessions a day, most of them desktop windows that stay open and roll over to a
+ * new session after 15 idle minutes), and from then on Faro was blind:
+ * `grafanacloud_org_fe_o11y_billable_sessions` flat at the cap, the collector
+ * answering 402, nothing in Loki. At 0.2 a month is about 38,000 sessions,
+ * which leaves room for a busy weekend. Raise it with the repository variable
+ * `VITE_FARO_SESSION_SAMPLE_RATE` (a build-time value) if the plan changes.
+ */
+export const DEFAULT_SESSION_SAMPLE_RATE = 0.2;
+
+/** A rate from the build variable, or the default for anything unset or unusable. */
+export function parseSessionSampleRate(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return DEFAULT_SESSION_SAMPLE_RATE;
+  }
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate >= 0 && rate <= 1
+    ? rate
+    : DEFAULT_SESSION_SAMPLE_RATE;
 }
 
 export interface FaroConfig {
@@ -54,6 +85,7 @@ export interface FaroConfig {
   appName: string;
   appVersion: string;
   environment: string;
+  sessionSampleRate: number;
 }
 
 /**
@@ -72,6 +104,7 @@ export function resolveFaroConfig(env: FaroEnv): FaroConfig | null {
     appName: env.VITE_FARO_APP_NAME?.trim() || "pqp-web",
     appVersion: env.VITE_FARO_APP_VERSION?.trim() || "dev",
     environment: "production",
+    sessionSampleRate: parseSessionSampleRate(env.VITE_FARO_SESSION_SAMPLE_RATE),
   };
 }
 
@@ -137,6 +170,9 @@ export function initFaro(deps: InitFaroDeps = {}): Faro | null {
     instrumentations: getWebInstrumentations(),
     // Per-request resource timings are dropped (see DROPPED_EVENT_NAMES).
     beforeSend: dropNoisyItems,
+    // Only a share of sessions report, to stay inside the plan's monthly
+    // session allowance (see DEFAULT_SESSION_SAMPLE_RATE).
+    sessionTracking: { samplingRate: config.sessionSampleRate },
     // No `user` is set: this app attaches no account identity to telemetry.
   });
   return faro;
