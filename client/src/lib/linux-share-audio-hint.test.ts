@@ -4,6 +4,7 @@ import {
   LINUX_SHARE_AUDIO_HINT_STORAGE_KEY,
   isLinuxPlatform,
   isLinuxShareAudioHintSeen,
+  linuxShareAudioHintContext,
   linuxShareAudioHintPersists,
   rememberLinuxShareAudioHint,
   shouldShowLinuxShareAudioHint,
@@ -149,5 +150,25 @@ describe("persistence", () => {
     };
     expect(isLinuxShareAudioHintSeen(hostile, true)).toBe(true);
     expect(() => rememberLinuxShareAudioHint(hostile, true)).not.toThrow();
+  });
+});
+
+describe("linuxShareAudioHintContext", () => {
+  it("uses the browser copy outside the desktop shell", () => {
+    expect(linuxShareAudioHintContext(false, { flatpak: true })).toBeUndefined();
+    expect(linuxShareAudioHintContext(false, null)).toBeUndefined();
+  });
+
+  it("uses the desktop copy in a .deb or AppImage shell", () => {
+    expect(linuxShareAudioHintContext(true, { flatpak: false })).toBe("desktop");
+  });
+
+  it("uses the desktop copy in a shell from before the flag", () => {
+    expect(linuxShareAudioHintContext(true, {})).toBe("desktop");
+    expect(linuxShareAudioHintContext(true, null)).toBe("desktop");
+  });
+
+  it("uses the Flatpak copy in the Flatpak build", () => {
+    expect(linuxShareAudioHintContext(true, { flatpak: true })).toBe("flatpak");
   });
 });

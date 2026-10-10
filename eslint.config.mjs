@@ -100,6 +100,7 @@ export default tseslint.config(
       "client/e2e/camera-sync/**/*.mjs",
       "client/e2e/share-fast-start/**/*.mjs",
       "electron/**/*.mjs",
+      "flatpak/**/*.mjs",
       "tools/**/*.{js,mjs}",
       "*.mjs",
     ],

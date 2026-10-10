@@ -1,0 +1,100 @@
+# Flathub manifest for the pqp desktop app. Canonical copy; the flathub/gg.pqp.pqp
+# repository carries the same four files (this manifest, the metainfo, the
+# .desktop file and pqp.sh). See docs/DESKTOP.md "Flatpak / Flathub".
+#
+# It repackages the released Linux x64 .deb instead of building from source:
+# pqp is a pnpm monorepo (electron/ + client/ + packages/shared) and Flathub's
+# offline node tooling reads npm and yarn lockfiles, not pnpm's. The .deb is the
+# same artifact the AppImage users run, sha256-pinned, and fetched by
+# flatpak-builder before the build (no network during the build itself).
+#
+# x86_64 only: the release publishes no arm64 Linux build yet. When it does, add
+# a second source with `only-arches: [aarch64]` and the arm64 .deb.
+id: gg.pqp.pqp
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '26.08'
+command: pqp
+separate-locales: false
+
+finish-args:
+  # Display: native Wayland, X11 only where there is no Wayland. IPC is X11's
+  # shared memory, which an X11 client needs.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU (video decode, WebGL) and webcams. Flatpak has no camera-only device
+  # permission, and Chromium opens V4L2 nodes directly for video calls.
+  - --device=all
+  # Microphone and the call's playback.
+  - --socket=pulseaudio
+  # It is a chat app: the API, the WebSocket, voice media and the hosted client.
+  - --share=network
+  # The tray icon (StatusNotifierItem): pqp keeps running in the tray when the
+  # window is closed during a call.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # The host's cursor theme, so the pointer is the right size under Wayland on
+  # HiDPI (Flatpak's Electron guide).
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
+  # Needing no permission here:
+  # - notifications: libnotify (0.8+ in the runtime) uses the notification
+  #   portal inside a sandbox, so no --talk-name=org.freedesktop.Notifications;
+  # - screen capture: xdg-desktop-portal's ScreenCast; file saves: FileChooser;
+  # - pqp:// links: the .desktop file's MimeType.
+  # Deliberately absent: --filesystem=xdg-run/pipewire-0. The shell's Linux
+  # share audio would need it (plus the pulseaudio socket) to link other apps'
+  # streams into its bus. The sound server allows that to a sandboxed client,
+  # but inside the sandbox the shell cannot reliably tell the call apart from
+  # other apps by process id, so the Flatpak build does not offer share audio
+  # at all (electron/lib/flatpak.js). See docs/DESKTOP.md "Flatpak / Flathub".
+
+modules:
+  - name: pqp
+    buildsystem: simple
+    sources:
+      - type: file
+        url: https://github.com/rafaelcg/pqp/releases/download/v0.2.4/pqp-0.2.4-amd64.deb
+        sha256: 83f75521c9f1facd16af599e38deefaac1049691fa79aea26e2fc33489b8fbe2
+        dest-filename: pqp.deb
+        only-arches: [x86_64]
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/rafaelcg/pqp/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: >-
+            .assets[] | select(.name == "pqp-" + $version + "-amd64.deb") |
+            .browser_download_url
+          is-main-source: true
+      # pqp's own license (AGPL-3.0-only). The .deb ships Electron's and
+      # Chromium's but not ours; flatpak-builder installs a LICENSE it finds in
+      # the build directory to share/licenses/gg.pqp.pqp.
+      - type: file
+        url: https://raw.githubusercontent.com/rafaelcg/pqp/v0.2.4/LICENSE
+        sha256: 0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0
+      - type: file
+        path: pqp.sh
+      - type: file
+        path: gg.pqp.pqp.desktop
+      - type: file
+        path: gg.pqp.pqp.metainfo.xml
+    build-commands:
+      - ar x pqp.deb
+      - tar -xf data.tar.xz
+      - mv opt/pqp "${FLATPAK_DEST}/pqp"
+      # zypak replaces Chromium's setuid sandbox, which cannot work in Flatpak.
+      - rm -f "${FLATPAK_DEST}/pqp/chrome-sandbox"
+      # Flathub updates the app. Without this file electron-updater never
+      # looks for a release, even in a build older than the Flatpak check in
+      # electron/lib/updater.js.
+      - rm -f "${FLATPAK_DEST}/pqp/resources/app-update.yml"
+      # Electron names its .desktop file (and the Wayland app_id) after the
+      # package; in Flatpak it has to be the app id, or Wayland loses the icon.
+      - patch-electron-desktop-filename "${FLATPAK_DEST}/pqp/resources/app.asar"
+      - install -Dm755 pqp.sh "${FLATPAK_DEST}/bin/pqp"
+      - install -Dm644 usr/share/icons/hicolor/512x512/apps/pqp.png
+        "${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/${FLATPAK_ID}.png"
+      - install -Dm644 gg.pqp.pqp.desktop "${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop"
+      - install -Dm644 gg.pqp.pqp.metainfo.xml "${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml"
+      - install -Dm644 LICENSE "${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE"

@@ -1,0 +1,101 @@
+name: Flatpak manifest
+
+# Keeps flatpak/gg.pqp.pqp.yml pointing at the newest desktop release: when a
+# `v*` release is published (the draft electron.yml made, published by hand),
+# download its Linux .deb, pin the sha256, add the release to the metainfo,
+# lint, and open a PR to main. Nothing here builds, signs or publishes anything.
+#
+# This is the canonical copy. Once the app is on Flathub, Flathub's own
+# external data checker opens the same bump on flathub/gg.pqp.pqp from the
+# manifest's `x-checker-data`, every two hours. See docs/DESKTOP.md
+# "Flatpak / Flathub".
+#
+# Opening the PR needs "Allow GitHub Actions to create and approve pull
+# requests" (Settings > Actions > General). Without it the branch is still
+# pushed and the job summary links the compare page.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to point the manifest at, e.g. v0.2.5"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: flatpak-manifest
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # Desktop releases only (`v1.2.3`); android-v* and ios-v* are not ours.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Pin the release's .deb and LICENSE
+        id: pin
+        run: |
+          set -euo pipefail
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::not a desktop tag: $TAG"; exit 1 ;; esac
+          version="${TAG#v}"
+          mkdir -p "$RUNNER_TEMP/flatpak"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "pqp-${version}-amd64.deb" --dir "$RUNNER_TEMP/flatpak"
+          deb_sha=$(sha256sum "$RUNNER_TEMP/flatpak/pqp-${version}-amd64.deb" | cut -d' ' -f1)
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/LICENSE" \
+            -o "$RUNNER_TEMP/flatpak/LICENSE"
+          license_sha=$(sha256sum "$RUNNER_TEMP/flatpak/LICENSE" | cut -d' ' -f1)
+          published="${{ github.event.release.published_at }}"
+          if [ -z "$published" ]; then
+            published=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt -q .publishedAt)
+          fi
+          node flatpak/bump.mjs "$version" "$deb_sha" "$license_sha" "${published:0:10}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "deb_sha=$deb_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate metainfo and manifest
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
+            manifest gg.pqp.pqp.yml
+          docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
+            appstream gg.pqp.pqp.metainfo.xml
+
+      - name: Open the PR
+        run: |
+          set -euo pipefail
+          version="${{ steps.pin.outputs.version }}"
+          if git diff --quiet -- flatpak/; then
+            echo "Manifest already points at ${version}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          branch="flatpak/v${version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add flatpak/gg.pqp.pqp.yml flatpak/gg.pqp.pqp.metainfo.xml
+          git commit -m "Flatpak: point the manifest at ${version}"
+          git push --force origin "$branch"
+          body="Points \`flatpak/gg.pqp.pqp.yml\` at the ${TAG} .deb (sha256 \`${{ steps.pin.outputs.deb_sha }}\`) and adds ${version} to the metainfo. Opened by \`.github/workflows/flatpak-manifest.yml\`. Flathub's own checker makes the same bump on flathub/gg.pqp.pqp."
+          if ! gh pr create --base main --head "$branch" --title "Flatpak: point the manifest at ${version}" --body "$body"; then
+            echo "Could not open the PR (is 'Allow GitHub Actions to create pull requests' on?). Branch pushed: https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}" >> "$GITHUB_STEP_SUMMARY"
+          fi
