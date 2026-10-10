@@ -5,6 +5,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +59,7 @@ import gg.pqp.app.R
 import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.bau.BAU_BODY_MAX
 import gg.pqp.app.bau.BAU_TITLE_MAX
+import gg.pqp.app.bau.BauChannelRefs
 import gg.pqp.app.bau.BauComposeGate
 import gg.pqp.app.bau.BauComposeProblem
 import gg.pqp.app.bau.BauComposeViewModel
@@ -66,6 +69,7 @@ import gg.pqp.app.bau.BauRefusal
 import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.ContentBauFiles
 import gg.pqp.app.bau.YoutubeLinks
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.serverPermissions
@@ -140,6 +144,7 @@ fun BauComposeDialog(
     config: CommunityHomeConfig,
     onDismiss: () -> Unit,
     onPosted: () -> Unit,
+    channels: List<Channel> = emptyList(),
 ) {
     val context = LocalContext.current
     val model: BauComposeViewModel = viewModel(
@@ -149,6 +154,9 @@ fun BauComposeDialog(
     val state by model.state.collectAsStateWithLifecycle()
     val draft = state.draft
     var confirmDiscard by remember { mutableStateOf(false) }
+
+    // `#name` typed or picked is stored as `<#id>`; the model needs the list to do it.
+    LaunchedEffect(channels) { model.setChannels(channels) }
 
     LaunchedEffect(state.posted) {
         if (state.posted) {
@@ -243,6 +251,38 @@ fun BauComposeDialog(
                     enabled = !state.posting,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp).testTag("bau.compose.body"),
                 )
+
+                // `#` picker. The field is a plain string, so this follows the end
+                // of the text: while the draft ends in `#ge`, the matching channels
+                // are offered and a tap swaps the token for `#name`.
+                val channelQuery = remember(draft.body) {
+                    BauChannelRefs.findQuery(draft.body, draft.body.length)
+                }
+                val channelMatches = remember(channelQuery, channels) {
+                    channelQuery?.let { BauChannelRefs.filter(channels, it.query) }.orEmpty()
+                }
+                if (channelQuery != null && channelMatches.isNotEmpty() && !state.posting) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .testTag("bau.compose.channels"),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        channelMatches.forEach { channel ->
+                            AssistChip(
+                                onClick = {
+                                    model.setBody(
+                                        BauChannelRefs.apply(draft.body, channelQuery, channel, channels).value,
+                                    )
+                                },
+                                label = { Text("#${channel.name}") },
+                                modifier = Modifier.testTag("bau.compose.channel.${channel.id}"),
+                            )
+                        }
+                    }
+                }
 
                 val media = draft.media
                 if (media != null) {

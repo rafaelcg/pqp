@@ -235,7 +235,11 @@ struct ChannelListView: View {
                         // hint so nobody opens it expecting to type.
                         if showsBau, let config = communityHome {
                             NavigationLink {
-                                CommunityHomeView(server: current, config: config)
+                                CommunityHomeView(
+                                    server: current,
+                                    config: config,
+                                    chatDestination: { AnyView(chat(for: $0)) }
+                                )
                             } label: {
                                 BauRow(unread: bauUnread)
                             }
@@ -340,11 +344,11 @@ struct ChannelListView: View {
         .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
         .navigationDestination(isPresented: $showingBau) {
             if let config = communityHome {
-                CommunityHomeView(server: current, config: config)
+                CommunityHomeView(server: current, config: config, chatDestination: { AnyView(chat(for: $0)) })
             }
         }
         .navigationDestination(item: $openedBau) { focus in
-            CommunityHomeView(server: current, config: communityHome ?? .off, focusPostId: focus.postId)
+            CommunityHomeView(server: current, config: communityHome ?? .off, focusPostId: focus.postId, chatDestination: { AnyView(chat(for: $0)) })
         }
         // Deferred by one appearance on purpose. A `navigationDestination` can
         // only serve a push once the view carrying it is *in* the stack, and on

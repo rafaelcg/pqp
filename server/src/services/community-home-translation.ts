@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   COMMUNITY_HOME_TRANSLATION_LANGS,
+  hasChannelRefs,
+  protectChannelRefs,
   type CommunityHomePostTranslationRow,
   type CommunityHomeTranslationLang,
 } from "@pqp/shared";
@@ -200,6 +202,7 @@ const stats = {
   skippedNotPublished: 0,
   discardedStale: 0,
   truncated: 0,
+  channelRefsKept: 0,
   providerRetries: 0,
   charsSent: 0,
   costUsd: 0,
@@ -222,6 +225,8 @@ export interface CommunityHomeTranslationMetrics {
   skippedNotPublished: number;
   discardedStale: number;
   truncated: number;
+  /** Fields left in the author's words because a `#channel` reference did not survive translation. */
+  channelRefsKept: number;
   providerRetries: number;
   charsSent: number;
   costUsd: number;
@@ -580,17 +585,24 @@ async function translateOnce(
   }
 
   // Which fields have words to translate. A GIF URL or an emoji-only line
-  // has none and is carried over untouched.
-  const fields: Array<[string, string]> = [];
-  for (const [name, value] of [
-    ["title", post.title],
-    ["teaser", post.teaser],
-    ["body", post.body],
-  ] as const) {
+  // has none and is carried over untouched. `#channel` references are stored
+  // as `<#uuid>`; they are swapped for numbered placeholders for everything
+  // below (detection, the "has words" test, truncation, the model) and put
+  // back afterwards, so the model never sees an id it could "fix" and a uuid's
+  // hex letters never count as words.
+  const names = ["title", "teaser", "body"] as const;
+  const guard = protectChannelRefs([
+    post.title ?? "",
+    post.teaser ?? "",
+    post.body,
+  ]);
+  const fields: Array<[string, string, number]> = [];
+  names.forEach((name, index) => {
+    const value = guard.texts[index]!;
     if (hasLetters(value)) {
-      fields.push([name, value]);
+      fields.push([name, value, index]);
     }
-  }
+  });
   const detected = detectLanguage(fields.map(([, value]) => value).join("\n"));
 
   if (fields.length === 0 || detected === lang) {
@@ -712,8 +724,32 @@ async function translateOnce(
     stats.truncated += 1;
   }
 
+  // Put the channel ids back. A field whose placeholders did not all survive
+  // keeps the author's own words: an untranslated post beats a dead link.
+  const allTranslated = names.map((_, index) => guard.texts[index]!);
+  const allSent = [...allTranslated];
+  fields.forEach(([, , index], i) => {
+    allTranslated[index] = translated[i]!;
+    allSent[index] = texts[i]!;
+  });
+  const restored = guard.restore(allTranslated, allSent);
   const byField = new Map<string, string>();
-  fields.forEach(([name], i) => byField.set(name, translated[i]!));
+  const storedMax: Record<string, number> = {
+    title: STORED_TITLE_MAX,
+    teaser: STORED_TEASER_MAX,
+    body: STORED_BODY_MAX,
+  };
+  fields.forEach(([name, , index]) => {
+    const value = restored[index];
+    // A restored id is longer than its placeholder: if the result no longer
+    // fits what we store, keep the author's words rather than cut a reference.
+    if (value == null || (hasChannelRefs(value) && value.length > storedMax[name]!)) {
+      stats.channelRefsKept += 1;
+      logEvent("communityHome.translation.channelRefsLost", { postId, lang, field: name });
+      return;
+    }
+    byField.set(name, value);
+  });
 
   // The post may have been edited while the model worked. The row we are about
   // to write is for the OLD text: throw it away and go again on the new one.
@@ -734,13 +770,13 @@ async function translateOnce(
   await upsertTranslation({
     postId,
     lang,
-    title: hasLetters(post.title)
+    title: byField.has("title")
       ? byField.get("title")!.slice(0, STORED_TITLE_MAX)
       : post.title,
-    body: hasLetters(post.body)
+    body: byField.has("body")
       ? byField.get("body")!.slice(0, STORED_BODY_MAX)
       : post.body,
-    teaser: hasLetters(post.teaser)
+    teaser: byField.has("teaser")
       ? byField.get("teaser")!.slice(0, STORED_TEASER_MAX)
       : post.teaser,
     sourceLang: detected,

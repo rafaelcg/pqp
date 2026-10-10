@@ -157,6 +157,9 @@
     <string name="bau_compose_publish">Post</string>
     <string name="bau_compose_title_hint">Title</string>
     <string name="bau_compose_body_hint">Write something</string>
+    <string name="bau_channel_unavailable">#unavailable-channel</string>
+    <string name="bau_channel_open">Open #%1$s</string>
+    <string name="bau_compose_channel_picker">Link a channel</string>
     <string name="bau_compose_attach">Add a photo or video</string>
     <string name="bau_compose_link_hint">Or paste a YouTube, Twitch, TikTok or Instagram link</string>
     <string name="bau_compose_link_ok">%1$s link. It shows up in the post.</string>

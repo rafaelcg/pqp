@@ -192,6 +192,25 @@ for what would replace it.
   the locked version too for a VIP post. **Publish**, **Save draft**, or
   **Schedule** (a `datetime-local` in the browser's timezone; the API stores
   the instant plus the IANA name).
+- **Channel links**: `#geral` in a post is a link to that channel. The composer
+  helps write it: type `#` and the server's channels open as a dropdown
+  (filtered as you type, arrows + Enter/Tab or a click to pick; the chat
+  composer's `AutocompleteMenu`). The textarea holds a readable `#name`; on
+  save it is stored as **`<#channelId>`** (the channel's uuid, grammar in
+  `packages/shared/src/community-home-channel-refs.ts`), so a rename never
+  breaks the link and the body never carries a name. Readers resolve the id
+  against the channels **they** can see (the same list the sidebar shows), so
+  a private or deleted channel is a muted `#unavailable-channel` with no name
+  and no link: the server does not resolve names and leaks nothing. A plain
+  `#name` in an older post (or one typed without the picker) links too when
+  exactly one visible channel has that name; two with the same name are never
+  guessed. Automatic translation swaps the ids for numbered placeholders
+  (`<#1>`) before the model sees the text and puts them back; a field whose
+  placeholders did not all come back keeps the author's words
+  (`communityHomeTranslation.channelRefsKept`). iOS and Android draw the same
+  links (tap opens the channel in the app) and offer the picker as a row of
+  chips while the draft ends in `#query`. Stored limit: the 4000 characters are
+  counted on the stored form, where a link is 40.
 - **Drafts tab**: drafts and scheduled posts with Publish now / Unschedule /
   Edit / Delete.
 - **Pinned post**: one per server, enforced by a partial unique index rather
@@ -603,6 +622,12 @@ the expected shape of a self-host without storage, not a bug.
   card's contract (no free chip, no author row, locked leaks nothing, likes
   and comment count stay on locked cards, two comments max, Twitch / TikTok /
   Instagram iframes).
+- `packages/shared/src/community-home-channel-refs.test.ts`,
+  `client/src/lib/community-home/channel-refs.test.ts`,
+  `client/src/components/community-home/community-home-channel-refs.test.tsx`,
+  Android `BauChannelRefsTest`, iOS `BauChannelRefsTests`: the `<#id>` grammar,
+  rendering and the privacy fallback, the `#` picker (filter, keyboard,
+  mouse), the `#name` to `<#id>` round trip, the translation guard.
 - `client/src/lib/community-home/embed-preview.test.ts` and
   `community-home-compose-embed.test.tsx`: composer live unfurl (player after
   debounce, skeleton while settling, muted hint after idle).

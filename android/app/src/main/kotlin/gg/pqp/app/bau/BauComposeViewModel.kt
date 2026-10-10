@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import gg.pqp.app.attachments.sanitizeAttachmentFilename
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
 import java.io.File
 import java.util.UUID
@@ -136,6 +137,13 @@ class BauComposeViewModel(
     private var uploadJob: Job? = null
     private var localFile: File? = null
 
+    /** The channels this person can see, for turning `#name` into `<#id>`. */
+    private var channels: List<Channel> = emptyList()
+
+    fun setChannels(list: List<Channel>) {
+        channels = list
+    }
+
     private fun edit(change: (BauComposeDraft) -> BauComposeDraft) {
         _state.value = _state.value.copy(
             draft = change(_state.value.draft),
@@ -213,9 +221,9 @@ class BauComposeViewModel(
     fun post() {
         val current = _state.value
         if (current.posting) return
-        val request = current.draft.toRequest()
+        val request = current.draft.toRequest(channels)
         if (request == null) {
-            _state.value = current.copy(problem = current.draft.problem())
+            _state.value = current.copy(problem = current.draft.problem(channels))
             return
         }
         _state.value = current.copy(posting = true, problem = null, refusal = null)

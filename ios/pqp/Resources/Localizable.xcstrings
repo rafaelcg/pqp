@@ -7951,6 +7951,16 @@
         }
       }
     },
+    "unavailable-channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "canal-indisponível"
+          }
+        }
+      }
+    },
     "Write something" : {
       "localizations" : {
         "pt-BR" : {
