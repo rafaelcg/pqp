@@ -163,6 +163,20 @@ bypasses `/sw.js` and `/sw-notification-click.js`). Nothing in this repository c
 set it. The client does not depend on it: the version file is read past every
 cache, and an update whose worker turns out stale is delivered by purging.
 
+### Post-mortems
+
+| Date | What broke | Root cause | Why nothing caught it | Pinned by |
+|---|---|---|---|---|
+| 2026-09-30 to 2026-10-10 | No new service worker installed in any browser: every install went installing, then redundant (no worker, no web push, no offline shell). Workers installed before 2026-09-30 could never update, so a normal reload kept their tabs on the Sep 30 bundle (field report: Zen/Firefox). Faro counted 3,632 of 8,702 page loads on a pre-Oct-1 bundle between Sep 30 and Oct 8. | `workbox.globPatterns` was `**/*.{js,css,html,woff2}`, which precaches every `.html` in `public/`, including `share-diagnostic.html`, `share-diagnostic-game.html` and `share-audio-tone.html`. Pages 308-redirects each to the extensionless path, and the edge not-found middleware added in #917 (`functions/_middleware.ts`, `spa-routes.ts`) answered that path with a 404, because it was not a known route. Workbox fails the **whole** install on one entry that is not a 200. | The middleware only touches `GET`. **`HEAD` hides it**: `curl -I https://pqp.gg/share-diagnostic` says 200, and a bare `curl` without `-L` says 308. Only `curl -sL -o /dev/null -w '%{http_code}'` shows the 404. The e2e stand-in for Pages served the files as plain 200s and had neither the redirect nor the middleware. A worker that fails to install is silent in the page: the old worker keeps answering, so nothing looks broken from a tab. | `src/lib/sw-precache.ts` (only `index.html` among HTML), `src/lib/sw-precache.test.ts` (applies the build's own globs to `public/` and checks every public `.html` is a known route), and `e2e/stale-bundle/pages-server.ts` (now does the `.html` to extensionless 308 and the middleware's 404 with the real `isUnknownSpaPath`; specs "a first visit gets a worker that installs and activates", "an old worker updates ..." and "every precache entry is a 200 through the edge ..."). |
+
+Lessons: a precache is a list of promises about URLs, and the whole install is
+only as good as the worst entry, so list files, not globs of whatever is in
+`public/`. When a check goes through the edge, test the verb the browser uses
+(`GET`, following redirects), not the one that is cheap (`HEAD`). Stuck workers
+recover on the next normal reload after the fixed build is deployed: the browser
+re-fetches `sw.js` on navigation, the new worker installs, and `skipWaiting` plus
+`clientsClaim` take over.
+
 ## Icons
 
 `scripts/generate-icons.py` renders the whole set from one definition — run it

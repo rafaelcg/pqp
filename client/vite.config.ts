@@ -15,6 +15,7 @@ import {
   renderPrerenderHero,
 } from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
+import { PRECACHE_GLOB_IGNORES, PRECACHE_GLOB_PATTERNS } from "./src/lib/sw-precache";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -316,25 +317,13 @@ export default defineConfig(({ command }) => ({
         // lives on a different origin in production and is deliberately not
         // cached: a chat app serving yesterday's messages from a cache is worse
         // than one that says it is offline.
-        globPatterns: ["**/*.{js,css,html,woff2}"],
-        // The RNNoise worklet is a `.js` file and would otherwise be swept
-        // into the shell precache, which is 63 kB downloaded by every install
-        // for a setting almost nobody turns on — and useless besides, since
-        // the wasm beside it is not a `.js` and is never precached, so the
-        // advanced suppressor could not start offline either way. It is
-        // fetched on demand, like the wasm.
         //
-        // The fonts are self-hosted now (`src/fonts.css`), one file per
-        // unicode-range subset. Only the Latin ones are the shell's: Vietnamese,
-        // Cyrillic and Greek are fetched on demand like the RNNoise wasm, so the
-        // install does not download files nobody on this site reads.
-        globIgnores: [
-          "**/workletProcessor-*.js",
-          "**/sw-build-*.js",
-          "**/*-vietnamese-*.woff2",
-          "**/*-cyrillic-*.woff2",
-          "**/*-greek-*.woff2",
-        ],
+        // `index.html` is the only HTML file in it, on purpose: Pages 308s the
+        // other `public/*.html` and the edge 404s the result, which fails every
+        // service worker install. See `src/lib/sw-precache.ts`.
+        globPatterns: PRECACHE_GLOB_PATTERNS,
+        // What is left out of the shell, and why: `src/lib/sw-precache.ts`.
+        globIgnores: PRECACHE_GLOB_IGNORES,
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,

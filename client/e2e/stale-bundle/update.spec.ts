@@ -239,6 +239,73 @@ test("the files that decide the build are served uncacheable", async ({ page }) 
   expect(version.build).toBe(NEW);
 });
 
+// ------------------------------------------- the worker has to INSTALL at all
+
+/**
+ * 2026-10-10: since 2026-09-30 no new service worker installed anywhere. The
+ * precache listed every `.html` in `public/`; Pages answers `/x.html` with a
+ * 308 to `/x`, and the edge middleware answers `/x` with a 404 (GET only, so a
+ * `HEAD` hid it). Workbox fails the whole install on one bad entry, so every
+ * worker went installing, then redundant: no worker, no push, no offline shell,
+ * and an old worker could never update. The stand-in for Pages now does both
+ * things, so these specs fail on that build and pass on a fixed one.
+ */
+
+/** The state of the newest worker the page's registration holds, once it settles. */
+async function settledWorkerState(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) {
+      return null;
+    }
+    const worker = registration.active ?? registration.installing ?? registration.waiting;
+    return worker?.state ?? null;
+  });
+}
+
+test("a first visit gets a worker that installs and activates", async ({ page }) => {
+  server.serve(newDir);
+  await page.goto(`${server.origin}/`);
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await page.mouse.click(5, 5);
+  // `ready` never resolves for a worker that goes redundant while installing.
+  await expect
+    .poll(() => settledWorkerState(page), { timeout: 30_000 })
+    .toBe("activated");
+});
+
+test("an old worker updates to a build whose precache is all reachable", async ({ page }) => {
+  await openOn(page, OLD);
+  server.serve(newDir);
+  await page.evaluate(async () => {
+    await (await navigator.serviceWorker.getRegistration())?.update();
+  });
+  await expect.poll(() => activeWorkerBuild(page), { timeout: 30_000 }).toBe(NEW);
+});
+
+test("every precache entry is a 200 through the edge once redirects are followed (only the shell itself redirects)", async ({
+  page,
+}) => {
+  server.serve(newDir);
+  const sw = readFileSync(path.join(newDir, "sw.js"), "utf8");
+  const urls = [...sw.matchAll(/url:\s*"([^"]+)"/g)].map((m) => m[1]!);
+  expect(urls.length).toBeGreaterThan(5);
+  const bad: string[] = [];
+  for (const url of urls) {
+    const response = await page.request.get(`${server.origin}/${url}`);
+    // `index.html` is 308'd to `/` by Pages, and Workbox copes with that one
+    // (it has precached the shell this way since the first build). Any other
+    // entry that moves is the 2026-10-10 bug.
+    const landed = url === "index.html" ? `${server.origin}/` : `${server.origin}/${url}`;
+    if (response.status() !== 200 || response.url() !== landed) {
+      bad.push(`${url} -> ${response.status()} ${response.url()}`);
+    }
+  }
+  expect(bad).toEqual([]);
+  // The only page in the shell is the shell.
+  expect(urls.filter((u) => u.endsWith(".html"))).toEqual(["index.html"]);
+});
+
 // ---------------------------------------------------------------- the language
 
 /**

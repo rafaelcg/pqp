@@ -48,6 +48,16 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   // and an existing check must keep passing.
   "/health",
   "/up",
+  // Static pages in `public/`. Pages 308s `/x.html` to `/x` and then serves the
+  // file at `/x`; the SPA has no route for either, so without these the edge
+  // answers the real page with a 404. `sw-precache.test.ts` fails when a new
+  // `public/*.html` is not listed here.
+  "/share-diagnostic",
+  "/share-diagnostic.html",
+  "/share-diagnostic-game",
+  "/share-diagnostic-game.html",
+  "/share-audio-tone",
+  "/share-audio-tone.html",
 ]);
 
 export function isUnknownSpaPath(pathname: string): boolean {

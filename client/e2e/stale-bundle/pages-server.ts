@@ -2,6 +2,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { isUnknownSpaPath } from "../../src/lib/spa-routes";
 import { headersFor, parseHeadersFile } from "./pages-headers";
 
 /**
@@ -16,7 +17,16 @@ import { headersFor, parseHeadersFile } from "./pages-headers";
  *    Pages' rule that several matching rules ADD to a header rather than
  *    replace it. A rule that wrongly matched `/assets/*` and `/*` would show up
  *    here as a comma-joined Cache-Control, which is what production would send;
- *  - an unknown path answers `index.html` with a 200, the SPA fallback.
+ *  - an unknown path answers `index.html` with a 200, the SPA fallback;
+ *  - Pages' "pretty URLs": a request for `/x.html` is a 308 to `/x`, and `/x`
+ *    is answered from `x.html`. This is what turned `public/*.html` into a
+ *    redirect for the service worker's precache fetch;
+ *  - the edge not-found middleware (`functions/_middleware.ts`): a GET that
+ *    would be answered with HTML for a path `isUnknownSpaPath` says the SPA has
+ *    no route for becomes a 404 with the body kept. The REAL predicate is
+ *    imported, not copied. A `HEAD` is not touched, which is exactly why
+ *    `curl -I` said everything was fine while every worker install failed
+ *    (see docs/PWA.md, 2026-10-10).
  *
  * `/api/*` answers 404 and `/ws` is not served: the specs that use this are
  * about the shell, and a missing API must be survivable by the client anyway.
@@ -70,9 +80,26 @@ export async function startPagesServer(options: {
       res.end("{}");
       return;
     }
+    // Pages' pretty URLs. `/index.html` is a 308 to `/` like any other page.
+    if (!pinned.has(pathname) && pathname.endsWith(".html")) {
+      const pretty = pathname.endsWith("/index.html")
+        ? pathname.slice(0, -"index.html".length)
+        : pathname.slice(0, -".html".length);
+      res.writeHead(308, { location: pretty + url.search });
+      res.end();
+      return;
+    }
     let file =
       pinned.get(pathname) ??
       path.join(root, pathname === "/" ? "index.html" : pathname);
+    if (
+      !pinned.has(pathname) &&
+      pathname !== "/" &&
+      !path.extname(pathname) &&
+      existsSync(`${file}.html`)
+    ) {
+      file = `${file}.html`;
+    }
     if (
       !pinned.has(pathname) &&
       (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile())
@@ -86,15 +113,14 @@ export async function startPagesServer(options: {
       }
       file = path.join(root, "index.html");
     }
-    res.writeHead(
-      200,
-      headersFor(
-        rules,
-        pathname,
-        TYPES[path.extname(file)] ?? "application/octet-stream",
-      ),
-    );
-    res.end(readFileSync(file));
+    const type = TYPES[path.extname(file)] ?? "application/octet-stream";
+    // The edge middleware: GET only, HTML only, unknown-to-the-SPA paths only.
+    const status =
+      req.method === "GET" && type.startsWith("text/html") && isUnknownSpaPath(pathname)
+        ? 404
+        : 200;
+    res.writeHead(status, headersFor(rules, pathname, type));
+    res.end(req.method === "HEAD" ? undefined : readFileSync(file));
   });
 
   await new Promise<void>((resolve) =>
