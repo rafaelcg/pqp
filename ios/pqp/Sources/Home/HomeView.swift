@@ -44,6 +44,9 @@ struct HomeView: View {
         let channel: Channel?
         /// Open the server's Baú on arrival (a new-post push was tapped).
         var opensBau: Bool = false
+        /// Set when the link was a Baú post: the channel list opens the
+        /// server's Baú on top of itself, scrolled to the post.
+        var bau: BauFocus? = nil
     }
 
     var body: some View {
@@ -53,7 +56,8 @@ struct HomeView: View {
                     ChannelListView(
                         server: restored.server,
                         initialChannel: restored.channel,
-                        opensBau: restored.opensBau
+                        opensBau: restored.opensBau,
+                        initialBau: restored.bau
                     )
                 }
         }
@@ -145,6 +149,12 @@ struct HomeView: View {
             // Baú is off by now the list simply stays.
             guard let server = await resolveServer(serverId) else { return }
             restoredChannel = RestoredChannel(server: server, channel: nil, opensBau: true)
+        case .bauPost(let serverId, let postId):
+            // A Baú post card in chat, or a Baú post link. The Baú is a screen
+            // on top of the server's channel list, so the list is the landing
+            // and it pushes the Baú itself once it knows the instance flag.
+            guard let server = await resolveServer(serverId) else { return }
+            restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
         }
     }
 

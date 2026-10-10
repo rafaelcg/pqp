@@ -11,7 +11,13 @@ struct CommunityHomeView: View {
     @Environment(SessionStore.self) private var session
     let server: Server
     let config: CommunityHomeConfig
+    /// The post a Baú card in chat (or a Baú link) asked for. The feed scrolls
+    /// to it once and outlines it for a moment; a post that is not in the feed
+    /// (gone, or not this viewer's) leaves the feed as it was.
+    var focusPostId: String? = nil
 
+    @State private var focusPending = true
+    @State private var highlightedPostId: String?
     @State private var posts: [CommunityHomePost] = []
     @State private var isLoading = true
     @State private var error: String?
@@ -55,6 +61,14 @@ struct CommunityHomeView: View {
                                 onCollapse: { expanded.removeValue(forKey: post.id) },
                                 onComment: { body in await addComment(post, body: body) }
                             )
+                            .overlay {
+                                if highlightedPostId == post.id {
+                                    RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                                        .strokeBorder(Palette.signal, lineWidth: 2)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            .id(post.id)
                         }
                     }
                     .padding(.horizontal, Metrics.hPadding)
@@ -68,6 +82,9 @@ struct CommunityHomeView: View {
                     guard let target else { return }
                     BauPlayback.shared.restoreTargetPostID = nil
                     withAnimation { proxy.scrollTo(target, anchor: .top) }
+                }
+                .onChange(of: posts.map(\.id), initial: true) { _, ids in
+                    focusIfNeeded(in: ids, proxy: proxy)
                 }
                 }
             }
@@ -95,6 +112,20 @@ struct CommunityHomeView: View {
             BauPlayback.shared.stopAllUnlessFullScreen()
         }
         .communityHomeComposer(server: server, config: config) { Task { await load() } }
+    }
+
+    /// Once per screen: bring the asked-for post into view and outline it.
+    private func focusIfNeeded(in ids: [String], proxy: ScrollViewProxy) {
+        guard focusPending, let focusPostId, ids.contains(focusPostId) else { return }
+        focusPending = false
+        withAnimation(Motion.standard) {
+            proxy.scrollTo(focusPostId, anchor: .top)
+            highlightedPostId = focusPostId
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(Motion.standard) { highlightedPostId = nil }
+        }
     }
 
     private func load() async {

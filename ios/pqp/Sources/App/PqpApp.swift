@@ -273,6 +273,13 @@ struct RootView: View {
         // universal-link path on a cold launch, which does NOT come through
         // `onOpenURL`. Both are needed — shipping only the first is why "the
         // link works, but only the second time" is such a common bug.
+        // A tap on a link in a message: a Baú post of this instance opens in
+        // the Baú, everything else goes where the system sends it.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let target = BauShare.inAppTarget(for: url) else { return .systemAction }
+            session.requestNavigation(target)
+            return .handled
+        })
         .onOpenURL { url in
             guard let target = DeepLink.target(url: url) else { return }
             session.requestNavigation(target)
