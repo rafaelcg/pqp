@@ -507,12 +507,18 @@ describeDb("Baú new post push", () => {
     expect(sent.length).toBe(3);
   });
 
-  it("keeps the claim when the fan-out fails once delivery has started, so nobody is told twice", async () => {
+  it("hands the claim back when the subscription read fails, since no device was reached", async () => {
     const id = await insertPublished();
     const pool = getPool();
     const real = pool.query.bind(pool);
+    let failuresLeft = 1;
     const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
-      if (typeof text === "string" && text.includes("FROM push_subscriptions")) {
+      if (
+        failuresLeft > 0 &&
+        typeof text === "string" &&
+        text.includes("FROM push_subscriptions")
+      ) {
+        failuresLeft -= 1;
         return Promise.reject(new Error("connection terminated"));
       }
       return (real as (...args: unknown[]) => unknown)(text, ...rest);
@@ -524,13 +530,13 @@ describeDb("Baú new post push", () => {
       spy.mockRestore();
       quiet.mockRestore();
     }
+    expect(sent).toEqual([]);
     const row = await getPool().query(
       `SELECT push_claimed_at FROM community_home_posts WHERE id = $1`,
       [id],
     );
-    expect(row.rows[0].push_claimed_at).not.toBeNull();
-    expect(await pushPendingCommunityHomePosts(serverId)).toBe(0);
-    expect(sent).toEqual([]);
+    expect(row.rows[0].push_claimed_at).toBeNull();
+    expect(await pushPendingCommunityHomePosts(serverId)).toBe(3);
   });
 
   it("works a backlog off a bounded batch at a time, and stamps stale posts without announcing them", async () => {

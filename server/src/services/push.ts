@@ -1119,6 +1119,8 @@ async function deliverToUsers(
   delivery: PushDeliveryOptions,
   kind: PushSkipKind,
   skipContext: PushSkipContext = {},
+  /** Called once, after the subscription read and before the first send. */
+  beforeSend?: () => void,
 ): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
     `SELECT ${SUBSCRIPTION_COLUMNS}
@@ -1147,6 +1149,7 @@ async function deliverToUsers(
     }
   }
 
+  beforeSend?.();
   await Promise.all(
     subscriptions.rows.map(async (subscription) => {
       const payload = payloadFor(subscription.user_id);
@@ -1848,7 +1851,8 @@ export function buildCommunityHomePostPayload(
 export async function sendCommunityHomePostPush(
   event: CommunityHomePostPush,
   /**
-   * Called once, right before the first thing that can reach a device. A
+   * Called once, after the preference and subscription reads and right before
+   * the first send, which is the first thing that can reach a device. A
    * caller that wants to hand its claim back on failure uses it to know which
    * side of that line a rejection fell on: before it, nothing was sent and a
    * retry is safe; after it, a retry could tell somebody twice.
@@ -1884,7 +1888,6 @@ export async function sendCommunityHomePostPush(
   if (recipients.length === 0) {
     return 0;
   }
-  beforeDelivery?.();
   await deliverToUsers(
     recipients,
     (userId) =>
@@ -1899,6 +1902,7 @@ export async function sendCommunityHomePostPush(
     MESSAGE_DELIVERY,
     "bau",
     skipContext,
+    beforeDelivery,
   );
   return recipients.length;
 }
