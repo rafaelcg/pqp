@@ -29,7 +29,7 @@ object BauChannelRefs {
 
     /** Same set as the web's `createChannelSchema`: letters, digits, `-`, `_`. */
     private const val NAME = "[A-Za-z0-9_-]"
-    private val PLAIN_HASH = Regex("(^|[^\\w<#&/])#($NAME+)")
+    private val PLAIN_HASH = Regex("(^|[\\s(\\[{\"'])#($NAME+)")
     private const val MAX_QUERY = 100
     const val MAX_SUGGESTIONS = 8
 

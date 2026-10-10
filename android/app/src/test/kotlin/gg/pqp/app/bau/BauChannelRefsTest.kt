@@ -80,6 +80,8 @@ class BauChannelRefsTest {
             "https://x.com/p#geral" to channels,
             "#geralzao" to channels,
             "&#geral;" to channels,
+            "https://x.com/p?next=#geral" to channels,
+            "https://x.com/p?a=1&b=#geral" to channels,
         )) {
             assertEquals(text, listOf<Part>(Part.Text(text)), BauChannelRefs.parse(text, list))
         }

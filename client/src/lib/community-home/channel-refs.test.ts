@@ -67,6 +67,8 @@ describe("parseChannelParts", () => {
       ["https://x.com/p#geral", channels],
       ["#geralzao", channels],
       ["&#geral;", channels],
+      ["https://x.com/p?next=#geral", channels],
+      ["https://x.com/p?a=1&b=#geral", channels],
     ] as const) {
       expect(parseChannelParts(text, chans)).toEqual([{ type: "text", value: text }]);
     }

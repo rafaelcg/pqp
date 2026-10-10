@@ -65,7 +65,8 @@ final class BauChannelRefsTests: XCTestCase {
     }
 
     func testUnknownAmbiguousMidWordAndURLHashesStayText() throws {
-        let plain = ["#nada", "a#geral", "https://x.com/p#geral", "#geralzao", "&#geral;"]
+        let plain = ["#nada", "a#geral", "https://x.com/p#geral", "#geralzao", "&#geral;",
+                     "https://x.com/p?next=#geral", "https://x.com/p?a=1&b=#geral"]
         for text in plain {
             XCTAssertEqual(BauChannelRefs.parse(text, channels: try channels()), [.text(text)], text)
         }

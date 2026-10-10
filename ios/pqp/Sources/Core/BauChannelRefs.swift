@@ -26,11 +26,12 @@ enum BauChannelRefs {
     private static let refPattern = try! NSRegularExpression(
         pattern: "<#([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>"
     )
-    /// The character before the `#` is captured instead of looked behind:
-    /// `page#anchor`, `<#id>` and `&#39;` are ruled out by what it is.
+    /// The character before the `#` is captured instead of looked behind. Only
+    /// the start, whitespace or an opening bracket or quote may precede it, so
+    /// every URL fragment (`?next=#x`, `page#x`) and `<#id>` is left alone.
     // swiftlint:disable:next force_try
     private static let plainHash = try! NSRegularExpression(
-        pattern: "(^|[^A-Za-z0-9_<#&/])#([A-Za-z0-9_-]+)"
+        pattern: "(^|[\\s(\\[{\"'])#([A-Za-z0-9_-]+)"
     )
 
     static func ref(_ channelId: String) -> String { "<#\(channelId.lowercased())>" }

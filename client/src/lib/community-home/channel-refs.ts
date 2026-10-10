@@ -55,10 +55,11 @@ function uniqueByName<T extends ChannelLike>(channels: readonly T[]) {
 
 /**
  * `#name` at the start of a word. No lookbehind (older Safari): the character
- * before is captured instead, and `page#anchor`, `<#id>` and `&#39;` are all
- * ruled out by what that character is.
+ * before is captured instead. Only the start of the text, whitespace or an
+ * opening bracket or quote may precede it, so `page#anchor`, `?next=#general`,
+ * `<#id>` and `&#39;` (every URL fragment and entity) are left alone.
  */
-const PLAIN_HASH = new RegExp(`(^|[^\\w<#&/])#([${NAME_CHARS}]+)`, "g");
+const PLAIN_HASH = new RegExp(`(^|[\\s(\\[{"'])#([${NAME_CHARS}]+)`, "g");
 
 /** Splits plain text on `#name` where exactly one channel has that name. */
 function splitPlainHashes(
