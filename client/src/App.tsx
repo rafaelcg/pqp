@@ -120,6 +120,10 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import {
+  SeasonalLookHint,
+  seasonalLookToOffer,
+} from "@/components/layout/seasonal-look-hint";
 import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
@@ -1539,6 +1543,10 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The seasonal look invite (Halloween, Christmas): which look it is for, or
+  // null out of season, once seen this season, or once dismissed this load.
+  const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
+  const dismissSeasonalLook = useCallback(() => setSeasonalLookOffer(null), []);
   // The one-time "Ativar notificações" card. Like the cargos card it decides
   // for itself whether it was seen, and the queue has to know too: a card that
   // wants the corner and never draws would hold every tip behind it.
@@ -9567,6 +9575,8 @@ function MainAppContent({
     notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
     qg: qgHintWanted && !campaignsYield,
     voiceClean: wantsVoiceCleanHint,
+    seasonalLook:
+      seasonalLookOffer !== null && qgHintReady && !campaignsYield,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
     cargos:
@@ -12270,6 +12280,11 @@ function MainAppContent({
       <NotifyOfferHint
         enabled={effectiveCornerHint === "notifyOffer"}
         onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
+      <SeasonalLookHint
+        look={seasonalLookOffer}
+        enabled={effectiveCornerHint === "seasonalLook"}
+        onDismiss={dismissSeasonalLook}
       />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}

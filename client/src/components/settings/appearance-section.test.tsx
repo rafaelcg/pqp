@@ -167,6 +167,41 @@ describe("Modo", () => {
     expect(getThemeState().preference).toBe("dark");
   });
 
+  it("keeps the mode before Night through Halloween, and Christmas keeps Light", () => {
+    localStorage.setItem("pqp:season", "halloween");
+    mount();
+    click(radio(group("Mode"), "Light"));
+    click(radio(host!, /^Night/));
+    click(radio(host!, /^Halloween/));
+    expect(getAppearance()).toBe("halloween");
+    expect(getThemeState().resolved).toBe("dark");
+    expect(rowText("brightness")).toContain("Halloween stays dark");
+
+    click(radio(host!, /^Classic/));
+    expect(getThemeState().preference).toBe("light");
+  });
+
+  it("offers a seasonal look only in its season, or while it is on", () => {
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(() => radio(host!, /^Halloween/)).toThrow();
+    expect(() => radio(host!, /^Christmas/)).toThrow();
+    act(() => root?.unmount());
+    host?.remove();
+
+    localStorage.setItem("pqp:season", "christmas");
+    mount();
+    click(radio(host!, /^Christmas/));
+    expect(getAppearance()).toBe("christmas");
+    expect(radio(group("Mode"), /Light/).getAttribute("aria-disabled")).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(radio(host!, /^Christmas/).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("skips locked options with the arrow keys", () => {
     mount();
     click(radio(host!, /^Night/));

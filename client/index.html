@@ -93,11 +93,14 @@
             ? "harmony"
             : storedAppearance === "harmony" ||
                 storedAppearance === "hearth" ||
-                storedAppearance === "night"
+                storedAppearance === "night" ||
+                storedAppearance === "halloween" ||
+                storedAppearance === "christmas"
               ? storedAppearance
               : "signal";
         document.documentElement.dataset.appearance = appearance;
-        if (appearance === "night") {
+        // Dark-only looks: keep in lockstep with `appearanceForcesDark`.
+        if (appearance === "night" || appearance === "halloween") {
           document.documentElement.dataset.theme = "dark";
         }
         const storedHue = localStorage.getItem("pqp-accent-hue");

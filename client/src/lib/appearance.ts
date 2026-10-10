@@ -15,12 +15,20 @@ export type { AppearancePreference };
 export const APPEARANCE_STORAGE_KEY = "pqp-appearance";
 export const DEFAULT_APPEARANCE: AppearancePreference = "signal";
 
-export const APPEARANCES = ["signal", "harmony", "hearth", "night"] as const;
+export const APPEARANCES = [
+  "signal",
+  "harmony",
+  "hearth",
+  "night",
+  "halloween",
+  "christmas",
+] as const;
 
+/** Night and Halloween only exist in dark. Christmas has a light side too. */
 export function appearanceForcesDark(
   appearance: AppearancePreference,
 ): boolean {
-  return appearance === "night";
+  return appearance === "night" || appearance === "halloween";
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
@@ -28,7 +36,9 @@ export function isAppearance(value: string | null): value is AppearancePreferenc
     value === "signal" ||
     value === "harmony" ||
     value === "hearth" ||
-    value === "night"
+    value === "night" ||
+    value === "halloween" ||
+    value === "christmas"
   );
 }
 
@@ -97,7 +107,7 @@ function commit(appearance: AppearancePreference): void {
 export function setAppearancePreference(appearance: AppearancePreference): void {
   storeAppearance(appearance);
   commit(appearance);
-  // Night also pins brightness. One PATCH so the account learns both keys
+  // Night and Halloween also pin brightness. One PATCH so the account learns both keys
   // without a second immediate write. Local theme persist is theme.ts's
   // appearance subscription, which must not import this module.
   queuePreferenceSync(

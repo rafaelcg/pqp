@@ -148,7 +148,7 @@ boot-script rule as theme and appearance.
 ## Stage 4 — named appearance presets
 
 A second axis, not a second `data-theme` value. Brightness stays
-`light | dark | system`. The skin is `signal | harmony | hearth | night`, stored as
+`light | dark | system`. The skin is `signal | harmony | hearth | night` (plus the seasonal looks, stage 5.5), stored as
 `pqp-appearance` and `user_preferences.settings.appearance`.
 
 `signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
@@ -169,6 +169,25 @@ and glows. Surfaces stay with the named look. Light uses a darker lightness so
 yellows still meet the accent-on-surface floor.
 
 Storage is `pqp-accent-hue` and `user_preferences.settings.accentHue`.
+
+## Stage 5.5 — seasonal looks
+
+Two more skins on the appearance axis: `halloween` and `christmas`.
+
+- Halloween is dark only, like Night: aubergine surfaces, pumpkin accent.
+- Christmas has light and dark: pine surfaces, a cranberry rail. Its accent is
+  gold in dark and pine in light. It is never red, because a red primary
+  button reads as the danger colour.
+
+The picker shows a seasonal look only in its season, or while it is the look
+on screen. A corner card invites people once per season
+(`docs/ONBOARDING.md`, Seasonal look). The windows live in
+`lib/seasonal-looks.ts`; Christmas turns itself on on 1 December with no
+deploy. The enum values are permanent: a stored pick keeps working all year.
+
+`chooseLook` in `lib/choose-look.ts` is the one way to pick a look. It notes
+the mode before a dark-only look and gives it back on the way out, also when
+the person moves between two dark-only looks first.
 
 ## Later stages (upside, not scoped here)
 

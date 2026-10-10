@@ -20,10 +20,12 @@
  *  4. qg — the house, first-run
  *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
- *  6. mobileBeta — phone browsers only; the campaign for the native apps
- *  7. whatsNew — Novidades now lives on the rail
- *  8. cargos — staff who can manage roles
- *  9. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *  6. seasonalLook — "the Halloween look is here", once per season; a short
+ *     window, so it goes before the year-round campaigns (`lib/seasonal-looks.ts`)
+ *  7. mobileBeta — phone browsers only; the campaign for the native apps
+ *  8. whatsNew — Novidades now lives on the rail
+ *  9. cargos — staff who can manage roles
+ * 10. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
@@ -32,6 +34,7 @@ export const CORNER_HINT_ORDER = [
   "notifyOffer",
   "qg",
   "voiceClean",
+  "seasonalLook",
   "mobileBeta",
   "whatsNew",
   "cargos",

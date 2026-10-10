@@ -79,6 +79,9 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
  * skin for dark, not a clone of another product's AMOLED theme.
+ * `halloween` (dark only) and `christmas` are seasonal looks: the client only
+ * offers them in their season, but a stored pick keeps working all year, so
+ * these values are permanent once shipped.
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
@@ -86,7 +89,7 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 export const appearancePreferenceSchema = z.preprocess(
   (value) =>
     value === "guild" || value === "accord" ? "harmony" : value,
-  z.enum(["signal", "harmony", "hearth", "night"]),
+  z.enum(["signal", "harmony", "hearth", "night", "halloween", "christmas"]),
 );
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
