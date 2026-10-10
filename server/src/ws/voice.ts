@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { newlyQueuedTracks, userStats } from "../services/user-stats.js";
 import type { WebSocket } from "ws";
 import { isEnabled } from "../lib/flags.js";
 import {
@@ -2080,6 +2081,30 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
       openedAt: null,
     }))
     .sort((a, b) => b.participants - a.participants);
+}
+
+/**
+ * This process's live seats, one per peer, for the per-person stats sampler
+ * (`services/user-stats.ts`). A seat held for its resume window is left out:
+ * nobody is in it.
+ */
+export function localLiveSeats(): {
+  userId: string;
+  voiceChannelId: string;
+  sharingScreen: boolean;
+}[] {
+  const seats = [];
+  for (const peer of peers.values()) {
+    if (peer.orphanedAt !== undefined) {
+      continue;
+    }
+    seats.push({
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+      sharingScreen: peer.sharingScreen,
+    });
+  }
+  return seats;
 }
 
 /**
@@ -9146,6 +9171,7 @@ export async function handleVoiceMessage(
         console.error("[voice] music permission re-check failed:", error);
       }
     }
+    const heldMusic = getMusicState(peer.voiceChannelId);
     const write = applyMusicWrite(peer.voiceChannelId, incoming, {
       userId: user.id,
       canManage: peer.canManageMusic,
@@ -9165,6 +9191,14 @@ export async function handleVoiceMessage(
         forced: true,
       });
       return;
+    }
+    if (write.kind === "accepted") {
+      // Counted here and only here: the `adopt*` paths take a queue another
+      // machine already accepted, and counting there would count it twice.
+      userStats.noteMusicQueued(
+        user.id,
+        newlyQueuedTracks(heldMusic, write.state, user.id),
+      );
     }
     if (
       write.kind === "accepted" &&

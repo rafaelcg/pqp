@@ -120,6 +120,7 @@ import {
   dbTxByPath,
 } from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
+import { userStats, type UserStatsMetrics } from "./user-stats.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -441,6 +442,13 @@ export interface AdminMetrics {
    * channel's watch-party state. Off (falling back to `misses` for
    * everything) when `READ_CACHE=off`.
    */
+  /**
+   * The Retrospectiva's per-person counters (`services/user-stats.ts`), as
+   * seen by THIS process. The sampler runs where the cold jobs run, the music
+   * flush where the sockets are, so read both machines. `blindTicks` above 0
+   * on the process running the jobs means it cannot see any seat.
+   */
+  userStats: UserStatsMetrics;
   readCache: {
     hits: number;
     misses: number;
@@ -1683,6 +1691,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     dbTx: { byPath: dbTxByPath() },
     dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),
+    userStats: userStats.metrics(),
     presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,

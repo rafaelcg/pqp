@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "8 October 2026",
+  updated: "10 October 2026",
   sections: [
     {
       id: "intro",
@@ -319,6 +319,16 @@ export const privacyEn: LegalDocument = {
             back, and how far new accounts get. The reports the operator reads
             hold counts, not names. Both records are deleted with your
             account. The data export does not include them yet.
+          </p>
+          <p>
+            <strong>Year in review.</strong> For each account and each day, in
+            São Paulo time, we also count how long you spent in calls with at
+            least one other person, how long you shared your screen, and how
+            many tracks you added to a call&apos;s music queue. We also keep a
+            list of the watch parties you watched. We do not record who was in
+            a call with you. We use these counts only to build your own year in
+            review. They are deleted with your account. The data export does
+            not include them yet.
           </p>
           <p>
             <strong>Technical.</strong> Application logs of errors and

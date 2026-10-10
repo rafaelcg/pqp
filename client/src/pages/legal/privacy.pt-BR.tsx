@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "8 de outubro de 2026",
+  updated: "10 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "2635023a",
+      sourceRev: "a1a0596f",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -355,6 +355,16 @@ export const privacyPtBr: LegalDocument = {
             operador lê têm contagens, não nomes. Os dois registros são
             apagados junto com a sua conta. A exportação de dados ainda não
             inclui nenhum deles.
+          </p>
+          <p>
+            <strong>Retrospectiva.</strong> Por conta e por dia, no horário de
+            São Paulo, a gente também conta quanto tempo você passou em
+            chamadas com pelo menos mais uma pessoa, quanto tempo compartilhou
+            a tela e quantas músicas pôs na fila de uma chamada. A gente também
+            guarda a lista das watch parties que você assistiu. A gente não
+            registra quem estava na chamada com você. Essas contagens servem só
+            para montar a sua retrospectiva do ano. Elas são apagadas junto com
+            a sua conta. A exportação de dados ainda não inclui nenhuma delas.
           </p>
           <p>
             <strong>Técnicos.</strong> Logs de aplicação com erros e eventos de

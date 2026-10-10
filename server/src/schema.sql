@@ -5236,6 +5236,40 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
 
+-- Per person, per São Paulo day: what the Retrospectiva needs and nothing
+-- else kept. Counts only. No room, no channel, no other person: who was in a
+-- call with whom is never recorded. `voice_seconds` and `share_seconds` come
+-- from a one-minute sampler over live seats in rooms of two or more people
+-- (services/user-stats.ts); `voice_sampled_at` is the last minute bucket
+-- added, so two samplers in the same minute, or a retried statement that had
+-- in fact committed, add that minute once. `music_queued` counts tracks this
+-- person put in a call's queue. Starts the day it shipped: nothing before it
+-- can be rebuilt. Kept for as long as the account exists; the cascade removes
+-- it with an art. 18 deletion. Runtime flag `user_stats` stops new writes.
+CREATE TABLE IF NOT EXISTS user_daily_stats (
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day              DATE NOT NULL,
+  voice_seconds    INTEGER NOT NULL DEFAULT 0,
+  share_seconds    INTEGER NOT NULL DEFAULT 0,
+  music_queued     INTEGER NOT NULL DEFAULT 0,
+  voice_sampled_at TIMESTAMPTZ,
+  PRIMARY KEY (user_id, day)
+);
+
+-- Which watch parties a person watched. Copied from `hls_session_viewers`
+-- before its 24h prune, one row per party (`started_at_ms` survives an
+-- in-place transcode restart, so one show is one row). `channel_id` carries no
+-- foreign key on purpose: deleting a channel must not erase a person's own
+-- history of having watched something in it. Same retention and cascade as
+-- `user_daily_stats`.
+CREATE TABLE IF NOT EXISTS user_watch_parties (
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel_id    UUID NOT NULL,
+  started_at_ms BIGINT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (user_id, channel_id, started_at_ms)
+);
+
 -- Who watched a party, by coarse class only. `device_class` is one of
 -- phone / tablet / desktop as the viewer's own browser judged it from screen
 -- size and pointer type (no user agent is read or stored); NULL for a client
