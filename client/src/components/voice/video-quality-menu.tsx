@@ -23,6 +23,12 @@ import {
   SCREEN_FRAME_RATES,
   type ScreenFrameRate,
 } from "@/lib/hls-capture-rate";
+import {
+  SHARE_PRIORITIES,
+  setSharePriority,
+  useSharePriority,
+  type SharePriority,
+} from "@/lib/share-priority";
 import { cn } from "@/lib/utils";
 
 /**
@@ -93,6 +99,11 @@ const FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
   "60": "settings.voice.screenFrameRate.60",
 };
 
+const PRIORITY_LABELS: Record<SharePriority, MessageKey> = {
+  motion: "call.quality.send.priority.motion",
+  detail: "call.quality.send.priority.detail",
+};
+
 const RECEIVE_LABELS: Record<ReceiveQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",
   "1080p": "settings.voice.videoQuality.1080p",
@@ -157,6 +168,9 @@ export function VideoQualityMenu({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const receiveQuality = useReceiveQuality();
+  // Frames or pixels first. A device preference read straight from its store
+  // (`share-priority.ts`), like the receive half, so it needs no prop thread.
+  const sharePriority = useSharePriority();
   const receiveReason = useReceiveQualityReason();
   const qualities = availableVideoQualities({ participantCount, hlsLive });
   const value = coerceVideoQuality(rawValue, qualities);
@@ -294,6 +308,46 @@ export function VideoQualityMenu({
               </p>
             </>
           )}
+          {/* What the share gives up first when the link tightens. Without it
+              the only answer was "fps", and a presenter showing code watched
+              the picture swing between 720p and 360p with nothing to press. */}
+          {isSharingScreen && (
+            <>
+              <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+                {t("call.quality.send.priority")}
+              </p>
+              {SHARE_PRIORITIES.map((priority) => {
+                const selected = priority === sharePriority;
+                return (
+                  <button
+                    key={priority}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={ITEM_CLASS}
+                    onClick={() => {
+                      setSharePriority(priority);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 text-signal",
+                        !selected && "invisible",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t(PRIORITY_LABELS[priority])}
+                    </span>
+                  </button>
+                );
+              })}
+              <p className="px-2.5 pb-1 pt-0.5 text-xs text-paper-muted">
+                {t("call.quality.send.priorityHint")}
+              </p>
+            </>
+          )}
           {/* The reason the control is on the call rather than only in a
               dialog: the size actually leaving this machine, updating while
               you look at it. Changing the choice above re-shapes the track
@@ -399,7 +453,9 @@ export function VideoQualityMenu({
           // anything they can see, and tinting it would be the same claim the
           // old label made.
           isSendingVideo &&
-          (value !== "auto" || screenFrameRate !== "auto")
+          (value !== "auto" ||
+            screenFrameRate !== "auto" ||
+            (isSharingScreen && sharePriority !== "motion"))
             ? "bg-signal/20 text-signal"
             : "bg-ink-3 text-paper hover:bg-ink-4",
         )}

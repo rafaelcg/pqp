@@ -10,7 +10,7 @@ import {
   splitShare,
 } from "@/lib/peer-connection-manager";
 import { DEFAULT_SCREEN_UPLOAD_BUDGET_BPS } from "@/lib/screen-upload-budget";
-import type { VideoQuality } from "@/lib/video-quality";
+import { screenFpsTier, type VideoQuality } from "@/lib/video-quality";
 import type { VoiceRoomTransport } from "@pqp/shared";
 
 /**
@@ -252,7 +252,7 @@ export function useShareUplinkStrain(
             : nextStrainStreak(
                 streak.current,
                 screens,
-                chosenScreenCeilingBps(quality),
+                chosenScreenCeilingBps(quality, screenFpsTier(screens[0]?.fps)),
                 viewers,
                 cameraChosenBps,
               );

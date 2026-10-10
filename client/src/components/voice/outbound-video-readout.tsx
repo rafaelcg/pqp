@@ -13,7 +13,11 @@ import {
   meshCameraBitrate,
   meshScreenBitrate,
 } from "@/lib/peer-connection-manager";
-import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
+import {
+  cameraBitrateFor,
+  screenFpsTier,
+  type VideoQuality,
+} from "@/lib/video-quality";
 
 /**
  * What this machine is actually sending, in words, next to the control that
@@ -81,12 +85,15 @@ export function expectedCeilingBps({
   viewers,
   cameraOn,
   sharingScreen,
+  screenFps = 30,
 }: {
   role: VideoSenderRole;
   quality: VideoQuality | undefined;
   viewers: number | undefined;
   cameraOn: boolean;
   sharingScreen: boolean;
+  /** The share's frame-rate tier: a 60 fps share is allowed more. */
+  screenFps?: 30 | 60;
 }): number | null {
   if (quality === undefined || viewers === undefined) {
     return null;
@@ -97,6 +104,7 @@ export function expectedCeilingBps({
       quality,
       undefined,
       cameraOn ? cameraBitrateFor(quality) : 0,
+      screenFps,
     );
   }
   if (role === "camera") {
@@ -104,7 +112,7 @@ export function expectedCeilingBps({
       viewers,
       cameraBitrateFor(quality),
       undefined,
-      sharingScreen ? chosenScreenCeilingBps(quality) : 0,
+      sharingScreen ? chosenScreenCeilingBps(quality, screenFps) : 0,
     );
   }
   return null;
@@ -150,7 +158,11 @@ export function OutboundVideoReadout({
    * cut still handed it a camera term, which is wrong every time that branch
    * runs. The expectation has to come from what is actually on the wire.
    */
-  const [alsoSending, setAlsoSending] = useState({ camera: false, screen: false });
+  const [alsoSending, setAlsoSending] = useState<{
+    camera: boolean;
+    screen: boolean;
+    screenFps: 30 | 60;
+  }>({ camera: false, screen: false, screenFps: 30 });
 
   useEffect(() => {
     // Pushed by the shared poll rather than polling directly: `getStats()`
@@ -170,9 +182,11 @@ export function OutboundVideoReadout({
       // Camera first when both exist: it is the smaller of the two numbers
       // and the one people misread as "the call is broken".
       const senders = snapshot.senders;
+      const screen = senders.find((sender) => sender.role === "screen");
       setAlsoSending({
         camera: senders.some((sender) => sender.role === "camera"),
-        screen: senders.some((sender) => sender.role === "screen"),
+        screen: screen !== undefined,
+        screenFps: screenFpsTier(screen?.fps),
       });
       setCamera(
         senders.find((sender) => sender.role === "camera") ??
@@ -211,6 +225,7 @@ export function OutboundVideoReadout({
     viewers,
     cameraOn: alsoSending.camera,
     sharingScreen: alsoSending.screen,
+    screenFps: alsoSending.screenFps,
   });
   const limited = describeLimitationAgainst(camera, chosen);
 
