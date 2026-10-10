@@ -348,7 +348,11 @@ class BauShareTest {
         val cache = BauCardCache(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             fetch = { _, _, _ ->
-                peak.updateAndGet { maxOf(it, active.incrementAndGet()) }
+                // Not `updateAndGet { maxOf(it, active.incrementAndGet()) }`:
+                // that lambda is retried on a lost compare-and-set, and every
+                // retry incremented `active` again, so the peak overcounted.
+                val now = active.incrementAndGet()
+                peak.accumulateAndGet(now) { a, b -> maxOf(a, b) }
                 gate.await()
                 active.decrementAndGet()
                 sampleCard()
