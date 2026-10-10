@@ -20,7 +20,7 @@ export const APPEARANCE_ACCENT_HUE: Record<AppearancePreference, number> = {
   hearth: 200,
   night: 125,
   halloween: 55,
-  christmas: 150,
+  christmas: 90,
 };
 
 export const ACCENT_SWATCHES = [15, 80, 125, 180, 210, 255, 300, 340] as const;

@@ -170,7 +170,7 @@ yellows still meet the accent-on-surface floor.
 
 Storage is `pqp-accent-hue` and `user_preferences.settings.accentHue`.
 
-## Stage 5.5 — seasonal looks
+## Stage 5.5: seasonal looks
 
 Two more skins on the appearance axis: `halloween` and `christmas`.
 
