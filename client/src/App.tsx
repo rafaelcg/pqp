@@ -5662,7 +5662,10 @@ function MainAppContent({
             via: "channels-update",
           });
           // A second apart, so one bad moment on the server cannot answer
-          // twice. A newer refetch cancels this one and confirms afresh.
+          // twice. A newer refetch cancels this one and confirms afresh, and
+          // it cannot outlive a newer list: every refetch clears this timer
+          // as it starts, and every other fetch of the list takes a newer
+          // ticket, which makes `current()` below false.
           const confirmId = decision.channelId;
           channelListRetryTimerRef.current = setTimeout(() => {
             channelListRetryTimerRef.current = null;

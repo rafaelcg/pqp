@@ -277,11 +277,46 @@ function useChatPaneNeed(
     }
     const watched = new Set<Element>();
     let resize: ResizeObserver | null = null;
+    // What the last read found, so a mutation that changed none of it (a
+    // message arriving in the transcript) costs no search of the pane.
+    let seen: {
+      header: HTMLElement | null;
+      composer: HTMLElement | null;
+      music: HTMLElement | null;
+      fila: HTMLElement | null;
+    } = { header: null, composer: null, music: null, fila: null };
+    const findHeader = () => {
+      // A direct child of the pane, so the transcript is never walked.
+      for (const child of pane.children) {
+        if (child.getAttribute("data-testid") === "call-split-chat-header") {
+          return child as HTMLElement;
+        }
+      }
+      return null;
+    };
+    const findMusic = (composer: HTMLElement | null) =>
+      composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
+    const findFila = (music: HTMLElement | null) =>
+      music?.querySelector<HTMLElement>('[data-music-fila="sheet"]') ?? null;
+    const changed = () => {
+      if (!seen.composer?.isConnected || !pane.contains(seen.composer)) {
+        return true;
+      }
+      if (findHeader() !== seen.header) {
+        return true;
+      }
+      const music = findMusic(seen.composer);
+      return music !== seen.music || findFila(music) !== seen.fila;
+    };
     const read = () => {
-      const header = pane.querySelector<HTMLElement>('[data-testid="call-split-chat-header"]');
-      const composer = pane.querySelector<HTMLElement>("[data-chat-composer]");
-      const music = composer?.querySelector<HTMLElement>("[data-music-composer]") ?? null;
-      const fila = music?.querySelector<HTMLElement>('[data-music-fila="sheet"]') ?? null;
+      const header = findHeader();
+      const composer =
+        seen.composer?.isConnected && pane.contains(seen.composer)
+          ? seen.composer
+          : pane.querySelector<HTMLElement>("[data-chat-composer]");
+      const music = findMusic(composer);
+      const fila = findFila(music);
+      seen = { header, composer, music, fila };
       // The queue and the music bar come and go: let go of what left, so a
       // long call that opens the queue again and again holds no old panels.
       const present = new Set<Element>(
@@ -319,13 +354,16 @@ function useChatPaneNeed(
     }
     // The composer mounts after the pane, and a channel switch replaces it.
     // The pane also holds the transcript, so a busy channel mutates it all
-    // the time: at most one read per frame, not one per message.
+    // the time: at most one check per frame, not one per message, and with
+    // ResizeObserver watching the sizes only a change of element reads again.
     let frame: number | null = null;
     const readSoon = () => {
       if (frame === null) {
         frame = requestAnimationFrame(() => {
           frame = null;
-          read();
+          if (!resize || changed()) {
+            read();
+          }
         });
       }
     };
