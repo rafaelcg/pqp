@@ -172,6 +172,15 @@ function getTranslator(): Translator | null {
   return t;
 }
 
+/**
+ * The same translator the posts use (model, base URL, retries, the system
+ * prompt that keeps product names untouched), for the Baú's video subtitles
+ * (`community-home-captions.ts`). Null without a key.
+ */
+export function communityHomeTranslator(): Translator | null {
+  return getTranslator();
+}
+
 /** The key (or a test translator) is present, so a job can actually run. */
 export function isCommunityHomeTranslationConfigured(): boolean {
   return getTranslator() !== null;
@@ -401,7 +410,8 @@ export async function reserveTranslationBudget(
   return rows[0] ? { day } : null;
 }
 
-async function refundTranslationBudget(day: string, chars: number): Promise<void> {
+/** Give back a reservation that never reached the provider. Shared with the video subtitles. */
+export async function refundTranslationBudget(day: string, chars: number): Promise<void> {
   await getPool().query(
     `UPDATE community_home_translation_usage
         SET chars = GREATEST(0, chars - $2), requests = GREATEST(0, requests - 1)

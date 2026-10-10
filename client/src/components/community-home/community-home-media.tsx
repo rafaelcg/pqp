@@ -1,6 +1,24 @@
-import { Download, Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import {
+  Captions,
+  CaptionsOff,
+  Download,
+  Maximize,
+  Minimize,
+  Pause,
+  Play,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CommunityHomeMedia } from "@pqp/shared";
+import type { CommunityHomeCaptionTrack, CommunityHomeMedia } from "@pqp/shared";
+import { fetchCommunityHomeCaptions } from "@/lib/api";
+import {
+  captionLanguageName,
+  captionsOnByDefault,
+  captionTrackUrl,
+  pickCaptionTrack,
+  writeCaptionsPreference,
+} from "@/lib/community-home/captions";
 import {
   formatHomeBytes,
   instagramEmbedSrc,
@@ -40,14 +58,30 @@ function twitchPlayerParent(): string {
  * Only the file row needs it: players and pictures let the menu float over
  * them, but the file row has its size and download link in that corner.
  */
+/** Where a video's automatic subtitles come from: the post that carries it. */
+export interface VideoCaptionsSource {
+  serverId: string;
+  postId: string;
+  /** The language the video is in, as the API heard it. */
+  sourceLang: string;
+  /** Length of the sound that was transcribed, when the API said. */
+  durationMs?: number | null;
+}
+
+/** How far a phone cut's length may drift from the transcribed main video. */
+const CAPTIONS_DURATION_TOLERANCE_MS = 1_500;
+
 export function UnlockedMedia({
   media,
   flush = false,
   reserveCorner = false,
+  captions = null,
 }: {
   media: CommunityHomeMedia;
   flush?: boolean;
   reserveCorner?: boolean;
+  /** Set when the post has automatic subtitles (`post.captions`). */
+  captions?: VideoCaptionsSource | null;
 }) {
   const { t } = useTranslation();
   const frame = cn(
@@ -170,7 +204,7 @@ export function UnlockedMedia({
   }
 
   if (media.kind === "video") {
-    return <HomeVideo media={media} frame={frame} />;
+    return <HomeVideo media={media} frame={frame} captions={captions} />;
   }
 
   return (
@@ -199,7 +233,15 @@ export function UnlockedMedia({
  * when the post's URLs change, never on a resize, so turning the phone does
  * not restart the video.
  */
-function HomeVideo({ media, frame }: { media: CommunityHomeMedia; frame: string }) {
+function HomeVideo({
+  media,
+  frame,
+  captions,
+}: {
+  media: CommunityHomeMedia;
+  frame: string;
+  captions: VideoCaptionsSource | null;
+}) {
   const { t } = useTranslation();
   const mainUrl = media.url;
   const mobileUrl = media.mobile?.url ?? null;
@@ -214,7 +256,16 @@ function HomeVideo({ media, frame }: { media: CommunityHomeMedia; frame: string 
   return (
     <div className={frame} data-home-media="video" data-home-video-rendition={chosen.rendition}>
       {chosen.url ? (
-        <VideoPlayer key={chosen.url} url={chosen.url} />
+        <VideoPlayer
+          key={chosen.url}
+          url={chosen.url}
+          captions={captions}
+          // The subtitles were heard on the MAIN video. The phone cut is meant
+          // to be the same video reframed, so it shows them too, but only
+          // while its length agrees with what was transcribed: a cut that was
+          // edited differently would put every line at the wrong moment.
+          captionsMustMatchDuration={chosen.rendition === "mobile"}
+        />
       ) : (
         <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
           {t("communityHome.media.unavailable")}
@@ -238,6 +289,20 @@ export function formatVideoDuration(seconds: number): string {
 
 type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
 
+type LoadedTrack = CommunityHomeCaptionTrack & { url: string; id: string };
+
+/** A cue's words as plain text: entities decoded, markup ignored. */
+function cueText(cue: TextTrackCue): string {
+  const vtt = cue as VTTCue;
+  try {
+    const html = vtt.getCueAsHTML?.();
+    if (html) return html.textContent ?? "";
+  } catch {
+    // Fall through to the raw text.
+  }
+  return vtt.text ?? "";
+}
+
 /**
  * The Baú's video. A landscape video takes the card's full width at its own
  * aspect ratio, so there are no black bars beside it. Anything taller than
@@ -251,8 +316,17 @@ type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
  * without the pointer, and comes back on any movement, key press, focus or
  * pause. It never fades while keyboard focus is inside it.
  */
-function VideoPlayer({ url }: { url: string }) {
-  const { t } = useTranslation();
+function VideoPlayer({
+  url,
+  captions: captionsSource,
+  captionsMustMatchDuration = false,
+}: {
+  url: string;
+  captions: VideoCaptionsSource | null;
+  /** Show the subtitles only while this file's length agrees with the transcribed one. */
+  captionsMustMatchDuration?: boolean;
+}) {
+  const { t, locale } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLCanvasElement>(null);
@@ -267,6 +341,129 @@ function VideoPlayer({ url }: { url: string }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [frameReady, setFrameReady] = useState(false);
   const fills = !shape || shape.w / shape.h >= FILL_MIN_RATIO;
+
+  // Automatic subtitles. Fetched the first time the reader comes near the
+  // player (pointer, focus, play), not for every video in the feed, and handed
+  // to <track> as blob: URLs because a <track> cannot send the Authorization
+  // header the API needs. The browser parses them; this player draws the
+  // current cue itself (track mode "hidden") so the words sit above the bar
+  // and follow it, and switches to the browser's own drawing ("showing") only
+  // in the iPhone's native fullscreen, where nothing of ours is on screen.
+  const captions =
+    captionsSource &&
+    (!captionsMustMatchDuration ||
+      (captionsSource.durationMs != null &&
+        duration != null &&
+        Math.abs(duration * 1000 - captionsSource.durationMs) <= CAPTIONS_DURATION_TOLERANCE_MS))
+      ? captionsSource
+      : null;
+  // null until the reader presses CC: the default can only be worked out
+  // once the subtitles are known to fit this file.
+  const [captionsChoice, setCaptionsChoice] = useState<boolean | null>(null);
+  const captionsOn =
+    captionsChoice ?? (captions ? captionsOnByDefault(captions.sourceLang, locale) : false);
+  const [wantCaptions, setWantCaptions] = useState(false);
+  const [tracks, setTracks] = useState<LoadedTrack[]>([]);
+  const [cue, setCue] = useState("");
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  const activeTrack = captionsOn ? pickCaptionTrack(tracks, locale) : null;
+  const captionsServer = captions?.serverId;
+  const captionsPost = captions?.postId;
+
+  useEffect(() => {
+    if (!captionsServer || !captionsPost || !wantCaptions) {
+      return;
+    }
+    let cancelled = false;
+    let made: string[] = [];
+    fetchCommunityHomeCaptions(captionsServer, captionsPost, locale)
+      .then((res) => {
+        if (cancelled) {
+          return;
+        }
+        const loaded = res.tracks.map((track) => ({
+          ...track,
+          id: `cc-${track.source ? "source" : track.lang}`,
+          url: captionTrackUrl(track.vtt),
+        }));
+        made = loaded.map((track) => track.url);
+        setTracks(loaded);
+      })
+      .catch(() => {
+        // No subtitles is the player as it always was, until the next
+        // approach, play or CC press asks again (a blip must not cost the
+        // subtitles for as long as the card stays on screen).
+        if (!cancelled) setWantCaptions(false);
+      });
+    return () => {
+      cancelled = true;
+      for (const blobUrl of made) URL.revokeObjectURL(blobUrl);
+      setTracks([]);
+    };
+  }, [captionsServer, captionsPost, locale, wantCaptions]);
+
+  const activeId = activeTrack?.id ?? null;
+  useEffect(() => {
+    const list = videoRef.current?.textTracks;
+    if (!list) {
+      return;
+    }
+    let current: TextTrack | null = null;
+    const onCue = () => {
+      const active = current?.activeCues;
+      setCue(active ? Array.from(active).map(cueText).filter(Boolean).join("\n") : "");
+    };
+    const apply = () => {
+      current?.removeEventListener("cuechange", onCue);
+      current = null;
+      for (let i = 0; i < list.length; i++) {
+        const track = list[i]!;
+        if (activeId && track.id === activeId) {
+          track.mode = nativeFullscreen ? "showing" : "hidden";
+          current = track;
+        } else {
+          track.mode = "disabled";
+        }
+      }
+      current?.addEventListener("cuechange", onCue);
+      onCue();
+    };
+    apply();
+    list.addEventListener?.("addtrack", apply);
+    return () => {
+      current?.removeEventListener("cuechange", onCue);
+      list.removeEventListener?.("addtrack", apply);
+      setCue("");
+    };
+  }, [activeId, tracks, nativeFullscreen]);
+
+  // iPhone's native fullscreen has none of our chrome: the browser draws the
+  // cues there, and this player again once it is back on the page.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !captionsPost) {
+      return;
+    }
+    const begin = () => setNativeFullscreen(true);
+    const end = () => setNativeFullscreen(false);
+    v.addEventListener("webkitbeginfullscreen", begin);
+    v.addEventListener("webkitendfullscreen", end);
+    return () => {
+      v.removeEventListener("webkitbeginfullscreen", begin);
+      v.removeEventListener("webkitendfullscreen", end);
+    };
+  }, [captionsPost]);
+
+  const toggleCaptions = () => {
+    const next = !captionsOn;
+    writeCaptionsPreference(next ? "on" : "off");
+    setWantCaptions(true);
+    setCaptionsChoice(next);
+  };
+  const trackLabel = (track: LoadedTrack) => {
+    const name = captionLanguageName(track.lang, locale) ?? t("communityHome.media.captionsUnknown");
+    return t("communityHome.media.captionsAuto", { language: name });
+  };
 
   useEffect(() => {
     const onChange = () => setFullscreen(currentFullscreenElement() === wrapRef.current);
@@ -322,6 +519,7 @@ function VideoPlayer({ url }: { url: string }) {
       return;
     }
     setStarted(true);
+    if (captions) setWantCaptions(true);
     if (v.paused || v.ended) {
       void v.play().catch(() => {});
     } else {
@@ -362,13 +560,13 @@ function VideoPlayer({ url }: { url: string }) {
 
   const showChrome = chrome || !playing;
   const iconButton =
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-text transition-colors duration-[var(--duration-fast)] hover:bg-text/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 focus-visible:ring-focus-ring";
+    "flex h-9 w-9 shrink-0 @sm/player:h-11 @sm/player:w-11 items-center justify-center rounded-full text-text transition-colors duration-[var(--duration-fast)] hover:bg-text/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 focus-visible:ring-focus-ring";
 
   return (
     <div
       ref={wrapRef}
       className={cn(
-        "group/player relative w-full overflow-hidden bg-surface-0",
+        "group/player @container/player relative w-full overflow-hidden bg-surface-0",
         !fills && !fullscreen && "h-96",
         fullscreen && "h-full",
         !showChrome && "cursor-none",
@@ -376,8 +574,12 @@ function VideoPlayer({ url }: { url: string }) {
       style={fills && !fullscreen ? { aspectRatio: shape ? `${shape.w} / ${shape.h}` : "16 / 9" } : undefined}
       data-home-video={fills ? "fill" : "fit"}
       onPointerMove={() => wake()}
+      onPointerEnter={captions ? () => setWantCaptions(true) : undefined}
       onKeyDown={() => wake()}
-      onFocus={() => wake()}
+      onFocus={() => {
+        if (captions) setWantCaptions(true);
+        wake();
+      }}
     >
       {!fills && (
         <canvas
@@ -412,8 +614,39 @@ function VideoPlayer({ url }: { url: string }) {
         }}
         onVolumeChange={(e) => setMuted(e.currentTarget.muted)}
       >
-        <track kind="captions" />
+        {tracks.length > 0 ? (
+          tracks.map((track) => (
+            <track
+              key={track.id}
+              id={track.id}
+              kind="subtitles"
+              src={track.url}
+              srcLang={track.lang === "und" ? undefined : track.lang}
+              label={trackLabel(track)}
+              data-home-video-track={track.source ? "source" : "translated"}
+            />
+          ))
+        ) : (
+          <track kind="captions" />
+        )}
       </video>
+
+      {activeTrack && cue && !nativeFullscreen ? (
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-[bottom] duration-[var(--duration-slow)]",
+            showChrome ? "bottom-16 @sm/player:bottom-20 sm:bottom-24" : "bottom-3 sm:bottom-6",
+          )}
+          data-home-video-cue
+        >
+          <span
+            lang={activeTrack.lang === "und" ? undefined : activeTrack.lang}
+            className="max-w-[min(92%,40rem)] whitespace-pre-line rounded-md bg-black/75 px-2 py-0.5 text-center text-xs font-medium leading-snug text-paper @sm/player:px-2.5 @sm/player:py-1 @sm/player:text-sm @2xl/player:text-base"
+          >
+            {cue}
+          </span>
+        </div>
+      ) : null}
 
       <div
         className={cn(
@@ -424,7 +657,7 @@ function VideoPlayer({ url }: { url: string }) {
       />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 pb-3 transition-opacity duration-[var(--duration-slow)] sm:gap-3 sm:px-5 sm:pb-4",
+          "absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-3 pb-3 transition-opacity duration-[var(--duration-slow)] @sm/player:gap-2 sm:gap-3 sm:px-5 sm:pb-4",
           showChrome
             ? "opacity-100"
             : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
@@ -438,7 +671,7 @@ function VideoPlayer({ url }: { url: string }) {
           aria-label={playing ? t("communityHome.media.pause") : t("communityHome.media.play")}
           className={cn(
             "flex shrink-0 items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_8px_30px_var(--glow-accent)] transition-transform duration-[var(--duration-fast)] hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 focus-visible:ring-focus-ring",
-            started ? "h-11 w-11" : "h-14 w-14",
+            started ? "h-9 w-9 @sm/player:h-11 @sm/player:w-11" : "h-11 w-11 @sm/player:h-14 @sm/player:w-14",
           )}
           data-home-video-play
         >
@@ -475,6 +708,18 @@ function VideoPlayer({ url }: { url: string }) {
           aria-valuetext={`${formatVideoDuration(time)} / ${formatVideoDuration(duration ?? 0)}`}
           className="mx-1 h-11 min-w-0 flex-1 cursor-pointer"
         />
+        {captions ? (
+          <button
+            type="button"
+            onClick={toggleCaptions}
+            aria-pressed={captionsOn}
+            aria-label={captionsOn ? t("communityHome.media.captionsOff") : t("communityHome.media.captionsOn")}
+            className={iconButton}
+            data-home-video-cc={captionsOn ? "on" : "off"}
+          >
+            {captionsOn ? <Captions className="h-5 w-5" aria-hidden /> : <CaptionsOff className="h-5 w-5" aria-hidden />}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={toggleMute}

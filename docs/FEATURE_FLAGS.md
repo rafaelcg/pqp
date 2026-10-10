@@ -112,6 +112,18 @@ default off; automatic translation of Baú posts, which also needs
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
+(`community_home_video_captions`, **per server**, default off), automatic
+subtitles on videos uploaded to the Baú. It sends the video's sound to the
+speech provider (Cloudflare Workers AI), so it goes on one server first. Read at
+the enqueue (publish and the minute sweep, which is also the backfill for videos
+already posted), by the worker before every provider call (a flip mid-queue
+drops the job with no call), and on every read: **off hides stored subtitles
+too**. Served as `captions` on each post of `GET /api/servers/:id/home/posts`.
+The translated track also needs `community_home_translation` on for the server.
+Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
+it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
+`docs/COMMUNITY_HOME.md` §"Video subtitles".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one

@@ -793,7 +793,21 @@ export function PostCard({
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
       {showMedia && post.media ? (
-        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+        <UnlockedMedia
+          media={post.media}
+          flush
+          reserveCorner={showStaffMenu}
+          captions={
+            post.captions && !isPreview
+              ? {
+                  serverId: post.serverId,
+                  postId: post.id,
+                  sourceLang: post.captions.sourceLang,
+                  durationMs: post.captions.durationMs,
+                }
+              : null
+          }
+        />
       ) : null}
       {showStaffMenu && (
         <div
@@ -1244,6 +1258,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     createdAt: now,
     updatedAt: now,
     translation: null,
+    captions: null,
   };
 }
 
