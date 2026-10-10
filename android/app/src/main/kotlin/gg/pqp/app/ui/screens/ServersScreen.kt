@@ -131,12 +131,17 @@ fun ServersScreen(
     LaunchedEffect(session) { communityHome = CommunityHomeConfigs.resolve(session.api) }
     var bauUnread by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     LifecycleResumeEffect(communityHome.enabled) {
-        if (communityHome.enabled) {
+        // Tied to this resume: a slow read that outlives it must not land after
+        // a newer one (or after the Baú stamped itself read) and put stale
+        // counts back, so pausing cancels it.
+        val read = if (communityHome.enabled) {
             scope.launch {
                 runCatching { session.api.bauUnreadAll() }.onSuccess { bauUnread = it }
             }
+        } else {
+            null
         }
-        onPauseOrDispose { }
+        onPauseOrDispose { read?.cancel() }
     }
 
     Scaffold(

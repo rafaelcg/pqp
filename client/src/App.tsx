@@ -1826,6 +1826,21 @@ function MainAppContent({
    */
   const [communityHomeNewestByServer, setCommunityHomeNewestByServer] =
     useState<Record<string, string>>({});
+  /**
+   * Re-renders once a minute while the open server has unread Baú posts, so the
+   * row's "New" chip lets go at 24 h instead of waiting for some other render.
+   */
+  const [communityHomeFreshTick, setCommunityHomeFreshTick] = useState(0);
+  useEffect(() => {
+    if (communityHomeUnread <= 0) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => setCommunityHomeFreshTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [communityHomeUnread]);
   /** Bumped by every Baú frame, for any server, to re-read the map above. */
   const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
@@ -11408,6 +11423,7 @@ function MainAppContent({
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeUnreadFresh={
+            communityHomeFreshTick >= 0 &&
             communityHomeUnread > 0 &&
             bauIsFresh(
               selectedServerId
