@@ -2,6 +2,7 @@ package gg.pqp.app.protocol
 
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
+import gg.pqp.app.bau.BauMobileRendition
 import gg.pqp.app.bau.BauPost
 import gg.pqp.app.bau.BauUnreadResponse
 import gg.pqp.app.bau.CommunityHomeConfig
@@ -59,6 +60,13 @@ class BauContractTest {
     fun `BauMedia matches communityHomeMediaSchema`() {
         assumeSharedModule()
         assertSubsetOfSchema(BauMedia.serializer(), "communityHomeMediaSchema")
+    }
+
+    /** The phone cut. A renamed `url` here would quietly play the landscape video forever. */
+    @Test
+    fun `BauMobileRendition matches communityHomeMobileRenditionSchema`() {
+        assumeSharedModule()
+        assertSubsetOfSchema(BauMobileRendition.serializer(), "communityHomeMobileRenditionSchema")
     }
 
     @Test

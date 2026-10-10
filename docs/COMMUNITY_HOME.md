@@ -261,6 +261,44 @@ downloads, never inline.
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
 
+### A phone cut of a video
+
+An uploaded video can carry a second, vertical (9:16) edit beside the main,
+landscape one: an owner posting a launch video with both cuts. Phones play the
+vertical one, everything else the main one. Runtime flag
+`bau_mobile_rendition` (**per server**, default off, env default
+`BAU_MOBILE_RENDITION`), served to the composer as `mobileRenditionEnabled` on
+`GET .../home/posts` and `.../home/drafts`.
+
+- **Storage.** Four nullable columns on the post row
+  (`mobile_media_name`, `_content_type`, `_byte_size`, `_storage_key`), not a
+  child table: there is exactly one alternate, it lives and dies with the main
+  video, and a CHECK refuses one on a post whose `media_kind` is not `video`.
+  The bytes take the same mint / PUT / claim as any Baú media (same 100 MiB
+  cap, same type allowlist, same HEAD), so the upload row is an ordinary one
+  and the orphan sweep needs nothing new.
+- **Writes.** `mobileMediaUploadId` on create and on PATCH. Refused unless the
+  flag is on, the main media is an uploaded video, the cut is a video, and it
+  is not the main file twice. On PATCH, omitted keeps the cut while the main
+  file stays the same; replacing or clearing the main media drops it (it was an
+  edit of the old video); `null` removes it. A removed or replaced cut, and
+  both files of a deleted post (main media included), are handed to the
+  orphan sweep inside the same transaction (upload row unclaimed and
+  unverified), then deleted right after COMMIT without the answer waiting on
+  it. Whatever that quick cleanup does not finish, the sweep does.
+- **Reads.** `media.mobile` = `{ name, contentType, byteSize, url }`, inside
+  `media`, so a locked viewer (who gets no media) never gets it. Flag off: the
+  field is null and every client plays the main video; stored cuts are kept,
+  so turning it back on brings them back. A client that ignores the field
+  plays the main video.
+- **Who plays which.** Web: `communityHomeVideoUrl` in
+  `client/src/lib/community-home/rendition.ts`. The vertical cut when the
+  viewport is at most 640 CSS px wide, or the pointer is coarse and the screen
+  is portrait; decided when the player mounts, never on rotate (a phone turned
+  sideways mid-video keeps playing). iOS and Android always prefer it
+  (`CommunityHomeMedia.inlineVideoURL`, `BauMedia.videoUrl`). The composers on
+  the phones do not offer it yet; staff attach it from the web.
+
 ## Schedule
 
 `status = scheduled` rows flip to `published` in `publishDueCommunityHomePosts`,
@@ -414,6 +452,12 @@ the expected shape of a self-host without storage, not a bug.
 - `client/src/lib/community-home/embed-preview.test.ts` and
   `community-home-compose-embed.test.tsx`: composer live unfurl (player after
   debounce, skeleton while settling, muted hint after idle).
+- `server/src/services/community-home-mobile-rendition.test.ts`: the phone
+  cut. Flag off refuses and hides, only beside an uploaded video and only a
+  video, add / replace / remove on edit, a new main video drops the old cut,
+  delete removes both objects, the lock covers it, the CHECK backstop.
+- `client/src/lib/community-home/rendition.test.ts`: which cut a viewport
+  plays.
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
   visibility helpers, media helpers, live-post toast gating.
 - `client/src/components/layout/channel-list-community-home.test.tsx`: the

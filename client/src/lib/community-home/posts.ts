@@ -19,6 +19,7 @@ export {
   type CommunityHomeComment,
   type CommunityHomeContentType,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomeMediaKind,
   type CommunityHomePost,
   type CommunityHomePostStatus,

@@ -17,6 +17,7 @@ import {
   type CommunityHomeComment,
   type CommunityHomeContentType,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomePost,
   type CommunityHomePostStatus,
   type CommunityHomeTranslationLang,
@@ -101,6 +102,16 @@ export function isCommunityHomeVipEnabled(): boolean {
   return isCommunityHomeEnabled() && isEnabled("community_home_vip");
 }
 
+/**
+ * The phone cut of a Baú video (runtime flag `bau_mobile_rendition`, per
+ * server, default off). Off means a write that names one is refused and a
+ * read leaves `media.mobile` out, so every reader plays the main video; the
+ * columns are kept, so turning it back on brings the cuts back.
+ */
+export function isBauMobileRenditionOn(serverId: string): boolean {
+  return isEnabled("bau_mobile_rendition", { serverId });
+}
+
 export function isCommunityHomeMediaConfigured(): boolean {
   return isStorageConfigured();
 }
@@ -141,6 +152,10 @@ interface PostRow {
   media_byte_size: string | null;
   media_storage_key: string | null;
   media_youtube_url: string | null;
+  mobile_media_name: string | null;
+  mobile_media_content_type: string | null;
+  mobile_media_byte_size: string | null;
+  mobile_media_storage_key: string | null;
   scheduled_at: Date | null;
   schedule_timezone: string | null;
   pinned_at: Date | null;
@@ -190,6 +205,8 @@ function postSelectSql(viewerParam: string): string {
   p.id, p.server_id, p.author_id, p.title, p.body, p.teaser, p.visibility,
   p.status, p.comments_enabled, p.media_kind, p.media_name, p.media_content_type,
   p.media_byte_size, p.media_storage_key, p.media_youtube_url,
+  p.mobile_media_name, p.mobile_media_content_type, p.mobile_media_byte_size,
+  p.mobile_media_storage_key,
   p.scheduled_at, p.schedule_timezone, p.pinned_at, p.published_at,
   p.created_at, p.updated_at,
   u.display_name, u.username, u.discriminator, u.avatar_url,
@@ -289,6 +306,7 @@ function buildMedia(
       url: null,
       youtubeUrl: null,
       twitchUrl: row.media_youtube_url,
+      mobile: null,
     };
   }
   if (isCommunityHomeEmbedKind(row.media_kind)) {
@@ -306,6 +324,7 @@ function buildMedia(
       url: null,
       youtubeUrl: row.media_youtube_url,
       twitchUrl: null,
+      mobile: null,
     };
   }
   let url: string | null = null;
@@ -332,6 +351,40 @@ function buildMedia(
     url,
     youtubeUrl: null,
     twitchUrl: null,
+    mobile: buildMobileRendition(row),
+  };
+}
+
+/**
+ * The phone cut, signed like the main video. Only on a `video`, and only
+ * while the flag is on for the server: off, the field is null and every
+ * client plays the main one.
+ */
+function buildMobileRendition(row: PostRow): CommunityHomeMobileRendition | null {
+  if (
+    row.media_kind !== "video" ||
+    !row.mobile_media_storage_key ||
+    !isBauMobileRenditionOn(row.server_id)
+  ) {
+    return null;
+  }
+  let url: string | null = null;
+  if (isStorageConfigured()) {
+    try {
+      url = presignGet(row.mobile_media_storage_key, {
+        ttlSeconds: READ_URL_TTL_SECONDS,
+      });
+    } catch {
+      url = null;
+    }
+  }
+  return {
+    name: row.mobile_media_name ?? "video",
+    contentType: row.mobile_media_content_type,
+    byteSize: row.mobile_media_byte_size
+      ? Number(row.mobile_media_byte_size)
+      : null,
+    url,
   };
 }
 
@@ -831,6 +884,128 @@ function embedMedia(url: string): MediaFields {
   );
 }
 
+/** The phone cut's columns. All null, or all set together. */
+type MobileFields = {
+  mobile_media_name: string | null;
+  mobile_media_content_type: string | null;
+  mobile_media_byte_size: number | null;
+  mobile_media_storage_key: string | null;
+};
+
+function emptyMobile(): MobileFields {
+  return {
+    mobile_media_name: null,
+    mobile_media_content_type: null,
+    mobile_media_byte_size: null,
+    mobile_media_storage_key: null,
+  };
+}
+
+/**
+ * Put a claimed upload on the post as its phone cut. The upload went through
+ * the same mint / PUT / claim as any Baú media, so the size cap, the type
+ * allowlist and the HEAD are already behind it; what is checked here is the
+ * shape of the pair: the flag is on, the main media is an uploaded video, the
+ * cut is a video too, and it is not the main file a second time.
+ */
+async function claimMobileRendition(
+  client: PoolClient,
+  serverId: string,
+  uploaderId: string,
+  uploadId: string,
+  postId: string,
+  main: MediaFields,
+): Promise<MobileFields> {
+  if (!isBauMobileRenditionOn(serverId)) {
+    throw new CommunityHomeError(
+      "invalid",
+      "Mobile versions are off on this server",
+    );
+  }
+  if (main.media_kind !== "video" || !main.media_storage_key) {
+    throw new CommunityHomeError(
+      "invalid",
+      "A mobile version needs an uploaded video as the main media",
+    );
+  }
+  const claimed = await claimUploadOntoPost(
+    client,
+    serverId,
+    uploaderId,
+    uploadId,
+    postId,
+  );
+  if (claimed.media_kind !== "video") {
+    throw new CommunityHomeError(
+      "invalid",
+      "The mobile version must be a video",
+    );
+  }
+  if (claimed.media_storage_key === main.media_storage_key) {
+    throw new CommunityHomeError(
+      "invalid",
+      "The mobile version must be a different file",
+    );
+  }
+  return {
+    mobile_media_name: claimed.media_name,
+    mobile_media_content_type: claimed.media_content_type,
+    mobile_media_byte_size: claimed.media_byte_size,
+    mobile_media_storage_key: claimed.media_storage_key,
+  };
+}
+
+/**
+ * Hand stored files the post no longer points at to the orphan sweep, INSIDE
+ * the write that stops pointing at them. Unclaimed and unverified is exactly
+ * what `sweepOrphanedCommunityHomeMedia` deletes (object, then row), so from
+ * the COMMIT on, every such file has a durable retry whatever happens next: a
+ * failed storage delete, storage switched off, the process stopping before
+ * the quick cleanup below runs.
+ */
+async function handOffStoredMedia(
+  client: PoolClient,
+  keys: (string | null | undefined)[],
+): Promise<string[]> {
+  const live = keys.filter((key): key is string => Boolean(key));
+  if (live.length > 0) {
+    await client.query(
+      `UPDATE community_home_media_uploads
+          SET claimed_post_id = NULL, verified_at = NULL
+        WHERE storage_key = ANY($1::text[])`,
+      [live],
+    );
+  }
+  return live;
+}
+
+/**
+ * The quick path after COMMIT: delete the object, then its (already handed
+ * off) upload row, so the bucket is clean now instead of at the next sweep.
+ * Best effort and never throws: anything it does not finish, the sweep does.
+ */
+async function forgetStoredMedia(keys: string[]): Promise<void> {
+  if (!isStorageConfigured()) {
+    return;
+  }
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        await deleteObject(key);
+        await getPool().query(
+          `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
+          [key],
+        );
+      } catch (error) {
+        console.error(
+          "[community-home] media cleanup left to the orphan sweep:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }),
+  );
+}
+
 function emptyMedia(): MediaFields {
   return {
     media_kind: null,
@@ -880,6 +1055,8 @@ export type CreateHomePostInput = {
   visibility: CommunityHomeVisibility;
   commentsEnabled: boolean;
   mediaUploadId: string | null;
+  /** The phone cut: a second claimed video upload. Needs `mediaUploadId` to be a video. */
+  mobileMediaUploadId?: string | null;
   youtubeUrl: string | null;
   status: CommunityHomePostStatus;
   scheduledAt: string | null;
@@ -961,6 +1138,18 @@ export async function createCommunityHomePost(
       media = embedMedia(input.youtubeUrl);
     }
 
+    let mobile = emptyMobile();
+    if (input.mobileMediaUploadId) {
+      mobile = await claimMobileRendition(
+        client,
+        serverId,
+        authorId,
+        input.mobileMediaUploadId,
+        postId,
+        media,
+      );
+    }
+
     assertPublishable({
       title: input.title,
       body: input.body,
@@ -981,6 +1170,10 @@ export async function createCommunityHomePost(
          media_byte_size = $5,
          media_storage_key = $6,
          media_youtube_url = $7,
+         mobile_media_name = $8,
+         mobile_media_content_type = $9,
+         mobile_media_byte_size = $10,
+         mobile_media_storage_key = $11,
          updated_at = NOW()
        WHERE id = $1`,
       [
@@ -991,6 +1184,10 @@ export async function createCommunityHomePost(
         media.media_byte_size,
         media.media_storage_key,
         media.media_youtube_url,
+        mobile.mobile_media_name,
+        mobile.mobile_media_content_type,
+        mobile.mobile_media_byte_size,
+        mobile.mobile_media_storage_key,
       ],
     );
     await client.query("COMMIT");
@@ -1017,6 +1214,12 @@ export type UpdateHomePostInput = {
   mediaUploadId?: string | null;
   youtubeUrl?: string | null;
   clearMedia?: boolean;
+  /**
+   * The phone cut. Undefined keeps it while the main video stays the same
+   * file (any other main media change drops it); an id replaces it; null
+   * removes it.
+   */
+  mobileMediaUploadId?: string | null;
 };
 
 export async function updateCommunityHomePost(
@@ -1051,10 +1254,16 @@ export async function updateCommunityHomePost(
       media_byte_size: string | null;
       media_storage_key: string | null;
       media_youtube_url: string | null;
+      mobile_media_name: string | null;
+      mobile_media_content_type: string | null;
+      mobile_media_byte_size: string | null;
+      mobile_media_storage_key: string | null;
     }>(
       `SELECT id, visibility, status, title, body, teaser,
               media_kind, media_name, media_content_type, media_byte_size,
-              media_storage_key, media_youtube_url
+              media_storage_key, media_youtube_url,
+              mobile_media_name, mobile_media_content_type,
+              mobile_media_byte_size, mobile_media_storage_key
          FROM community_home_posts
         WHERE id = $1 AND server_id = $2
         FOR UPDATE`,
@@ -1089,6 +1298,35 @@ export async function updateCommunityHomePost(
       media = embedMedia(input.youtubeUrl);
     } else if (input.youtubeUrl === null && input.mediaUploadId === null) {
       // explicit clear via nullable fields when clearMedia not set — leave
+    }
+
+    // The phone cut is a second edit of THIS video, so it only survives an
+    // edit that keeps the same main file. A new main video without a new cut
+    // would otherwise play last week's vertical edit on every phone.
+    const previousMobileKey = row.mobile_media_storage_key;
+    let mobile: MobileFields = {
+      mobile_media_name: row.mobile_media_name,
+      mobile_media_content_type: row.mobile_media_content_type,
+      mobile_media_byte_size: row.mobile_media_byte_size
+        ? Number(row.mobile_media_byte_size)
+        : null,
+      mobile_media_storage_key: row.mobile_media_storage_key,
+    };
+    if (input.mobileMediaUploadId) {
+      mobile = await claimMobileRendition(
+        client,
+        serverId,
+        actorId,
+        input.mobileMediaUploadId,
+        postId,
+        media,
+      );
+    } else if (
+      input.mobileMediaUploadId === null ||
+      media.media_kind !== "video" ||
+      media.media_storage_key !== previousKey
+    ) {
+      mobile = emptyMobile();
     }
 
     const visibility = input.visibility ?? row.visibility;
@@ -1128,6 +1366,10 @@ export async function updateCommunityHomePost(
          media_byte_size = $11,
          media_storage_key = $12,
          media_youtube_url = $13,
+         mobile_media_name = $14,
+         mobile_media_content_type = $15,
+         mobile_media_byte_size = $16,
+         mobile_media_storage_key = $17,
          updated_at = NOW()
        WHERE id = $1 AND server_id = $2`,
       [
@@ -1144,29 +1386,24 @@ export async function updateCommunityHomePost(
         media.media_byte_size,
         media.media_storage_key,
         media.media_youtube_url,
+        mobile.mobile_media_name,
+        mobile.mobile_media_content_type,
+        mobile.mobile_media_byte_size,
+        mobile.mobile_media_storage_key,
       ],
     );
+    // Files this edit stops pointing at go to the orphan sweep in the same
+    // transaction, so a rolled-back edit never loses the object the row still
+    // names, and a committed one never loses track of the file it dropped.
+    const dropped = await handOffStoredMedia(client, [
+      previousKey !== media.media_storage_key ? previousKey : null,
+      previousMobileKey !== mobile.mobile_media_storage_key
+        ? previousMobileKey
+        : null,
+    ]);
     await client.query("COMMIT");
-    // Only after COMMIT: a rolled-back edit must not have deleted the object
-    // the row still points at.
-    if (
-      previousKey &&
-      previousKey !== media.media_storage_key &&
-      isStorageConfigured()
-    ) {
-      await client.query(
-        `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
-        [previousKey],
-      );
-      try {
-        await deleteObject(previousKey);
-      } catch (error) {
-        console.error(
-          "[community-home] failed to delete replaced media object:",
-          error instanceof Error ? error.message : error,
-        );
-      }
-    }
+    // Not awaited: the author's answer does not wait on the bucket.
+    void forgetStoredMedia(dropped);
     if (row.status === "published") {
       // An edit of a live post: the old translations are now stale by hash
       // (readers get the original in the meantime); make new ones.
@@ -1329,34 +1566,38 @@ export async function deleteCommunityHomePost(
   if (!canManage) {
     throw new CommunityHomeError("forbidden", "Staff only");
   }
-  const result = await getPool().query<{ media_storage_key: string | null }>(
-    `DELETE FROM community_home_posts
-      WHERE id = $1 AND server_id = $2
-      RETURNING media_storage_key`,
-    [postId, serverId],
-  );
-  if (!result.rows[0]) {
-    throw new CommunityHomeError("not_found", "Post not found");
-  }
-  const key = result.rows[0].media_storage_key;
-  // The FK only nulls `claimed_post_id`, and the orphan sweep skips verified
-  // rows, so without this the upload row would outlive its post forever.
-  if (key) {
-    await getPool().query(
-      `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
-      [key],
+  // Both stored files go with the post: the main media and its phone cut.
+  // Handed to the orphan sweep in the same transaction as the delete (see
+  // `handOffStoredMedia`), then cleaned up right away without waiting.
+  const client = await getPool().connect();
+  let dropped: string[];
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{
+      media_storage_key: string | null;
+      mobile_media_storage_key: string | null;
+    }>(
+      `DELETE FROM community_home_posts
+        WHERE id = $1 AND server_id = $2
+        RETURNING media_storage_key, mobile_media_storage_key`,
+      [postId, serverId],
     );
-  }
-  if (key && isStorageConfigured()) {
-    try {
-      await deleteObject(key);
-    } catch (error) {
-      console.error(
-        "[community-home] failed to delete media object:",
-        error instanceof Error ? error.message : error,
-      );
+    const deleted = result.rows[0];
+    if (!deleted) {
+      throw new CommunityHomeError("not_found", "Post not found");
     }
+    dropped = await handOffStoredMedia(client, [
+      deleted.media_storage_key,
+      deleted.mobile_media_storage_key,
+    ]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
+  void forgetStoredMedia(dropped);
 }
 
 export async function listCommunityHomeComments(

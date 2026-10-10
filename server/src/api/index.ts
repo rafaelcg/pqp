@@ -361,6 +361,7 @@ import {
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isBauMobileRenditionOn,
   isCommunityHomeEnabled,
   isCommunityHomeMediaConfigured,
   isCommunityHomeVipEnabled,
@@ -4355,7 +4356,11 @@ router.get(
         user.id,
         url.searchParams.get("lang"),
       );
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4369,7 +4374,11 @@ router.get(
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4434,6 +4443,7 @@ router.post(
         visibility: raw.visibility,
         commentsEnabled: raw.commentsEnabled !== false,
         mediaUploadId: raw.mediaUploadId ?? null,
+        mobileMediaUploadId: raw.mobileMediaUploadId ?? null,
         youtubeUrl: raw.youtubeUrl ?? null,
         status: raw.status,
         scheduledAt: raw.scheduledAt ?? null,
@@ -4473,6 +4483,7 @@ router.patch(
         mediaUploadId: raw.mediaUploadId,
         youtubeUrl: raw.youtubeUrl,
         clearMedia: raw.clearMedia,
+        mobileMediaUploadId: raw.mobileMediaUploadId,
       });
       await notifyHome(serverId!);
       return { post };

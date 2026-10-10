@@ -606,6 +606,25 @@ export const communityHomeEmbedUrlSchema = z
     "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 
+/**
+ * The second cut of an uploaded video: the vertical (9:16) edit a phone plays
+ * instead of the landscape one. Always a stored video, uploaded through the
+ * same mint / PUT / claim as the main media, and only ever carried by a media
+ * whose own kind is `video`. It rides inside `media`, so a locked viewer, who
+ * gets no media at all, never gets this either.
+ */
+export const communityHomeMobileRenditionSchema = z.object({
+  name: z.string(),
+  contentType: z.string().nullable(),
+  byteSize: z.number().int().nonnegative().nullable(),
+  /** Presigned GET; null when storage is not readable right now. */
+  url: z.string().nullable(),
+});
+
+export type CommunityHomeMobileRendition = z.infer<
+  typeof communityHomeMobileRenditionSchema
+>;
+
 /** Media as returned to a viewer who may see it. Locked viewers get null. */
 export const communityHomeMediaSchema = z.object({
   kind: communityHomeMediaKindSchema,
@@ -626,6 +645,15 @@ export const communityHomeMediaSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  /**
+   * The phone cut of a `video`, when the author attached one and the
+   * `bau_mobile_rendition` flag is on for the server. Absent on an older API
+   * and on every other kind; missing reads as null, and a client that ignores
+   * it plays the main video, which is the whole compatibility story.
+   * Optional in the type too, so a media built by hand (an embed preview, a
+   * fixture) never has to name it.
+   */
+  mobile: communityHomeMobileRenditionSchema.nullable().optional(),
 });
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;
@@ -826,6 +854,12 @@ export const createCommunityHomePostSchema = z.object({
   /** Claimed media upload id, or omit / null for text-only / a paste URL. */
   mediaUploadId: z.string().uuid().optional().nullable(),
   /**
+   * A second claimed upload: the vertical cut phones play. Only with a
+   * `mediaUploadId` that is a video, and must be a video itself. Behind the
+   * `bau_mobile_rendition` flag.
+   */
+  mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  /**
    * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
    * classifies which; one field so the composer stays one paste box.
    */
@@ -853,6 +887,12 @@ export const updateCommunityHomePostSchema = z.object({
   youtubeUrl: z.string().max(500).optional().nullable(),
   /** Pass null to clear media (including a paste-URL embed). */
   clearMedia: z.boolean().optional(),
+  /**
+   * The phone cut. Omitted keeps the one on the post (and it goes with the
+   * main media when that is replaced by something that is not a video or
+   * cleared); a claimed upload id replaces it; `null` removes it.
+   */
+  mobileMediaUploadId: z.string().uuid().optional().nullable(),
 });
 
 export type UpdateCommunityHomePostRequest = z.infer<
@@ -953,6 +993,12 @@ export const communityHomePostsResponseSchema = z.object({
    * Defaulted: an older API never sends it.
    */
   translationEnabled: z.boolean().default(false),
+  /**
+   * `bau_mobile_rendition` is on for this server: the staff composer offers
+   * a second, vertical cut of an uploaded video. Defaulted: an older API
+   * never sends it.
+   */
+  mobileRenditionEnabled: z.boolean().default(false),
 });
 
 export type CommunityHomePostsResponse = z.infer<
@@ -1026,6 +1072,7 @@ export type ParsedCommunityHomePostFields = {
   visibility: CommunityHomeVisibility;
   commentsEnabled: boolean;
   mediaUploadId: string | null;
+  mobileMediaUploadId: string | null;
   youtubeUrl: string | null;
   status: CommunityHomePostStatus;
   scheduledAt: string | null;

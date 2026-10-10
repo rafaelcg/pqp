@@ -93,6 +93,7 @@ import {
   youtubePosterUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomePost,
   type CommunityHomeViewerMode,
   type CommunityHomeVisibility,
@@ -105,6 +106,7 @@ import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
+import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
 import {
   ComposeTranslationNote,
@@ -1087,7 +1089,27 @@ type ComposeState = {
   /** Media already on the post being edited, until replaced or removed. */
   existingMedia: CommunityHomeMedia | null;
   clearMedia: boolean;
+  /** The vertical cut picked in this session, not yet on a post. */
+  mobileUpload: UploadedHomeMedia | null;
+  /** Local preview of `mobileUpload`, an object URL. */
+  mobilePreviewUrl: string | null;
+  /** The vertical cut already on the post being edited. */
+  existingMobile: CommunityHomeMobileRendition | null;
+  /** The author removed the cut on the post. */
+  clearMobile: boolean;
 };
+
+/**
+ * What every change of the MAIN media does to the phone cut: forget it. The
+ * cut is a second edit of one particular video, and the server drops it too
+ * when the main file changes.
+ */
+const NO_MOBILE = {
+  mobileUpload: null,
+  mobilePreviewUrl: null,
+  existingMobile: null,
+  clearMobile: false,
+} as const;
 
 const emptyCompose = (): ComposeState => ({
   editingId: null,
@@ -1102,6 +1124,7 @@ const emptyCompose = (): ComposeState => ({
   uploadPreviewUrl: null,
   existingMedia: null,
   clearMedia: false,
+  ...NO_MOBILE,
 });
 
 function composeFromPost(post: CommunityHomePost): ComposeState {
@@ -1120,7 +1143,37 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
     existingMedia:
       post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
+    existingMobile: post.media?.mobile ?? null,
   };
+}
+
+/** The main media is an uploaded video, which is what a phone cut goes beside. */
+function composeMainIsVideo(state: ComposeState): boolean {
+  if (state.upload) {
+    return state.upload.kind === "video";
+  }
+  return !state.clearMedia && state.existingMedia?.kind === "video";
+}
+
+/** Which main video the composer holds: the session upload, else the post's own. */
+function composeMainKey(state: ComposeState): string {
+  return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
+/** The cut as the composer shows it: picked now, else the one on the post. */
+function composeMobile(state: ComposeState): CommunityHomeMobileRendition | null {
+  if (!composeMainIsVideo(state)) {
+    return null;
+  }
+  if (state.mobileUpload) {
+    return {
+      name: state.mobileUpload.name,
+      contentType: state.mobileUpload.contentType,
+      byteSize: state.mobileUpload.byteSize,
+      url: state.mobilePreviewUrl,
+    };
+  }
+  return state.clearMobile ? null : state.existingMobile;
 }
 
 function composeHasFileMedia(state: ComposeState): boolean {
@@ -1157,9 +1210,10 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       url: state.uploadPreviewUrl,
       youtubeUrl: null,
       twitchUrl: null,
+      mobile: composeMobile(state),
     };
   } else if (state.existingMedia && !state.clearMedia) {
-    media = state.existingMedia;
+    media = { ...state.existingMedia, mobile: composeMobile(state) };
   }
   const now = new Date().toISOString();
   return {
@@ -1204,6 +1258,7 @@ function ComposeCard({
   vipEnabled,
   mediaEnabled,
   translationEnabled,
+  mobileRenditionEnabled,
   onDone,
   onCancelEdit,
 }: {
@@ -1216,6 +1271,8 @@ function ComposeCard({
   mediaEnabled: boolean;
   /** Readers in other languages are served an automatic translation here. */
   translationEnabled: boolean;
+  /** `bau_mobile_rendition` is on here: offer a vertical cut beside a video. */
+  mobileRenditionEnabled: boolean;
   onDone: (post: CommunityHomePost, action: ComposeAction) => void;
   onCancelEdit: () => void;
 }) {
@@ -1246,6 +1303,15 @@ function ComposeCard({
       }
     };
   }, [state.uploadPreviewUrl]);
+
+  useEffect(() => {
+    const url = state.mobilePreviewUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [state.mobilePreviewUrl]);
 
   async function pickFile(file: File | null) {
     if (!file) {
@@ -1304,6 +1370,7 @@ function ComposeCard({
         uploadPreviewUrl: previewUrl,
         youtubeUrl: "",
         clearMedia: true,
+        ...NO_MOBILE,
       }));
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -1326,6 +1393,7 @@ function ComposeCard({
       uploadPreviewUrl: null,
       youtubeUrl: "",
       clearMedia: true,
+      ...NO_MOBILE,
     }));
   }
 
@@ -1357,6 +1425,11 @@ function ComposeCard({
       const teaser =
         vipEnabled && state.visibility === "members" ? state.teaser.trim() || null : null;
       const visibility: CommunityHomeVisibility = vipEnabled ? state.visibility : "free";
+      // Only beside an uploaded video; a stale pick never rides along.
+      const mobileUploadId =
+        composeMainIsVideo(state) && state.mobileUpload
+          ? state.mobileUpload.uploadId
+          : null;
       let post: CommunityHomePost;
       if (state.editingId) {
         const { post: updated } = await updateCommunityHomePost(
@@ -1375,6 +1448,13 @@ function ComposeCard({
                 : state.clearMedia
                   ? { clearMedia: true }
                   : {}),
+            // Omitted keeps the cut on the post (the server drops it with a
+            // replaced main video by itself); null removes it.
+            ...(mobileUploadId
+              ? { mobileMediaUploadId: mobileUploadId }
+              : state.clearMobile
+                ? { mobileMediaUploadId: null }
+                : {}),
           },
         );
         post = updated;
@@ -1396,6 +1476,7 @@ function ComposeCard({
           visibility,
           commentsEnabled: state.commentsEnabled,
           mediaUploadId: state.upload?.uploadId ?? null,
+          mobileMediaUploadId: mobileUploadId,
           youtubeUrl,
           status:
             action === "publish"
@@ -1587,6 +1668,7 @@ function ComposeCard({
                   upload: youtubeUrl ? null : prev.upload,
                   uploadPreviewUrl: youtubeUrl ? null : prev.uploadPreviewUrl,
                   clearMedia: youtubeUrl ? true : prev.clearMedia,
+                  ...(youtubeUrl ? NO_MOBILE : {}),
                 }));
               }}
               placeholder="https://youtu.be/…"
@@ -1620,6 +1702,42 @@ function ComposeCard({
               {t("communityHome.compose.clearMedia")}
             </button>
           </p>
+        )}
+
+        {mobileRenditionEnabled && mediaEnabled && composeMainIsVideo(state) && (
+          <ComposeMobileRendition
+            // Keyed by the main video: a new main file remounts the picker,
+            // which aborts a cut still uploading for the old one, so it can
+            // never land beside a video it was not cut from.
+            key={composeMainKey(state)}
+            serverId={serverId}
+            current={composeMobile(state)}
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  mobileUpload: uploaded,
+                  mobilePreviewUrl: previewUrl,
+                  clearMobile: false,
+                };
+              });
+            }}
+            onRemove={() =>
+              setState((prev) => ({
+                ...prev,
+                mobileUpload: null,
+                mobilePreviewUrl: null,
+                clearMobile: true,
+              }))
+            }
+          />
         )}
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-paper-muted">
@@ -1974,6 +2092,7 @@ export function CommunityHomeFeed({
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [mobileRenditionEnabled, setMobileRenditionEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [staffTab, setStaffTab] = useState<StaffTab>("feed");
@@ -2014,6 +2133,7 @@ export function CommunityHomeFeed({
         setPosts(feed.posts);
         setDrafts(staff.posts);
         setTranslationEnabled(feed.translationEnabled === true);
+        setMobileRenditionEnabled(feed.mobileRenditionEnabled === true);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setPosts([]);
@@ -2526,6 +2646,7 @@ export function CommunityHomeFeed({
                 vipEnabled={vipEnabled}
                 mediaEnabled={mediaEnabled}
                 translationEnabled={translationEnabled}
+                mobileRenditionEnabled={mobileRenditionEnabled}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());

@@ -221,6 +221,49 @@ class YoutubeLinksTest {
     }
 
     @Test
+    fun `a video with a phone cut plays the cut`() {
+        val media = BauMedia(
+            kind = "video",
+            name = "launch-16x9.mp4",
+            url = "https://files.example.com/bau/landscape.mp4?sig=1",
+            mobile = BauMobileRendition(
+                name = "launch-9x16.mp4",
+                url = "https://files.example.com/bau/vertical.mp4?sig=1",
+            ),
+        )
+        assertTrue(media.canPlayInApp)
+        assertEquals("https://files.example.com/bau/vertical.mp4?sig=1", media.videoUrl)
+        assertEquals("https://files.example.com/bau/vertical.mp4?sig=1", media.openUrl)
+    }
+
+    @Test
+    fun `a phone cut without a readable url falls back to the main video`() {
+        val main = "https://files.example.com/bau/landscape.mp4?sig=1"
+        for (cut in listOf(null, BauMobileRendition(url = null), BauMobileRendition(url = "/relative.mp4"))) {
+            val media = BauMedia(kind = "video", name = "x.mp4", url = main, mobile = cut)
+            assertEquals(main, media.videoUrl)
+            assertEquals(main, media.openUrl)
+        }
+    }
+
+    @Test
+    fun `the phone cut decodes from the feed, and an older payload without it still does`() {
+        val withCut = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+               "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null,
+               "mobile":{"name":"b.mp4","contentType":"video/mp4","byteSize":5,"url":"https://s.example/b.mp4"}}""",
+        )
+        assertEquals("https://s.example/b.mp4", withCut.videoUrl)
+        val without = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+               "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null}""",
+        )
+        assertEquals("https://s.example/a.mp4", without.videoUrl)
+    }
+
+    @Test
     fun `a comment that is only a klipy url is a gif`() {
         val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
         assertEquals(url, comment(url).gifUrl)

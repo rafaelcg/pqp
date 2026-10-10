@@ -133,6 +133,13 @@ Off, the camera plays loose exactly as before: nothing writes its rate or its
 position, and nothing reads the film's clock. Only `true` turns the variable
 on. An API older than the flag sends no field, which the client reads as off.
 
+Born as a flag (no old reader): `BAU_MOBILE_RENDITION` (`bau_mobile_rendition`,
+default off, **per server**), a second, vertical cut of a Baú video that phones
+play instead of the main one. Served to the composer as `mobileRenditionEnabled`
+on `GET /api/servers/:id/home/posts`. Off, a write that names a cut is refused
+and reads leave `media.mobile` null, so everyone plays the main video; stored
+cuts are kept. See `docs/COMMUNITY_HOME.md` §"A phone cut of a video".
+
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
 share from the Windows desktop app through WASAPI process loopback, Windows 10

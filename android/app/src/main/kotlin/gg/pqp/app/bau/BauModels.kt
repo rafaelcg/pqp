@@ -33,6 +33,20 @@ data class CommunityHomeConfig(
 )
 
 /**
+ * The phone cut of an uploaded video: the vertical (9:16) edit the author
+ * attached beside the landscape one (`communityHomeMobileRenditionSchema`).
+ * The phone plays this one when it is there; an older server never sends it
+ * and the card plays the main video, exactly as before.
+ */
+@Serializable
+data class BauMobileRendition(
+    val name: String = "",
+    val contentType: String? = null,
+    val byteSize: Long? = null,
+    val url: String? = null,
+)
+
+/**
  * One post's media, as the viewer may see it. `url` is a presigned GET for
  * storage-backed kinds and null for YouTube / Twitch / TikTok / Instagram; a
  * locked viewer gets no media at all (the whole object is null on the post),
@@ -48,6 +62,8 @@ data class BauMedia(
     val url: String? = null,
     val youtubeUrl: String? = null,
     val twitchUrl: String? = null,
+    /** The vertical cut of a `video`, or null. Only ever set on a video. */
+    val mobile: BauMobileRendition? = null,
 ) {
     val isImage: Boolean get() = kind == "image"
     val isVideo: Boolean get() = kind == "video"
@@ -62,16 +78,30 @@ data class BauMedia(
      * plays. A video without one (storage off, or an API-relative path this
      * card cannot sign) falls through to the open-out file card.
      */
-    val canPlayInApp: Boolean get() = isVideo && url?.let { u ->
-        u.startsWith("https://") || u.startsWith("http://")
-    } == true
+    val canPlayInApp: Boolean get() = isVideo && isHttp(videoUrl)
+
+    /**
+     * The URL the player gets for a video: the vertical cut when the post has
+     * one with a readable URL (this is a phone, which is who it is for), else
+     * the main video. The only place the choice is made, so the player never
+     * has to know there are two.
+     */
+    val videoUrl: String? get() = when {
+        !isVideo -> null
+        isHttp(mobile?.url) -> mobile?.url
+        else -> url
+    }
 
     /** What a tap opens: the object for storage kinds, the watch page for paste URLs. */
     val openUrl: String? get() = when {
         isYoutube || isTiktok || isInstagram -> youtubeUrl
         isTwitch -> twitchUrl
+        isVideo -> videoUrl
         else -> url
     }
+
+    private fun isHttp(raw: String?): Boolean =
+        raw != null && (raw.startsWith("https://") || raw.startsWith("http://"))
 }
 
 @Serializable

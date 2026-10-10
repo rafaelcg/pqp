@@ -218,6 +218,53 @@ final class CommunityHomeMediaDecisionTests: XCTestCase {
         XCTAssertNil(CommunityHomeMedia(kind: "youtube", youtubeUrl: "https://youtu.be/dQw4w9WgXcQ").inlineVideoURL)
     }
 
+    func testAVideoWithAPhoneCutPlaysTheCut() {
+        let media = CommunityHomeMedia(
+            kind: "video", name: "launch-16x9.mp4",
+            url: "https://files.example.com/bau/landscape.mp4?sig=1",
+            mobile: CommunityHomeMobileRendition(
+                name: "launch-9x16.mp4", url: "https://files.example.com/bau/vertical.mp4?sig=1"
+            )
+        )
+        XCTAssertEqual(media.inlineVideoURL?.path, "/bau/vertical.mp4")
+        XCTAssertEqual(media.openURL?.path, "/bau/vertical.mp4")
+    }
+
+    func testAPhoneCutWithoutAReadableURLFallsBackToTheMainVideo() {
+        let main = "https://files.example.com/bau/landscape.mp4?sig=1"
+        for cut in [nil, CommunityHomeMobileRendition(url: nil), CommunityHomeMobileRendition(url: "/relative.mp4")] {
+            let media = CommunityHomeMedia(kind: "video", name: "x.mp4", url: main, mobile: cut)
+            XCTAssertEqual(media.inlineVideoURL?.absoluteString, main)
+        }
+    }
+
+    func testThePhoneCutDecodesAndAnOlderPayloadStillDoes() throws {
+        let withCut = Data("""
+            {"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+             "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null,
+             "mobile":{"name":"b.mp4","contentType":"video/mp4","byteSize":5,"url":"https://s.example/b.mp4"}}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: withCut).inlineVideoURL?.absoluteString,
+            "https://s.example/b.mp4"
+        )
+        let older = Data("""
+            {"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+             "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: older).inlineVideoURL?.absoluteString,
+            "https://s.example/a.mp4"
+        )
+        let garbled = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","mobile":"nope"}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: garbled).inlineVideoURL?.absoluteString,
+            "https://s.example/a.mp4"
+        )
+    }
+
     func testACommentThatIsOnlyAKlipyURLIsAGIF() {
         let url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
         XCTAssertEqual(comment(url).gifURL?.absoluteString, url)
