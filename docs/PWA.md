@@ -163,6 +163,47 @@ bypasses `/sw.js` and `/sw-notification-click.js`). Nothing in this repository c
 set it. The client does not depend on it: the version file is read past every
 cache, and an update whose worker turns out stale is delivered by purging.
 
+### A precache entry that 404s
+
+Found on 2026-10-10. Symptom: a plain reload showed the old site and a hard
+reload (Cmd+Shift+R) showed the new one, every time. Seen in Zen (Firefox) and
+earlier on Windows.
+
+Cause:
+
+1. The worker precached every `**/*.html`, which included three standalone
+   pages in `client/public/` (`share-diagnostic.html`,
+   `share-diagnostic-game.html`, `share-audio-tone.html`).
+2. Pages answers `/x.html` with a 308 to `/x`.
+3. Since #917 (2026-09-30), the edge middleware answers a path that
+   `isUnknownSpaPath` does not know with a 404. It did not know these three.
+4. One non-200 entry fails Workbox's install. Every new worker went
+   `redundant`, on every deploy, in every browser.
+
+Effects from 2026-09-30 to the fix:
+
+- A new visitor never got a worker, so web push was unavailable to them.
+- An existing worker was never replaced. A worker from before the
+  network-first handler (installed before 2026-10-01) kept answering every
+  navigation from its old precache. A hard reload skips the worker, which is
+  why it showed the new build.
+
+What prevents it now:
+
+| Guard | Where |
+|---|---|
+| HTML in the precache is `index.html` only | `globPatterns` in `client/vite.config.ts` |
+| Every `public/*.html` is a known path | `spa-routes.ts`, enforced by `spa-routes.test.ts` |
+| The e2e stand-in for Pages has the pretty-URL 308 and the middleware's 404 | `client/e2e/stale-bundle/pages-server.ts` |
+| A fresh worker must reach `activated`, and every precache URL must answer 200 (Chromium and Firefox) | `client/e2e/stale-bundle/update.spec.ts` |
+| After each deploy, every precache URL must answer 200 on that deployment | `client/scripts/check-precache.mjs`, run by `deploy-web.yml` |
+| Every 10 minutes, every precache URL of the live `pqp.gg/sw.js` must answer 200 (opens an issue) | `sw-precache` in `scripts/monitor/availability.mjs` |
+| A worker that fails to install is reported to Faro as `pwa_sw_install_failed` | `watchInstallFailures` in `client/src/lib/register-sw.ts` |
+
+Recovery needs no code. A stuck worker still fetches `sw.js` on navigation.
+Once the new worker installs, `skipWaiting` lets it take over, and the next
+normal reload is on the new build.
+
 ## Icons
 
 `scripts/generate-icons.py` renders the whole set from one definition — run it

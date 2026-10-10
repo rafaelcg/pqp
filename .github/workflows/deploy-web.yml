@@ -183,8 +183,16 @@ jobs:
           # checkout pinned to a SHA is a detached HEAD, which it reports as
           # "head": every deploy after #385 went to the head.pqp-3yr.pages.dev
           # preview and production sat on the last push-triggered build.
-          "$TMP/node_modules/.bin/wrangler" pages deploy dist \
-            --project-name=pqp --branch=main --commit-dirty=true
+          # Output goes to a file (read by the precache check below) with no
+          # pipe, so a failed wrangler fails this step: the default shell is
+          # `bash -e` without pipefail, and a pipe would report `tee`'s status.
+          LOG="$RUNNER_TEMP/pages-deploy.log"
+          if ! "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+            --project-name=pqp --branch=main --commit-dirty=true >"$LOG" 2>&1; then
+            cat "$LOG"
+            exit 1
+          fi
+          cat "$LOG"
 
       # The middleware is only useful if it is actually in the bundle. A grep is
       # a poor test and a fine tripwire: it fails the deploy on the one mistake
@@ -197,3 +205,20 @@ jobs:
             || { echo "::error::dist/edge-config.json was not emitted — the middleware cannot find the API"; exit 1; }
           grep -q '"apiUrl":"http' "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
             || { echo "::error::edge-config.json has no apiUrl — VITE_API_URL was empty at build time"; exit 1; }
+
+      # Every URL the service worker precaches must answer 200, or the worker's
+      # install fails and nobody gets the new worker (nor web push). Only the
+      # real origin has Pages' pretty URLs and the edge middleware together:
+      # from 2026-09-30 to 2026-10-10 three precached pages were 308'd to a
+      # path the middleware 404'd. Checked on this deploy's own URL, so a slow
+      # alias cannot make it flaky. See `client/scripts/check-precache.mjs`.
+      - name: Verify every precached file answers 200
+        run: |
+          DEPLOY_URL="$(grep -oE 'https://[a-z0-9-]+\.pqp-3yr\.pages\.dev' "$RUNNER_TEMP/pages-deploy.log" | head -1)"
+          if [ -z "$DEPLOY_URL" ]; then
+            # Never fall back to pqp.gg: it may still be the previous deploy,
+            # which would test the wrong build.
+            echo "::error::No deployment URL in the wrangler output, so the precache could not be checked"
+            exit 1
+          fi
+          node "$GITHUB_WORKSPACE/client/scripts/check-precache.mjs" "$DEPLOY_URL" "$GITHUB_WORKSPACE/client/dist/sw.js"

@@ -467,6 +467,88 @@ async function checkLiveHls() {
   };
 }
 
+/**
+ * Every URL the live service worker precaches answers 200.
+ *
+ * One non-200 entry fails the worker's whole install, in every browser, and
+ * nothing on the page shows it. From 2026-09-30 to 2026-10-10 three precached
+ * pages were 308'd by Pages' pretty URLs to a path the edge middleware 404'd:
+ * no new visitor got a worker (so no web push), and old workers served the old
+ * build on every plain reload. The deploy checks its own deployment URL
+ * (`client/scripts/check-precache.mjs`); this checks pqp.gg itself, where a
+ * zone rule changed in the dashboard could do the same with no deploy at all.
+ *
+ * GET, never HEAD: Pages answered HEAD with 200 for exactly the paths the
+ * middleware 404'd on GET. `Range: bytes=0-0` keeps it to a byte per file, so
+ * 206 counts as present.
+ */
+async function fetchFollowing(url, hops = 3) {
+  let target = url;
+  for (let hop = 0; ; hop += 1) {
+    const res = await httpGet(target, { timeoutMs: 10_000, headers: { range: "bytes=0-0" } });
+    const location = res.headers.location;
+    if (res.status >= 300 && res.status < 400 && location && hop < hops) {
+      target = new URL(location, target).toString();
+      continue;
+    }
+    return res;
+  }
+}
+
+async function checkPrecache() {
+  const result = await untilOk(async () => {
+    const sw = await httpGet(`${WEB_ORIGIN}/sw.js`, { timeoutMs: 10_000 });
+    if (sw.status !== 200) {
+      return { ok: false, note: `sw.js answered HTTP ${sw.status}` };
+    }
+    const paths = [...sw.body.matchAll(/\{url:"([^"]+)",revision:/g)].map((m) => m[1]);
+    if (paths.length === 0) {
+      return { ok: false, note: "no precache entries found in sw.js (manifest format changed?)" };
+    }
+    const failed = [];
+    let next = 0;
+    async function lane() {
+      while (next < paths.length) {
+        const path = paths[next++];
+        try {
+          const res = await fetchFollowing(`${WEB_ORIGIN}/${path}`);
+          if (res.status !== 200 && res.status !== 206) {
+            failed.push(`${path} ${res.status}`);
+          }
+        } catch (error) {
+          failed.push(`${path} ${error.message}`);
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: 6 }, lane));
+    return {
+      ok: failed.length === 0,
+      count: paths.length,
+      failed,
+      note:
+        failed.length === 0
+          ? `all ${paths.length} entries answer`
+          : `${failed.length} of ${paths.length} do not answer 200: ${failed.slice(0, 5).join(", ")}`,
+    };
+  }, RETRY);
+
+  return {
+    key: "sw-precache",
+    title: `Service worker precache (${WEB_ORIGIN}/sw.js)`,
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `All ${result.count} precached files answer (attempt ${result.attempt})`
+      : "The service worker cannot install: a precached file does not answer 200.",
+    detail: trail(result.tries),
+    runbook: [
+      "Every browser drops the new worker while this fails: no web push for new visitors, and old workers keep serving the old build.",
+      "1. `node client/scripts/check-precache.mjs https://pqp.gg <path to the live sw.js>` lists the failing files.",
+      "2. A 404 after a 308 is Pages' pretty URL meeting the edge middleware's unknown-path 404 (`client/src/lib/spa-routes.ts`).",
+      "3. See docs/PWA.md, 'A precache entry that 404s'.",
+    ].join("\n"),
+  };
+}
+
 export async function runAvailabilityChecks() {
   // Sequential on purpose. Running five probes in parallel against one small
   // machine means the monitor's own load is part of what it is measuring, and
@@ -474,6 +556,7 @@ export async function runAvailabilityChecks() {
   const checks = [
     ["api-health", checkApiHealth],
     ["web-app", checkWebsite],
+    ["sw-precache", checkPrecache],
     ["websocket", checkWebsocket],
     ["fly-machines", checkFlyMachines],
     ["worker-image-drift", checkWorkerImageDrift],

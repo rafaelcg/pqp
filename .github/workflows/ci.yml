@@ -366,9 +366,29 @@ jobs:
 
       # Real builds and a real service worker, no API and no database
       # (client/playwright.stale-bundle.config.ts). It does not depend on the
-      # shard, so one shard carries it.
+      # shard, so one shard carries it: a media shard, which finishes in about
+      # 9 minutes, where a core shard is already near the 20-minute limit.
+      # Firefox runs only the stale-bundle install specs, so only this shard
+      # needs it. Its own cache key: the Chromium cache above is immutable once
+      # saved and cannot pick Firefox up.
+      - name: Cache Playwright Firefox
+        if: matrix.suite == 'media' && matrix.shard == 1
+        id: playwright-firefox-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright/firefox-*
+          key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright Firefox
+        if: matrix.suite == 'media' && matrix.shard == 1 && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
+
+      - name: Install Playwright Firefox system deps
+        if: matrix.suite == 'media' && matrix.shard == 1 && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @pqp/client exec playwright install-deps firefox
+
       - name: E2E stale bundle (real service worker)
-        if: matrix.suite == 'core' && matrix.shard == 1
+        if: matrix.suite == 'media' && matrix.shard == 1
         run: pnpm --filter @pqp/client e2e:stale-bundle
 
       # The presenter's camera held to the film, measured off the pictures

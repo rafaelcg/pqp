@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const registerSW = vi.fn(() => async () => {});
 vi.mock("virtual:pwa-register", () => ({ registerSW }));
 
-import { HOME_REGISTER_DELAY_MS, registerServiceWorker } from "./register-sw";
+import {
+  HOME_REGISTER_DELAY_MS,
+  registerServiceWorker,
+  watchInstallFailures,
+} from "./register-sw";
 
 type Listener = () => void;
 
@@ -111,5 +115,52 @@ describe("registerServiceWorker", () => {
     await vi.advanceTimersByTimeAsync(HOME_REGISTER_DELAY_MS * 2);
     await settle();
     expect(registerSW).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchInstallFailures", () => {
+  class FakeWorker extends EventTarget {
+    state = "installing";
+    go(state: string) {
+      this.state = state;
+      this.dispatchEvent(new Event("statechange"));
+    }
+  }
+  class FakeRegistration extends EventTarget {
+    installing: FakeWorker | null = null;
+  }
+
+  function setup(initial: FakeWorker | null) {
+    const registration = new FakeRegistration();
+    registration.installing = initial;
+    const failed = vi.fn();
+    watchInstallFailures(registration as unknown as ServiceWorkerRegistration, failed);
+    return { registration, failed };
+  }
+
+  it("reports a worker that goes redundant while installing", () => {
+    const worker = new FakeWorker();
+    const { failed } = setup(worker);
+    worker.go("redundant");
+    expect(failed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report a worker that installed and was later replaced", () => {
+    const worker = new FakeWorker();
+    const { failed } = setup(worker);
+    worker.go("installed");
+    worker.go("activating");
+    worker.go("activated");
+    worker.go("redundant");
+    expect(failed).not.toHaveBeenCalled();
+  });
+
+  it("watches an update found after registration", () => {
+    const { registration, failed } = setup(null);
+    const update = new FakeWorker();
+    registration.installing = update;
+    registration.dispatchEvent(new Event("updatefound"));
+    update.go("redundant");
+    expect(failed).toHaveBeenCalledTimes(1);
   });
 });

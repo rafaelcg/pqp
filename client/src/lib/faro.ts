@@ -156,6 +156,18 @@ export function faroSessionId(): string | null {
   }
 }
 
+/**
+ * Push a named event with string attributes. A no-op when Faro is off (every
+ * self-host, local dev) or the push throws: telemetry never breaks the app.
+ */
+export function reportFaroEvent(name: string, attributes: Record<string, string> = {}): void {
+  try {
+    faro?.api.pushEvent(name, attributes);
+  } catch {
+    // Nothing to do: losing one event is better than an error in the caller.
+  }
+}
+
 /** Test seam: forget the instance so a later `initFaro` runs again. */
 export function resetFaroForTests(): void {
   faro = null;

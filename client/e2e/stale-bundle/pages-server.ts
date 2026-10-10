@@ -2,11 +2,12 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { isUnknownSpaPath } from "../../src/lib/spa-routes";
 import { headersFor, parseHeadersFile } from "./pages-headers";
 
 /**
  * A stand-in for Cloudflare Pages, small enough to read in one go, faithful in
- * the four ways that decide whether a browser keeps a stale bundle:
+ * the six ways that decide whether a browser keeps a stale bundle:
  *
  *  - it serves whichever build directory is CURRENT, and `serve()` swaps it, so
  *    a spec can deploy a new build under a page that is already open;
@@ -16,7 +17,14 @@ import { headersFor, parseHeadersFile } from "./pages-headers";
  *    Pages' rule that several matching rules ADD to a header rather than
  *    replace it. A rule that wrongly matched `/assets/*` and `/*` would show up
  *    here as a comma-joined Cache-Control, which is what production would send;
- *  - an unknown path answers `index.html` with a 200, the SPA fallback.
+ *  - an unknown path answers `index.html` with a 200, the SPA fallback;
+ *  - Pages' pretty URLs: `/x.html` is a 308 to `/x` (and `/index.html` to `/`),
+ *    and `/x` serves `x.html`;
+ *  - the edge middleware's real-404 rule (`functions/_middleware.ts`): an HTML
+ *    answer on a path `isUnknownSpaPath` does not know becomes a 404, body kept.
+ *    The real function is imported, not copied. Missing these two hid a
+ *    precache entry that 404'd in production, which fails every worker install
+ *    (2026-10-10, `docs/PWA.md` §"A precache entry that 404s").
  *
  * `/api/*` answers 404 and `/ws` is not served: the specs that use this are
  * about the shell, and a missing API must be survivable by the client anyway.
@@ -70,9 +78,22 @@ export async function startPagesServer(options: {
       res.end("{}");
       return;
     }
+    if (!pinned.has(pathname) && pathname.endsWith(".html")) {
+      const pretty = pathname === "/index.html" ? "/" : pathname.slice(0, -".html".length);
+      res.writeHead(308, { location: `${pretty}${url.search}` });
+      res.end();
+      return;
+    }
     let file =
       pinned.get(pathname) ??
       path.join(root, pathname === "/" ? "index.html" : pathname);
+    if (
+      !pinned.has(pathname) &&
+      path.extname(pathname) === "" &&
+      existsSync(`${file}.html`)
+    ) {
+      file = `${file}.html`;
+    }
     if (
       !pinned.has(pathname) &&
       (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile())
@@ -86,14 +107,21 @@ export async function startPagesServer(options: {
       }
       file = path.join(root, "index.html");
     }
-    res.writeHead(
-      200,
-      headersFor(
-        rules,
-        pathname,
-        TYPES[path.extname(file)] ?? "application/octet-stream",
-      ),
-    );
+    const type = TYPES[path.extname(file)] ?? "application/octet-stream";
+    if (
+      req.method === "GET" &&
+      type.startsWith("text/html") &&
+      isUnknownSpaPath(pathname)
+    ) {
+      res.writeHead(404, {
+        "content-type": type,
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+      });
+      res.end(readFileSync(file));
+      return;
+    }
+    res.writeHead(200, headersFor(rules, pathname, type));
     res.end(readFileSync(file));
   });
 

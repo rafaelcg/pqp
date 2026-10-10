@@ -48,6 +48,12 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   // and an existing check must keep passing.
   "/health",
   "/up",
+  // Standalone pages in `client/public/`, which Pages serves at their pretty
+  // URL (`/x.html` is a 308 to `/x`). Real files, so never a 404.
+  // `spa-routes.test.ts` fails when a new `public/*.html` is not listed here.
+  "/share-diagnostic",
+  "/share-diagnostic-game",
+  "/share-audio-tone",
 ]);
 
 export function isUnknownSpaPath(pathname: string): boolean {
