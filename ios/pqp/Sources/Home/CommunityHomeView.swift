@@ -41,6 +41,7 @@ struct CommunityHomeView: View {
                     message: "When the staff of \(server.name) posts, it shows up here."
                 )
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(posts) { post in
@@ -61,6 +62,14 @@ struct CommunityHomeView: View {
                 }
                 .refreshable { await load() }
                 .accessibilityIdentifier("bau.feed")
+                // The restore button of a Picture in Picture window brings
+                // the person back to the post that was playing.
+                .onChange(of: BauPlayback.shared.restoreTargetPostID) { _, target in
+                    guard let target else { return }
+                    BauPlayback.shared.restoreTargetPostID = nil
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                }
+                }
             }
         }
         .navigationTitle("Baú")
@@ -79,7 +88,12 @@ struct CommunityHomeView: View {
                 }
             }
         }
-        .onDisappear { session.eventHandlers.removeValue(forKey: handlerKey) }
+        .onDisappear {
+            session.eventHandlers.removeValue(forKey: handlerKey)
+            // Scrolling a playing card away keeps it going in Picture in
+            // Picture; leaving the Baú altogether does not.
+            BauPlayback.shared.stopAllUnlessFullScreen()
+        }
         .communityHomeComposer(server: server, config: config) { Task { await load() } }
     }
 
@@ -196,7 +210,7 @@ private struct PostCard: View {
                     }
                 }
                 if let media = post.media {
-                    MediaView(media: media)
+                    MediaView(media: media, postID: post.id)
                 }
             }
 
@@ -334,13 +348,14 @@ private struct LockedBox: View {
 private struct MediaView: View {
     @Environment(\.openURL) private var openURL
     let media: CommunityHomeMedia
+    var postID: String?
 
     var body: some View {
         if let videoURL = media.inlineVideoURL {
             // A stored video plays in place, like the web's `<video>`. It is
             // not wrapped in the open-out button: that button would swallow
             // the tap meant for the player's own controls.
-            BauInlineVideo(url: videoURL, name: media.name)
+            BauInlineVideo(url: videoURL, name: media.name, postID: postID)
         } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)
@@ -476,115 +491,6 @@ private struct BauGif: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
             .accessibilityLabel(Text("GIF"))
             .accessibilityIdentifier("bau.gif")
-    }
-}
-
-/// An uploaded video, played where it sits.
-///
-/// Mirrors the web's player: nothing plays until the person taps (no
-/// autoplay, so a feed does not make noise on scroll), the first frame is
-/// painted as the poster, and the system controls carry play, scrub and
-/// fullscreen. The URL is the presigned GET the feed carried; a feed reload
-/// mints a fresh one, so there is no refetch here. A file the player cannot
-/// open falls back to the old behaviour, a tap that opens it outside.
-private struct BauInlineVideo: View {
-    @Environment(\.openURL) private var openURL
-    let url: URL
-    let name: String
-
-    @State private var player: AVPlayer?
-    @State private var failed = false
-
-    var body: some View {
-        Group {
-            if let player {
-                VideoPlayer(player: player)
-            } else if failed {
-                Button { openURL(url) } label: {
-                    ZStack {
-                        Palette.surfaceRaised
-                        VStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundStyle(Palette.warning)
-                            Text("Could not play this file.")
-                                .font(Typography.callout)
-                                .foregroundStyle(Palette.paperMuted)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            } else {
-                Palette.surfaceRaised.overlay { ProgressView().tint(Palette.paperMuted) }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(16 / 9, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
-        .accessibilityLabel(name.isEmpty ? Text("Play video") : Text(name))
-        .accessibilityIdentifier("bau.media.video")
-        .task(id: url) { await prepare() }
-        .onDisappear { player?.pause() }
-    }
-
-    /// Probe before handing the asset over, as `MediaPlayerView` does, so an
-    /// unplayable URL lands in the failed state rather than a player with a
-    /// permanently black frame. The task is keyed on the URL (a feed reload
-    /// signs a new one), so a cancelled run must not touch state that now
-    /// belongs to the replacement, and the item is watched afterwards: a
-    /// signed URL that dies before the first tap fails in the item, not here.
-    private func prepare() async {
-        failed = false
-        player = nil
-        let asset = AVURLAsset(url: url)
-        let item = AVPlayerItem(asset: asset)
-        do {
-            guard try await asset.load(.isPlayable) else { throw APIError.transport("Not playable") }
-            let player = AVPlayer(playerItem: item)
-            // Paint the first frame as the poster, the web's `#t=0.001`.
-            await player.seek(to: CMTime(seconds: 0.001, preferredTimescale: 600))
-            if Task.isCancelled { return }
-            self.player = player
-        } catch {
-            if Task.isCancelled { return }
-            failed = true
-            return
-        }
-        // Everything that can go wrong once the player exists: the item
-        // failing outright, an error set on it (a range request that dies
-        // mid-clip while the status still reads readyToPlay), and the
-        // "could not reach the end" notification a dropped connection posts.
-        let broken = Publishers.CombineLatest(
-            item.publisher(for: \.status),
-            item.publisher(for: \.error)
-        )
-        .filter { BauVideoHealth.isFailure(status: $0.0, error: $0.1) }
-        .map { _ in () }
-        .merge(with: NotificationCenter.default
-            .publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
-            .map { _ in () })
-        // `publisher(for:)` replays the current value on subscription, but a
-        // failure recorded during the seek above is cheap to check outright.
-        var isBroken = BauVideoHealth.isFailure(status: item.status, error: item.error)
-        if !isBroken {
-            for await _ in broken.values {
-                isBroken = true
-                break
-            }
-        }
-        guard isBroken, !Task.isCancelled else { return }
-        player?.pause()
-        player = nil
-        failed = true
-    }
-}
-
-/// When an inline Baú video counts as broken and the card should offer the
-/// open-out fallback instead of a player that will never move.
-enum BauVideoHealth {
-    /// A failed item, or any error on the item whatever its status says:
-    /// `readyToPlay` is a statement about the probe, not about the stream.
-    static func isFailure(status: AVPlayerItem.Status, error: Error?) -> Bool {
-        status == .failed || error != nil
     }
 }
 
