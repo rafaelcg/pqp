@@ -240,6 +240,13 @@ sealed interface BauRefusal {
     data class Invalid(val serverMessage: String?) : BauRefusal
     data object Network : BauRefusal
 
+    /**
+     * A create that died on the wire. The server may well have committed it,
+     * and the post route takes no idempotency key, so a blind retry could
+     * publish twice: the sentence tells the person to look first.
+     */
+    data object Unconfirmed : BauRefusal
+
     companion object {
         fun from(failure: Throwable): BauRefusal = when (failure) {
             is ApiException -> when (failure.status) {

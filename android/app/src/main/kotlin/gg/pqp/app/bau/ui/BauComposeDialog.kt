@@ -118,6 +118,7 @@ internal fun refusalText(refusal: BauRefusal): String = when (refusal) {
     BauRefusal.SlowDown -> stringResource(R.string.bau_compose_refused_slow_down)
     BauRefusal.NoStorage -> stringResource(R.string.bau_compose_refused_no_storage)
     BauRefusal.Network -> stringResource(R.string.bau_compose_refused_network)
+    BauRefusal.Unconfirmed -> stringResource(R.string.bau_compose_refused_unconfirmed)
     is BauRefusal.Invalid -> refusal.serverMessage
         ?.let { stringResource(R.string.bau_compose_refused_invalid, it) }
         ?: stringResource(R.string.bau_compose_refused_generic)
@@ -136,13 +137,15 @@ internal fun refusalText(refusal: BauRefusal): String = when (refusal) {
 fun BauComposeDialog(
     session: SessionStore,
     serverId: String,
+    /** A new number per opening, so every composer starts from an empty draft. */
+    composeSession: Int,
     config: CommunityHomeConfig,
     onDismiss: () -> Unit,
     onPosted: () -> Unit,
 ) {
     val context = LocalContext.current
     val model: BauComposeViewModel = viewModel(
-        key = "bau-compose-$serverId",
+        key = "bau-compose-$serverId-$composeSession",
         factory = BauComposeViewModel.factory(session, serverId, ContentBauFiles(context)),
     )
     val state by model.state.collectAsStateWithLifecycle()
@@ -158,6 +161,7 @@ fun BauComposeDialog(
     }
 
     fun close() {
+        if (state.posting) return
         if (model.isDirty() && !state.posted) confirmDiscard = true else onDismiss()
     }
 
@@ -172,7 +176,7 @@ fun BauComposeDialog(
                     TopAppBar(
                         title = { Text(stringResource(R.string.bau_compose_title)) },
                         navigationIcon = {
-                            IconButton(onClick = ::close) {
+                            IconButton(onClick = ::close, enabled = !state.posting) {
                                 Icon(
                                     PqpIcons.Close,
                                     contentDescription = stringResource(R.string.bau_compose_close),
@@ -219,6 +223,7 @@ fun BauComposeDialog(
                         }
                     },
                     isError = draft.title.length > BAU_TITLE_MAX,
+                    enabled = !state.posting,
                     modifier = Modifier.fillMaxWidth().testTag("bau.compose.title"),
                 )
                 OutlinedTextField(
@@ -233,6 +238,7 @@ fun BauComposeDialog(
                         }
                     },
                     isError = draft.body.length > BAU_BODY_MAX,
+                    enabled = !state.posting,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp).testTag("bau.compose.body"),
                 )
 
@@ -272,7 +278,7 @@ fun BauComposeDialog(
                         if (media.uploading) {
                             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         }
-                        TextButton(onClick = model::removeMedia) {
+                        TextButton(onClick = model::removeMedia, enabled = !state.posting) {
                             Text(stringResource(R.string.bau_compose_remove))
                         }
                     }
@@ -297,6 +303,7 @@ fun BauComposeDialog(
                         onValueChange = model::setLink,
                         placeholder = { Text(stringResource(R.string.bau_compose_link_hint)) },
                         singleLine = true,
+                        enabled = !state.posting,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Uri,
                             capitalization = KeyboardCapitalization.None,
@@ -326,7 +333,7 @@ fun BauComposeDialog(
             onDismissRequest = { confirmDiscard = false },
             title = { Text(stringResource(R.string.bau_compose_discard_title)) },
             confirmButton = {
-                TextButton(onClick = { confirmDiscard = false; onDismiss() }) {
+                TextButton(onClick = { confirmDiscard = false; model.discard(); onDismiss() }) {
                     Text(stringResource(R.string.bau_compose_discard))
                 }
             },

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /** A picked file, already copied somewhere this process owns. */
@@ -53,8 +54,12 @@ class ContentBauFiles(context: Context) : BauFileSource {
                 }
             }.getOrNull() ?: parsed.lastPathSegment,
         )
-        val type = bauMediaType(resolver.getType(parsed), filename)
-            ?: return@withContext Result.failure(BauPickException(BauPickFailure.UnsupportedType))
+        val type = try {
+            bauMediaType(resolver.getType(parsed), filename)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return@withContext Result.failure(BauPickException(BauPickFailure.Unreadable))
+        } ?: return@withContext Result.failure(BauPickException(BauPickFailure.UnsupportedType))
 
         val dir = File(app.cacheDir, "bau-compose").apply { mkdirs() }
         val target = File(dir, UUID.randomUUID().toString())
@@ -66,6 +71,8 @@ class ContentBauFiles(context: Context) : BauFileSource {
                 target.outputStream().use { out ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
+                        // A cancelled pick stops copying; `finally` deletes the file.
+                        ensureActive()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         total += read
@@ -83,6 +90,7 @@ class ContentBauFiles(context: Context) : BauFileSource {
                 tooLarge -> Result.failure(BauPickException(BauPickFailure.TooLarge))
                 !opened || total <= 0 -> Result.failure(BauPickException(BauPickFailure.Unreadable))
                 else -> {
+                    ensureActive()
                     keep = true
                     Result.success(BauLocalFile(target, filename, type))
                 }
@@ -216,9 +224,24 @@ class BauComposeViewModel(
                 .onSuccess { _state.value = _state.value.copy(posting = false, posted = true) }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
-                    _state.value = _state.value.copy(posting = false, refusal = BauRefusal.from(failure))
+                    val refusal = BauRefusal.from(failure)
+                    _state.value = _state.value.copy(
+                        posting = false,
+                        refusal = if (refusal == BauRefusal.Network) BauRefusal.Unconfirmed else refusal,
+                    )
                 }
         }
+    }
+
+    /**
+     * The composer is going away without posting: stop any upload and delete
+     * the cached file. A post already in flight is not stopped (the screen
+     * keeps Close disabled while it runs), because cancelling the coroutine
+     * would not recall a request the server may already have.
+     */
+    fun discard() {
+        if (_state.value.posting) return
+        dropMedia()
     }
 
     /** True when closing would throw something away. */

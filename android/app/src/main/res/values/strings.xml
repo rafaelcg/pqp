@@ -164,6 +164,7 @@
     <string name="bau_compose_refused_slow_down">Slow down a little and try again in a moment.</string>
     <string name="bau_compose_refused_no_storage">This server cannot take photos or videos right now. A link or text still works.</string>
     <string name="bau_compose_refused_network">Could not reach the server. Try again.</string>
+    <string name="bau_compose_refused_unconfirmed">Could not confirm the post. Check the Baú before trying again.</string>
     <string name="bau_compose_refused_invalid">Could not post. %1$s</string>
     <string name="bau_compose_refused_generic">Could not post. Try again.</string>
     <string name="bau_compose_discard_title">Discard this post?</string>

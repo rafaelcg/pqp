@@ -96,11 +96,13 @@ fun BauScreen(
     val state by model.state.collectAsStateWithLifecycle()
     val canPost = rememberCanPostToBau(session, serverId, state.config)
     var composing by rememberSaveable { mutableStateOf(false) }
+    var composeSession by rememberSaveable { mutableStateOf(0) }
 
     if (composing && canPost) {
         BauComposeDialog(
             session = session,
             serverId = serverId,
+            composeSession = composeSession,
             config = state.config,
             onDismiss = { composing = false },
             onPosted = {
@@ -143,7 +145,10 @@ fun BauScreen(
                     actions = {
                         if (canPost) {
                             IconButton(
-                                onClick = { composing = true },
+                                onClick = {
+                                    composeSession += 1
+                                    composing = true
+                                },
                                 modifier = Modifier.testTag("bau.compose.open"),
                             ) {
                                 Icon(

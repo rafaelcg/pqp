@@ -156,6 +156,7 @@
     <string name="bau_compose_refused_slow_down">Calma, tenta de novo daqui a pouco.</string>
     <string name="bau_compose_refused_no_storage">Este servidor não aceita foto ou vídeo agora. Link ou texto ainda funcionam.</string>
     <string name="bau_compose_refused_network">Não deu pra falar com o servidor. Tenta de novo.</string>
+    <string name="bau_compose_refused_unconfirmed">Não deu pra confirmar o post. Dá uma olhada no Baú antes de tentar de novo.</string>
     <string name="bau_compose_refused_invalid">Não deu pra publicar. %1$s</string>
     <string name="bau_compose_refused_generic">Não deu pra publicar. Tenta de novo.</string>
     <string name="bau_compose_discard_title">Descartar este post?</string>

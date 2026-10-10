@@ -4,10 +4,15 @@ import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.social.postJson
 import java.io.File
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.asRequestBody
 
 /**
@@ -73,10 +78,26 @@ class BauMediaUploader(private val api: ApiClient) {
             .put(file.asRequestBody(contentType.toMediaTypeOrNull()))
             .header("Content-Type", contentType)
             .build()
-        withContext(Dispatchers.IO) {
-            api.http.newCall(request).execute().use { response ->
-                check(response.isSuccessful) { "Upload refused with HTTP ${response.code}" }
-            }
+        api.http.newCall(request).await().use { response ->
+            check(response.isSuccessful) { "Upload refused with HTTP ${response.code}" }
         }
     }
+}
+
+/**
+ * OkHttp's `enqueue` as a suspend call that cancels the socket with the
+ * coroutine. A blocking `execute()` inside `withContext` would keep sending
+ * up to 100 MiB after the person removed the file or left the composer.
+ */
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (continuation.isActive) continuation.resume(response) else response.close()
+        }
+    })
 }
