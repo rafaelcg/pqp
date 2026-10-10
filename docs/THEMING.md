@@ -174,10 +174,11 @@ Storage is `pqp-accent-hue` and `user_preferences.settings.accentHue`.
 
 Two more skins on the appearance axis: `halloween` and `christmas`.
 
-- Halloween is dark only, like Night: aubergine surfaces, pumpkin accent.
-- Christmas has light and dark: pine surfaces, a cranberry rail. Its accent is
-  gold in dark and pine in light. It is never red, because a red primary
-  button reads as the danger colour.
+Both are dark only, like Night.
+
+- Halloween: aubergine surfaces, pumpkin accent.
+- Christmas: pine surfaces, a cranberry rail, a gold accent. It is never red,
+  because a red primary button reads as the danger colour.
 
 The picker shows a seasonal look only in its season, or while it is the look
 on screen. A corner card invites people once per season

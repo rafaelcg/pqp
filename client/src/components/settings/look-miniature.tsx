@@ -8,10 +8,6 @@ import { appearanceForcesDark, type AppearancePreference } from "@/lib/appearanc
  */
 export function lookAccent(look: AppearancePreference, mode: "light" | "dark"): string {
   const swatch = `var(--swatch-${look}-accent)`;
-  if (mode === "light" && look === "christmas") {
-    // Gold on white fails; light Christmas trades it for pine (`index.css`).
-    return "oklch(0.45 0.11 160)";
-  }
   return mode === "light" && !appearanceForcesDark(look)
     ? `color-mix(in oklch, ${swatch} 62%, black)`
     : swatch;

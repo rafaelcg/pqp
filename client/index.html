@@ -100,7 +100,11 @@
               : "signal";
         document.documentElement.dataset.appearance = appearance;
         // Dark-only looks: keep in lockstep with `appearanceForcesDark`.
-        if (appearance === "night" || appearance === "halloween") {
+        if (
+          appearance === "night" ||
+          appearance === "halloween" ||
+          appearance === "christmas"
+        ) {
           document.documentElement.dataset.theme = "dark";
         }
         const storedHue = localStorage.getItem("pqp-accent-hue");

@@ -24,11 +24,15 @@ export const APPEARANCES = [
   "christmas",
 ] as const;
 
-/** Night and Halloween only exist in dark. Christmas has a light side too. */
+/** Night and the seasonal looks only exist in dark. */
 export function appearanceForcesDark(
   appearance: AppearancePreference,
 ): boolean {
-  return appearance === "night" || appearance === "halloween";
+  return (
+    appearance === "night" ||
+    appearance === "halloween" ||
+    appearance === "christmas"
+  );
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
@@ -107,7 +111,7 @@ function commit(appearance: AppearancePreference): void {
 export function setAppearancePreference(appearance: AppearancePreference): void {
   storeAppearance(appearance);
   commit(appearance);
-  // Night and Halloween also pin brightness. One PATCH so the account learns both keys
+  // Night and the seasonal looks also pin brightness. One PATCH so the account learns both keys
   // without a second immediate write. Local theme persist is theme.ts's
   // appearance subscription, which must not import this module.
   queuePreferenceSync(

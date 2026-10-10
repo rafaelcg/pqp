@@ -2,8 +2,8 @@
  * Picking a look, from the Aparência picker or from the seasonal corner card.
  *
  * One function so both doors keep the same promise: a dark-only look (Night,
- * Halloween) pins the mode to dark, and leaving it gives back the mode the
- * person had before. Moving between two dark-only looks keeps the note, so
+ * Halloween, Christmas) pins the mode to dark, and leaving it gives back the
+ * mode the person had before. Moving between two dark-only looks keeps the note, so
  * Night to Halloween to Clássico still lands on Light for a Light user.
  */
 

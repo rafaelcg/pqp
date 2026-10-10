@@ -79,7 +79,7 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
  * skin for dark, not a clone of another product's AMOLED theme.
- * `halloween` (dark only) and `christmas` are seasonal looks: the client only
+ * `halloween` and `christmas` are dark-only seasonal looks: the client only
  * offers them in their season, but a stored pick keeps working all year, so
  * these values are permanent once shipped.
  *

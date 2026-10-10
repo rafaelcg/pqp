@@ -168,7 +168,7 @@ describe("Modo", () => {
     expect(getThemeState().preference).toBe("dark");
   });
 
-  it("keeps the mode before Night through Halloween, and Christmas keeps Light", () => {
+  it("keeps the mode before Night through the seasonal looks", () => {
     localStorage.setItem("pqp:season", "halloween");
     mount();
     click(radio(group("Mode"), "Light"));
@@ -177,6 +177,8 @@ describe("Modo", () => {
     expect(getAppearance()).toBe("halloween");
     expect(getThemeState().resolved).toBe("dark");
     expect(rowText("brightness")).toContain("Halloween stays dark");
+    click(radio(host!, /^Christmas/));
+    expect(getThemeState().resolved).toBe("dark");
 
     click(radio(host!, /^Classic/));
     expect(getThemeState().preference).toBe("light");
@@ -201,7 +203,7 @@ describe("Modo", () => {
     mount();
     click(radio(host!, /^Christmas/));
     expect(getAppearance()).toBe("christmas");
-    expect(radio(group("Mode"), /Light/).getAttribute("aria-disabled")).toBeNull();
+    expect(radio(group("Mode"), /Light/).getAttribute("aria-disabled")).toBe("true");
     act(() => root?.unmount());
     host?.remove();
 
