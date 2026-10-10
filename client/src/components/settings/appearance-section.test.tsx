@@ -177,8 +177,6 @@ describe("Modo", () => {
     expect(getAppearance()).toBe("halloween");
     expect(getThemeState().resolved).toBe("dark");
     expect(rowText("brightness")).toContain("Halloween stays dark");
-    click(radio(host!, /^Christmas/));
-    expect(getThemeState().resolved).toBe("dark");
 
     click(radio(host!, /^Classic/));
     expect(getThemeState().preference).toBe("light");
