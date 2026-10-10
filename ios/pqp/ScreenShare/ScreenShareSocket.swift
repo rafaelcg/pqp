@@ -25,6 +25,9 @@ final class ScreenShareSocketClient: @unchecked Sendable {
     /// inside a picture and desynchronise the link for good. Every member that
     /// touches the descriptor takes this.
     private let lock = NSLock()
+    /// Guards only the descriptor's VALUE, never a write. It is what lets
+    /// `close()` reach a write that is parked inside `lock` (see there).
+    private let descriptorLock = NSLock()
 
     /// Roughly one and a half 720p NV12 frames. Requested, not demanded: the
     /// kernel clamps to its own maximum and a refusal is not worth failing over.
@@ -71,7 +74,7 @@ final class ScreenShareSocketClient: @unchecked Sendable {
             Darwin.close(socketDescriptor)
             return false
         }
-        descriptor = socketDescriptor
+        descriptorLock.withLock { descriptor = socketDescriptor }
         return true
     }
 
@@ -162,13 +165,20 @@ final class ScreenShareSocketClient: @unchecked Sendable {
     }
 
     func close() {
+        // A write in progress holds `lock`, and one parked on an app that has
+        // stopped reading would hold it until `SO_SNDTIMEO` fires. Shutting the
+        // socket down first, without `lock`, makes that write return at once;
+        // only then is the lock taken to close the descriptor itself.
+        let current = descriptorLock.withLock { descriptor }
+        if current >= 0 { shutdown(current, SHUT_RDWR) }
         lock.withLock { closeLocked() }
     }
 
     private func closeLocked() {
-        guard descriptor >= 0 else { return }
-        Darwin.close(descriptor)
-        descriptor = -1
+        let current = descriptorLock.withLock { descriptor }
+        guard current >= 0 else { return }
+        Darwin.close(current)
+        descriptorLock.withLock { descriptor = -1 }
     }
 }
 

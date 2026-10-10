@@ -285,10 +285,14 @@ actor LiveKitVoiceClient {
         let mixer = AudioManager.shared.mixer
         guard let room, room.connectionState == .connected,
               let microphone = microphonePublication(in: room) else {
-            // No track to carry anything, so nothing the mixer lets through
-            // can leave this phone.
-            mixer.micVolume = 1
-            isMixerMicSilenced = false
+            // No track here to carry anything. The mixer is shared with the
+            // other kind of call, so it is only put back if THIS room is the
+            // one that zeroed it; otherwise an idle client would undo a live
+            // one's mute.
+            if isMixerMicSilenced {
+                mixer.micVolume = 1
+                isMixerMicSilenced = false
+            }
             return
         }
         if routing.micVolume == 0 {
@@ -462,7 +466,9 @@ actor LiveKitVoiceClient {
         isAppAudioLive = true
         ScreenShareAppAudio.shared.setOpen(true)
         await applyMicrophoneRouting()
-        return true
+        // A hangup during that await has already torn the share down,
+        // gate included; say so rather than report a share that is gone.
+        return self.room === room && localScreen === track
     }
 
     /// One frame from the bridge. The first one also starts the publish.
@@ -560,11 +566,14 @@ actor LiveKitVoiceClient {
         // Only when it was this room that set them: the voice channel and the
         // DM call each own one of these clients, and the idle one being
         // cleared must not reach into the live one's share.
-        if isAppAudioLive || isMixerMicSilenced {
-            ScreenShareAppAudio.shared.setOpen(false)
-            AudioManager.shared.mixer.micVolume = 1
-        }
-        isMixerMicSilenced = false
+        //
+        // The gate shuts now; the microphone volume comes back only AFTER the
+        // room has disconnected below. A muted person whose share was keeping
+        // the track on is still on the wire until then, and restoring the
+        // mixer first would put their voice in the room for the length of the
+        // teardown.
+        let ownedSharedAudio = isAppAudioLive || isMixerMicSilenced
+        if ownedSharedAudio { ScreenShareAppAudio.shared.setOpen(false) }
         isAppAudioLive = false
         isSelfServerMuted = false
         let room = self.room
@@ -585,6 +594,10 @@ actor LiveKitVoiceClient {
         remoteAudio.removeEverything()
         isDeafened = false
         await room?.disconnect()
+        if ownedSharedAudio {
+            AudioManager.shared.mixer.micVolume = 1
+        }
+        isMixerMicSilenced = false
         emitVideo()
         emit()
     }
