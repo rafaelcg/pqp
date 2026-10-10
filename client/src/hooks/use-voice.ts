@@ -175,6 +175,12 @@ import {
 } from "@/lib/voice-audio";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 import {
+  createMicRecoveryBudget,
+  watchMicHealth,
+  type MicFault,
+} from "@/lib/mic-health";
+import { reportFaroEvent } from "@/lib/faro";
+import {
   joinLeaveAutoMuteEnabled,
   shouldSuppressJoinLeaveSound,
 } from "@/lib/large-room-sounds";
@@ -1540,6 +1546,9 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
   let pipeline: MicPipeline | null = null;
+  /** Stops watching the current pipeline's health; see `watchCurrentMic`. */
+  let disposeMicWatch: (() => void) | null = null;
+  const micRecoveryBudget = createMicRecoveryBudget();
   /**
    * This seat was taken as audience: deliberately no microphone, and none was
    * ever asked for. Distinct from `pipeline === null` after a failed open,
@@ -2678,6 +2687,49 @@ export function createVoiceController(transport: RealtimeTransport) {
     await swapPipeline("Failed to switch microphone");
   }
 
+  /**
+   * Reopen the microphone when the one being published has gone quiet on its
+   * own: the capture ended, or the context that clocks the published track
+   * stopped running. See `lib/mic-health.ts` for why the published track
+   * cannot tell us itself.
+   *
+   * Only on a connected call, and only for the pipeline still in use: a fault
+   * on one that a leave, a device pick or a previous recovery already
+   * replaced is history. `swapPipeline` does the rest exactly as it does for a
+   * device change, falling back through the same ladder when the device that
+   * died is gone, and carrying mute, deafen and push-to-talk onto the new
+   * track. Bounded by `micRecoveryBudget` so a device that dies on every open
+   * cannot loop.
+   */
+  function watchCurrentMic(watched: MicPipeline) {
+    disposeMicWatch?.();
+    disposeMicWatch = watchMicHealth(
+      {
+        tracks: watched.rawStream.getAudioTracks(),
+        context: watched.audioContext,
+      },
+      (fault) => {
+        void recoverMic(watched, fault);
+      },
+    );
+  }
+
+  async function recoverMic(watched: MicPipeline, fault: MicFault) {
+    if (pipeline !== watched || state.status !== "connected") {
+      return;
+    }
+    const allowed = micRecoveryBudget.take(Date.now());
+    reportFaroEvent("voice.micRecovery", {
+      fault,
+      transport: state.usingSfu ? "livekit" : "mesh",
+      outcome: allowed ? "reopen" : "budget-exhausted",
+    });
+    if (!allowed) {
+      return;
+    }
+    await swapPipeline("Failed to reopen microphone");
+  }
+
   async function swapPipeline(failureMessage: string) {
     if (!pipeline || state.status === "idle") {
       return;
@@ -2736,6 +2788,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
       stopMicPipeline(pipeline);
       pipeline = next;
+      watchCurrentMic(next);
       // Carries mute, deafen and the push-to-talk gate onto the new track: a
       // swap must never be a way to end up transmitting when you were not.
       applyMuteToPipeline();
@@ -5719,6 +5772,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
         pipeline = next;
+        watchCurrentMic(next);
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
       } catch (err) {
