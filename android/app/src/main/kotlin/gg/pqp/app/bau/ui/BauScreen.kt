@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -94,12 +95,14 @@ fun BauScreen(
     onBack: () -> Unit,
     /** A voice room or a call is live; the video then leaves the audio focus alone. */
     callActive: Boolean = false,
+    /** A post to scroll to once the feed has loaded (a card or link tapped in chat). */
+    focusPostId: String? = null,
 ) {
     // Leaving the Baú releases the player; a card scrolling away only pauses.
     DisposableEffect(Unit) { onDispose { BauPlayback.stop() } }
     LaunchedEffect(callActive) { BauPlayback.setCallActive(callActive) }
     CompositionLocalProvider(LocalBauCallActive provides callActive) {
-        BauScreenContent(session, serverId, serverName, onBack)
+        BauScreenContent(session, serverId, serverName, onBack, focusPostId)
     }
 }
 
@@ -110,6 +113,7 @@ private fun BauScreenContent(
     serverId: String,
     serverName: String,
     onBack: () -> Unit,
+    focusPostId: String?,
 ) {
     val model: BauViewModel = viewModel(
         key = "bau-$serverId",
@@ -118,6 +122,20 @@ private fun BauScreenContent(
     val state by model.state.collectAsStateWithLifecycle()
     val canPost = rememberCanPostToBau(session, serverId, state.config)
     var composing by rememberSaveable { mutableStateOf(false) }
+
+    // Arrived from a post card in chat: bring that post to the top, once. A
+    // post that is not in the feed (gone, or not published) leaves the feed
+    // where it always starts.
+    val listState = rememberLazyListState()
+    var focused by rememberSaveable(focusPostId) { mutableStateOf(focusPostId == null) }
+    LaunchedEffect(focusPostId, state.posts) {
+        if (focused || focusPostId == null) return@LaunchedEffect
+        val index = state.posts.indexOfFirst { it.id.equals(focusPostId, ignoreCase = true) }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+            focused = true
+        }
+    }
 
     if (composing && canPost) {
         BauComposeDialog(
@@ -201,6 +219,7 @@ private fun BauScreenContent(
                 )
 
                 else -> LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize().testTag("bau.feed"),
                     contentPadding = PaddingValues(
                         horizontal = Spacing.gutter,

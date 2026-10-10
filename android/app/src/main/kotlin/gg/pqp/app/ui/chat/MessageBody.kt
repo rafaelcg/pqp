@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import gg.pqp.app.bau.BauShare
 import gg.pqp.app.ui.theme.Spacing
 
 /**
@@ -54,6 +55,7 @@ fun MessageBody(
     modifier: Modifier = Modifier,
 ) {
     val blocks = remember(body) { ChatMarkdown.parse(body) }
+    val openBau = LocalOpenBauPost.current
 
     Column(modifier) {
         blocks.forEachIndexed { index, block ->
@@ -61,7 +63,7 @@ fun MessageBody(
             val last = index == blocks.lastIndex
             when (block) {
                 is ChatBlock.Paragraph -> Text(
-                    text = annotate(block.spans, selfUsername, if (last) editedMark else null),
+                    text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau),
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
@@ -74,7 +76,7 @@ fun MessageBody(
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = annotate(block.spans, selfUsername, if (last) editedMark else null),
+                        text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -116,6 +118,7 @@ private fun annotate(
     spans: List<ChatSpan>,
     selfUsername: String?,
     editedMark: String?,
+    openBau: (BauPostTarget) -> Unit,
 ): AnnotatedString {
     val scheme = MaterialTheme.colorScheme
     val me = selfUsername?.lowercase()
@@ -158,7 +161,15 @@ private fun annotate(
             )
 
             if (span.link != null) {
-                withLink(LinkAnnotation.Url(span.link, linkStyles)) {
+                // A same-instance Baú address opens in the app, not the browser.
+                // Everything else keeps the platform's default link handling.
+                val bau = BauShare.refOfUrl(span.link)
+                val annotation = if (bau != null) {
+                    LinkAnnotation.Url(span.link, linkStyles) { openBau(BauPostTarget(bau)) }
+                } else {
+                    LinkAnnotation.Url(span.link, linkStyles)
+                }
+                withLink(annotation) {
                     withStyle(style) { append(span.text) }
                 }
             } else {

@@ -127,6 +127,21 @@
     <string name="bau_comment_placeholder">Write a comment</string>
     <string name="bau_comment_submit">Comment</string>
     <string name="bau_comment_failed">Could not post the comment.</string>
+    <string name="bau_card_cta">Open in Baú</string>
+    <string name="bau_card_untitled">New in the Baú</string>
+    <string name="bau_card_aria">Baú post: %1$s</string>
+    <string name="bau_card_by">%1$s · in Baú</string>
+    <string name="bau_card_video">Video</string>
+    <string name="bau_card_locked">Locked</string>
+    <string name="bau_card_pinned">Pinned</string>
+    <plurals name="bau_card_likes">
+        <item quantity="one">%1$d like</item>
+        <item quantity="other">%1$d likes</item>
+    </plurals>
+    <plurals name="bau_card_comments">
+        <item quantity="one">%1$d comment</item>
+        <item quantity="other">%1$d comments</item>
+    </plurals>
     <string name="bau_comments_off">Comments are off on this post.</string>
     <string name="bau_media_file">File</string>
     <string name="bau_media_image">Image</string>

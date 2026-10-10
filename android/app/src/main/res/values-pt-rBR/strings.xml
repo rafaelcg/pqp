@@ -119,6 +119,21 @@
     <string name="bau_comment_placeholder">Escreve um comentário</string>
     <string name="bau_comment_submit">Comentar</string>
     <string name="bau_comment_failed">Não deu pra comentar.</string>
+    <string name="bau_card_cta">Ver no Baú</string>
+    <string name="bau_card_untitled">Novidade no Baú</string>
+    <string name="bau_card_aria">Post do Baú: %1$s</string>
+    <string name="bau_card_by">%1$s · no Baú</string>
+    <string name="bau_card_video">Vídeo</string>
+    <string name="bau_card_locked">Trancado</string>
+    <string name="bau_card_pinned">Fixado</string>
+    <plurals name="bau_card_likes">
+        <item quantity="one">%1$d curtida</item>
+        <item quantity="other">%1$d curtidas</item>
+    </plurals>
+    <plurals name="bau_card_comments">
+        <item quantity="one">%1$d comentário</item>
+        <item quantity="other">%1$d comentários</item>
+    </plurals>
     <string name="bau_comments_off">Comentários desligados neste post.</string>
     <string name="bau_media_file">Arquivo</string>
     <string name="bau_media_image">Imagem</string>
