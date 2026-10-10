@@ -4293,6 +4293,8 @@ async function announceHomePost(
       serverId,
       postId,
       channelId,
+      // A retried publish must not post the card twice.
+      nonce: `bau:${postId}`,
       origin: safeShareOrigin(
         resolveRedirectOrigin(
           typeof req.headers.origin === "string" ? req.headers.origin : undefined,
@@ -4321,7 +4323,9 @@ function throwShareFailure(reason: ShareFailure): never {
     case "bad-channel":
       throw new HttpError(400, "Pick a text channel of this server");
     default:
-      throw new HttpError(400, "Could not post the card");
+      // The chat could not take it right now (database breaker, an unknown
+      // refusal): a retry is the right answer, so not a 4xx.
+      throw new HttpError(503, "Could not post the card, try again");
   }
 }
 
@@ -4510,6 +4514,7 @@ router.post(
       postId: postId!,
       channelId: body.channelId,
       message: body.message ?? null,
+      ...(body.nonce ? { nonce: body.nonce } : {}),
       origin: safeShareOrigin(
         resolveRedirectOrigin(
           typeof req.headers.origin === "string" ? req.headers.origin : undefined,

@@ -89,7 +89,7 @@ type Card = {
   mediaKind: string | null;
   mediaUrl: string | null;
   locked: boolean;
-  author: { displayName: string };
+  author: { displayName: string } | null;
 };
 
 describe("teaserFromBody", () => {
@@ -207,6 +207,8 @@ describe("toPostCard", () => {
     expect(card.mediaKind).toBeNull();
     expect(card.mediaUrl).toBeNull();
     expect(card.locked).toBe(true);
+    // Who wrote a locked post is withheld, as the feed withholds it.
+    expect(card.author).toBeNull();
   });
 });
 
@@ -308,7 +310,7 @@ describeDb("Baú card and share endpoints", () => {
     expect(ok.body.card.title).toBe("Sessão 11");
     expect(ok.body.card.teaser).toBe("o clip inteiro");
     expect(ok.body.card.serverName).toBe("Mesa da Tues");
-    expect(ok.body.card.author.displayName).toBe("owner");
+    expect(ok.body.card.author?.displayName).toBe("owner");
 
     const outsider = await call(stranger, "GET", `${base()}/posts/${post.id}/card`);
     expect(outsider.status).toBeGreaterThanOrEqual(403);
@@ -358,6 +360,8 @@ describeDb("Baú card and share endpoints", () => {
     expect(asMember.body.card.teaser).toBe("só o inner vê");
     expect(JSON.stringify(asMember.body)).not.toContain("segredo-do-clip");
     expect(JSON.stringify(asMember.body)).not.toContain("youtu.be");
+    expect(asMember.body.card.author).toBeNull();
+    expect(JSON.stringify(asMember.body)).not.toContain(owner.id);
     const asOwner = await call<{ card: Card }>(owner, "GET", `${base()}/posts/${post.id}/card`);
     expect(asOwner.body.card.locked).toBe(false);
   });
@@ -379,6 +383,20 @@ describeDb("Baú card and share endpoints", () => {
     expect(bodies[0]).toMatch(
       new RegExp(`^Saiu no Baú\\nhttps?://[^\\s]+/app/server/${serverId}/bau/${post.id}$`),
     );
+  });
+
+  it("a retried share with the same nonce posts one card, a new nonce posts another", async () => {
+    const { post } = await publish();
+    const send = (nonce: string) =>
+      call(owner, "POST", `${base()}/posts/${post.id}/share`, {
+        channelId: generalId,
+        nonce,
+      });
+    expect((await send("attempt-1")).status).toBe(200);
+    expect((await send("attempt-1")).status).toBe(200);
+    expect(await lastMessageBody(generalId)).toHaveLength(1);
+    expect((await send("attempt-2")).status).toBe(200);
+    expect(await lastMessageBody(generalId)).toHaveLength(2);
   });
 
   it("share refuses another server's channel, a voice channel and a channel the caller cannot speak in", async () => {
@@ -434,6 +452,15 @@ describeDb("Baú card and share endpoints", () => {
     const bodies = await lastMessageBody(generalId);
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toContain(`/app/server/${serverId}/bau/${ok.post.id}`);
+    // Publishing the same post again (a retried request) does not repeat it.
+    const again = await call<{ announced: boolean }>(
+      owner,
+      "POST",
+      `${base()}/posts/${ok.post.id}/publish`,
+      { announceChannelId: generalId },
+    );
+    expect(again.body.announced).toBe(true);
+    expect(await lastMessageBody(generalId)).toHaveLength(1);
 
     const bad = await publish({ announceChannelId: otherServerChannelId });
     expect(bad.announced).toBe(false);

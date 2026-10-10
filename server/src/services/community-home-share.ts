@@ -76,11 +76,13 @@ export function toPostCard(
     serverName,
     title: post.title,
     teaser: teaser ? teaserFromBody(teaser) : null,
-    author: {
-      id: post.author.id,
-      displayName: post.author.displayName,
-      avatarUrl: post.author.avatarUrl,
-    },
+    author: post.locked
+      ? null
+      : {
+          id: post.author.id,
+          displayName: post.author.displayName,
+          avatarUrl: post.author.avatarUrl,
+        },
     mediaKind,
     mediaUrl,
     visibility: post.visibility,
@@ -154,6 +156,8 @@ export async function shareCommunityHomePost(input: {
   channelId: string;
   message?: string | null;
   origin: string;
+  /** Chat de-duplicates on it: a retried share returns the first message. */
+  nonce?: string;
 }): Promise<ShareResult> {
   // Readable and published, by the author's own eyes.
   try {
@@ -183,6 +187,7 @@ export async function shareCommunityHomePost(input: {
     author: input.author,
     channelId: input.channelId,
     body,
+    ...(input.nonce ? { nonce: input.nonce } : {}),
   });
   if (posted.ok) {
     return { ok: true };

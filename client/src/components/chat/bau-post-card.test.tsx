@@ -100,6 +100,14 @@ describe("BauPostCardView", () => {
     expect(html).not.toContain("<video");
   });
 
+  it("a locked card names the server, not the author", () => {
+    const html = render(
+      card({ locked: true, visibility: "members", author: null, serverName: "Mesa da Sessão" }),
+    );
+    expect(html).toContain("Mesa da Sessão");
+    expect(html).not.toContain("Tues");
+  });
+
   it("falls back to a line for an untitled post", () => {
     expect(render(card({ title: null }))).toContain("New in the Baú");
   });

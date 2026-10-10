@@ -2684,7 +2684,7 @@ const MessageRow = memo(function MessageRow({
       ),
     [message.body],
   );
-  const bauState = useBauCard(bauSelection?.link ?? null, locale);
+  const bauState = useBauCard(bauSelection?.link ?? null, locale, currentUserId);
   // While the card is (about to be) there, the pasted URL is not repeated
   // above it: what is left is the sender's own words, or nothing.
   const bauCardShown =
