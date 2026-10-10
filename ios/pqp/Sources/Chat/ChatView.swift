@@ -1202,7 +1202,10 @@ struct MessageBodyText: View {
 
     init(body: String) { raw = body }
 
-    private var attributed: AttributedString {
+    private var attributed: AttributedString { Self.attributed(raw) }
+
+    /// Also what the Baú draws between `#channel` links, so both read alike.
+    static func attributed(_ raw: String) -> AttributedString {
         guard var parsed = try? AttributedString(
             markdown: raw,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)

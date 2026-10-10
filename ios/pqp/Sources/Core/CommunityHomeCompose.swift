@@ -112,6 +112,9 @@ struct ComposeDraft: Equatable, Sendable {
     var body = ""
     var link = ""
     var media: ComposeMedia?
+    /// The channels this account can see, which `#name` in the body is turned
+    /// into `<#id>` against. Empty leaves the body exactly as typed.
+    var channels: [Channel] = []
 
     var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
     var trimmedBody: String { body.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -122,7 +125,10 @@ struct ComposeDraft: Equatable, Sendable {
     var problem: ComposeProblem? {
         if trimmedTitle.isEmpty { return .needsTitle }
         if title.utf16.count > CommunityHomeLimits.titleMax { return .titleTooLong }
-        if body.utf16.count > CommunityHomeLimits.bodyMax { return .bodyTooLong }
+        // The limit is on what the server stores: a `#channel` is `<#uuid>` there.
+        if BauChannelRefs.toStored(body, channels: channels).utf16.count > CommunityHomeLimits.bodyMax {
+            return .bodyTooLong
+        }
         if media != nil, !trimmedLink.isEmpty { return .oneMediaSource }
         if !trimmedLink.isEmpty, CommunityHomeLinks.provider(trimmedLink) == nil { return .badLink }
         if media?.uploading == true { return .fileStillUploading }
@@ -138,7 +144,7 @@ struct ComposeDraft: Equatable, Sendable {
         guard problem == nil else { return nil }
         return CreateCommunityHomePostRequest(
             title: trimmedTitle,
-            body: trimmedBody.isEmpty ? nil : trimmedBody,
+            body: trimmedBody.isEmpty ? nil : BauChannelRefs.toStored(trimmedBody, channels: channels),
             mediaUploadId: media?.uploadId,
             youtubeUrl: trimmedLink.isEmpty ? nil : trimmedLink
         )

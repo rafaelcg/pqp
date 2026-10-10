@@ -469,6 +469,20 @@ private fun SignedInNav(
                         focusPostId = route.focusPostId,
                         onBack = nav::popBackStack,
                         callActive = voiceState.isActive || callState.outgoing != null,
+                        // A `#channel` in a post opens that channel, the same way
+                        // the channel list does.
+                        onOpenChannel = { channel ->
+                            nav.navigate(
+                                ChatRoute(
+                                    channel.id,
+                                    channel.name,
+                                    channel.slowmodeSeconds,
+                                    serverId = route.serverId,
+                                    isVoiceChannel = channel.isVoice,
+                                    isWatchParty = channel.type == "watch_party",
+                                ),
+                            )
+                        },
                     )
                 }
                 composable<ChatRoute> { entry ->

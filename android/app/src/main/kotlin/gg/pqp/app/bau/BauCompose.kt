@@ -2,6 +2,7 @@ package gg.pqp.app.bau
 
 import gg.pqp.app.attachments.attachmentContentTypeFor
 import gg.pqp.app.core.ApiException
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.hasPermission
@@ -161,11 +162,15 @@ data class BauComposeDraft(
     val trimmedBody: String get() = body.trim()
     val trimmedLink: String get() = link.trim()
 
-    /** First thing wrong with this draft, or null when it can go. */
-    fun problem(): BauComposeProblem? = when {
+    /**
+     * First thing wrong with this draft, or null when it can go. The body's
+     * limit is checked on what the server will store: a `#channel` is
+     * `<#uuid>` there, forty characters for a handful.
+     */
+    fun problem(channels: List<Channel> = emptyList()): BauComposeProblem? = when {
         trimmedTitle.isEmpty() -> BauComposeProblem.NeedsTitle
         title.length > BAU_TITLE_MAX -> BauComposeProblem.TitleTooLong
-        body.length > BAU_BODY_MAX -> BauComposeProblem.BodyTooLong
+        BauChannelRefs.toStored(body, channels).length > BAU_BODY_MAX -> BauComposeProblem.BodyTooLong
         media != null && trimmedLink.isNotEmpty() -> BauComposeProblem.OneMediaSource
         trimmedLink.isNotEmpty() && BauLinks.provider(trimmedLink) == null -> BauComposeProblem.BadLink
         media?.uploading == true -> BauComposeProblem.FileStillUploading
@@ -179,11 +184,12 @@ data class BauComposeDraft(
      * are mutually exclusive by construction, which is the server's own
      * "pick one media source" rule.
      */
-    fun toRequest(): CreateBauPostRequest? {
-        if (problem() != null) return null
+    fun toRequest(channels: List<Channel> = emptyList()): CreateBauPostRequest? {
+        if (problem(channels) != null) return null
         return CreateBauPostRequest(
             title = trimmedTitle,
-            body = trimmedBody.ifEmpty { null },
+            // `#name` typed or picked becomes `<#id>`, so a rename never breaks it.
+            body = BauChannelRefs.toStored(trimmedBody, channels).ifEmpty { null },
             mediaUploadId = media?.uploadId,
             youtubeUrl = trimmedLink.ifEmpty { null },
         )

@@ -65,6 +65,7 @@ import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
 import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
@@ -97,12 +98,13 @@ fun BauScreen(
     callActive: Boolean = false,
     /** A post to scroll to once the feed has loaded (a card or link tapped in chat). */
     focusPostId: String? = null,
+    onOpenChannel: (Channel) -> Unit = {},
 ) {
     // Leaving the Baú releases the player; a card scrolling away only pauses.
     DisposableEffect(Unit) { onDispose { BauPlayback.stop() } }
     LaunchedEffect(callActive) { BauPlayback.setCallActive(callActive) }
     CompositionLocalProvider(LocalBauCallActive provides callActive) {
-        BauScreenContent(session, serverId, serverName, onBack, focusPostId)
+        BauScreenContent(session, serverId, serverName, onBack, focusPostId, onOpenChannel)
     }
 }
 
@@ -114,6 +116,7 @@ private fun BauScreenContent(
     serverName: String,
     onBack: () -> Unit,
     focusPostId: String?,
+    onOpenChannel: (Channel) -> Unit,
 ) {
     val model: BauViewModel = viewModel(
         key = "bau-$serverId",
@@ -142,6 +145,7 @@ private fun BauScreenContent(
             session = session,
             serverId = serverId,
             config = state.config,
+            channels = state.channels,
             onDismiss = { composing = false },
             onPosted = {
                 composing = false
@@ -231,6 +235,8 @@ private fun BauScreenContent(
                         PostCard(
                             post = post,
                             vipEnabled = state.config.vipEnabled,
+                            channels = state.channels,
+                            onOpenChannel = onOpenChannel,
                             expanded = state.expandedComments[post.id],
                             loadingComments = post.id in state.loadingComments,
                             submitting = post.id in state.submitting,
@@ -251,6 +257,8 @@ private fun BauScreenContent(
 private fun PostCard(
     post: BauPost,
     vipEnabled: Boolean,
+    channels: List<Channel>,
+    onOpenChannel: (Channel) -> Unit,
     expanded: List<BauComment>?,
     loadingComments: Boolean,
     submitting: Boolean,
@@ -297,10 +305,13 @@ private fun PostCard(
         if (post.locked) {
             post.teaser?.takeIf { it.isNotBlank() }?.let { teaser ->
                 Spacer(Modifier.height(Spacing.sm))
-                Text(
+                BauChannelText(
                     text = teaser,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    channels = channels,
+                    onOpenChannel = onOpenChannel,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
                 )
             }
             Spacer(Modifier.height(Spacing.md))
@@ -312,7 +323,11 @@ private fun PostCard(
                 if (gifBody != null) {
                     InlineGif(gifBody)
                 } else {
-                    Text(text = body, style = MaterialTheme.typography.bodyLarge)
+                    BauChannelText(
+                        text = body,
+                        channels = channels,
+                        onOpenChannel = onOpenChannel,
+                    )
                 }
             }
             post.media?.let { media ->

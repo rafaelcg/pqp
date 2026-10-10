@@ -19,9 +19,10 @@ extension View {
     func communityHomeComposer(
         server: Server,
         config: CommunityHomeConfig,
+        channels: [Channel] = [],
         onPosted: @escaping () -> Void
     ) -> some View {
-        modifier(CommunityHomeComposerEntry(server: server, config: config, onPosted: onPosted))
+        modifier(CommunityHomeComposerEntry(server: server, config: config, channels: channels, onPosted: onPosted))
     }
 }
 
@@ -29,6 +30,7 @@ private struct CommunityHomeComposerEntry: ViewModifier {
     @Environment(SessionStore.self) private var session
     let server: Server
     let config: CommunityHomeConfig
+    let channels: [Channel]
     let onPosted: () -> Void
 
     @State private var permissions: PermissionsSnapshot?
@@ -55,7 +57,7 @@ private struct CommunityHomeComposerEntry: ViewModifier {
                 }
             }
             .sheet(isPresented: $composing) {
-                CommunityHomeComposeView(server: server, config: config, api: session.api) {
+                CommunityHomeComposeView(server: server, config: config, api: session.api, channels: channels) {
                     composing = false
                     onPosted()
                 }
@@ -383,6 +385,7 @@ struct CommunityHomeComposeView: View {
     @Environment(\.dismiss) private var dismiss
     let server: Server
     let config: CommunityHomeConfig
+    let channels: [Channel]
     let onPosted: () -> Void
 
     @State private var model: CommunityHomeComposeModel
@@ -392,11 +395,20 @@ struct CommunityHomeComposeView: View {
 
     private enum Field { case title, body, link }
 
-    init(server: Server, config: CommunityHomeConfig, api: APIClient, onPosted: @escaping () -> Void) {
+    init(
+        server: Server,
+        config: CommunityHomeConfig,
+        api: APIClient,
+        channels: [Channel] = [],
+        onPosted: @escaping () -> Void
+    ) {
         self.server = server
         self.config = config
+        self.channels = channels
         self.onPosted = onPosted
-        _model = State(initialValue: CommunityHomeComposeModel(api: api, serverId: server.id))
+        let model = CommunityHomeComposeModel(api: api, serverId: server.id)
+        model.draft.channels = channels
+        _model = State(initialValue: model)
     }
 
     var body: some View {
@@ -424,7 +436,11 @@ struct CommunityHomeComposeView: View {
                             .padding(12)
                             .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
                             .onChange(of: model.draft.body) { _, _ in model.edited() }
+                            // The list can arrive after the sheet opened.
+                            .onChange(of: channels) { _, fresh in model.draft.channels = fresh }
                             .accessibilityIdentifier("bau.compose.body")
+
+                        channelSuggestions
 
                         mediaSection
 
@@ -512,6 +528,43 @@ struct CommunityHomeComposeView: View {
         if let failure = model.pickFailure { return failure.message }
         if let refusal = model.refusal { return refusal.message }
         return nil
+    }
+
+    /// The `#` picker. A `TextField` does not expose its caret, so this follows
+    /// the end of the text: while the draft ends in `#ge`, the matching channels
+    /// are offered and a tap swaps the token for `#name`.
+    @ViewBuilder
+    private var channelSuggestions: some View {
+        if !model.posting,
+           let query = BauChannelRefs.findQuery(model.draft.body) {
+            let matches = BauChannelRefs.filter(model.draft.channels, query: query.query)
+            if !matches.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(matches) { channel in
+                            Button {
+                                model.draft.body = BauChannelRefs.apply(
+                                    to: model.draft.body,
+                                    query: query,
+                                    channel: channel,
+                                    channels: model.draft.channels
+                                )
+                            } label: {
+                                Text(verbatim: "#\(channel.name)")
+                                    .font(Typography.callout)
+                                    .foregroundStyle(Palette.signal)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Capsule().fill(Palette.signal.opacity(0.14)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("bau.compose.channel.\(channel.name)")
+                        }
+                    }
+                }
+                .accessibilityIdentifier("bau.compose.channels")
+            }
+        }
     }
 
     @ViewBuilder

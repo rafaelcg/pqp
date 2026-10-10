@@ -15,6 +15,9 @@ struct CommunityHomeView: View {
     /// to it once and outlines it for a moment; a post that is not in the feed
     /// (gone, or not this viewer's) leaves the feed as it was.
     var focusPostId: String? = nil
+    /// The screen a `#channel` in a post opens, built by whoever owns channel
+    /// navigation (the channel list). Absent: the link is drawn but inert.
+    var chatDestination: ((Channel) -> AnyView)?
 
     @State private var focusPending = true
     @State private var highlightedPostId: String?
@@ -25,6 +28,10 @@ struct CommunityHomeView: View {
     @State private var expanded: [String: [CommunityHomeComment]] = [:]
     @State private var loadingComments: Set<String> = []
     @State private var handlerKey = UUID().uuidString
+    /// The channels this account can see here, for drawing `#channel`. The
+    /// API stores only an id; a channel that is not in this list gets no name.
+    @State private var channels: [Channel] = []
+    @State private var openedChannel: Channel?
 
     var body: some View {
         ZStack {
@@ -54,6 +61,10 @@ struct CommunityHomeView: View {
                             PostCard(
                                 post: post,
                                 vipEnabled: config.vipEnabled,
+                                channels: channels,
+                                onOpenChannel: { channel in
+                                    if chatDestination != nil { openedChannel = channel }
+                                },
                                 expanded: expanded[post.id],
                                 loadingComments: loadingComments.contains(post.id),
                                 onToggleLike: { Task { await toggleLike(post) } },
@@ -74,7 +85,11 @@ struct CommunityHomeView: View {
                     .padding(.horizontal, Metrics.hPadding)
                     .padding(.vertical, 12)
                 }
-                .refreshable { await load() }
+                .refreshable {
+                    async let fresh: Void = loadChannels()
+                    await load()
+                    await fresh
+                }
                 .accessibilityIdentifier("bau.feed")
                 // The restore button of a Picture in Picture window brings
                 // the person back to the post that was playing.
@@ -92,6 +107,9 @@ struct CommunityHomeView: View {
         .navigationTitle("Baú")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // Once per opening, beside the feed and not inside every reload: a
+            // burst of updates must not turn into a burst of channel-list reads.
+            Task { await loadChannels() }
             await load()
             // A publish, a comment, a deletion: the frame says "refetch" and
             // nothing more (likes deliberately do not fan out). The feed is
@@ -111,7 +129,15 @@ struct CommunityHomeView: View {
             // Picture; leaving the Baú altogether does not.
             BauPlayback.shared.stopAllUnlessFullScreen()
         }
-        .communityHomeComposer(server: server, config: config) { Task { await load() } }
+        .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
+        .navigationDestination(item: $openedChannel) { channel in
+            chatDestination?(channel) ?? AnyView(EmptyView())
+        }
+    }
+
+    /// Best effort: without it a `#channel` is the neutral "unavailable" mark.
+    private func loadChannels() async {
+        if let fresh = try? await session.api.channels(serverId: server.id) { channels = fresh }
     }
 
     /// Once per screen: bring the asked-for post into view and outline it.
@@ -133,6 +159,7 @@ struct CommunityHomeView: View {
         do {
             posts = try await session.api.communityHomePosts(serverId: server.id)
             error = nil
+
             // Only after the posts arrived: a read marker for a page that
             // failed to load would clear a badge for posts nobody has seen.
             // Best effort past that point, since the posts are the screen and
@@ -198,6 +225,8 @@ struct CommunityHomeView: View {
 private struct PostCard: View {
     let post: CommunityHomePost
     let vipEnabled: Bool
+    let channels: [Channel]
+    let onOpenChannel: (Channel) -> Void
     let expanded: [CommunityHomeComment]?
     let loadingComments: Bool
     let onToggleLike: () -> Void
@@ -225,7 +254,7 @@ private struct PostCard: View {
 
             if post.locked {
                 if let teaser = post.teaser, !teaser.isEmpty {
-                    Text(teaser)
+                    BauBodyText(text: teaser, channels: channels, onOpenChannel: onOpenChannel)
                         .font(Typography.callout)
                         .foregroundStyle(Palette.paperMuted)
                 }
@@ -235,7 +264,7 @@ private struct PostCard: View {
                     if let gifURL = GifLinks.mediaBody(body) {
                         BauGif(url: gifURL)
                     } else {
-                        MessageBodyText(body: body)
+                        BauBodyText(text: body, channels: channels, onOpenChannel: onOpenChannel)
                             .font(Typography.body)
                             .foregroundStyle(Palette.paper)
                     }
