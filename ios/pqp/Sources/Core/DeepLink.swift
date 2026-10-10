@@ -85,13 +85,13 @@ enum DeepLink {
             return serverId.isEmpty ? nil : .bau(serverId: serverId)
         case 3 where segments[0] == "server" && segments[2] == "bau":
             let serverId = segments[1]
-            return serverId.isEmpty ? nil : .bau(serverId: serverId)
+            return serverId.isEmpty ? nil : .bau(serverId: serverId.lowercased())
 
         case 4 where segments[0] == "server" && segments[2] == "bau":
             let serverId = segments[1]
             let postId = segments[3]
             guard !serverId.isEmpty, !postId.isEmpty else { return nil }
-            return .bauPost(serverId: serverId, postId: postId.lowercased())
+            return .bauPost(serverId: serverId.lowercased(), postId: postId.lowercased())
 
         case 4 where segments[0] == "server" && segments[2] == "channel":
             let serverId = segments[1]

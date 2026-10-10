@@ -257,9 +257,20 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         }
     }
 
+    private static func isLoadable(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "https": true
+        #if DEBUG
+        case "http": true
+        #endif
+        default: false
+        }
+    }
+
     var poster: Poster {
-        let url = mediaUrl.flatMap { URL(string: $0) }
-            .flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+        // https only (the server hands out signed R2 URLs and YouTube posters);
+        // plain http is a debug build talking to the local stack.
+        let url = mediaUrl.flatMap { URL(string: $0) }.flatMap { Self.isLoadable($0) ? $0 : nil }
         switch mediaKind {
         case .video:
             if let url { return .videoFrame(url) }
@@ -385,8 +396,10 @@ actor BauCardStore {
         if let hit = entries[key], isFresh(hit) {
             return await hit.task.value
         }
+        // Only a settled entry is evicted: dropping one still in flight would
+        // stop later rows coalescing with a request that keeps running.
         if entries.count >= Self.capacity,
-           let oldest = entries.min(by: { $0.value.at < $1.value.at })?.key {
+           let oldest = entries.filter({ $0.value.settled }).min(by: { $0.value.at < $1.value.at })?.key {
             entries.removeValue(forKey: oldest)
         }
         nextId += 1

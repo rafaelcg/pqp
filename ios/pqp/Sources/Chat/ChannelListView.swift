@@ -368,10 +368,20 @@ struct ChannelListView: View {
         .task {
             guard let initialBau, !hasSeededInitialBau else { return }
             hasSeededInitialBau = true
-            let config = await session.api.communityHomeConfig()
-            if communityHome == nil { communityHome = config }
-            guard config.enabled, current.communityHomeEnabled else { return }
-            openedBau = initialBau
+            // `communityHomeConfig()` answers "off" on any failure and only
+            // remembers a real answer, so a dead network at launch would
+            // drop the link. Ask a few times before settling for the list.
+            for delay in [0.0, 1.5, 4.0] {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                guard !Task.isCancelled else { return }
+                let config = await session.api.communityHomeConfig()
+                if config.enabled {
+                    if communityHome == nil { communityHome = config }
+                    guard current.communityHomeEnabled else { return }
+                    openedBau = initialBau
+                    return
+                }
+            }
         }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }

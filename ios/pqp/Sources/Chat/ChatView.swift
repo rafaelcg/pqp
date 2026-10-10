@@ -1141,10 +1141,12 @@ struct MessageRow: View {
 
                 // The card is the preview of a Baú link; a generic unfurl of
                 // the same URL beside it would say the same thing twice.
-                if !bauCardShown {
-                    ForEach(message.embeds, id: \.url) { embed in
-                        EmbedCard(embed: embed)
-                    }
+                // Only the Baú link's own unfurl is dropped; a different URL in
+                // the same message keeps its preview.
+                ForEach(message.embeds.filter { embed in
+                    !(bauCardShown && URL(string: embed.url).flatMap { BauShare.inAppTarget(for: $0) } != nil)
+                }, id: \.url) { embed in
+                    EmbedCard(embed: embed)
                 }
 
                 if message.editedAt != nil {
