@@ -19,6 +19,8 @@ import {
   LARGE_ROOM_PARTICIPANTS,
   parseVideoQuality,
   screenBitrateFor,
+  screenFpsTier,
+  SCREEN_60FPS_BITRATE_FACTOR,
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
@@ -514,6 +516,25 @@ describe("the presenter as the ladder's source", () => {
     ).toBeUndefined();
   });
 
+  it("honours the presenter's sharpness choice everywhere except an HLS ingest", () => {
+    expect(screenShareDegradationPreference(null, "detail")).toBe(
+      "maintain-resolution",
+    );
+    expect(
+      screenShareDegradationPreference(
+        { ladderTopHeight: null, uplinkBps: 10_000_000 },
+        "detail",
+      ),
+    ).toBe("maintain-resolution");
+    // The egress stalls every viewer when the source's framerate collapses.
+    expect(screenShareDegradationPreference(LIVE, "detail")).toBe(
+      "maintain-framerate",
+    );
+    expect(screenShareDegradationPreference(null, "motion")).toBe(
+      "maintain-framerate",
+    );
+  });
+
   it("leaves an ordinary large call alone", () => {
     // The rule that must not move. No egress, no raise, whatever the size.
     for (const hls of [null, { ladderTopHeight: null, uplinkBps: 10_000_000 }]) {
@@ -809,5 +830,30 @@ describe("the presenter's camera at 480p (2026-09-25)", () => {
     expect(presenterCameraSimulcastRungs(480).map((rung) => rung.height)).toEqual([360]);
     expect(presenterCameraSimulcastRungs(360).map((rung) => rung.height)).toEqual([180]);
     expect(presenterCameraSimulcastRungs(180)).toEqual([]);
+  });
+});
+
+describe("the screen ceiling at 60 fps", () => {
+  it("is half again the 30 fps ceiling on every rung", () => {
+    for (const quality of VIDEO_QUALITIES) {
+      expect(screenBitrateFor(quality, 60)).toBe(
+        Math.round(screenBitrateFor(quality) * SCREEN_60FPS_BITRATE_FACTOR),
+      );
+    }
+    expect(screenBitrateFor("auto", 60)).toBe(4_500_000);
+  });
+
+  it("leaves every existing caller, which passes no rate, at the 30 fps ladder", () => {
+    expect(screenBitrateFor("auto")).toBe(3_000_000);
+    expect(screenBitrateFor("1080p")).toBe(8_000_000);
+  });
+
+  it("reads a measured rate onto the two tiers the ladder knows", () => {
+    expect(screenFpsTier(59.6)).toBe(60);
+    expect(screenFpsTier(45)).toBe(60);
+    expect(screenFpsTier(30)).toBe(30);
+    expect(screenFpsTier(null)).toBe(30);
+    expect(screenFpsTier(undefined)).toBe(30);
+    expect(screenFpsTier(Number.NaN)).toBe(30);
   });
 });

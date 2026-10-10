@@ -33,6 +33,7 @@ import {
   LARGE_ROOM_SCREEN_BITRATE,
   LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
+  SCREEN_60FPS_BITRATE_FACTOR,
   screenSimulcastPlan,
   screenShareSimulcastEnabled,
   screenShareDegradationPreference,
@@ -44,6 +45,10 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
+import {
+  DEFAULT_SHARE_PRIORITY,
+  type SharePriority,
+} from "./share-priority";
 import type { ShareGuardCeiling } from "./share-high-motion-guard";
 import { guardedLayerFramerates } from "./share-guard-layers";
 import {
@@ -310,6 +315,19 @@ export interface LiveKitSession {
    * double need not know about it.
    */
   setScreenGuardCeiling?(ceiling: ShareGuardCeiling | null): Promise<void>;
+  /**
+   * Frames or pixels first under pressure (`share-priority.ts`), in place on
+   * the published share. A watch party's HLS source ignores it and stays on
+   * `maintain-framerate`. Optional so a test double need not know about it.
+   */
+  setScreenPriority?(priority: SharePriority): Promise<void>;
+  /**
+   * Re-read the published capture's frame rate and re-apply the screen's
+   * `maxFramerate` and ceiling, after the frame rate was changed in place with
+   * `applyConstraints`. Without it a share moved from 30 to 60 kept encoding
+   * at 30 under the 30 fps ceiling. Optional for test doubles.
+   */
+  refreshScreenFrameRate?(): Promise<void>;
   /**
    * The published screen's sender stats, for the guard and `pqpShareHealth`.
    * Empty when nothing is published.
@@ -652,6 +670,14 @@ export async function connectLiveKit({
    * does not put the frame rate back) and over the top layer's bitrate.
    */
   let screenGuardCeiling: ShareGuardCeiling | null = null;
+  /** Frames or pixels first; see `share-priority.ts`. */
+  let screenPriority: SharePriority = DEFAULT_SHARE_PRIORITY;
+  /**
+   * The frame-rate tier of the capture the plan is for, read off the track by
+   * `planForTrack` and `refreshScreenFrameRate`. A 60 fps ordinary share gets
+   * `SCREEN_60FPS_BITRATE_FACTOR` on its top layer's ceiling.
+   */
+  let screenPublishFps: 30 | 60 = 30;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
@@ -1381,7 +1407,7 @@ export async function connectLiveKit({
         subLayerAwake ||
         priorityMissing ||
         params.degradationPreference !==
-          screenShareDegradationPreference(hlsSource) ||
+          screenShareDegradationPreference(hlsSource, screenPriority) ||
         top?.scaleResolutionDownBy !==
           screenShareScaleResolutionDownBy(hlsSource)
       );
@@ -1464,7 +1490,7 @@ export async function connectLiveKit({
       const params = sender.getParameters();
       const keep =
         params.degradationPreference ??
-        screenShareDegradationPreference(hlsSource);
+        screenShareDegradationPreference(hlsSource, screenPriority);
       // Into balanced and straight back: libwebrtc clears the adapter's
       // restrictions on either switch, which is the whole point.
       params.degradationPreference = "balanced";
@@ -1563,7 +1589,7 @@ export async function connectLiveKit({
         if (source === Track.Source.ScreenShare) {
           const ingest = feedingHls ? hlsSource : null;
           params.degradationPreference =
-            screenShareDegradationPreference(ingest);
+            screenShareDegradationPreference(ingest, screenPriority);
           const scale = screenShareScaleResolutionDownBy(ingest);
           if (scale === 1) {
             // GCC's maintain-framerate walk invents 180p on the remaining
@@ -1786,9 +1812,14 @@ export async function connectLiveKit({
     }
     return {
       ...plan,
+      // A 60 fps capture is twice the frames under one allowance; see
+      // `SCREEN_60FPS_BITRATE_FACTOR`. Not under the large-room cap, whose
+      // number is about the SFU's downstream bill rather than the picture.
       topBitrate: plan.capped
         ? Math.min(screenMaxBitrate, LARGE_ROOM_SCREEN_BITRATE)
-        : screenMaxBitrate,
+        : screenPublishFps === 60
+          ? Math.round(screenMaxBitrate * SCREEN_60FPS_BITRATE_FACTOR)
+          : screenMaxBitrate,
     };
   }
 
@@ -1814,7 +1845,67 @@ export async function connectLiveKit({
     return nativeScreenCaptureHeight;
   }
 
+  /**
+   * Put the published share's `maxFramerate` and ceiling where the guard and
+   * the capture's current frame rate say. Shared by the guard and by
+   * `refreshScreenFrameRate`. A watch party's ingest is left alone.
+   */
+  async function applyScreenGuardCeiling(
+    ceiling: ShareGuardCeiling | null,
+  ): Promise<void> {
+    await enqueueScreenOp(async () => {
+      const feedingHls =
+        screenPlanPinned ||
+        (hlsSource !== null && hlsSource.ladderTopHeight !== null);
+      if (feedingHls) {
+        // A watch party's ingest is pinned to its own rules; the guard is
+        // never allowed to move it.
+        screenGuardCeiling = null;
+        return;
+      }
+      screenGuardCeiling = ceiling;
+      const epoch = screenShareEpoch;
+      const track = publishedScreenTrack;
+      const sender = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShare,
+      )?.track?.sender;
+      if (!track || !sender) {
+        return;
+      }
+      try {
+        const params = sender.getParameters();
+        // Lifting the guard hands back whatever the capture delivers, which
+        // is what publish used to set.
+        const fps = ceiling
+          ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
+          : publishMaxFrameRateFromTrack(track);
+        // Under a ceiling the smaller copies go to 30 before anything the
+        // full-picture viewer sees does (`share-guard-layers.ts`).
+        const encodings = params.encodings ?? [];
+        const rates = guardedLayerFramerates(encodings, fps, ceiling !== null);
+        encodings.forEach((encoding, index) => {
+          encoding.maxFramerate = rates[index] ?? fps;
+        });
+        await sender.setParameters(params);
+      } catch (err) {
+        console.warn(
+          "[pqp] SFU screen frame-rate ceiling rejected; keeping the published one",
+          err,
+        );
+      }
+      if (screenShareEpoch !== epoch) {
+        return;
+      }
+      await setSourceMaxBitrate(
+        Track.Source.ScreenShare,
+        currentScreenPlan().topBitrate,
+        "screen",
+      );
+    });
+  }
+
   function planForTrack(track: MediaStreamTrack): ScreenSimulcastPlan {
+    screenPublishFps = publishMaxFrameRateFromTrack(track);
     return clampScreenPlanToCapture(
       currentScreenPlan(),
       nativeScreenCaptureHeight ?? trackCaptureHeight(track),
@@ -1929,7 +2020,10 @@ export async function connectLiveKit({
       // become stills). HLS ingest: hold pixels. Egress transcodes whatever
       // size arrives, and Chrome's maintain-framerate walk 1080 → 180 is
       // what every playlist viewer then gets. fps/bitrate can still drop.
-      degradationPreference: screenShareDegradationPreference(hlsSource),
+      degradationPreference: screenShareDegradationPreference(
+        hlsSource,
+        screenPriority,
+      ),
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
         maxFramerate: publishMaxFrameRateFromTrack(track),
@@ -2803,55 +2897,31 @@ export async function connectLiveKit({
     },
 
     async setScreenGuardCeiling(ceiling: ShareGuardCeiling | null) {
+      await applyScreenGuardCeiling(ceiling);
+    },
+
+    async setScreenPriority(priority: SharePriority) {
+      if (priority === screenPriority) {
+        return;
+      }
+      screenPriority = priority;
+      // `setSourceMaxBitrate` writes the degradation preference with the
+      // ceiling, and leaves a watch party's ingest on `maintain-framerate`.
       await enqueueScreenOp(async () => {
-        const feedingHls =
-          screenPlanPinned ||
-          (hlsSource !== null && hlsSource.ladderTopHeight !== null);
-        if (feedingHls) {
-          // A watch party's ingest is pinned to its own rules; the guard is
-          // never allowed to move it.
-          screenGuardCeiling = null;
-          return;
-        }
-        screenGuardCeiling = ceiling;
-        const epoch = screenShareEpoch;
-        const track = publishedScreenTrack;
-        const sender = room.localParticipant.getTrackPublication(
-          Track.Source.ScreenShare,
-        )?.track?.sender;
-        if (!track || !sender) {
-          return;
-        }
-        try {
-          const params = sender.getParameters();
-          // Lifting the guard hands back whatever the capture delivers, which
-          // is what publish used to set.
-          const fps = ceiling
-            ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
-            : publishMaxFrameRateFromTrack(track);
-          // Under a ceiling the smaller copies go to 30 before anything the
-          // full-picture viewer sees does (`share-guard-layers.ts`).
-          const encodings = params.encodings ?? [];
-          const rates = guardedLayerFramerates(encodings, fps, ceiling !== null);
-          encodings.forEach((encoding, index) => {
-            encoding.maxFramerate = rates[index] ?? fps;
-          });
-          await sender.setParameters(params);
-        } catch (err) {
-          console.warn(
-            "[pqp] SFU screen frame-rate ceiling rejected; keeping the published one",
-            err,
-          );
-        }
-        if (screenShareEpoch !== epoch) {
-          return;
-        }
         await setSourceMaxBitrate(
           Track.Source.ScreenShare,
           currentScreenPlan().topBitrate,
           "screen",
         );
       });
+    },
+
+    async refreshScreenFrameRate() {
+      const track = publishedScreenTrack;
+      if (track) {
+        screenPublishFps = publishMaxFrameRateFromTrack(track);
+      }
+      await applyScreenGuardCeiling(screenGuardCeiling);
     },
 
     async getScreenSenderReports() {

@@ -143,6 +143,11 @@ import {
   getReceiveQuality,
   subscribeReceiveQuality,
 } from "@/lib/receive-quality";
+import {
+  getSharePriority,
+  sharePriorityContentHint,
+  subscribeSharePriority,
+} from "@/lib/share-priority";
 import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
 import { resolveLiveHlsStream } from "@/lib/hls-playback";
 import {
@@ -1278,6 +1283,20 @@ export function createVoiceController(transport: RealtimeTransport) {
   // choice needs no thread through the stage's props.
   subscribeReceiveQuality((quality) => {
     void sfu?.setReceiveQuality(quality);
+  });
+  // The presenter's "frames or pixels first", the same way: the menu writes the
+  // store and the share already on the wire follows it in place.
+  subscribeSharePriority((priority) => {
+    const track = screenCaptureStream?.getVideoTracks()[0];
+    if (track && !screenCaptureIsWatchParty) {
+      try {
+        track.contentHint = sharePriorityContentHint(priority);
+      } catch {
+        // Read-only on some older engines; the sender preference still moves.
+      }
+    }
+    manager?.setScreenPriority?.(priority);
+    void sfu?.setScreenPriority?.(priority);
   });
   // The other half of the fallback-microphone notice: the OS telling us a
   // device came or went is the only signal that the saved mic might be
@@ -4214,6 +4233,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // rebuilt after a WS drop silently reverted both to the defaults, and
       // nothing recomputed them until the user next touched the menu.
       await sfu.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
+      await sfu.setScreenPriority?.(getSharePriority());
       await sfu.setScreenQuality(videoQuality);
       // The viewer's half: the largest layer this device wants, remembered
       // per device. Applied before anything is subscribed so the first frame
@@ -4313,6 +4333,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     // Same reason, for the screen: a share carried across a reconnect must be
     // rebuilt at the chosen quality, not at the default one.
     manager.setScreenQuality(videoQuality);
+    manager.setScreenPriority?.(getSharePriority());
     if (pipeline) {
       applyPreservedSelfVoice();
       applyMuteToPipeline();
@@ -6373,8 +6394,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // stuttering. Guarded because the property is read-only on some older
       // implementations rather than merely ignored.
       // Watch-party measured host fps sawteeth are usually capture surface (tab/YouTube 24fps), not this hint.
+      // "detail" only when the presenter chose sharpness (`share-priority.ts`);
+      // a watch party's ingest keeps motion whatever was chosen.
       try {
-        track.contentHint = "motion";
+        track.contentHint =
+          intent.watchParty === true
+            ? "motion"
+            : sharePriorityContentHint(getSharePriority());
       } catch {
         // Encoder defaults, working share.
       }
@@ -6602,7 +6628,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       } catch {
         return;
       }
-      manager?.setScreenQuality(videoQuality);
+      // The senders read the delivered rate for their `maxFramerate` and
+      // ceiling. This used to call `setScreenQuality` with the same rung, which
+      // returns early, so a share moved to 60 kept encoding under 30.
+      manager?.retuneScreenSenders?.();
+      await sfu?.refreshScreenFrameRate?.();
     },
 
     /** Promote a share to the large tile. No-op if they are not sharing. */
