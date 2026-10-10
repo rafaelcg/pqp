@@ -132,7 +132,7 @@ final class BauPlayback {
     func release(_ session: BauVideoSession) {
         floor.release(session.id)
         // Keep the session alive while its PiP window is still on screen.
-        if !session.isPictureInPictureActive { retained.removeValue(forKey: session.id) }
+        if !session.hasPictureInPicture { retained.removeValue(forKey: session.id) }
         if floor.current == nil { deactivateAudio() }
     }
 
@@ -185,13 +185,18 @@ final class BauVideoSession: NSObject {
     @ObservationIgnored private(set) var isFullScreen = false
     @ObservationIgnored private(set) var isCardVisible = false
     @ObservationIgnored private(set) var isPictureInPictureActive = false
+    /// The controller's own PiP (the button, backgrounding) is up. Separate
+    /// from the session's PiP layer, but it holds the session alive the same
+    /// way: a paused video in a window still on screen must not be released.
+    @ObservationIgnored private(set) var isSystemPictureInPictureActive = false
+    var hasPictureInPicture: Bool { isPictureInPictureActive || isSystemPictureInPictureActive }
 
     @ObservationIgnored private weak var controller: AVPlayerViewController?
     @ObservationIgnored private var pipCanvas: WatchPlayerCanvas?
     @ObservationIgnored private var pip: AVPictureInPictureController?
     @ObservationIgnored private var pipPossibleObservation: AnyCancellable?
     @ObservationIgnored private var pipTimeout: Task<Void, Never>?
-    @ObservationIgnored private var restoring = false
+    @ObservationIgnored private(set) var restoring = false
     @ObservationIgnored private var statusObservation: AnyCancellable?
     @ObservationIgnored private var prepareTask: Task<Void, Never>?
     @ObservationIgnored private var orientationOwner: UUID?
@@ -215,11 +220,22 @@ final class BauVideoSession: NSObject {
     /// before the first tap fails in the item, not in the probe.
     func prepareIfNeeded() async {
         guard player == nil, status != .failed else { return }
-        if let prepareTask { await prepareTask.value; return }
-        let task = Task { await prepare() }
-        prepareTask = task
-        await task.value
-        prepareTask = nil
+        // The probe is shared by every card that asks for this session, but a
+        // card that scrolls away cancels ITS wait: when nobody is waiting any
+        // more the work is dropped too (and started again by the next card).
+        let task: Task<Void, Never>
+        if let prepareTask {
+            task = prepareTask
+        } else {
+            task = Task { await prepare() }
+            prepareTask = task
+        }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if prepareTask == task { prepareTask = nil }
     }
 
     private func prepare() async {
@@ -228,10 +244,13 @@ final class BauVideoSession: NSObject {
         let player: AVPlayer
         do {
             guard try await asset.load(.isPlayable) else { throw APIError.transport("Not playable") }
+            if Task.isCancelled { return }
             player = AVPlayer(playerItem: item)
             // Paint the first frame as the poster, the web's `#t=0.001`.
             await player.seek(to: CMTime(seconds: 0.001, preferredTimescale: 600))
+            if Task.isCancelled { return }
         } catch {
+            if Task.isCancelled { return }
             status = .failed
             return
         }
@@ -298,6 +317,21 @@ final class BauVideoSession: NSObject {
         guard self.controller === controller else { return }
         controller.player = nil
         self.controller = nil
+    }
+
+    func systemPictureInPictureDidStart() { isSystemPictureInPictureActive = true }
+
+    /// The restore button of the controller's PiP window was tapped.
+    func systemPictureInPictureWillRestore() { restoring = true }
+
+    /// The controller's PiP window closed. Restore, or the card is on screen:
+    /// keep playing. The X button with the card off screen: nobody is watching.
+    func systemPictureInPictureDidStop() {
+        isSystemPictureInPictureActive = false
+        let keep = restoring || isCardVisible
+        restoring = false
+        if !keep { player?.pause() }
+        if player?.timeControlStatus == .paused { BauPlayback.shared.release(self) }
     }
 
     func fullScreenWillBegin() {
@@ -478,6 +512,9 @@ struct BauInlineVideo: View {
     var postID: String?
 
     @State private var session: BauVideoSession?
+    /// Tracked apart from the session: `onAppear` can fire before the task
+    /// below has produced one.
+    @State private var cardVisible = false
 
     private var callActive: Bool { voice.holdsSeat || call.phase.isInRoom }
 
@@ -510,13 +547,26 @@ struct BauInlineVideo: View {
         .accessibilityIdentifier("bau.media.video")
         .task(id: url) {
             let next = BauPlayback.shared.session(for: url, postID: postID)
+            // A refresh re-signs the URL under a card that stays put. The old
+            // session would play on, unseen and unreachable, so it stops,
+            // unless a PiP window or the full screen is deliberately using it.
+            if let old = session, old !== next, !old.hasPictureInPicture, !old.isFullScreen {
+                old.stopCompletely()
+            }
             session = next
             next.callActive = callActive
+            if cardVisible { next.cardDidAppear() }
             await next.prepareIfNeeded()
         }
         .onChange(of: callActive, initial: true) { _, now in session?.callActive = now }
-        .onAppear { session?.cardDidAppear() }
-        .onDisappear { session?.cardDidDisappear() }
+        .onAppear {
+            cardVisible = true
+            session?.cardDidAppear()
+        }
+        .onDisappear {
+            cardVisible = false
+            session?.cardDidDisappear()
+        }
     }
 }
 
@@ -577,6 +627,7 @@ private struct BauPlayerSurface: UIViewControllerRepresentable {
             restoreUserInterfaceForPictureInPictureStopWithCompletionHandler
                 completionHandler: @escaping (Bool) -> Void
         ) {
+            session.systemPictureInPictureWillRestore()
             BauPlayback.shared.restoreTargetPostID = session.postID
             completionHandler(true)
         }
@@ -584,9 +635,13 @@ private struct BauPlayerSurface: UIViewControllerRepresentable {
         func playerViewControllerDidStopPictureInPicture(
             _ playerViewController: AVPlayerViewController
         ) {
-            // The system's own PiP (backgrounding, the button) closed with
-            // the card off screen: nobody is watching.
-            if !session.isCardVisible { session.player?.pause() }
+            session.systemPictureInPictureDidStop()
+        }
+
+        func playerViewControllerDidStartPictureInPicture(
+            _ playerViewController: AVPlayerViewController
+        ) {
+            session.systemPictureInPictureDidStart()
         }
     }
 }
