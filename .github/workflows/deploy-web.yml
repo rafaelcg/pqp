@@ -175,9 +175,6 @@ jobs:
             echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
-          # The default shell is `bash -e` without pipefail, so without this a
-          # failed wrangler would be hidden behind `tee`'s exit status.
-          set -o pipefail
           TMP="$(mktemp -d)"
           (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
           cd "$GITHUB_WORKSPACE/client"
@@ -186,9 +183,16 @@ jobs:
           # checkout pinned to a SHA is a detached HEAD, which it reports as
           # "head": every deploy after #385 went to the head.pqp-3yr.pages.dev
           # preview and production sat on the last push-triggered build.
-          "$TMP/node_modules/.bin/wrangler" pages deploy dist \
-            --project-name=pqp --branch=main --commit-dirty=true \
-            | tee "$RUNNER_TEMP/pages-deploy.log"
+          # Output goes to a file (read by the precache check below) with no
+          # pipe, so a failed wrangler fails this step: the default shell is
+          # `bash -e` without pipefail, and a pipe would report `tee`'s status.
+          LOG="$RUNNER_TEMP/pages-deploy.log"
+          if ! "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+            --project-name=pqp --branch=main --commit-dirty=true >"$LOG" 2>&1; then
+            cat "$LOG"
+            exit 1
+          fi
+          cat "$LOG"
 
       # The middleware is only useful if it is actually in the bundle. A grep is
       # a poor test and a fine tripwire: it fails the deploy on the one mistake
