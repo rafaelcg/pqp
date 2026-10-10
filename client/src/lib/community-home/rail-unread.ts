@@ -3,7 +3,7 @@
  *
  * THE RAIL'S VOCABULARY. A channel with unread messages lights the white pip
  * on the icon's left edge; a red NUMBER on the icon is reserved for mentions,
- * the things addressed to you. A Baú post is news for everybody, so #1005 gave
+ * the things addressed to you. A Baú post is news for everybody, so PR 1005 gave
  * it the plain pip, and that turned out to be far too quiet for the feature
  * the product leads with: a new post looked like any busy channel.
  *
