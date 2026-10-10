@@ -919,6 +919,11 @@ final class VoiceModel {
                 self.isCameraOn = false
                 if self.seatMicrophone != .none {
                     try? await voice.startAudio()
+                    // The track is new and the person's mute is not: without
+                    // this a muted phone was audible after every reconnect
+                    // while the roster still showed it muted.
+                    await voice.setMuted(self.isMuted)
+                    await voice.setDeafened(self.isDeafened)
                 }
                 await session?.realtime.joinVoice(
                     channelId: intendedChannel.id, declaresResume: declaresResume
