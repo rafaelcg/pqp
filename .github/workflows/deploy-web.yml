@@ -175,6 +175,9 @@ jobs:
             echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
+          # The default shell is `bash -e` without pipefail, so without this a
+          # failed wrangler would be hidden behind `tee`'s exit status.
+          set -o pipefail
           TMP="$(mktemp -d)"
           (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
           cd "$GITHUB_WORKSPACE/client"
@@ -209,7 +212,9 @@ jobs:
         run: |
           DEPLOY_URL="$(grep -oE 'https://[a-z0-9-]+\.pqp-3yr\.pages\.dev' "$RUNNER_TEMP/pages-deploy.log" | head -1)"
           if [ -z "$DEPLOY_URL" ]; then
-            echo "::warning::No deployment URL in the wrangler output; checking https://pqp.gg instead"
-            DEPLOY_URL="https://pqp.gg"
+            # Never fall back to pqp.gg: it may still be the previous deploy,
+            # which would test the wrong build.
+            echo "::error::No deployment URL in the wrangler output, so the precache could not be checked"
+            exit 1
           fi
           node "$GITHUB_WORKSPACE/client/scripts/check-precache.mjs" "$DEPLOY_URL" "$GITHUB_WORKSPACE/client/dist/sw.js"

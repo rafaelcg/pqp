@@ -12,8 +12,8 @@
  * answered `/x` with a 404. Only the real origin has Pages' pretty URLs and the
  * middleware together, so this runs after the deploy (`deploy-web.yml`).
  *
- * A deploy can take a few seconds to answer for every file, so each failure is
- * retried before it counts.
+ * A deploy can take a few seconds to answer for every file, so failures are
+ * checked again in a few rounds before they count.
  */
 import { readFileSync } from "node:fs";
 
@@ -31,28 +31,44 @@ if (urls.length === 0) {
   process.exit(1);
 }
 
+const CONCURRENCY = 8;
+const ROUNDS = 5;
+const ROUND_PAUSE_MS = 3000;
+
 async function status(url) {
-  for (let attempt = 0; ; attempt += 1) {
-    let code;
-    try {
-      code = (await fetch(url, { redirect: "follow", cache: "no-store" })).status;
-    } catch (error) {
-      code = String(error?.cause?.code ?? error);
-    }
-    if (code === 200 || attempt === 4) {
-      return code;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+  try {
+    return (await fetch(url, { redirect: "follow", cache: "no-store" })).status;
+  } catch (error) {
+    return String(error?.cause?.code ?? error);
   }
 }
 
-const failed = [];
-for (const path of urls) {
-  const code = await status(`${origin}/${path}`);
-  if (code !== 200) {
-    failed.push(`${path} ${code}`);
+/** Every path's status, at most `CONCURRENCY` requests at once. */
+async function check(paths) {
+  const results = new Map();
+  let next = 0;
+  async function lane() {
+    while (next < paths.length) {
+      const path = paths[next++];
+      results.set(path, await status(`${origin}/${path}`));
+    }
   }
+  await Promise.all(Array.from({ length: CONCURRENCY }, lane));
+  return results;
 }
+
+// Rounds, not per-URL retries: a deploy that is still propagating makes many
+// files fail at once, and one shared pause covers them all.
+let pending = urls;
+let results = new Map();
+for (let round = 0; round < ROUNDS && pending.length > 0; round += 1) {
+  if (round > 0) {
+    await new Promise((resolve) => setTimeout(resolve, ROUND_PAUSE_MS));
+  }
+  results = await check(pending);
+  pending = pending.filter((path) => results.get(path) !== 200);
+}
+const failed = pending.map((path) => `${path} ${results.get(path)}`);
 
 if (failed.length > 0) {
   console.error(
