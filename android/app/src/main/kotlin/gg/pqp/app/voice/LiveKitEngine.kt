@@ -137,6 +137,8 @@ class LiveKitEngine(
      * an empty tile in front of everybody.
      */
     private val onScreenShareEnded: () -> Unit = {},
+    /** The share's game sound started going out (true) or stopped for good (false). */
+    private val onScreenAudioChanged: (Boolean) -> Unit = {},
 ) : VoiceTransport {
 
     /**
@@ -244,7 +246,20 @@ class LiveKitEngine(
     /** The game's sound while a share carries it. See [GameAudioCapture]. */
     @Volatile private var gameAudio: GameAudioCapture? = null
 
-    override val isSharingScreenAudio: Boolean get() = gameAudio != null
+    override val isSharingScreenAudio: Boolean get() = carryingGameAudio()
+
+    /** A moderator holds the microphone. Nothing goes out, game included. */
+    @Volatile private var serverMuted = false
+
+    override fun setSelfServerMuted(muted: Boolean) {
+        if (serverMuted == muted) return
+        serverMuted = muted
+        micTrack?.enabled = micTrackEnabled()
+        scope.launch { applyMuteToPublication() }
+    }
+
+    private fun carryingGameAudio(): Boolean =
+        !serverMuted && gameAudio?.usable == true
 
     /**
      * The microphone's buffer hook while [gameAudio] is attached. The mic
@@ -260,14 +275,16 @@ class LiveKitEngine(
             bytesRead: Int,
             captureTimeNs: Long,
         ): Long {
-            gameAudio?.process(
-                buffer,
-                audioFormat,
-                channelCount,
-                sampleRate,
-                bytesRead,
-                micOn = !(muted || deafened) && canPublishAudio,
-            )
+            if (!serverMuted) {
+                gameAudio?.process(
+                    buffer,
+                    audioFormat,
+                    channelCount,
+                    sampleRate,
+                    bytesRead,
+                    micOn = !(muted || deafened) && canPublishAudio,
+                )
+            }
             return captureTimeNs
         }
     }
@@ -1218,7 +1235,7 @@ class LiveKitEngine(
      * [gameAudioHook] in that second case, so the publication stays live
      * without anyone hearing the room they muted themselves from.
      */
-    private fun sendingAudio(): Boolean = !(muted || deafened) || gameAudio != null
+    private fun sendingAudio(): Boolean = !(muted || deafened) || carryingGameAudio()
 
     private fun micTrackEnabled(): Boolean = canPublishAudio && sendingAudio()
 
@@ -1447,7 +1464,18 @@ class LiveKitEngine(
     private fun attachGameAudio(track: LocalScreencastVideoTrack) {
         if (!gameAudioSupported()) return
         val projection = (track.capturer as? ScreenCapturerAndroid)?.mediaProjection ?: return
-        gameAudio = GameAudioCapture(projection)
+        lateinit var capture: GameAudioCapture
+        capture = GameAudioCapture(projection) { live ->
+            // Off the setup or microphone thread, and only for the share
+            // that is still current.
+            scope.launch {
+                if (gameAudio !== capture) return@launch
+                micTrack?.enabled = micTrackEnabled()
+                applyMuteToPublication()
+                onScreenAudioChanged(live && carryingGameAudio())
+            }
+        }
+        gameAudio = capture
         micTrack?.setAudioBufferCallback(gameAudioHook)
         micTrack?.enabled = micTrackEnabled()
         scope.launch { applyMuteToPublication() }
@@ -1460,6 +1488,7 @@ class LiveKitEngine(
         capture.release()
         micTrack?.enabled = micTrackEnabled()
         scope.launch { applyMuteToPublication() }
+        onScreenAudioChanged(false)
     }
 
     override fun stopScreenShare() {

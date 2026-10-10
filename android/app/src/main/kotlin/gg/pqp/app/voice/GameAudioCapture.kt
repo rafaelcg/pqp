@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Executors
 
 /** Whether this device can carry a game's sound in a screen share at all. */
 fun gameAudioSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
@@ -33,29 +34,54 @@ fun gameAudioSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES
  * (`USAGE_VOICE_COMMUNICATION`, which is what this app's own call plays as)
  * are never capturable, so the room does not hear itself back.
  *
- * [process] runs on the microphone thread every 10 ms and [release] on the main
- * thread, so both take [lock]. The recorder is built lazily from the first
- * buffer's own format, because that is the only reliable statement of what the
- * microphone is producing (sample rate and channel count differ by device).
+ * ### Threads
+ *
+ * [process] runs on the microphone thread every 10 ms and must never wait on
+ * anything slow. The recorder is built from the first buffer's own format
+ * (the only reliable statement of what the microphone produces), but on
+ * [setup], a thread of its own: building and starting an `AudioRecord` can take
+ * longer than a buffer, and doing it inline would put a gap in the presenter's
+ * voice. Until it is live, buffers pass through with only the mute applied.
+ *
+ * [onStatus] is told `true` once the recorder runs and `false` once it has
+ * failed for good, so the call bar never claims a sound that is not going out.
+ * It is called from the setup thread or the microphone thread; the receiver
+ * posts it wherever it needs to go.
  */
-class GameAudioCapture(private val projection: MediaProjection) {
+class GameAudioCapture(
+    private val projection: MediaProjection,
+    private val onStatus: (live: Boolean) -> Unit = {},
+) {
     private val lock = Any()
+    private val setup = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "pqp-game-audio-setup")
+    }
+
+    // Everything below is guarded by [lock].
     private var record: AudioRecord? = null
     private var ring: PcmRing? = null
-    private var recordFormat: Pair<Int, Int>? = null
-    private var failed = false
+    /** The format [record] was built for, or is being built for. */
+    private var wantedFormat: Pair<Int, Int>? = null
     private var released = false
-
     private var scratch = ShortArray(0)
     private var mic = ShortArray(0)
     private var game = ShortArray(0)
+
+    /**
+     * False once capture can no longer produce anything this share: the
+     * platform refused the recorder, or the recorder died. The engines read
+     * it to decide whether the microphone track still has a reason to stay on
+     * while the person is muted.
+     */
+    @Volatile var usable: Boolean = true
+        private set
 
     /**
      * Mix whatever game audio is waiting into one microphone buffer, in place.
      *
      * [micOn] false zeroes the microphone half (see [mixPcm16]); that holds
      * even when there is no game audio to add, because the caller keeps the
-     * track enabled for as long as this object is attached.
+     * track enabled for as long as this object is attached and usable.
      */
     fun process(
         buffer: ByteBuffer,
@@ -66,9 +92,10 @@ class GameAudioCapture(private val projection: MediaProjection) {
         micOn: Boolean,
     ) {
         if (bytesRead <= 0) return
-        if (audioFormat != AudioFormat.ENCODING_PCM_16BIT) {
-            // Never seen from either build, which record 16-bit. Mixing a
-            // format we did not expect would be noise; the mute still holds.
+        if (audioFormat != AudioFormat.ENCODING_PCM_16BIT || !usable) {
+            // A format we did not expect (never seen from either build, which
+            // record 16-bit) or a capture that has died. Mixing would be
+            // noise; the mute still holds.
             if (!micOn) zero(buffer, bytesRead)
             return
         }
@@ -78,7 +105,7 @@ class GameAudioCapture(private val projection: MediaProjection) {
                 if (!micOn) zero(buffer, bytesRead)
                 return
             }
-            ensureRecord(sampleRate, channelCount)
+            requestRecord(sampleRate, channelCount)
             val gameCount = drainInto(count)
 
             val shorts = buffer.duplicate().apply { position(0) }
@@ -94,15 +121,72 @@ class GameAudioCapture(private val projection: MediaProjection) {
 
     /** Stop and hand the recorder back. Safe to call more than once. */
     fun release() {
-        synchronized(lock) {
+        val old = synchronized(lock) {
             released = true
-            record?.let { recorder ->
-                runCatching { recorder.stop() }
-                runCatching { recorder.release() }
-            }
-            record = null
             ring?.clear()
+            record.also { record = null }
         }
+        // Stopping a recorder can block; it goes on the setup thread, which
+        // also means a build still in flight finishes (and is released by the
+        // `released` check) before this runs.
+        runCatching {
+            setup.execute {
+                old?.let(::dispose)
+            }
+        }.onFailure { old?.let(::dispose) }
+        setup.shutdown()
+    }
+
+    /**
+     * Ask for a recorder in this format, once per format. Caller holds [lock].
+     *
+     * A format change (a route change can do it) rebuilds rather than mixing
+     * samples at the wrong rate; the old recorder keeps feeding nothing in the
+     * meantime because [drainInto] only reads a recorder of the wanted format.
+     */
+    private fun requestRecord(sampleRate: Int, channelCount: Int) {
+        val format = sampleRate to channelCount
+        if (wantedFormat == format) return
+        wantedFormat = format
+        val stale = record
+        record = null
+        ring = null
+        runCatching {
+            setup.execute { build(format, stale) }
+        }.onFailure { stale?.let(::dispose) }
+    }
+
+    /** On [setup]. Builds the recorder and publishes it under [lock]. */
+    private fun build(format: Pair<Int, Int>, stale: AudioRecord?) {
+        stale?.let(::dispose)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            // The engines never attach one below 10; this is the guard.
+            fail("playback capture needs Android 10")
+            return
+        }
+        val built = createRecord(format.first, format.second)
+        if (built == null) {
+            fail("the platform refused the playback capture recorder")
+            return
+        }
+        val published = synchronized(lock) {
+            if (released || wantedFormat != format) {
+                false
+            } else {
+                record = built
+                ring = PcmRing(gameAudioRingCapacity(format.first, format.second))
+                // 20 ms per read: two microphone buffers' worth.
+                scratch = ShortArray(maxOf(2, format.first / 50 * maxOf(1, format.second)))
+                true
+            }
+        }
+        if (!published) {
+            // Released, or the format moved again while this was building.
+            dispose(built)
+            return
+        }
+        Log.i(TAG, "game audio capture started at ${format.first}Hz x${format.second}")
+        onStatus(true)
     }
 
     /** Pull everything the recorder has into the ring, then take [count] out. */
@@ -114,7 +198,18 @@ class GameAudioCapture(private val projection: MediaProjection) {
         // buffer can ever be owed.
         for (attempt in 0 until 4) {
             val read = recorder.read(scratch, 0, scratch.size, AudioRecord.READ_NON_BLOCKING)
-            if (read <= 0) break
+            if (read < 0) {
+                // ERROR_DEAD_OBJECT and friends: this recorder will never
+                // produce again. Hand it back and say so, rather than reading
+                // a corpse every 10 ms for the rest of the share.
+                Log.w(TAG, "game audio capture died: read returned $read")
+                record = null
+                ring = null
+                runCatching { setup.execute { dispose(recorder) } }
+                markFailed()
+                return 0
+            }
+            if (read == 0) break
             queue.write(scratch, read)
             // A short read means the recorder is empty for now.
             if (read < scratch.size) break
@@ -123,35 +218,16 @@ class GameAudioCapture(private val projection: MediaProjection) {
         return queue.read(game, count)
     }
 
-    private fun ensureRecord(sampleRate: Int, channelCount: Int) {
-        if (failed) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // The engines never attach one below 10; this is the guard.
-            failed = true
-            return
-        }
-        buildRecord(sampleRate, channelCount)
-    }
-
     @RequiresApi(Build.VERSION_CODES.Q)
     @SuppressLint("MissingPermission") // RECORD_AUDIO is held for the call itself.
-    private fun buildRecord(sampleRate: Int, channelCount: Int) {
-        val format = sampleRate to channelCount
-        if (record != null && recordFormat == format) return
-        // The microphone changed format under us (a route change can do it).
-        // Rebuild rather than mix samples at the wrong rate.
-        record?.let { old ->
-            runCatching { old.stop() }
-            runCatching { old.release() }
-        }
-        record = null
-
+    private fun createRecord(sampleRate: Int, channelCount: Int): AudioRecord? {
         val channelMask = if (channelCount == 2) {
             AudioFormat.CHANNEL_IN_STEREO
         } else {
             AudioFormat.CHANNEL_IN_MONO
         }
-        val built = runCatching {
+        var candidate: AudioRecord? = null
+        return runCatching {
             val config = AudioPlaybackCaptureConfiguration.Builder(projection)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -166,7 +242,7 @@ class GameAudioCapture(private val projection: MediaProjection) {
                 AudioFormat.ENCODING_PCM_16BIT,
             )
             val ringSamples = gameAudioRingCapacity(sampleRate, channelCount)
-            AudioRecord.Builder()
+            val recorder = AudioRecord.Builder()
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -177,26 +253,41 @@ class GameAudioCapture(private val projection: MediaProjection) {
                 .setBufferSizeInBytes(maxOf(minimum, ringSamples * 2))
                 .setAudioPlaybackCaptureConfig(config)
                 .build()
-                .also { recorder ->
-                    check(recorder.state == AudioRecord.STATE_INITIALIZED) {
-                        "playback capture recorder did not initialise"
-                    }
-                    recorder.startRecording()
-                }
+            candidate = recorder
+            check(recorder.state == AudioRecord.STATE_INITIALIZED) {
+                "playback capture recorder did not initialise"
+            }
+            recorder.startRecording()
+            check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                "playback capture recorder did not start"
+            }
+            recorder
         }.getOrElse { error ->
-            // One attempt per share. A recorder that refused once will refuse
-            // every 10 ms, and the share is worth more silent than spamming.
             Log.w(TAG, "game audio capture unavailable: ${error.message}")
-            failed = true
-            return
+            // Built but not started is still native audio resources held.
+            candidate?.let(::dispose)
+            null
         }
+    }
 
-        record = built
-        recordFormat = format
-        ring = PcmRing(gameAudioRingCapacity(sampleRate, channelCount))
-        // 20 ms per read: two microphone buffers' worth.
-        scratch = ShortArray(maxOf(2, sampleRate / 50 * maxOf(1, channelCount)))
-        Log.i(TAG, "game audio capture started at ${sampleRate}Hz x$channelCount")
+    /**
+     * One attempt per share. A recorder that refused once will refuse every
+     * time, and the share is worth more silent than retrying in a loop.
+     */
+    private fun fail(reason: String) {
+        Log.w(TAG, "game audio off for this share: $reason")
+        markFailed()
+    }
+
+    private fun markFailed() {
+        if (!usable) return
+        usable = false
+        onStatus(false)
+    }
+
+    private fun dispose(recorder: AudioRecord) {
+        runCatching { recorder.stop() }
+        runCatching { recorder.release() }
     }
 
     private fun zero(buffer: ByteBuffer, bytes: Int) {

@@ -77,6 +77,13 @@ interface VoiceTransport {
      */
     val isSharingScreenAudio: Boolean
 
+    /**
+     * A moderator holds this device's microphone. Separate from [setMuted]
+     * because the two differ while a share carries the game's sound: a
+     * self-mute keeps the game going out, a moderator's mute stops everything.
+     */
+    fun setSelfServerMuted(muted: Boolean)
+
     fun start(localPeerId: String, ice: List<IceServer>)
 
     /**

@@ -311,6 +311,7 @@ class VoiceController(
         // Posted rather than run inline: this arrives on the projection's own
         // callback thread, from inside the capturer we are about to dispose.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
+        onScreenAudioChanged = ::onScreenAudioChanged,
     )
 
     /**
@@ -365,6 +366,7 @@ class VoiceController(
         // "Stop sharing" chip and a refused publish both have to take the
         // roster claim down with them.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
+        onScreenAudioChanged = ::onScreenAudioChanged,
         onFailed = { failure -> onSfuFailure(failure) },
         onConnected = {
             // Only now is the call actually a call. `welcome` arrived long
@@ -817,6 +819,8 @@ class VoiceController(
             return
         }
 
+        // The game's sound is claimed only once its recorder is running; see
+        // [onScreenAudioChanged].
         _state.value = _state.value.copy(
             sharingScreen = true,
             sharingScreenAudio = engine.isSharingScreenAudio,
@@ -837,6 +841,17 @@ class VoiceController(
                 put("audioStreamId", JsonNull)
             },
         )
+    }
+
+    /**
+     * The share's game sound went live, or failed for good. Engines post this
+     * on [scope]; a stale one after the share ended is ignored.
+     */
+    private fun onScreenAudioChanged(live: Boolean) {
+        val current = _state.value
+        if (live && !current.sharingScreen) return
+        if (current.sharingScreenAudio == live) return
+        _state.value = current.copy(sharingScreenAudio = live)
     }
 
     fun stopScreenShare() {
@@ -1339,6 +1354,9 @@ class VoiceController(
             .copy(participants = participants)
             .absorbServerMute(participants, before.localPeerId)
         _state.value = after
+        // Every roster, not only on a change: a promotion hands over a fresh
+        // engine that starts out knowing nothing.
+        engine.setSelfServerMuted(after.serverMuted)
         if (after.muted != before.muted) {
             // Forced on by a moderator. Not pushed back over the socket: the
             // server already holds us as muted, which is how we got here, and

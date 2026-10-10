@@ -108,6 +108,8 @@ class VoiceEngine(
     private val onRemoteCamera: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
     /** The person stopped the share from the system UI rather than from ours. */
     private val onScreenShareEnded: () -> Unit = {},
+    /** The share's game sound started going out (true) or stopped for good (false). */
+    private val onScreenAudioChanged: (Boolean) -> Unit = {},
 ) : VoiceTransport {
     private var factory: PeerConnectionFactory? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
@@ -184,10 +186,22 @@ class VoiceEngine(
      */
     @Volatile private var gameAudio: GameAudioCapture? = null
 
-    override val isSharingScreenAudio: Boolean get() = gameAudio != null
+    override val isSharingScreenAudio: Boolean get() = carryingGameAudio()
 
     /** The person wants to be heard: not muted, not deafened. */
     @Volatile private var micWanted = true
+
+    /** A moderator holds the microphone. Nothing goes out, game included. */
+    @Volatile private var serverMuted = false
+
+    override fun setSelfServerMuted(muted: Boolean) {
+        if (serverMuted == muted) return
+        serverMuted = muted
+        applyLocalAudio()
+    }
+
+    private fun carryingGameAudio(): Boolean =
+        !serverMuted && gameAudio?.usable == true
 
     /** For a renderer: the same GL context the decoders draw into. */
     private val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
@@ -273,13 +287,15 @@ class VoiceEngine(
                 // The one seam where a share's game audio can join the call:
                 // see [GameAudioCapture]. A no-op unless a share attached it.
                 .setAudioBufferCallback { buffer, format, channels, rate, bytes, captureTimeNs ->
-                    gameAudio?.process(
+                    // A moderator's mute leaves the track disabled, so nothing
+                    // mixed here is sent; skipping is only the cheaper path.
+                    if (!serverMuted) gameAudio?.process(
                         buffer,
                         format,
                         channels,
                         rate,
                         bytes,
-                        micOn = micWanted && canPublishAudio,
+                        micOn = micWanted && canPublishAudio && !serverMuted,
                     )
                     captureTimeNs
                 }
@@ -321,10 +337,12 @@ class VoiceEngine(
      * person is muted, and the buffer callback zeroes the microphone half
      * instead (`micOn` above): muting yourself must not cut the game the room
      * is watching. Without SPEAK nothing goes out at all, game included; the
-     * controller also stops the share in that case.
+     * controller also stops the share in that case. A moderator's mute
+     * ([serverMuted]) silences the game too: it is the room's decision about
+     * this person, not the person's own.
      */
     private fun applyLocalAudio() {
-        localAudio?.setEnabled(canPublishAudio && (micWanted || gameAudio != null))
+        localAudio?.setEnabled(canPublishAudio && (micWanted || carryingGameAudio()))
     }
 
     /**
@@ -638,7 +656,17 @@ class VoiceEngine(
      */
     private fun attachGameAudio(projection: MediaProjection?) {
         if (projection == null || !gameAudioSupported()) return
-        gameAudio = GameAudioCapture(projection)
+        lateinit var capture: GameAudioCapture
+        capture = GameAudioCapture(projection) { live ->
+            // Off the setup or microphone thread, and only for the share
+            // that is still current.
+            scope.launch {
+                if (gameAudio !== capture) return@launch
+                applyLocalAudio()
+                onScreenAudioChanged(live && carryingGameAudio())
+            }
+        }
+        gameAudio = capture
         applyLocalAudio()
     }
 
@@ -647,6 +675,7 @@ class VoiceEngine(
         gameAudio = null
         capture.release()
         applyLocalAudio()
+        onScreenAudioChanged(false)
     }
 
     private fun releaseScreenCapture() {
