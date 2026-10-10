@@ -92,8 +92,12 @@ struct SfuMicrophoneRouting: Equatable, Sendable {
     let micVolume: Float
 
     static func resolve(muted: Bool, appAudioLive: Bool, serverMuted: Bool) -> SfuMicrophoneRouting {
+        // First, and whatever the local flag says: the roster's moderator mute
+        // can land before the model has flipped its own `isMuted`, and that
+        // window must not turn a track the SFU just muted back on.
+        if serverMuted { return SfuMicrophoneRouting(trackEnabled: false, micVolume: 1) }
         if !muted { return SfuMicrophoneRouting(trackEnabled: true, micVolume: 1) }
-        if appAudioLive && !serverMuted {
+        if appAudioLive {
             return SfuMicrophoneRouting(trackEnabled: true, micVolume: 0)
         }
         return SfuMicrophoneRouting(trackEnabled: false, micVolume: 1)

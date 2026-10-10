@@ -50,6 +50,17 @@ final class ScreenShareSocketClient: @unchecked Sendable {
             socketDescriptor, SOL_SOCKET, SO_SNDBUF,
             &sendBuffer, socklen_t(MemoryLayout<Int32>.size)
         )
+        // A ceiling on how long one write may block. Writes hold `lock` (two
+        // writers must not interleave), so a write parked forever on an app
+        // that stopped reading would also park `close()` from
+        // `broadcastFinished()`. With the timeout the stalled write fails, the
+        // caller closes, and the next frame reconnects. Half a second is
+        // fifteen frames: far past any healthy write, short of a frozen share.
+        var sendTimeout = timeval(tv_sec: 0, tv_usec: 500_000)
+        setsockopt(
+            socketDescriptor, SOL_SOCKET, SO_SNDTIMEO,
+            &sendTimeout, socklen_t(MemoryLayout<timeval>.size)
+        )
 
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in

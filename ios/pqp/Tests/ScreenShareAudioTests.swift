@@ -208,9 +208,15 @@ final class ScreenShareAudioTests: XCTestCase {
     }
 
     func testAModeratorsMuteIsNeverWorkedAround() {
-        XCTAssertEqual(
-            SfuMicrophoneRouting.resolve(muted: true, appAudioLive: true, serverMuted: true),
-            SfuMicrophoneRouting(trackEnabled: false, micVolume: 1)
-        )
+        // Including the moment the roster says so before the model has
+        // flipped its own mute: `muted` false must not reopen the track.
+        for muted in [false, true] {
+            for live in [false, true] {
+                XCTAssertEqual(
+                    SfuMicrophoneRouting.resolve(muted: muted, appAudioLive: live, serverMuted: true),
+                    SfuMicrophoneRouting(trackEnabled: false, micVolume: 1)
+                )
+            }
+        }
     }
 }

@@ -50,6 +50,9 @@ actor LiveKitVoiceClient {
     /// A moderator's mute on our own seat, from the roster. Never worked
     /// around, not even to keep a share's sound going.
     private var isSelfServerMuted = false
+    /// This room set the mixer's microphone volume to zero and has not yet
+    /// confirmed it safe to restore. See `applyMicrophoneRouting`.
+    private var isMixerMicSilenced = false
     private var localCamera: LocalVideoTrack?
     /// Attached to our own camera track to count frames. Kept here because a
     /// track holds its renderers strongly and this one has to come off again.
@@ -281,13 +284,39 @@ actor LiveKitVoiceClient {
         )
         let mixer = AudioManager.shared.mixer
         guard let room, room.connectionState == .connected,
-              microphonePublication(in: room) != nil else {
+              let microphone = microphonePublication(in: room) else {
+            // No track to carry anything, so nothing the mixer lets through
+            // can leave this phone.
             mixer.micVolume = 1
+            isMixerMicSilenced = false
             return
         }
-        if routing.micVolume == 0 { mixer.micVolume = 0 }
-        _ = try? await room.localParticipant.setMicrophone(enabled: routing.trackEnabled)
-        if routing.micVolume > 0 { mixer.micVolume = 1 }
+        if routing.micVolume == 0 {
+            mixer.micVolume = 0
+            isMixerMicSilenced = true
+        }
+        if routing.trackEnabled {
+            _ = try? await room.localParticipant.setMicrophone(enabled: true)
+            if routing.micVolume > 0 {
+                mixer.micVolume = 1
+                isMixerMicSilenced = false
+            }
+            return
+        }
+        // Turning the track OFF is the half where a failure leaks speech: the
+        // mixer may be holding a muted person at zero right now, and putting it
+        // back to one over a track that is still on would send what they say.
+        // So the mixer is restored only once the track is confirmed off, by a
+        // mute or, failing that, by taking the publication down. If both fail
+        // the mixer stays at zero, which is still silence.
+        var confirmedOff = (try? await room.localParticipant.setMicrophone(enabled: false)) != nil
+        if !confirmedOff {
+            confirmedOff = (try? await room.localParticipant.unpublish(publication: microphone)) != nil
+        }
+        if confirmedOff {
+            mixer.micVolume = 1
+            isMixerMicSilenced = false
+        }
     }
 
     /// Silences everyone else. The mic is the caller's to mute alongside, and
@@ -413,11 +442,6 @@ actor LiveKitVoiceClient {
     func startScreenShare(quality: VideoQuality) async -> Bool {
         guard let room, room.connectionState == .connected else { return false }
         if localScreen != nil { return true }
-        // The share's sound: the extension forwards it whatever the room, and
-        // this is the only place the gate opens. See `ScreenShareAppAudio`.
-        isAppAudioLive = true
-        ScreenShareAppAudio.shared.setOpen(true)
-        await applyMicrophoneRouting()
         let plan = sfuScreenPlan(quality: quality, participantCount: participantCount)
         let track = LocalVideoTrack.createBufferTrack(
             name: Track.screenShareVideoName,
@@ -429,6 +453,15 @@ actor LiveKitVoiceClient {
         )
         localScreen = track
         screenPlan = plan
+        // The share's sound: the extension forwards it whatever the room, and
+        // this is the only place the gate opens. See `ScreenShareAppAudio`.
+        // Last, and with nothing after the await: everything above happened
+        // without a suspension, so a hangup that lands during the routing
+        // finds a whole share to tear down (gate included) and leaves nothing
+        // stale behind for the next start to trip over.
+        isAppAudioLive = true
+        ScreenShareAppAudio.shared.setOpen(true)
+        await applyMicrophoneRouting()
         return true
     }
 
@@ -495,8 +528,10 @@ actor LiveKitVoiceClient {
     func stopScreenShare() async {
         // Sound first: the gate shuts before the picture goes, and a mute that
         // was only holding the microphone at zero becomes a real one again.
-        ScreenShareAppAudio.shared.setOpen(false)
+        // Only this room's own gate: the idle client of the other kind of call
+        // is stopped too, and must not shut a live share's sound.
         if isAppAudioLive {
+            ScreenShareAppAudio.shared.setOpen(false)
             isAppAudioLive = false
             await applyMicrophoneRouting()
         }
@@ -525,10 +560,11 @@ actor LiveKitVoiceClient {
         // Only when it was this room that set them: the voice channel and the
         // DM call each own one of these clients, and the idle one being
         // cleared must not reach into the live one's share.
-        if isAppAudioLive {
+        if isAppAudioLive || isMixerMicSilenced {
             ScreenShareAppAudio.shared.setOpen(false)
             AudioManager.shared.mixer.micVolume = 1
         }
+        isMixerMicSilenced = false
         isAppAudioLive = false
         isSelfServerMuted = false
         let room = self.room
