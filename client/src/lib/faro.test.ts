@@ -8,7 +8,14 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dropNoisyItems, initFaro, resetFaroForTests, resolveFaroConfig } from "./faro";
+import {
+  DEFAULT_SESSION_SAMPLE_RATE,
+  dropNoisyItems,
+  initFaro,
+  parseSessionSampleRate,
+  resetFaroForTests,
+  resolveFaroConfig,
+} from "./faro";
 
 afterEach(() => {
   resetFaroForTests();
@@ -33,6 +40,7 @@ describe("resolveFaroConfig", () => {
       appName: "pqp-web",
       appVersion: "dev",
       environment: "production",
+      sessionSampleRate: DEFAULT_SESSION_SAMPLE_RATE,
     });
   });
 
@@ -48,7 +56,25 @@ describe("resolveFaroConfig", () => {
       appName: "pqp-web",
       appVersion: "deadbeef",
       environment: "production",
+      sessionSampleRate: DEFAULT_SESSION_SAMPLE_RATE,
     });
+  });
+});
+
+describe("parseSessionSampleRate", () => {
+  it("defaults to a share that fits the free plan's monthly sessions", () => {
+    expect(parseSessionSampleRate(undefined)).toBe(DEFAULT_SESSION_SAMPLE_RATE);
+    expect(parseSessionSampleRate("")).toBe(DEFAULT_SESSION_SAMPLE_RATE);
+    expect(DEFAULT_SESSION_SAMPLE_RATE).toBeLessThan(1);
+  });
+
+  it("takes a rate between 0 and 1, and nothing else", () => {
+    expect(parseSessionSampleRate("0.5")).toBe(0.5);
+    expect(parseSessionSampleRate("1")).toBe(1);
+    expect(parseSessionSampleRate("0")).toBe(0);
+    expect(parseSessionSampleRate("1.5")).toBe(DEFAULT_SESSION_SAMPLE_RATE);
+    expect(parseSessionSampleRate("-0.1")).toBe(DEFAULT_SESSION_SAMPLE_RATE);
+    expect(parseSessionSampleRate("half")).toBe(DEFAULT_SESSION_SAMPLE_RATE);
   });
 });
 
@@ -88,6 +114,10 @@ describe("initFaro", () => {
     expect(config.instrumentations.length).toBeGreaterThan(0);
     // The volume guard is wired in.
     expect((config as { beforeSend?: unknown }).beforeSend).toBe(dropNoisyItems);
+    // And sessions are sampled, so the plan's monthly allowance is not spent by the 9th.
+    expect(
+      (config as { sessionTracking?: { samplingRate?: number } }).sessionTracking?.samplingRate,
+    ).toBe(DEFAULT_SESSION_SAMPLE_RATE);
     // No user identity is ever attached (PII posture).
     expect(config.user).toBeUndefined();
   });
