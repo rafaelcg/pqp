@@ -137,15 +137,13 @@ internal fun refusalText(refusal: BauRefusal): String = when (refusal) {
 fun BauComposeDialog(
     session: SessionStore,
     serverId: String,
-    /** A new number per opening, so every composer starts from an empty draft. */
-    composeSession: Int,
     config: CommunityHomeConfig,
     onDismiss: () -> Unit,
     onPosted: () -> Unit,
 ) {
     val context = LocalContext.current
     val model: BauComposeViewModel = viewModel(
-        key = "bau-compose-$serverId-$composeSession",
+        key = "bau-compose-$serverId",
         factory = BauComposeViewModel.factory(session, serverId, ContentBauFiles(context)),
     )
     val state by model.state.collectAsStateWithLifecycle()
@@ -153,7 +151,11 @@ fun BauComposeDialog(
     var confirmDiscard by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.posted) {
-        if (state.posted) onPosted()
+        if (state.posted) {
+            // Emptied before the next opening, so a posted flag never closes it.
+            model.reset()
+            onPosted()
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->

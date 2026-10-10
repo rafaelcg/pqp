@@ -242,6 +242,13 @@ class BauComposeViewModel(
     fun discard() {
         if (_state.value.posting) return
         dropMedia()
+        _state.value = BauComposeState()
+    }
+
+    /** After a post landed: the next opening starts from an empty draft. */
+    fun reset() {
+        dropMedia()
+        _state.value = BauComposeState()
     }
 
     /** True when closing would throw something away. */
