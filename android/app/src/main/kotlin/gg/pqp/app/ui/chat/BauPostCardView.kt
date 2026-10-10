@@ -96,7 +96,8 @@ fun rememberBauCardState(api: ApiClient, selection: BauCardSelection?): BauCardS
     val postId = selection.link.postId
     val lang = remember { Locale.getDefault().language }
     val cache: BauCardCache = remember(api) { BauCards.of(api) }
-    val state by produceState<BauCardState>(BauCardState.Loading, cache, serverId, postId, lang) {
+    val key = "$serverId:$postId:$lang"
+    val keyed by produceState<Pair<String, BauCardState>>(key to BauCardState.Loading, cache, key) {
         // A miss is a 404 or a network failure and looks the same from here, so
         // a row that stays on screen asks again, twice, after the cache's miss
         // window. Otherwise a phone that was offline when the row appeared
@@ -105,14 +106,17 @@ fun rememberBauCardState(api: ApiClient, selection: BauCardSelection?): BauCardS
         while (true) {
             val card = cache.load(serverId, postId, lang)
             if (card != null) {
-                value = BauCardState.Ready(card)
+                value = key to BauCardState.Ready(card)
                 return@produceState
             }
-            value = BauCardState.Unavailable
+            value = key to BauCardState.Unavailable
             if (++attempt > RETRIES) return@produceState
             delay(BauCardCache.MISS_TTL_MS + 1_000)
         }
     }
+    // A row reused for another post (an edit, a recycled key) must not show the
+    // previous post's card while the new one loads.
+    val state = if (keyed.first == key) keyed.second else BauCardState.Loading
     return state
 }
 
