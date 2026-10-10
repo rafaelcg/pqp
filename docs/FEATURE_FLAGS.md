@@ -139,6 +139,19 @@ byte. Turn it on for one server with `PUT /api/admin/flag-overrides
 interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
 `docs/WATCH_PARTY.md` §"How many people watched".
 
+Born as a flag (no old reader): `VOICE_AUDIO_SELF_HEAL`
+(`voice_audio_self_heal`, default **on**, global, client-only), the web call
+watching its own audio and repairing it (`client/src/lib/audio-health.ts`): a
+voice the local meter hears that the room never gets, a voice the SFU says is
+talking that never arrives, an element the browser will not play, a speaker
+that went away. Quiet repairs first (re-attach the track, reopen the mic,
+replay, resubscribe or restart the path), then a card with "Arrumar". Served as
+`audioSelfHeal` on the global `GET /api/voice/config`; off stops it on the next
+config refresh, mid-call, no reload. The same answer is the client's proof that
+the API takes `mediaQuality.audioHealth` on a call rating, which feeds
+`callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
+event `voice.audioHealth`.
+
 Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
 default off, **per server**, client-only), the presenter's camera held to the
 film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),

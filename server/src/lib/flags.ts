@@ -410,6 +410,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
   },
+  voice_audio_self_heal: {
+    description:
+      "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",
+    env: "VOICE_AUDIO_SELF_HEAL",
+    parseEnv: onUnlessOff,
+    // On: the repairs are the ones the call already does on its own (reopen
+    // the mic, replay an element, resubscribe, ICE restart), each bounded per
+    // call, and the off switch is here for a misfire seen live. Global, not
+    // per server: half of the reports are DM calls, which have no server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (audioSelfHeal)",
+  },
   watch_now_banner: {
     description:
       "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",

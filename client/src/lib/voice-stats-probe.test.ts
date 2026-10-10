@@ -582,3 +582,32 @@ describe("subscribeVoiceStats", () => {
     }
   });
 });
+
+describe("summariseAudioStats", () => {
+  it("reads every audio copy with the track feeding it, and differences the counters", async () => {
+    const { summariseAudioStats } = await import("./voice-stats-probe");
+    const marks = new Map<string, number>();
+    const report = (sent: number, energy: number, received: number) => [
+      { id: "out-a", type: "outbound-rtp", kind: "audio", mediaSourceId: "src-a", packetsSent: sent },
+      { id: "src-a", type: "media-source", kind: "audio", trackIdentifier: "mic-1", audioLevel: 0.2, totalAudioEnergy: energy },
+      { id: "in-a", type: "inbound-rtp", kind: "audio", trackIdentifier: "bob-mic", packetsReceived: received, audioLevel: 0.05 },
+      { id: "out-v", type: "outbound-rtp", kind: "video", packetsSent: 999 },
+    ];
+    const first = summariseAudioStats("bob", report(100, 0.01, 50), marks);
+    expect(first.senders).toEqual([
+      { peerId: "bob", trackId: "mic-1", packetsDelta: null, audioLevel: 0.2, energyDelta: null },
+    ]);
+    expect(first.receivers).toEqual([
+      { peerId: "bob", trackId: "bob-mic", packetsDelta: null, audioLevel: 0.05 },
+    ]);
+    const second = summariseAudioStats("bob", report(200, 0.015, 50), marks);
+    expect(second.senders[0]!.packetsDelta).toBe(100);
+    expect(second.senders[0]!.energyDelta).toBeCloseTo(0.005);
+    expect(second.receivers[0]!.packetsDelta).toBe(0);
+    // A counter going backwards is a new connection under the same key: no
+    // reading, rather than a negative one.
+    const third = summariseAudioStats("bob", report(5, 0.001, 1), marks);
+    expect(third.senders[0]!.packetsDelta).toBeNull();
+    expect(third.receivers[0]!.packetsDelta).toBeNull();
+  });
+});

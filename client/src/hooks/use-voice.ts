@@ -185,6 +185,19 @@ import {
   type MicFault,
 } from "@/lib/mic-health";
 import { reportFaroEvent } from "@/lib/faro";
+import type { AudioHealthPrompt } from "@/lib/audio-health";
+import {
+  createAudioHealthMonitor,
+  registerAudioHealthSummary,
+  type AudioHealthView,
+} from "@/lib/audio-health-monitor";
+import {
+  replayAllPlayback,
+  stuckPlaybackCount,
+  takeOutputMissingEvents,
+} from "@/lib/audio-playback-health";
+import { audioSelfHealEnabled } from "@/lib/audio-self-heal-flag";
+import { subscribeVoiceStats } from "@/lib/voice-stats-probe";
 import {
   joinLeaveAutoMuteEnabled,
   shouldSuppressJoinLeaveSound,
@@ -204,6 +217,14 @@ const JOIN_TIMEOUT_MS = 12_000;
  * toward 1s, which is a late open, not a stuck one.
  */
 const VOICE_ACTIVITY_POLL_MS = 50;
+/**
+ * How often the audio self-repair reads the local meter to learn whether this
+ * person spoke since the last stats tick (`lib/audio-health.ts`). An interval
+ * rather than the speaking loop's frame, because the frame stops on a hidden
+ * tab and people talk with this app in the background; Chrome clamps a hidden
+ * interval toward 1s, which is still a reading every stats tick.
+ */
+const AUDIO_HEALTH_LEVEL_POLL_MS = 250;
 /**
  * `welcome` to media up on an SFU room. This used to share the 12s above,
  * which was sized for a handful of peers. On 2026-09-05 a ~90-person watch
@@ -381,6 +402,14 @@ export interface VoiceState {
    * always starts able to show it again.
    */
   micFallback: MicFallbackNotice | null;
+  /**
+   * The audio self-repair's card (`lib/audio-health.ts`): `mic` when our
+   * voice stopped reaching the room and the quiet repairs did not bring it
+   * back, `hearing` when the call stopped playing here, `micUnavailable` when
+   * the call was joined without a microphone. Null otherwise, with
+   * `voice_audio_self_heal` off, and after the card was closed for the call.
+   */
+  audioHealthPrompt: AudioHealthPrompt | null;
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
   speakingPeerIds: string[];
@@ -1808,6 +1837,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     errorKind: null,
     notice: null,
     micFallback: null,
+    audioHealthPrompt: null,
     voiceChannelId: null,
     self: null,
     speakingPeerIds: [],
@@ -2847,6 +2877,192 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /**
+   * THE AUDIO SELF-REPAIR (`lib/audio-health.ts`, `lib/audio-health-monitor.ts`).
+   *
+   * `watchCurrentMic` above catches the faults a browser announces. This
+   * catches the ones it does not: a voice the local meter hears and the room
+   * never gets, a voice the SFU says is talking that never arrives here, an
+   * element the browser will not play, an output device that went away. It
+   * rides the one shared stats poll (`subscribeVoiceStats`), which the call
+   * rating already keeps running for the length of every call, so it adds no
+   * scan of its own; the only new clock is a quarter-second read of the local
+   * meter. Everything is behind `voice_audio_self_heal`, read every tick, so
+   * turning it off from the dashboard stops it mid-call.
+   */
+  /** The listen-only fallback took the call: opening a microphone failed. */
+  let micUnavailable = false;
+  /** Which call the monitor's tally belongs to (a new peer id is a new call). */
+  let audioHealthPeerId: string | null = null;
+  /**
+   * The card's own rejoin (`rejoinWithMic`) is the same call to the person
+   * and to the tally: the tap has to be counted against the episode it
+   * repaired, not lost with a tally reset.
+   */
+  let audioHealthCarryOverUntil = 0;
+  let audioHealthUnsubscribe: (() => void) | null = null;
+  let audioHealthLevelTimer: ReturnType<typeof setInterval> | null = null;
+
+  function audioHealthView(): AudioHealthView {
+    const micTrack = pipeline?.processedStream.getAudioTracks()[0] ?? null;
+    const channelId = state.voiceChannelId;
+    const roster = new Map(
+      (channelId ? (state.occupancy[channelId] ?? []) : []).map((p) => [p.peerId, p]),
+    );
+    // The microphone rides in the share's mix and its own publication is
+    // muted on purpose (`publicationShouldBeMuted`): nothing to judge.
+    const mixing = Boolean(screenMix && state.isSharingMic);
+    const expectSending =
+      pipeline !== null &&
+      state.isTransmitting &&
+      state.canSpeak &&
+      !state.isMuted &&
+      !state.isDeafened &&
+      !mixing &&
+      (!state.usingSfu || !publicationShouldBeMuted());
+    return {
+      connected: state.status === "connected",
+      usingSfu: state.usingSfu,
+      expectSending,
+      micTrack: micTrack ? { id: micTrack.id, readyState: micTrack.readyState } : null,
+      micUnavailable: micUnavailable && pipeline === null && !audienceSeat && state.canSpeak,
+      sharingScreen: state.isSharingScreen,
+      sfuMissingPublication: Boolean(
+        sfu &&
+          state.usingSfu &&
+          pipeline &&
+          state.canSpeak &&
+          sfu.isConnected() &&
+          sfu.hasMicPublication?.() === false,
+      ),
+      deafened: state.isDeafened,
+      peers: state.remotePeers.map((peer) => {
+        const participant = roster.get(peer.peerId);
+        const key = peer.userId ?? peer.peerId;
+        return {
+          peerId: peer.peerId,
+          connected: peer.connectionState === "connected",
+          expectAudio:
+            !state.isDeafened &&
+            participant !== undefined &&
+            !participant.muted &&
+            participant.canSpeak !== false &&
+            !state.serverMutedPeerIds.includes(peer.peerId) &&
+            !state.speakLockedPeerIds.includes(peer.peerId) &&
+            (state.peerVolumes[key] ?? 1) > 0,
+          micTrackId: peer.stream?.getAudioTracks()[0]?.id ?? null,
+        };
+      }),
+    };
+  }
+
+  const audioHealth = createAudioHealthMonitor({
+    view: audioHealthView,
+    actions: {
+      async reattachMic() {
+        if (!pipeline) {
+          return;
+        }
+        if (manager) {
+          await manager.replaceLocalTrack(pipeline.processedStream);
+        }
+        if (sfu) {
+          await sfu.replaceTrack(pipeline.processedStream);
+          sfuPublicationMuted = null;
+          await applyPublicationMute();
+        }
+      },
+      async reopenMic() {
+        await swapPipeline("Failed to reopen microphone");
+      },
+      async publishMic() {
+        await publishMicWhenAllowed();
+      },
+      async rejoinWithMic() {
+        const channelId = state.voiceChannelId;
+        if (!channelId || state.status !== "connected") {
+          return;
+        }
+        // Bounded: a rejoin that never lands must not glue the next,
+        // unrelated call onto this one's tally.
+        audioHealthCarryOverUntil = Date.now() + 30_000;
+        await retakeSeatWithMicrophone(channelId);
+      },
+      async restartInbound(peerId: string) {
+        if (state.usingSfu) {
+          await sfu?.resubscribeVoice?.(peerId);
+        } else {
+          await manager?.retryPeer(peerId);
+        }
+      },
+      replayPlayback: replayAllPlayback,
+      stuckPlayback: stuckPlaybackCount,
+      takeOutputMissing: takeOutputMissingEvents,
+    },
+    onPrompt(prompt) {
+      if (state.audioHealthPrompt !== prompt) {
+        state.audioHealthPrompt = prompt;
+        emit();
+      }
+    },
+    report(event) {
+      reportFaroEvent("voice.audioHealth", {
+        kind: event.kind,
+        outcome: event.outcome,
+        transport: event.transport,
+        ...(event.reason ? { reason: event.reason } : {}),
+      });
+    },
+  });
+  // The rating reads the tally of the call that just ended.
+  registerAudioHealthSummary(() => audioHealth.summary());
+
+  function startAudioHealth() {
+    if (audioHealthUnsubscribe || state.status !== "connected") {
+      return;
+    }
+    if (state.peerId !== audioHealthPeerId) {
+      if (Date.now() > audioHealthCarryOverUntil) {
+        audioHealth.reset();
+      }
+      audioHealthCarryOverUntil = 0;
+      audioHealthPeerId = state.peerId;
+    }
+    audioHealthUnsubscribe = subscribeVoiceStats((snapshot) => {
+      if (!audioSelfHealEnabled()) {
+        audioHealth.hidePrompt();
+        return;
+      }
+      void audioHealth.sample(snapshot.audio);
+    });
+    const timer = setInterval(() => {
+      if (
+        !pipeline ||
+        !state.isTransmitting ||
+        typeof pipeline.analyser.getByteFrequencyData !== "function"
+      ) {
+        return;
+      }
+      if (readAnalyserLevel(pipeline.analyser) >= SPEAKING_THRESHOLD) {
+        audioHealth.noteLocalSpeaking();
+      }
+    }, AUDIO_HEALTH_LEVEL_POLL_MS);
+    if (typeof timer === "object" && timer !== null && "unref" in timer) {
+      (timer as { unref: () => void }).unref();
+    }
+    audioHealthLevelTimer = timer;
+  }
+
+  function stopAudioHealth() {
+    audioHealthUnsubscribe?.();
+    audioHealthUnsubscribe = null;
+    if (audioHealthLevelTimer) {
+      clearInterval(audioHealthLevelTimer);
+      audioHealthLevelTimer = null;
+    }
+    audioHealth.hidePrompt();
+  }
+
   function disposeRemoteAnalysers() {
     for (const entry of remoteAnalysers.values()) {
       entry.dispose();
@@ -2899,6 +3115,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       cancelAnimationFrame(speakingRaf);
       speakingRaf = 0;
     }
+    stopAudioHealth();
     stopVoiceActivityPoll();
     speakingTracker.clear();
     voiceActivityTracker.clear();
@@ -2912,6 +3129,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   function startSpeakingLoop() {
     stopSpeakingLoop();
     startVoiceActivityPoll();
+    startAudioHealth();
     const tick = () => {
       const next: string[] = [];
       // The interval keeps the gate alive on a hidden tab. This rAF path is
@@ -4496,6 +4714,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       errorKind: null,
       notice: null,
       micFallback: null,
+      audioHealthPrompt: null,
       voiceChannelId: null,
       self: null,
       speakingPeerIds: [],
@@ -5793,6 +6012,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
         pipeline = next;
+        micUnavailable = false;
         watchCurrentMic(next);
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
@@ -5817,6 +6037,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         // controls no-op), so this is the join catching up with the rest.
         stopMicPipeline(pipeline);
         pipeline = null;
+        micUnavailable = true;
         state.isMuted = true;
         applyMuteToPipeline();
         state.notice = translateMessage("voice.notice.listenOnly", {
@@ -7122,6 +7343,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       } finally {
         manualMicPicksInFlight -= 1;
       }
+    },
+
+    /**
+     * "Arrumar" on the audio self-repair's card: reopen the microphone,
+     * replay and resubscribe what we cannot hear, or rejoin with a
+     * microphone, by what the card is about. See `lib/audio-health-monitor.ts`.
+     */
+    async repairAudio() {
+      await audioHealth.repair();
+    },
+
+    /** The close (x) on that card. Quiet for that problem for the rest of the call. */
+    dismissAudioHealthPrompt() {
+      audioHealth.dismiss();
     },
 
     /**

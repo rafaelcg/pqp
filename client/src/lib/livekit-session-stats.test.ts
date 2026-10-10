@@ -145,6 +145,7 @@ vi.mock("livekit-client", () => {
 });
 
 const { connectLiveKit } = await import("./livekit-session");
+const { setAudioSelfHealForTests } = await import("./audio-self-heal-flag");
 const { describeLimitation, sampleVoiceStats } = await import(
   "./voice-stats-probe"
 );
@@ -593,5 +594,76 @@ describe("what an SFU presenter is sending", () => {
     await session();
     const snapshot = await sampleVoiceStats();
     expect(snapshot.senders).toEqual([]);
+  });
+});
+
+describe("what the audio self-repair reads off an SFU room", () => {
+  beforeEach(() => setAudioSelfHealForTests(true));
+  afterEach(() => setAudioSelfHealForTests(false));
+
+  function voiceParticipant(
+    identity: string,
+    speaking: boolean,
+    received: () => number,
+    extra: { trackName?: string; isSubscribed?: boolean } = {},
+  ) {
+    const pub = {
+      source: Track.Source.Microphone,
+      trackSid: `TR_mic_${identity}`,
+      trackName: extra.trackName ?? "",
+      isSubscribed: extra.isSubscribed ?? true,
+      audioTrack: {
+        getReceiverStats: async () => ({ type: "audio", timestamp: 1, packetsReceived: received() }),
+      },
+    };
+    return {
+      identity,
+      isSpeaking: speaking,
+      videoTrackPublications: new Map(),
+      audioTrackPublications: new Map([[pub.trackSid, pub]]),
+    } as unknown as FakeRemoteParticipant;
+  }
+
+  it("pairs the server's speaking detector with the packets that actually arrived", async () => {
+    await session();
+    let packets = 100;
+    newestRoom().remoteParticipants.set("rafa", voiceParticipant("rafa", true, () => packets));
+    // The archive copy is never subscribed, so it is never judged.
+    newestRoom().remoteParticipants.set(
+      "host",
+      voiceParticipant("host", true, () => 0, { trackName: "mic-archive" }),
+    );
+
+    const first = await sampleVoiceStats();
+    expect(first.audio?.receivers).toEqual([
+      { peerId: "rafa", trackId: null, packetsDelta: null, audioLevel: null, remoteSpeaking: true },
+    ]);
+    packets = 100;
+    const second = await sampleVoiceStats();
+    expect(second.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: 0, remoteSpeaking: true });
+  });
+
+  it("an unsubscribed voice reads as nothing arriving, and video sampling survives a participant without audio maps", async () => {
+    await session();
+    newestRoom().remoteParticipants.set(
+      "rafa",
+      voiceParticipant("rafa", true, () => 0, { isSubscribed: false }),
+    );
+    newestRoom().remoteParticipants.set("cam", remote("cam", [screenPublication()]));
+    const snapshot = await sampleVoiceStats();
+    expect(snapshot.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: null });
+    expect(snapshot.receivers).toHaveLength(1);
+  });
+
+  it("reads no receiver of a participant who is not speaking, and nothing at all with the flag off", async () => {
+    await session();
+    const reads = vi.fn(() => 10);
+    newestRoom().remoteParticipants.set("rafa", voiceParticipant("rafa", false, reads));
+    const quiet = await sampleVoiceStats();
+    expect(quiet.audio?.receivers[0]).toMatchObject({ remoteSpeaking: false, packetsDelta: null });
+    expect(reads).not.toHaveBeenCalled();
+    setAudioSelfHealForTests(false);
+    const off = await sampleVoiceStats();
+    expect(off.audio?.receivers ?? []).toEqual([]);
   });
 });

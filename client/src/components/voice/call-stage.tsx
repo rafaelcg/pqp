@@ -91,6 +91,7 @@ import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
+import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
@@ -671,6 +672,13 @@ export interface CallStageProps {
    * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
    */
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -788,6 +796,8 @@ export function CallStage({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -854,6 +864,8 @@ export function CallStage({
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
+      onRepairAudio={onRepairAudio}
+      onDismissAudioHealthPrompt={onDismissAudioHealthPrompt}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -903,6 +915,8 @@ function ActiveCall({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -948,6 +962,13 @@ function ActiveCall({
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -2562,6 +2583,14 @@ function ActiveCall({
           visible={!chrome.hidden}
           onDismiss={onDismissMicFallbackNotice}
         />
+        {onRepairAudio && onDismissAudioHealthPrompt ? (
+          <AudioHealthNotice
+            prompt={voiceState.audioHealthPrompt ?? null}
+            visible={!chrome.hidden}
+            onRepair={onRepairAudio}
+            onDismiss={onDismissAudioHealthPrompt}
+          />
+        ) : null}
         <ShareGameCaptureNotice
           hint={voiceState.shareCaptureHint}
           visible={!chrome.hidden}

@@ -14,6 +14,7 @@ import {
   shareFastStartQualityActive,
 } from "./share-fast-start";
 import { sfuIceServers } from "./sfu-ice-servers";
+import { audioSelfHealEnabled } from "./audio-self-heal-flag";
 import {
   createRemoteAudioDelivery,
   type RemoteAudioPlan,
@@ -65,10 +66,14 @@ import {
 } from "./voice-link-quality";
 import {
   measureKbps,
+  measurePacketDelta,
   pickActiveVideoSenderLayer,
   registerVoiceStatsSource,
   statRows,
+  summariseAudioStats,
   summariseStats,
+  type AudioReceiverSample,
+  type AudioStatsSample,
   type CandidatePairSample,
   type VideoReceiverSample,
   type VideoSenderRole,
@@ -173,6 +178,9 @@ const VIDEO_MAX_FRAMERATE = 30;
  * sending the bytes at all. The same rule is in the Android and iOS clients.
  */
 export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
+
+/** Remote voices whose receiver stats the audio self-repair reads per tick. */
+const MAX_AUDIO_RECEIVER_READS = 8;
 
 /**
  * The unambiguous, opt-in signal for `LIVE_HLS_VOICE_TRACK`'s "separada"
@@ -378,6 +386,18 @@ export interface LiveKitSession {
   disconnect(): Promise<void>;
   /** True while the LiveKit room is actually connected (not merely constructed). */
   isConnected(): boolean;
+  /**
+   * True while a microphone publication exists, muted or not. The audio
+   * self-repair reads it to tell "nothing published" from "published and
+   * silent". Optional so a test double need not know about it.
+   */
+  hasMicPublication?(): boolean;
+  /**
+   * Unsubscribe and resubscribe one participant's microphone, for a voice
+   * the server says is speaking and that never arrives here. Resolves false
+   * when there was nothing to resubscribe. Optional for test doubles.
+   */
+  resubscribeVoice?(peerId: string): Promise<boolean>;
   /**
    * True while THIS participant's own screen share is actually on the wire: the
    * room is connected and a ScreenShare publication exists whose track is live
@@ -1333,14 +1353,87 @@ export async function connectLiveKit({
     return [];
   }
 
+  /**
+   * The audio half, for the self-repair (`audio-health.ts`): our microphone's
+   * sender, and every remote MICROPHONE with the server's own speaking
+   * detector beside what actually arrived. The duplicates (archive, voice
+   * track, stage mix) are never subscribed, so they are skipped here too.
+   */
+  async function sampleAudio(): Promise<AudioStatsSample> {
+    const audio: AudioStatsSample = { senders: [], receivers: [] };
+    // Receiver stats are one `getStats()` each, and a watch party seats two
+    // hundred microphones. Only a participant the server hears speaking is
+    // ever judged (`createInboundDetector`), so only they are read, and at
+    // most a handful per tick. A mark left from the last time somebody spoke
+    // still differences correctly: anything that arrived since counts.
+    let receiverReads = 0;
+    const sender = published?.sender;
+    if (sender && typeof sender.getStats === "function") {
+      try {
+        const rows = summariseAudioStats(localPeerId, statRows(await sender.getStats()));
+        audio.senders.push(...rows.senders);
+      } catch {
+        // Sender went away mid-sample.
+      }
+    }
+    for (const participant of room.remoteParticipants.values()) {
+      const publications = participant.audioTrackPublications?.values() ?? [];
+      for (const pub of publications) {
+        if (
+          pub.source !== Track.Source.Microphone ||
+          pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
+          pub.trackName === VOICE_TRACK_NAME ||
+          pub.trackName === STAGE_MIX_TRACK_NAME
+        ) {
+          continue;
+        }
+        const row: AudioReceiverSample = {
+          peerId: participant.identity,
+          trackId: null,
+          packetsDelta: null,
+          audioLevel: null,
+          remoteSpeaking: participant.isSpeaking,
+        };
+        if (!participant.isSpeaking || receiverReads >= MAX_AUDIO_RECEIVER_READS) {
+          audio.receivers.push(row);
+          continue;
+        }
+        receiverReads += 1;
+        const track = pub.isSubscribed ? pub.audioTrack : undefined;
+        const reader = (
+          track as unknown as
+            | { getReceiverStats?: () => Promise<{ packetsReceived?: number } | undefined> }
+            | undefined
+        )?.getReceiverStats;
+        if (track && typeof reader === "function") {
+          try {
+            const stats = await reader.call(track);
+            row.packetsDelta = measurePacketDelta(
+              `sfu:ain:${participant.identity}:${pub.trackSid}`,
+              stats?.packetsReceived ?? null,
+            );
+          } catch {
+            // Unsubscribed mid-sample: nothing arrived, which is what null says.
+          }
+        }
+        audio.receivers.push(row);
+      }
+    }
+    return audio;
+  }
+
   async function sampleRoom(): Promise<VoiceStatsSnapshot> {
     if (room.state !== ConnectionState.Connected) {
       return { senders: [], receivers: [], paths: [] };
     }
-    const [senders, receivers, paths] = await Promise.all([
+    const [senders, receivers, paths, audio] = await Promise.all([
       sampleSenders(),
       sampleReceivers(),
       samplePublisherPaths(),
+      // The audio half is the newest reader of this sample and must never be
+      // the reason the video half has nothing to say. Nothing reads it with
+      // `voice_audio_self_heal` off, so nothing is spent on it then.
+      audioSelfHealEnabled() ? sampleAudio().catch(() => undefined) : undefined,
     ]);
     if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
       const screen = senders.find((row) => row.role === "screen");
@@ -1354,7 +1447,7 @@ export async function connectLiveKit({
         availableOutgoingKbps: path?.availableOutgoingKbps ?? null,
       });
     }
-    return { senders, receivers, paths };
+    return { senders, receivers, paths, audio };
   }
 
   const unregisterStats = registerVoiceStatsSource(sampleRoom);
@@ -3049,6 +3142,41 @@ export async function connectLiveKit({
 
     isConnected() {
       return room.state === ConnectionState.Connected;
+    },
+
+    hasMicPublication() {
+      return published !== null;
+    },
+
+    async resubscribeVoice(peerId: string) {
+      const participant = room.remoteParticipants.get(peerId);
+      if (!participant) {
+        return false;
+      }
+      let touched = false;
+      for (const pub of participant.audioTrackPublications?.values() ?? []) {
+        if (
+          pub.source !== Track.Source.Microphone ||
+          pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
+          pub.trackName === VOICE_TRACK_NAME ||
+          pub.trackName === STAGE_MIX_TRACK_NAME
+        ) {
+          continue;
+        }
+        try {
+          // Off and on again: the server tears the forwarding down and sets
+          // it up fresh, and `TrackSubscribed` files a new stream, which the
+          // sinks pick up as a new `srcObject`. The audio delivery plan
+          // re-applies on that same event.
+          pub.setSubscribed(false);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          pub.setSubscribed(true);
+          touched = true;
+        } catch {
+          // Gone between the lookup and the call.
+        }
+      }
+      return touched;
     },
 
     screenPublishLive() {

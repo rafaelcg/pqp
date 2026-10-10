@@ -765,10 +765,18 @@ export interface VoiceConfig {
    * state and its off switch whatever this says.
    */
   audienceMode?: boolean;
+  /**
+   * `voice_audio_self_heal`: watch this call's audio and repair it
+   * (`lib/audio-health.ts`). Global, so it is read without a server.
+   */
+  audioSelfHeal?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
   apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** The global answer, for the switches that are not per server. */
+export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/config");
 
 /** Turn audience mode on or off in the call running in this voice channel. */
 export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
