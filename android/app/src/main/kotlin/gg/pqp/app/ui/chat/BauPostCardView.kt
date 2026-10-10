@@ -60,6 +60,9 @@ import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -78,6 +81,8 @@ sealed interface BauCardState {
     data class Ready(val card: BauPostCard) : BauCardState
 }
 
+private const val RETRIES = 2
+
 /** Where a tap on a post address goes. Provided once, above the nav graph. */
 data class BauPostTarget(val ref: BauPostRef, val serverName: String = "")
 
@@ -92,8 +97,21 @@ fun rememberBauCardState(api: ApiClient, selection: BauCardSelection?): BauCardS
     val lang = remember { Locale.getDefault().language }
     val cache: BauCardCache = remember(api) { BauCards.of(api) }
     val state by produceState<BauCardState>(BauCardState.Loading, cache, serverId, postId, lang) {
-        val card = cache.load(serverId, postId, lang)
-        value = if (card != null) BauCardState.Ready(card) else BauCardState.Unavailable
+        // A miss is a 404 or a network failure and looks the same from here, so
+        // a row that stays on screen asks again, twice, after the cache's miss
+        // window. Otherwise a phone that was offline when the row appeared
+        // would show the plain link until the row is recomposed from scratch.
+        var attempt = 0
+        while (true) {
+            val card = cache.load(serverId, postId, lang)
+            if (card != null) {
+                value = BauCardState.Ready(card)
+                return@produceState
+            }
+            value = BauCardState.Unavailable
+            if (++attempt > RETRIES) return@produceState
+            delay(BauCardCache.MISS_TTL_MS + 1_000)
+        }
     }
     return state
 }
@@ -382,6 +400,9 @@ private fun Counter(icon: androidx.compose.ui.graphics.vector.ImageVector, count
 private const val FRAME_WIDTH = 640
 private const val FRAME_HEIGHT = 360
 
+/** Remote frame extraction is network and decode; two at a time is plenty for a chat. */
+private val frameLoads = Semaphore(2)
+
 /** Bounded by bytes, not entries: a handful of posters is the working set. */
 private val frameCache = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
@@ -401,27 +422,23 @@ private fun rememberVideoFirstFrame(url: String?): androidx.compose.ui.graphics.
         url,
     ) {
         if (value != null) return@produceState
-        val bitmap = withContext(Dispatchers.IO) {
-            val retriever = MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(url, HashMap())
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+        // Below API 27 there is no scaled decode, and a full 1080p frame is
+        // too much to hold per poster. Those phones get the plate and the play
+        // badge, which still say "video".
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O_MR1) return@produceState
+        val bitmap = frameLoads.withPermit {
+            withContext(Dispatchers.IO) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(url, HashMap())
                     retriever.getScaledFrameAtTime(
                         0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, FRAME_WIDTH, FRAME_HEIGHT,
                     )
-                } else {
-                    retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
-                        val scale = minOf(1f, FRAME_WIDTH.toFloat() / full.width)
-                        if (scale >= 1f) full else {
-                            Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
-                                .also { if (it !== full) full.recycle() }
-                        }
-                    }
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    runCatching { retriever.release() }
                 }
-            } catch (_: Exception) {
-                null
-            } finally {
-                runCatching { retriever.release() }
             }
         }
         if (bitmap != null) {

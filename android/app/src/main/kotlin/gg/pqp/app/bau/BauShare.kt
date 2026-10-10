@@ -138,13 +138,20 @@ object BauShare {
     /** The first same-instance Baú permalink in a message body, or null. */
     fun select(body: String?, appOrigin: String? = ownOrigin()): BauCardSelection? {
         if (body.isNullOrEmpty()) return null
-        for (link in findLinks(body)) {
+        // An address inside a code span or fence is a sample, not a share.
+        for (link in findLinks(maskCode(body))) {
             if (isOwnInstanceOrigin(link.origin, appOrigin)) {
                 return BauCardSelection(link, bodyIsOnlyLink(body, link))
             }
         }
         return null
     }
+
+    private val CODE_RE = Regex("""```[\s\S]*?```|`[^`\n]*`""")
+
+    /** [text] with code spans and fences blanked out, same length, so offsets still index the original. */
+    private fun maskCode(text: String): String =
+        if ('`' !in text) text else CODE_RE.replace(text) { " ".repeat(it.value.length) }
 
     /**
      * The message with the card's own link taken out, so the words the sender

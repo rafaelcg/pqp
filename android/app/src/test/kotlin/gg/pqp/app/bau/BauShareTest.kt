@@ -148,6 +148,15 @@ class BauShareTest {
     }
 
     @Test
+    fun `an address inside code is a sample and gets no card`() {
+        assertNull(BauShare.select("`https://pqp.gg$path`", null))
+        assertNull(BauShare.select("```\nhttps://pqp.gg$path\n```", null))
+        val mixed = "`x` e https://pqp.gg$path"
+        val selected = BauShare.select(mixed, null)!!
+        assertEquals(mixed.indexOf("https"), selected.link.start)
+    }
+
+    @Test
     fun `a message that is only the link is linkOnly`() {
         val selected = BauShare.select("https://pqp.gg$path", null)!!
         assertTrue(selected.linkOnly)
