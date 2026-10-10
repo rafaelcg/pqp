@@ -8050,6 +8050,16 @@
           }
         }
       }
+    },
+    "Could not confirm the post. Check the Baú before trying again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra confirmar o post. Dá uma olhada no Baú antes de tentar de novo."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

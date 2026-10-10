@@ -1,4 +1,5 @@
 import AVFoundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -107,6 +108,25 @@ private struct PickedMovie: Transferable {
     }
 }
 
+/// A photo as the library hands it over: a file, not bytes in memory. A ProRAW
+/// or a panorama can be hundreds of MiB decoded, and the size is checked on
+/// disk before anything is read.
+private struct PickedImage: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .image) { image in
+            SentTransferredFile(image.url)
+        } importing: { received in
+            let ext = received.file.pathExtension.isEmpty ? "img" : received.file.pathExtension
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bau-\(UUID().uuidString).\(ext)")
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedImage(url: copy)
+        }
+    }
+}
+
 enum ComposePicker {
     /// A library item, as something the Baú will sign an upload for.
     ///
@@ -124,7 +144,7 @@ enum ComposePicker {
     }
 
     private static func prepareImage(_ item: PhotosPickerItem, types: [UTType]) async throws -> PreparedMedia {
-        guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+        guard let picked = try await item.loadTransferable(type: PickedImage.self) else {
             throw PickFailure.unreadable
         }
         let native: [(UTType, String, String)] = [
@@ -133,22 +153,39 @@ enum ComposePicker {
             (.gif, "image/gif", "gif"),
             (.webP, "image/webp", "webp"),
         ]
-        var bytes = data
-        var contentType = "image/jpeg"
-        var ext = "jpg"
-        if let match = native.first(where: { candidate in types.contains { $0.conforms(to: candidate.0) } }) {
-            contentType = match.1
-            ext = match.2
-        } else {
-            guard let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.85) else {
-                throw PickFailure.unreadable
-            }
-            bytes = jpeg
+        let size = fileSize(picked.url)
+        guard size > 0 else {
+            try? FileManager.default.removeItem(at: picked.url)
+            throw PickFailure.unreadable
         }
-        guard Int64(bytes.count) <= CommunityHomeLimits.maxBytes else { throw PickFailure.tooLarge }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("bau-\(UUID().uuidString).\(ext)")
-        try bytes.write(to: url)
-        return PreparedMedia(url: url, contentType: contentType, filename: "photo.\(ext)", isVideo: false)
+        if let match = native.first(where: { candidate in types.contains { $0.conforms(to: candidate.0) } }) {
+            guard size <= CommunityHomeLimits.maxBytes else {
+                try? FileManager.default.removeItem(at: picked.url)
+                throw PickFailure.tooLarge
+            }
+            return PreparedMedia(url: picked.url, contentType: match.1, filename: "photo.\(match.2)", isVideo: false)
+        }
+        // HEIC and the rest become JPEG, decoded through ImageIO's thumbnailer
+        // so a 48 MP original is scaled while it is read, never held whole.
+        defer { try? FileManager.default.removeItem(at: picked.url) }
+        guard let source = CGImageSourceCreateWithURL(picked.url as CFURL, nil) else { throw PickFailure.unreadable }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 4096,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.85) else {
+            throw PickFailure.unreadable
+        }
+        guard Int64(jpeg.count) <= CommunityHomeLimits.maxBytes else { throw PickFailure.tooLarge }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("bau-\(UUID().uuidString).jpg")
+        try jpeg.write(to: url)
+        return PreparedMedia(url: url, contentType: "image/jpeg", filename: "photo.jpg", isVideo: false)
+    }
+
+    private static func fileSize(_ url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private static func prepareVideo(_ item: PhotosPickerItem) async throws -> PreparedMedia {
@@ -163,7 +200,8 @@ enum ComposePicker {
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: ready.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard size > 0 else { throw PickFailure.unreadable }
-        guard size <= CommunityHomeLimits.maxBytes else {
+        // At the limit means the export was cut off by `fileLengthLimit`.
+        guard size < CommunityHomeLimits.maxBytes else {
             try? FileManager.default.removeItem(at: ready)
             throw PickFailure.tooLarge
         }
@@ -178,6 +216,9 @@ enum ComposePicker {
             throw PickFailure.unreadable
         }
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("bau-\(UUID().uuidString).mp4")
+        // The export stops writing at the limit instead of running to the end
+        // of a long clip; the caller treats an output at the limit as too large.
+        exporter.fileLengthLimit = CommunityHomeLimits.maxBytes
         if #available(iOS 18.0, *) {
             try await exporter.export(to: output, as: .mp4)
         } else {
@@ -239,8 +280,10 @@ final class CommunityHomeComposeModel {
         dropMedia()
         pickFailure = nil
         edited()
+        // Set before the task starts, so Post cannot slip in between the tap
+        // and the first await and publish without the file.
+        preparing = true
         pickTask = Task { [api, serverId] in
-            preparing = true
             defer { preparing = false }
             let prepared: PreparedMedia
             do {
@@ -298,11 +341,16 @@ final class CommunityHomeComposeModel {
     }
 
     func discard() {
+        guard !posting else { return }
         dropMedia()
     }
 
     func post() async {
         guard !posting else { return }
+        if preparing {
+            problem = .fileStillUploading
+            return
+        }
         guard let request = draft.request else {
             problem = draft.problem
             return
@@ -317,7 +365,8 @@ final class CommunityHomeComposeModel {
             localURL = nil
             posted = true
         } catch {
-            refusal = CommunityHomeRefusal.from(error)
+            let refusal = CommunityHomeRefusal.from(error)
+            self.refusal = refusal == .network ? .unconfirmed : refusal
         }
     }
 }
@@ -405,6 +454,9 @@ struct CommunityHomeComposeView: View {
                     .padding(.vertical, 12)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // What is on screen is what is in the request: edits made while a
+                // post is in flight would be lost on success.
+                .disabled(model.posting)
             }
             .navigationTitle("New post")
             .navigationBarTitleDisplayMode(.inline)
@@ -413,6 +465,7 @@ struct CommunityHomeComposeView: View {
                     Button("Cancel") {
                         if model.isDirty { confirmDiscard = true } else { dismiss() }
                     }
+                    .disabled(model.posting)
                     .tint(Palette.paperMuted)
                     .accessibilityIdentifier("bau.compose.cancel")
                 }
@@ -435,7 +488,7 @@ struct CommunityHomeComposeView: View {
                 Button("Keep writing", role: .cancel) {}
             }
         }
-        .interactiveDismissDisabled(model.isDirty)
+        .interactiveDismissDisabled(model.isDirty || model.posting)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             model.pick(item)

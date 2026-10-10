@@ -83,6 +83,15 @@ final class CommunityHomeComposeTests: XCTestCase {
         XCTAssertEqual(ComposeDraft(title: "t", body: String(repeating: "a", count: 4001)).problem, .bodyTooLong)
     }
 
+    func testLengthsAreCountedInUTF16LikeTheServer() {
+        // 101 emoji is 101 characters to Swift and 202 to the server's `max(200)`.
+        XCTAssertEqual(
+            ComposeDraft(title: String(repeating: "\u{1F600}", count: 101), body: "x").problem,
+            .titleTooLong
+        )
+        XCTAssertNil(ComposeDraft(title: String(repeating: "\u{1F600}", count: 100), body: "x").problem)
+    }
+
     func testAFileAndALinkTogetherAreRefusedBeforeTheServerHasTo() {
         let draft = ComposeDraft(title: "t", link: "https://youtu.be/dQw4w9WgXcQ", media: file)
         XCTAssertEqual(draft.problem, .oneMediaSource)

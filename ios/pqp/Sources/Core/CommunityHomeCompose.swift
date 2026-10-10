@@ -121,8 +121,8 @@ struct ComposeDraft: Equatable, Sendable {
     /// counted on the untrimmed text, the way the server's `max()` does.
     var problem: ComposeProblem? {
         if trimmedTitle.isEmpty { return .needsTitle }
-        if title.count > CommunityHomeLimits.titleMax { return .titleTooLong }
-        if body.count > CommunityHomeLimits.bodyMax { return .bodyTooLong }
+        if title.utf16.count > CommunityHomeLimits.titleMax { return .titleTooLong }
+        if body.utf16.count > CommunityHomeLimits.bodyMax { return .bodyTooLong }
         if media != nil, !trimmedLink.isEmpty { return .oneMediaSource }
         if !trimmedLink.isEmpty, CommunityHomeLinks.provider(trimmedLink) == nil { return .badLink }
         if media?.uploading == true { return .fileStillUploading }
@@ -214,6 +214,10 @@ enum CommunityHomeRefusal: Equatable, Sendable {
     case noStorage
     case invalid(String?)
     case network
+    /// A create that died on the wire. The server may well have committed it,
+    /// and the post route takes no idempotency key, so a blind retry could
+    /// publish twice: the sentence tells the person to look first.
+    case unconfirmed
 
     static func from(_ error: Error) -> CommunityHomeRefusal {
         guard let api = error as? APIError else { return .network }
@@ -245,6 +249,7 @@ enum CommunityHomeRefusal: Equatable, Sendable {
         case .slowDown: String(localized: "Slow down a little and try again in a moment.")
         case .noStorage: String(localized: "This server cannot take photos or videos right now. A link or text still works.")
         case .network: String(localized: "Could not reach the server. Try again.")
+        case .unconfirmed: String(localized: "Could not confirm the post. Check the Baú before trying again.")
         case .invalid(let detail?): String(localized: "Could not post. \(detail)")
         case .invalid(nil): String(localized: "Could not post. Try again.")
         }
