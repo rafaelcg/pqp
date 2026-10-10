@@ -161,6 +161,12 @@ class GameAudioCapture(
         val stale = record
         record = null
         ring = null
+        if (live) {
+            // A route change: nothing is mixed until the replacement is
+            // published, and the call bar must not say otherwise meanwhile.
+            live = false
+            onStatus(false)
+        }
         runCatching {
             setup.execute { build(format, stale) }
         }.onFailure { stale?.let(::dispose) }
