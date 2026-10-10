@@ -70,6 +70,12 @@ data class VoiceState(
     /** This device is capturing and publishing its screen. */
     val sharingScreen: Boolean = false,
     /**
+     * The share carries the phone's own sound (a game, a video), mixed into
+     * the microphone. False on Android 9 and older, where the platform has no
+     * playback capture, and whenever no share is running.
+     */
+    val sharingScreenAudio: Boolean = false,
+    /**
      * Whether this device may put a screen on this room's stage.
      *
      * IT IS THE PERMISSION, NOT THE TRANSPORT. It used to be
@@ -802,10 +808,19 @@ class VoiceController(
         val profile = screenCaptureProfileFor(width, height)
         if (!engine.startScreenShare(permission, profile)) {
             VoiceService.dropProjection(context)
+            // Said, not swallowed: the person pressed a labelled button and
+            // granted the system dialog, so silence here reads as a broken
+            // button rather than a refusal.
+            _state.value = _state.value.copy(
+                notice = context.getString(R.string.voice_screen_share_failed),
+            )
             return
         }
 
-        _state.value = _state.value.copy(sharingScreen = true)
+        _state.value = _state.value.copy(
+            sharingScreen = true,
+            sharingScreenAudio = engine.isSharingScreenAudio,
+        )
         // Announced after the capture is alive, never before: a roster that
         // says somebody is presenting while nothing is on the wire puts an
         // empty tile in front of everybody else.
@@ -813,10 +828,12 @@ class VoiceController(
             buildJsonObject {
                 put("type", "set-sharing-screen")
                 put("sharing", true)
-                // This capture carries no audio. `MediaProjection` can record
-                // the device's playback from Android 10, but only from apps
-                // that allow it, and a system audio track nobody can rely on is
-                // worse than an honest silent share.
+                // No separate share-audio stream. From Android 10 the phone's
+                // playback (the game) is captured and mixed into the
+                // microphone track instead (see [GameAudioCapture]), because
+                // neither WebRTC build here can publish an app-fed second
+                // audio track. Announcing a stream id would tell receivers to
+                // look for a track that does not exist.
                 put("audioStreamId", JsonNull)
             },
         )
@@ -826,7 +843,7 @@ class VoiceController(
         if (!engine.isSharingScreen && !_state.value.sharingScreen) return
         engine.stopScreenShare()
         VoiceService.dropProjection(context)
-        _state.value = _state.value.copy(sharingScreen = false)
+        _state.value = _state.value.copy(sharingScreen = false, sharingScreenAudio = false)
         session.realtime.send(
             buildJsonObject {
                 put("type", "set-sharing-screen")
@@ -958,6 +975,7 @@ class VoiceController(
             participants = emptyList(),
             unreachablePeers = 0,
             sharingScreen = false,
+            sharingScreenAudio = false,
         )
     }
 
@@ -1385,6 +1403,7 @@ class VoiceController(
         VoiceService.dropProjection(context)
         _state.value = _state.value.copy(
             sharingScreen = false,
+            sharingScreenAudio = false,
             refusal = Refusal.ScreenShareDenied,
         )
     }

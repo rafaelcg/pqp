@@ -69,7 +69,14 @@ the order to cut from the bottom:
 
 1. Auth, servers, channels, text chat. **Done.**
 2. Voice with a foreground service. **Done, and audio measured on both sides.**
-3. Screen sharing via `MediaProjection`, send and receive. **Done.**
+3. Screen sharing via `MediaProjection`, send and receive, on mesh and LiveKit
+   rooms alike. **Done.** From Android 10 the share carries the phone's own
+   sound (a game, a video) through `AudioPlaybackCapture`, mixed into the
+   microphone track because neither WebRTC build can publish an app-fed second
+   audio track (`voice/GameAudioCapture.kt`, `voice/GameAudioMix.kt`). Muting
+   yourself zeroes the voice half and keeps the game going out. A game that opts
+   out of playback capture arrives silent. **The sound half is unverified on a
+   device.**
 4. Push via FCM, as the third leg of `server/src/services/push.ts`. **Client
    and server legs built. Whether a Play build receives it depends on the
    `GOOGLE_SERVICES_JSON` secret reaching the release workflow; see the push
