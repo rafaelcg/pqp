@@ -16,9 +16,14 @@ struct ChannelListView: View {
     /// somewhere real instead of on an empty stack.
     let initialChannel: Channel?
 
-    init(server: Server, initialChannel: Channel? = nil) {
+    /// A new-post push was tapped: open the Baú once the list knows whether
+    /// this server has one (see `openBauIfAsked`).
+    let opensBau: Bool
+
+    init(server: Server, initialChannel: Channel? = nil, opensBau: Bool = false) {
         self.server = server
         self.initialChannel = initialChannel
+        self.opensBau = opensBau
         _current = State(initialValue: server)
     }
 
@@ -35,6 +40,8 @@ struct ChannelListView: View {
     /// re-reads it, after `CommunityHomeView` has told the server it was
     /// read.
     @State private var bauUnread = 0
+    @State private var showingBau = false
+    @State private var hasOpenedBauFromPush = false
     /**
      Channels with a picture on them right now, from `channel-live`.
 
@@ -320,6 +327,11 @@ struct ChannelListView: View {
             }
         }
         .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
+        .navigationDestination(isPresented: $showingBau) {
+            if let config = communityHome {
+                CommunityHomeView(server: current, config: config)
+            }
+        }
         // Deferred by one appearance on purpose. A `navigationDestination` can
         // only serve a push once the view carrying it is *in* the stack, and on
         // a restored launch this view is itself being pushed in the same
@@ -538,6 +550,18 @@ struct ChannelListView: View {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
         }
         await refreshBauUnread()
+    }
+
+    /// The push for a new post lands here with `opensBau`. Once, and only if
+    /// this server's Baú is actually on: a tap that outlived the owner's switch
+    /// stays on the channel list instead of opening a screen that cannot load.
+    /// The push has no animation of its own, same as a restored channel.
+    private func openBauIfAsked() {
+        guard opensBau, !hasOpenedBauFromPush, showsBau else { return }
+        hasOpenedBauFromPush = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { showingBau = true }
     }
 
     /// Only asked while the row is drawn: the route 404s when the instance
@@ -760,6 +784,7 @@ struct ChannelListView: View {
         if communityHome == nil {
             communityHome = await session.api.communityHomeConfig()
         }
+        openBauIfAsked()
         // A previous load's retry loop (a pull-to-refresh while one was
         // mid-backoff, say) must not keep running alongside this fresh one.
         availabilityRetryTask?.cancel()

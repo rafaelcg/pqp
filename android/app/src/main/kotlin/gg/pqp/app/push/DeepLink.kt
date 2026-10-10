@@ -24,6 +24,14 @@ sealed interface DeepLinkTarget {
     data class Server(val serverId: String) : DeepLinkTarget
 
     /**
+     * A server's Baú, from the push for a new post (`/app/server/<sid>/home`,
+     * `buildCommunityHomePostPayload` in `server/src/services/push.ts`). The web
+     * client reads the same path as "this server" and lands on the Baú by
+     * itself; the phone opens a server on its channel list, so it names it.
+     */
+    data class Bau(val serverId: String) : DeepLinkTarget
+
+    /**
      * `pqp://invite/<code>` or `https://pqp.gg/app/invite/<code>`. No push
      * produces either; the manifest accepts both.
      */
@@ -40,7 +48,7 @@ val DeepLinkTarget.channelId: String?
     get() = when (this) {
         is DeepLinkTarget.Channel -> channelId
         is DeepLinkTarget.Conversation -> channelId
-        is DeepLinkTarget.Server, is DeepLinkTarget.Invite -> null
+        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite -> null
     }
 
 object DeepLink {
@@ -90,6 +98,9 @@ object DeepLink {
                 segments[1] == "server" &&
                 segments[3] == "channel" ->
                 DeepLinkTarget.Channel(segments[2], segments[4])
+
+            segments.size == 4 && segments[1] == "server" && segments[3] == "home" ->
+                DeepLinkTarget.Bau(segments[2])
 
             segments.size >= 3 && segments[1] == "server" ->
                 DeepLinkTarget.Server(segments[2])
