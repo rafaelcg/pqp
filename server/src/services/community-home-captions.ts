@@ -666,6 +666,7 @@ async function failTranslation(
 
 /** A reader's request asks for a missing translation at most this often per (post, language) and process. */
 const READ_KICK_COOLDOWN_MS = 60_000;
+const READ_KICKS_MAX = 2_000;
 const readKicks = new Map<string, number>();
 
 /**
@@ -683,9 +684,15 @@ async function kickTranslationFromRead(
   const key = `${postId}:${lang}`;
   const now = Date.now();
   if ((readKicks.get(key) ?? 0) > now - READ_KICK_COOLDOWN_MS || inFlightTranslations.has(key)) return;
+  // Re-inserted so the map stays in time order: the oldest entries are the
+  // first ones, and trimming past the cap drops them without scanning the rest.
+  readKicks.delete(key);
   readKicks.set(key, now);
-  if (readKicks.size > 2_000) {
-    for (const [k, at] of readKicks) if (at <= now - READ_KICK_COOLDOWN_MS) readKicks.delete(k);
+  if (readKicks.size > READ_KICKS_MAX) {
+    for (const k of readKicks.keys()) {
+      if (readKicks.size <= READ_KICKS_MAX / 2) break;
+      readKicks.delete(k);
+    }
   }
   try {
     if (!communityHomeTranslator()) return;
