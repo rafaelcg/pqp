@@ -41,6 +41,18 @@ describe("discordAnnouncement", () => {
     expect(text.split("\n")[0]).toBe("**Bold guild is on pqp now too** 🎉");
   });
 
+  it("drops pings and links a crafted template name would smuggle in", () => {
+    const text = discordAnnouncement(
+      "pt-BR",
+      "@everyone [clica](https://evil.example) <@&123> https://x.example",
+      url,
+    );
+    expect(text).not.toContain("@");
+    expect(text).not.toContain("evil.example");
+    expect(text).not.toContain("x.example");
+    expect(text.match(/https?:\/\//g)).toHaveLength(1);
+  });
+
   it("picks the chip from the app's language", () => {
     expect(defaultAnnouncementLang("pt-BR")).toBe("pt-BR");
     expect(defaultAnnouncementLang("es")).toBe("es");

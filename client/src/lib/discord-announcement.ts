@@ -43,13 +43,29 @@ export function announcementUrl(origin: string, code: string): string {
   return shareInviteUrl(origin, code, "discord");
 }
 
+/**
+ * The server name as it goes into the paste. It came from a Discord template,
+ * so it is somebody else's text: no markdown that would break the bold line,
+ * no `@everyone` / `@here` or role mention the owner did not choose, and no
+ * link or masked link riding along with ours.
+ */
+export function announcementServerName(server: string): string {
+  return (
+    server
+      .replace(/https?:\/\/\S*/gi, "")
+      .replace(/[*_~`|<>@#[\]()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 100) || "pqp"
+  );
+}
+
 export function discordAnnouncement(
   lang: AnnouncementLang,
   server: string,
   url: string,
 ): string {
-  // A name with Discord markdown in it would break the bold line.
-  const name = server.replace(/[*_~`|]/g, "").trim() || "pqp";
+  const name = announcementServerName(server);
   switch (lang) {
     case "pt-BR":
       return [

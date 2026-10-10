@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BringCrewPhase, DiscordImportArrivals } from "@pqp/shared";
-import { getImportArrivals } from "@/lib/api";
+import { ApiError, getImportArrivals } from "@/lib/api";
 import { readBringCrewDismissed, writeBringCrewDismissed } from "@/lib/bring-crew";
 
 /** While the strip is up, ask again this often even if nothing else moved. */
@@ -25,31 +25,49 @@ export function useBringCrew(
 } {
   const [arrivals, setArrivals] = useState<DiscordImportArrivals | null>(null);
   const [dismissed, setDismissed] = useState<BringCrewPhase | null>(null);
+  /** The last request failed for a reason worth retrying (network, 5xx). */
+  const [retrying, setRetrying] = useState(false);
   const forServer = useRef<string | null>(null);
+  /** Only the newest request may write: polls and focus can overlap. */
+  const latest = useRef(0);
 
   const load = useCallback(() => {
     if (!serverId || !canManage) {
       return;
     }
     const asked = serverId;
+    const ticket = ++latest.current;
+    const current = () => forServer.current === asked && latest.current === ticket;
     getImportArrivals(asked)
       .then((next) => {
-        if (forServer.current === asked) {
+        if (current()) {
           setArrivals(next);
+          setRetrying(false);
         }
       })
-      .catch(() => {
-        // A 403 after a permission change, or the API without the route:
-        // nothing to draw.
-        if (forServer.current === asked) {
-          setArrivals(null);
+      .catch((error: unknown) => {
+        if (!current()) {
+          return;
         }
+        if (
+          error instanceof ApiError &&
+          (error.status === 403 || error.status === 404)
+        ) {
+          // A permission taken away, or an API without the route: nothing
+          // to draw, and nothing to retry.
+          setArrivals(null);
+          setRetrying(false);
+          return;
+        }
+        // A blip: keep what is on screen and keep asking.
+        setRetrying(true);
       });
   }, [serverId, canManage]);
 
   useEffect(() => {
     forServer.current = serverId;
     setArrivals(null);
+    setRetrying(false);
     setDismissed(serverId ? readBringCrewDismissed(serverId) : null);
   }, [serverId]);
 
@@ -59,9 +77,10 @@ export function useBringCrew(
   }, [load, memberCount]);
 
   const live =
-    arrivals?.enabled === true &&
-    arrivals.phase !== null &&
-    arrivals.phase !== "over";
+    retrying ||
+    (arrivals?.enabled === true &&
+      arrivals.phase !== null &&
+      arrivals.phase !== "over");
 
   useEffect(() => {
     if (!live) {
