@@ -6,6 +6,8 @@
  * plain `tsc` run, neither of which knows about the virtual module.
  */
 
+import { reportFaroEvent } from "./faro";
+
 export interface ServiceWorkerControls {
   /** Activate the waiting worker and reload. */
   update: () => Promise<void>;
@@ -15,7 +17,44 @@ export interface ServiceWorkerControls {
 type RegisterSW = (options: {
   onNeedRefresh?: () => void;
   onRegisterError?: (error: unknown) => void;
+  onRegisteredSW?: (
+    swUrl: string,
+    registration: ServiceWorkerRegistration | undefined,
+  ) => void;
 }) => (reloadPage?: boolean) => Promise<void>;
+
+/**
+ * Calls `onFailed` when a worker of this registration fails to install: it
+ * goes `redundant` without ever reaching `installed`. A worker that is
+ * replaced after it installed also ends `redundant`, and is not a failure.
+ *
+ * `onRegisterError` never sees this: registration succeeds, and the install
+ * fails afterwards (a precache entry that is not 200, for example). From
+ * 2026-09-30 to 2026-10-10 every install failed that way, and nothing on the
+ * page noticed (`docs/PWA.md` §"A precache entry that 404s").
+ */
+export function watchInstallFailures(
+  registration: ServiceWorkerRegistration,
+  onFailed: () => void,
+): void {
+  const watch = (worker: ServiceWorker | null) => {
+    if (!worker) {
+      return;
+    }
+    let installed = false;
+    worker.addEventListener("statechange", () => {
+      if (worker.state === "redundant") {
+        if (!installed) {
+          onFailed();
+        }
+      } else if (worker.state !== "installing" && worker.state !== "parsed") {
+        installed = true;
+      }
+    });
+  };
+  watch(registration.installing);
+  registration.addEventListener("updatefound", () => watch(registration.installing));
+}
 
 /** Longest a first-time visitor to the marketing home page goes unregistered. */
 export const HOME_REGISTER_DELAY_MS = 20_000;
@@ -103,6 +142,14 @@ export function registerServiceWorker(
           onNeedRefresh,
           onRegisterError: (error) => {
             console.warn("[pwa] service worker registration failed", error);
+          },
+          onRegisteredSW: (_url, registration) => {
+            if (registration) {
+              watchInstallFailures(registration, () => {
+                console.warn("[pwa] service worker install failed");
+                reportFaroEvent("pwa_sw_install_failed");
+              });
+            }
           },
         });
       } catch {

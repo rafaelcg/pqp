@@ -369,7 +369,9 @@ jobs:
       # shard, so one shard carries it.
       - name: E2E stale bundle (real service worker)
         if: matrix.suite == 'core' && matrix.shard == 1
-        run: pnpm --filter @pqp/client e2e:stale-bundle
+        run: |
+          pnpm --filter @pqp/client exec playwright install --with-deps firefox
+          pnpm --filter @pqp/client e2e:stale-bundle
 
       # The presenter's camera held to the film, measured off the pictures
       # (client/playwright.camera-sync.config.ts): the real watch player on a

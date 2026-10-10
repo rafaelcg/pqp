@@ -195,8 +195,10 @@ What prevents it now:
 | HTML in the precache is `index.html` only | `globPatterns` in `client/vite.config.ts` |
 | Every `public/*.html` is a known path | `spa-routes.ts`, enforced by `spa-routes.test.ts` |
 | The e2e stand-in for Pages has the pretty-URL 308 and the middleware's 404 | `client/e2e/stale-bundle/pages-server.ts` |
-| A fresh worker must reach `activated`, and every precache URL must answer 200 | `client/e2e/stale-bundle/update.spec.ts` |
-| After each deploy, every precache URL must answer 200 on the real origin | `client/scripts/check-precache.mjs`, run by `deploy-web.yml` |
+| A fresh worker must reach `activated`, and every precache URL must answer 200 (Chromium and Firefox) | `client/e2e/stale-bundle/update.spec.ts` |
+| After each deploy, every precache URL must answer 200 on that deployment | `client/scripts/check-precache.mjs`, run by `deploy-web.yml` |
+| Every 10 minutes, every precache URL of the live `pqp.gg/sw.js` must answer 200 (opens an issue) | `sw-precache` in `scripts/monitor/availability.mjs` |
+| A worker that fails to install is reported to Faro as `pwa_sw_install_failed` | `watchInstallFailures` in `client/src/lib/register-sw.ts` |
 
 Recovery needs no code. A stuck worker still fetches `sw.js` on navigation.
 Once the new worker installs, `skipWaiting` lets it take over, and the next

@@ -31,5 +31,20 @@ export default defineConfig({
         serviceWorkers: "allow",
       },
     },
+    {
+      // Only the specs about whether a worker can install at all: the stale
+      // build first showed up in Zen (Firefox), and Firefox has its own
+      // service worker implementation. The update-card specs drive the page's
+      // clock and stay on Chromium.
+      name: "firefox",
+      grep: /precached URL|fresh worker installs|plain reload reaches the new build$/,
+      use: {
+        ...devices["Desktop Firefox"],
+        viewport: { width: 1280, height: 800 },
+        locale: "pt-BR",
+        colorScheme: "dark",
+        serviceWorkers: "allow",
+      },
+    },
   ],
 });
