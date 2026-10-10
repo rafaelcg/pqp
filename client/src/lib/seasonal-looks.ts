@@ -38,11 +38,11 @@ export const SEASON_WINDOWS: Record<
 export const SEASON_OVERRIDE_KEY = "pqp:season";
 
 /**
- * TEMPORARY, for testing: the picker lists every seasonal look all year. Set
- * back to false before merging, so each look only shows in its season. The
- * corner card follows the calendar either way.
+ * True lists every seasonal look in the picker all year, for testing. False
+ * (shipped) shows each look only in its season. The corner card follows the
+ * calendar either way.
  */
-export const OFFER_SEASONAL_LOOKS_ALL_YEAR = true;
+export const OFFER_SEASONAL_LOOKS_ALL_YEAR = false;
 
 export function isSeasonalLook(
   look: AppearancePreference,
