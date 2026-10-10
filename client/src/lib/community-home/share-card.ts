@@ -76,6 +76,12 @@ export function stripBauLink(body: string, link: BauPostLink): string {
 // ------------------------------------------------------------------- loading
 
 type Entry = {
+  /**
+   * Rows that still want this card. A request waiting for a slot is dropped
+   * when this is zero, so a long channel scrolled past does not leave a queue
+   * of fetches for rows that are gone.
+   */
+  holders: number;
   at: number;
   promise: Promise<CommunityHomePostCard | null>;
   value: CommunityHomePostCard | null | undefined;
@@ -119,6 +125,8 @@ export function __resetBauCardCache(): void {
   cache.clear();
 }
 
+const SKIPPED = Symbol("skipped");
+
 /** The card, or null when the viewer may not see it (or it is gone). */
 export function loadBauCard(
   serverId: string,
@@ -127,6 +135,21 @@ export function loadBauCard(
   now: () => number = Date.now,
   viewerId: string | null = null,
 ): Promise<CommunityHomePostCard | null> {
+  return acquireBauCard(serverId, postId, lang, now, viewerId).promise;
+}
+
+/**
+ * Like {@link loadBauCard}, for a caller that can go away: `release` says it
+ * no longer wants the answer, and a fetch nobody wants that has not started
+ * yet never starts.
+ */
+export function acquireBauCard(
+  serverId: string,
+  postId: string,
+  lang?: string,
+  now: () => number = Date.now,
+  viewerId: string | null = null,
+): { promise: Promise<CommunityHomePostCard | null>; release: () => void } {
   // The viewer is part of the key: what the server answers is decided per
   // person (membership, the VIP lock), so a second account on the same tab
   // must never be served the first one's card.
@@ -135,23 +158,39 @@ export function loadBauCard(
   if (hit) {
     const ttl = hit.value === null ? MISS_TTL_MS : OK_TTL_MS;
     if (hit.value === undefined || now() - hit.at < ttl) {
-      return hit.promise;
+      hit.holders += 1;
+      return { promise: hit.promise, release: holderRelease(hit) };
     }
   }
   const entry: Entry = {
+    holders: 1,
     at: now(),
     value: undefined,
-    promise: withSlot(() => fetchCommunityHomePostCard(serverId, postId, lang))
-      .then((res) => res.card)
-      // 4xx: not ours to show. Offline or 5xx: a plain link for now, and the
-      // short miss TTL lets the next render try again.
-      .catch(() => null)
-      .then((value) => {
-        entry.value = value;
-        entry.at = now();
-        return value;
-      }),
+    promise: Promise.resolve(null),
   };
+  // Assigned after the object exists: the slot may run the task at once, and
+  // the task reads `entry.holders`.
+  entry.promise = withSlot<{ card: CommunityHomePostCard } | typeof SKIPPED>(() =>
+    entry.holders > 0
+      ? fetchCommunityHomePostCard(serverId, postId, lang)
+      : Promise.resolve(SKIPPED),
+  )
+    .then((res) => (res === SKIPPED ? SKIPPED : res.card))
+    // 4xx: not ours to show. Offline or 5xx: a plain link for now, and the
+    // short miss TTL lets the next render try again.
+    .catch(() => null)
+    .then((value) => {
+      if (value === SKIPPED) {
+        // Never asked: forget it, so the next row that wants it does.
+        if (cache.get(key) === entry) {
+          cache.delete(key);
+        }
+        return null;
+      }
+      entry.value = value;
+      entry.at = now();
+      return value;
+    });
   if (cache.size >= CACHE_MAX) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) {
@@ -159,7 +198,17 @@ export function loadBauCard(
     }
   }
   cache.set(key, entry);
-  return entry.promise;
+  return { promise: entry.promise, release: holderRelease(entry) };
+}
+
+function holderRelease(entry: Entry): () => void {
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      entry.holders -= 1;
+    }
+  };
 }
 
 export type BauCardState =
@@ -188,7 +237,8 @@ export function useBauCard(
       return;
     }
     let cancelled = false;
-    void loadBauCard(serverId, postId, lang, Date.now, viewerId).then((card) => {
+    const handle = acquireBauCard(serverId, postId, lang, Date.now, viewerId);
+    void handle.promise.then((card) => {
       if (cancelled) {
         return;
       }
@@ -199,6 +249,7 @@ export function useBauCard(
     });
     return () => {
       cancelled = true;
+      handle.release();
     };
   }, [serverId, postId, lang, key, viewerId]);
   if (!key) {

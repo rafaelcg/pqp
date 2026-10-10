@@ -7,6 +7,7 @@ vi.mock("@/lib/api", () => ({
 
 const {
   __resetBauCardCache,
+  acquireBauCard,
   isOwnInstanceOrigin,
   loadBauCard,
   selectBauCardLink,
@@ -118,6 +119,36 @@ describe("loadBauCard", () => {
     await Promise.all(loads);
     expect(peak).toBeLessThanOrEqual(4);
     expect(fetchCard).toHaveBeenCalledTimes(10);
+  });
+
+  it("a queued fetch nobody wants any more never starts", async () => {
+    const releases: Array<() => void> = [];
+    fetchCard.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ card: CARD }));
+        }),
+    );
+    // Four fill the slots, two more queue behind them.
+    const filling = Array.from({ length: 4 }, (_, i) =>
+      loadBauCard(SERVER, `fill-${i}`, "en"),
+    );
+    const gone = acquireBauCard(SERVER, "gone", "en");
+    const kept = acquireBauCard(SERVER, "kept", "en");
+    gone.release();
+    while (releases.length > 0) {
+      releases.shift()!();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    await Promise.all(filling);
+    expect(await gone.promise).toBeNull();
+    expect(await kept.promise).toEqual(CARD);
+    const asked = fetchCard.mock.calls.map((call) => call[1]);
+    expect(asked).not.toContain("gone");
+    expect(asked).toContain("kept");
+    // And a later row that wants it gets a real fetch, not the skipped null.
+    fetchCard.mockResolvedValue({ card: CARD });
+    expect(await loadBauCard(SERVER, "gone", "en")).toEqual(CARD);
   });
 
   it("a refusal is null (the link stays plain) and is cached briefly", async () => {
