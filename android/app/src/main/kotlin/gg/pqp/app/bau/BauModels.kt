@@ -1,6 +1,7 @@
 package gg.pqp.app.bau
 
 import gg.pqp.app.social.PublicUser
+import gg.pqp.app.ui.media.GifLinks
 import java.net.URI
 import kotlinx.serialization.Serializable
 
@@ -56,6 +57,15 @@ data class BauMedia(
     val isInstagram: Boolean get() = kind == "instagram"
     val isFile: Boolean get() = kind == "file"
 
+    /**
+     * An uploaded video with a readable http(s) URL, which the in-app player
+     * plays. A video without one (storage off, or an API-relative path this
+     * card cannot sign) falls through to the open-out file card.
+     */
+    val canPlayInApp: Boolean get() = isVideo && url?.let { u ->
+        u.startsWith("https://") || u.startsWith("http://")
+    } == true
+
     /** What a tap opens: the object for storage kinds, the watch page for paste URLs. */
     val openUrl: String? get() = when {
         isYoutube || isTiktok || isInstagram -> youtubeUrl
@@ -70,7 +80,14 @@ data class BauComment(
     val author: PublicUser,
     val body: String,
     val createdAt: String,
-)
+) {
+    /**
+     * Non-null when the comment is nothing but an allowlisted picker GIF URL,
+     * which then draws as the GIF. The same rule chat and the web use
+     * ([GifLinks]); any other body or host stays text.
+     */
+    val gifUrl: String? get() = GifLinks.mediaBody(body)
+}
 
 @Serializable
 data class BauPost(

@@ -190,4 +190,50 @@ class YoutubeLinksTest {
         assertNull(YoutubeLinks.videoId(null))
         assertNull(YoutubeLinks.thumbnailUrl("https://example.com"))
     }
+
+    // The two media decisions that used to be placeholders.
+
+    private fun comment(body: String) = BauComment(
+        id = "c",
+        author = gg.pqp.app.social.PublicUser(id = "u", displayName = "Rafa"),
+        body = body,
+        createdAt = "2026-08-30T20:00:00.000Z",
+    )
+
+    @Test
+    fun `a stored video with an http url plays in the app`() {
+        val media = BauMedia(
+            kind = "video",
+            name = "pqp-bau-lancamento-small.mp4",
+            contentType = "video/mp4",
+            url = "https://files.example.com/bau/clip.mp4?X-Amz-Signature=abc",
+        )
+        assertTrue(media.canPlayInApp)
+    }
+
+    @Test
+    fun `only a stored video with a readable url plays in the app`() {
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = null).canPlayInApp)
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = "/relative.mp4").canPlayInApp)
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = "file:///etc/hosts").canPlayInApp)
+        assertFalse(BauMedia(kind = "image", name = "x.png", url = "https://a.example/x.png").canPlayInApp)
+        assertFalse(BauMedia(kind = "youtube", youtubeUrl = "https://youtu.be/dQw4w9WgXcQ").canPlayInApp)
+    }
+
+    @Test
+    fun `a comment that is only a klipy url is a gif`() {
+        val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        assertEquals(url, comment(url).gifUrl)
+        assertEquals(url, comment("  $url\n").gifUrl)
+    }
+
+    @Test
+    fun `anything else in a comment stays text`() {
+        val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        assertNull(comment("olha isso $url").gifUrl)
+        assertNull(comment("https://evil.example/x.gif").gifUrl)
+        assertNull(comment("http://static.klipy.com/ii/x.gif").gifUrl)
+        assertNull(comment("https://static.klipy.com/ii/page.html?x=.gif").gifUrl)
+        assertNull(comment("tá bom").gifUrl)
+    }
 }

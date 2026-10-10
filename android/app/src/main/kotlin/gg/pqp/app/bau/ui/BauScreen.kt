@@ -69,6 +69,9 @@ import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
 import gg.pqp.app.ui.components.pqpTopBarColors
+import gg.pqp.app.ui.media.GifLinks
+import gg.pqp.app.ui.media.InlineGif
+import gg.pqp.app.ui.media.VideoPlayerDialog
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
@@ -239,7 +242,12 @@ private fun PostCard(
         } else {
             post.body?.takeIf { it.isNotBlank() }?.let { body ->
                 Spacer(Modifier.height(Spacing.sm))
-                Text(text = body, style = MaterialTheme.typography.bodyLarge)
+                val gifBody = remember(body) { GifLinks.mediaBody(body) }
+                if (gifBody != null) {
+                    InlineGif(gifBody)
+                } else {
+                    Text(text = body, style = MaterialTheme.typography.bodyLarge)
+                }
             }
             post.media?.let { media ->
                 Spacer(Modifier.height(Spacing.md))
@@ -387,6 +395,8 @@ private fun LockedBox() {
 @Composable
 private fun MediaView(media: BauMedia) {
     val context = LocalContext.current
+    // Saveable: a rotation while the player is open must not close it.
+    var playing by rememberSaveable(media.url) { mutableStateOf(false) }
     val target = media.openUrl
     val open: () -> Unit = {
         if (target != null) {
@@ -476,13 +486,16 @@ private fun MediaView(media: BauMedia) {
             PlayBadge(stringResource(R.string.bau_media_instagram))
         }
 
-        media.isVideo -> Box(
+        media.canPlayInApp -> Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable(role = Role.Button, onClick = open)
+                // Plays in the app's own player, the one chat attachments use
+                // (see `VideoPlayerDialog`): an `ACTION_VIEW` hand-off gets a
+                // URL that the browser or a viewer may download, not stream.
+                .clickable(role = Role.Button) { playing = true }
                 .testTag("bau.media.video"),
             contentAlignment = Alignment.Center,
         ) {
@@ -490,6 +503,17 @@ private fun MediaView(media: BauMedia) {
         }
 
         else -> FileCard(media, open)
+    }
+
+    if (playing && media.canPlayInApp && target != null) {
+        VideoPlayerDialog(
+            key = target,
+            url = target,
+            // The feed carries a fresh presigned URL on every load; there is
+            // no per-media re-sign route to call.
+            remint = null,
+            onDismiss = { playing = false },
+        )
     }
 }
 
@@ -701,7 +725,14 @@ private fun CommentRow(comment: BauComment) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = comment.body, style = MaterialTheme.typography.bodyMedium)
+            // A comment that is only a picker GIF draws as the GIF, as in chat
+            // and on the web; any other body, or any other host, stays text.
+            val gifBody = remember(comment.body) { comment.gifUrl }
+            if (gifBody != null) {
+                InlineGif(gifBody)
+            } else {
+                Text(text = comment.body, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
