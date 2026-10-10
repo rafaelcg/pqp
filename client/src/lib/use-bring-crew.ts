@@ -49,12 +49,14 @@ export function useBringCrew(
         if (!current()) {
           return;
         }
-        if (
-          error instanceof ApiError &&
-          (error.status === 403 || error.status === 404)
-        ) {
-          // A permission taken away, or an API without the route: nothing
-          // to draw, and nothing to retry.
+        const transient =
+          !(error instanceof ApiError) ||
+          error.status === 0 ||
+          error.status === 429 ||
+          error.status >= 500;
+        if (!transient) {
+          // A permission taken away, an API without the route, any other
+          // refusal: nothing to draw, and nothing to retry.
           setArrivals(null);
           setRetrying(false);
           return;
