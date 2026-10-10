@@ -444,6 +444,7 @@ private fun SignedInNav(
                         serverId = route.serverId,
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
+                        callActive = voiceState.isActive || callState.outgoing != null,
                     )
                 }
                 composable<ChatRoute> { entry ->

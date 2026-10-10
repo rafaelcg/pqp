@@ -35,6 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,7 +73,6 @@ import gg.pqp.app.ui.components.EmptyState
 import gg.pqp.app.ui.components.pqpTopBarColors
 import gg.pqp.app.ui.media.GifLinks
 import gg.pqp.app.ui.media.InlineGif
-import gg.pqp.app.ui.media.VideoPlayerDialog
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
@@ -87,6 +88,23 @@ import gg.pqp.app.ui.theme.TabularFigures
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BauScreen(
+    session: SessionStore,
+    serverId: String,
+    serverName: String,
+    onBack: () -> Unit,
+    /** A voice room or a call is live; the video then leaves the audio focus alone. */
+    callActive: Boolean = false,
+) {
+    // Leaving the Baú releases the player; a card scrolling away only pauses.
+    DisposableEffect(Unit) { onDispose { BauPlayback.stop() } }
+    CompositionLocalProvider(LocalBauCallActive provides callActive) {
+        BauScreenContent(session, serverId, serverName, onBack)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BauScreenContent(
     session: SessionStore,
     serverId: String,
     serverName: String,
@@ -423,8 +441,7 @@ private fun LockedBox() {
 @Composable
 private fun MediaView(media: BauMedia) {
     val context = LocalContext.current
-    // Saveable: a rotation while the player is open must not close it.
-    var playing by rememberSaveable(media.url) { mutableStateOf(false) }
+    val callActive = LocalBauCallActive.current
     val target = media.openUrl
     val open: () -> Unit = {
         if (target != null) {
@@ -514,16 +531,22 @@ private fun MediaView(media: BauMedia) {
             PlayBadge(stringResource(R.string.bau_media_instagram))
         }
 
+        media.canPlayInApp && target != null && BauPlayback.activeKey == target ->
+            BauActiveVideo(key = target, open = open)
+
         media.canPlayInApp -> Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                // Plays in the app's own player, the one chat attachments use
-                // (see `VideoPlayerDialog`): an `ACTION_VIEW` hand-off gets a
-                // URL that the browser or a viewer may download, not stream.
-                .clickable(role = Role.Button) { playing = true }
+                // Plays in the card, in the app's own player: an `ACTION_VIEW`
+                // hand-off gets a URL that the browser or a viewer may
+                // download, not stream. The feed carries a fresh presigned URL
+                // on every load, so there is nothing to re-sign here.
+                .clickable(role = Role.Button) {
+                    target?.let { BauPlayback.play(context, it, it, callActive) }
+                }
                 .testTag("bau.media.video"),
             contentAlignment = Alignment.Center,
         ) {
@@ -531,17 +554,6 @@ private fun MediaView(media: BauMedia) {
         }
 
         else -> FileCard(media, open)
-    }
-
-    if (playing && media.canPlayInApp && target != null) {
-        VideoPlayerDialog(
-            key = target,
-            url = target,
-            // The feed carries a fresh presigned URL on every load; there is
-            // no per-media re-sign route to call.
-            remint = null,
-            onDismiss = { playing = false },
-        )
     }
 }
 
