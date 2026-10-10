@@ -44,6 +44,7 @@ function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
     createdAt: now,
     updatedAt: now,
     translation: null,
+    captions: null,
     ...overrides,
   };
 }

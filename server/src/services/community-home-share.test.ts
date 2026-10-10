@@ -146,6 +146,7 @@ describe("toPostCard", () => {
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
     translation: null,
+    captions: null,
   };
 
   it("uses the signed url for an image or video and the poster for YouTube", () => {
