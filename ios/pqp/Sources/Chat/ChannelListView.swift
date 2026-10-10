@@ -375,6 +375,7 @@ struct ChannelListView: View {
                 if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 guard !Task.isCancelled else { return }
                 let config = await session.api.communityHomeConfig()
+                guard !Task.isCancelled else { return }
                 if config.enabled {
                     if communityHome == nil { communityHome = config }
                     guard current.communityHomeEnabled else { return }

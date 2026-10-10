@@ -398,8 +398,13 @@ actor BauCardStore {
         }
         // Only a settled entry is evicted: dropping one still in flight would
         // stop later rows coalescing with a request that keeps running.
-        if entries.count >= Self.capacity,
-           let oldest = entries.filter({ $0.value.settled }).min(by: { $0.value.at < $1.value.at })?.key {
+        if entries.count >= Self.capacity {
+            guard let oldest = entries.filter({ $0.value.settled }).min(by: { $0.value.at < $1.value.at })?.key else {
+                // Capacity is all in-flight requests: this one is fetched
+                // uncached and tied to its caller, so it cancels with the row
+                // instead of adding to a pile nobody is waiting on.
+                return try? await fetch(serverId, postId, lang)
+            }
             entries.removeValue(forKey: oldest)
         }
         nextId += 1
