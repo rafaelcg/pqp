@@ -77,6 +77,15 @@ class GameAudioCapture(
         private set
 
     /**
+     * The recorder is running and its sound is going into the call. Separate
+     * from [usable]: between attach and the first recorder starting the capture
+     * is usable (the track may stay on for it) but nothing is live yet, and
+     * the call bar must not say "com o som" in that window.
+     */
+    @Volatile var live: Boolean = false
+        private set
+
+    /**
      * Mix whatever game audio is waiting into one microphone buffer, in place.
      *
      * [micOn] false zeroes the microphone half (see [mixPcm16]); that holds
@@ -123,6 +132,7 @@ class GameAudioCapture(
     fun release() {
         val old = synchronized(lock) {
             released = true
+            live = false
             ring?.clear()
             record.also { record = null }
         }
@@ -166,7 +176,11 @@ class GameAudioCapture(
         }
         val built = createRecord(format.first, format.second)
         if (built == null) {
-            fail("the platform refused the playback capture recorder")
+            // Only the build for the format still wanted decides the outcome.
+            // A superseded one failing (the route moved on while it built)
+            // must not disable the newer build queued behind it.
+            val current = synchronized(lock) { !released && wantedFormat == format }
+            if (current) fail("the platform refused the playback capture recorder")
             return
         }
         val published = synchronized(lock) {
@@ -186,6 +200,7 @@ class GameAudioCapture(
             return
         }
         Log.i(TAG, "game audio capture started at ${format.first}Hz x${format.second}")
+        live = true
         onStatus(true)
     }
 
@@ -282,6 +297,7 @@ class GameAudioCapture(
     private fun markFailed() {
         if (!usable) return
         usable = false
+        live = false
         onStatus(false)
     }
 

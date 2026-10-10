@@ -246,7 +246,8 @@ class LiveKitEngine(
     /** The game's sound while a share carries it. See [GameAudioCapture]. */
     @Volatile private var gameAudio: GameAudioCapture? = null
 
-    override val isSharingScreenAudio: Boolean get() = carryingGameAudio()
+    override val isSharingScreenAudio: Boolean
+        get() = carryingGameAudio() && gameAudio?.live == true
 
     /** A moderator holds the microphone. Nothing goes out, game included. */
     @Volatile private var serverMuted = false
@@ -256,6 +257,8 @@ class LiveKitEngine(
         serverMuted = muted
         micTrack?.enabled = micTrackEnabled()
         scope.launch { applyMuteToPublication() }
+        // The call bar's "com o som" follows the moderator too.
+        if (gameAudio != null) onScreenAudioChanged(isSharingScreenAudio)
     }
 
     private fun carryingGameAudio(): Boolean =

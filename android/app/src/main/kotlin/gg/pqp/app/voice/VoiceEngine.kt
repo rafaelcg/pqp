@@ -186,7 +186,8 @@ class VoiceEngine(
      */
     @Volatile private var gameAudio: GameAudioCapture? = null
 
-    override val isSharingScreenAudio: Boolean get() = carryingGameAudio()
+    override val isSharingScreenAudio: Boolean
+        get() = carryingGameAudio() && gameAudio?.live == true
 
     /** The person wants to be heard: not muted, not deafened. */
     @Volatile private var micWanted = true
@@ -198,6 +199,8 @@ class VoiceEngine(
         if (serverMuted == muted) return
         serverMuted = muted
         applyLocalAudio()
+        // The call bar's "com o som" follows the moderator too.
+        if (gameAudio != null) onScreenAudioChanged(isSharingScreenAudio)
     }
 
     private fun carryingGameAudio(): Boolean =

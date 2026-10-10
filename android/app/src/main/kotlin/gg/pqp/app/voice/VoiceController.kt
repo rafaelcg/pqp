@@ -849,6 +849,8 @@ class VoiceController(
      */
     private fun onScreenAudioChanged(live: Boolean) {
         val current = _state.value
+        // A server mute lands on the roster path, a recorder starting on a
+        // posted coroutine; either way a share that has ended stays silent.
         if (live && !current.sharingScreen) return
         if (current.sharingScreenAudio == live) return
         _state.value = current.copy(sharingScreenAudio = live)
