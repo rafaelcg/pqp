@@ -562,13 +562,19 @@ private struct BauInlineVideo: View {
         .merge(with: NotificationCenter.default
             .publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
             .map { _ in () })
-        for await _ in broken.values {
-            if Task.isCancelled { return }
-            player?.pause()
-            player = nil
-            failed = true
-            return
+        // `publisher(for:)` replays the current value on subscription, but a
+        // failure recorded during the seek above is cheap to check outright.
+        var isBroken = BauVideoHealth.isFailure(status: item.status, error: item.error)
+        if !isBroken {
+            for await _ in broken.values {
+                isBroken = true
+                break
+            }
         }
+        guard isBroken, !Task.isCancelled else { return }
+        player?.pause()
+        player = nil
+        failed = true
     }
 }
 
