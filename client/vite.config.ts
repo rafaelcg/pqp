@@ -316,7 +316,17 @@ export default defineConfig(({ command }) => ({
         // lives on a different origin in production and is deliberately not
         // cached: a chat app serving yesterday's messages from a cache is worse
         // than one that says it is offline.
-        globPatterns: ["**/*.{js,css,html,woff2}"],
+        //
+        // HTML is `index.html` only, never `**/*.html`. Every precache entry
+        // must answer 200 or the whole install fails and the new worker is
+        // discarded, on every deploy, in every browser. A standalone page in
+        // `public/` (the share diagnostics) is served by Pages at a pretty URL
+        // (`/x.html` is a 308 to `/x`), and the edge middleware 404s a path no
+        // SPA route knows. From 2026-09-30 to 2026-10-10 that kept every new
+        // visitor without a worker (so without web push) and every existing
+        // worker on its old build: a plain reload showed the old site, a hard
+        // reload the new one. `docs/PWA.md` §"A precache entry that 404s".
+        globPatterns: ["**/*.{js,css,woff2}", "index.html"],
         // The RNNoise worklet is a `.js` file and would otherwise be swept
         // into the shell precache, which is 63 kB downloaded by every install
         // for a setting almost nobody turns on — and useless besides, since

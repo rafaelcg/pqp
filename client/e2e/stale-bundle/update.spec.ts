@@ -350,6 +350,94 @@ test("offline, a navigation is still answered: the precached shell is the fallba
   await context.close();
 });
 
+// ------------------------------------------------- the worker can install at all
+
+/**
+ * Found on 2026-10-10: production's worker could not install, in any browser.
+ * Three standalone pages in `public/` were precached, Pages answers `/x.html`
+ * with a 308 to `/x`, and the edge middleware turned `/x` into a 404 because
+ * no SPA route knew it. One non-200 entry fails Workbox's install, so the new
+ * worker went redundant on every deploy, and a person whose worker predated
+ * the network-first handler kept getting the old build on every plain reload
+ * (a hard reload skips the worker, so it showed the new one).
+ */
+
+/** The URLs the built worker precaches, as it would request them. */
+function precacheUrls(dir: string): string[] {
+  const sw = readFileSync(path.join(dir, "sw.js"), "utf8");
+  return [...sw.matchAll(/\{url:"([^"]+)",revision:/g)].map((m) => `/${m[1]!}`);
+}
+
+test("every precached URL answers 200 at the edge", async ({ page }) => {
+  server.serve(newDir);
+  const urls = precacheUrls(newDir);
+  expect(urls.length).toBeGreaterThan(20);
+  const failed: string[] = [];
+  for (const url of urls) {
+    const response = await page.request.get(`${server.origin}${url}`);
+    if (response.status() !== 200) {
+      failed.push(`${url} ${response.status()}`);
+    }
+  }
+  expect(failed).toEqual([]);
+});
+
+test("a fresh worker installs and activates", async ({ browser }) => {
+  server.serve(newDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  const states = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const worker = registration.installing ?? registration.waiting ?? registration.active!;
+    const seen = [worker.state];
+    await new Promise<void>((resolve) => {
+      if (worker.state === "activated") {
+        resolve();
+        return;
+      }
+      worker.addEventListener("statechange", () => {
+        seen.push(worker.state);
+        if (worker.state === "activated" || worker.state === "redundant") {
+          resolve();
+        }
+      });
+    });
+    return seen;
+  });
+  expect(states.at(-1)).toBe("activated");
+  await context.close();
+});
+
+test("a person on a worker from before the fix: a plain reload reaches the new build", async ({
+  browser,
+}) => {
+  server.serve(legacyDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  // The legacy worker does not claim the page it installed from: one reload
+  // puts the page under it, as for anybody who came back the next day.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", "fixture-legacy");
+
+  server.serve(newDir);
+  await expect
+    .poll(
+      async () => {
+        // Cmd+R, then read the build the page booted (set once the bundle runs).
+        await page.reload();
+        await page.waitForFunction(() => !!document.documentElement.dataset.pqpBuild);
+        return buildOf(page);
+      },
+      { timeout: 30_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe(NEW);
+  await context.close();
+});
+
 test("exactly one handler answers a navigation: Workbox's own navigation route is not built in", async () => {
   // Two fetch listeners that both call `respondWith` make the second throw
   // `InvalidStateError`. The network-first handler is the one; the legacy
