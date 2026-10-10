@@ -39,6 +39,32 @@ struct CommunityHomeConfig: Codable, Sendable, Hashable {
     }
 }
 
+/// The phone cut of an uploaded video: the vertical (9:16) edit the author
+/// attached beside the landscape one (`communityHomeMobileRenditionSchema`).
+/// The phone plays this one when it is there; an older server never sends it
+/// and the card plays the main video, exactly as before.
+struct CommunityHomeMobileRendition: Codable, Sendable, Hashable {
+    let name: String
+    let contentType: String?
+    let byteSize: Int?
+    let url: String?
+
+    init(name: String = "", contentType: String? = nil, byteSize: Int? = nil, url: String? = nil) {
+        self.name = name
+        self.contentType = contentType
+        self.byteSize = byteSize
+        self.url = url
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        contentType = try c.decodeIfPresent(String.self, forKey: .contentType)
+        byteSize = try c.decodeIfPresent(Int.self, forKey: .byteSize)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+    }
+}
+
 /// One post's media, as the viewer may see it. `url` is a presigned GET for
 /// storage-backed kinds and nil for YouTube / Twitch / TikTok / Instagram; a
 /// locked viewer gets no media at all (the whole object is nil on the post),
@@ -52,6 +78,8 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
     let url: String?
     let youtubeUrl: String?
     let twitchUrl: String?
+    /// The vertical cut of a `video`, or nil. Only ever set on a video.
+    let mobile: CommunityHomeMobileRendition?
 
     var isImage: Bool { kind == "image" }
     var isVideo: Bool { kind == "video" }
@@ -65,21 +93,32 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
     /// The URL an uploaded video plays from, or nil when this is not a stored
     /// video or has no readable https URL (a deployment without storage sends
     /// the object with `url: null`; the card then falls back to open-out).
+    ///
+    /// When the author attached a vertical cut with a readable URL, that is
+    /// the one: this is a phone, which is who the cut is for. The only place
+    /// the choice is made, so the player never has to know there are two.
     var inlineVideoURL: URL? {
-        guard isVideo, let raw = url, let parsed = URL(string: raw),
-              ["https", "http"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
-        return parsed
+        guard isVideo else { return nil }
+        return Self.httpURL(mobile?.url) ?? Self.httpURL(url)
     }
 
     /// What a tap opens: the object for storage kinds, the watch page for paste URLs.
     var openURL: URL? {
         if isYoutube || isTiktok || isInstagram { return URL(string: youtubeUrl ?? "") }
         if isTwitch { return URL(string: twitchUrl ?? "") }
+        if isVideo, let playable = inlineVideoURL { return playable }
         return URL(string: url ?? "")
     }
 
+    private static func httpURL(_ raw: String?) -> URL? {
+        guard let raw, let parsed = URL(string: raw),
+              ["https", "http"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
+        return parsed
+    }
+
     init(kind: String, name: String = "", contentType: String? = nil, byteSize: Int? = nil,
-         url: String? = nil, youtubeUrl: String? = nil, twitchUrl: String? = nil) {
+         url: String? = nil, youtubeUrl: String? = nil, twitchUrl: String? = nil,
+         mobile: CommunityHomeMobileRendition? = nil) {
         self.kind = kind
         self.name = name
         self.contentType = contentType
@@ -87,6 +126,7 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         self.url = url
         self.youtubeUrl = youtubeUrl
         self.twitchUrl = twitchUrl
+        self.mobile = mobile
     }
 
     init(from decoder: Decoder) throws {
@@ -98,6 +138,8 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         url = try c.decodeIfPresent(String.self, forKey: .url)
         youtubeUrl = try c.decodeIfPresent(String.self, forKey: .youtubeUrl)
         twitchUrl = try c.decodeIfPresent(String.self, forKey: .twitchUrl)
+        // A malformed cut costs the cut, never the card.
+        mobile = try? c.decodeIfPresent(CommunityHomeMobileRendition.self, forKey: .mobile)
     }
 }
 

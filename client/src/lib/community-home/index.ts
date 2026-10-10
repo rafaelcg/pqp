@@ -74,6 +74,7 @@ export {
   youtubeEmbedSrc,
   youtubePosterUrl,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomeMediaKind,
   type UploadedHomeMedia,
 } from "./media";

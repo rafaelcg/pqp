@@ -1,5 +1,5 @@
 import { Download, Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommunityHomeMedia } from "@pqp/shared";
 import {
   formatHomeBytes,
@@ -8,6 +8,10 @@ import {
   twitchEmbedSrc,
   youtubeEmbedSrc,
 } from "@/lib/community-home/media";
+import {
+  communityHomeVideoUrl,
+  readRenditionViewport,
+} from "@/lib/community-home/rendition";
 import { Slider } from "@/components/ui/slider";
 import {
   currentFullscreenElement,
@@ -166,17 +170,7 @@ export function UnlockedMedia({
   }
 
   if (media.kind === "video") {
-    return (
-      <div className={frame} data-home-media="video">
-        {media.url ? (
-          <VideoPlayer url={media.url} />
-        ) : (
-          <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
-            {t("communityHome.media.unavailable")}
-          </div>
-        )}
-      </div>
-    );
+    return <HomeVideo media={media} frame={frame} />;
   }
 
   return (
@@ -189,6 +183,38 @@ export function UnlockedMedia({
           decoding="async"
           className="max-h-[32rem] w-full object-contain"
         />
+      ) : (
+        <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
+          {t("communityHome.media.unavailable")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * An uploaded video, in the cut this screen should play: the vertical one on
+ * a phone when the author attached it, the main one everywhere else (the rule
+ * is `communityHomeVideoUrl`). Decided when the card mounts and again only
+ * when the post's URLs change, never on a resize, so turning the phone does
+ * not restart the video.
+ */
+function HomeVideo({ media, frame }: { media: CommunityHomeMedia; frame: string }) {
+  const { t } = useTranslation();
+  const mainUrl = media.url;
+  const mobileUrl = media.mobile?.url ?? null;
+  const chosen = useMemo(
+    () =>
+      communityHomeVideoUrl(
+        { kind: "video", url: mainUrl, mobile: { url: mobileUrl } },
+        readRenditionViewport(),
+      ),
+    [mainUrl, mobileUrl],
+  );
+  return (
+    <div className={frame} data-home-media="video" data-home-video-rendition={chosen.rendition}>
+      {chosen.url ? (
+        <VideoPlayer key={chosen.url} url={chosen.url} />
       ) : (
         <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
           {t("communityHome.media.unavailable")}

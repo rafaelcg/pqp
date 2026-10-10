@@ -50,6 +50,7 @@ export {
 export type {
   CommunityHomeMedia,
   CommunityHomeMediaKind,
+  CommunityHomeMobileRendition,
 } from "@pqp/shared";
 
 const ALLOWED_CONTENT_TYPES: ReadonlySet<string> = new Set(

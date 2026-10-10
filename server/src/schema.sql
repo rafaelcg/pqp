@@ -4048,6 +4048,29 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
 
+-- The phone cut of a post's uploaded video: the vertical (9:16) edit a phone
+-- plays instead of the landscape one. A second stored object on the same row,
+-- through the same mint / PUT / claim and the same size, type and HEAD checks
+-- as the main media, so its upload row is the same kind of row and the orphan
+-- sweep and the delete path treat it the same way. NULL on every post that
+-- does not have one. Only ever set when media_kind = 'video', and always a
+-- video itself (the service enforces both; the CHECK is the backstop). Served
+-- only while the runtime flag `bau_mobile_rendition` is on for the server.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_name TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_content_type TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_byte_size BIGINT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_storage_key TEXT;
+
+DO $$
+BEGIN
+  ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_mobile_media_check;
+  ALTER TABLE community_home_posts
+    ADD CONSTRAINT community_home_posts_mobile_media_check
+    CHECK (mobile_media_storage_key IS NULL OR media_kind = 'video');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;

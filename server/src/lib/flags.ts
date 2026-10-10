@@ -275,6 +275,17 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (translationEnabled)",
   },
+  bau_mobile_rendition: {
+    description:
+      "Versão pro celular dos vídeos do Baú: quem posta anexa um segundo corte (vertical) e o celular toca esse.",
+    env: "BAU_MOBILE_RENDITION",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the feed and post reads hydrate posts of
+    // one server, and create / update are routes under `/servers/:id`.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
+  },
   desktop_share_audio_native: {
     description:
       "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",
