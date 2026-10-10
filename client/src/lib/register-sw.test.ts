@@ -214,6 +214,15 @@ describe("installFailureReporter", () => {
     expect(report.mock.calls).toEqual([[{ reason: "unknown", path: "", status: "0", build: "" }]]);
   });
 
+  it("stays quiet, fallback included, in a tab the worker did not choose", () => {
+    const report = vi.fn();
+    const r = installFailureReporter(report, 3000);
+    r.cause({ ...cause, report: false });
+    r.failed();
+    vi.advanceTimersByTime(5000);
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it("ignores messages that are not ours", () => {
     const report = vi.fn();
     const r = installFailureReporter(report);

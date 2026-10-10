@@ -447,6 +447,7 @@ test("a failed install tells the page which file broke it", async ({ browser }) 
     reason: "bad-precaching-response",
     path: "/robots.txt",
     status: 404,
+    report: true,
   });
   await context.close();
 });

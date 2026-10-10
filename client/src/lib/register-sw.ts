@@ -91,21 +91,28 @@ export function installCauseAttributes(message: unknown): Record<string, string>
  * and a worker from before the message existed never sends one. So a cause is
  * reported at once, and an outcome is reported on its own only if no cause
  * arrived within `waitMs` either side of it.
+ *
+ * Every open tab sees both signals. The worker marks one tab's message
+ * `report: true` and the rest `report: false`; a tab told `false` stays quiet,
+ * its fallback included, so one failed install is one event.
  */
 export function installFailureReporter(
   report: (attributes: Record<string, string>) => void,
   waitMs = INSTALL_CAUSE_WAIT_MS,
 ): { cause: (message: unknown) => void; failed: () => void } {
   let lastReportAt = Number.NEGATIVE_INFINITY;
-  const send = (attributes: Record<string, string>) => {
+  const send = (attributes: Record<string, string> | null) => {
     lastReportAt = Date.now();
-    report(attributes);
+    if (attributes) {
+      report(attributes);
+    }
   };
   return {
     cause(message) {
       const attributes = installCauseAttributes(message);
       if (attributes && Date.now() - lastReportAt >= waitMs) {
-        send(attributes);
+        // Another tab was chosen to report this one: settle without sending.
+        send((message as { report?: unknown }).report === false ? null : attributes);
       }
     },
     failed() {

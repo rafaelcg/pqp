@@ -26,7 +26,8 @@
  *     listener here runs before Workbox's, wraps `event.waitUntil` for that
  *     one event, and when a promise passed to it rejects, posts the failing
  *     path, status and error name to every open page of the origin
- *     (`PQP_SW_INSTALL_FAILED`, read by `lib/register-sw.ts`), then rethrows so
+ *     (`PQP_SW_INSTALL_FAILED`, read by `lib/register-sw.ts`), with `report`
+ *     true on exactly one of them so N tabs make one event, then rethrows so
  *     the install fails exactly as before. The post is bounded by a timer, so
  *     reporting can never hold an install open. Only our own asset path is
  *     sent: no query string, no user data.
@@ -107,10 +108,19 @@ export function swBuildScript(
     `      status: typeof details.status === "number" ? details.status : 0`,
     `    };`,
     `  }`,
+    `  function rank(client) {`,
+    `    return client.focused ? 0 : client.visibilityState === "visible" ? 1 : 2;`,
+    `  }`,
     `  function tell(message) {`,
     `    var posted = self.clients.matchAll({ type: "window", includeUncontrolled: true })`,
     `      .then(function (clients) {`,
-    `        for (var i = 0; i < clients.length; i++) { clients[i].postMessage(message); }`,
+    `        // Every open page hears it, ONE reports it (focused, else visible,`,
+    `        // else the first), so N tabs make one event, not N.`,
+    `        var chosen = 0;`,
+    `        for (var i = 1; i < clients.length; i++) { if (rank(clients[i]) < rank(clients[chosen])) { chosen = i; } }`,
+    `        for (var j = 0; j < clients.length; j++) {`,
+    `          clients[j].postMessage({ type: message.type, build: message.build, reason: message.reason, path: message.path, status: message.status, report: j === chosen });`,
+    `        }`,
     `      })`,
     `      .catch(function () {});`,
     `    var timeout = new Promise(function (resolve) { setTimeout(resolve, ${INSTALL_REPORT_TIMEOUT_MS}); });`,
