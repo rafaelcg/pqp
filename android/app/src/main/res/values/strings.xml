@@ -136,6 +136,40 @@
     <string name="bau_media_tiktok">Watch on TikTok</string>
     <string name="bau_media_instagram">Watch on Instagram</string>
     <string name="bau_media_unavailable">Media unavailable right now.</string>
+    <string name="bau_compose_open">New post</string>
+    <string name="bau_compose_title">New post</string>
+    <string name="bau_compose_close">Close</string>
+    <string name="bau_compose_publish">Post</string>
+    <string name="bau_compose_title_hint">Title</string>
+    <string name="bau_compose_body_hint">Write something</string>
+    <string name="bau_compose_attach">Add a photo or video</string>
+    <string name="bau_compose_link_hint">Or paste a YouTube, Twitch, TikTok or Instagram link</string>
+    <string name="bau_compose_link_ok">%1$s link. It shows up in the post.</string>
+    <string name="bau_compose_remove">Remove</string>
+    <string name="bau_compose_uploading">Uploading…</string>
+    <string name="bau_compose_upload_failed">The upload failed. Remove it and try again.</string>
+    <string name="bau_compose_err_needs_title">Add a title to post.</string>
+    <string name="bau_compose_err_needs_content">Write something, or add a photo, video or link.</string>
+    <string name="bau_compose_err_title_long">The title is over %1$d characters.</string>
+    <string name="bau_compose_err_body_long">The text is too long for one post.</string>
+    <string name="bau_compose_err_one_source">A post carries a file or a link, not both.</string>
+    <string name="bau_compose_err_bad_link">That does not look like a YouTube, Twitch, TikTok or Instagram link.</string>
+    <string name="bau_compose_err_uploading">Wait for the upload to finish.</string>
+    <string name="bau_compose_pick_unreadable">Could not read that file.</string>
+    <string name="bau_compose_pick_unsupported">Use a PNG, JPEG, WebP, GIF, MP4 or WebM.</string>
+    <string name="bau_compose_pick_too_large">That file is over 100 MB.</string>
+    <string name="bau_compose_refused_not_staff">Only people who manage this server can post to the Baú.</string>
+    <string name="bau_compose_refused_unavailable">The Baú is not available on this server right now.</string>
+    <string name="bau_compose_refused_too_large">That file is too large for the Baú.</string>
+    <string name="bau_compose_refused_slow_down">Slow down a little and try again in a moment.</string>
+    <string name="bau_compose_refused_no_storage">This server cannot take photos or videos right now. A link or text still works.</string>
+    <string name="bau_compose_refused_network">Could not reach the server. Try again.</string>
+    <string name="bau_compose_refused_unconfirmed">Could not confirm the post. Check the Baú before trying again.</string>
+    <string name="bau_compose_refused_invalid">Could not post. %1$s</string>
+    <string name="bau_compose_refused_generic">Could not post. Try again.</string>
+    <string name="bau_compose_discard_title">Discard this post?</string>
+    <string name="bau_compose_discard">Discard</string>
+    <string name="bau_compose_keep_writing">Keep writing</string>
 
     <!-- Attachments -->
     <!-- Accessible name for an animated image. %1$s is its filename or, for a

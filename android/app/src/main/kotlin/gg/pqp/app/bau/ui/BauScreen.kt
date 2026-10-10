@@ -80,10 +80,9 @@ import gg.pqp.app.ui.theme.TabularFigures
 /**
  * A server's Baú: the posts that stay, newest first.
  *
- * Read and react only. There is no composer for a post here and there will
- * not be one this pass: staff write from the web, where the media upload and
- * the schedule live. What a phone is for is reading the clip on the bus and
- * leaving a heart, and that is what this screen does.
+ * Reading and reacting is for everybody. Staff (whoever the server lets
+ * publish, see [rememberCanPostToBau]) also get a "new post" button; drafts and
+ * the schedule stay on the web.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,6 +97,21 @@ fun BauScreen(
         factory = BauViewModel.factory(session, serverId),
     )
     val state by model.state.collectAsStateWithLifecycle()
+    val canPost = rememberCanPostToBau(session, serverId, state.config)
+    var composing by rememberSaveable { mutableStateOf(false) }
+
+    if (composing && canPost) {
+        BauComposeDialog(
+            session = session,
+            serverId = serverId,
+            config = state.config,
+            onDismiss = { composing = false },
+            onPosted = {
+                composing = false
+                model.refresh()
+            },
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -127,6 +141,20 @@ fun BauScreen(
                                 contentDescription = stringResource(R.string.chat_back),
                                 modifier = Modifier.size(Sizes.iconAction),
                             )
+                        }
+                    },
+                    actions = {
+                        if (canPost) {
+                            IconButton(
+                                onClick = { composing = true },
+                                modifier = Modifier.testTag("bau.compose.open"),
+                            ) {
+                                Icon(
+                                    imageVector = PqpIcons.Edit,
+                                    contentDescription = stringResource(R.string.bau_compose_open),
+                                    modifier = Modifier.size(Sizes.iconAction),
+                                )
+                            }
                         }
                     },
                     colors = pqpTopBarColors(),
