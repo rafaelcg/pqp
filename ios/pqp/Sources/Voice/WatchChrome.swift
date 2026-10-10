@@ -375,6 +375,9 @@ enum WatchOrientation {
         /// One per fullscreen presented, so a voice room's and a DM call's
         /// never stand in for each other.
         case screenShare(UUID)
+        /// A Baú video in the system's full screen (`BauVideoSession`). One
+        /// per presentation, like the shared screen's.
+        case bauVideo(UUID)
     }
 
     private static var owners: Set<Owner> = []
@@ -462,6 +465,11 @@ enum WatchOrientation {
     static func enterScreenShare(_ id: UUID) { enter(.screenShare(id)) }
 
     static func leaveScreenShare(_ id: UUID) { leave(.screenShare(id)) }
+
+    /// A Baú video is full screen, so it may turn with the phone.
+    static func enterBauVideo(_ id: UUID) { enter(.bauVideo(id)) }
+
+    static func leaveBauVideo(_ id: UUID) { leave(.bauVideo(id)) }
 
     /// Safety net for the one thing a view's own `onDisappear` cannot be
     /// trusted with: the room or the call ending underneath a fullscreen, so
