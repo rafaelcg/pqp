@@ -27,15 +27,54 @@ import LiveKit
 final class ScreenShareAppAudio: @unchecked Sendable {
     static let shared = ScreenShareAppAudio()
 
-    private let lock = NSLock()
-    private var isOpen = false
+    /// Who is asking. The voice channel and the DM call each own a LiveKit
+    /// client, both talk to the one process-wide mixer, and a request is only
+    /// ever withdrawn by the client that made it.
+    typealias Owner = ObjectIdentifier
 
-    /// Opened by the LiveKit room for the life of its share.
-    func setOpen(_ open: Bool) {
-        lock.withLock { isOpen = open }
+    private let lock = NSLock()
+    private var gateOwner: Owner?
+    private var silencers: Set<Owner> = []
+    private let applyMicVolume: @Sendable (Float) -> Void
+
+    init(applyMicVolume: @escaping @Sendable (Float) -> Void = { volume in
+        AudioManager.shared.mixer.micVolume = volume
+    }) {
+        self.applyMicVolume = applyMicVolume
     }
 
-    var acceptsAudio: Bool { lock.withLock { isOpen } }
+    /// Opened by the LiveKit room for the life of its share. Closing is a
+    /// no-op for anybody but the room that opened it, so the idle client of
+    /// the other kind of call can never shut a live share's sound.
+    func setOpen(_ open: Bool, owner: Owner) {
+        lock.withLock {
+            if open {
+                gateOwner = owner
+            } else if gateOwner == owner {
+                gateOwner = nil
+            }
+        }
+    }
+
+    var acceptsAudio: Bool { lock.withLock { gateOwner != nil } }
+
+    /// Holds the mixer's microphone at zero for as long as ANY client asks.
+    ///
+    /// The mixer is shared and a zero is a privacy promise (somebody muted is
+    /// relying on it), so the volume is the union of every client's request
+    /// rather than whatever the last writer set. One client releasing its own
+    /// request can never undo another's. Applied under the lock, so two
+    /// clients cannot interleave a read of the set with a write of the volume.
+    func setMicSilenced(_ silenced: Bool, by owner: Owner) {
+        lock.withLock {
+            let before = silencers.isEmpty
+            if silenced { silencers.insert(owner) } else { silencers.remove(owner) }
+            let after = silencers.isEmpty
+            if before != after { applyMicVolume(after ? 1 : 0) }
+        }
+    }
+
+    var isMicSilenced: Bool { lock.withLock { !silencers.isEmpty } }
 
     /// One buffer from the extension. Dropped unless a LiveKit share is live.
     func deliver(_ frame: ScreenShareAudioFrame) {

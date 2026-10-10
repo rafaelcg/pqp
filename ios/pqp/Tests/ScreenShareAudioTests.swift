@@ -179,7 +179,42 @@ final class ScreenShareAudioTests: XCTestCase {
 
     func testTheGateStartsShut() {
         // A mesh call never opens it, so a broadcast's sound has nowhere to go.
-        XCTAssertFalse(ScreenShareAppAudio().acceptsAudio)
+        XCTAssertFalse(ScreenShareAppAudio(applyMicVolume: { _ in }).acceptsAudio)
+    }
+
+    /// Two owners, standing in for the voice-channel client and the DM-call
+    /// client, which share one process-wide mixer.
+    private final class Owner {}
+
+    func testOnlyTheOpenerCanShutTheGate() {
+        let audio = ScreenShareAppAudio(applyMicVolume: { _ in })
+        let live = Owner(), idle = Owner()
+        audio.setOpen(true, owner: ObjectIdentifier(live))
+        audio.setOpen(false, owner: ObjectIdentifier(idle))
+        XCTAssertTrue(audio.acceptsAudio, "the idle client shut a live share's sound")
+        audio.setOpen(false, owner: ObjectIdentifier(live))
+        XCTAssertFalse(audio.acceptsAudio)
+    }
+
+    func testTheMicrophoneStaysAtZeroWhileAnyClientAsks() {
+        let volumes = VolumeLog()
+        let audio = ScreenShareAppAudio(applyMicVolume: { volumes.append($0) })
+        // Held for the whole test: an identifier of a freed object can be
+        // reused by the next allocation, which would make the two one owner.
+        let firstOwner = Owner(), secondOwner = Owner()
+        let first = ObjectIdentifier(firstOwner), second = ObjectIdentifier(secondOwner)
+        audio.setMicSilenced(true, by: first)
+        audio.setMicSilenced(true, by: second)
+        // One client letting go must not undo the other's mute.
+        audio.setMicSilenced(false, by: first)
+        XCTAssertTrue(audio.isMicSilenced)
+        // Releasing a request that was never made changes nothing either.
+        audio.setMicSilenced(false, by: first)
+        XCTAssertTrue(audio.isMicSilenced)
+        audio.setMicSilenced(false, by: second)
+        XCTAssertFalse(audio.isMicSilenced)
+        XCTAssertEqual(volumes.values, [0, 1], "the volume moves only on the edges")
+        withExtendedLifetime((firstOwner, secondOwner)) {}
     }
 
     // MARK: - What a mute does while a share's sound is live
@@ -219,4 +254,11 @@ final class ScreenShareAudioTests: XCTestCase {
             }
         }
     }
+}
+
+private final class VolumeLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Float] = []
+    func append(_ value: Float) { lock.withLock { stored.append(value) } }
+    var values: [Float] { lock.withLock { stored } }
 }

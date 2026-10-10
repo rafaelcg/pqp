@@ -50,9 +50,6 @@ actor LiveKitVoiceClient {
     /// A moderator's mute on our own seat, from the roster. Never worked
     /// around, not even to keep a share's sound going.
     private var isSelfServerMuted = false
-    /// This room set the mixer's microphone volume to zero and has not yet
-    /// confirmed it safe to restore. See `applyMicrophoneRouting`.
-    private var isMixerMicSilenced = false
     private var localCamera: LocalVideoTrack?
     /// Attached to our own camera track to count frames. Kept here because a
     /// track holds its renderers strongly and this one has to come off again.
@@ -282,45 +279,33 @@ actor LiveKitVoiceClient {
         let routing = SfuMicrophoneRouting.resolve(
             muted: isMuted, appAudioLive: isAppAudioLive, serverMuted: isSelfServerMuted
         )
-        let mixer = AudioManager.shared.mixer
+        let shared = ScreenShareAppAudio.shared
+        let me = ObjectIdentifier(self)
         guard let room, room.connectionState == .connected,
               let microphone = microphonePublication(in: room) else {
-            // No track here to carry anything. The mixer is shared with the
-            // other kind of call, so it is only put back if THIS room is the
-            // one that zeroed it; otherwise an idle client would undo a live
-            // one's mute.
-            if isMixerMicSilenced {
-                mixer.micVolume = 1
-                isMixerMicSilenced = false
-            }
+            // No track here to carry anything, so this client's own request
+            // for silence can go. Only its own: the mixer is shared, and the
+            // other kind of call keeps whatever it asked for.
+            shared.setMicSilenced(false, by: me)
             return
         }
-        if routing.micVolume == 0 {
-            mixer.micVolume = 0
-            isMixerMicSilenced = true
-        }
+        if routing.micVolume == 0 { shared.setMicSilenced(true, by: me) }
         if routing.trackEnabled {
             _ = try? await room.localParticipant.setMicrophone(enabled: true)
-            if routing.micVolume > 0 {
-                mixer.micVolume = 1
-                isMixerMicSilenced = false
-            }
+            if routing.micVolume > 0 { shared.setMicSilenced(false, by: me) }
             return
         }
-        // Turning the track OFF is the half where a failure leaks speech: the
-        // mixer may be holding a muted person at zero right now, and putting it
-        // back to one over a track that is still on would send what they say.
-        // So the mixer is restored only once the track is confirmed off, by a
-        // mute or, failing that, by taking the publication down. If both fail
-        // the mixer stays at zero, which is still silence.
+        // Turning the track OFF is the half where a failure leaks speech: this
+        // client may be holding a muted person at zero right now, and letting
+        // go of that over a track that is still on would send what they say.
+        // So the request is withdrawn only once the track is confirmed off, by
+        // a mute or, failing that, by taking the publication down. If both
+        // fail the microphone stays at zero, which is still silence.
         var confirmedOff = (try? await room.localParticipant.setMicrophone(enabled: false)) != nil
         if !confirmedOff {
             confirmedOff = (try? await room.localParticipant.unpublish(publication: microphone)) != nil
         }
-        if confirmedOff {
-            mixer.micVolume = 1
-            isMixerMicSilenced = false
-        }
+        if confirmedOff { shared.setMicSilenced(false, by: me) }
     }
 
     /// Silences everyone else. The mic is the caller's to mute alongside, and
@@ -464,7 +449,7 @@ actor LiveKitVoiceClient {
         // finds a whole share to tear down (gate included) and leaves nothing
         // stale behind for the next start to trip over.
         isAppAudioLive = true
-        ScreenShareAppAudio.shared.setOpen(true)
+        ScreenShareAppAudio.shared.setOpen(true, owner: ObjectIdentifier(self))
         await applyMicrophoneRouting()
         // A hangup during that await has already torn the share down,
         // gate included; say so rather than report a share that is gone.
@@ -537,7 +522,7 @@ actor LiveKitVoiceClient {
         // Only this room's own gate: the idle client of the other kind of call
         // is stopped too, and must not shut a live share's sound.
         if isAppAudioLive {
-            ScreenShareAppAudio.shared.setOpen(false)
+            ScreenShareAppAudio.shared.setOpen(false, owner: ObjectIdentifier(self))
             isAppAudioLive = false
             await applyMicrophoneRouting()
         }
@@ -572,8 +557,7 @@ actor LiveKitVoiceClient {
         // the track on is still on the wire until then, and restoring the
         // mixer first would put their voice in the room for the length of the
         // teardown.
-        let ownedSharedAudio = isAppAudioLive || isMixerMicSilenced
-        if ownedSharedAudio { ScreenShareAppAudio.shared.setOpen(false) }
+        ScreenShareAppAudio.shared.setOpen(false, owner: ObjectIdentifier(self))
         isAppAudioLive = false
         isSelfServerMuted = false
         let room = self.room
@@ -594,10 +578,9 @@ actor LiveKitVoiceClient {
         remoteAudio.removeEverything()
         isDeafened = false
         await room?.disconnect()
-        if ownedSharedAudio {
-            AudioManager.shared.mixer.micVolume = 1
-        }
-        isMixerMicSilenced = false
+        // Only now, with the track gone with the room, and only this client's
+        // own request. See `ScreenShareAppAudio.setMicSilenced`.
+        ScreenShareAppAudio.shared.setMicSilenced(false, by: ObjectIdentifier(self))
         emitVideo()
         emit()
     }
