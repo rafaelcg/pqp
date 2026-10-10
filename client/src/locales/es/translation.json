@@ -4770,5 +4770,10 @@
   "communityHome.share.error.generic": "No se pudo publicar la tarjeta. Inténtalo de nuevo.",
   "communityHome.compose.announce": "Anunciar en #{channel}",
   "communityHome.compose.announceHint": "Publica una tarjeta con un botón que abre este post.",
-  "communityHome.compose.announceFailed": "Publicado. No se pudo publicar la tarjeta en #{channel}."
+  "communityHome.compose.announceFailed": "Publicado. No se pudo publicar la tarjeta en #{channel}.",
+  "newcomerInvite.title": "Trae a tus amigos",
+  "newcomerInvite.body": "Crea una sala solo para tu grupo y mándales el enlace.",
+  "newcomerInvite.action": "Invitar amigos",
+  "newcomerInvite.later": "Ahora no",
+  "newcomerInvite.roomName": "Sala de {name}"
 }

@@ -4702,5 +4702,10 @@
   "communityHome.share.error.generic": "Não deu para postar o card. Tenta de novo.",
   "communityHome.compose.announce": "Anunciar no #{channel}",
   "communityHome.compose.announceHint": "Posta um card com um botão que abre este post.",
-  "communityHome.compose.announceFailed": "Publicado. O card não foi postado em #{channel}."
+  "communityHome.compose.announceFailed": "Publicado. O card não foi postado em #{channel}.",
+  "newcomerInvite.title": "Chama teus amigos pra cá",
+  "newcomerInvite.body": "Cria uma sala só da tua turma e manda o link pra eles.",
+  "newcomerInvite.action": "Chamar amigos",
+  "newcomerInvite.later": "Agora não",
+  "newcomerInvite.roomName": "Sala de {name}"
 }

@@ -315,3 +315,32 @@ describe("the stream-started frame", () => {
     expect(chat).toContain("streamStartedSchema");
   });
 });
+
+/**
+ * `newcomer_invite_moment`, the "chama teus amigos" strip. A global client
+ * flag on its own config route: pinned from both sides so the strip cannot
+ * ship reading a field the server never sends.
+ */
+describe("newcomer_invite_moment against the onboarding config the client reads", () => {
+  it("is global, off by default, and named under the field the route serves", () => {
+    const def = FEATURE_FLAGS.newcomer_invite_moment;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/onboarding/config (inviteMoment)");
+  });
+
+  it("the route is mounted and answers from the flag", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/onboarding\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/onboarding/config is not mounted").toBeTruthy();
+    expect(route).toContain('inviteMoment: isEnabled("newcomer_invite_moment")');
+  });
+
+  it("the client asks that route and reads inviteMoment off the answer", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/newcomer-invite.ts"), "utf8");
+    expect(lib).toContain("/api/onboarding/config");
+    expect(lib).toMatch(/\.inviteMoment === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/newcomerInviteUserId \? startNewcomerInviteConfig\(\) : undefined/);
+  });
+});

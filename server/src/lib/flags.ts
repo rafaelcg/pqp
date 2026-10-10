@@ -543,6 +543,19 @@ export const FEATURE_FLAGS = {
     // known but a conversation has no roles: global on purpose.
     perServer: false,
   },
+  newcomer_invite_moment: {
+    description:
+      "Chama teus amigos (só cliente): quem chegou sem convite e só está em comunidades públicas (o QG) vê uma faixa pra criar uma sala e mandar o link, e a lista de primeiros passos para de contar o QG como sala.",
+    env: "NEWCOMER_INVITE_MOMENT",
+    parseEnv: exactTrue,
+    // Off until the strip has been seen on production by a real newcomer.
+    codeDefault: false,
+    // About an account, not a server: the strip asks whether ANY of your
+    // servers is a room of your own, and the hub's checklist has no server in
+    // hand. A per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (inviteMoment)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
