@@ -121,6 +121,7 @@ import {
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
+import { shareAppTarget } from "@/lib/share-app-hint";
 import {
   NO_SCREEN_FULLSCREEN,
   escapeExitsExpandedFullscreen,
@@ -2810,6 +2811,12 @@ export function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // A phone browser that cannot capture still has a native app that can. Only
+  // used to point at it once the person taps the greyed-out button.
+  const shareAppLink = useMemo(
+    () => shareAppTarget({ canShareInBrowser: canShare }),
+    [canShare],
+  );
   // Watch party is a Chrome tab plus that tab's sound. The shell picker
   // lists screens and windows only, so the same door there would start a
   // silent share and the prompt would be a lie.
@@ -3661,8 +3668,31 @@ export function CallControls({
         />
       )}
     {shareHint && (
-      <p role="status" className="text-center text-[11px] text-paper-muted">
+      <p
+        role="status"
+        data-testid="share-unavailable-hint"
+        className="text-center text-[11px] text-paper-muted"
+      >
         {shareHint}
+        {shareAppLink && (
+          <>
+            {" "}
+            {t("voice.share.useApp")}{" "}
+            <a
+              href={shareAppLink.url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="share-get-app-link"
+              className="font-medium text-signal underline underline-offset-2"
+            >
+              {t(
+                shareAppLink.platform === "android"
+                  ? "voice.share.useApp.android"
+                  : "voice.share.useApp.ios",
+              )}
+            </a>
+          </>
+        )}
       </p>
     )}
     </div>
