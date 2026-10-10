@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -177,18 +178,35 @@ internal object BauPlayback {
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
         private set
 
+    private var callActive = false
+
+    /**
+     * The call state changed under a clip that is already loaded: a call that
+     * starts must not find a player still asking for focus, and a call that
+     * ended hands the focus handling back.
+     */
+    fun setCallActive(active: Boolean) {
+        callActive = active
+        player?.let { applyAudio(it) }
+    }
+
+    private fun applyAudio(exo: ExoPlayer) {
+        exo.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(),
+            BauPlaybackPolicy.handleAudioFocus(callActive),
+        )
+    }
+
     fun play(context: Context, key: String, url: String, callActive: Boolean) {
+        this.callActive = callActive
         floor.claim(key)?.let { releasePlayer() }
         if (player != null) return
         failedKey = null
         val exo = ExoPlayer.Builder(context.applicationContext).build().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                BauPlaybackPolicy.handleAudioFocus(callActive),
-            )
+            applyAudio(this)
             setMediaItem(MediaItem.fromUri(Backend.absolute(url).orEmpty()))
             playWhenReady = true
             addListener(object : Player.Listener {
@@ -300,9 +318,21 @@ internal fun BauActiveVideo(
     DisposableEffect(key) {
         onDispose {
             val exo = BauPlayback.player
-            if (exo != null && BauPlaybackPolicy.pauseWhenScrolledAway(fullscreenNow, exo.isPlaying)) {
+            // `playWhenReady`, not `isPlaying`: a clip still buffering is not
+            // playing yet, and would start the moment it is ready.
+            if (exo != null &&
+                BauPlaybackPolicy.pauseWhenScrolledAway(fullscreenNow, exo.playWhenReady)
+            ) {
                 BauPlayback.pause()
             }
+        }
+    }
+
+    // Home or recents with the card still on screen: stop making noise. The
+    // full screen has its own copy of this, with the PiP exception.
+    LifecycleStartEffect(key) {
+        onStopOrDispose {
+            if (!fullscreenNow) BauPlayback.pause()
         }
     }
 
@@ -377,12 +407,17 @@ private fun BauFullscreen(player: ExoPlayer, onExit: () -> Unit) {
     }
 
     // Landscape while it is up, whatever the app does the rest of the time.
-    DisposableEffect(activity, size.width > size.height) {
+    DisposableEffect(activity) {
         val previous = activity?.requestedOrientation
-        activity?.requestedOrientation = fullscreenOrientation(size.width, size.height)
         onDispose {
             if (previous != null) activity.requestedOrientation = previous
         }
+    }
+    // Keyed on the answer, not on the size: the size often arrives after the
+    // dialog opens, and a portrait clip must be able to leave landscape then.
+    val wantedOrientation = fullscreenOrientation(size.width, size.height)
+    LaunchedEffect(activity, wantedOrientation) {
+        activity?.requestedOrientation = wantedOrientation
     }
 
     // Leaving the app while it plays: Picture in Picture.

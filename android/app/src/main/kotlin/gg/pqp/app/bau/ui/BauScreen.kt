@@ -97,6 +97,7 @@ fun BauScreen(
 ) {
     // Leaving the Baú releases the player; a card scrolling away only pauses.
     DisposableEffect(Unit) { onDispose { BauPlayback.stop() } }
+    LaunchedEffect(callActive) { BauPlayback.setCallActive(callActive) }
     CompositionLocalProvider(LocalBauCallActive provides callActive) {
         BauScreenContent(session, serverId, serverName, onBack)
     }
