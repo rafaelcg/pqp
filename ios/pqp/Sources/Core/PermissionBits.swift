@@ -18,6 +18,12 @@ import Foundation
  to grow into a full mirror of `Permission`.
  */
 enum PermissionBit {
+    /// `Permission.MANAGE_SERVER` = `1n << 5n` in
+    /// `packages/shared/src/permissions.ts`. In the Baú it is the one bit that
+    /// publishes: every write route under `/home` asks the server for it, and
+    /// the compose button asks the same question of the same snapshot.
+    static let manageServer: UInt64 = 1 << 5
+
     /// `Permission.START_WATCH_PARTY` = `1n << 23n` in
     /// `packages/shared/src/permissions.ts`: start the stream in a
     /// `watch_party` channel. Everyone else there is the audience.

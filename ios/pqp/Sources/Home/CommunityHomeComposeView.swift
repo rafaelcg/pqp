@@ -1,0 +1,557 @@
+import AVFoundation
+import PhotosUI
+import SwiftUI
+import UniformTypeIdentifiers
+
+// Publishing from the phone: a title, some words, one photo or video or one
+// link. The staff-only half of the Baú; everybody else never sees the button.
+// Drafts, the schedule and the VIP tier stay on the web.
+
+// MARK: - Entry point
+
+extension View {
+    /// Adds the "new post" button to a Baú screen, for the people the server
+    /// would let publish and nobody else. It asks the server which bits this
+    /// account holds (`CommunityHomeComposeGate`), says no until it answers,
+    /// and re-asks each time the screen opens, so a promotion or a demotion
+    /// shows up without restarting the app.
+    func communityHomeComposer(
+        server: Server,
+        config: CommunityHomeConfig,
+        onPosted: @escaping () -> Void
+    ) -> some View {
+        modifier(CommunityHomeComposerEntry(server: server, config: config, onPosted: onPosted))
+    }
+}
+
+private struct CommunityHomeComposerEntry: ViewModifier {
+    @Environment(SessionStore.self) private var session
+    let server: Server
+    let config: CommunityHomeConfig
+    let onPosted: () -> Void
+
+    @State private var permissions: PermissionsSnapshot?
+    @State private var composing = false
+
+    private var canPost: Bool {
+        CommunityHomeComposeGate.canPost(config: config, permissions: permissions)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar {
+                if canPost {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            composing = true
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .tint(Palette.signal)
+                        .accessibilityLabel(Text("Post to the Baú"))
+                        .accessibilityIdentifier("bau.compose.open")
+                    }
+                }
+            }
+            .sheet(isPresented: $composing) {
+                CommunityHomeComposeView(server: server, config: config, api: session.api) {
+                    composing = false
+                    onPosted()
+                }
+            }
+            .task(id: server.id) {
+                permissions = try? await session.api.fetchMemberPermissions(serverId: server.id)
+            }
+    }
+}
+
+// MARK: - Picking
+
+enum PickFailure: Equatable, Sendable {
+    case unreadable
+    case unsupported
+    case tooLarge
+
+    var message: String {
+        switch self {
+        case .unreadable: String(localized: "Could not read that file.")
+        case .unsupported: String(localized: "Use a PNG, JPEG, WebP, GIF, MP4 or WebM.")
+        case .tooLarge: String(localized: "That file is over 100 MB.")
+        }
+    }
+}
+
+/// What the picker produced, as a file this process owns.
+struct PreparedMedia: Sendable {
+    let url: URL
+    let contentType: String
+    let filename: String
+    let isVideo: Bool
+}
+
+/// A video as the library hands it over: a file, copied somewhere we own
+/// before the picker deletes its own.
+private struct PickedMovie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bau-\(UUID().uuidString).\(ext)")
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
+        }
+    }
+}
+
+enum ComposePicker {
+    /// A library item, as something the Baú will sign an upload for.
+    ///
+    /// Images keep their format when the Baú takes it (PNG, JPEG, GIF, WebP)
+    /// and become JPEG otherwise, which is what HEIC, the iPhone's own, is.
+    /// Video is MP4 as-is, or re-encoded to H.264 MP4 when it is a QuickTime
+    /// `.mov`: the allowlist has no `video/quicktime`, and a browser cannot play
+    /// the HEVC an iPhone records by default.
+    static func prepare(_ item: PhotosPickerItem) async throws -> PreparedMedia {
+        let types = item.supportedContentTypes
+        if types.contains(where: { $0.conforms(to: .movie) || $0.conforms(to: .video) }) {
+            return try await prepareVideo(item)
+        }
+        return try await prepareImage(item, types: types)
+    }
+
+    private static func prepareImage(_ item: PhotosPickerItem, types: [UTType]) async throws -> PreparedMedia {
+        guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+            throw PickFailure.unreadable
+        }
+        let native: [(UTType, String, String)] = [
+            (.png, "image/png", "png"),
+            (.jpeg, "image/jpeg", "jpg"),
+            (.gif, "image/gif", "gif"),
+            (.webP, "image/webp", "webp"),
+        ]
+        var bytes = data
+        var contentType = "image/jpeg"
+        var ext = "jpg"
+        if let match = native.first(where: { candidate in types.contains { $0.conforms(to: candidate.0) } }) {
+            contentType = match.1
+            ext = match.2
+        } else {
+            guard let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.85) else {
+                throw PickFailure.unreadable
+            }
+            bytes = jpeg
+        }
+        guard Int64(bytes.count) <= CommunityHomeLimits.maxBytes else { throw PickFailure.tooLarge }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("bau-\(UUID().uuidString).\(ext)")
+        try bytes.write(to: url)
+        return PreparedMedia(url: url, contentType: contentType, filename: "photo.\(ext)", isVideo: false)
+    }
+
+    private static func prepareVideo(_ item: PhotosPickerItem) async throws -> PreparedMedia {
+        guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
+            throw PickFailure.unreadable
+        }
+        let ext = movie.url.pathExtension.lowercased()
+        var ready = movie.url
+        if ext != "mp4" && ext != "m4v" {
+            ready = try await exportMP4(movie.url)
+            try? FileManager.default.removeItem(at: movie.url)
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: ready.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > 0 else { throw PickFailure.unreadable }
+        guard size <= CommunityHomeLimits.maxBytes else {
+            try? FileManager.default.removeItem(at: ready)
+            throw PickFailure.tooLarge
+        }
+        return PreparedMedia(url: ready, contentType: "video/mp4", filename: "video.mp4", isVideo: true)
+    }
+
+    private static func exportMP4(_ source: URL) async throws -> URL {
+        let asset = AVURLAsset(url: source)
+        let preset = AVAssetExportSession.allExportPresets().contains(AVAssetExportPreset1920x1080)
+            ? AVAssetExportPreset1920x1080 : AVAssetExportPresetHighestQuality
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: preset) else {
+            throw PickFailure.unreadable
+        }
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("bau-\(UUID().uuidString).mp4")
+        if #available(iOS 18.0, *) {
+            try await exporter.export(to: output, as: .mp4)
+        } else {
+            exporter.outputURL = output
+            exporter.outputFileType = .mp4
+            exporter.shouldOptimizeForNetworkUse = true
+            await exporter.export()
+            guard exporter.status == .completed else { throw PickFailure.unreadable }
+        }
+        return output
+    }
+}
+
+extension PickFailure: Error {}
+
+// MARK: - Model
+
+@MainActor
+@Observable
+final class CommunityHomeComposeModel {
+    var draft = ComposeDraft()
+    var posting = false
+    /// Set when Post was tapped on a draft that is not ready; cleared by the next edit.
+    var problem: ComposeProblem?
+    var pickFailure: PickFailure?
+    /// The server (or the network) said no to the last write.
+    var refusal: CommunityHomeRefusal?
+    var posted = false
+    /// A video being re-encoded before it can go up.
+    var preparing = false
+
+    private let api: APIClient
+    private let serverId: String
+    private var pickTask: Task<Void, Never>?
+    private var localURL: URL?
+
+    init(api: APIClient, serverId: String) {
+        self.api = api
+        self.serverId = serverId
+    }
+
+    var isDirty: Bool {
+        !draft.trimmedTitle.isEmpty || !draft.trimmedBody.isEmpty || !draft.trimmedLink.isEmpty || draft.media != nil
+    }
+
+    /// Any edit clears what the last attempt complained about.
+    func edited() {
+        problem = nil
+        refusal = nil
+    }
+
+    func setLink(_ value: String) {
+        if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { dropMedia() }
+        draft.link = value
+        edited()
+    }
+
+    func pick(_ item: PhotosPickerItem) {
+        dropMedia()
+        pickFailure = nil
+        edited()
+        pickTask = Task { [api, serverId] in
+            preparing = true
+            defer { preparing = false }
+            let prepared: PreparedMedia
+            do {
+                prepared = try await ComposePicker.prepare(item)
+            } catch {
+                if !Task.isCancelled { pickFailure = (error as? PickFailure) ?? .unreadable }
+                return
+            }
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: prepared.url)
+                return
+            }
+            localURL = prepared.url
+            let size = (try? FileManager.default.attributesOfItem(atPath: prepared.url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            draft.link = ""
+            draft.media = ComposeMedia(
+                filename: prepared.filename,
+                contentType: prepared.contentType,
+                byteSize: size,
+                isVideo: prepared.isVideo,
+                uploading: true
+            )
+            do {
+                let id = try await CommunityHomeMediaUploader(api: api).upload(
+                    serverId: serverId,
+                    fileURL: prepared.url,
+                    contentType: prepared.contentType,
+                    filename: prepared.filename
+                )
+                guard !Task.isCancelled else { return }
+                draft.media?.uploadId = id
+                draft.media?.uploading = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                draft.media?.uploading = false
+                draft.media?.failed = true
+                refusal = CommunityHomeRefusal.from(error)
+            }
+        }
+    }
+
+    func removeMedia() {
+        dropMedia()
+        pickFailure = nil
+        edited()
+    }
+
+    private func dropMedia() {
+        pickTask?.cancel()
+        pickTask = nil
+        if let localURL { try? FileManager.default.removeItem(at: localURL) }
+        localURL = nil
+        draft.media = nil
+        preparing = false
+    }
+
+    func discard() {
+        dropMedia()
+    }
+
+    func post() async {
+        guard !posting else { return }
+        guard let request = draft.request else {
+            problem = draft.problem
+            return
+        }
+        posting = true
+        problem = nil
+        refusal = nil
+        defer { posting = false }
+        do {
+            _ = try await api.createCommunityHomePost(serverId: serverId, request: request)
+            if let localURL { try? FileManager.default.removeItem(at: localURL) }
+            localURL = nil
+            posted = true
+        } catch {
+            refusal = CommunityHomeRefusal.from(error)
+        }
+    }
+}
+
+// MARK: - View
+
+struct CommunityHomeComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+    let server: Server
+    let config: CommunityHomeConfig
+    let onPosted: () -> Void
+
+    @State private var model: CommunityHomeComposeModel
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var confirmDiscard = false
+    @FocusState private var focus: Field?
+
+    private enum Field { case title, body, link }
+
+    init(server: Server, config: CommunityHomeConfig, api: APIClient, onPosted: @escaping () -> Void) {
+        self.server = server
+        self.config = config
+        self.onPosted = onPosted
+        _model = State(initialValue: CommunityHomeComposeModel(api: api, serverId: server.id))
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Palette.ink.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        TextField("Title", text: $model.draft.title)
+                            .focused($focus, equals: .title)
+                            .font(Typography.bodyMedium)
+                            .foregroundStyle(Palette.paper)
+                            .padding(12)
+                            .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+                            .submitLabel(.next)
+                            .onSubmit { focus = .body }
+                            .onChange(of: model.draft.title) { _, _ in model.edited() }
+                            .accessibilityIdentifier("bau.compose.title")
+
+                        TextField("Write something", text: $model.draft.body, axis: .vertical)
+                            .focused($focus, equals: .body)
+                            .lineLimit(6...16)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.paper)
+                            .padding(12)
+                            .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+                            .onChange(of: model.draft.body) { _, _ in model.edited() }
+                            .accessibilityIdentifier("bau.compose.body")
+
+                        mediaSection
+
+                        if model.draft.media == nil {
+                            TextField("Or paste a YouTube, Twitch, TikTok or Instagram link", text: Binding(
+                                get: { model.draft.link },
+                                set: { model.setLink($0) }
+                            ))
+                            .focused($focus, equals: .link)
+                            .keyboardType(.URL)
+                            .textContentType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.paper)
+                            .padding(12)
+                            .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+                            .accessibilityIdentifier("bau.compose.link")
+
+                            if let provider = CommunityHomeLinks.provider(model.draft.link) {
+                                LinkPreview(provider: provider, link: model.draft.link)
+                            }
+                        }
+
+                        if let text = errorText {
+                            Text(text)
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.danger)
+                                .accessibilityIdentifier("bau.compose.error")
+                        }
+                    }
+                    .padding(.horizontal, Metrics.hPadding)
+                    .padding(.vertical, 12)
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+            .navigationTitle("New post")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        if model.isDirty { confirmDiscard = true } else { dismiss() }
+                    }
+                    .tint(Palette.paperMuted)
+                    .accessibilityIdentifier("bau.compose.cancel")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if model.posting {
+                        ProgressView().tint(Palette.signal)
+                    } else {
+                        Button("Post") { Task { await model.post() } }
+                            .fontWeight(.semibold)
+                            .tint(Palette.signal)
+                            .accessibilityIdentifier("bau.compose.post")
+                    }
+                }
+            }
+            .confirmationDialog("Discard this post?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) {
+                    model.discard()
+                    dismiss()
+                }
+                Button("Keep writing", role: .cancel) {}
+            }
+        }
+        .interactiveDismissDisabled(model.isDirty)
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            model.pick(item)
+            // Cleared so choosing the same item again after removing it still fires.
+            pickerItem = nil
+        }
+        .onChange(of: model.posted) { _, posted in
+            if posted { onPosted() }
+        }
+        .onDisappear { if !model.posted { model.discard() } }
+    }
+
+    private var errorText: String? {
+        if let problem = model.problem { return problem.message }
+        if let failure = model.pickFailure { return failure.message }
+        if let refusal = model.refusal { return refusal.message }
+        return nil
+    }
+
+    @ViewBuilder
+    private var mediaSection: some View {
+        if let media = model.draft.media {
+            HStack(spacing: 12) {
+                Image(systemName: media.isVideo ? "video" : "photo")
+                    .foregroundStyle(Palette.paperMuted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(media.filename)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.paper)
+                        .lineLimit(1)
+                    if media.uploading {
+                        Text("Uploading…")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paperMuted)
+                    } else if media.failed {
+                        Text("The upload failed. Remove it and try again.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.danger)
+                    } else {
+                        Text(ByteCountFormatter.string(fromByteCount: media.byteSize, countStyle: .file))
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paperMuted)
+                    }
+                }
+                Spacer()
+                if media.uploading { ProgressView().tint(Palette.signal) }
+                Button("Remove") { model.removeMedia() }
+                    .font(Typography.callout)
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("bau.compose.media.remove")
+            }
+            .padding(12)
+            .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+            .accessibilityIdentifier("bau.compose.media")
+        } else if model.preparing {
+            HStack(spacing: 12) {
+                ProgressView().tint(Palette.signal)
+                Text("Preparing…")
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.paperMuted)
+                Spacer()
+            }
+            .padding(12)
+            .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+        } else if CommunityHomeComposeGate.canAttachFiles(config: config) {
+            PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos]), photoLibrary: .shared()) {
+                AttachLabel()
+            }
+            .accessibilityIdentifier("bau.compose.attach")
+        }
+    }
+}
+
+/// What the link will be. A YouTube link shows its public thumbnail, the same
+/// one the feed shows; the other three name their provider, because the
+/// server decides what it will accept.
+private struct LinkPreview: View {
+    let provider: CommunityHomeLinks.Provider
+    let link: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let thumbnail = CommunityHomeLinks.youtubeThumbnail(link) {
+                AsyncImage(url: thumbnail) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Palette.surfaceRaised
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 180)
+                .clipped()
+            }
+            Text("\(provider.rawValue) link. It shows up in the post.")
+                .font(Typography.callout)
+                .foregroundStyle(Palette.paper)
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        .accessibilityIdentifier("bau.compose.link.preview")
+    }
+}
+
+/// Its own view because a `PhotosPicker` label closure is not main-actor
+/// isolated, and the surface modifier is.
+private struct AttachLabel: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "photo.on.rectangle")
+            Text("Add a photo or video")
+        }
+        .font(Typography.bodyMedium)
+        .foregroundStyle(Palette.signal)
+        .frame(maxWidth: .infinity)
+        .padding(12)
+        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+    }
+}

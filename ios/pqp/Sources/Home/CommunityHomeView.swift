@@ -2,10 +2,9 @@ import SwiftUI
 
 /// A server's Baú: the posts that stay, newest first.
 ///
-/// Read and react only. There is no composer for a post here and there will
-/// not be one this pass: staff write from the web, where the media upload and
-/// the schedule live. What a phone is for is reading the clip on the bus and
-/// leaving a heart, and that is what this screen does.
+/// Reading and reacting is for everybody. Staff (whoever the server lets
+/// publish, see `communityHomeComposer`) also get a "new post" button; drafts
+/// and the schedule stay on the web.
 struct CommunityHomeView: View {
     @Environment(SessionStore.self) private var session
     let server: Server
@@ -79,6 +78,7 @@ struct CommunityHomeView: View {
             }
         }
         .onDisappear { session.eventHandlers.removeValue(forKey: handlerKey) }
+        .communityHomeComposer(server: server, config: config) { Task { await load() } }
     }
 
     private func load() async {

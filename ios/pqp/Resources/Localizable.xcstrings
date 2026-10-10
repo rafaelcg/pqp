@@ -7760,6 +7760,296 @@
           }
         }
       }
+    },
+    "Post to the Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publica no Baú"
+          }
+        }
+      }
+    },
+    "New post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Novo post"
+          }
+        }
+      }
+    },
+    "Post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publicar"
+          }
+        }
+      }
+    },
+    "Title" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título"
+          }
+        }
+      }
+    },
+    "Write something" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve algo"
+          }
+        }
+      }
+    },
+    "Or paste a YouTube, Twitch, TikTok or Instagram link" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ou cola um link do YouTube, Twitch, TikTok ou Instagram"
+          }
+        }
+      }
+    },
+    "Add a photo or video" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adiciona uma foto ou vídeo"
+          }
+        }
+      }
+    },
+    "The upload failed. Remove it and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra enviar. Tira e tenta de novo."
+          }
+        }
+      }
+    },
+    "%@ link. It shows up in the post." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link do %@. Aparece no post."
+          }
+        }
+      }
+    },
+    "Discard this post?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar este post?"
+          }
+        }
+      }
+    },
+    "Keep writing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar escrevendo"
+          }
+        }
+      }
+    },
+    "Could not read that file." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ler esse arquivo."
+          }
+        }
+      }
+    },
+    "Use a PNG, JPEG, WebP, GIF, MP4 or WebM." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usa PNG, JPEG, WebP, GIF, MP4 ou WebM."
+          }
+        }
+      }
+    },
+    "That file is over 100 MB." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse arquivo passa de 100 MB."
+          }
+        }
+      }
+    },
+    "Only people who manage this server can post to the Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só quem gerencia o servidor pode publicar no Baú."
+          }
+        }
+      }
+    },
+    "The Baú is not available on this server right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Baú não está disponível neste servidor agora."
+          }
+        }
+      }
+    },
+    "That file is too large for the Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse arquivo é grande demais pro Baú."
+          }
+        }
+      }
+    },
+    "Slow down a little and try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma, tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "This server cannot take photos or videos right now. A link or text still works." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este servidor não aceita foto ou vídeo agora. Link ou texto ainda funcionam."
+          }
+        }
+      }
+    },
+    "Could not reach the server. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra falar com o servidor. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Could not post. %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra publicar. %@"
+          }
+        }
+      }
+    },
+    "Could not post. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra publicar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Add a title to post." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Põe um título pra publicar."
+          }
+        }
+      }
+    },
+    "Write something, or add a photo, video or link." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve algo, ou adiciona uma foto, vídeo ou link."
+          }
+        }
+      }
+    },
+    "The title is over %lld characters." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O título passa de %lld caracteres."
+          }
+        }
+      }
+    },
+    "The text is too long for one post." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O texto está grande demais pra um post."
+          }
+        }
+      }
+    },
+    "A post carries a file or a link, not both." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um post leva um arquivo ou um link, não os dois."
+          }
+        }
+      }
+    },
+    "That does not look like a YouTube, Twitch, TikTok or Instagram link." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não parece um link do YouTube, Twitch, TikTok ou Instagram."
+          }
+        }
+      }
+    },
+    "Wait for the upload to finish." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espera o envio terminar."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
