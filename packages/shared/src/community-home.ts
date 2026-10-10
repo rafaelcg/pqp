@@ -871,6 +871,12 @@ export const createCommunityHomePostSchema = z.object({
   status: communityHomePostStatusSchema.default("draft"),
   scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
   scheduleTimezone: z.string().min(1).max(64).optional().nullable(),
+  /**
+   * With `status: "published"`: also post the card into this channel of the
+   * same server. Best effort; a channel the author cannot send in is skipped
+   * and the post still publishes.
+   */
+  announceChannelId: z.string().uuid().optional().nullable(),
 });
 
 export type CreateCommunityHomePostRequest = z.infer<

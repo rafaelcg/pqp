@@ -204,6 +204,47 @@ for what would replace it.
   browser dialog. Heart with a count. The two newest comments under an
   unlocked card, "See all N" fetches the rest.
 
+## Promoting a post in chat
+
+A post has one stable address, `/app/server/<serverId>/bau/<postId>` (client
+route `home` in `client/src/lib/app-route.ts`; `bauPostPath` in
+`packages/shared/src/community-home-share.ts`). Opening it lands on the server's
+Baú, scrolls to the post and rings it for a moment. It survives sign-up
+(`signedOutRedirectPath`), so a logged-out visitor lands on the post, not the
+door. A post older than the 50 the feed loads is fetched on its own and shown
+at the top.
+
+A chat message containing that address, on this instance (the page origin or
+`pqp.gg`), is drawn as a **card** under the sender's words: poster (first frame
+of a video, the picture, a YouTube poster, or a lime plate), a play badge for
+anything that plays, title, a two-line teaser, author, likes and comments, and
+an **Open in Baú / Ver no Baú** button. The pasted URL is not repeated above
+its own card. The data comes from `GET /api/servers/:id/home/posts/:postId/card`,
+which runs the feed's own authorization (member, the VIP lock, published only,
+the server's own Baú switch). Anything else is a 404 and the link stays plain.
+A locked post leaks only its title, teaser and public YouTube poster.
+
+Two ways to put a card in a channel, both posting a **normal chat message**
+through `postChannelMessage` (so SEND_MESSAGES, slow mode, AutoMod and the
+broadcast are chat's own, and the card shows up everywhere the link does):
+
+- **Announce on publish.** The composer carries "Anunciar no #geral", ticked
+  by default, with the server's general channel (else the first public text
+  channel you may speak in). `announceChannelId` on create, or in the body of
+  `POST …/publish`. Best effort: a channel you cannot speak in, a slow mode or
+  an AutoMod hit never fails the publish (`announced: false` comes back and the
+  composer says so). Immediate publishes only; a scheduled post is not announced.
+- **Share to a channel.** Staff menu on a published post (web) opens a picker
+  (channel, optional words) and calls `POST …/posts/:postId/share`
+  (`MANAGE_SERVER`). The link is built from the request `Origin` when it is an
+  allowed app origin, else `pqp.gg`.
+
+Tests: `server/src/services/community-home-share.test.ts` (card
+authorization, locked leaks nothing, share and announce through the real chat
+path, send permission), `packages/shared/src/community-home-share.test.ts`
+(permalink parsing), `client/src/lib/community-home/share-card.test.ts` (which
+links get a card), `client/src/components/chat/bau-post-card.test.tsx`.
+
 ## Limits
 
 What a member can do, and how much of it. The global per-user write budget

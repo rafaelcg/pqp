@@ -1,4 +1,5 @@
 import {
+  bauPostPath,
   parseCommunityLink,
   type Channel,
   type Gif,
@@ -9,6 +10,7 @@ import {
   CalendarClock,
   Eye,
   Heart,
+  Link2,
   Lock,
   LockOpen,
   Menu as MenuIcon,
@@ -20,6 +22,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Share2,
   Smile,
   Trash2,
   Upload,
@@ -55,6 +58,7 @@ import {
   deleteCommunityHomePost,
   fetchCommunityHomeComments,
   fetchCommunityHomeDrafts,
+  fetchCommunityHomePost,
   fetchCommunityHomePosts,
   deleteServerImage,
   pinCommunityHomePost,
@@ -117,6 +121,8 @@ import {
   CommunityHomeStaffGuide,
 } from "./community-home-onboarding";
 import { OverviewStartHere } from "./overview-start-here";
+import { CommunityHomeShareDialog } from "./community-home-share-dialog";
+import { pickAnnounceChannel, shareableChannels } from "@/lib/community-home/announce";
 
 /**
  * Baú: the durable media feed of a server. Posts, likes, flat comments,
@@ -173,6 +179,18 @@ type Props = {
   onServerUpdated?: (server: Server) => void;
   /** Bumped by App on `community-home-update` for this server. */
   refreshSignal?: number;
+  /**
+   * Whether the caller may speak in a channel. Keeps the share picker and the
+   * announce default honest; the server still decides for real.
+   */
+  canSendInChannel?: (channelId: string) => boolean;
+  /**
+   * A post to scroll to and highlight (a Baú permalink or a card in chat).
+   * `focusNonce` changes on every follow, so the same card clicked twice
+   * scrolls twice.
+   */
+  focusPostId?: string | null;
+  focusNonce?: number;
 };
 
 type StaffTab = "feed" | "compose" | "drafts";
@@ -688,6 +706,11 @@ type PostCardProps = {
   onUnpublish?: (post: CommunityHomePost) => void;
   onTogglePin?: (post: CommunityHomePost) => void;
   onToggleLock?: (post: CommunityHomePost) => void;
+  /** Staff: post this into a channel as a card. */
+  onShare?: (post: CommunityHomePost) => void;
+  onCopyLink?: (post: CommunityHomePost) => void;
+  /** Followed from a permalink or a chat card: ring it for a moment. */
+  highlighted?: boolean;
 };
 
 /**
@@ -715,6 +738,9 @@ export function PostCard({
   onUnpublish,
   onTogglePin,
   onToggleLock,
+  onShare,
+  onCopyLink,
+  highlighted = false,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -749,7 +775,9 @@ export function PostCard({
         onTogglePin ||
         onPublishNow ||
         onUnpublish ||
-        onToggleLock,
+        onToggleLock ||
+        onShare ||
+        onCopyLink,
     );
 
   useEffect(() => {
@@ -783,10 +811,13 @@ export function PostCard({
   return (
     <article
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-border bg-surface-1",
+        "relative scroll-mt-4 overflow-hidden rounded-2xl border border-border bg-surface-1 transition-shadow duration-[var(--duration-slow)]",
         isPreview && "border-dashed border-accent/40",
+        highlighted &&
+          "border-accent/60 shadow-[0_0_0_2px_var(--color-accent),0_0_32px_var(--glow-accent)]",
       )}
       data-home-post
+      data-home-post-id={post.id}
       data-home-post-visibility={post.visibility}
       data-home-post-status={post.status}
       data-home-post-locked={locked ? "1" : "0"}
@@ -842,6 +873,34 @@ export function PostCard({
                 title={t("communityHome.drafts.unscheduleHint")}
               >
                 {t("communityHome.drafts.unschedule")}
+              </button>
+            )}
+            {onShare && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onShare(post);
+                }}
+                data-home-share
+              >
+                <Share2 className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.share.menu")}
+              </button>
+            )}
+            {onCopyLink && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onCopyLink(post);
+                }}
+                data-home-copy-link
+              >
+                <Link2 className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.share.copyLink")}
               </button>
             )}
             {onTogglePin && post.status === "published" && (
@@ -1259,6 +1318,7 @@ function ComposeCard({
   mediaEnabled,
   translationEnabled,
   mobileRenditionEnabled,
+  announceChannel,
   onDone,
   onCancelEdit,
 }: {
@@ -1273,10 +1333,21 @@ function ComposeCard({
   translationEnabled: boolean;
   /** `bau_mobile_rendition` is on here: offer a vertical cut beside a video. */
   mobileRenditionEnabled: boolean;
-  onDone: (post: CommunityHomePost, action: ComposeAction) => void;
+  /**
+   * The channel a published post can also be announced in, or null when there
+   * is nowhere this person may speak. The box is ticked by default: a post
+   * nobody is told about is the problem the card exists to fix.
+   */
+  announceChannel: Channel | null;
+  onDone: (
+    post: CommunityHomePost,
+    action: ComposeAction,
+    announce: { channelName: string; ok: boolean } | null,
+  ) => void;
   onCancelEdit: () => void;
 }) {
   const { t } = useTranslation();
+  const [announce, setAnnounce] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleValue);
@@ -1431,6 +1502,11 @@ function ComposeCard({
           ? state.mobileUpload.uploadId
           : null;
       let post: CommunityHomePost;
+      const announceChannelId =
+        action === "publish" && announce && announceChannel
+          ? announceChannel.id
+          : null;
+      let announced: boolean | undefined;
       if (state.editingId) {
         const { post: updated } = await updateCommunityHomePost(
           serverId,
@@ -1459,7 +1535,11 @@ function ComposeCard({
         );
         post = updated;
         if (action === "publish" && post.status !== "published") {
-          post = (await publishCommunityHomePost(serverId, post.id)).post;
+          const published = await publishCommunityHomePost(serverId, post.id, {
+            announceChannelId,
+          });
+          post = published.post;
+          announced = published.announced;
         } else if (action === "schedule" && scheduledIso) {
           post = (
             await scheduleCommunityHomePost(serverId, post.id, {
@@ -1469,7 +1549,7 @@ function ComposeCard({
           ).post;
         }
       } else {
-        const { post: created } = await createCommunityHomePost(serverId, {
+        const created = await createCommunityHomePost(serverId, {
           title: state.title.trim() || null,
           body: state.body,
           teaser,
@@ -1486,12 +1566,20 @@ function ComposeCard({
                 : "draft",
           scheduledAt: scheduledIso,
           scheduleTimezone: scheduledIso ? timezone : null,
+          ...(announceChannelId ? { announceChannelId } : {}),
         });
-        post = created;
+        post = created.post;
+        announced = created.announced;
       }
       setShowPreview(false);
       setScheduling(false);
-      onDone(post, action);
+      onDone(
+        post,
+        action,
+        announceChannelId && announceChannel
+          ? { channelName: announceChannel.name, ok: announced === true }
+          : null,
+      );
     } catch (error) {
       setError(errorMessage(error, t("communityHome.error.generic")));
     } finally {
@@ -1799,6 +1887,28 @@ function ComposeCard({
           />
         )}
 
+        {announceChannel && !editingPublished && (
+          <label
+            className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-ink-4 bg-ink px-3 py-2 text-xs text-paper-muted"
+            data-home-compose-announce
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={announce}
+              onChange={(event) => setAnnounce(event.target.checked)}
+            />
+            <span>
+              <span className="block font-semibold text-paper">
+                {t("communityHome.compose.announce", {
+                  channel: announceChannel.name,
+                })}
+              </span>
+              {t("communityHome.compose.announceHint")}
+            </span>
+          </label>
+        )}
+
         <ComposeTranslationNote
           enabled={translationEnabled}
           serverId={serverId}
@@ -2087,6 +2197,9 @@ export function CommunityHomeFeed({
   refreshSignal = 0,
   channels = [],
   onOpenChannel,
+  canSendInChannel,
+  focusPostId = null,
+  focusNonce = 0,
 }: Props) {
   const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
@@ -2101,6 +2214,13 @@ export function CommunityHomeFeed({
     loadCommunityHomeViewerMode(),
   );
   const [notice, setNotice] = useState<MessageKey | null>(null);
+  const [announceWarning, setAnnounceWarning] = useState<string | null>(null);
+  const [shareTarget, setShareTarget] = useState<CommunityHomePost | null>(null);
+  const [sharedNotice, setSharedNotice] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  /** A permalink to a post older than the page the feed loads. */
+  const [focusedExtra, setFocusedExtra] = useState<CommunityHomePost | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const [identityEditing, setIdentityEditing] = useState(false);
   const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
     () => identityDraftFrom(server),
@@ -2432,8 +2552,19 @@ export function CommunityHomeFeed({
     }
   }
 
-  function onComposed(post: CommunityHomePost, action: ComposeAction) {
+  function onComposed(
+    post: CommunityHomePost,
+    action: ComposeAction,
+    announce: { channelName: string; ok: boolean } | null,
+  ) {
     setCompose(emptyCompose());
+    setAnnounceWarning(
+      announce && !announce.ok
+        ? t("communityHome.compose.announceFailed", {
+            channel: announce.channelName,
+          })
+        : null,
+    );
     // Reconcile both lists from the returned post rather than guessing.
     setPosts((previous) => {
       const rest = (previous ?? []).filter((p) => p.id !== post.id);
@@ -2460,6 +2591,102 @@ export function CommunityHomeFeed({
       setStaffTab("drafts");
     }
   }
+
+  const sendable = useCallback(
+    (channelId: string) => canSendInChannel?.(channelId) ?? true,
+    [canSendInChannel],
+  );
+  const shareChannels = useMemo(
+    () => shareableChannels(channels, sendable),
+    [channels, sendable],
+  );
+  const announceChannel = useMemo(
+    () => pickAnnounceChannel(channels, sendable),
+    [channels, sendable],
+  );
+
+  async function copyPostLink(post: CommunityHomePost) {
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${bauPostPath(post.serverId, post.id)}`,
+      );
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch {
+      setActionError(t("communityHome.error.generic"));
+    }
+  }
+
+  // Reset the transient strips with the server they belong to.
+  useEffect(() => {
+    setShareTarget(null);
+    setSharedNotice(null);
+    setAnnounceWarning(null);
+    setFocusedExtra(null);
+    setHighlightId(null);
+  }, [serverId]);
+
+  useEffect(() => {
+    if (!sharedNotice) {
+      return;
+    }
+    const timer = setTimeout(() => setSharedNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [sharedNotice]);
+
+  // A permalink (or a card in chat) names one post: show the feed, find the
+  // post, scroll to it and mark it for a moment. A post older than the page
+  // the feed loads is fetched on its own and shown at the top.
+  useEffect(() => {
+    if (!focusPostId || posts === null) {
+      return;
+    }
+    setStaffTab("feed");
+    let cancelled = false;
+    const inFeed = posts.some((one) => one.id === focusPostId);
+    const reveal = () => {
+      if (cancelled) {
+        return;
+      }
+      setHighlightId(focusPostId);
+      const scroll = (behavior: ScrollBehavior) =>
+        document
+          .querySelector(`[data-home-post-id="${CSS.escape(focusPostId)}"]`)
+          ?.scrollIntoView({ block: "start", behavior });
+      requestAnimationFrame(() => scroll("smooth"));
+      // Pictures and players above it settle after the first paint and move
+      // the post; one more nudge once they have.
+      settle = setTimeout(() => scroll("auto"), 700);
+    };
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    if (inFeed) {
+      reveal();
+    } else {
+      void fetchCommunityHomePost(serverId, focusPostId)
+        .then(({ post }) => {
+          if (!cancelled && post.status === "published") {
+            setFocusedExtra(post);
+            reveal();
+          }
+        })
+        .catch(() => undefined);
+    }
+    const timer = setTimeout(() => {
+      setHighlightId((current) => (current === focusPostId ? null : current));
+    }, 3200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(settle);
+    };
+    // `posts` is read once per follow; a later refetch must not re-scroll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPostId, focusNonce, serverId, posts === null]);
+
+  const shownPosts =
+    posts && focusedExtra && !posts.some((one) => one.id === focusedExtra.id)
+      ? [focusedExtra, ...posts]
+      : posts;
 
   const feedEmpty = posts !== null && posts.length === 0;
   // A scheduled post lives in the drafts list, not the feed, so after a reload
@@ -2626,6 +2853,24 @@ export function CommunityHomeFeed({
               {t(notice)}
             </p>
           )}
+          {(sharedNotice || linkCopied) && (
+            <p
+              className="animate-rise rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-success"
+              role="status"
+              data-home-notice
+            >
+              {linkCopied ? t("communityHome.share.linkCopied") : sharedNotice}
+            </p>
+          )}
+          {announceWarning && (
+            <p
+              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+              role="status"
+              data-home-announce-warning
+            >
+              {announceWarning}
+            </p>
+          )}
           {actionError && (
             <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {actionError}
@@ -2647,6 +2892,7 @@ export function CommunityHomeFeed({
                 mediaEnabled={mediaEnabled}
                 translationEnabled={translationEnabled}
                 mobileRenditionEnabled={mobileRenditionEnabled}
+                announceChannel={announceChannel}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());
@@ -2807,10 +3053,11 @@ export function CommunityHomeFeed({
                         {t("communityHome.feed.heading")}
                       </h3>
                     )}
-                    {posts.map((post) => (
+                    {(shownPosts ?? posts).map((post) => (
                 <PostCard
                   key={post.id}
                   post={post}
+                  highlighted={highlightId === post.id}
                   me={me}
                   locked={isPostLockedForViewer(
                     post,
@@ -2831,6 +3078,10 @@ export function CommunityHomeFeed({
                     canManageServer && vipEnabled
                       ? (target) => void toggleLock(target)
                       : undefined
+                  }
+                  onShare={canManageServer ? setShareTarget : undefined}
+                  onCopyLink={
+                    canManageServer ? (target) => void copyPostLink(target) : undefined
                   }
                 />
                     ))}
@@ -2870,6 +3121,22 @@ export function CommunityHomeFeed({
         onConfirm={cancelIdentityEdit}
         onClose={() => setIdentityDiscardOpen(false)}
       />
+      {shareTarget && (
+        <CommunityHomeShareDialog
+          open
+          serverId={serverId}
+          postId={shareTarget.id}
+          channels={shareChannels}
+          defaultChannelId={announceChannel?.id ?? null}
+          onClose={() => setShareTarget(null)}
+          onShared={(channel) => {
+            setShareTarget(null);
+            setSharedNotice(
+              t("communityHome.share.sent", { channel: channel.name }),
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
