@@ -176,7 +176,9 @@ describe("stageHeightClass", () => {
       musicGivesWay: true,
     });
     expect(rule).toContain("var(--chat-music-h,0px)");
-    expect(rule).toContain("max(68svh,280px)/2");
+    expect(rule).toContain("max(68svh,280px)_/_2");
+    // Spaces around the operators, written out: `calc()` needs them.
+    expect(rule).toContain("_-_var(--chat-music-h,0px)");
   });
 
   it("never gives way for music when the stage shows no picture", () => {

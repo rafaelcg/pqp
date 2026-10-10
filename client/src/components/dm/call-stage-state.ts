@@ -110,7 +110,7 @@ export const STAGE_COLUMN_RESERVE_PX = 300;
  * box off the screen.
  */
 const STAGE_HEIGHT_TALL_LESS_MUSIC =
-  "h-[max(calc(max(68svh,280px)-var(--chat-music-h,0px)),calc(max(68svh,280px)/2))]";
+  "h-[max(calc(max(68svh,280px)_-_var(--chat-music-h,0px)),calc(max(68svh,280px)_/_2))]";
 
 export function stageHeightClass(input: {
   anyVideo: boolean;
