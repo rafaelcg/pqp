@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +40,8 @@ import androidx.navigation.toRoute
 import gg.pqp.app.R
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
+import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.ui.chat.LocalOpenBauPost
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.RealtimeClient
@@ -95,8 +98,15 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class ChannelsRoute(val serverId: String, val serverName: String)
 
-/** A server's Baú. Reached from its channel list only, so it carries what that list knew. */
-@Serializable data class BauRoute(val serverId: String, val serverName: String)
+/**
+ * A server's Baú. Reached from its channel list, or from a post card or address
+ * in chat; the latter carries [focusPostId], which the feed scrolls to.
+ */
+@Serializable data class BauRoute(
+    val serverId: String,
+    val serverName: String,
+    val focusPostId: String? = null,
+)
 
 /**
  * `channelName` defaults because a notification tap knows the channel's id and
@@ -216,6 +226,17 @@ private fun SignedInNav(
     watchPartyHost: WatchPartyHostController,
 ) {
     val nav = rememberNavController()
+    // A Baú post card (or a bare post address) in any chat opens the post here.
+    // The server's name rides along when the card knows it; an address alone
+    // does not, so the list of servers this phone already holds fills it in.
+    val openBauPost = remember(nav, session) {
+        { target: BauPostTarget ->
+            val name = target.serverName.ifEmpty {
+                session.servers.value.firstOrNull { it.id == target.ref.serverId }?.name.orEmpty()
+            }
+            nav.navigate(BauRoute(target.ref.serverId, name, target.ref.postId))
+        }
+    }
     val voiceState by voice.state.collectAsStateWithLifecycle()
     val callState by calls.state.collectAsStateWithLifecycle()
 
@@ -390,6 +411,7 @@ private fun SignedInNav(
             // Compose's are the platform's, they cooperate with the predictive
             // back gesture the manifest opts into, and a bespoke slide would
             // break that cooperation.
+            CompositionLocalProvider(LocalOpenBauPost provides openBauPost) {
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
                     // The start destination is the three-tab home (servers,
@@ -444,6 +466,7 @@ private fun SignedInNav(
                         session = session,
                         serverId = route.serverId,
                         serverName = route.serverName,
+                        focusPostId = route.focusPostId,
                         onBack = nav::popBackStack,
                         callActive = voiceState.isActive || callState.outgoing != null,
                     )
@@ -661,6 +684,7 @@ private fun SignedInNav(
                 composable<YouRoute> {
                     YouScreen(session = session, onBack = nav::popBackStack)
                 }
+            }
             }
 
             arrival?.let { landing ->
