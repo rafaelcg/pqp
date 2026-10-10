@@ -1155,6 +1155,11 @@ function composeMainIsVideo(state: ComposeState): boolean {
   return !state.clearMedia && state.existingMedia?.kind === "video";
 }
 
+/** Which main video the composer holds: the session upload, else the post's own. */
+function composeMainKey(state: ComposeState): string {
+  return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
 /** The cut as the composer shows it: picked now, else the one on the post. */
 function composeMobile(state: ComposeState): CommunityHomeMobileRendition | null {
   if (!composeMainIsVideo(state)) {
@@ -1704,17 +1709,26 @@ function ComposeCard({
             // Keyed by the main video: a new main file remounts the picker,
             // which aborts a cut still uploading for the old one, so it can
             // never land beside a video it was not cut from.
-            key={state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`}
+            key={composeMainKey(state)}
             serverId={serverId}
             current={composeMobile(state)}
-            onUploaded={(uploaded, previewUrl) =>
-              setState((prev) => ({
-                ...prev,
-                mobileUpload: uploaded,
-                mobilePreviewUrl: previewUrl,
-                clearMobile: false,
-              }))
-            }
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  mobileUpload: uploaded,
+                  mobilePreviewUrl: previewUrl,
+                  clearMobile: false,
+                };
+              });
+            }}
             onRemove={() =>
               setState((prev) => ({
                 ...prev,

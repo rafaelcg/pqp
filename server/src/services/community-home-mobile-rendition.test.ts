@@ -108,6 +108,11 @@ const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48,
   0x44, 0x52,
 ]);
+/** Post-commit cleanup runs after the answer; wait for it to settle. */
+async function settled(check: () => void | Promise<void>): Promise<void> {
+  await vi.waitFor(check, { timeout: 2000, interval: 10 });
+}
+
 const MP4 = Buffer.from("\0\0\0\x18ftypmp42 fake video bytes");
 
 type Mobile = {
@@ -356,7 +361,7 @@ describeDb("community home mobile rendition", () => {
       { mobileMediaUploadId: second.uploadId },
     );
     expect(replaced.body.post.media?.mobile?.name).toBe("v2.mp4");
-    expect(deleted).toEqual([first.key]);
+    await settled(() => expect(deleted).toEqual([first.key]));
 
     const removed = await call<{ post: PostBody }>(
       owner,
@@ -366,11 +371,13 @@ describeDb("community home mobile rendition", () => {
     );
     expect(removed.body.post.media?.mobile ?? null).toBeNull();
     expect(removed.body.post.media?.kind).toBe("video");
-    expect(deleted).toEqual([first.key, second.key]);
-    const rows = await getPool().query<{ storage_key: string }>(
-      `SELECT storage_key FROM community_home_media_uploads`,
-    );
-    expect(rows.rows.map((r) => r.storage_key)).toEqual([main.key]);
+    await settled(async () => {
+      expect(deleted).toEqual([first.key, second.key]);
+      const rows = await getPool().query<{ storage_key: string }>(
+        `SELECT storage_key FROM community_home_media_uploads`,
+      );
+      expect(rows.rows.map((r) => r.storage_key)).toEqual([main.key]);
+    });
   });
 
   it("replacing or clearing the main video drops the old cut with it", async () => {
@@ -391,7 +398,9 @@ describeDb("community home mobile rendition", () => {
     );
     expect(swapped.status).toBe(200);
     expect(swapped.body.post.media?.mobile ?? null).toBeNull();
-    expect(deleted.sort()).toEqual([cut.key, main.key].sort());
+    await settled(() =>
+      expect([...deleted].sort()).toEqual([cut.key, main.key].sort()),
+    );
 
     const newCut = await upload("video/mp4", MP4, "cut-v2.mp4");
     await call(owner, "PATCH", `/api/servers/${serverId}/home/posts/${postId}`, {
@@ -407,7 +416,9 @@ describeDb("community home mobile rendition", () => {
     );
     expect(asImage.body.post.media?.kind).toBe("image");
     expect(asImage.body.post.media?.mobile ?? null).toBeNull();
-    expect(deleted.sort()).toEqual([newCut.key, newMain.key].sort());
+    await settled(() =>
+      expect([...deleted].sort()).toEqual([newCut.key, newMain.key].sort()),
+    );
   });
 
   it("deleting the post deletes both objects and both upload rows", async () => {
@@ -423,11 +434,13 @@ describeDb("community home mobile rendition", () => {
       `/api/servers/${serverId}/home/posts/${created.body.post.id}`,
     );
     expect(res.status).toBe(200);
-    expect(deleted.sort()).toEqual([cut.key, main.key].sort());
-    const rows = await getPool().query(
-      `SELECT 1 FROM community_home_media_uploads`,
-    );
-    expect(rows.rowCount).toBe(0);
+    await settled(async () => {
+      expect([...deleted].sort()).toEqual([cut.key, main.key].sort());
+      const rows = await getPool().query(
+        `SELECT 1 FROM community_home_media_uploads`,
+      );
+      expect(rows.rowCount).toBe(0);
+    });
   });
 
   it("a storage delete that fails leaves the object to the orphan sweep, and the edit still succeeds", async () => {
@@ -447,14 +460,16 @@ describeDb("community home mobile rendition", () => {
     expect(removed.status).toBe(200);
     expect(removed.body.post.media?.mobile ?? null).toBeNull();
     // The row is the only handle on the object: kept, unclaimed, unverified.
-    const row = await getPool().query<{
-      claimed_post_id: string | null;
-      verified_at: Date | null;
-    }>(
-      `SELECT claimed_post_id, verified_at FROM community_home_media_uploads WHERE storage_key = $1`,
-      [cut.key],
-    );
-    expect(row.rows[0]).toEqual({ claimed_post_id: null, verified_at: null });
+    await settled(async () => {
+      const row = await getPool().query<{
+        claimed_post_id: string | null;
+        verified_at: Date | null;
+      }>(
+        `SELECT claimed_post_id, verified_at FROM community_home_media_uploads WHERE storage_key = $1`,
+        [cut.key],
+      );
+      expect(row.rows[0]).toEqual({ claimed_post_id: null, verified_at: null });
+    });
 
     // Once storage answers again, the sweep finishes the job.
     failDeletes.clear();

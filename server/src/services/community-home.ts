@@ -1390,8 +1390,10 @@ export async function updateCommunityHomePost(
     );
     await client.query("COMMIT");
     // Only after COMMIT: a rolled-back edit must not have deleted the object
-    // the row still points at.
-    await Promise.all([
+    // the row still points at. Not awaited: the author's answer does not wait
+    // on the bucket. `forgetStoredMedia` never throws, and a storage delete
+    // that fails is handed to the orphan sweep, which is the durable retry.
+    void Promise.all([
       previousKey &&
       previousKey !== media.media_storage_key &&
       isStorageConfigured()
@@ -1578,7 +1580,8 @@ export async function deleteCommunityHomePost(
     throw new CommunityHomeError("not_found", "Post not found");
   }
   // Both stored files go with the post: the main media and its phone cut.
-  await Promise.all([
+  // Not awaited, for the same reason as on an edit (see above).
+  void Promise.all([
     deleted.media_storage_key
       ? forgetStoredMedia(deleted.media_storage_key, "media object")
       : null,
