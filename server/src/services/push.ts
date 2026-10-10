@@ -1847,6 +1847,13 @@ export function buildCommunityHomePostPayload(
 /** The awaitable pipeline. Returns how many people it tried to push. */
 export async function sendCommunityHomePostPush(
   event: CommunityHomePostPush,
+  /**
+   * Called once, right before the first thing that can reach a device. A
+   * caller that wants to hand its claim back on failure uses it to know which
+   * side of that line a rejection fell on: before it, nothing was sent and a
+   * retry is safe; after it, a retry could tell somebody twice.
+   */
+  beforeDelivery?: () => void,
 ): Promise<number> {
   const transports = readTransports();
   if (!transports || event.recipients.size === 0) {
@@ -1877,6 +1884,7 @@ export async function sendCommunityHomePostPush(
   if (recipients.length === 0) {
     return 0;
   }
+  beforeDelivery?.();
   await deliverToUsers(
     recipients,
     (userId) =>

@@ -276,12 +276,15 @@ async function announceServerPosts(
       }
     }
     if (recipients.size > 0) {
-      pushed += await sendCommunityHomePostPush({
-        serverId,
-        serverName: row.name,
-        recipients,
-      });
-      progress.pagesSent += 1;
+      pushed += await sendCommunityHomePostPush(
+        { serverId, serverName: row.name, recipients },
+        // Counted before the send starts delivering, not after it returns: a
+        // rejection after some devices were reached must not look like
+        // "nothing went out" and hand the claim back.
+        () => {
+          progress.pagesSent += 1;
+        },
+      );
     }
   }
   logEvent("push.bauPost", {
