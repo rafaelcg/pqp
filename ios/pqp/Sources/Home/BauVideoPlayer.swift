@@ -222,20 +222,25 @@ final class BauVideoSession: NSObject {
         guard player == nil, status != .failed else { return }
         // The probe is shared by every card that asks for this session, but a
         // card that scrolls away cancels ITS wait: when nobody is waiting any
-        // more the work is dropped too (and started again by the next card).
-        let task: Task<Void, Never>
-        if let prepareTask {
-            task = prepareTask
-        } else {
-            task = Task { await prepare() }
-            prepareTask = task
+        // more the work is dropped too. A card that arrives while a cancelled
+        // probe is still winding down must not inherit its early return, so
+        // it goes round again with a probe of its own.
+        for _ in 0..<3 {
+            let task: Task<Void, Never>
+            if let prepareTask, !prepareTask.isCancelled {
+                task = prepareTask
+            } else {
+                task = Task { await prepare() }
+                prepareTask = task
+            }
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            if prepareTask == task { prepareTask = nil }
+            if player != nil || status == .failed || Task.isCancelled { return }
         }
-        await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        if prepareTask == task { prepareTask = nil }
     }
 
     private func prepare() async {
