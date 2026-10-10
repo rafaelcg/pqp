@@ -31,7 +31,9 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  bauIsFresh,
   railServerIndicator,
+  withServerBauNewest,
   withServerBauUnread,
   type RailServerIndicator,
 } from "./rail-unread";

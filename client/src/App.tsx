@@ -516,6 +516,8 @@ import {
   mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
+  bauIsFresh,
+  withServerBauNewest,
   withServerBauUnread,
 } from "@/lib/community-home";
 import { pickLivePartyChannel } from "@/lib/live-party-landing";
@@ -1817,6 +1819,28 @@ function MainAppContent({
    */
   const [communityHomeUnreadByServer, setCommunityHomeUnreadByServer] =
     useState<Record<string, number>>({});
+  /**
+   * When each server's newest unread Baú post went live (ISO), for the "New"
+   * chip's 24 hour window. Servers with nothing unread are absent, and so is
+   * every server on an API that predates the field.
+   */
+  const [communityHomeNewestByServer, setCommunityHomeNewestByServer] =
+    useState<Record<string, string>>({});
+  /**
+   * Re-renders once a minute while the open server has unread Baú posts, so the
+   * row's "New" chip lets go at 24 h instead of waiting for some other render.
+   */
+  const [communityHomeFreshTick, setCommunityHomeFreshTick] = useState(0);
+  useEffect(() => {
+    if (communityHomeUnread <= 0) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => setCommunityHomeFreshTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [communityHomeUnread]);
   /** Bumped by every Baú frame, for any server, to re-read the map above. */
   const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
@@ -7788,6 +7812,9 @@ function MainAppContent({
       setCommunityHomeUnreadByServer((current) =>
         withServerBauUnread(current, serverId, 0),
       );
+      setCommunityHomeNewestByServer((current) =>
+        withServerBauNewest(current, serverId, null),
+      );
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -7808,11 +7835,14 @@ function MainAppContent({
     const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
     void fetchCommunityHomeUnread(selectedServerId)
-      .then(({ count }) => {
+      .then(({ count, newestAt }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
           setCommunityHomeUnreadByServer((current) =>
             withServerBauUnread(current, selectedServerId, count),
+          );
+          setCommunityHomeNewestByServer((current) =>
+            withServerBauNewest(current, selectedServerId, count > 0 ? newestAt : null),
           );
           communityHomeUnreadRef.current = count;
           communityHomeUnreadBaselineRef.current = true;
@@ -7870,6 +7900,9 @@ function MainAppContent({
       setCommunityHomeUnreadByServer((current) =>
         Object.keys(current).length === 0 ? current : {},
       );
+      setCommunityHomeNewestByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
       return;
     }
     let cancelled = false;
@@ -7881,10 +7914,19 @@ function MainAppContent({
     const attempt = (n: number): void => {
       timer = window.setTimeout(() => {
         void fetchCommunityHomeUnreadAll()
-          .then(({ servers: counts }) => {
+          .then(({ servers: counts, newest }) => {
             if (cancelled) {
               return;
             }
+            setCommunityHomeNewestByServer((current) => {
+              const next = { ...(newest ?? {}) };
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
             setCommunityHomeUnreadByServer((current) => {
               const next = { ...counts };
               // The server whose feed is open has just been stamped read; a
@@ -11380,6 +11422,15 @@ function MainAppContent({
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
+          communityHomeUnreadFresh={
+            communityHomeFreshTick >= 0 &&
+            communityHomeUnread > 0 &&
+            bauIsFresh(
+              selectedServerId
+                ? communityHomeNewestByServer[selectedServerId]
+                : null,
+            )
+          }
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}

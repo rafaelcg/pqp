@@ -1083,8 +1083,10 @@ private struct CommunityBanner: View {
 /// a second line: the one thing a person needs to know before tapping is that
 /// this is not a place to type.
 struct BauRow: View {
-    /// Posts not yet seen. Never a mention: the Baú has no @, so the badge is
-    /// the quiet one.
+    /// Posts not yet seen. Never a mention (the Baú has no @), but lime all the
+    /// same: it was the quiet grey badge, and that made the feature the product
+    /// leads with the least eventful row in the list. `isMention` on the badge
+    /// is how it asks for the signal colour.
     var unread: Int = 0
 
     var body: some View {
@@ -1108,7 +1110,7 @@ struct BauRow: View {
             Spacer()
 
             if unread > 0 {
-                UnreadBadge(count: unread)
+                UnreadBadge(count: unread, isMention: true)
             }
         }
         .padding(.horizontal, 14)

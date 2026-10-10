@@ -2799,6 +2799,8 @@
   "chrome.unreadMentions_other": "{count} menções não lidas",
   "chrome.unreadMessagesSr": "mensagens não lidas",
   "chrome.unreadBauSr": "post novo no Baú",
+  "chrome.unreadBauCountSr_one": "{count} post novo no Baú",
+  "chrome.unreadBauCountSr_other": "{count} posts novos no Baú",
   "chrome.blockedSr": "(bloqueado)",
   "chrome.newCategory": "Nova categoria",
   "chrome.renameCategory": "Renomear categoria",

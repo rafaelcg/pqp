@@ -219,6 +219,10 @@ struct HomeView: View {
 @Observable
 final class HomeModel {
     var servers: [Server] = []
+    /// Unread Baú posts per server, for the lime badge on each tile. Servers
+    /// with nothing unread are absent. Kept across a failed read: a badge one
+    /// behind is better than one that flickers away.
+    var bauUnread: [String: Int] = [:]
     var conversations: [DmSummary] = []
     var isLoading = true
     var error: String?
@@ -343,11 +347,27 @@ final class HomeModel {
             // Memoised behind the client, so this is one round trip for the
             // life of the process rather than one per return to the hub.
             communitiesEnabled = await session.api.communitiesEnabled()
+            await refreshBauUnread()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
         hasLoadedOnce = true
+    }
+
+    /// The lime Baú badges on the server tiles: one read for all servers, asked
+    /// only when the instance has the Baú on (memoised behind the client).
+    /// Non-fatal, like the friend badge: it never reaches the hub's error line.
+    func refreshBauUnread() async {
+        guard let session else { return }
+        guard await session.api.communityHomeConfig().enabled else {
+            bauUnread = [:]
+            return
+        }
+        // A failed read keeps what is on screen.
+        if let all = await session.api.communityHomeUnreadAll() {
+            bauUnread = all
+        }
     }
 
     /// Everything `FirstRun` needs, assembled from what the hub already holds.
@@ -858,7 +878,12 @@ struct HubView: View {
                             NavigationLink {
                                 ChannelListView(server: server)
                             } label: {
-                                ServerTile(server: server)
+                                ServerTile(
+                                    server: server,
+                                    bauUnread: server.communityHomeEnabled
+                                        ? BauBadge.unread(for: server.id, in: model.bauUnread)
+                                        : 0
+                                )
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("hub.server.\(server.id)")
@@ -979,6 +1004,9 @@ struct HubView: View {
 /// desktop pattern that a phone cannot support.
 struct ServerTile: View {
     let server: Server
+    /// Unread Baú posts, drawn as a lime count at the tile's corner. Zero is
+    /// nothing at all.
+    var bauUnread: Int = 0
 
     var body: some View {
         VStack(spacing: 7) {
@@ -987,6 +1015,17 @@ struct ServerTile: View {
             // root-relative path against the API base and falls back on its own,
             // so an icon route that 404s costs nothing.
             Avatar(name: server.name, seed: server.id, size: 58, url: server.iconUrl)
+                .overlay(alignment: .topTrailing) {
+                    if let label = BauBadge.label(count: bauUnread) {
+                        // Lime, the brand signal: a new Baú post is news for
+                        // the whole server, and nothing else on this tile uses
+                        // the colour for "unread".
+                        UnreadBadge(label: label, isMention: true)
+                            .overlay(Capsule().strokeBorder(Palette.ink, lineWidth: 2))
+                            .offset(x: 6, y: -4)
+                            .accessibilityIdentifier("hub.server.bau.\(server.id)")
+                    }
+                }
 
             Text(server.name)
                 .font(Typography.caption)
@@ -1060,11 +1099,22 @@ struct ConversationRow: View {
 }
 
 struct UnreadBadge: View {
-    let count: Int
+    let label: String
     var isMention: Bool = false
 
+    init(count: Int, isMention: Bool = false) {
+        self.label = count > 99 ? "99+" : "\(count)"
+        self.isMention = isMention
+    }
+
+    /// A caller that has already decided what the badge says (the Baú's "9+").
+    init(label: String, isMention: Bool = false) {
+        self.label = label
+        self.isMention = isMention
+    }
+
     var body: some View {
-        Text(verbatim: count > 99 ? "99+" : "\(count)")
+        Text(verbatim: label)
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(Palette.inkDeep)
             .padding(.horizontal, 7)

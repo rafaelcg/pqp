@@ -719,15 +719,15 @@ export async function setCommunityHomePostPinned(
 export async function countUnreadCommunityHomePosts(
   serverId: string,
   viewerId: string,
-): Promise<number> {
+): Promise<{ count: number; newestAt: string | null }> {
   // Same catch-up as the feed read: a due scheduled post counts toward unread
   // the moment its time passes, so the badge and the feed never disagree.
   await flushDueScheduledPosts(serverId);
   const visibilityFilter = isCommunityHomeVipEnabled()
     ? ""
     : " AND p.visibility = 'free'";
-  const result = await getPool().query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n
+  const result = await getPool().query<{ n: string; newest: Date | null }>(
+    `SELECT COUNT(*)::text AS n, MAX(p.published_at) AS newest
        FROM community_home_posts p
        LEFT JOIN community_home_reads r
          ON r.server_id = p.server_id AND r.user_id = $1
@@ -738,7 +738,11 @@ export async function countUnreadCommunityHomePosts(
         ${visibilityFilter}`,
     [viewerId, serverId],
   );
-  return Number(result.rows[0]?.n ?? 0);
+  const row = result.rows[0];
+  return {
+    count: Number(row?.n ?? 0),
+    newestAt: row?.newest ? new Date(row.newest).toISOString() : null,
+  };
 }
 
 /**
@@ -755,12 +759,19 @@ export async function countUnreadCommunityHomePosts(
  */
 export async function countUnreadCommunityHomePostsAllServers(
   viewerId: string,
-): Promise<Record<string, number>> {
+): Promise<{
+  servers: Record<string, number>;
+  newest: Record<string, string>;
+}> {
   const visibilityFilter = isCommunityHomeVipEnabled()
     ? ""
     : " AND p.visibility = 'free'";
-  const result = await getPool().query<{ server_id: string; n: string }>(
-    `SELECT p.server_id, COUNT(*)::text AS n
+  const result = await getPool().query<{
+    server_id: string;
+    n: string;
+    newest: Date | null;
+  }>(
+    `SELECT p.server_id, COUNT(*)::text AS n, MAX(p.published_at) AS newest
        FROM server_members sm
        JOIN servers s ON s.id = sm.server_id AND s.community_home_enabled
        JOIN community_home_posts p
@@ -775,11 +786,15 @@ export async function countUnreadCommunityHomePostsAllServers(
       GROUP BY p.server_id`,
     [viewerId],
   );
-  const out: Record<string, number> = {};
+  const servers: Record<string, number> = {};
+  const newest: Record<string, string> = {};
   for (const row of result.rows) {
-    out[row.server_id] = Number(row.n);
+    servers[row.server_id] = Number(row.n);
+    if (row.newest) {
+      newest[row.server_id] = new Date(row.newest).toISOString();
+    }
   }
-  return out;
+  return { servers, newest };
 }
 
 /** Stamp the feed as read up to now. Never fans out: it is one person's mark. */
