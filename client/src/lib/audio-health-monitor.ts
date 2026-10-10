@@ -84,6 +84,9 @@ export interface AudioHealthReport {
   reason?: string;
 }
 
+/** How long one repair may take before the ladder stops waiting for it. */
+export const REPAIR_TIMEOUT_MS = 10_000;
+
 export function createAudioHealthMonitor(deps: {
   view(): AudioHealthView;
   actions: AudioHealthActions;
@@ -101,9 +104,17 @@ export function createAudioHealthMonitor(deps: {
   let tracker: AudioHealthTracker = newTracker();
   let prompt: AudioHealthPrompt | null = null;
   let localSpoke = false;
-  /** Peers the last `inboundStalled` episode was about, for the card's tap. */
+  /** Peers the open `inboundStalled` episode is about, for the card's tap. */
   let stalledPeers: string[] = [];
-  let busy = false;
+  /**
+   * Bumped by `pause` and `reset`. A sample still awaiting a repair when the
+   * call stops, or when a new call starts, notices on its next step that its
+   * generation is gone and stops, rather than judging the next call with the
+   * last one's evidence.
+   */
+  let generation = 0;
+  /** The generation of the sample in flight, or null. */
+  let running: number | null = null;
 
   function newTracker(): AudioHealthTracker {
     return createAudioHealthTracker({
@@ -128,13 +139,31 @@ export function createAudioHealthMonitor(deps: {
     }
   }
 
+  /**
+   * Run one repair, bounded. A repair that throws or hangs is a repair that
+   * did not work: the next tick's evidence says so, and the ladder climbs. A
+   * hang must never hold the monitor (`running`) for the rest of the call.
+   */
   async function run(action: () => Promise<unknown>) {
-    try {
-      await action();
-    } catch {
-      // A repair that throws is a repair that did not work; the next tick's
-      // evidence says so, and the ladder climbs.
-    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, REPAIR_TIMEOUT_MS);
+      let started: Promise<unknown>;
+      try {
+        started = action();
+      } catch {
+        started = Promise.resolve();
+      }
+      started.then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      );
+    });
   }
 
   function outboundEvidence(view: AudioHealthView, audio: AudioStatsSample): OutboundSenderEvidence[] {
@@ -220,11 +249,13 @@ export function createAudioHealthMonitor(deps: {
   async function sample(audio: AudioStatsSample | undefined): Promise<void> {
     const view = deps.view();
     transport = view.usingSfu ? "livekit" : "mesh";
-    if (!view.connected || busy) {
+    if (!view.connected || running === generation) {
       localSpoke = false;
       return;
     }
-    busy = true;
+    const mine = generation;
+    running = mine;
+    const stale = () => mine !== generation;
     try {
       const at = now();
       tracker.tick(at);
@@ -249,6 +280,9 @@ export function createAudioHealthMonitor(deps: {
         });
         if (reason) {
           await micNotSending(reason);
+          if (stale()) {
+            return;
+          }
         }
       } else {
         outbound.reset();
@@ -261,7 +295,11 @@ export function createAudioHealthMonitor(deps: {
         noteReason("playbackBlocked", "paused");
         const decision = tracker.detected("playbackBlocked", at);
         if (decision.action === "auto") {
-          if (await deps.actions.replayPlayback().catch(() => false)) {
+          const played = await deps.actions.replayPlayback().catch(() => false);
+          if (stale()) {
+            return;
+          }
+          if (played) {
             tracker.cleared("playbackBlocked");
           }
         }
@@ -278,8 +316,16 @@ export function createAudioHealthMonitor(deps: {
         if (decision.action === "auto") {
           for (const peerId of stalled) {
             await run(() => deps.actions.restartInbound(peerId));
+            if (stale()) {
+              return;
+            }
           }
         }
+      }
+      if (tracker.stage("inboundStalled") === "idle") {
+        // Episode over (proven fixed): a later playback-only card must not
+        // restart peers that are working.
+        stalledPeers = [];
       }
 
       // The output device, repaired where it was found.
@@ -291,7 +337,9 @@ export function createAudioHealthMonitor(deps: {
 
       syncPrompt();
     } finally {
-      busy = false;
+      if (running === mine) {
+        running = null;
+      }
     }
   }
 
@@ -319,14 +367,15 @@ export function createAudioHealthMonitor(deps: {
       }
       syncPrompt();
       if (current === "hearing") {
+        const peers = tracker.stage("inboundStalled") === "verifying-manual" ? stalledPeers : [];
+        stalledPeers = [];
         const played = await deps.actions.replayPlayback().catch(() => false);
         if (played) {
           tracker.cleared("playbackBlocked");
         }
-        for (const peerId of stalledPeers) {
+        for (const peerId of peers) {
           await run(() => deps.actions.restartInbound(peerId));
         }
-        stalledPeers = [];
         inbound.reset();
       } else if (current === "mic") {
         const view = deps.view();
@@ -355,6 +404,7 @@ export function createAudioHealthMonitor(deps: {
 
     /** A new call: new tally, new history, no card. */
     reset() {
+      generation += 1;
       tracker = newTracker();
       outbound.reset();
       inbound.reset();
@@ -367,7 +417,19 @@ export function createAudioHealthMonitor(deps: {
       }
     },
 
-    /** Take the card down without touching the tally (the call paused). */
+    /**
+     * The call stopped (left, or paused for a reconnect): drop any sample
+     * still in flight and take the card down. The tally stays.
+     */
+    pause() {
+      generation += 1;
+      if (prompt !== null) {
+        prompt = null;
+        deps.onPrompt(null);
+      }
+    },
+
+    /** Take the card down without touching the tally (the flag went off). */
     hidePrompt() {
       if (prompt !== null) {
         prompt = null;

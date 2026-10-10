@@ -85,7 +85,10 @@ describe("audio playback health", () => {
     const setSinkId = vi.fn(async () => {});
     Object.assign(el, { setSinkId });
     trackPlaybackElement(el, "bob");
-    let outputs = [{ kind: "audiooutput", deviceId: "default" }];
+    let outputs = [
+      { kind: "audiooutput", deviceId: "default" },
+      { kind: "audiooutput", deviceId: "speakers-1" },
+    ];
     vi.stubGlobal("navigator", {
       mediaDevices: { enumerateDevices: async () => outputs },
     });
@@ -98,17 +101,20 @@ describe("audio playback health", () => {
     // Back, then gone again: a second event.
     outputs = [...outputs, { kind: "audiooutput", deviceId: "headset-1" }];
     await checkOutputDevice("headset-1");
-    outputs = outputs.slice(0, 1);
+    outputs = outputs.slice(0, 2);
     await checkOutputDevice("headset-1");
     expect(takeOutputMissingEvents()).toBe(1);
   });
 
-  it("says nothing when outputs carry no ids (no permission yet)", async () => {
+  it("says nothing when outputs carry no ids, or only the default (no permission yet)", async () => {
     setAudioSelfHealForTests(true);
-    vi.stubGlobal("navigator", {
-      mediaDevices: { enumerateDevices: async () => [{ kind: "audiooutput", deviceId: "" }] },
-    });
-    await checkOutputDevice("headset-1");
+    for (const listed of [
+      [{ kind: "audiooutput", deviceId: "" }],
+      [{ kind: "audiooutput", deviceId: "default" }, { kind: "audiooutput", deviceId: "" }],
+    ]) {
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices: async () => listed } });
+      await checkOutputDevice("headset-1");
+    }
     expect(takeOutputMissingEvents()).toBe(0);
   });
 });

@@ -148,7 +148,16 @@ export async function checkOutputDevice(deviceId: string): Promise<void> {
   } catch {
     return;
   }
-  if (outputs.length === 0 || outputs.every((device) => !device.deviceId)) {
+  // Only a list that names real devices is evidence. Before a permission a
+  // browser can show the default entry with an id and hide the rest, which
+  // would read as "the headset is gone" when it is merely not listed yet.
+  const named = outputs.filter(
+    (device) =>
+      device.deviceId !== "" &&
+      device.deviceId !== "default" &&
+      device.deviceId !== "communications",
+  );
+  if (named.length === 0) {
     return;
   }
   if (outputs.some((device) => device.deviceId === deviceId)) {
@@ -186,7 +195,9 @@ function armGestureRetry(): void {
     gestureArmed = false;
     document.removeEventListener("pointerdown", retry, true);
     document.removeEventListener("keydown", retry, true);
-    void replayAllPlayback();
+    if (audioSelfHealEnabled()) {
+      void replayAllPlayback();
+    }
   };
   document.addEventListener("pointerdown", retry, true);
   document.addEventListener("keydown", retry, true);

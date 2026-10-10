@@ -83,7 +83,6 @@ export async function recordCallRating(
   userId: string,
   input: CreateCallRatingRequest,
 ): Promise<void> {
-  noteRatedAudioHealth(input.rating, input.transport, input.mediaQuality?.audioHealth);
   await getPool().query(
     `INSERT INTO call_ratings
        (user_id, channel_id, rating, note, duration_seconds,
@@ -113,6 +112,9 @@ export async function recordCallRating(
         : null,
     ],
   );
+  // Counted only once the row is stored, so a failed write (and the retry
+  // that follows it) never counts one call twice.
+  noteRatedAudioHealth(input.rating, input.transport, input.mediaQuality?.audioHealth);
 }
 
 interface SummaryRow {

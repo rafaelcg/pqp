@@ -643,6 +643,29 @@ describe("what the audio self-repair reads off an SFU room", () => {
     expect(second.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: 0, remoteSpeaking: true });
   });
 
+  it("reads at most eight speakers a tick, in turns, and the rest are not judged", async () => {
+    await session();
+    const reads = new Map<string, number>();
+    for (let i = 0; i < 10; i += 1) {
+      const id = `p${i}`;
+      newestRoom().remoteParticipants.set(
+        id,
+        voiceParticipant(id, true, () => {
+          reads.set(id, (reads.get(id) ?? 0) + 1);
+          return 50;
+        }),
+      );
+    }
+    const first = await sampleVoiceStats();
+    expect(reads.size).toBe(8);
+    const skipped = first.audio!.receivers.filter((row) => row.remoteSpeaking === false);
+    expect(skipped.map((row) => row.peerId)).toEqual(["p8", "p9"]);
+    await sampleVoiceStats();
+    // The two left out last time are read this time.
+    expect(reads.get("p8")).toBe(1);
+    expect(reads.get("p9")).toBe(1);
+  });
+
   it("an unsubscribed voice reads as nothing arriving, and video sampling survives a participant without audio maps", async () => {
     await session();
     newestRoom().remoteParticipants.set(
@@ -651,7 +674,8 @@ describe("what the audio self-repair reads off an SFU room", () => {
     );
     newestRoom().remoteParticipants.set("cam", remote("cam", [screenPublication()]));
     const snapshot = await sampleVoiceStats();
-    expect(snapshot.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: null });
+    // Heard speaking by the server, no subscription here: that is evidence.
+    expect(snapshot.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: 0 });
     expect(snapshot.receivers).toHaveLength(1);
   });
 

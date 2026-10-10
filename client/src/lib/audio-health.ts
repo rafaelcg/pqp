@@ -190,10 +190,10 @@ export interface InboundPeerTick {
   /** SFU: the server's speaking detector. Null on a mesh, which has none. */
   remoteSpeaking: boolean | null;
   /**
-   * Packets of their VOICE received since the previous tick. Null when there
-   * is no receiver row to read (no track yet), which judges nothing on a
-   * mesh and counts as nothing arriving on the SFU, where a participant the
-   * server hears speaking and we have no receiver for is the fault itself.
+   * Packets of their VOICE received since the previous tick. Zero is
+   * evidence of nothing arriving (the SFU sampler also reports zero for a
+   * speaker we hold no subscription to, which is the fault itself). Null is
+   * no evidence at all: no receiver row, a first read, a failed read.
    */
   packetsDelta: number | null;
 }
@@ -230,9 +230,12 @@ export function createInboundDetector(options: {
       }
       if (tick.remoteSpeaking !== null) {
         const judged = tick.expectAudio && tick.remoteSpeaking;
+        // Only a counter that did not move is evidence. Null (a first read,
+        // a read that failed) judges nothing, so it is not counted at all.
+        const evidence = judged && tick.packetsDelta !== null;
         peer.speaking.push({
-          judged,
-          dead: judged && (tick.packetsDelta === null || tick.packetsDelta === 0),
+          judged: evidence,
+          dead: evidence && tick.packetsDelta === 0,
         });
         if (peer.speaking.length > windowTicks) {
           peer.speaking.shift();

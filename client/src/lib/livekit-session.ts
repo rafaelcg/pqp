@@ -181,6 +181,28 @@ export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
 
 /** Remote voices whose receiver stats the audio self-repair reads per tick. */
 const MAX_AUDIO_RECEIVER_READS = 8;
+/**
+ * A stats read that never settles must not hold the shared sample hostage:
+ * the video readouts and the call rating wait on the same tick.
+ */
+const AUDIO_STATS_READ_TIMEOUT_MS = 1_000;
+
+/** The promise's value, or undefined when it rejects or takes longer than `ms`. */
+function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      },
+    );
+  });
+}
 
 /**
  * The unambiguous, opt-in signal for `LIVE_HLS_VOICE_TRACK`'s "separada"
@@ -540,6 +562,8 @@ export async function connectLiveKit({
   }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** Where the audio self-repair's receiver reads resume next tick. */
+  let audioReadCursor = 0;
   /** The watch-party voice archive publication, kept so it can be withdrawn. */
   let publishedMicArchive: InstanceType<typeof LocalAudioTrack> | null = null;
   /** The "separada" voice-track publication, kept so it can be withdrawn. */
@@ -1361,21 +1385,26 @@ export async function connectLiveKit({
    */
   async function sampleAudio(): Promise<AudioStatsSample> {
     const audio: AudioStatsSample = { senders: [], receivers: [] };
-    // Receiver stats are one `getStats()` each, and a watch party seats two
-    // hundred microphones. Only a participant the server hears speaking is
-    // ever judged (`createInboundDetector`), so only they are read, and at
-    // most a handful per tick. A mark left from the last time somebody spoke
-    // still differences correctly: anything that arrived since counts.
-    let receiverReads = 0;
     const sender = published?.sender;
     if (sender && typeof sender.getStats === "function") {
-      try {
-        const rows = summariseAudioStats(localPeerId, statRows(await sender.getStats()));
-        audio.senders.push(...rows.senders);
-      } catch {
-        // Sender went away mid-sample.
+      const report = await settleWithin(sender.getStats(), AUDIO_STATS_READ_TIMEOUT_MS);
+      if (report) {
+        audio.senders.push(...summariseAudioStats(localPeerId, statRows(report)).senders);
       }
     }
+    // THREE ANSWERS, NEVER CONFUSED, because the inbound detector acts on
+    // them (`createInboundDetector`):
+    //  - `packetsDelta: 0` is evidence of nothing arriving: the counter did
+    //    not move, or the server hears them and we hold no subscription;
+    //  - `packetsDelta: null` is no evidence: the first read of a counter, or
+    //    a read that failed or timed out;
+    //  - `remoteSpeaking: false` is "not judged": nobody is talking, or this
+    //    speaker was not read this tick.
+    // Receiver stats are one `getStats()` each and a watch party seats two
+    // hundred microphones. Only a speaker is ever judged, so only speakers are
+    // read, at most a handful a tick, starting where the last tick stopped so
+    // a crowd laughing at once is read in turns rather than the same eight.
+    const speakers: { row: AudioReceiverSample; read: () => Promise<void> }[] = [];
     for (const participant of room.remoteParticipants.values()) {
       const publications = participant.audioTrackPublications?.values() ?? [];
       for (const pub of publications) {
@@ -1394,31 +1423,45 @@ export async function connectLiveKit({
           audioLevel: null,
           remoteSpeaking: participant.isSpeaking,
         };
-        if (!participant.isSpeaking || receiverReads >= MAX_AUDIO_RECEIVER_READS) {
-          audio.receivers.push(row);
+        audio.receivers.push(row);
+        if (!participant.isSpeaking) {
           continue;
         }
-        receiverReads += 1;
-        const track = pub.isSubscribed ? pub.audioTrack : undefined;
-        const reader = (
-          track as unknown as
-            | { getReceiverStats?: () => Promise<{ packetsReceived?: number } | undefined> }
-            | undefined
-        )?.getReceiverStats;
-        if (track && typeof reader === "function") {
-          try {
-            const stats = await reader.call(track);
+        speakers.push({
+          row,
+          read: async () => {
+            const track = pub.isSubscribed ? pub.audioTrack : undefined;
+            const reader = (
+              track as unknown as
+                | { getReceiverStats?: () => Promise<{ packetsReceived?: number } | undefined> }
+                | undefined
+            )?.getReceiverStats;
+            if (!track || typeof reader !== "function") {
+              row.packetsDelta = 0;
+              return;
+            }
+            const stats = await settleWithin(reader.call(track), AUDIO_STATS_READ_TIMEOUT_MS);
             row.packetsDelta = measurePacketDelta(
               `sfu:ain:${participant.identity}:${pub.trackSid}`,
               stats?.packetsReceived ?? null,
             );
-          } catch {
-            // Unsubscribed mid-sample: nothing arrived, which is what null says.
-          }
-        }
-        audio.receivers.push(row);
+          },
+        });
       }
     }
+    const reads = Math.min(speakers.length, MAX_AUDIO_RECEIVER_READS);
+    const offset = speakers.length > 0 ? audioReadCursor % speakers.length : 0;
+    audioReadCursor = offset + reads;
+    const chosen = new Set<number>();
+    for (let i = 0; i < reads; i += 1) {
+      chosen.add((offset + i) % speakers.length);
+    }
+    speakers.forEach((speaker, index) => {
+      if (!chosen.has(index)) {
+        speaker.row.remoteSpeaking = false;
+      }
+    });
+    await Promise.all([...chosen].map((index) => speakers[index]!.read().catch(() => {})));
     return audio;
   }
 

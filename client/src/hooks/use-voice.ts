@@ -3039,6 +3039,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (
         !pipeline ||
         !state.isTransmitting ||
+        !audioSelfHealEnabled() ||
         typeof pipeline.analyser.getByteFrequencyData !== "function"
       ) {
         return;
@@ -3060,7 +3061,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       clearInterval(audioHealthLevelTimer);
       audioHealthLevelTimer = null;
     }
-    audioHealth.hidePrompt();
+    audioHealth.pause();
   }
 
   function disposeRemoteAnalysers() {
@@ -6054,6 +6055,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     leave() {
       audienceSeat = false;
+      // The person hung up: whatever the card's rejoin was doing, the next
+      // call is a new one with a tally of its own.
+      audioHealthCarryOverUntil = 0;
       leaveCall();
     },
 

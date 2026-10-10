@@ -504,6 +504,8 @@ export function summariseStats(
  * backwards (a new connection reusing the key), so a rebuilt transport never
  * reads as one sample of nothing having arrived.
  */
+const MAX_COUNTER_MARKS = 4_000;
+
 export function counterDelta(
   marks: Map<string, number>,
   key: string,
@@ -513,6 +515,12 @@ export function counterDelta(
     return null;
   }
   const previous = marks.get(key);
+  // Keys are per stats row, and rows churn with every reconnect and every
+  // speaker in a big room. A long-lived tab must not keep them all: past the
+  // cap the table starts over, which costs one sample of "no reading".
+  if (previous === undefined && marks.size >= MAX_COUNTER_MARKS) {
+    marks.clear();
+  }
   marks.set(key, value);
   if (previous === undefined || value < previous) {
     return null;

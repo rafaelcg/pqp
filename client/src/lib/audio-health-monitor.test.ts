@@ -324,3 +324,81 @@ describe("createAudioHealthMonitor: playback, microphone, output", () => {
     registerAudioHealthSummary(null);
   });
 });
+
+describe("createAudioHealthMonitor: lifecycle", () => {
+  const silentMic: AudioStatsSample = {
+    ...healthyAudio(),
+    senders: [{ peerId: "bob", trackId: "mic-1", packetsDelta: 100, audioLevel: 0, energyDelta: 0 }],
+  };
+
+  it("a repair that never settles does not hold the monitor for the rest of the call", async () => {
+    vi.useFakeTimers();
+    try {
+      const acts = actions({ reattachMic: vi.fn(() => new Promise<void>(() => {})) });
+      const t = setup({ actions: acts });
+      t.monitor.noteLocalSpeaking();
+      await t.monitor.sample(silentMic);
+      t.monitor.noteLocalSpeaking();
+      await t.monitor.sample(silentMic);
+      t.monitor.noteLocalSpeaking();
+      const hung = t.monitor.sample(silentMic);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await hung;
+      // The next samples are judged again: the ladder reached the next rung.
+      for (let i = 0; i < 3; i += 1) {
+        t.monitor.noteLocalSpeaking();
+        await t.monitor.sample(silentMic);
+      }
+      expect(acts.reopenMic).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a sample still repairing when the call stops judges nothing after", async () => {
+    let release: () => void = () => {};
+    let stuck = 0;
+    const acts = actions({
+      reattachMic: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+      stuckPlayback: vi.fn(() => stuck),
+    });
+    const t = setup({ actions: acts });
+    for (let i = 0; i < 2; i += 1) {
+      await t.tick(silentMic);
+    }
+    const inFlight = t.tick(silentMic);
+    await Promise.resolve();
+    t.monitor.pause();
+    stuck = 1;
+    release();
+    await inFlight;
+    // The playback check after the repair belonged to a stopped call.
+    expect(acts.replayPlayback).not.toHaveBeenCalled();
+  });
+
+  it("a playback-only card does not restart peers from an episode that already healed", async () => {
+    let stuck = 0;
+    const acts = actions({
+      stuckPlayback: vi.fn(() => stuck),
+      replayPlayback: vi.fn(async () => false),
+    });
+    const t = setup({ actions: acts });
+    const nothing: AudioStatsSample = {
+      ...healthyAudio(),
+      receivers: [{ peerId: "bob", trackId: "bob-mic", packetsDelta: 0, audioLevel: null }],
+    };
+    for (let i = 0; i < 5; i += 1) {
+      await t.tick(nothing, false);
+    }
+    expect(acts.restartInbound).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 16; i += 1) {
+      await t.tick(healthyAudio(), false);
+    }
+    stuck = 1;
+    await t.tick(healthyAudio(), false);
+    await t.tick(healthyAudio(), false);
+    expect(t.monitor.prompt()).toBe("hearing");
+    await t.monitor.repair();
+    expect(acts.restartInbound).toHaveBeenCalledTimes(1);
+  });
+});

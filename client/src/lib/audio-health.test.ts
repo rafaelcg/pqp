@@ -128,11 +128,15 @@ describe("createInboundDetector", () => {
     }
   });
 
-  it("SFU: no receiver at all while the server hears them is the fault itself", () => {
+  it("SFU: a read with no evidence (first read, failed read) is not a strike", () => {
     const detector = createInboundDetector();
-    const t = { peerId: "a", expectAudio: true, remoteSpeaking: true, packetsDelta: null };
-    detector.update([t]);
-    expect(detector.update([t])).toEqual(["a"]);
+    const unknown = { peerId: "a", expectAudio: true, remoteSpeaking: true, packetsDelta: null };
+    const zero = { ...unknown, packetsDelta: 0 };
+    expect(detector.update([unknown])).toEqual([]);
+    expect(detector.update([unknown])).toEqual([]);
+    expect(detector.update([zero])).toEqual([]);
+    expect(detector.update([unknown])).toEqual([]);
+    expect(detector.update([zero])).toEqual(["a"]);
   });
 
   it("SFU: a peer this listener silenced is not judged", () => {
