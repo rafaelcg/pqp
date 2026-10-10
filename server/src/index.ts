@@ -69,6 +69,7 @@ import {
   isCommunityHomeEnabled,
   publishDueCommunityHomePosts,
 } from "./services/community-home.js";
+import { pushPendingCommunityHomePosts } from "./services/community-home-push.js";
 import { sweepChannelAudiences } from "./services/servers.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { reconcileStaleHlsSessions } from "./voice/hls-cleanup.js";
@@ -574,6 +575,9 @@ async function sweepCommunityHomeSchedule(): Promise<void> {
         `[community-home] published scheduled posts on ${serverIds.length} server(s)`,
       );
     }
+    // Every published post nobody announced yet, wherever it was published
+    // (this tick, a feed read's catch-up, a route on another machine).
+    await pushPendingCommunityHomePosts();
   } catch (error) {
     console.error("[community-home] schedule sweep failed:", error);
   }

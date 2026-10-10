@@ -150,6 +150,17 @@ for what would replace it.
   16:9 here (pin a Baú post instead). Private halls that turned Baú on
   keep today's feed with no identity header. One channel-list row, still
   called Baú.
+- **Server rail** (web): an unread Baú post lights the white pip on that
+  server's icon, the same one an unread channel lights, and never a number: the
+  red count on an icon is for mentions, and a staff post is news, not a message
+  addressed to you. A muted server stays silent, as for channels. One read
+  (`GET /api/community-home/unread`, `{ servers: { [id]: count } }`, only
+  servers whose owner turned Baú on) feeds every icon; it is re-asked on any
+  `community-home-update` frame and when you move between servers. The open
+  server's own number still comes from `…/home/unread` and drives the row and
+  the corner card (`client/src/lib/community-home/rail-unread.ts`).
+- **Push** on a new post, behind the runtime flag `bau_post_push` (default off,
+  per server, see below).
 - **Live corner card** when a post is published while you are in that
   server, looking at another channel (`community-home-update` plus unread
   going up). Not the author: own posts never count as unread. Not if you
@@ -205,6 +216,46 @@ for what would replace it.
   or unlock (VIP visibility). Delete is a two-step in that overflow, not a
   browser dialog. Heart with a count. The two newest comments under an
   unlocked card, "See all N" fetches the rest.
+
+## Push on a new post (`bau_post_push`)
+
+Runtime flag, **default off, per server** (`docs/FEATURE_FLAGS.md`): turn it on
+for one server with `PUT /api/admin/flag-overrides { key: "bau_post_push",
+serverId, enabled: true }`, then globally. It needs `community_home`, the
+server's own Baú switch and a configured push transport (web push, FCM, APNs;
+the same pipeline as mentions and DMs).
+
+- **When.** A post going live: published from the composer, "Publish now", or a
+  scheduled time arriving. Exactly once: `community_home_posts.push_claimed_at`
+  is stamped by one `UPDATE ... RETURNING` (`services/community-home-push.ts`),
+  by the publish route and by the 30 s sweep alike, so two API machines, a
+  feed read's catch-up and an unpublish followed by a publish cannot announce a
+  post twice. The stamp is taken **even with the flag off**, so turning it on
+  never announces what was published while it was off. A post unannounced for
+  more than 30 minutes is stamped and dropped.
+- **Who.** Every member except: the author; anybody who blocked the author; for
+  a members-only post, anybody who could not open it in full (only
+  `MANAGE_SERVER` and the VIP cargo can; with the VIP flag off a members-only
+  post is not announced). Then the push-only rules, each counted under
+  `product.pushSkipped.bau.*` on `GET /api/admin/metrics`: a socket in front of
+  the person (`live_socket`, or `attentive_socket` with `push_attention_gate`;
+  the live corner card is that notice), stored do-not-disturb (`dnd`), the
+  server muted (`muted`: an explicit `none` for the server or a `none` default)
+  or explicitly set to mentions only for this server (`level`). The account-wide
+  "mentions" default for servers does **not** silence it: a staff post is not
+  chat noise. No device (`no_subscription`) and no configured transport
+  (`transport_off`) are counted the same way. Sends land in
+  `product.pushDelivery` by platform like every other push, and one
+  `push.bauPost` log line per server per claim.
+- **Quiet.** Posts claimed together are one push per person that says how many
+  ("3 posts novos no Baú do X"). The notification `tag` is per server
+  (`bau:<serverId>`), so on the device (and as the APNs collapse id) a later
+  post replaces an earlier one. TTL is a day.
+- **Copy.** Title `Baú`; body `Post novo no Baú do {server}: {title}` (en, es,
+  pt-BR by the recipient's `settings.locale`). Never the body of the post.
+- **Tap.** `path` is `/app/server/<id>/home`. The web client lands on the Baú
+  for any server URL with no channel; iOS (`DeepLinkTarget.bau`) and Android
+  (`DeepLinkTarget.Bau`) open their Baú screen.
 
 ## Limits
 
@@ -582,6 +633,11 @@ the expected shape of a self-host without storage, not a bug.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →
   preview → publish → like, member intro + lock + comments, unread badge +
   live corner card, private-hall landing.
+- `server/src/services/community-home-push.test.ts`: the push audience (author,
+  mute, mentions level, DND, live socket, VIP, blocks), once-only claim, flag
+  off stamps without sending, scheduled posts, the aggregate unread read.
+- `client/src/lib/community-home/rail-unread.test.ts` and
+  `client/src/components/layout/server-rail-bau.test.tsx`: the rail's pip.
 
 ## Not here yet (see the strategy doc)
 
@@ -593,5 +649,5 @@ to report the *person*. Worth closing before this is on by default for
 strangers; the queue and the moderation surfaces already exist.
 
 Checkout, plans and prices, polls as a post type, older pages of the feed,
-push or email on publish, Electron / Android / iOS surfaces (web only for now;
-the native apps show nothing and lose nothing).
+email on publish, a permalink route to one post (a push opens the Baú, not the
+post), the Electron surface.

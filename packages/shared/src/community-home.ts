@@ -994,6 +994,17 @@ export type CommunityHomeUnreadResponse = z.infer<
   typeof communityHomeUnreadResponseSchema
 >;
 
+/** `GET /api/community-home/unread`: the same count for every server the
+ * viewer is in whose owner turned the Baú on, servers with nothing unread left
+ * out. What the server rail reads. */
+export const communityHomeUnreadAllResponseSchema = z.object({
+  servers: z.record(z.string(), z.number().int().positive()),
+});
+
+export type CommunityHomeUnreadAllResponse = z.infer<
+  typeof communityHomeUnreadAllResponseSchema
+>;
+
 export const createCommunityHomeCommentSchema = z.object({
   body: z.string().max(COMMUNITY_HOME_COMMENT_MAX * 2),
 });

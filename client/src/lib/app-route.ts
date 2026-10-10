@@ -12,6 +12,10 @@ import {
  *
  *   /app                                → null (default landing)
  *   /app/server/<serverId>              → { kind: "channel", serverId }
+ *   /app/server/<serverId>/home         → same: a server URL with no channel
+ *                                         lands on the Baú when it is on (the
+ *                                         path a new-post push carries; the
+ *                                         phones parse `/home` as the Baú)
  *   /app/server/<sid>/channel/<cid>     → { kind: "channel", serverId, channelId }
  *   /app/server/<sid>/channel/<cid>/message/<mid>
  *                                       → …and highlight that message

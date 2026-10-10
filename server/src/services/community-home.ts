@@ -741,6 +741,42 @@ export async function countUnreadCommunityHomePosts(
   return Number(result.rows[0]?.n ?? 0);
 }
 
+/**
+ * `countUnreadCommunityHomePosts` for every server the viewer is in, in one
+ * query: `{ [serverId]: count }`, servers with nothing unread left out. Same
+ * rules (own posts never count, no read row means everything is unread, the
+ * VIP filter matches the feed) with one addition the single-server read does
+ * not need: only servers whose owner turned the Baú on.
+ */
+export async function countUnreadCommunityHomePostsAllServers(
+  viewerId: string,
+): Promise<Record<string, number>> {
+  const visibilityFilter = isCommunityHomeVipEnabled()
+    ? ""
+    : " AND p.visibility = 'free'";
+  const result = await getPool().query<{ server_id: string; n: string }>(
+    `SELECT p.server_id, COUNT(*)::text AS n
+       FROM server_members sm
+       JOIN servers s ON s.id = sm.server_id AND s.community_home_enabled
+       JOIN community_home_posts p
+         ON p.server_id = sm.server_id
+        AND p.status = 'published'
+        AND p.author_id <> $1
+        ${visibilityFilter}
+       LEFT JOIN community_home_reads r
+         ON r.server_id = sm.server_id AND r.user_id = $1
+      WHERE sm.user_id = $1
+        AND (r.last_seen_at IS NULL OR p.published_at > r.last_seen_at)
+      GROUP BY p.server_id`,
+    [viewerId],
+  );
+  const out: Record<string, number> = {};
+  for (const row of result.rows) {
+    out[row.server_id] = Number(row.n);
+  }
+  return out;
+}
+
 /** Stamp the feed as read up to now. Never fans out: it is one person's mark. */
 export async function markCommunityHomeRead(
   serverId: string,

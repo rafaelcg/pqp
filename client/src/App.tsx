@@ -337,6 +337,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchCommunityHomeUnreadAll,
   fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
@@ -515,6 +516,7 @@ import {
   mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
+  withServerBauUnread,
 } from "@/lib/community-home";
 import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -1808,6 +1810,15 @@ function MainAppContent({
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  /**
+   * Unread Baú posts for EVERY server, for the rail's icons. The open server's
+   * own count above drives the sidebar row and the corner card; this is the
+   * same number for the servers whose channel list is not on screen.
+   */
+  const [communityHomeUnreadByServer, setCommunityHomeUnreadByServer] =
+    useState<Record<string, number>>({});
+  /** Bumped by every Baú frame, for any server, to re-read the map above. */
+  const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
   const communityHomeUnreadServerRef = useRef<string | null>(null);
   const communityHomeUpdateNudgeRef = useRef(0);
@@ -5009,6 +5020,8 @@ function MainAppContent({
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
+            // Any server's frame, the open one included: the rail's icons.
+            setCommunityHomeAllNudge((n) => n + 1);
             return;
           }
 
@@ -7772,6 +7785,9 @@ function MainAppContent({
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast(null);
       const serverId = selectedServerId;
+      setCommunityHomeUnreadByServer((current) =>
+        withServerBauUnread(current, serverId, 0),
+      );
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -7795,6 +7811,9 @@ function MainAppContent({
       .then(({ count }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          setCommunityHomeUnreadByServer((current) =>
+            withServerBauUnread(current, selectedServerId, count),
+          );
           communityHomeUnreadRef.current = count;
           communityHomeUnreadBaselineRef.current = true;
           if (
@@ -7828,6 +7847,64 @@ function MainAppContent({
     communityHomeOpen,
     selectedServerId,
     communityHomeUpdateNudge,
+  ]);
+
+  /**
+   * Unread Baú posts for every server, for the rail.
+   *
+   * The sidebar effect above only knows the server that is open, so before this
+   * a post published in any other server left its icon untouched. One request
+   * for all of them, re-asked when a Baú frame arrives (debounced: a staff
+   * member publishing three posts is one read), when the set of servers with a
+   * Baú changes, and when the person moves between servers (a feed they just
+   * left has been stamped read by then). The open server's own entry is not
+   * trusted from here: the rail draws it as selected anyway, and the sidebar
+   * effect owns its number.
+   */
+  const bauServerKey = servers
+    .filter((row) => row.communityHomeEnabled === true)
+    .map((row) => row.id)
+    .join(",");
+  useEffect(() => {
+    if (!communityHomeFeatureOn || bauServerKey === "") {
+      setCommunityHomeUnreadByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void fetchCommunityHomeUnreadAll()
+        .then(({ servers: counts }) => {
+          if (cancelled) {
+            return;
+          }
+          setCommunityHomeUnreadByServer((current) => {
+            const next = { ...counts };
+            // The server whose feed is open has just been stamped read; a
+            // read that raced the stamp must not light its icon on leaving.
+            if (selectedServerId && communityHomeOpen) {
+              delete next[selectedServerId];
+            }
+            return JSON.stringify(next) === JSON.stringify(current)
+              ? current
+              : next;
+          });
+        })
+        .catch(() => {
+          // Keep what is on screen: no pip is better than a wrong one.
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    communityHomeFeatureOn,
+    bauServerKey,
+    communityHomeAllNudge,
+    selectedServerId,
+    communityHomeOpen,
   ]);
 
   /**
@@ -11069,6 +11146,7 @@ function MainAppContent({
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
+        serverBauUnread={communityHomeUnreadByServer}
         homeSelected={
           selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
         }

@@ -3998,6 +3998,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_community_home_posts_pinned_one
   ON community_home_posts (server_id)
   WHERE pinned_at IS NOT NULL;
 
+-- WHEN A PUBLISHED POST HAS BEEN ANNOUNCED BY PUSH (`bau_post_push`,
+-- services/community-home-push.ts). Stamped by one UPDATE ... RETURNING, so the
+-- machine that gets the row back is the only one that sends: exactly once
+-- across API instances, across the publish route and the sweep, and across an
+-- unpublish followed by a publish. Stamped even when nothing is sent, so
+-- turning the flag on never announces what was published while it was off.
+-- The existing published posts are backfilled ONCE, in the block that adds the
+-- column, because this file runs on every boot and a plain UPDATE here would
+-- also swallow the pushes of posts published just before a restart.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'community_home_posts'
+       AND column_name = 'push_claimed_at'
+  ) THEN
+    ALTER TABLE community_home_posts ADD COLUMN push_claimed_at TIMESTAMPTZ;
+    UPDATE community_home_posts
+       SET push_claimed_at = COALESCE(published_at, NOW())
+     WHERE status = 'published';
+  END IF;
+END $$;
+
+-- The sweep asks "any published post nobody has announced?" every 30 s across
+-- every server; this keeps that a lookup of the (almost always empty) set.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_unannounced
+  ON community_home_posts (published_at)
+  WHERE status = 'published' AND push_claimed_at IS NULL;
+
 -- How far each person has read this server's Baú. Mirrors `channel_reads`:
 -- one row per (server, person), stamped when the feed is opened. The unread
 -- count is derived from it, never stored, so it cannot drift.
