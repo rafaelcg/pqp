@@ -1,5 +1,5 @@
 import { Check, SlidersHorizontal } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { InboundVideoReadout } from "@/components/voice/inbound-video-readout";
@@ -175,6 +175,32 @@ export function VideoQualityMenu({
   const qualities = availableVideoQualities({ participantCount, hlsLive });
   const value = coerceVideoQuality(rawValue, qualities);
 
+  // THE MENU NEVER GROWS PAST THE STAGE. It opens upward from the bar, and a
+  // presenter's menu (sizes, frame rate, priority, both readouts) is taller
+  // than a short stage: its top rows slid under the channel header or off the
+  // window, where nobody could press them. So it is held to the room between
+  // the button and the top of the stage it sits in, and scrolls inside that.
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const measure = () => {
+      const stage = root.closest('[data-testid^="call-stage"]');
+      const ceiling = stage ? Math.max(0, stage.getBoundingClientRect().top) : 0;
+      // 8px for the menu's own `mb-2`, 8 more so it does not touch the edge.
+      const room = root.getBoundingClientRect().top - ceiling - 16;
+      setMaxHeight(Math.max(160, Math.floor(room)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
+
   // Same dismissal contract as the user-panel popover: a press anywhere else,
   // or Escape. Anchored on the wrapper rather than the panel so a press on the
   // button itself is the button's toggle rather than an outside-close followed
@@ -228,7 +254,8 @@ export function VideoQualityMenu({
         <div
           role="menu"
           aria-label={label}
-          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 max-w-[80vw] -translate-x-1/2 overflow-y-auto overscroll-contain rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          style={maxHeight === null ? undefined : { maxHeight }}
         >
           {isSendingVideo && (
             <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
