@@ -12,12 +12,9 @@ import {
   chosenScreenCeilingBps,
   meshCameraBitrate,
   meshScreenBitrate,
+  sampledScreenFpsTier,
 } from "@/lib/peer-connection-manager";
-import {
-  cameraBitrateFor,
-  screenFpsTier,
-  type VideoQuality,
-} from "@/lib/video-quality";
+import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
 
 /**
  * What this machine is actually sending, in words, next to the control that
@@ -160,9 +157,8 @@ export function OutboundVideoReadout({
    */
   const [alsoSending, setAlsoSending] = useState<{
     camera: boolean;
-    screen: boolean;
-    screenFps: 30 | 60;
-  }>({ camera: false, screen: false, screenFps: 30 });
+    screen: VideoSenderSample | null;
+  }>({ camera: false, screen: null });
 
   useEffect(() => {
     // Pushed by the shared poll rather than polling directly: `getStats()`
@@ -185,8 +181,7 @@ export function OutboundVideoReadout({
       const screen = senders.find((sender) => sender.role === "screen");
       setAlsoSending({
         camera: senders.some((sender) => sender.role === "camera"),
-        screen: screen !== undefined,
-        screenFps: screenFpsTier(screen?.fps),
+        screen: screen ?? null,
       });
       setCamera(
         senders.find((sender) => sender.role === "camera") ??
@@ -224,8 +219,8 @@ export function OutboundVideoReadout({
     quality,
     viewers,
     cameraOn: alsoSending.camera,
-    sharingScreen: alsoSending.screen,
-    screenFps: alsoSending.screenFps,
+    sharingScreen: alsoSending.screen !== null,
+    screenFps: sampledScreenFpsTier(alsoSending.screen ?? undefined, quality),
   });
   const limited = describeLimitationAgainst(camera, chosen);
 

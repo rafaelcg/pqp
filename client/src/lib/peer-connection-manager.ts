@@ -5,6 +5,7 @@ import {
   screenBitrateFor,
   screenScaleFactor,
   SCREEN_60FPS_BITRATE_FACTOR,
+  screenFpsTier,
   type VideoQuality,
 } from "./video-quality";
 import {
@@ -435,6 +436,29 @@ export function chosenScreenCeilingBps(
   fps: 30 | 60 = 30,
 ): number {
   return Math.min(screenBitrateFor(quality, fps), meshScreenMaxBitrate(fps));
+}
+
+/**
+ * The frame-rate tier a sampled screen sender was CONFIGURED for.
+ *
+ * Not the encoder's output rate alone: a 60 fps capture under pressure, or
+ * under the sharpness priority, can encode at 30 while its ceiling is still the
+ * 60 fps one, and reading 30 there compares the sender against the wrong limit.
+ * So a ceiling above the 30 fps one for this rung also means 60.
+ */
+export function sampledScreenFpsTier(
+  sample: { fps?: number | null; ceilingKbps?: number | null } | undefined,
+  quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+): 30 | 60 {
+  if (!sample) {
+    return 30;
+  }
+  if (screenFpsTier(sample.fps) === 60) {
+    return 60;
+  }
+  const ceilingBps = (sample.ceilingKbps ?? 0) * 1000;
+  // 5 % over, so kbps rounding on the way into the sample is not a tier.
+  return ceilingBps > chosenScreenCeilingBps(quality, 30) * 1.05 ? 60 : 30;
 }
 
 /**

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chosenScreenCeilingBps,
   createPeerConnectionManager,
+  sampledScreenFpsTier,
   meshScreenBitrate,
 } from "./peer-connection-manager";
 import {
@@ -1120,5 +1121,22 @@ describe("a 60 fps share on the mesh, and what it gives up first", () => {
       "maintain-resolution",
     );
     manager.dispose();
+  });
+});
+
+describe("the tier a sampled screen sender was configured for", () => {
+  it("is 60 when the encoder is putting out 60", () => {
+    expect(sampledScreenFpsTier({ fps: 59, ceilingKbps: 3000 }, "auto")).toBe(60);
+  });
+
+  it("stays 60 when a 60 fps share is encoding slower, read off its ceiling", () => {
+    // Sharpness priority, or a squeezed link: 28 fps out, 4.5 Mbps ceiling.
+    expect(sampledScreenFpsTier({ fps: 28, ceilingKbps: 4500 }, "auto")).toBe(60);
+  });
+
+  it("is 30 for a 30 fps share at its own ceiling, or with nothing to read", () => {
+    expect(sampledScreenFpsTier({ fps: 30, ceilingKbps: 3000 }, "auto")).toBe(30);
+    expect(sampledScreenFpsTier({ fps: 30, ceilingKbps: null }, "auto")).toBe(30);
+    expect(sampledScreenFpsTier(undefined, "auto")).toBe(30);
   });
 });
