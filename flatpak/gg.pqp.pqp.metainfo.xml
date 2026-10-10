@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright pqp contributors -->
+<component type="desktop-application">
+  <id>gg.pqp.pqp</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+
+  <name>pqp</name>
+  <summary>Voice, text and watch parties with your friends</summary>
+  <summary xml:lang="pt-BR">Voz, texto e watch party com a tua galera</summary>
+  <summary xml:lang="es">Voz, texto y watch parties con tus amigos</summary>
+
+  <developer id="gg.pqp">
+    <name>pqp</name>
+  </developer>
+
+  <description>
+    <p>
+      pqp is an open source place to hang out with your friends: voice channels,
+      text chat and watch parties, in servers you make for your group.
+    </p>
+    <p xml:lang="pt-BR">
+      O pqp é um lugar de código aberto pra ficar com a tua galera: canais de voz,
+      chat de texto e watch party, em servidores que tu cria pro teu grupo.
+    </p>
+    <ul>
+      <li>Voice calls with noise suppression and push to talk</li>
+      <li xml:lang="pt-BR">Calls de voz com supressão de ruído e aperte pra falar</li>
+      <li>Share your screen or a window, with your camera on if you want</li>
+      <li xml:lang="pt-BR">Compartilha a tela ou uma janela, com a câmera ligada se tu quiser</li>
+      <li>Watch parties: one person streams, everybody watches together</li>
+      <li xml:lang="pt-BR">Watch party: uma pessoa transmite e todo mundo assiste junto</li>
+      <li>Text channels with replies, reactions, GIFs, polls and file uploads</li>
+      <li xml:lang="pt-BR">Canais de texto com respostas, reações, GIFs, enquetes e arquivos</li>
+      <li>Servers with roles and per channel permissions, direct messages and friends</li>
+      <li xml:lang="pt-BR">Servidores com cargos e permissões por canal, mensagens diretas e amigos</li>
+    </ul>
+    <p>
+      The desktop app is the same pqp as pqp.gg in the browser, with notifications,
+      a tray icon and pqp:// links. An account on pqp.gg is needed to sign in.
+    </p>
+    <p xml:lang="pt-BR">
+      O app de desktop é o mesmo pqp do pqp.gg no navegador, com notificações,
+      ícone na bandeja e links pqp://. Precisa de uma conta no pqp.gg pra entrar.
+    </p>
+    <p>
+      In the Flatpak build, sharing the computer's sound along with a screen share
+      is not available: the sandbox does not let the app keep the call out of the
+      shared sound. Share a browser tab from Chrome, or use the AppImage or .deb
+      from pqp.gg, when the sound matters.
+    </p>
+    <p xml:lang="pt-BR">
+      Na versão Flatpak, o som do computador não vai junto quando tu compartilha a
+      tela: o sandbox não deixa o app tirar a call do som compartilhado. Se o som
+      importa, compartilha uma aba do Chrome ou usa o AppImage ou o .deb do pqp.gg.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">gg.pqp.pqp.desktop</launchable>
+
+  <url type="homepage">https://pqp.gg</url>
+  <url type="bugtracker">https://github.com/rafaelcg/pqp/issues</url>
+  <url type="vcs-browser">https://github.com/rafaelcg/pqp</url>
+  <url type="donation">https://pqp.gg/apoie</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Text channels, a voice channel and a poll</caption>
+      <image type="source" width="1920" height="1080">https://pqp.gg/images/flathub/chat.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A voice call</caption>
+      <image type="source" width="1920" height="1200">https://pqp.gg/images/flathub/call.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Sharing a screen in a call</caption>
+      <image type="source" width="1920" height="1080">https://pqp.gg/images/flathub/screen.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A watch party</caption>
+      <image type="source" width="1152" height="768">https://pqp.gg/images/flathub/watch-party.png</image>
+    </screenshot>
+  </screenshots>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#c8f55a</color>
+    <color type="primary" scheme_preference="dark">#090e12</color>
+  </branding>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+    <content_attribute id="social-info">mild</content_attribute>
+  </content_rating>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <recommends>
+    <internet>always</internet>
+  </recommends>
+
+  <categories>
+    <category>Network</category>
+    <category>Chat</category>
+    <category>InstantMessaging</category>
+  </categories>
+
+  <keywords>
+    <keyword>voice</keyword>
+    <keyword>chat</keyword>
+    <keyword>watch party</keyword>
+    <keyword>screen share</keyword>
+  </keywords>
+
+  <provides>
+    <binary>pqp</binary>
+  </provides>
+
+  <releases>
+    <release version="0.2.4" date="2026-10-05">
+      <url type="details">https://github.com/rafaelcg/pqp/releases/tag/v0.2.4</url>
+      <description>
+        <p>Linux: sharing the computer's sound also catches Spotify and games running through Wine or Proton.</p>
+      </description>
+    </release>
+    <release version="0.2.3" date="2026-10-05">
+      <url type="details">https://github.com/rafaelcg/pqp/releases/tag/v0.2.3</url>
+      <description>
+        <p>Linux: the app can carry the computer's sound when sharing a screen, without the call coming back through it.</p>
+      </description>
+    </release>
+  </releases>
+</component>

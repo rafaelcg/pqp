@@ -265,6 +265,11 @@ export interface DesktopShareCapabilities {
    * in every shell before it, and off unless the runtime flag says so.
    */
   linuxShareAudio?: boolean;
+  /**
+   * The shell is the Flatpak build (`flatpak/gg.pqp.pqp.yml`). It never
+   * offers `linuxShareAudio`; the page uses this for copy only. Absent before.
+   */
+  flatpak?: boolean;
   /** The shell answers `fullscreenAppState()` (Windows). Absent before it. */
   fullscreenAppState?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */

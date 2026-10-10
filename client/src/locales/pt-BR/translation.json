@@ -1385,6 +1385,7 @@
   "voice.share.tickAudio": "Escolhe uma guia do Chrome e marca “Também compartilhar áudio da guia” pra mandar o som junto.",
   "voice.share.linuxAudioHint": "No Linux, o som só vai junto quando você compartilha uma aba do Chrome e marca Compartilhar áudio da aba. Tela inteira e janela ficam sem som por aqui.",
   "voice.share.linuxAudioHint_desktop": "No Linux, o app de mesa não consegue mandar o som do computador em nenhum tipo de compartilhamento. Abre o pqp no navegador e compartilha uma aba do Chrome se o som for importante.",
+  "voice.share.linuxAudioHint_flatpak": "Na versão Flatpak do pqp, o som do computador não vai junto no compartilhamento: o sandbox não deixa o app tirar a call do som. Se o som importa, instala o .deb ou o AppImage do pqp.gg, ou compartilha uma aba do Chrome pelo navegador.",
   "voice.share.linuxAudioHint.dismiss": "Fechar dica",
   "voice.share.systemAudioOn": "O som do computador vai junto: jogo, música, o que estiver tocando. A call não vai.",
   "voice.share.systemAudioOff": "Som do computador desligado. Uma guia do Chrome ainda manda o som dela.",
