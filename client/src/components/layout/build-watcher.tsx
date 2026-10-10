@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { applyUpdate } from "@/lib/apply-update";
 import { fetchClientUpdateConfig } from "@/lib/api";
 import { RUNNING_BUILD } from "@/lib/build-info";
@@ -43,10 +43,11 @@ async function askServerForForce(): Promise<ForceConfig | null> {
  *
  *  2. ACTS, when it is safe and nobody has to be asked. Once the page knows it
  *     is behind, `decideUpdateAction` says whether this is a moment to reload
- *     (nobody has touched the page for three minutes; or it has been out of date
- *     past twelve hours) or only a moment for the card. A reload is never
- *     taken in a call, while somebody is typing, or while they watch a live
- *     party, and never twice in a row for the same build.
+ *     (the tab is hidden; a call just ended; nobody has touched the page for
+ *     three minutes; or it has been out of date past twelve hours) or only a
+ *     moment for the card. A reload is never taken in a call (unless the
+ *     operator made the update critical), while somebody is typing, or while
+ *     they watch a live party, and never twice in a row for the same build.
  *
  * Mounted in `main.tsx` beside `UpdatePrompt`, outside `App`, because a stale
  * bundle matters on every route and a signed-out landing page is one too.
@@ -61,6 +62,16 @@ export function BuildWatcher({
   const inCall = useInCall();
   const watching = useWatchingParty();
   const [tick, setTick] = useState(0);
+  // When this page's last call ended: the in-call banner promises the reload
+  // for right after the hangup, and this is how the policy keeps the promise.
+  const callEndedAt = useRef<number | null>(null);
+  const wasInCall = useRef(inCall);
+  if (wasInCall.current !== inCall) {
+    if (wasInCall.current && !inCall) {
+      callEndedAt.current = Date.now();
+    }
+    wasInCall.current = inCall;
+  }
 
   useEffect(() => {
     // For support and for tests: which build is this tab, read off the page.
@@ -84,7 +95,13 @@ export function BuildWatcher({
       return;
     }
     const timer = window.setInterval(() => setTick((n) => n + 1), RECHECK_MS);
-    return () => window.clearInterval(timer);
+    // A tab going hidden is the safest moment there is: look at once.
+    const onVisibility = () => setTick((n) => n + 1);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [build.stale]);
 
   useEffect(() => {
@@ -96,6 +113,10 @@ export function BuildWatcher({
     const action = decideUpdateAction({
       stale: true,
       forced: build.forced,
+      critical: build.critical,
+      hidden: document.visibilityState === "hidden",
+      sinceCallEndedMs:
+        callEndedAt.current === null ? null : now - callEndedAt.current,
       staleForMs: build.since === null ? 0 : now - build.since,
       idleMs: idleForMs(now),
       inCall,

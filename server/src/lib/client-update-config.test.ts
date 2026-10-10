@@ -9,6 +9,8 @@ describe("clientUpdateConfig", () => {
   afterEach(() => {
     delete process.env.CLIENT_FORCE_UPDATE;
     delete process.env.CLIENT_MIN_BUILT_AT;
+    delete process.env.CLIENT_FORCE_UPDATE_IN_CALL;
+    delete process.env.CLIENT_CRITICAL_MIN_BUILT_AT;
     resetFeatureFlagsForTests();
   });
 
@@ -16,7 +18,20 @@ describe("clientUpdateConfig", () => {
     expect(clientUpdateConfig()).toEqual({
       forceUpdate: false,
       minBuiltAt: null,
+      interruptCalls: false,
+      criticalMinBuiltAt: null,
     });
+  });
+
+  it("reads the two levers that reach a page in a call", () => {
+    process.env.CLIENT_FORCE_UPDATE_IN_CALL = "true";
+    process.env.CLIENT_CRITICAL_MIN_BUILT_AT = "2026-10-10T12:00:00Z";
+    expect(clientUpdateConfig()).toMatchObject({
+      interruptCalls: true,
+      criticalMinBuiltAt: Date.UTC(2026, 9, 10, 12),
+    });
+    process.env.CLIENT_FORCE_UPDATE_IN_CALL = "yes";
+    expect(clientUpdateConfig().interruptCalls).toBe(false);
   });
 
   it("follows CLIENT_FORCE_UPDATE as its environment default, exact word only", () => {

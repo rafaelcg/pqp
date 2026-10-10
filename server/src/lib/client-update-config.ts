@@ -28,7 +28,18 @@ import { isEnabled } from "./flags.js";
  *    Build ids are commit hashes and cannot be ordered, which is why this is a
  *    time and not "a minimum build".
  *
- * A client only acts on either when it is actually stale (its build differs
+ * And two that also reach a page IN A CALL, which the two above never do (they
+ * wait for the hangup). For a critical fix only: they end the call.
+ *
+ *  - `interruptCalls`: the runtime flag `client_force_update_in_call`. With
+ *    either lever above forcing a bundle, that bundle reloads mid-call too.
+ *  - `criticalMinBuiltAt`: `CLIENT_CRITICAL_MIN_BUILT_AT`, same format as
+ *    `CLIENT_MIN_BUILT_AT`. Bundles built before it reload, call or not.
+ *
+ * Only bundles from 2026-10-10 on read these two; an older bundle ignores the
+ * extra fields and treats a force as before.
+ *
+ * A client only acts on any of them when it is actually stale (its build differs
  * from `/version.json`), so a `minBuiltAt` set past the newest build cannot
  * trap anybody in a reload loop: there is nothing newer to reload into.
  */
@@ -36,6 +47,10 @@ export interface ClientUpdateConfig {
   forceUpdate: boolean;
   /** Epoch milliseconds, or null when no minimum is set. */
   minBuiltAt: number | null;
+  /** A forced bundle reloads even in a call. */
+  interruptCalls: boolean;
+  /** Epoch milliseconds: bundles built before it reload even in a call. */
+  criticalMinBuiltAt: number | null;
 }
 
 /** Epoch ms from an ISO date or a plain number of milliseconds; null if unusable. */
@@ -58,5 +73,7 @@ export function clientUpdateConfig(): ClientUpdateConfig {
   return {
     forceUpdate: isEnabled("client_force_update"),
     minBuiltAt: parseMinBuiltAt(process.env.CLIENT_MIN_BUILT_AT),
+    interruptCalls: isEnabled("client_force_update_in_call"),
+    criticalMinBuiltAt: parseMinBuiltAt(process.env.CLIENT_CRITICAL_MIN_BUILT_AT),
   };
 }

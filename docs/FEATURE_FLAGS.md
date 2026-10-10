@@ -174,6 +174,13 @@ only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
 (ISO date or epoch ms) forces bundles built before a moment and is environment-only.
 See `docs/PWA.md` §"Nobody stays on an old bundle".
 
+`CLIENT_FORCE_UPDATE_IN_CALL` (`client_force_update_in_call`, default off, global),
+born as a flag: with a force on (the flag above or `CLIENT_MIN_BUILT_AT`), the
+forced bundles reload even in a call, which ends the call. For a critical fix only.
+Served as `interruptCalls` by the same endpoint. Its environment-only sibling
+`CLIENT_CRITICAL_MIN_BUILT_AT` (same format as `CLIENT_MIN_BUILT_AT`) does the same
+for bundles built before a moment, served as `criticalMinBuiltAt`.
+
 Also born as a flag: `SHARE_HIGH_MOTION_GUARD` (`share_high_motion_guard`,
 default off, **per server**), served to the client by the same
 `GET /api/share/config?serverId=` as `shareHighMotionGuard`. A presenter whose
