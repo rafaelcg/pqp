@@ -38,14 +38,18 @@ describe("currentSeason", () => {
 
 describe("isLookOffered", () => {
   it("always offers the year-round looks", () => {
-    expect(isLookOffered("night", "signal", null)).toBe(true);
+    expect(isLookOffered("night", "signal", null, false)).toBe(true);
   });
 
   it("offers a seasonal look in its season or while it is on", () => {
-    expect(isLookOffered("halloween", "signal", "halloween")).toBe(true);
-    expect(isLookOffered("christmas", "signal", "halloween")).toBe(false);
-    expect(isLookOffered("halloween", "halloween", null)).toBe(true);
-    expect(isLookOffered("halloween", "signal", null)).toBe(false);
+    expect(isLookOffered("halloween", "signal", "halloween", false)).toBe(true);
+    expect(isLookOffered("christmas", "signal", "halloween", false)).toBe(false);
+    expect(isLookOffered("halloween", "halloween", null, false)).toBe(true);
+    expect(isLookOffered("halloween", "signal", null, false)).toBe(false);
+  });
+
+  it("offers every seasonal look when all year is on", () => {
+    expect(isLookOffered("christmas", "signal", null, true)).toBe(true);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   takeModeBeforeNight,
 } from "@/components/settings/appearance-section";
 import { getAccentHue, setAccentHuePreference } from "@/lib/accent";
+import { OFFER_SEASONAL_LOOKS_ALL_YEAR } from "@/lib/seasonal-looks";
 import { getAppearance, setAppearancePreference } from "@/lib/appearance";
 import { getThemeState, setThemePreference } from "@/lib/theme";
 import { DEFAULT_CHAT_DISPLAY, getChatDisplay, setChatDisplay } from "@/lib/chat-display";
@@ -181,7 +182,14 @@ describe("Modo", () => {
     expect(getThemeState().preference).toBe("light");
   });
 
-  it("offers a seasonal look only in its season, or while it is on", () => {
+  it.runIf(OFFER_SEASONAL_LOOKS_ALL_YEAR)("offers every seasonal look while testing", () => {
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(radio(host!, /^Halloween/)).toBeTruthy();
+    expect(radio(host!, /^Christmas/)).toBeTruthy();
+  });
+
+  it.skipIf(OFFER_SEASONAL_LOOKS_ALL_YEAR)("offers a seasonal look only in its season, or while it is on", () => {
     localStorage.setItem("pqp:season", "none");
     mount();
     expect(() => radio(host!, /^Halloween/)).toThrow();
