@@ -215,7 +215,15 @@ export function startVersionWatch(options: {
     running: options.running,
     fetchLatest: () => fetchLatestBuild(),
     fetchForceConfig: options.fetchForceConfig,
-    updateWorker: updateRegisteredWorker,
+    // A hidden tab reads the version file (a tiny static file) but leaves the
+    // worker alone: the worker checks for itself on the page's fetches
+    // (`sw-build-script.ts`), and a hundred background tabs each asking for
+    // `sw.js` every ten minutes would be a hundred update jobs for one answer.
+    // A stale hidden tab reloads through `applyUpdate`, which updates first.
+    updateWorker: () =>
+      document.visibilityState === "hidden"
+        ? Promise.resolve()
+        : updateRegisteredWorker(),
     publish: options.publish,
   });
   activeWatch = watch;

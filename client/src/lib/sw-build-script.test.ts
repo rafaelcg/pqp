@@ -347,16 +347,18 @@ describe("the worker looks for the next build itself", () => {
     };
     scope.self = scope;
     vm.runInNewContext(swBuildScript("abc123", { updateEveryMs: 1_000 }), scope);
+    const extended: Promise<unknown>[] = [];
     const fetchEvent = async () => {
       for (const listener of listeners.fetch ?? []) {
         listener({
           request: { url: "https://pqp.gg/assets/x.js", mode: "cors", method: "GET" },
           respondWith: () => {},
+          waitUntil: (promise: Promise<unknown>) => extended.push(promise),
         });
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
     };
-    return { fetchEvent, updates, store };
+    return { fetchEvent, updates, store, extended };
   }
 
   it("checks on a fetch, then not again until the interval has passed", async () => {
@@ -364,6 +366,8 @@ describe("the worker looks for the next build itself", () => {
     const w = workerScope(null, now);
     await w.fetchEvent();
     expect(w.updates.count).toBe(1);
+    // The check holds the worker alive (it may be stopped once the fetch is answered).
+    expect(w.extended).toHaveLength(1);
     expect(w.store.get("/__pqp_last_update_check")).toBe("10000");
     now.value += 500;
     await w.fetchEvent();
