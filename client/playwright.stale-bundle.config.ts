@@ -37,7 +37,7 @@ export default defineConfig({
       // service worker implementation. The update-card specs drive the page's
       // clock and stay on Chromium.
       name: "firefox",
-      grep: /precached URL|fresh worker installs|plain reload reaches the new build$/,
+      grep: /precached URL|fresh worker installs|plain reload reaches the new build$|which file broke it/,
       use: {
         ...devices["Desktop Firefox"],
         viewport: { width: 1280, height: 800 },

@@ -7,6 +7,7 @@
  */
 
 import { reportFaroEvent } from "./faro";
+import { INSTALL_FAILED_MESSAGE } from "./sw-build-script";
 
 export interface ServiceWorkerControls {
   /** Activate the waiting worker and reload. */
@@ -54,6 +55,115 @@ export function watchInstallFailures(
   };
   watch(registration.installing);
   registration.addEventListener("updatefound", () => watch(registration.installing));
+}
+
+/** How long a failed install waits for the worker to say why before reporting without it. */
+export const INSTALL_CAUSE_WAIT_MS = 3000;
+
+/** The attributes of a worker's `PQP_SW_INSTALL_FAILED` message, or null for any other message. */
+export function installCauseAttributes(message: unknown): Record<string, string> | null {
+  const data = message as {
+    type?: unknown;
+    build?: unknown;
+    reason?: unknown;
+    path?: unknown;
+    status?: unknown;
+  } | null;
+  if (!data || data.type !== INSTALL_FAILED_MESSAGE) {
+    return null;
+  }
+  const text = (value: unknown, max: number) =>
+    typeof value === "string" ? value.slice(0, max) : "";
+  return {
+    reason: text(data.reason, 80) || "unknown",
+    path: text(data.path, 200),
+    status: typeof data.status === "number" ? String(data.status) : "0",
+    build: text(data.build, 64),
+  };
+}
+
+/**
+ * Turns the two signals of a failed install into ONE report.
+ *
+ * The worker says why (`cause`, the `PQP_SW_INSTALL_FAILED` message from
+ * `sw-build-script.ts`: failing path, status, error name) and the page sees
+ * the outcome (`failed`, from `watchInstallFailures`). Either can come first,
+ * and a worker from before the message existed never sends one. So a cause is
+ * reported at once, and an outcome is reported on its own only if no cause
+ * arrived within `waitMs` either side of it.
+ *
+ * This is per tab. Every open tab sees both signals; `onceAcrossTabs` makes
+ * them one event.
+ */
+export function installFailureReporter(
+  report: (attributes: Record<string, string>) => void,
+  waitMs = INSTALL_CAUSE_WAIT_MS,
+): { cause: (message: unknown) => void; failed: () => void } {
+  let lastReportAt = Number.NEGATIVE_INFINITY;
+  const send = (attributes: Record<string, string>) => {
+    lastReportAt = Date.now();
+    report(attributes);
+  };
+  return {
+    cause(message) {
+      const attributes = installCauseAttributes(message);
+      if (attributes && Date.now() - lastReportAt >= waitMs) {
+        send(attributes);
+      }
+    },
+    failed() {
+      const at = Date.now();
+      setTimeout(() => {
+        if (lastReportAt < at - waitMs) {
+          send({ reason: "unknown", path: "", status: "0", build: "" });
+        }
+      }, waitMs);
+    },
+  };
+}
+
+/** How long one tab's report of a failure keeps the other tabs from repeating it. */
+export const INSTALL_REPORT_DEDUPE_MS = 60_000;
+
+const REPORTED_PREFIX = "pqp:sw-install-reported:";
+
+/**
+ * Runs `fn` in at most one tab per `key` per `windowMs`.
+ *
+ * A failed install is seen by every open tab of the origin. The first tab to
+ * take the Web Lock for `key` writes the time to `localStorage` and reports;
+ * a tab that finds a recent time stays quiet. Without Web Locks the storage
+ * check alone still dedupes everything but an exact tie. Without storage
+ * (private mode, blocked site data) every tab reports: a duplicate is better
+ * than a failure nobody hears about.
+ */
+export async function onceAcrossTabs(
+  key: string,
+  fn: () => void,
+  windowMs = INSTALL_REPORT_DEDUPE_MS,
+): Promise<void> {
+  const name = `${REPORTED_PREFIX}${key}`;
+  const run = () => {
+    try {
+      const at = Number(localStorage.getItem(name));
+      if (at && Date.now() - at < windowMs) {
+        return;
+      }
+      localStorage.setItem(name, String(Date.now()));
+    } catch {
+      // No storage: report from this tab anyway.
+    }
+    fn();
+  };
+  try {
+    if (navigator.locks?.request) {
+      await navigator.locks.request(name, async () => run());
+      return;
+    }
+  } catch {
+    // Locks refused: fall through to the storage check alone.
+  }
+  run();
 }
 
 /** Longest a first-time visitor to the marketing home page goes unregistered. */
@@ -138,6 +248,20 @@ export function registerServiceWorker(
         if (disposed) {
           return;
         }
+        const installFailure = installFailureReporter((attributes) => {
+          console.warn("[pwa] service worker install failed", attributes);
+          const key = [attributes.build, attributes.path, attributes.status, attributes.reason].join("|");
+          void onceAcrossTabs(key, () => reportFaroEvent("pwa_sw_install_failed", attributes));
+        });
+        // Reporting must never stand between the page and its worker.
+        try {
+          navigator.serviceWorker.addEventListener("message", (event) =>
+            installFailure.cause(event.data),
+          );
+          navigator.serviceWorker.startMessages();
+        } catch {
+          // No message channel: the outcome is still reported without a cause.
+        }
         updateSW = module.registerSW({
           onNeedRefresh,
           onRegisterError: (error) => {
@@ -145,10 +269,7 @@ export function registerServiceWorker(
           },
           onRegisteredSW: (_url, registration) => {
             if (registration) {
-              watchInstallFailures(registration, () => {
-                console.warn("[pwa] service worker install failed");
-                reportFaroEvent("pwa_sw_install_failed");
-              });
+              watchInstallFailures(registration, installFailure.failed);
             }
           },
         });

@@ -55,6 +55,11 @@ export interface PagesServer {
    * `pqp.gg` can serve while Pages itself is already on the new build.
    */
   pin: (pathname: string, file: string | null) => void;
+  /**
+   * Answer `pathname` with `status` (null undoes it). A file that should be
+   * there and is not: what one broken precache entry looks like to a worker.
+   */
+  fail: (pathname: string, status: number | null) => void;
   /** Requests answered, oldest first, for asserting what a browser re-fetched. */
   requests: () => string[];
   close: () => Promise<void>;
@@ -68,6 +73,7 @@ export async function startPagesServer(options: {
   let root = "";
   const log: string[] = [];
   const pinned = new Map<string, string>();
+  const failing = new Map<string, number>();
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -76,6 +82,12 @@ export async function startPagesServer(options: {
     if (pathname.startsWith("/api/")) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end("{}");
+      return;
+    }
+    const failStatus = failing.get(pathname);
+    if (failStatus !== undefined) {
+      res.writeHead(failStatus, { "content-type": "text/plain", "cache-control": "no-store" });
+      res.end("failing on purpose");
       return;
     }
     if (!pinned.has(pathname) && pathname.endsWith(".html")) {
@@ -139,6 +151,13 @@ export async function startPagesServer(options: {
         pinned.delete(pathname);
       } else {
         pinned.set(pathname, path.resolve(file));
+      }
+    },
+    fail(pathname, status) {
+      if (status === null) {
+        failing.delete(pathname);
+      } else {
+        failing.set(pathname, status);
       }
     },
     requests: () => [...log],
