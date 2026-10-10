@@ -90,11 +90,33 @@ import kotlinx.coroutines.launch
 // `@RequiresOptIn`, so `kotlin.OptIn` compiles to nothing here and lint
 // fails the release build anyway. `checkReleaseBuilds = true` in
 // app/build.gradle.kts is what would have found that, days later.
-@OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayerDialog(
     attachment: Attachment,
     api: ApiClient,
+    onDismiss: () -> Unit,
+) {
+    VideoPlayerDialog(
+        key = attachment.id,
+        url = attachment.url,
+        remint = { api.attachmentUrl(attachment.id) },
+        onDismiss = onDismiss,
+    )
+}
+
+/**
+ * The same player for a video that is not a chat attachment (a Baú post's
+ * upload). [url] is whatever the API handed out, absolute or API-relative;
+ * [remint] returns a fresh signed URL after the first playback error, or null
+ * when the caller has no way to mint one (the Baú feed re-signs on reload, so
+ * a failed clip there just says so).
+ */
+@OptIn(UnstableApi::class)
+@Composable
+fun VideoPlayerDialog(
+    key: String,
+    url: String,
+    remint: (suspend () -> String?)?,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -102,7 +124,7 @@ fun VideoPlayerDialog(
 
     var failed by remember { mutableStateOf(false) }
 
-    val player = remember(attachment.id) {
+    val player = remember(key) {
         ExoPlayer.Builder(context).build().apply {
             // `handleAudioFocus = true` is what makes this behave in a call.
             // Voice holds focus with `USAGE_VOICE_COMMUNICATION`; asking for
@@ -117,7 +139,7 @@ fun VideoPlayerDialog(
                     .build(),
                 /* handleAudioFocus = */ true,
             )
-            setMediaItem(MediaItem.fromUri(Backend.absolute(attachment.url).orEmpty()))
+            setMediaItem(MediaItem.fromUri(Backend.absolute(url).orEmpty()))
             playWhenReady = true
             prepare()
         }
@@ -143,7 +165,7 @@ fun VideoPlayerDialog(
                 }
                 retried = true
                 scope.launch {
-                    val fresh = runCatching { api.attachmentUrl(attachment.id) }.getOrNull()
+                    val fresh = remint?.let { mint -> runCatching { mint() }.getOrNull() }
                     if (fresh == null) {
                         failed = true
                         return@launch

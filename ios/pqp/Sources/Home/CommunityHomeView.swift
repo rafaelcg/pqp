@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 /// A server's Baú: the posts that stay, newest first.
 ///
@@ -185,9 +186,13 @@ private struct PostCard: View {
                 LockedBox()
             } else {
                 if let body = post.body, !body.isEmpty {
-                    MessageBodyText(body: body)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.paper)
+                    if let gifURL = GifLinks.mediaBody(body) {
+                        BauGif(url: gifURL)
+                    } else {
+                        MessageBodyText(body: body)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.paper)
+                    }
                 }
                 if let media = post.media {
                     MediaView(media: media)
@@ -330,7 +335,12 @@ private struct MediaView: View {
     let media: CommunityHomeMedia
 
     var body: some View {
-        if let target = media.openURL {
+        if let videoURL = media.inlineVideoURL {
+            // A stored video plays in place, like the web's `<video>`. It is
+            // not wrapped in the open-out button: that button would swallow
+            // the tap meant for the player's own controls.
+            BauInlineVideo(url: videoURL, name: media.name)
+        } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)
         } else {
@@ -410,16 +420,6 @@ private struct MediaView: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
             .accessibilityLabel(Text("Watch on Instagram"))
             .accessibilityIdentifier("bau.media.instagram")
-        } else if media.isVideo {
-            ZStack {
-                Palette.surfaceRaised
-                PlayBadge(label: media.name.isEmpty ? String(localized: "Play video") : media.name)
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
-            .accessibilityLabel(Text("Play video"))
-            .accessibilityIdentifier("bau.media.video")
         } else {
             fileCard
         }
@@ -461,6 +461,86 @@ private struct MediaView: View {
                 .fill(Palette.surfaceRaised)
         )
         .accessibilityIdentifier("bau.media.file")
+    }
+}
+
+/// A GIF posted from the picker: a body that is only an allowlisted URL.
+/// Same size and clip as the chat transcript uses for the same thing.
+private struct BauGif: View {
+    let url: URL
+
+    var body: some View {
+        AnimatedImageView(url: url)
+            .frame(maxWidth: 260, maxHeight: 260, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .accessibilityLabel(Text("GIF"))
+            .accessibilityIdentifier("bau.gif")
+    }
+}
+
+/// An uploaded video, played where it sits.
+///
+/// Mirrors the web's player: nothing plays until the person taps (no
+/// autoplay, so a feed does not make noise on scroll), the first frame is
+/// painted as the poster, and the system controls carry play, scrub and
+/// fullscreen. The URL is the presigned GET the feed carried; a feed reload
+/// mints a fresh one, so there is no refetch here. A file the player cannot
+/// open falls back to the old behaviour, a tap that opens it outside.
+private struct BauInlineVideo: View {
+    @Environment(\.openURL) private var openURL
+    let url: URL
+    let name: String
+
+    @State private var player: AVPlayer?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let player {
+                VideoPlayer(player: player)
+            } else if failed {
+                Button { openURL(url) } label: {
+                    ZStack {
+                        Palette.surfaceRaised
+                        VStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(Palette.warning)
+                            Text("Could not play this file.")
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.paperMuted)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                Palette.surfaceRaised.overlay { ProgressView().tint(Palette.paperMuted) }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        .accessibilityLabel(name.isEmpty ? Text("Play video") : Text(name))
+        .accessibilityIdentifier("bau.media.video")
+        .task(id: url) { await prepare() }
+        .onDisappear { player?.pause() }
+    }
+
+    /// Probe before handing the asset over, as `MediaPlayerView` does, so an
+    /// unplayable or expired URL lands in the failed state rather than a
+    /// player with a permanently black frame.
+    private func prepare() async {
+        failed = false
+        let asset = AVURLAsset(url: url)
+        do {
+            guard try await asset.load(.isPlayable) else { throw APIError.transport("Not playable") }
+            let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            // Paint the first frame as the poster, the web's `#t=0.001`.
+            await player.seek(to: CMTime(seconds: 0.001, preferredTimescale: 600))
+            self.player = player
+        } catch {
+            player = nil
+            failed = true
+        }
     }
 }
 
@@ -514,9 +594,13 @@ private struct CommentsBlock: View {
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.paper)
                                 .lineLimit(1)
-                            Text(comment.body)
-                                .font(Typography.callout)
-                                .foregroundStyle(Palette.paper)
+                            if let gifURL = comment.gifURL {
+                                BauGif(url: gifURL)
+                            } else {
+                                Text(comment.body)
+                                    .font(Typography.callout)
+                                    .foregroundStyle(Palette.paper)
+                            }
                         }
                     }
                 }

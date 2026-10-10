@@ -62,6 +62,15 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
     var isFile: Bool { kind == "file" }
     var isGif: Bool { contentType?.lowercased() == "image/gif" }
 
+    /// The URL an uploaded video plays from, or nil when this is not a stored
+    /// video or has no readable https URL (a deployment without storage sends
+    /// the object with `url: null`; the card then falls back to open-out).
+    var inlineVideoURL: URL? {
+        guard isVideo, let raw = url, let parsed = URL(string: raw),
+              ["https", "http"].contains(parsed.scheme?.lowercased() ?? "") else { return nil }
+        return parsed
+    }
+
     /// What a tap opens: the object for storage kinds, the watch page for paste URLs.
     var openURL: URL? {
         if isYoutube || isTiktok || isInstagram { return URL(string: youtubeUrl ?? "") }
@@ -97,6 +106,10 @@ struct CommunityHomeComment: Codable, Identifiable, Sendable, Hashable {
     let author: PublicUser
     let body: String
     let createdAt: Date
+
+    /// A comment that is only a picker GIF draws as the GIF, the same rule
+    /// chat and the web use (`GifLinks`, allowlisted hosts only).
+    var gifURL: URL? { GifLinks.mediaBody(body) }
 }
 
 struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
