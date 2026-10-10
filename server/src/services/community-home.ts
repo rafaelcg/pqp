@@ -747,6 +747,11 @@ export async function countUnreadCommunityHomePosts(
  * rules (own posts never count, no read row means everything is unread, the
  * VIP filter matches the feed) with one addition the single-server read does
  * not need: only servers whose owner turned the Baú on.
+ *
+ * A members-only post counts for a viewer who cannot open it, ON PURPOSE and
+ * exactly like the single-server count: the feed shows that viewer the title,
+ * the teaser and the lock, so the pip never promises a card the feed will not
+ * draw. (The push is stricter, because a notification for a lock is an advert.)
  */
 export async function countUnreadCommunityHomePostsAllServers(
   viewerId: string,

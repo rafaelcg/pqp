@@ -7873,28 +7873,40 @@ function MainAppContent({
       return;
     }
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void fetchCommunityHomeUnreadAll()
-        .then(({ servers: counts }) => {
-          if (cancelled) {
-            return;
-          }
-          setCommunityHomeUnreadByServer((current) => {
-            const next = { ...counts };
-            // The server whose feed is open has just been stamped read; a
-            // read that raced the stamp must not light its icon on leaving.
-            if (selectedServerId && communityHomeOpen) {
-              delete next[selectedServerId];
+    let timer = 0;
+    // The first read waits a beat so a burst of frames is one request; a read
+    // that fails is retried with a bounded backoff, so a blip does not leave a
+    // new post's pip off until the next frame or navigation.
+    const delays = [250, 5_000, 20_000, 60_000];
+    const attempt = (n: number): void => {
+      timer = window.setTimeout(() => {
+        void fetchCommunityHomeUnreadAll()
+          .then(({ servers: counts }) => {
+            if (cancelled) {
+              return;
             }
-            return JSON.stringify(next) === JSON.stringify(current)
-              ? current
-              : next;
+            setCommunityHomeUnreadByServer((current) => {
+              const next = { ...counts };
+              // The server whose feed is open has just been stamped read; a
+              // read that raced the stamp must not light its icon on leaving.
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+          })
+          .catch(() => {
+            // Keep what is on screen (no pip is better than a wrong one) and
+            // ask again, a few times.
+            if (!cancelled && n + 1 < delays.length) {
+              attempt(n + 1);
+            }
           });
-        })
-        .catch(() => {
-          // Keep what is on screen: no pip is better than a wrong one.
-        });
-    }, 250);
+      }, delays[n]);
+    };
+    attempt(0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);

@@ -232,7 +232,12 @@ the same pipeline as mentions and DMs).
   feed read's catch-up and an unpublish followed by a publish cannot announce a
   post twice. The stamp is taken **even with the flag off**, so turning it on
   never announces what was published while it was off. A post unannounced for
-  more than 30 minutes is stamped and dropped.
+  more than 30 minutes is stamped and dropped (in one statement, never loaded),
+  and a claim is at most 200 fresh posts per call. If the fan-out fails before
+  anything was sent the claim is handed back and the next tick retries; once a
+  page of pushes has gone out the posts stay claimed, because finishing could
+  tell some people twice and a missed push is the lesser harm. The walk is
+  capped at 50 000 members (`capped` on the `push.bauPost` line).
 - **Who.** Every member except: the author; anybody who blocked the author; for
   a members-only post, anybody who could not open it in full (only
   `MANAGE_SERVER` and the VIP cargo can; with the VIP flag off a members-only

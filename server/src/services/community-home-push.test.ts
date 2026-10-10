@@ -51,7 +51,11 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer } = await import("./servers.js");
 const { savePushSubscription, setLiveSocketProbeForTests, setPushSenderForTests } =
   await import("./push.js");
-const { pushPendingCommunityHomePosts, BAU_PUSH_FRESH_MS } = await import(
+const {
+  pushPendingCommunityHomePosts,
+  BAU_PUSH_FRESH_MS,
+  BAU_PUSH_CLAIM_BATCH,
+} = await import(
   "./community-home-push.js"
 );
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
@@ -467,6 +471,78 @@ describeDb("Baú new post push", () => {
       [id],
     );
     expect(stamped.rows[0].push_claimed_at).not.toBeNull();
+  });
+
+  it("hands the claim back when the fan-out fails before anything was sent, then delivers on the next tick", async () => {
+    const id = await insertPublished();
+    const pool = getPool();
+    const real = pool.query.bind(pool);
+    let failuresLeft = 1;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+      if (
+        failuresLeft > 0 &&
+        typeof text === "string" &&
+        text.includes("FROM user_preferences")
+      ) {
+        failuresLeft -= 1;
+        return Promise.reject(new Error("connection terminated"));
+      }
+      return (real as (...args: unknown[]) => unknown)(text, ...rest);
+    }) as never);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await pushPendingCommunityHomePosts(serverId)).toBe(0);
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+    expect(sent).toEqual([]);
+    const row = await getPool().query(
+      `SELECT push_claimed_at FROM community_home_posts WHERE id = $1`,
+      [id],
+    );
+    expect(row.rows[0].push_claimed_at).toBeNull();
+
+    expect(await pushPendingCommunityHomePosts(serverId)).toBe(3);
+    expect(sent.length).toBe(3);
+  });
+
+  it("works a backlog off a bounded batch at a time, and stamps stale posts without announcing them", async () => {
+    await getPool().query(
+      `INSERT INTO community_home_posts
+         (server_id, author_id, title, body, status, published_at)
+       SELECT $1, $2, 'p' || g, 'corpo', 'published', NOW()
+         FROM generate_series(1, $3) g`,
+      [serverId, owner.id, BAU_PUSH_CLAIM_BATCH + 5],
+    );
+    await getPool().query(
+      `INSERT INTO community_home_posts
+         (server_id, author_id, title, body, status, published_at)
+       SELECT $1, $2, 'velho' || g, 'corpo', 'published', NOW() - INTERVAL '3 hours'
+         FROM generate_series(1, 10) g`,
+      [serverId, owner.id],
+    );
+    const unannounced = async () =>
+      Number(
+        (
+          await getPool().query(
+            `SELECT COUNT(*)::int AS n FROM community_home_posts
+              WHERE push_claimed_at IS NULL`,
+          )
+        ).rows[0].n,
+      );
+
+    await pushPendingCommunityHomePosts(serverId);
+    // The stale ten are stamped for good; one batch of the fresh ones went out.
+    expect(await unannounced()).toBe(5);
+    expect(sent[0]!.payload.body).toBe(
+      `${BAU_PUSH_CLAIM_BATCH} posts novos no Baú do Mesa da Tues`,
+    );
+
+    sent.length = 0;
+    await pushPendingCommunityHomePosts(serverId);
+    expect(await unannounced()).toBe(0);
+    expect(sent[0]!.payload.body).toBe("5 posts novos no Baú do Mesa da Tues");
   });
 
   it("a server whose owner turned the Baú off announces nothing", async () => {

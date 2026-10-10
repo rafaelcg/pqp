@@ -51,9 +51,15 @@ import { notePushSkipped } from "./push-skips.js";
 /** A claimed post older than this is stamped and never announced. */
 export const BAU_PUSH_FRESH_MS = 30 * 60 * 1000;
 
-const AUDIENCE_PAGE = 500;
-/** A seat belt per claim, not a rule: 50 000 people is a very large community. */
+const AUDIENCE_PAGE = 1000;
+/**
+ * A seat belt per claim, not a rule: 50 000 people is a very large community.
+ * Past it the walk stops and says so (`capped` on the `push.bauPost` line), so
+ * a community that outgrows it is a log search and not a silent gap.
+ */
 export const BAU_PUSH_MAX_MEMBERS = 50_000;
+/** Posts claimed per call, so a backlog is worked off a tick at a time. */
+export const BAU_PUSH_CLAIM_BATCH = 200;
 
 interface ClaimedPost {
   id: string;
@@ -77,14 +83,38 @@ export async function pushPendingCommunityHomePosts(
     return 0;
   }
   try {
-    const claimed = await getPool().query<ClaimedPost>(
+    const pool = getPool();
+    const staleScope = serverId ? "AND server_id = $2" : "";
+    const claimScope = serverId ? "AND server_id = $1" : "";
+    const scopeParams = serverId ? [serverId] : [];
+    // Stale first, and not returned: a backlog (a long outage, a worker that
+    // was off) is stamped in one statement and never held in memory.
+    await pool.query(
       `UPDATE community_home_posts
           SET push_claimed_at = NOW()
         WHERE status = 'published'
           AND push_claimed_at IS NULL
-          ${serverId ? "AND server_id = $1" : ""}
-        RETURNING id, server_id, author_id, title, visibility, published_at`,
-      serverId ? [serverId] : [],
+          AND published_at < NOW() - ($1::int * INTERVAL '1 millisecond')
+          ${staleScope}`,
+      [BAU_PUSH_FRESH_MS, ...scopeParams],
+    );
+    // Then the fresh ones, a bounded batch at a time. SKIP LOCKED so two
+    // machines claiming at once take different rows instead of queueing.
+    const claimed = await pool.query<ClaimedPost>(
+      `UPDATE community_home_posts p
+          SET push_claimed_at = NOW()
+         FROM (
+           SELECT id FROM community_home_posts
+            WHERE status = 'published'
+              AND push_claimed_at IS NULL
+              ${claimScope}
+            ORDER BY published_at
+            LIMIT ${BAU_PUSH_CLAIM_BATCH}
+            FOR UPDATE SKIP LOCKED
+         ) picked
+        WHERE p.id = picked.id
+        RETURNING p.id, p.server_id, p.author_id, p.title, p.visibility, p.published_at`,
+      scopeParams,
     );
     if (claimed.rows.length === 0) {
       return 0;
@@ -97,13 +127,28 @@ export async function pushPendingCommunityHomePosts(
     }
     let pushed = 0;
     for (const [id, posts] of byServer) {
+      const progress = { pagesSent: 0 };
       try {
-        pushed += await announceServerPosts(id, posts);
+        pushed += await announceServerPosts(id, posts, progress);
       } catch (error) {
         console.error(
           `[community-home] post push failed for server ${id}:`,
           error,
         );
+        // Nothing went out yet: the failure was before any vendor was called
+        // (a lookup, a preference read), so the claim is handed back and the
+        // next tick tries again, for as long as the post is fresh. Once a page
+        // has been sent the posts stay claimed: finishing the rest could tell
+        // some people twice, and a missed push is the lesser harm.
+        if (progress.pagesSent === 0) {
+          await pool
+            .query(
+              `UPDATE community_home_posts SET push_claimed_at = NULL
+                WHERE id = ANY($1::uuid[])`,
+              [posts.map((post) => post.id)],
+            )
+            .catch(() => {});
+        }
       }
     }
     return pushed;
@@ -116,6 +161,7 @@ export async function pushPendingCommunityHomePosts(
 async function announceServerPosts(
   serverId: string,
   claimed: readonly ClaimedPost[],
+  progress: { pagesSent: number },
 ): Promise<number> {
   if (!isEnabled("bau_post_push", { serverId }) || !isAnyPushEnabled()) {
     return 0;
@@ -235,6 +281,7 @@ async function announceServerPosts(
         serverName: row.name,
         recipients,
       });
+      progress.pagesSent += 1;
     }
   }
   logEvent("push.bauPost", {
@@ -242,6 +289,7 @@ async function announceServerPosts(
     posts: posts.length,
     walked,
     pushed,
+    capped: walked >= BAU_PUSH_MAX_MEMBERS ? true : undefined,
   });
   return pushed;
 }
