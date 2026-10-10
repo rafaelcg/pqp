@@ -3,12 +3,14 @@ package gg.pqp.app.bau
 import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.Backend
 import gg.pqp.app.social.getJson
-import java.util.WeakHashMap
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 
@@ -260,7 +262,13 @@ class BauCardCache(
         /** Null while the request is in flight. */
         @Volatile var doneAt: Long? = null
         @Volatile var value: BauPostCard? = null
+
+        /** Callers currently waiting on [result]. Guarded by the cache lock. */
+        var waiters = 0
     }
+
+    /** Requests actually on the wire at once; the rest queue, and a queued one nobody waits for is dropped. */
+    private val permits = Semaphore(MAX_IN_FLIGHT)
 
     private val entries = LinkedHashMap<String, Entry>()
 
@@ -282,7 +290,7 @@ class BauCardCache(
                 val fresh = Entry()
                 fresh.result = scope.async {
                     val value = try {
-                        fetch(serverId, postId, lang)
+                        permits.withPermit { fetch(serverId, postId, lang) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -296,26 +304,51 @@ class BauCardCache(
                 }
                 entries[key] = fresh
                 fresh
+            }.also { it.waiters++ }
+        }
+        try {
+            return entry.result.await()
+        } finally {
+            // The last row to stop waiting for a request that has not finished
+            // cancels it and forgets it, so scrolling past a link-heavy stretch
+            // does not leave the queue working for rows that are gone. A later
+            // row for the same post simply asks again.
+            synchronized(entries) {
+                entry.waiters--
+                if (entry.waiters == 0 && entry.doneAt == null) {
+                    entry.result.cancel()
+                    if (entries[key] === entry) entries.remove(key)
+                }
             }
         }
-        return entry.result.await()
     }
 
     companion object {
         const val OK_TTL_MS = 60_000L
         const val MISS_TTL_MS = 30_000L
         const val MAX_ENTRIES = 200
+        const val MAX_IN_FLIGHT = 4
     }
 }
 
-/** One cache per signed-in client, so a card never outlives the account that was allowed to see it. */
+/**
+ * The cache for the signed-in client. Only the current client's cache is kept,
+ * and it reaches the client through a weak reference, so a signed-out
+ * `ApiClient` is not pinned by this object and an account never sees another's
+ * cards.
+ */
 object BauCards {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val caches = WeakHashMap<ApiClient, BauCardCache>()
+    private var current: Pair<WeakReference<ApiClient>, BauCardCache>? = null
 
-    fun of(api: ApiClient): BauCardCache = synchronized(caches) {
-        caches.getOrPut(api) {
-            BauCardCache(scope, { serverId, postId, lang -> api.bauPostCard(serverId, postId, lang) })
+    fun of(api: ApiClient): BauCardCache = synchronized(this) {
+        current?.takeIf { it.first.get() === api }?.second ?: run {
+            val ref = WeakReference(api)
+            val cache = BauCardCache(scope, { serverId, postId, lang ->
+                ref.get()?.bauPostCard(serverId, postId, lang)
+            })
+            current = ref to cache
+            cache
         }
     }
 }

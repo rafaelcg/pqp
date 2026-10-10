@@ -378,8 +378,14 @@ private fun Counter(icon: androidx.compose.ui.graphics.vector.ImageVector, count
 
 // ----------------------------------------------------------- video frame
 
-/** A frame is ~0.5 MB at poster size; a dozen posters on screen is the working set. */
-private val frameCache = object : LruCache<String, Bitmap>(16) {}
+/** Poster size: a card is at most ~420dp wide, so a frame is never decoded larger than this. */
+private const val FRAME_WIDTH = 640
+private const val FRAME_HEIGHT = 360
+
+/** Bounded by bytes, not entries: a handful of posters is the working set. */
+private val frameCache = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+}
 
 /**
  * The first frame of a signed video file, decoded off the main thread. Never
@@ -399,7 +405,19 @@ private fun rememberVideoFirstFrame(url: String?): androidx.compose.ui.graphics.
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(url, HashMap())
-                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+                    retriever.getScaledFrameAtTime(
+                        0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, FRAME_WIDTH, FRAME_HEIGHT,
+                    )
+                } else {
+                    retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+                        val scale = minOf(1f, FRAME_WIDTH.toFloat() / full.width)
+                        if (scale >= 1f) full else {
+                            Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
+                                .also { if (it !== full) full.recycle() }
+                        }
+                    }
+                }
             } catch (_: Exception) {
                 null
             } finally {

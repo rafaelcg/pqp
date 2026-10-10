@@ -306,4 +306,50 @@ class BauShareTest {
         cache.load(server, post, "en")
         assertEquals(2, calls.get())
     }
+
+    @Test
+    fun `the last waiter leaving cancels the request and the next ask refetches`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        val calls = AtomicInteger()
+        val cache = BauCardCache(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            fetch = { _, _, _ ->
+                calls.incrementAndGet()
+                started.complete(Unit)
+                gate.await()
+                sampleCard()
+            },
+        )
+        val waiter = async(Dispatchers.Default) { cache.load(server, post, "pt") }
+        started.await()
+        waiter.cancel()
+        waiter.join()
+        // Not poisoned: a new row for the same post starts a fresh request.
+        gate.complete(Unit)
+        assertNotNull(cache.load(server, post, "pt"))
+        assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun `only a few requests are on the wire at once`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val active = AtomicInteger()
+        val peak = AtomicInteger()
+        val cache = BauCardCache(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            fetch = { _, _, _ ->
+                peak.updateAndGet { maxOf(it, active.incrementAndGet()) }
+                gate.await()
+                active.decrementAndGet()
+                sampleCard()
+            },
+        )
+        val ids = (1..12).map { "aaaaaaaa-0000-4000-8000-%012d".format(it) }
+        val loads = ids.map { id -> async(Dispatchers.Default) { cache.load(server, id, null) } }
+        kotlinx.coroutines.delay(200)
+        gate.complete(Unit)
+        loads.awaitAll()
+        assertTrue("peak ${peak.get()}", peak.get() <= BauCardCache.MAX_IN_FLIGHT)
+    }
 }
