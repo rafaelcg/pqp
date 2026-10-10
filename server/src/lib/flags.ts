@@ -285,6 +285,7 @@ export const FEATURE_FLAGS = {
     // one server, and create / update are routes under `/servers/:id`.
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
+  },
   bau_post_push: {
     description:
       "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
