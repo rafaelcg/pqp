@@ -402,3 +402,52 @@ describe("createAudioHealthMonitor: lifecycle", () => {
     expect(acts.restartInbound).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("createAudioHealthMonitor: the card's repair", () => {
+  it("stops before restarting peers when the call ended while it was replaying", async () => {
+    let release: (value: boolean) => void = () => {};
+    const acts = actions({
+      replayPlayback: vi.fn(
+        () => new Promise<boolean>((resolve) => (release = resolve)),
+      ),
+    });
+    const t = setup({ actions: acts, view: () => view({ usingSfu: true }) });
+    const deaf: AudioStatsSample = {
+      senders: [],
+      receivers: [{ peerId: "bob", trackId: null, packetsDelta: 0, audioLevel: null, remoteSpeaking: true }],
+    };
+    for (let i = 0; i < 6; i += 1) {
+      await t.tick(deaf, false);
+    }
+    expect(t.monitor.prompt()).toBe("hearing");
+    const restartsBefore = (acts.restartInbound as ReturnType<typeof vi.fn>).mock.calls.length;
+    const repair = t.monitor.repair();
+    t.monitor.pause();
+    release(true);
+    await repair;
+    expect(acts.restartInbound).toHaveBeenCalledTimes(restartsBefore);
+  });
+
+  it("restarts many stalled paths at once, and at most eight", async () => {
+    const peers = Array.from({ length: 12 }, (_, i) => ({
+      peerId: `p${i}`,
+      connected: true,
+      expectAudio: true,
+      micTrackId: `p${i}-mic`,
+    }));
+    const t = setup({ view: () => view({ peers }) });
+    const nothing: AudioStatsSample = {
+      senders: [],
+      receivers: peers.map((peer) => ({
+        peerId: peer.peerId,
+        trackId: peer.micTrackId,
+        packetsDelta: 0,
+        audioLevel: null,
+      })),
+    };
+    for (let i = 0; i < 5; i += 1) {
+      await t.tick(nothing, false);
+    }
+    expect(t.acts.restartInbound).toHaveBeenCalledTimes(8);
+  });
+});

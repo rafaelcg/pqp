@@ -86,6 +86,8 @@ export interface AudioHealthReport {
 
 /** How long one repair may take before the ladder stops waiting for it. */
 export const REPAIR_TIMEOUT_MS = 10_000;
+/** Inbound paths restarted by one repair, at most. */
+export const MAX_PEER_RESTARTS = 8;
 
 export function createAudioHealthMonitor(deps: {
   view(): AudioHealthView;
@@ -227,6 +229,20 @@ export function createAudioHealthMonitor(deps: {
     });
   }
 
+  /**
+   * Restart several paths at once, each bounded by `run`, and never more
+   * than a handful: a whole room going quiet is a problem on this side, which
+   * one restart of each of the first few paths will show, and restarting two
+   * hundred would be its own outage.
+   */
+  async function restartPeers(peerIds: readonly string[]) {
+    await Promise.all(
+      peerIds
+        .slice(0, MAX_PEER_RESTARTS)
+        .map((peerId) => run(() => deps.actions.restartInbound(peerId))),
+    );
+  }
+
   function noteReason(kind: AudioHealthKind, reason: string) {
     reasons.set(kind, reason);
   }
@@ -314,11 +330,9 @@ export function createAudioHealthMonitor(deps: {
         noteReason("inboundStalled", view.usingSfu ? "speaking-no-packets" : "no-packets");
         const decision = tracker.detected("inboundStalled", at);
         if (decision.action === "auto") {
-          for (const peerId of stalled) {
-            await run(() => deps.actions.restartInbound(peerId));
-            if (stale()) {
-              return;
-            }
+          await restartPeers(stalled);
+          if (stale()) {
+            return;
           }
         }
       }
@@ -362,6 +376,9 @@ export function createAudioHealthMonitor(deps: {
         return;
       }
       const at = now();
+      // The call the tap was for. A leave or a new call while the repair is
+      // still awaiting must not have the rest of it run against the next one.
+      const mine = generation;
       for (const kind of kindsForPrompt(current)) {
         tracker.manualRepair(kind, at);
       }
@@ -370,12 +387,13 @@ export function createAudioHealthMonitor(deps: {
         const peers = tracker.stage("inboundStalled") === "verifying-manual" ? stalledPeers : [];
         stalledPeers = [];
         const played = await deps.actions.replayPlayback().catch(() => false);
+        if (mine !== generation) {
+          return;
+        }
         if (played) {
           tracker.cleared("playbackBlocked");
         }
-        for (const peerId of peers) {
-          await run(() => deps.actions.restartInbound(peerId));
-        }
+        await restartPeers(peers);
         inbound.reset();
       } else if (current === "mic") {
         const view = deps.view();
