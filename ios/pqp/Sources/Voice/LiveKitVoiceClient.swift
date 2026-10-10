@@ -281,14 +281,17 @@ actor LiveKitVoiceClient {
         )
         let shared = ScreenShareAppAudio.shared
         let me = ObjectIdentifier(self)
-        guard let room, room.connectionState == .connected,
-              let microphone = microphonePublication(in: room) else {
+        guard let room, let microphone = microphonePublication(in: room) else {
             // No track here to carry anything, so this client's own request
             // for silence can go. Only its own: the mixer is shared, and the
             // other kind of call keeps whatever it asked for.
             shared.setMicSilenced(false, by: me)
             return
         }
+        // A room that is reconnecting still holds the track and will send on
+        // it again: keep whatever silence this client holds and change
+        // nothing until it is back.
+        guard room.connectionState == .connected else { return }
         if routing.micVolume == 0 { shared.setMicSilenced(true, by: me) }
         if routing.trackEnabled {
             _ = try? await room.localParticipant.setMicrophone(enabled: true)
