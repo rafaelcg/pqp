@@ -956,25 +956,47 @@ async function claimMobileRendition(
 }
 
 /**
- * Drop the upload row and the object of a stored file the post no longer
- * points at. Only ever called after COMMIT: a rolled-back write must not
- * have deleted the object the row still names.
+ * Drop the object and the upload row of a stored file the post no longer
+ * points at. Only ever called after COMMIT: a rolled-back write must not have
+ * deleted the object the row still names.
+ *
+ * Never throws. The post write it follows has already committed, and a
+ * cleanup hiccup must not turn that into an error the author retries.
+ *
+ * The object goes first and the row only after it: the row is the one handle
+ * anything has on the object. When the storage delete fails, the row is
+ * handed to the orphan sweep instead (unclaimed and unverified is exactly what
+ * `sweepOrphanedCommunityHomeMedia` looks for), so the object gets another try
+ * rather than sitting in the bucket with nothing pointing at it.
  */
 async function forgetStoredMedia(key: string, what: string): Promise<void> {
-  // The FK only nulls `claimed_post_id`, and the orphan sweep skips verified
-  // rows, so without this the upload row would outlive its post forever.
-  await getPool().query(
-    `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
-    [key],
-  );
-  if (!isStorageConfigured()) {
-    return;
-  }
   try {
-    await deleteObject(key);
+    if (isStorageConfigured()) {
+      try {
+        await deleteObject(key);
+      } catch (error) {
+        console.error(
+          `[community-home] failed to delete ${what}, left to the orphan sweep:`,
+          error instanceof Error ? error.message : error,
+        );
+        await getPool().query(
+          `UPDATE community_home_media_uploads
+              SET claimed_post_id = NULL, verified_at = NULL
+            WHERE storage_key = $1`,
+          [key],
+        );
+        return;
+      }
+    }
+    // The FK only nulls `claimed_post_id`, and the orphan sweep skips verified
+    // rows, so without this the upload row would outlive its post forever.
+    await getPool().query(
+      `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
+      [key],
+    );
   } catch (error) {
     console.error(
-      `[community-home] failed to delete ${what}:`,
+      `[community-home] cleanup of ${what} failed:`,
       error instanceof Error ? error.message : error,
     );
   }
@@ -1369,19 +1391,17 @@ export async function updateCommunityHomePost(
     await client.query("COMMIT");
     // Only after COMMIT: a rolled-back edit must not have deleted the object
     // the row still points at.
-    if (
+    await Promise.all([
       previousKey &&
       previousKey !== media.media_storage_key &&
       isStorageConfigured()
-    ) {
-      await forgetStoredMedia(previousKey, "replaced media object");
-    }
-    if (
+        ? forgetStoredMedia(previousKey, "replaced media object")
+        : null,
       previousMobileKey &&
       previousMobileKey !== mobile.mobile_media_storage_key
-    ) {
-      await forgetStoredMedia(previousMobileKey, "replaced mobile version");
-    }
+        ? forgetStoredMedia(previousMobileKey, "replaced mobile version")
+        : null,
+    ]);
     if (row.status === "published") {
       // An edit of a live post: the old translations are now stale by hash
       // (readers get the original in the meantime); make new ones.
@@ -1558,12 +1578,14 @@ export async function deleteCommunityHomePost(
     throw new CommunityHomeError("not_found", "Post not found");
   }
   // Both stored files go with the post: the main media and its phone cut.
-  if (deleted.media_storage_key) {
-    await forgetStoredMedia(deleted.media_storage_key, "media object");
-  }
-  if (deleted.mobile_media_storage_key) {
-    await forgetStoredMedia(deleted.mobile_media_storage_key, "mobile version");
-  }
+  await Promise.all([
+    deleted.media_storage_key
+      ? forgetStoredMedia(deleted.media_storage_key, "media object")
+      : null,
+    deleted.mobile_media_storage_key
+      ? forgetStoredMedia(deleted.mobile_media_storage_key, "mobile version")
+      : null,
+  ]);
 }
 
 export async function listCommunityHomeComments(

@@ -1701,6 +1701,10 @@ function ComposeCard({
 
         {mobileRenditionEnabled && mediaEnabled && composeMainIsVideo(state) && (
           <ComposeMobileRendition
+            // Keyed by the main video: a new main file remounts the picker,
+            // which aborts a cut still uploading for the old one, so it can
+            // never land beside a video it was not cut from.
+            key={state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`}
             serverId={serverId}
             current={composeMobile(state)}
             onUploaded={(uploaded, previewUrl) =>

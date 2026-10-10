@@ -51,6 +51,8 @@ vi.mock("../auth/clerk.js", () => ({
 
 const stored = new Map<string, { bytes: Buffer; contentType: string }>();
 const deleted: string[] = [];
+/** Keys whose storage delete fails, to prove the row is kept for a retry. */
+const failDeletes = new Set<string>();
 
 vi.mock("../lib/s3.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/s3.js")>()),
@@ -66,6 +68,9 @@ vi.mock("../lib/s3.js", async (importOriginal) => ({
   getObjectPrefix: async (key: string, length: number) =>
     stored.get(key)?.bytes.subarray(0, length) ?? null,
   deleteObject: async (key: string) => {
+    if (failDeletes.has(key)) {
+      throw new Error("storage unreachable");
+    }
     deleted.push(key);
     stored.delete(key);
   },
@@ -74,6 +79,7 @@ vi.mock("../lib/s3.js", async (importOriginal) => ({
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
+const { sweepOrphanedCommunityHomeMedia } = await import("./community-home.js");
 const { createServer: createChatServer } = await import("./servers.js");
 
 let httpServer: Server;
@@ -149,6 +155,7 @@ describeDb("community home mobile rendition", () => {
     resetApiRateLimits();
     stored.clear();
     deleted.length = 0;
+    failDeletes.clear();
     process.env.COMMUNITY_HOME_ENABLED = "true";
     process.env.COMMUNITY_HOME_VIP_ENABLED = "true";
     process.env.BAU_MOBILE_RENDITION = "true";
@@ -421,6 +428,42 @@ describeDb("community home mobile rendition", () => {
       `SELECT 1 FROM community_home_media_uploads`,
     );
     expect(rows.rowCount).toBe(0);
+  });
+
+  it("a storage delete that fails leaves the object to the orphan sweep, and the edit still succeeds", async () => {
+    const main = await upload("video/mp4", MP4, "main.mp4");
+    const cut = await upload("video/mp4", MP4, "cut.mp4");
+    const created = await publish({
+      mediaUploadId: main.uploadId,
+      mobileMediaUploadId: cut.uploadId,
+    });
+    failDeletes.add(cut.key);
+    const removed = await call<{ post: PostBody }>(
+      owner,
+      "PATCH",
+      `/api/servers/${serverId}/home/posts/${created.body.post.id}`,
+      { mobileMediaUploadId: null },
+    );
+    expect(removed.status).toBe(200);
+    expect(removed.body.post.media?.mobile ?? null).toBeNull();
+    // The row is the only handle on the object: kept, unclaimed, unverified.
+    const row = await getPool().query<{
+      claimed_post_id: string | null;
+      verified_at: Date | null;
+    }>(
+      `SELECT claimed_post_id, verified_at FROM community_home_media_uploads WHERE storage_key = $1`,
+      [cut.key],
+    );
+    expect(row.rows[0]).toEqual({ claimed_post_id: null, verified_at: null });
+
+    // Once storage answers again, the sweep finishes the job.
+    failDeletes.clear();
+    await getPool().query(
+      `UPDATE community_home_media_uploads SET created_at = NOW() - INTERVAL '2 hours' WHERE storage_key = $1`,
+      [cut.key],
+    );
+    expect(await sweepOrphanedCommunityHomeMedia()).toBe(1);
+    expect(deleted).toEqual([cut.key]);
   });
 
   it("a locked viewer gets no media at all, so no cut either", async () => {

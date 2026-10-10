@@ -78,6 +78,31 @@ describe("ComposeMobileRendition", () => {
     );
   });
 
+  it("a cut still uploading when the picker goes away never lands", async () => {
+    const onUploaded = vi.fn();
+    let finish: (value: unknown) => void = () => {};
+    let signal: AbortSignal | undefined;
+    uploadHomeMedia.mockImplementation(
+      (_server: string, _file: File, options: { signal?: AbortSignal }) => {
+        signal = options.signal;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+    await mount({ onUploaded });
+    await choose(new File(["x"], "old-cut.mp4", { type: "video/mp4" }));
+    // The main video changed: the composer remounts the picker (it is keyed
+    // by the main file), which unmounts this one.
+    await act(async () => root!.unmount());
+    root = null;
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      finish({ uploadId: "late", kind: "video", name: "old-cut.mp4", contentType: "video/mp4", byteSize: 1 });
+    });
+    expect(onUploaded).not.toHaveBeenCalled();
+  });
+
   it("refuses anything that is not a video before uploading", async () => {
     const onUploaded = vi.fn();
     await mount({ onUploaded });
