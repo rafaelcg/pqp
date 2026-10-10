@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import Combine
 
 /// A server's Baú: the posts that stay, newest first.
 ///
@@ -526,20 +527,34 @@ private struct BauInlineVideo: View {
     }
 
     /// Probe before handing the asset over, as `MediaPlayerView` does, so an
-    /// unplayable or expired URL lands in the failed state rather than a
-    /// player with a permanently black frame.
+    /// unplayable URL lands in the failed state rather than a player with a
+    /// permanently black frame. The task is keyed on the URL (a feed reload
+    /// signs a new one), so a cancelled run must not touch state that now
+    /// belongs to the replacement, and the item is watched afterwards: a
+    /// signed URL that dies before the first tap fails in the item, not here.
     private func prepare() async {
         failed = false
+        player = nil
         let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
         do {
             guard try await asset.load(.isPlayable) else { throw APIError.transport("Not playable") }
-            let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            let player = AVPlayer(playerItem: item)
             // Paint the first frame as the poster, the web's `#t=0.001`.
             await player.seek(to: CMTime(seconds: 0.001, preferredTimescale: 600))
+            if Task.isCancelled { return }
             self.player = player
         } catch {
+            if Task.isCancelled { return }
+            failed = true
+            return
+        }
+        for await status in item.publisher(for: \.status).values where status == .failed {
+            if Task.isCancelled { return }
+            player?.pause()
             player = nil
             failed = true
+            return
         }
     }
 }
