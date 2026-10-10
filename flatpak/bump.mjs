@@ -114,11 +114,12 @@ function main(argv) {
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const manifestPath = path.join(dir, "gg.pqp.pqp.yml");
   const metainfoPath = path.join(dir, "gg.pqp.pqp.metainfo.xml");
-  writeFileSync(
-    manifestPath,
-    bumpManifest(readFileSync(manifestPath, "utf8"), { version, debSha256, licenseSha256 }),
-  );
-  writeFileSync(metainfoPath, addRelease(readFileSync(metainfoPath, "utf8"), { version, date }));
+  // Both edits are computed before either file is written, so a failure
+  // leaves the pair as it was rather than half bumped.
+  const manifest = bumpManifest(readFileSync(manifestPath, "utf8"), { version, debSha256, licenseSha256 });
+  const metainfo = addRelease(readFileSync(metainfoPath, "utf8"), { version, date });
+  writeFileSync(manifestPath, manifest);
+  writeFileSync(metainfoPath, metainfo);
   console.log(`flatpak: manifest and metainfo now point at ${version}`);
 }
 
