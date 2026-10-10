@@ -348,7 +348,11 @@ class BauShareTest {
         val cache = BauCardCache(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             fetch = { _, _, _ ->
-                peak.updateAndGet { maxOf(it, active.incrementAndGet()) }
+                // Increment OUTSIDE the CAS loop: updateAndGet re-runs its lambda
+                // when another thread wins the race, which would count one fetch
+                // twice and report a peak the semaphore never allowed.
+                val now = active.incrementAndGet()
+                peak.accumulateAndGet(now) { a, b -> maxOf(a, b) }
                 gate.await()
                 active.decrementAndGet()
                 sampleCard()
