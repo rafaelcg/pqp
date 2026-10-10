@@ -38,6 +38,11 @@ export interface BuildStaleness {
   stale: boolean;
   /** The operator made the update mandatory (`/api/client-update/config`). */
   forced: boolean;
+  /**
+   * The operator made it CRITICAL: the page reloads even in a call
+   * (`isCriticalBuild` in `client-version.ts`). Implies `forced` in practice.
+   */
+  critical?: boolean;
   /** The deployed build's id, for the loop guard and for support. */
   latestBuild: string | null;
   /** When the deployed build was built, or when this page first saw it. */

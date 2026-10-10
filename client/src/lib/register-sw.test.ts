@@ -64,6 +64,20 @@ describe("registerServiceWorker", () => {
     expect(registerSW).toHaveBeenCalledTimes(1);
   });
 
+  it("never lets the plugin reload the page by itself when another worker takes over", async () => {
+    stubBrowser({ path: "/app", existingRegistration: false });
+    const onNeedRefresh = vi.fn();
+    registerServiceWorker(onNeedRefresh);
+    await settle();
+    const options = (registerSW.mock.calls[0] as unknown[])[0] as {
+      onNeedReload?: () => void;
+    };
+    // Supplying it is what stops prompt mode from calling location.reload().
+    expect(typeof options.onNeedReload).toBe("function");
+    options.onNeedReload?.();
+    expect(onNeedRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("registers at once on the home page for somebody who already has a worker", async () => {
     stubBrowser({ path: "/", existingRegistration: true });
     registerServiceWorker(() => {});

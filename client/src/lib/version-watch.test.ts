@@ -62,7 +62,7 @@ describe("createVersionWatch", () => {
     const s = setup({ latest: { build: "def456", builtAt: 500_000 } });
     await s.watch.check();
     expect(s.published).toEqual([
-      { stale: true, forced: false, latestBuild: "def456", since: 500_000 },
+      { stale: true, forced: false, critical: false, latestBuild: "def456", since: 500_000 },
     ]);
     expect(s.calls.force).toBe(1);
   });
@@ -86,6 +86,33 @@ describe("createVersionWatch", () => {
     expect(s.published[0]?.forced).toBe(true);
   });
 
+  it("is critical when the operator lets the force interrupt calls", async () => {
+    const s = setup({
+      latest: { build: "def456", builtAt: 500_000 },
+      force: { forceUpdate: true, minBuiltAt: null, interruptCalls: true },
+    });
+    await s.watch.check();
+    expect(s.published[0]).toMatchObject({ forced: true, critical: true });
+  });
+
+  it("keeps a critical update it already knew when the lookup then fails", async () => {
+    let answer: ForceConfig | null = {
+      forceUpdate: false,
+      minBuiltAt: null,
+      criticalMinBuiltAt: 2_000,
+    };
+    const s = setup({
+      latest: { build: "def456", builtAt: 500_000 },
+      force: async () => answer,
+    });
+    await s.watch.check();
+    expect(s.published.at(-1)?.critical).toBe(true);
+    answer = null;
+    s.advance(MIN_GAP_MS);
+    await s.watch.check();
+    expect(s.published.at(-1)?.critical).toBe(true);
+  });
+
   it("is forced by a minimum build time the running bundle predates", async () => {
     const s = setup({
       latest: { build: "def456", builtAt: 500_000 },
@@ -104,7 +131,7 @@ describe("createVersionWatch", () => {
     });
     await s.watch.check();
     expect(s.published).toEqual([
-      { stale: true, forced: false, latestBuild: "def456", since: 500_000 },
+      { stale: true, forced: false, critical: false, latestBuild: "def456", since: 500_000 },
     ]);
   });
 
@@ -123,6 +150,7 @@ describe("createVersionWatch", () => {
     expect(s.published.at(-1)).toEqual({
       stale: true,
       forced: true,
+      critical: false,
       latestBuild: "def456",
       since: 500_000,
     });

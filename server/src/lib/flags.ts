@@ -523,6 +523,15 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/client-update/config (forceUpdate)",
   },
+  client_force_update_in_call: {
+    description:
+      "Atualização crítica: com a atualização forçada ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega mesmo no meio de uma call. Derruba quem está em call; só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
+    env: "CLIENT_FORCE_UPDATE_IN_CALL",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/client-update/config (interruptCalls)",
+  },
   mention_ids_from_db: {
     description:
       "Menção de cargo (@cargo) avisa de verdade: o selo ao vivo e o push usam as pessoas que a mensagem registrou, não só o @usuário digitado (desligado: só quem foi citado pelo nome recebe).",
