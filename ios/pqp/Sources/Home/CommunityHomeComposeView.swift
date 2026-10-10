@@ -253,6 +253,7 @@ final class CommunityHomeComposeModel {
     private let api: APIClient
     private let serverId: String
     private var pickTask: Task<Void, Never>?
+    private var pickToken = UUID()
     private var localURL: URL?
 
     init(api: APIClient, serverId: String) {
@@ -283,8 +284,12 @@ final class CommunityHomeComposeModel {
         // Set before the task starts, so Post cannot slip in between the tap
         // and the first await and publish without the file.
         preparing = true
+        // A cancelled pick finishes after its replacement has started; only
+        // the pick that is still current may clear the flag.
+        let token = UUID()
+        pickToken = token
         pickTask = Task { [api, serverId] in
-            defer { preparing = false }
+            defer { if pickToken == token { preparing = false } }
             let prepared: PreparedMedia
             do {
                 prepared = try await ComposePicker.prepare(item)
@@ -334,6 +339,7 @@ final class CommunityHomeComposeModel {
     private func dropMedia() {
         pickTask?.cancel()
         pickTask = nil
+        pickToken = UUID()
         if let localURL { try? FileManager.default.removeItem(at: localURL) }
         localURL = nil
         draft.media = nil
