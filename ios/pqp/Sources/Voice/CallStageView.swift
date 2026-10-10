@@ -12,6 +12,20 @@ import WebRTC
 struct CallStageView: View {
     @Environment(CallModel.self) private var call
     @Environment(SessionStore.self) private var session
+    /// Compact on an iPhone held sideways, which is the only way this stage
+    /// ends up landscape (`callStageAllowsLandscape`).
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
+
+    /// Whether this stage holds the landscape unlock right now.
+    private var allowsLandscape: Bool {
+        callStageAllowsLandscape(
+            layout: call.layout,
+            hasRemoteCamera: call.peers.first.map { call.camera(for: $0.peerId) != nil } ?? false,
+            isCameraOn: call.isCameraOn
+        )
+    }
 
     var body: some View {
         @Bindable var call = call
@@ -68,6 +82,12 @@ struct CallStageView: View {
         .animation(Motion.standard, value: call.layout)
         .animation(Motion.standard, value: call.isCameraOn)
         .statusBarHidden(false)
+        // Stated on every change rather than entered once: a camera going off
+        // or a share starting takes the unlock back, and the phone returns to
+        // portrait with it. `PqpApp` drops it too when the cover goes down.
+        .onAppear { WatchOrientation.setCallStage(allowsLandscape) }
+        .onChange(of: allowsLandscape) { _, allowed in WatchOrientation.setCallStage(allowed) }
+        .onDisappear { WatchOrientation.setCallStage(false) }
     }
 
     // MARK: - Stage
@@ -174,8 +194,10 @@ struct CallStageView: View {
             VStack {
                 HStack {
                     Spacer()
+                    // The shape our own camera is sending: the capturer turns
+                    // the picture with the phone, so on its side it is wide.
                     VideoTile(track: local, mirrored: true)
-                        .frame(width: 104, height: 148)
+                        .frame(width: isLandscape ? 148 : 104, height: isLandscape ? 104 : 148)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius,
                                                     style: .continuous))
                         .overlay(
@@ -189,7 +211,7 @@ struct CallStageView: View {
                 Spacer()
             }
             .padding(.horizontal, Metrics.hPadding)
-            .padding(.top, 92)
+            .padding(.top, isLandscape ? 12 : 92)
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
     }
@@ -330,11 +352,28 @@ private struct PeerStageTile: View {
     var isMuted: Bool = false
     var isServerMuted: Bool = false
     var large: Bool
+    /// The remote picture's size, once it has one. Only the large stage asks.
+    @State private var videoSize: CGSize = .zero
 
     var body: some View {
         ZStack {
             if let track {
-                VideoTile(track: track)
+                if large {
+                    // Fill or fit by shape, not always fill: see
+                    // `cameraStageShouldFill` for what always-fill did to a
+                    // laptop's webcam on an upright phone.
+                    GeometryReader { proxy in
+                        VideoTile(
+                            track: track,
+                            contentMode: cameraStageShouldFill(
+                                video: videoSize, container: proxy.size
+                            ) ? .scaleAspectFill : .scaleAspectFit,
+                            onVideoSize: { videoSize = $0 }
+                        )
+                    }
+                } else {
+                    VideoTile(track: track)
+                }
             } else {
                 Palette.ink
                 VStack(spacing: 10) {
