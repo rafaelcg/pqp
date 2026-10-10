@@ -6,7 +6,7 @@ import {
 } from "@/components/downloads/platform-marks";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { isAndroidDevice } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { playStoreUrl } from "@/lib/play-store";
@@ -32,7 +32,7 @@ export function MobileBetaHint({
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
-    () => !isAutomatedBrowser() && !isMobileBetaHintSeen(),
+    () => !shouldSuppressHints() && !isMobileBetaHintSeen(),
   );
   const [open, setOpen] = useState(true);
   const [android] = useState(() => isAndroidDevice());

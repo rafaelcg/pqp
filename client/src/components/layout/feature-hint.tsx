@@ -18,7 +18,7 @@ import {
   type AttachedFeatureHintId,
   type FeatureHintId,
 } from "@/lib/feature-hints";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 
 interface FeatureHintSlot {
@@ -100,7 +100,7 @@ function takeEligibility(id: FeatureHintId): boolean {
   if (eligibleThisLoad.has(id)) {
     return true;
   }
-  const ok = !isAutomatedBrowser() && !isFeatureHintSeen(id);
+  const ok = !shouldSuppressHints() && !isFeatureHintSeen(id);
   if (ok) {
     eligibleThisLoad.add(id);
   }

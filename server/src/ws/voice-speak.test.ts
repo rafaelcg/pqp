@@ -272,6 +272,8 @@ describe("SPEAK in voice rooms", () => {
           canSpeak: false,
           canStream: false,
           canManageMusic: false,
+          canUseSoundboard: false,
+          canManageSoundboard: false,
           // Why, so the client can say it on the locked mic instead of a
           // generic "listen only" (docs/plans/AUDIENCE_MODE.md).
           speakReason: "permission",
@@ -290,6 +292,8 @@ describe("SPEAK in voice rooms", () => {
         canSpeak: true,
         canStream: true,
         canManageMusic: false,
+        canUseSoundboard: false,
+        canManageSoundboard: false,
       });
       expect(setSfuUserCanPublish).not.toHaveBeenCalled();
     });

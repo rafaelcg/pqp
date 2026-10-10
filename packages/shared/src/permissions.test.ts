@@ -31,9 +31,9 @@ const ADMIN = Permission.ADMINISTRATOR;
 
 describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
-    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("2668225");
-    expect(parsePermissions("2668225")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("33554431");
+    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("36222657");
+    expect(parsePermissions("36222657")).toBe(PERMISSION_DEFAULT_EVERYONE);
+    expect(serializePermissions(PERMISSION_ALL)).toBe("134217727");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
@@ -64,6 +64,22 @@ describe("permission bitfields", () => {
     expect(hasPermission(cleaned, Permission.MODERATE_MEMBERS)).toBe(false);
     expect(hasPermission(cleaned, ADMIN)).toBe(false);
     expect(hasPermission(cleaned, Permission.SEND_MESSAGES)).toBe(true);
+  });
+
+  it("gives the soundboard to everyone and the library to managers", () => {
+    expect(hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.USE_SOUNDBOARD)).toBe(
+      true,
+    );
+    expect(
+      hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.MANAGE_SOUNDBOARD),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.MANAGE_SOUNDBOARD),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.MANAGE_SOUNDBOARD),
+    ).toBe(false);
+    expect(hasPermission(PERMISSION_ALL, Permission.USE_SOUNDBOARD)).toBe(true);
   });
 
   it("includes MANAGE_WEBHOOKS in ALL and the manager seed, not @everyone", () => {

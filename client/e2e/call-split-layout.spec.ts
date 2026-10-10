@@ -480,7 +480,9 @@ test("the channel list collapses to icons while somebody else presents, and come
     // Hanging up is one click away from the strip, and the strip still says
     // the state in words even with no room to print them: the 72px column
     // drops the sentence to screen-reader text rather than dropping it. Half
-    // the voice suite reads that string to know a call is up.
+    // the voice suite reads that string to know a call is up. The dock's
+    // Leave is a different surface, and it is not on screen while the stage
+    // is open for a share.
     await expect(
       page.locator("[data-voice-bar-compact]").getByRole("button", {
         name: "Disconnect from voice",

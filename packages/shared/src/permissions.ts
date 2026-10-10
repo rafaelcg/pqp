@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–23). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–26). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -50,12 +50,22 @@ export const Permission = {
    * everyone may remove their own. See `musicWriteAllowed` in music.ts.
    */
   MANAGE_MUSIC: 1n << 24n,
+  /**
+   * Play a soundboard clip for the room. On for `@everyone`. A channel
+   * overwrite can take it away without taking SPEAK. See `soundboard.ts`.
+   */
+  USE_SOUNDBOARD: 1n << 25n,
+  /**
+   * Add, rename and delete the server's soundboard clips. Off for
+   * `@everyone`. Manager and owner have it. A role can be given it.
+   */
+  MANAGE_SOUNDBOARD: 1n << 26n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 25n) - 1n;
+export const PERMISSION_ALL = (1n << 27n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -71,7 +81,8 @@ export const PERMISSION_DEFAULT_EVERYONE =
   Permission.SPEAK |
   Permission.STREAM |
   Permission.CHANGE_NICKNAME |
-  Permission.ADD_REACTIONS;
+  Permission.ADD_REACTIONS |
+  Permission.USE_SOUNDBOARD;
 
 /** What a timeout leaves: you can still see the channel and scroll back. */
 export const PERMISSION_TIMEOUT_KEEP =
@@ -240,6 +251,8 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.MANAGE_WEBHOOKS, key: "MANAGE_WEBHOOKS" },
   { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
   { bit: Permission.MANAGE_MUSIC, key: "MANAGE_MUSIC" },
+  { bit: Permission.USE_SOUNDBOARD, key: "USE_SOUNDBOARD" },
+  { bit: Permission.MANAGE_SOUNDBOARD, key: "MANAGE_SOUNDBOARD" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

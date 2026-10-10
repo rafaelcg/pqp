@@ -1,0 +1,268 @@
+/**
+ * How long an mp3 or ogg clip is, from its header. No decode and no
+ * ffmpeg: a soundboard upload is at most half a megabyte, and walking
+ * that is enough to refuse a file that is longer than the cap.
+ *
+ * Returns null when the bytes are not a clip we can time. Callers treat
+ * null as "do not store this", never as "duration zero".
+ */
+
+const MPEG1_L3_BITRATES = [
+  0, 32000, 40000, 48000, 56000, 64000, 80000, 96000, 112000, 128000, 160000,
+  192000, 224000, 256000, 320000, 0,
+];
+
+const MPEG1_RATES = [44100, 48000, 32000];
+
+// MPEG-2 and MPEG-2.5 Layer III: the lower sample rates a voice recording
+// or a tool's "small file" preset produces. Half the frame size, 576 samples.
+const MPEG2_L3_BITRATES = [
+  0, 8000, 16000, 24000, 32000, 40000, 48000, 56000, 64000, 80000, 96000,
+  112000, 128000, 144000, 160000, 0,
+];
+const MPEG2_RATES = [22050, 24000, 16000];
+const MPEG25_RATES = [11025, 12000, 8000];
+
+export function audioDurationMs(
+  bytes: Uint8Array,
+  contentType: string,
+): number | null {
+  const type = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (type === "audio/mpeg" || type === "audio/mp3") {
+    return mp3DurationMs(bytes);
+  }
+  if (type === "audio/ogg") {
+    return oggDurationMs(bytes);
+  }
+  return null;
+}
+
+/**
+ * Why a clip cannot be stored, or null when it can.
+ *
+ * Size and duration are both checked here so the upload route and the
+ * client say the same word for the same file.
+ */
+export function soundboardClipRejection(
+  byteLength: number,
+  durationMs: number | null,
+  maxBytes: number,
+  maxDurationMs: number,
+): "too_big" | "too_long" | "unreadable" | null {
+  if (byteLength <= 0 || byteLength > maxBytes) {
+    return "too_big";
+  }
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 40) {
+    return "unreadable";
+  }
+  if (durationMs > maxDurationMs) {
+    return "too_long";
+  }
+  return null;
+}
+
+function mp3DurationMs(bytes: Uint8Array): number | null {
+  let offset = skipId3(bytes);
+  let samples = 0;
+  let rate = 0;
+  let frames = 0;
+  while (offset + 4 < bytes.length && frames < 20_000) {
+    const header = readMp3Header(bytes, offset);
+    if (!header) {
+      offset += 1;
+      continue;
+    }
+    if (rate === 0) {
+      rate = header.sampleRate;
+    }
+    if (header.sampleRate !== rate) {
+      break;
+    }
+    samples += header.samplesPerFrame;
+    frames += 1;
+    offset += header.frameBytes;
+  }
+  if (frames === 0 || rate === 0) {
+    return null;
+  }
+  return Math.round((samples * 1000) / rate);
+}
+
+function skipId3(bytes: Uint8Array): number {
+  if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) {
+    return 0;
+  }
+  const size =
+    ((bytes[6]! & 0x7f) << 21) |
+    ((bytes[7]! & 0x7f) << 14) |
+    ((bytes[8]! & 0x7f) << 7) |
+    (bytes[9]! & 0x7f);
+  const next = 10 + size;
+  return next < bytes.length ? next : 0;
+}
+
+function readMp3Header(
+  bytes: Uint8Array,
+  offset: number,
+): { frameBytes: number; sampleRate: number; samplesPerFrame: number } | null {
+  if (bytes[offset] !== 0xff || (bytes[offset + 1]! & 0xe0) !== 0xe0) {
+    return null;
+  }
+  const version = (bytes[offset + 1]! >> 3) & 0x03;
+  const layer = (bytes[offset + 1]! >> 1) & 0x03;
+  // Layer III only, in MPEG-1, MPEG-2 and MPEG-2.5. That is what a person
+  // exports. Other layers are refused rather than guessed.
+  if (version === 0x01 || layer !== 0x01) {
+    return null;
+  }
+  const mpeg1 = version === 0x03;
+  const bitrateIndex = (bytes[offset + 2]! >> 4) & 0x0f;
+  const rateIndex = (bytes[offset + 2]! >> 2) & 0x03;
+  const padding = (bytes[offset + 2]! >> 1) & 0x01;
+  const bitrate = (mpeg1 ? MPEG1_L3_BITRATES : MPEG2_L3_BITRATES)[bitrateIndex] ?? 0;
+  const rates = mpeg1 ? MPEG1_RATES : version === 0x02 ? MPEG2_RATES : MPEG25_RATES;
+  const sampleRate = rates[rateIndex] ?? 0;
+  if (bitrate === 0 || sampleRate === 0) {
+    return null;
+  }
+  const samplesPerFrame = mpeg1 ? 1152 : 576;
+  const frameBytes =
+    Math.floor(((samplesPerFrame / 8) * bitrate) / sampleRate) + padding;
+  if (frameBytes < 4 || offset + frameBytes > bytes.length) {
+    return null;
+  }
+  return { frameBytes, sampleRate, samplesPerFrame };
+}
+
+function oggDurationMs(bytes: Uint8Array): number | null {
+  let offset = 0;
+  let lastGranule = 0;
+  let preSkip = 0;
+  let sampleRate = 0;
+  let codec: "opus" | "vorbis" | null = null;
+  // A chained file is several logical streams played one after another.
+  // Each one's length is added, so a chain cannot hide a long clip behind
+  // short parts.
+  let chainedMs = 0;
+
+  const streamMs = (): number | null => {
+    if (!codec || sampleRate <= 0 || lastGranule <= 0) {
+      return null;
+    }
+    const samples = codec === "opus" ? lastGranule - preSkip : lastGranule;
+    return samples > 0 ? (samples * 1000) / sampleRate : null;
+  };
+
+  while (offset + 27 <= bytes.length) {
+    if (
+      bytes[offset] !== 0x4f ||
+      bytes[offset + 1] !== 0x67 ||
+      bytes[offset + 2] !== 0x67 ||
+      bytes[offset + 3] !== 0x53
+    ) {
+      break;
+    }
+    // A beginning-of-stream page after audio has been counted starts the
+    // next link of the chain. (Interleaved streams open all their BOS pages
+    // before any audio, so they do not trip this.)
+    if (((bytes[offset + 5] ?? 0) & 0x02) !== 0 && lastGranule > 0) {
+      const ms = streamMs();
+      if (ms === null) {
+        return null;
+      }
+      chainedMs += ms;
+      lastGranule = 0;
+      codec = null;
+      sampleRate = 0;
+      preSkip = 0;
+    }
+    const granule = readU64(bytes, offset + 6);
+    if (granule > 0) {
+      lastGranule = granule;
+    }
+    const segments = bytes[offset + 26] ?? 0;
+    if (offset + 27 + segments > bytes.length) {
+      break;
+    }
+    let body = 0;
+    for (let i = 0; i < segments; i += 1) {
+      body += bytes[offset + 27 + i] ?? 0;
+    }
+    const start = offset + 27 + segments;
+    const end = start + body;
+    if (end > bytes.length) {
+      break;
+    }
+    const head = identifyOgg(bytes.subarray(start, end));
+    if (head) {
+      codec = head.codec;
+      if (head.codec === "opus") {
+        preSkip = head.preSkip;
+        sampleRate = 48000;
+      } else {
+        sampleRate = head.sampleRate;
+      }
+    }
+    offset = end;
+  }
+
+  const last = streamMs();
+  if (last === null && chainedMs === 0) {
+    return null;
+  }
+  return Math.round(chainedMs + (last ?? 0));
+}
+
+function identifyOgg(
+  body: Uint8Array,
+):
+  | { codec: "opus"; preSkip: number }
+  | { codec: "vorbis"; sampleRate: number }
+  | null {
+  const opus = indexOfAscii(body, "OpusHead");
+  if (opus >= 0 && opus + 12 <= body.length) {
+    const preSkip = body[opus + 10]! | (body[opus + 11]! << 8);
+    return { codec: "opus", preSkip };
+  }
+  const vorbis = indexOfAscii(body, "vorbis");
+  // Packet is 0x01 + "vorbis", then version (4), channels (1), sample rate (4).
+  if (vorbis >= 1 && body[vorbis - 1] === 0x01 && vorbis + 15 <= body.length) {
+    const sampleRate =
+      body[vorbis + 11]! |
+      (body[vorbis + 12]! << 8) |
+      (body[vorbis + 13]! << 16) |
+      (body[vorbis + 14]! << 24);
+    if (sampleRate > 0) {
+      return { codec: "vorbis", sampleRate };
+    }
+  }
+  return null;
+}
+
+function indexOfAscii(bytes: Uint8Array, needle: string): number {
+  const first = needle.charCodeAt(0);
+  for (let i = 0; i <= bytes.length - needle.length; i += 1) {
+    if (bytes[i] !== first) {
+      continue;
+    }
+    let match = true;
+    for (let j = 1; j < needle.length; j += 1) {
+      if (bytes[i + j] !== needle.charCodeAt(j)) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function readU64(bytes: Uint8Array, offset: number): number {
+  let value = 0;
+  for (let i = 0; i < 8; i += 1) {
+    value += (bytes[offset + i] ?? 0) * 2 ** (8 * i);
+  }
+  return value;
+}

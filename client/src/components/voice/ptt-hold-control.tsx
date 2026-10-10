@@ -1,18 +1,14 @@
 import { Mic, MicOff } from "lucide-react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
  * Hold-to-talk as a call control, not a banner above the bar.
  *
- * Lives in the same row as the icon buttons. The bound key is a chip on the
- * pill; when the window is not focused the chip dims, because the key cannot
- * reach this page and the button still can.
- *
- * `inBar`: on the slim bar the pill is the cell between the people and the
- * tiles. It is full width while the bar folds into lines, and from 35rem it
- * grows into whatever the row has spare, up to 22rem. The tiers are the
- * bar's, in `call-stage.tsx`.
+ * Lives in the same row as the icon buttons, and only as wide as its label.
+ * The bound key is a chip on the pill; when the window is not focused the
+ * chip dims, because the key cannot reach this page and the button still can.
  */
 export function PttHoldControl({
   blocked,
@@ -33,27 +29,31 @@ export function PttHoldControl({
 }) {
   const { t } = useTranslation();
   const locked = blocked || listenOnly;
-  const label = locked
+  const fullLabel = locked
     ? t("voice.ptt.blocked")
     : isTransmitting
       ? t("voice.ptt.transmitting")
       : t("voice.ptt.hold");
+  const label = inBar
+    ? locked
+      ? t("voice.ptt.chipMuted")
+      : t("voice.ptt.chip")
+    : fullLabel;
 
-  return (
+  const button = (
     <button
       type="button"
       aria-pressed={isTransmitting}
+      aria-label={fullLabel}
       disabled={locked}
       className={cn(
         // Cap the used box. Flex items default to min-height: auto, so the
         // label + keycap would otherwise grow past the tiles.
-        "inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 text-sm font-medium leading-none touch-none",
+        "inline-flex w-fit max-w-full shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 text-sm font-medium leading-none touch-none",
         inBar ? "h-9 max-h-9 min-h-9" : "h-10 max-h-10 min-h-10",
         "transition-[background,color,opacity] duration-[var(--duration-fast)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         "disabled:pointer-events-none disabled:opacity-40",
-        inBar &&
-          "w-full @min-[35rem]:w-auto @min-[35rem]:max-w-[22rem] @min-[35rem]:grow",
         isTransmitting
           ? "bg-accent text-on-accent"
           : "border border-border bg-surface-3 text-text hover:bg-surface-2",
@@ -100,6 +100,16 @@ export function PttHoldControl({
         </kbd>
       ) : null}
     </button>
+  );
+
+  if (!inBar) {
+    return button;
+  }
+
+  return (
+    <Tooltip label={fullLabel}>
+      <span className="inline-flex w-fit max-w-full shrink-0">{button}</span>
+    </Tooltip>
   );
 }
 

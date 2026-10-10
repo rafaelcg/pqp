@@ -122,6 +122,7 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
   "set-music",
   "set-music-listening",
   "live-reaction",
+  "soundboard-play",
   "voice-still-here",
 ]);
 

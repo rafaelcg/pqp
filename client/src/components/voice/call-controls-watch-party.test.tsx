@@ -50,6 +50,8 @@ const idle: VoiceState = {
   canSpeak: true,
   canStream: true,
   canManageMusic: true,
+  canUseSoundboard: false,
+  canManageSoundboard: false,
   isAudienceSeat: false,
   inputMode: "voice-activity",
   isTransmitting: false,
@@ -137,12 +139,13 @@ describe("CallControls in a watch party room", () => {
     const html = render({ ...idle, canStream: false });
     expect(html).not.toContain("lucide-monitor-play");
     expect(html).not.toContain("lucide-screen-share");
+    expect(html).not.toContain("watch-party");
   });
 
-  it("shows the Watch party button to the presenter (canStream true)", () => {
+  it("shows the Watch party action in the more menu for the presenter", () => {
     const html = render({ ...idle, canStream: true });
-    expect(html).toContain("lucide-monitor-play");
     expect(html).toContain("lucide-screen-share");
+    expect(html).toContain('data-call-more="watch-party share-cursor join-leave-sounds"');
   });
 });
 

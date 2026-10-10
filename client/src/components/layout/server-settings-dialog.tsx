@@ -6,6 +6,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  AudioLines,
   Image as ImageIcon,
   KeyRound,
   ScrollText,
@@ -26,6 +27,7 @@ import { ServerIdentitySection } from "@/components/layout/server-identity-secti
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
+import { SoundboardSettingsSection } from "@/components/layout/soundboard-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
@@ -191,6 +193,7 @@ type SectionId =
   | "overview"
   | "access"
   | "roles"
+  | "soundboard"
   | "integrations"
   | "moderation"
   | "automod"
@@ -226,6 +229,13 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.roles",
     description: "serverSettings.roles.description",
     icon: Users,
+    ownerOnly: false,
+  },
+  {
+    id: "soundboard",
+    label: "serverSettings.section.soundboard",
+    description: "serverSettings.soundboard.description",
+    icon: AudioLines,
     ownerOnly: false,
   },
   {
@@ -445,6 +455,7 @@ interface ServerSettingsDialogProps {
   currentUserId: string | null;
   canManageRoles?: boolean;
   canManageServer?: boolean;
+  canManageSoundboard?: boolean;
   canManageWebhooks?: boolean;
   canModerateQueue?: boolean;
   /** Manage Messages: sees AutoMod read-only, with the test box. */
@@ -472,6 +483,7 @@ export function ServerSettingsDialog({
   currentUserId,
   canManageRoles = false,
   canManageServer = false,
+  canManageSoundboard = false,
   canManageWebhooks = false,
   canModerateQueue = false,
   canManageMessages = false,
@@ -526,6 +538,7 @@ export function ServerSettingsDialog({
   const isOwner = server?.role === "owner";
   const canSeeOverview = isOwner || canManageServer;
   const canSeeRoles = canManageRoles;
+  const canSeeSoundboard = canManageSoundboard;
   const canSeeIntegrations = canManageWebhooks;
   const canSeeModeration = canModerateQueue || isOwner;
   const canSeeAudit = canManageServer;
@@ -536,6 +549,7 @@ export function ServerSettingsDialog({
     canSeeAutomod ||
     canSeeOverview ||
     canSeeRoles ||
+    canSeeSoundboard ||
     canSeeIntegrations ||
     canSeeModeration ||
     canSeeAudit;
@@ -581,7 +595,9 @@ export function ServerSettingsDialog({
       ? "overview"
       : canSeeRoles
         ? "roles"
-        : canSeeIntegrations
+        : canSeeSoundboard
+          ? "soundboard"
+          : canSeeIntegrations
           ? "integrations"
           : canSeeModeration
             ? "moderation"
@@ -777,6 +793,8 @@ export function ServerSettingsDialog({
         return isOwner;
       case "roles":
         return canSeeRoles;
+      case "soundboard":
+        return canSeeSoundboard;
       case "integrations":
         return canSeeIntegrations;
       case "moderation":
@@ -980,6 +998,10 @@ export function ServerSettingsDialog({
 
           {active.id === "roles" && serverId && (
             <RolesSettingsSection serverId={serverId} />
+          )}
+
+          {active.id === "soundboard" && serverId && (
+            <SoundboardSettingsSection serverId={serverId} />
           )}
 
           {active.id === "integrations" && serverId && (

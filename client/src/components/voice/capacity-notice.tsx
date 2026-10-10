@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { VoiceRoomTransport } from "@pqp/shared";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   capacityNoticeMessage,
@@ -71,7 +71,7 @@ export function CapacityNotice({
       show: shouldShowCapacityNotice({
         rise,
         seen: seen ?? isVoiceCapacityHintSeen(voiceChannelId),
-        automated: isAutomatedBrowser(),
+        automated: shouldSuppressHints(),
       }),
     };
   }

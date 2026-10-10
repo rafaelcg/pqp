@@ -91,14 +91,14 @@ test("the cursor preference is remembered across a reload", async ({
   await openApp(page);
   await joinLobby(page);
 
-  const toggle = page.getByTestId("share-cursor-toggle");
-  // Shown, because presenting is the default and the person has to be able to
-  // find the thing that changes it.
+  const toggle = page.locator('[data-menu-item="share-cursor"]');
+  await page.getByTestId("call-dock-more").click();
+  // Shown from the more menu, because presenting is the default and the
+  // person has to be able to find the thing that changes it.
   await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
 
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   expect(await storedPreference(page)).toBe("hide");
 
   await leaveVoiceIfConnected(page);
@@ -107,8 +107,9 @@ test("the cursor preference is remembered across a reload", async ({
 
   // The claim: still hidden, without being re-armed. A session-only store
   // would come back "false" here and pass every unit test on the way.
-  await expect(page.getByTestId("share-cursor-toggle")).toHaveAttribute(
-    "aria-pressed",
+  await page.getByTestId("call-dock-more").click();
+  await expect(page.locator('[data-menu-item="share-cursor"]')).toHaveAttribute(
+    "aria-checked",
     "true",
   );
   await leaveVoiceIfConnected(page);
@@ -122,7 +123,9 @@ test("a screen share says so when it carries the cursor anyway", async ({
   await openApp(page);
   await joinLobby(page);
 
-  await page.getByTestId("share-cursor-toggle").click();
+  await page.getByTestId("call-dock-more").click();
+  await page.locator('[data-menu-item="share-cursor"]').click();
+  await expect(page.locator('[data-menu-item="share-cursor"]')).toBeHidden();
   await page.getByRole("button", { name: "Share your screen" }).click();
   await expect(page.getByText("You are presenting")).toBeVisible({
     timeout: 20_000,
@@ -145,12 +148,15 @@ test("a share nobody asked to hide the cursor on says nothing", async ({
   await openApp(page);
   await joinLobby(page);
 
-  // Presenting: the pointer is the content. A warning on every share anybody
-  // ever starts is how a true warning gets trained into background noise.
-  await expect(page.getByTestId("share-cursor-toggle")).toHaveAttribute(
-    "aria-pressed",
+  // Presenting is the default. The control lives in the more menu now, and
+  // a warning on every share anybody ever starts is how a true warning gets
+  // trained into background noise.
+  await page.getByTestId("call-dock-more").click();
+  await expect(page.locator('[data-menu-item="share-cursor"]')).toHaveAttribute(
+    "aria-checked",
     "false",
   );
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Share your screen" }).click();
   await expect(page.getByText("You are presenting")).toBeVisible({
     timeout: 20_000,

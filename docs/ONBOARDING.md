@@ -61,10 +61,9 @@ QG" (Filminho, 2026-10-04).
 hands the one attached slot to the first id that wants it, and `wanting` is
 built from standing conditions (connected, in a call, a dock on screen) that
 do not change when somebody presses Entendi. So a card already seen went on
-winning for the rest of the load and every tip behind it waited for good. On
-a developer's machine, where nothing is remembered so every card can be seen
-again, that is every session: `callDock` is first, so the music card could
-never once be drawn. `spendFeatureHintForLoad` is what the queue skips on.
+winning for the rest of the load and every tip behind it waited for good.
+`spendFeatureHintForLoad` is what the queue skips on. Localhost keeps the
+cards off unless `pqp:hints-persist` is set.
 
 **Once means once, including within a page load.** `components/layout/feature-hint.tsx`
 keeps two per-load sets. `eligibleThisLoad` holds a card eligible through a
@@ -110,8 +109,9 @@ the hero when there is one, in the title row otherwise). A card passes
 `title`, `body`, an optional `hero`, children for a preview, and a `footer`.
 
 **One store.** `lib/hints.ts` is the only place that decides whether a
-"show once" card was seen: never on `localhost` (developers see every card on
-every reload), never for Playwright (`navigator.webdriver`), and hostile or
+"show once" card was seen: never on `localhost` (the cards stay off there,
+so a reload is not a stack of coachmarks; set `pqp:hints-persist` to `1` to
+preview them), never for Playwright (`navigator.webdriver`), and hostile or
 missing storage reads as seen. The per-surface libs (`qg-hint.ts`,
 `cargos-hint.ts`, `mobile-beta-hint.ts`, `feature-hints.ts`) keep their names as
 thin wrappers. The download strip is the exception on purpose: it is furniture,

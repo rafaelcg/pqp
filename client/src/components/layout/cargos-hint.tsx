@@ -4,7 +4,7 @@ import { STAFF_ROLE_COLORS } from "@pqp/shared";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { isCargosHintSeen, rememberCargosHint } from "@/lib/cargos-hint";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export function CargosHint({
   onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
-  const [eligible] = useState(() => !isAutomatedBrowser() && !isCargosHintSeen());
+  const [eligible] = useState(() => !shouldSuppressHints() && !isCargosHintSeen());
   const [open, setOpen] = useState(true);
   const close = () => {
     setOpen(false);

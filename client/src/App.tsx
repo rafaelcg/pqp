@@ -161,7 +161,8 @@ import {
   useUpdatePromptShowing,
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
-import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { isCargosHintSeen } from "@/lib/cargos-hint";
+import { shouldSuppressHints } from "@/lib/hints";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -1505,10 +1506,10 @@ function MainAppContent({
    * it for a card nobody can see buries every tip behind it.
    */
   const [wantsMobileBeta, setWantsMobileBeta] = useState(() =>
-    shouldShowMobileBetaHint(),
+    !shouldSuppressHints() && shouldShowMobileBetaHint(),
   );
   const [wantsWhatsNew, setWantsWhatsNew] = useState(
-    () => !isAutomatedBrowser() && !isWhatsNewSeen(),
+    () => !shouldSuppressHints() && !isWhatsNewSeen(),
   );
   const [wantsComposerFormatHint] = useState(() =>
     featureHintEligible("composerFormat"),
@@ -1533,17 +1534,17 @@ function MainAppContent({
   // has to know too, or the corner stays "taken" by a card that never draws
   // and every attached tip behind it (share, music) waits for good. Same for
   // a card that HAS drawn and was then dismissed, which is what the
-  // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
-  // on purpose, so this card wanted the corner on every load and the in-call
-  // tips could not be drawn once.
+  // `onDismiss` below is: localhost keeps the cards off unless
+  // `pqp:hints-persist` is set, so a dismissed card cannot steal the corner
+  // on every reload.
   const [wantsCargosHint, setWantsCargosHint] = useState(
-    () => !isAutomatedBrowser() && !isCargosHintSeen(),
+    () => !shouldSuppressHints() && !isCargosHintSeen(),
   );
   // The one-time "Ativar notificações" card. Like the cargos card it decides
   // for itself whether it was seen, and the queue has to know too: a card that
   // wants the corner and never draws would hold every tip behind it.
   const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
-    () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
+    () => !shouldSuppressHints() && !isNotifyOfferSeen(),
   );
   const notifyOfferReady = useNotifyOfferReady();
   const [wantsChannelPinHint] = useState(() =>
@@ -9359,6 +9360,7 @@ function MainAppContent({
     (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
       perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageSoundboard = perms.can(Permission.MANAGE_SOUNDBOARD);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
@@ -9490,7 +9492,7 @@ function MainAppContent({
     !sidebarIconsOnly &&
     shouldOfferVoiceCleanNudge({
       dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
-      automated: isAutomatedBrowser(),
+      automated: shouldSuppressHints(),
       inCall: voiceState.status === "connected",
       micOn: !voiceState.isMuted,
       presentingWatchParty:
@@ -9720,6 +9722,7 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
+          hideLeave={callDockOnScreen}
           compact={compact}
           hideActions={callDockOnScreen}
         />
@@ -10628,6 +10631,7 @@ function MainAppContent({
               </div>
             )}
             channelId={selectedChannel.id}
+            serverId={selectedServer?.id ?? null}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
             serverIconUrl={selectedServer?.iconUrl ?? null}
@@ -11859,6 +11863,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
+        canManageSoundboard={canManageSoundboard}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||

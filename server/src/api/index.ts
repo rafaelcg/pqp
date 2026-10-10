@@ -3437,6 +3437,132 @@ router.get("/api/music/related", async (ctx) => {
   }
 });
 
+// ------------------------------------------------------------ soundboard
+
+import {
+  claimSoundboardSoundSchema,
+  createSoundboardUploadSchema,
+  Permission as SoundboardPermission,
+  SOUNDBOARD_MAX_SOUNDS,
+  updateSoundboardSoundSchema,
+} from "@pqp/shared";
+import {
+  claimSoundboardSound,
+  createSoundboardUpload,
+  deleteSoundboardSound,
+  listSoundboardSounds,
+  SoundboardError,
+  updateSoundboardSound,
+} from "../services/soundboard.js";
+
+function soundboardHttpError(error: SoundboardError): HttpError {
+  switch (error.code) {
+    case "storage":
+      return new HttpError(503, "storage");
+    case "slots":
+      return new HttpError(409, "slots");
+    case "missing":
+      return new HttpError(404, "missing");
+    case "too_big":
+      return new HttpError(400, "too_big");
+    case "too_long":
+      return new HttpError(400, "too_long");
+    case "type":
+      return new HttpError(400, "type");
+    case "unreadable":
+      return new HttpError(400, "unreadable");
+  }
+}
+
+router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId, user.id);
+  return {
+    sounds: await listSoundboardSounds(serverId),
+    maxSounds: SOUNDBOARD_MAX_SOUNDS,
+  };
+});
+
+router.post(
+  "/api/servers/:serverId/soundboard/uploads",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    const body = createSoundboardUploadSchema.parse(await readJsonBody(req));
+    try {
+      return await createSoundboardUpload({
+        serverId,
+        contentType: body.contentType,
+        byteSize: body.byteSize,
+      });
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/soundboard",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    const body = claimSoundboardSoundSchema.parse(await readJsonBody(req));
+    try {
+      const sound = await claimSoundboardSound({
+        serverId,
+        userId: user.id,
+        key: body.key,
+        name: body.name,
+        emoji: body.emoji,
+        volume: body.volume,
+      });
+      return { sound };
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ req, user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    const body = updateSoundboardSoundSchema.parse(await readJsonBody(req));
+    const sound = await updateSoundboardSound({
+      serverId,
+      soundId,
+      name: body.name,
+      emoji: body.emoji,
+      volume: body.volume,
+    });
+    if (!sound) {
+      throw new NotFound("Sound not found");
+    }
+    return { sound };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    const removed = await deleteSoundboardSound(serverId, soundId);
+    if (!removed) {
+      throw new NotFound("Sound not found");
+    }
+    return { ok: true };
+  },
+);
+
 // ------------------------------------------------------------ attachments
 
 /**

@@ -1722,6 +1722,26 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
 }
 
+/* A soundboard tile that just played: the icon kicks once from full size. */
+@keyframes sound-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.22) rotate(-6deg);
+  }
+  70% {
+    transform: scale(0.96) rotate(3deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-sound-pulse {
+  animation: sound-pulse 0.42s var(--ease-emphasized) both;
+}
+
 /* Corner cards and steps inside a dialog: one entrance, one exit. */
 @keyframes pop-in {
   from {
@@ -2224,6 +2244,7 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .animate-toast-in,
   .animate-toast-out,
   .animate-badge-pop,
+  .animate-sound-pulse,
   .animate-pop-in,
   .animate-pop-out,
   .animate-step-in,

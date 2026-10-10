@@ -11,7 +11,12 @@ import {
   type PeerAudioTrack,
 } from "@/components/voice/peer-audio-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  SoundboardOccupantMark,
+  soundboardSoundLabel,
+} from "@/components/voice/soundboard-float";
 import { useTranslation } from "@/lib/i18n";
+import { useSoundboardMark } from "@/lib/soundboard";
 import { VOICE_OCCUPANT_DRAG_MIME } from "@/lib/voice-occupant-dnd";
 import {
   voiceOccupantAudioAffordance,
@@ -81,6 +86,8 @@ export function VoiceOccupantRow({
   onDragEnd: () => void;
 }) {
   const { t } = useTranslation();
+  const mark = useSoundboardMark(person.userId);
+  const playing = mark ? soundboardSoundLabel(mark.soundId, t) : null;
   const rowRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLElement | null>(null);
   const menu = usePeerAudioMenu<HTMLLIElement>();
@@ -171,7 +178,14 @@ export function VoiceOccupantRow({
           data-voice-occupant={person.userId}
           data-voice-occupant-channel={channelId}
           data-voice-occupant-draggable={canDrag ? "true" : "false"}
-          aria-label={t("voice.occupant.row", { name: person.displayName })}
+          aria-label={
+            playing
+              ? t("voice.occupant.rowPlaying", {
+                  name: person.displayName,
+                  sound: playing,
+                })
+              : t("voice.occupant.row", { name: person.displayName })
+          }
           onDragStart={handleDragStart}
           onDragEnd={() => {
             clearGhost();
@@ -193,7 +207,10 @@ export function VoiceOccupantRow({
             muted={person.muted || person.deafened}
             size="sm"
           />
-          <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="truncate">{person.displayName}</span>
+            <SoundboardOccupantMark userId={person.userId} />
+          </span>
           {/* The speaker slot sits BEFORE the badges, so the mute and deafen
               icons end at the row's right edge for everybody. After them, a
               hover-only slot that is invisible but still 18px wide pushed

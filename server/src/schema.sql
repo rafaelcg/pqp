@@ -3553,7 +3553,10 @@ $$;
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
 -- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) | MOVE(4194304) |
 -- START_WATCH_PARTY(8388608) = 12927234.
--- Manager: ALL(16777215) minus ADMINISTRATOR(8) = 16777207.
+-- Manager: ALL(134217727) minus ADMINISTRATOR(8) = 134217719.
+-- USE_SOUNDBOARD is bit 25 and MANAGE_SOUNDBOARD is bit 26. The number
+-- below is only for a hall that still has no manager row. Existing rows
+-- gain the bits in soundboard_bits_2026_10.
 -- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
@@ -3612,7 +3615,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 16777207, 2,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 134217719, 2,
       FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
     );
   END IF;
@@ -5269,6 +5272,118 @@ CREATE TABLE IF NOT EXISTS hls_session_presence (
   PRIMARY KEY (channel_id, started_at_ms, instance_id)
 );
 
+-- Soundboard clips for a server. Play clicks are not rows: a play is a
+-- socket frame. 24 is the hard cap, enforced again in the claim transaction.
+CREATE TABLE IF NOT EXISTS soundboard_sounds (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  emoji        TEXT NOT NULL,
+  storage_key  TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  bytes        INTEGER NOT NULL,
+  duration_ms  INTEGER NOT NULL,
+  volume       REAL NOT NULL DEFAULT 1,
+  created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT soundboard_sounds_name_len CHECK (char_length(name) BETWEEN 2 AND 24),
+  CONSTRAINT soundboard_sounds_volume CHECK (volume >= 0 AND volume <= 1),
+  CONSTRAINT soundboard_sounds_duration CHECK (duration_ms > 0 AND duration_ms <= 5200),
+  CONSTRAINT soundboard_sounds_bytes CHECK (bytes > 0 AND bytes <= 524288)
+);
+
+CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
+  ON soundboard_sounds (server_id, created_at);
+
+-- A signed upload nobody has claimed yet. Durable and shared, so the cap of
+-- 24 holds across both API machines and a deploy cannot lose the record of an
+-- object that still has to be swept. The claim deletes its row in the same
+-- transaction that inserts the sound. A cleanup leases the row (cleanup_until),
+-- deletes the object, and only then deletes the row, so exactly one of them
+-- owns a file at a time and a failed or interrupted cleanup is retried.
+CREATE TABLE IF NOT EXISTS soundboard_pending_uploads (
+  storage_key TEXT PRIMARY KEY,
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  -- Set while a cleanup holds the file: the object is being deleted, so a
+  -- claim must not take the ticket. A cleanup that dies or fails simply lets
+  -- the lease lapse and the ticket becomes sweepable again.
+  cleanup_until TIMESTAMPTZ
+);
+
+-- An earlier revision of this table (this feature's own branch, never on
+-- main) had no lease column; add it where the table already exists. Every
+-- revision had expires_at, so it needs no migration.
+ALTER TABLE soundboard_pending_uploads
+  ADD COLUMN IF NOT EXISTS cleanup_until TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_server
+  ON soundboard_pending_uploads (server_id);
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_expiry
+  ON soundboard_pending_uploads (expires_at);
+
+-- One object, one row. An earlier revision of this table could claim the
+-- same key twice. Drop the later row before the unique index, or a database
+-- that already has those rows fails to boot. The kept row still points at
+-- the file, so the object stays.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'soundboard_storage_key_unique_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM soundboard_sounds AS extra
+   USING soundboard_sounds AS kept
+   WHERE extra.storage_key = kept.storage_key
+     AND (extra.created_at, extra.id) > (kept.created_at, kept.id);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS soundboard_sounds_storage_key
+    ON soundboard_sounds (storage_key);
+
+  INSERT INTO data_migrations (name) VALUES ('soundboard_storage_key_unique_2026_10');
+END $$;
+
+-- USE_SOUNDBOARD (bit 25 = 33554432) onto @everyone, so a channel overwrite
+-- is what turns the board off. MANAGE_SOUNDBOARD (bit 26 = 67108864) onto
+-- manager and admin. Owner already resolves to every bit in application
+-- code. One-shot, like manage_music_bit_2026_09.
+DO $$
+DECLARE
+  use_soundboard CONSTANT BIGINT := 33554432;
+  manage_soundboard CONSTANT BIGINT := 67108864;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'soundboard_bits_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | use_soundboard
+     WHERE is_everyone
+       AND (permissions & use_soundboard) = 0
+    RETURNING server_id
+  ),
+  staff AS (
+    UPDATE roles
+       SET permissions = permissions | use_soundboard | manage_soundboard
+     WHERE system_key IN ('manager', 'admin')
+       AND (permissions & manage_soundboard) = 0
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (
+     SELECT server_id FROM changed
+     UNION
+     SELECT server_id FROM staff
+   );
+
+  INSERT INTO data_migrations (name) VALUES ('soundboard_bits_2026_10');
+END $$;
 -- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
 -- channel: when a share has been stable long enough, every API machine that saw
 -- it races one upsert on this row, and only the one that finds

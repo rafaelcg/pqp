@@ -682,8 +682,10 @@ Mirror all preload additions into client/src/lib/desktop.ts:1-9 and client/src/c
   report into "disable your theme and retry". See `THEMING.md`.
 - **A bot API and app directory.** Incoming webhooks cover the realistic 90% (CI, alerts,
   RSS) at a fraction of the cost. A full bot platform is a product in itself.
-- **Stage channels, soundboard, activities, Nitro-style cosmetics.** These serve Discord's
+- **Stage channels, activities, Nitro-style cosmetics.** These serve Discord's
   scale and monetisation, not a self-hostable app for small communities.
+  Soundboard is the exception: a server library of short clips, played locally
+  from one socket frame. See `docs/SOUNDBOARD.md`.
 - **Server discovery.** Meaningless when every deployment is its own island; it only makes
   sense on a hosted pqp.gg with real network effects.
 

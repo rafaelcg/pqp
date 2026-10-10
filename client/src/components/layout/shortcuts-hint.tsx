@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { isFeatureHintSeen, rememberFeatureHint } from "@/lib/feature-hints";
-import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldSuppressHints } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -23,7 +23,7 @@ export function ShortcutsHint({
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
-    () => !isAutomatedBrowser() && !isFeatureHintSeen("shortcuts"),
+    () => !shouldSuppressHints() && !isFeatureHintSeen("shortcuts"),
   );
   const [open, setOpen] = useState(true);
   const close = () => {

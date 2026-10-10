@@ -63,6 +63,8 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   MANAGE_WEBHOOKS: "roles.perm.MANAGE_WEBHOOKS",
   START_WATCH_PARTY: "roles.perm.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.perm.MANAGE_MUSIC",
+  USE_SOUNDBOARD: "roles.perm.USE_SOUNDBOARD",
+  MANAGE_SOUNDBOARD: "roles.perm.MANAGE_SOUNDBOARD",
 };
 
 /** One-liners for flags whose names collide or oversell. Labels stay for the rest. */
@@ -87,6 +89,8 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   MANAGE_WEBHOOKS: "roles.permHint.MANAGE_WEBHOOKS",
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
+  USE_SOUNDBOARD: "roles.permHint.USE_SOUNDBOARD",
+  MANAGE_SOUNDBOARD: "roles.permHint.MANAGE_SOUNDBOARD",
 };
 
 /** Display order. Bit numbers stay as defined in `@pqp/shared`. */
@@ -127,7 +131,15 @@ const PERMISSION_GROUPS = [
   },
   {
     heading: "roles.group.voice",
-    keys: ["CONNECT", "SPEAK", "STREAM", "START_WATCH_PARTY", "MANAGE_MUSIC"],
+    keys: [
+      "CONNECT",
+      "SPEAK",
+      "STREAM",
+      "START_WATCH_PARTY",
+      "MANAGE_MUSIC",
+      "USE_SOUNDBOARD",
+      "MANAGE_SOUNDBOARD",
+    ],
   },
 ] as const satisfies readonly {
   heading: MessageKey;
