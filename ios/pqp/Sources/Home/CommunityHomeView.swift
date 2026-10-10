@@ -549,13 +549,36 @@ private struct BauInlineVideo: View {
             failed = true
             return
         }
-        for await status in item.publisher(for: \.status).values where status == .failed {
+        // Everything that can go wrong once the player exists: the item
+        // failing outright, an error set on it (a range request that dies
+        // mid-clip while the status still reads readyToPlay), and the
+        // "could not reach the end" notification a dropped connection posts.
+        let broken = Publishers.CombineLatest(
+            item.publisher(for: \.status),
+            item.publisher(for: \.error)
+        )
+        .filter { BauVideoHealth.isFailure(status: $0.0, error: $0.1) }
+        .map { _ in () }
+        .merge(with: NotificationCenter.default
+            .publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
+            .map { _ in () })
+        for await _ in broken.values {
             if Task.isCancelled { return }
             player?.pause()
             player = nil
             failed = true
             return
         }
+    }
+}
+
+/// When an inline Baú video counts as broken and the card should offer the
+/// open-out fallback instead of a player that will never move.
+enum BauVideoHealth {
+    /// A failed item, or any error on the item whatever its status says:
+    /// `readyToPlay` is a statement about the probe, not about the stream.
+    static func isFailure(status: AVPlayerItem.Status, error: Error?) -> Bool {
+        status == .failed || error != nil
     }
 }
 

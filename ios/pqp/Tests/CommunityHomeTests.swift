@@ -233,3 +233,18 @@ final class CommunityHomeMediaDecisionTests: XCTestCase {
         XCTAssertNil(comment("tá bom").gifURL)
     }
 }
+
+final class BauVideoHealthTests: XCTestCase {
+    func testAFailedItemIsBroken() {
+        XCTAssertTrue(BauVideoHealth.isFailure(status: .failed, error: nil))
+    }
+
+    func testAnErrorOnAReadyItemIsBroken() {
+        XCTAssertTrue(BauVideoHealth.isFailure(status: .readyToPlay, error: URLError(.networkConnectionLost)))
+    }
+
+    func testAHealthyItemIsNot() {
+        XCTAssertFalse(BauVideoHealth.isFailure(status: .unknown, error: nil))
+        XCTAssertFalse(BauVideoHealth.isFailure(status: .readyToPlay, error: nil))
+    }
+}
