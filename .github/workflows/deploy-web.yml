@@ -162,7 +162,7 @@ jobs:
       # the site with no middleware at all, which looks exactly like a working
       # deploy until somebody pastes a profile link into WhatsApp. The binary is
       # invoked by absolute path so the install can stay outside the workspace.
-      - name: Deploy to Cloudflare Pages
+      - name: Install wrangler
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -177,17 +177,52 @@ jobs:
           fi
           TMP="$(mktemp -d)"
           (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
+          echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
+
+      # THE GATE. The same `dist` goes to a preview branch first, and every URL
+      # its service worker precaches must answer 200 there before production is
+      # touched. One non-200 entry fails the worker's install in every browser:
+      # from 2026-09-30 to 2026-10-10 three precached pages were 308'd by
+      # Pages' pretty URLs to a path the edge middleware 404'd, nobody new got a
+      # worker (nor web push), and old workers kept serving the old build. A
+      # preview deployment runs the same Pages Functions and `_headers`, so it
+      # answers like production for these files. On failure production keeps
+      # the build it had and this job is red. Wrangler uploads only files the
+      # project does not already have, so the production deploy below re-sends
+      # almost nothing. See `client/scripts/check-precache.mjs`.
+      #
+      # Output goes to a file with no pipe, so a failed wrangler fails the step:
+      # the default shell is `bash -e` without pipefail, and a pipe would report
+      # `tee`'s status.
+      - name: Deploy a preview and check its precache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd "$GITHUB_WORKSPACE/client"
+          LOG="$RUNNER_TEMP/pages-preview.log"
+          if ! "$WRANGLER" pages deploy dist \
+            --project-name=pqp --branch=precache-check --commit-dirty=true >"$LOG" 2>&1; then
+            cat "$LOG"
+            exit 1
+          fi
+          cat "$LOG"
+          URL="$(scripts/deploy-url.sh "$LOG")"
+          node scripts/check-precache.mjs "$URL" dist/sw.js
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
           cd "$GITHUB_WORKSPACE/client"
           # `--branch=main` is what makes this a PRODUCTION deploy. Wrangler
           # otherwise reads the branch off the checkout, and a workflow_run
           # checkout pinned to a SHA is a detached HEAD, which it reports as
           # "head": every deploy after #385 went to the head.pqp-3yr.pages.dev
           # preview and production sat on the last push-triggered build.
-          # Output goes to a file (read by the precache check below) with no
-          # pipe, so a failed wrangler fails this step: the default shell is
-          # `bash -e` without pipefail, and a pipe would report `tee`'s status.
           LOG="$RUNNER_TEMP/pages-deploy.log"
-          if ! "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+          if ! "$WRANGLER" pages deploy dist \
             --project-name=pqp --branch=main --commit-dirty=true >"$LOG" 2>&1; then
             cat "$LOG"
             exit 1
@@ -206,19 +241,12 @@ jobs:
           grep -q '"apiUrl":"http' "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
             || { echo "::error::edge-config.json has no apiUrl — VITE_API_URL was empty at build time"; exit 1; }
 
-      # Every URL the service worker precaches must answer 200, or the worker's
-      # install fails and nobody gets the new worker (nor web push). Only the
-      # real origin has Pages' pretty URLs and the edge middleware together:
-      # from 2026-09-30 to 2026-10-10 three precached pages were 308'd to a
-      # path the middleware 404'd. Checked on this deploy's own URL, so a slow
-      # alias cannot make it flaky. See `client/scripts/check-precache.mjs`.
-      - name: Verify every precached file answers 200
+      # The same check on the production deployment itself, after the gate
+      # above: a production-only difference (an environment binding, a rule
+      # that only matches the main branch) would show up here. It cannot stop
+      # this deploy any more; it makes the job red so somebody looks.
+      - name: Verify every precached file answers 200 in production
         run: |
-          DEPLOY_URL="$(grep -oE 'https://[a-z0-9-]+\.pqp-3yr\.pages\.dev' "$RUNNER_TEMP/pages-deploy.log" | head -1)"
-          if [ -z "$DEPLOY_URL" ]; then
-            # Never fall back to pqp.gg: it may still be the previous deploy,
-            # which would test the wrong build.
-            echo "::error::No deployment URL in the wrangler output, so the precache could not be checked"
-            exit 1
-          fi
-          node "$GITHUB_WORKSPACE/client/scripts/check-precache.mjs" "$DEPLOY_URL" "$GITHUB_WORKSPACE/client/dist/sw.js"
+          cd "$GITHUB_WORKSPACE/client"
+          URL="$(scripts/deploy-url.sh "$RUNNER_TEMP/pages-deploy.log")"
+          node scripts/check-precache.mjs "$URL" dist/sw.js

@@ -5,6 +5,8 @@ vi.mock("virtual:pwa-register", () => ({ registerSW }));
 
 import {
   HOME_REGISTER_DELAY_MS,
+  installCauseAttributes,
+  installFailureReporter,
   registerServiceWorker,
   watchInstallFailures,
 } from "./register-sw";
@@ -162,5 +164,68 @@ describe("watchInstallFailures", () => {
     registration.dispatchEvent(new Event("updatefound"));
     update.go("redundant");
     expect(failed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("installFailureReporter", () => {
+  const cause = {
+    type: "PQP_SW_INSTALL_FAILED",
+    build: "b1",
+    reason: "bad-precaching-response",
+    path: "/robots.txt",
+    status: 404,
+  };
+  const withCause = { reason: "bad-precaching-response", path: "/robots.txt", status: "404", build: "b1" };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports the cause once when it arrives before the outcome", () => {
+    const report = vi.fn();
+    const r = installFailureReporter(report, 3000);
+    r.cause(cause);
+    vi.advanceTimersByTime(10);
+    r.failed();
+    vi.advanceTimersByTime(5000);
+    expect(report.mock.calls).toEqual([[withCause]]);
+  });
+
+  it("reports the cause once when it arrives after the outcome", () => {
+    const report = vi.fn();
+    const r = installFailureReporter(report, 3000);
+    r.failed();
+    vi.advanceTimersByTime(500);
+    r.cause(cause);
+    vi.advanceTimersByTime(5000);
+    expect(report.mock.calls).toEqual([[withCause]]);
+  });
+
+  it("reports the outcome alone when no cause comes (a worker from before the message)", () => {
+    const report = vi.fn();
+    const r = installFailureReporter(report, 3000);
+    r.failed();
+    vi.advanceTimersByTime(2999);
+    expect(report).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(report.mock.calls).toEqual([[{ reason: "unknown", path: "", status: "0", build: "" }]]);
+  });
+
+  it("ignores messages that are not ours", () => {
+    const report = vi.fn();
+    const r = installFailureReporter(report);
+    r.cause({ type: "PQP_BUILD" });
+    r.cause("hello");
+    r.cause(null);
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("bounds what a message can put in an event", () => {
+    expect(
+      installCauseAttributes({ type: "PQP_SW_INSTALL_FAILED", path: "x".repeat(500), status: "404" }),
+    ).toEqual({ reason: "unknown", path: "x".repeat(200), status: "0", build: "" });
   });
 });

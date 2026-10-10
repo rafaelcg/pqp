@@ -1,6 +1,6 @@
 /**
  * The script the service worker imports beside its precache (`sw-build-*.js`,
- * emitted by `client/vite.config.ts`). Two jobs, both about which build a
+ * emitted by `client/vite.config.ts`). Three jobs, all about which build a
  * person ends up on:
  *
  *  1. STAMP. It says which build this worker was made from and answers a
@@ -19,6 +19,18 @@
  *     worker's again. `index.html` is tiny and the hashed assets it names are
  *     still precached, so what this costs is one small request per navigation.
  *
+ *  3. SAY WHY AN INSTALL FAILED. One precache entry that is not 200 fails the
+ *     whole install (Workbox's `bad-precaching-response`), and the page only
+ *     ever sees the worker turn `redundant`. From 2026-09-30 to 2026-10-10
+ *     every install failed that way and nothing said which file. The install
+ *     listener here runs before Workbox's, wraps `event.waitUntil` for that
+ *     one event, and when a promise passed to it rejects, posts the failing
+ *     path, status and error name to every open page of the origin
+ *     (`PQP_SW_INSTALL_FAILED`, read by `lib/register-sw.ts`), then rethrows so
+ *     the install fails exactly as before. The post is bounded by a timer, so
+ *     reporting can never hold an install open. Only our own asset path is
+ *     sent: no query string, no user data.
+ *
  * It is a fetch listener in an imported script, so it is registered before
  * Workbox's own router and answers first. Paths on the denylist are left alone
  * (no `respondWith`), exactly as Workbox's navigation route leaves them.
@@ -27,6 +39,12 @@
  */
 
 export const NAVIGATION_TIMEOUT_MS = 4000;
+
+/** Longest the failing install waits for its report to reach the pages. */
+export const INSTALL_REPORT_TIMEOUT_MS = 1000;
+
+/** The message a failing install posts to the pages (`lib/register-sw.ts`). */
+export const INSTALL_FAILED_MESSAGE = "PQP_SW_INSTALL_FAILED";
 
 /** Paths that are files or endpoints, not app routes: the worker never answers them with the shell. */
 export const NAVIGATE_DENYLIST: RegExp[] = [
@@ -73,8 +91,47 @@ export function swBuildScript(
   if (options.navigation === false) {
     return [...stamp, ``].join("\n");
   }
+  const installReport = [
+    `(function () {`,
+    `  function describe(error) {`,
+    `    var details = (error && error.details) || {};`,
+    `    var path = "";`,
+    `    if (typeof details.url === "string") {`,
+    `      try { path = new URL(details.url, self.location.href).pathname; } catch (e) { path = ""; }`,
+    `    }`,
+    `    return {`,
+    `      type: ${JSON.stringify(INSTALL_FAILED_MESSAGE)},`,
+    `      build: self.__PQP_BUILD__,`,
+    `      reason: String((error && error.name) || "error").slice(0, 80),`,
+    `      path: path.slice(0, 200),`,
+    `      status: typeof details.status === "number" ? details.status : 0`,
+    `    };`,
+    `  }`,
+    `  function tell(message) {`,
+    `    var posted = self.clients.matchAll({ type: "window", includeUncontrolled: true })`,
+    `      .then(function (clients) {`,
+    `        for (var i = 0; i < clients.length; i++) { clients[i].postMessage(message); }`,
+    `      })`,
+    `      .catch(function () {});`,
+    `    var timeout = new Promise(function (resolve) { setTimeout(resolve, ${INSTALL_REPORT_TIMEOUT_MS}); });`,
+    `    return Promise.race([posted, timeout]);`,
+    `  }`,
+    `  self.addEventListener("install", function (event) {`,
+    `    var reported = false;`,
+    `    var waitUntil = event.waitUntil;`,
+    `    event.waitUntil = function (promise) {`,
+    `      return waitUntil.call(event, Promise.resolve(promise).catch(function (error) {`,
+    `        if (reported) { throw error; }`,
+    `        reported = true;`,
+    `        return tell(describe(error)).then(function () { throw error; });`,
+    `      }));`,
+    `    };`,
+    `  });`,
+    `})();`,
+  ];
   return [
     ...stamp,
+    ...installReport,
     `(function () {`,
     `  var DENY = [${deny.join(", ")}];`,
     `  var TIMEOUT_MS = ${Number(timeoutMs)};`,

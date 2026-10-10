@@ -41,6 +41,7 @@ test.afterAll(async () => {
 
 test.beforeEach(() => {
   server.pin("/sw.js", null);
+  server.fail("/robots.txt", null);
   server.serve(oldDir);
 });
 
@@ -406,6 +407,47 @@ test("a fresh worker installs and activates", async ({ browser }) => {
     return seen;
   });
   expect(states.at(-1)).toBe("activated");
+  await context.close();
+});
+
+test("a failed install tells the page which file broke it", async ({ browser }) => {
+  server.serve(newDir);
+  // `robots.txt` is precached with a revision, so a 404 on it fails the install.
+  server.fail("/robots.txt", 404);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.goto(`${server.origin}/`);
+  const result = await page.evaluate(async () => {
+    const messages: unknown[] = [];
+    navigator.serviceWorker.addEventListener("message", (event) => messages.push(event.data));
+    navigator.serviceWorker.startMessages();
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const worker = registration.installing ?? registration.waiting ?? registration.active!;
+    await new Promise<void>((resolve) => {
+      if (worker.state === "redundant") {
+        resolve();
+        return;
+      }
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "redundant" || worker.state === "activated") {
+          resolve();
+        }
+      });
+    });
+    // The message is posted before the install fails; give delivery a moment.
+    for (let i = 0; i < 20 && messages.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { state: worker.state, messages };
+  });
+  expect(result.state).toBe("redundant");
+  expect(result.messages).toContainEqual({
+    type: "PQP_SW_INSTALL_FAILED",
+    build: NEW,
+    reason: "bad-precaching-response",
+    path: "/robots.txt",
+    status: 404,
+  });
   await context.close();
 });
 

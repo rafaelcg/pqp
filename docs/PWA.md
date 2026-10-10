@@ -196,13 +196,50 @@ What prevents it now:
 | Every `public/*.html` is a known path | `spa-routes.ts`, enforced by `spa-routes.test.ts` |
 | The e2e stand-in for Pages has the pretty-URL 308 and the middleware's 404 | `client/e2e/stale-bundle/pages-server.ts` |
 | A fresh worker must reach `activated`, and every precache URL must answer 200 (Chromium and Firefox) | `client/e2e/stale-bundle/update.spec.ts` |
-| After each deploy, every precache URL must answer 200 on that deployment | `client/scripts/check-precache.mjs`, run by `deploy-web.yml` |
+| Before production is touched, the build goes to the `precache-check` preview branch and every precache URL must answer 200 there. On failure production keeps its build and the job is red | "Deploy a preview and check its precache" in `deploy-web.yml`, `client/scripts/check-precache.mjs` |
+| After the production deploy, the same check on that deployment | "Verify every precached file answers 200 in production" in `deploy-web.yml` |
 | Every 10 minutes, every precache URL of the live `pqp.gg/sw.js` must answer 200 (opens an issue) | `sw-precache` in `scripts/monitor/availability.mjs` |
-| A worker that fails to install is reported to Faro as `pwa_sw_install_failed` | `watchInstallFailures` in `client/src/lib/register-sw.ts` |
+| A worker that fails to install is reported to Faro as `pwa_sw_install_failed`, with the failing `path`, `status`, `reason` (Workbox's error name) and `build` | The worker posts `PQP_SW_INSTALL_FAILED` from its install listener (`client/src/lib/sw-build-script.ts`); the page joins it with the `redundant` state it sees (`installFailureReporter` in `client/src/lib/register-sw.ts`). A worker from before the message reports `reason: unknown` |
 
 Recovery needs no code. A stuck worker still fetches `sw.js` on navigation.
 Once the new worker installs, `skipWaiting` lets it take over, and the next
 normal reload is on the new build.
+
+To read the reports: in Grafana, Faro events named `pwa_sw_install_failed`.
+The `path` and `status` name the file to fix. A burst of them right after a
+deploy means that deploy's precache is broken for everybody.
+
+### If a worker itself is broken (the kill switch)
+
+Everything above assumes the new worker can install and take over. If a
+shipped worker is broken in a way that keeps the page from working (a fetch
+handler that fails every request, for example), the standard remedy is a
+"no-op" worker: a `sw.js` with no fetch handler that skips waiting, claims
+the open pages, deletes the caches and reloads them. Google's guide:
+[Removing buggy service workers](https://developer.chrome.com/docs/workbox/remove-buggy-service-workers).
+pqp does not ship one, and does not need to for an install failure like the
+one above.
+
+What pqp already has, in order of weight:
+
+1. The update card and the automatic safe-moment reload (above).
+2. The update ladder (`client/src/lib/update-ladder.ts`): rung 1 deletes every
+   cache and navigates with a cache-buster; rung 2 also unregisters the workers.
+3. The forced update (`client_force_update` on the dashboard), which puts every
+   out-of-date client through that ladder.
+
+These run in the PAGE, so they need a page that loads. If the worker is so
+broken that no page loads at all, ship the no-op worker:
+
+1. Replace the generated worker with a static `client/public/sw.js` that has an
+   `install` listener calling `self.skipWaiting()`, and an `activate` listener
+   that deletes every cache from `caches.keys()`, calls `self.clients.claim()`,
+   and navigates every window client to its own URL.
+2. Turn off the PWA plugin's worker generation for that build, so the static file
+   is the one served.
+3. Deploy, and check `pqp.gg/sw.js` is the no-op file.
+4. Keep it live until Faro shows no more sessions on the broken build, then
+   restore the generated worker.
 
 ## Icons
 
