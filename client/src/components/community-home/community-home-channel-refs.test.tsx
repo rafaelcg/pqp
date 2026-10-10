@@ -150,6 +150,7 @@ describe("PostCard", () => {
       createdAt: now,
       updatedAt: now,
       translation: null,
+      captions: null,
       ...overrides,
     };
   }
