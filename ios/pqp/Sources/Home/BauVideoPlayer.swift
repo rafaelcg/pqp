@@ -574,7 +574,9 @@ struct BauInlineVideo: View {
             next.callActive = callActive
             if cardVisible { next.cardDidAppear() }
             await next.prepareIfNeeded()
-            if playWhenReady {
+            // A task for a URL the card has already moved past must not eat
+            // the pending tap: the task for the new URL plays it.
+            if !Task.isCancelled, playWhenReady {
                 playWhenReady = false
                 playIfStillHere(next)
             }
