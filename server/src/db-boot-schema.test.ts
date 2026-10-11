@@ -438,6 +438,17 @@ describeDb("initDb on a real Postgres", () => {
       expect(await validated()).toMatchObject({ convalidated: true });
       await client.query("ROLLBACK");
 
+      // A NULL in the list makes the old CHECK pass any type (NULL is not
+      // false), so its literals prove nothing either.
+      await client.query("BEGIN");
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', NULL));`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
       // From a constraint that allows a type this list lacks (a rollback
       // image meeting a newer schema): it validates, so rows of that type
       // would keep the newer constraint in place.

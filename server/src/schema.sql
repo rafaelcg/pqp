@@ -5349,11 +5349,14 @@ BEGIN
        AND pg_get_constraintdef(oid) LIKE '%''forum''%'
   ) THEN
     -- Proof needs the canonical shape every block in this file writes
-    -- (`type IN (...)`, which Postgres prints as `type = ANY (ARRAY[...])`).
-    -- A differently written constraint (`type <> 'x'`, an OR) could be valid
-    -- and still allow types outside the list, so it validates instead.
+    -- (`type IN ('a', 'b')`, printed as `type = ANY (ARRAY['a'::text, ...])`)
+    -- with nothing but plain literals in the array. A differently written
+    -- constraint (`type <> 'x'`, an OR) or a NULL element (a CHECK that
+    -- evaluates to NULL passes) could be valid and still let other types in,
+    -- so either one validates instead.
     SELECT c.convalidated
-           AND pg_get_constraintdef(c.oid) ~ '^CHECK \(\(type = ANY \(ARRAY\[[^]]*\]\)\)\)$'
+           AND pg_get_constraintdef(c.oid)
+               ~ '^CHECK \(\(type = ANY \(ARRAY\[''[a-z_]+''::text(, ''[a-z_]+''::text)*\]\)\)\)$'
            AND NOT EXISTS (
              SELECT 1
                FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
