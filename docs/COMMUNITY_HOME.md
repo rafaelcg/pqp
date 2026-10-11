@@ -391,6 +391,16 @@ downloads, never inline.
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
 
+**Images are scanned** with the chat attachment scanner when
+`CONTENT_SCAN_PROVIDER` is set, at the end of `POST …/home/media/claim` and
+before `verified_at`, so a refused picture can never go on a post. That covers
+a video's custom cover too, which is an ordinary image upload. Same policy and
+fail-closed rule as chat; a refusal answers "Upload could not be verified",
+quarantines the row (the orphan sweep skips it) and files an automated report
+into the **instance** queue, never the server's own, since the uploader is its
+staff. Video and PDF are recorded `skipped`. Details:
+`docs/CONTENT_SAFETY.md` §"What is scanned".
+
 ### A phone cut of a video
 
 An uploaded video can carry a second, vertical (9:16) edit beside the main,

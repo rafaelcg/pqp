@@ -56,6 +56,8 @@ import {
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
 import { toPublicUserSummary } from "./users.js";
+import { checkCommunityHomeUpload } from "./community-home-scan.js";
+import type { ScanStatus } from "./content-scan.js";
 
 /** The allowlisted content types a Baú image may be stored under. */
 const IMAGE_CONTENT_TYPES: ReadonlySet<string> = new Set(
@@ -1958,9 +1960,11 @@ export async function claimCommunityHomeMediaUpload(input: {
     kind: "image" | "video" | "file";
     uploader_id: string;
     server_id: string;
+    scan_status: ScanStatus;
+    quarantined_at: Date | null;
   }>(
     `SELECT id, storage_key, filename, content_type, byte_size, kind,
-            uploader_id, server_id
+            uploader_id, server_id, scan_status, quarantined_at
        FROM community_home_media_uploads
       WHERE id = $1`,
     [input.uploadId],
@@ -1972,6 +1976,11 @@ export async function claimCommunityHomeMediaUpload(input: {
     upload.uploader_id !== input.uploaderId
   ) {
     throw new CommunityHomeError("not_found", "Media upload not found");
+  }
+  // The scanner refused it. Same answer as any other failed verification, and
+  // no second look: a quarantined row is evidence, not a retry.
+  if (upload.quarantined_at) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
   }
   if (!isCommunityHomeKey(input.serverId, upload.storage_key)) {
     throw new CommunityHomeError("invalid", "Invalid storage key");
@@ -2046,6 +2055,22 @@ export async function claimCommunityHomeMediaUpload(input: {
     }
     contentType = sniffed;
   }
+  // The image scan, last and on its own: only bytes that passed the HEAD and
+  // the sniff are worth a provider call, and the sniffed type is the one to
+  // scan as. Refused (or unjudgeable, under the default fail-closed mode) and
+  // the row is never verified, so no post can carry it. The reasons this is
+  // the place are on `checkCommunityHomeUpload`.
+  const allowed = await checkCommunityHomeUpload({
+    id: upload.id,
+    serverId: upload.server_id,
+    uploaderId: upload.uploader_id,
+    storageKey: upload.storage_key,
+    contentType,
+    scanStatus: upload.scan_status,
+  });
+  if (!allowed) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
   await pool.query(
     `UPDATE community_home_media_uploads
         SET verified_at = NOW(), byte_size = $2, content_type = $3
@@ -2115,6 +2140,12 @@ async function flushDueScheduledPosts(serverId: string): Promise<void> {
   }
 }
 
+/**
+ * Delete uploads nothing claimed. A row the scanner quarantined is unclaimed
+ * and unverified too, and is the one this must not take: it is the evidence a
+ * moderator is being sent to look at. `sweepQuarantinedCommunityHomeMedia`
+ * owns those rows instead.
+ */
 export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
   if (!isStorageConfigured()) {
     return 0;
@@ -2123,6 +2154,7 @@ export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
     `SELECT id, storage_key FROM community_home_media_uploads
       WHERE claimed_post_id IS NULL
         AND verified_at IS NULL
+        AND quarantined_at IS NULL
         AND created_at < NOW() - $1::interval
       ORDER BY created_at ASC
       LIMIT $2`,

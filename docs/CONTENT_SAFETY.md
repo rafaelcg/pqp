@@ -9,9 +9,32 @@ like a feature announcement is worse than none, because it makes the untouched
 parts invisible.
 
 > **Status as shipped: `CONTENT_SCAN_PROVIDER` is empty, so nothing is scanned.**
-> Every attachment row records `scan_status = 'unscanned'`. That is the honest
-> state, not a pass. Turning it on is a Railway variable and a restart —
+> Every attachment row, and every Baú upload row, records
+> `scan_status = 'unscanned'`. That is the honest state, not a pass. Turning
+> it on is a Railway variable and a restart —
 > [Turning it on](#turning-it-on).
+
+---
+
+## What is scanned
+
+Every place a user can put an image in front of other people, and whether the
+scanner sees it once `CONTENT_SCAN_PROVIDER` is set. "Skipped" is recorded on
+the row and is not a pass.
+
+| Surface | Scanned | When | Where the verdict lives |
+|---|---|---|---|
+| Chat attachments, images (stored, and remote GIFs) | **yes** | On send, before the message claims it | `message_attachments.scan_*` |
+| Chat attachments, video / audio / PDF | skipped | same | same |
+| Baú (Community Home) media, images | **yes** | On `POST .../home/media/claim`, before the upload can go on any post | `community_home_media_uploads.scan_*` |
+| Baú video cover (custom poster) | **yes** | A cover is an ordinary Baú image upload through the same claim | same |
+| Baú video (main file and phone cut) / PDF | skipped | same claim | same |
+| Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
+| Avatars and profile banners (`avatars.ts`) | **no** | | |
+| Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
+
+The last two rows are open gaps, not decisions. The community featured image
+in particular is shown on the public `pqp.gg/c/<slug>` page.
 
 ---
 
@@ -110,8 +133,22 @@ The alternatives, and what each gives up:
 | R2 event notification → Worker | seconds to minutes | Same window, plus a queue and a second deployment to keep alive |
 | At the edge on read | zero for cached, unbounded otherwise | Cannot stop the bytes being stored, and re-checks the same object forever |
 
+Baú media gets the same three properties one step earlier. Its upload goes
+mint, PUT, then `POST .../home/media/claim`, which HEADs the object, sniffs an
+image's bytes, and sets `verified_at`. Nothing can put an upload on a post
+without `verified_at` (`claimUploadOntoPost` refuses it), so the scan runs at
+the end of that claim (`checkCommunityHomeUpload` in
+`server/src/services/community-home-scan.ts`): no transaction is open, the
+upload has never been on any post, draft or cover, and a refusal is the same
+"Upload could not be verified" a failed HEAD already answers. Every Baú
+picture, a video's custom cover included, goes through that one claim, on web,
+iOS and Android alike. An upload is judged once: a re-claim of a row that
+passed, was flagged or was skipped does not call the provider again, while an
+`error` is scanned again on retry and a quarantined row is refused outright.
+
 The cost is latency, bounded by `CONTENT_SCAN_TIMEOUT_MS` (default 6s) and paid
-only by messages carrying a freshly uploaded image. That bound is the "never
+only by messages carrying a freshly uploaded image (and, for Baú, by the claim
+of a freshly uploaded image). That bound is the "never
 block on a slow third party" rule: a provider that hangs is a provider that
 answered `error` six seconds ago.
 
@@ -171,9 +208,14 @@ adapters therefore fail when they understand **nothing** in a response, and
    hour — destroying the only evidence the upload ever happened, at the exact
    moment a human is being asked to look at it.
 4. A report is filed into the existing moderation queue (`reports`), with
-   `reporter_id` NULL. It reaches the same place a human report would: the
-   server's owner and admins for a server channel, the instance queue for a
-   conversation.
+   `reporter_id` NULL. For a chat attachment it reaches the same place a human
+   report would: the server's owner and admins for a server channel, the
+   instance queue for a conversation. **A Baú upload always goes to the
+   instance queue** (`createAutomatedInstanceReport`, `context_kind = 'none'`,
+   `channel_label` "Baú · <server name>"): only Manage Server can upload to a
+   Baú, so the uploader is somebody who reads that server's own queue, and the
+   finding would land in front of the accused. Same rule as a community
+   report.
 
 ### Flagged
 
@@ -203,6 +245,13 @@ SELECT id, uploader_id, channel_id, scan_status, scan_provider,
 FROM message_attachments
 WHERE quarantined_at IS NOT NULL
 ORDER BY quarantined_at DESC;
+
+-- Baú uploads: same columns, no channel; the server is the place.
+SELECT id, uploader_id, server_id, scan_status, scan_provider,
+       scan_score, scan_labels, scanned_at, quarantined_at
+FROM community_home_media_uploads
+WHERE quarantined_at IS NOT NULL
+ORDER BY quarantined_at DESC;
 ```
 
 ### Retention
@@ -211,6 +260,10 @@ ORDER BY quarantined_at DESC;
 |---|---|
 | Ordinary rejection (e.g. gore) | `CONTENT_SCAN_QUARANTINE_DAYS`, default 30 |
 | Labelled `illegal` or `csam_suspected` | **Forever, until deleted by hand** |
+
+Both tables follow this, each with its own sweep
+(`sweepQuarantinedAttachments`, `sweepQuarantinedCommunityHomeMedia`), and the
+ordinary orphan sweeps skip a quarantined row on both.
 
 Thirty days is long enough to answer an appeal and short enough that the bucket
 does not become a private archive of everything the scanner ever disliked. The
@@ -700,7 +753,7 @@ reports — leaving every server exactly as it was.
    reversible step and it stops new people walking in.
 3. **Then decide on the room.** Content inside a community is reported,
    scanned and moderated exactly like any other server's — the ordinary
-   message-report and attachment-scan paths already cover it, and the
+   message-report, attachment-scan and Baú-scan paths already cover it, and the
    illegal-content runbook above takes precedence over everything here.
 4. **Close the report** with a note saying which of the two you did. A
    community report carries no `serverId`, so `PATCH /api/reports/:id` will
@@ -730,7 +783,10 @@ on. This is the honest list.
    invisible to every classifier. Human reports only.
 4. **Video, audio and PDF are not scanned at all.** They are recorded `skipped`,
    which is not `pass`. Only the five raster image types are checked. A video
-   attachment is entirely unexamined.
+   attachment is entirely unexamined, and so is a Baú video (up to 100 MiB,
+   and its phone cut). A Baú video's custom cover is scanned, because it is an
+   image upload; the first frame a player paints when there is no cover is
+   not.
 5. **Nothing uploaded before scanning was enabled has been checked.** Those rows
    read `unscanned` and there is no backfill. Writing one is possible — iterate
    the rows, presign, scan — but it is not implemented, and on a free tier it is
@@ -794,6 +850,13 @@ Full annotations in `.env.example`.
 `unscanned` is **not** a synonym for `pass` and nothing in this codebase treats
 it as one.
 
+### Columns on `community_home_media_uploads` (Baú)
+
+The same six columns as `message_attachments` above (`scan_status`,
+`scan_provider`, `scan_score`, `scan_labels`, `scanned_at`, `quarantined_at`),
+with the same meaning. A rejected row stays unclaimed and unverified, so
+nothing can put it on a post.
+
 ### Columns on `servers` (communities)
 
 | Column | |
@@ -839,6 +902,9 @@ processing explicit images, so it is the wrong tool here regardless of price.
 |---|---|
 | `server/src/services/content-scan.ts` | Providers, policy, fail-closed rule |
 | `server/src/services/attachments.ts` | Where the scan runs, quarantine, escalation |
+| `server/src/services/community-home-scan.ts` | The Baú scan: verdict, quarantine, instance-queue report, quarantine expiry |
+| `server/src/services/community-home.ts` | `claimCommunityHomeMediaUpload`, where the Baú scan runs |
 | `server/src/services/reports.ts` | `createAutomatedReport` |
 | `server/src/services/content-scan.test.ts` | Failure modes, per provider |
 | `server/src/services/attachments.test.ts` | `describe("scanning")` — the DB consequences |
+| `server/src/services/community-home-media-scan.test.ts` | The same consequences for Baú, through the real claim route |

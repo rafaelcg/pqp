@@ -4078,6 +4078,44 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
 
+-- Image scanning for Baú media, the same verdict columns and the same meaning
+-- as on `message_attachments` (see the long comment there and
+-- docs/CONTENT_SAFETY.md). The scan runs on `POST .../home/media/claim`, before
+-- `verified_at` is set, and nothing can put an unverified upload on a post, so
+-- a refused image never reaches a feed.
+--
+-- `quarantined_at` is the same evidence hold: a rejected upload stays unclaimed
+-- and unverified, which is exactly what the orphan sweep deletes within the
+-- hour, so the sweep skips it and `sweepQuarantinedCommunityHomeMedia` expires
+-- it after CONTENT_SCAN_QUARANTINE_DAYS instead (never, for an illegal label).
+ALTER TABLE community_home_media_uploads
+  ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'unscanned';
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_provider TEXT;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_score REAL;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_labels JSONB;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ;
+
+-- Added once, never dropped and re-added (a re-add re-validates every row under
+-- a strong lock on each schema run).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_media_uploads_scan_status_check'
+       AND conrelid = 'community_home_media_uploads'::regclass
+  ) THEN
+    ALTER TABLE community_home_media_uploads
+      ADD CONSTRAINT community_home_media_uploads_scan_status_check
+      CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'rejected', 'error'));
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_community_home_media_quarantined
+  ON community_home_media_uploads (quarantined_at) WHERE quarantined_at IS NOT NULL;
+
 -- The phone cut of a post's uploaded video: the vertical (9:16) edit a phone
 -- plays instead of the landscape one. A second stored object on the same row,
 -- through the same mint / PUT / claim and the same size, type and HEAD checks
