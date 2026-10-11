@@ -124,6 +124,9 @@ final class SessionStore {
     // ones, and `lazy` is illegal on those.
     let api: APIClient
     let realtime: RealtimeClient
+    /// Who is in every voice room this account can see, for the channel list.
+    /// Fed from the socket for the whole session; see `VoiceOccupancyStore`.
+    let voiceOccupancy = VoiceOccupancyStore()
 
     init() {
         let mode = AppConfig.authMode
@@ -676,6 +679,8 @@ final class SessionStore {
         eventTask?.cancel()
         eventTask = nil
         eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
+        eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
+        voiceOccupancy.clear()
         // Cached pages are one account's private messages sitting in
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.
@@ -720,11 +725,17 @@ final class SessionStore {
     /// would mean reopening a busy channel showed a page that is visibly
     /// behind until the refetch landed.
     private static let cacheHandlerKey = "read-cache"
+    /// The other one: voice rooms are listed with who is inside before anybody
+    /// opens the server, so the rosters sent at `auth` have to land somewhere.
+    private static let occupancyHandlerKey = "voice-occupancy"
 
     private func startRealtime() async {
         guard eventTask == nil else { return }
         eventHandlers[Self.cacheHandlerKey] = { event in
             Task { await ReadCache.shared.apply(event) }
+        }
+        eventHandlers[Self.occupancyHandlerKey] = { [voiceOccupancy] event in
+            voiceOccupancy.apply(event)
         }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in
