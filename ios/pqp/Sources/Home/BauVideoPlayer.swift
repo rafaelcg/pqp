@@ -572,7 +572,6 @@ struct BauInlineVideo: View {
             // shows its cover again. Kept dismissed only when this very URL is
             // already playing (`session(for:)` returns a live session only for
             // the same URL, as in PiP or a rebuilt card) or its tap is waiting.
-            if playWhenReady != url { playWhenReady = nil }
             coverDismissed = next.isPlaying || playWhenReady == url
             next.callActive = callActive
             if cardVisible { next.cardDidAppear() }
