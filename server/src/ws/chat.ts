@@ -17,6 +17,7 @@ import {
   type ChanceRequest,
   type ChannelFanoutFrame,
   type ChatServerMessage,
+  type ForumPostSummary,
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
@@ -89,6 +90,11 @@ import {
 import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
+// --- forums ---
+import {
+  bumpForumPostActivity,
+  getForumPostSummary,
+} from "../services/forums.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
@@ -1873,6 +1879,76 @@ async function notifyChannelActivity(
   }
 }
 
+// --- forums ---
+//
+// The forum list's live rows. Every frame goes to the FORUM through
+// `broadcastToChannel`, so it crosses to the sibling instance on the channel
+// relay like any channel frame (both types are in `CHAT_SERVER_MESSAGE_TYPES`,
+// which is what lets the receiving side accept them).
+
+/** A post appeared or changed: retitled, retagged, pinned, bumped, resolved. */
+export function announceForumPostUpdate(post: ForumPostSummary): void {
+  broadcastToChannel(post.forumId, {
+    type: "forum-post-upsert",
+    forumId: post.forumId,
+    post,
+  });
+}
+
+/**
+ * A post was just published: its row for the forum's viewers, and the
+ * forum's unread dot for everyone else who can see it. The activity frame is
+ * the same content-free `channel-activity` a message sends (a server
+ * channel's frame never carries a preview), and it pings nobody: a new post
+ * records no mentions on the forum, and the opening message's own mentions
+ * already went out on the post's id.
+ */
+export async function announceForumPost(
+  post: ForumPostSummary,
+  authorId: string,
+): Promise<void> {
+  announceForumPostUpdate(post);
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: post.forumId,
+      authorId,
+      mentions: [],
+      repliedToUserId: null,
+      preview: null,
+    });
+  }
+  await notifyChannelActivity(post.forumId, authorId, [], null, {
+    webPush: false,
+  });
+}
+
+/** A post was deleted: the forum's list drops the row, an open panel closes. */
+export function announceForumPostRemoved(forumId: string, postId: string): void {
+  const frame = { type: "forum-post-removed" as const, forumId, postId };
+  broadcastToChannel(forumId, frame);
+  broadcastToChannel(postId, frame);
+}
+
+/**
+ * The bump, after a message landed in a thread channel. Never fails the send:
+ * the message is already stored and fanned out, and a list that is one reply
+ * behind until the next one is the cost of a database hiccup here.
+ */
+async function bumpForumPost(postId: string, at: Date): Promise<void> {
+  try {
+    const forumId = await bumpForumPostActivity(postId, at);
+    if (!forumId) {
+      return;
+    }
+    const summary = await getForumPostSummary(postId);
+    if (summary) {
+      announceForumPostUpdate(summary);
+    }
+  } catch (error) {
+    console.error("[forums] bump failed:", error);
+  }
+}
+
 /**
  * Make a hit's after-effects live: fan the alert post out to the channel the
  * moderators chose, and take a timed-out author out of this server's voice
@@ -2355,6 +2431,10 @@ async function postChannelMessageAttempt(
       messageId: threadInfo.rootMessageId,
       thread: threadInfo,
     });
+  } else if (threadInfo) {
+    // --- forums --- a thread with no origin message is a forum post (or a
+    // shell still waiting for this very message, which the bump skips).
+    await bumpForumPost(input.channelId, dbMessage.created_at);
   }
 
   if (url && !cacheFresh) {
