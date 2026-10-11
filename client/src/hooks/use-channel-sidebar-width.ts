@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type SidebarWidthSlot,
   channelSidebarMaxWidth,
   clampChannelSidebarWidth,
   loadChannelSidebarWidth,
@@ -25,7 +26,7 @@ export function viewportWidth(): number {
  * stored number is the person's choice and the clamp is a constraint, not a
  * second opinion.
  */
-export function useChannelSidebarWidth(): {
+export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   width: number;
   /** This window's upper bound. What the handle reports as `aria-valuemax`. */
   maxWidth: number;
@@ -34,8 +35,9 @@ export function useChannelSidebarWidth(): {
   /** Settled. Persisted. */
   commitWidth: (width: number) => void;
 } {
+  const { key, defaultWidth } = slot;
   const [width, setWidth] = useState(() =>
-    loadChannelSidebarWidth(viewportWidth()),
+    loadChannelSidebarWidth(viewportWidth(), { key, defaultWidth }),
   );
   const [maxWidth, setMaxWidth] = useState(() =>
     channelSidebarMaxWidth(viewportWidth()),
@@ -56,11 +58,14 @@ export function useChannelSidebarWidth(): {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const commitWidth = useCallback((next: number) => {
-    const clamped = clampChannelSidebarWidth(next, viewportWidth());
-    setWidth(clamped);
-    saveChannelSidebarWidth(clamped);
-  }, []);
+  const commitWidth = useCallback(
+    (next: number) => {
+      const clamped = clampChannelSidebarWidth(next, viewportWidth());
+      setWidth(clamped);
+      saveChannelSidebarWidth(clamped, { key });
+    },
+    [key],
+  );
 
   return { width, maxWidth, setWidth, commitWidth };
 }

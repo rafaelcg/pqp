@@ -46,6 +46,9 @@
   --color-on-accent: oklch(0.16 0.012 250);
 
   --color-danger: oklch(0.65 0.2 25);
+  /* A count ON the danger fill (an unread badge): white in every theme,
+     because the red is mid-luminance in both. Measured by the bench. */
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.8 0.14 85);
   --color-success: oklch(0.72 0.14 150);
 
@@ -501,6 +504,7 @@
   --color-on-accent: oklch(0.99 0 0);
 
   --color-danger: oklch(0.52 0.2 25);
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.52 0.13 75);
   --color-success: oklch(0.48 0.13 150);
 
