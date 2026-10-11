@@ -11,7 +11,7 @@ import { SOUNDBOARD_BUILTINS, type SoundboardBuiltinId } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
-import { fetchSoundboard, type SoundboardSoundDto } from "@/lib/api";
+import { type SoundboardSoundDto } from "@/lib/api";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -19,7 +19,8 @@ import {
   type SoundboardIcon,
 } from "@/lib/soundboard-icons";
 import {
-  prefetchSoundboard,
+  loadSoundboardCatalog,
+  warmSoundboardBuiltins,
   pulseSoundboardActive,
   requestSoundboardPlay,
   setSoundboardCatalogServer,
@@ -73,22 +74,18 @@ export function SoundboardControl({
       return;
     }
     let cancelled = false;
-    void prefetchSoundboard(serverId).then(() => {
-      if (cancelled) {
-        return;
+    // One catalog request fills the tiles; warming the built-in pack runs
+    // beside it and never holds them back.
+    void loadSoundboardCatalog(serverId).then((list) => {
+      if (!cancelled && list) {
+        setSounds(list);
       }
-      void fetchSoundboard(serverId)
-        .then((page) => {
-          if (!cancelled) {
-            setSounds(page.sounds);
-          }
-        })
-        .catch(() => undefined);
     });
+    void warmSoundboardBuiltins();
     return () => {
       cancelled = true;
     };
-  }, [serverId, canUse, adding]);
+  }, [serverId, canUse]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -306,11 +303,11 @@ export function SoundboardControl({
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
-          void prefetchSoundboard(serverId).then(() =>
-            fetchSoundboard(serverId)
-              .then((page) => setSounds(page.sounds))
-              .catch(() => undefined),
-          );
+          void loadSoundboardCatalog(serverId).then((list) => {
+            if (list) {
+              setSounds(list);
+            }
+          });
         }}
       />
     </>

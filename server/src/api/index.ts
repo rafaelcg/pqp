@@ -3551,7 +3551,15 @@ router.delete(
     if (!isUuid(soundId!)) {
       throw new NotFound("Sound not found");
     }
-    const removed = await deleteSoundboardSound(serverId, soundId);
+    let removed: boolean;
+    try {
+      removed = await deleteSoundboardSound(serverId, soundId);
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
     if (!removed) {
       throw new NotFound("Sound not found");
     }

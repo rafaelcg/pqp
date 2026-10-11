@@ -248,14 +248,23 @@ async function finishCleanup(keys: string[]): Promise<void> {
   for (const key of keys) {
     // A batch can take longer than one lease (each S3 call may run its full
     // timeout), so each key renews its own lease just before its delete.
-    await getPool()
+    // Only a lease still held may be renewed. If it lapsed, a claim may have
+    // taken the ticket (and the file is a saved sound now), so skip the key:
+    // the sweep finds it again if it is still due.
+    const renewed = await getPool()
       .query(
         `UPDATE soundboard_pending_uploads
             SET cleanup_until = NOW() + INTERVAL '120 seconds'
-          WHERE storage_key = $1 AND cleanup_until IS NOT NULL`,
+          WHERE storage_key = $1
+            AND cleanup_until IS NOT NULL
+            AND cleanup_until > NOW()
+        RETURNING storage_key`,
         [key],
       )
-      .catch(() => undefined);
+      .catch(() => null);
+    if (!renewed || renewed.rows.length === 0) {
+      continue;
+    }
     try {
       await deleteObject(key);
     } catch {
@@ -579,7 +588,7 @@ export async function deleteSoundboardSound(
   // With no storage configured the file cannot be removed, so keep the row
   // rather than forget a key whose object may still exist.
   if (!isStorageConfigured()) {
-    throw new Error("storage_unavailable");
+    throw new SoundboardError("storage");
   }
   await deleteObject(key);
   await getPool().query(

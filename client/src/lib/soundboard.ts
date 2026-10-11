@@ -5,7 +5,7 @@ import {
   type SoundboardSound,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
-import { fetchSoundboard } from "@/lib/api";
+import { fetchSoundboard, type SoundboardSoundDto } from "@/lib/api";
 import {
   decodeAudioBuffer,
   sharedAudioContext,
@@ -236,6 +236,17 @@ export function resetSoundboardMarksForTests(): void {
 }
 
 export async function prefetchSoundboard(serverId: string): Promise<void> {
+  await loadSoundboardCatalog(serverId);
+  await warmSoundboardBuiltins();
+}
+
+/**
+ * One catalog request: remembers the custom clips for playback and hands the
+ * list back, or null when it could not be read (the built-in pack still plays).
+ */
+export async function loadSoundboardCatalog(
+  serverId: string,
+): Promise<SoundboardSoundDto[] | null> {
   const token = (catalogTokens.get(serverId) ?? 0) + 1;
   catalogTokens.set(serverId, token);
   try {
@@ -243,9 +254,14 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
     if (catalogTokens.get(serverId) === token) {
       rememberCustom(serverId, page.sounds);
     }
+    return page.sounds;
   } catch {
-    // The board still plays the built-in pack.
+    return null;
   }
+}
+
+/** Download and decode the built-in pack. Independent of the catalog. */
+export async function warmSoundboardBuiltins(): Promise<void> {
   await Promise.all(
     SOUNDBOARD_BUILTINS.map((sound) =>
       warm(`/sounds/soundboard/${sound.file}`, sound.id),

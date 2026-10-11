@@ -207,9 +207,9 @@ describeDb("soundboard upload ledger", () => {
     const key = await upload();
     const sound = await claim(key);
     s3.unconfigured = true;
-    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toThrow(
-      "storage_unavailable",
-    );
+    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
+      code: "storage",
+    });
     s3.unconfigured = false;
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
   });
