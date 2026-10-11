@@ -102,8 +102,15 @@ sealed interface BauPreviewState {
 
 fun bauPreviewState(latest: BauLatest?, legacyUnread: Int, canPost: Boolean): BauPreviewState {
     if (latest == null) return BauPreviewState.Plain(legacyUnread)
-    val first = latest.posts.firstOrNull() ?: return BauPreviewState.Empty(canPost)
-    if (!first.isNew) return BauPreviewState.Seen(first.card)
+    val first = latest.posts.firstOrNull()
+        // Posts were sent but none decoded: say what the count says, never "empty".
+        ?: return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Empty(canPost)
+    // The server counts something new that did not survive decoding (a newer
+    // shape this build cannot read): the plain row with the count, rather
+    // than a "seen" row that hides it.
+    if (!first.isNew) {
+        return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Seen(first.card)
+    }
     val newCount = maxOf(latest.unread, latest.posts.count { it.isNew })
     val second = latest.posts.getOrNull(1)?.takeIf { it.isNew }?.card
     return BauPreviewState.Fresh(

@@ -56,6 +56,7 @@ import gg.pqp.app.core.hasPermission
 import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.ui.components.EmptyState
 import gg.pqp.app.ui.screens.channels.CategoryHeader
+import gg.pqp.app.ui.screens.channels.ChannelSection
 import gg.pqp.app.ui.screens.channels.ChannelRow
 import gg.pqp.app.ui.screens.channels.ChannelUnread
 import gg.pqp.app.ui.screens.channels.CompactBarHeight
@@ -75,7 +76,7 @@ import gg.pqp.app.ui.screens.channels.rowBadge
 import gg.pqp.app.ui.screens.channels.sectionsOf
 import gg.pqp.app.ui.screens.channels.serverActivity
 import gg.pqp.app.ui.screens.channels.serverUnread
-import gg.pqp.app.ui.screens.channels.withActivity
+import gg.pqp.app.ui.screens.channels.UnreadLedger
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
@@ -90,6 +91,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -305,16 +308,30 @@ fun ChannelsScreen(
             }
     }
 
-    // Unread per channel. Fetched on every resume, because the moment it is
-    // most wrong is coming back from a channel that was just read; the
-    // `channel-activity` frame bumps it live in between, the same arithmetic
-    // the iOS list does. A failed fetch keeps what is on screen.
+    // Unread per channel. Fetched on every resume (via [retryTick]), because
+    // the moment it is most wrong is coming back from a channel that was just
+    // read, and on every socket reconnect; retried on the socket's backoff when
+    // it fails. The `channel-activity` frame bumps it live in between, the same
+    // arithmetic the iOS list does, and [UnreadLedger] replays any frame that
+    // lands while a snapshot is in flight so the snapshot cannot erase it.
+    val unreadLedger = remember(serverId) { UnreadLedger() }
     var unread by remember(serverId) { mutableStateOf<Map<String, ChannelUnread>>(emptyMap()) }
-    LifecycleResumeEffect(serverId) {
-        val job = scope.launch {
-            runCatching { session.api.serverUnread(serverId) }.onSuccess { unread = it }
+    LaunchedEffect(serverId, retryTick) {
+        val ticket = unreadLedger.begin()
+        for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+            val snapshot = try {
+                session.api.serverUnread(serverId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (snapshot != null) {
+                unreadLedger.snapshot(ticket, snapshot)?.let { unread = it }
+                return@LaunchedEffect
+            }
+            if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
         }
-        onPauseOrDispose { job.cancel() }
     }
     LaunchedEffect(serverId) {
         session.realtime.frames.collect { frame ->
@@ -322,7 +339,7 @@ fun ChannelsScreen(
             if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
             val channelId = frame["channelId"]?.jsonPrimitive?.contentOrNull ?: return@collect
             val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false
-            unread = unread.withActivity(channelId, mention)
+            unread = unreadLedger.activity(channelId, mention)
         }
     }
 
@@ -343,16 +360,22 @@ fun ChannelsScreen(
 
     // The Baú preview. `/home/latest` when the API has it; a 404 means an
     // older API or the flag off for this server, and the screen falls back to
-    // `/home/unread` and the plain row. Fetched on every resume (opening the
-    // Baú marks it read, and coming back is what shrinks the card) and again
-    // on the `community-home-update` nudge. A failure keeps what is drawn.
+    // `/home/unread` and the plain row, going straight there for the rest of
+    // this visit. Fetched on every resume (opening the Baú marks it read, and
+    // coming back is what shrinks the card), on a reconnect, and on the
+    // `community-home-update` nudge. One refresh at a time ([bauRefresh]), so
+    // an older answer never lands after a newer one. A failure keeps what is
+    // drawn.
     var bauLatest by remember(serverId) { mutableStateOf<BauLatest?>(null) }
     var bauLegacyUnread by remember(serverId) { mutableIntStateOf(0) }
     var bauAnswered by remember(serverId) { mutableStateOf(false) }
-    suspend fun refreshBau() {
+    var bauLatestUnsupported by remember(serverId) { mutableStateOf(false) }
+    val bauRefresh = remember(serverId) { Mutex() }
+    suspend fun refreshBau() = bauRefresh.withLock {
         try {
-            val latest = session.api.bauLatest(serverId)
+            val latest = if (bauLatestUnsupported) null else session.api.bauLatest(serverId)
             if (latest == null) {
+                bauLatestUnsupported = true
                 bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
             }
             bauLatest = latest
@@ -367,9 +390,8 @@ fun ChannelsScreen(
             }
         }
     }
-    LifecycleResumeEffect(serverId, showBau) {
-        val job = if (showBau) scope.launch { refreshBau() } else null
-        onPauseOrDispose { job?.cancel() }
+    LaunchedEffect(serverId, showBau, retryTick) {
+        if (showBau) refreshBau()
     }
     LaunchedEffect(serverId, showBau) {
         if (!showBau) return@LaunchedEffect
@@ -397,6 +419,26 @@ fun ChannelsScreen(
     }
 
     val list = channels
+    // Derived from the channel list only, so a roster or unread change does
+    // not regroup and sort every channel again.
+    val sections = remember(list) { list?.let(::sectionsOf).orEmpty() }
+    // Every `watch_party` channel this server has, folded into ONE block: a
+    // live or pending party sits above everything, and the "Criar watch
+    // party" row sits at the end of the list, where creating one belongs.
+    val watchPartyBlock = remember(list, parties, liveChannels, permissions, liveHlsEnabled) {
+        watchPartyListBlock(
+            list.orEmpty().filter { it.type == "watch_party" }.map { channel ->
+                watchPartyListEntry(
+                    channelId = channel.id,
+                    channelName = channel.name,
+                    party = parties[channel.id],
+                    watching = liveChannels[channel.id]?.watching,
+                    canHost = liveHlsEnabled &&
+                        hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
+                )
+            },
+        )
+    }
     val activity = remember(list, rooms, liveChannels) {
         val ids = list.orEmpty().filter { it.isVoice }.map { it.id }
         serverActivity(
@@ -444,13 +486,12 @@ fun ChannelsScreen(
 
                 else -> channelListItems(
                     list = list,
+                    sections = sections,
+                    watchPartyBlock = watchPartyBlock,
                     showBau = showBau,
                     bauState = bauState,
                     serverId = serverId,
-                    parties = parties,
                     liveChannels = liveChannels,
-                    permissions = permissions,
-                    liveHlsEnabled = liveHlsEnabled,
                     unread = unread,
                     muted = muted,
                     folded = folded,
@@ -484,13 +525,12 @@ fun ChannelsScreen(
  */
 private fun LazyListScope.channelListItems(
     list: List<Channel>,
+    sections: List<ChannelSection>,
+    watchPartyBlock: WatchPartyListBlock,
     showBau: Boolean,
     bauState: BauPreviewState,
     serverId: String,
-    parties: Map<String, gg.pqp.app.watch.WatchPartyPayload>,
     liveChannels: Map<String, gg.pqp.app.watch.ChannelLive>,
-    permissions: PermissionsSnapshot,
-    liveHlsEnabled: Boolean,
     unread: Map<String, ChannelUnread>,
     muted: Set<String>,
     folded: Set<String>,
@@ -503,22 +543,6 @@ private fun LazyListScope.channelListItems(
     onOpenBau: () -> Unit,
     onToggleCategory: (String) -> Unit,
 ) {
-    val sections = sectionsOf(list)
-    // Every `watch_party` channel this server has, folded into ONE block: a
-    // live or pending party sits above everything, and the "Criar watch
-    // party" row sits at the end of the list, where creating one belongs.
-    val watchPartyBlock = watchPartyListBlock(
-        list.filter { it.type == "watch_party" }.map { channel ->
-            watchPartyListEntry(
-                channelId = channel.id,
-                channelName = channel.name,
-                party = parties[channel.id],
-                watching = liveChannels[channel.id]?.watching,
-                canHost = liveHlsEnabled &&
-                    hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
-            )
-        },
-    )
     val openById: (String) -> Unit = { id -> list.firstOrNull { it.id == id }?.let(onOpenChannel) }
 
     if (watchPartyBlock !is WatchPartyListBlock.None && watchPartyBlock !is WatchPartyListBlock.Host) {

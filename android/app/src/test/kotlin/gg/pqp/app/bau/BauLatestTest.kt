@@ -105,6 +105,14 @@ class BauLatestTest {
     }
 
     @Test
+    fun `an unread count with no decodable new post keeps the count instead of hiding it`() {
+        val oldOnly = parse("""{"unread":2,"posts":[${card("p1", "A", false)}]}""")
+        assertEquals(BauPreviewState.Plain(2), bauPreviewState(oldOnly, 0, canPost = false))
+        val none = BauLatest(unread = 1, lastSeenAt = null, posts = emptyList())
+        assertEquals(BauPreviewState.Plain(1), bauPreviewState(none, 0, canPost = true))
+    }
+
+    @Test
     fun `the thumbnail never pulls a frame out of a video`() {
         fun c(kind: String?, url: String?, locked: Boolean = false) =
             BauPostCard(postId = "p", serverId = s, mediaKind = kind, mediaUrl = url, locked = locked)

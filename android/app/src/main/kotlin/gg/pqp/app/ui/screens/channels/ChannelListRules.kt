@@ -42,6 +42,46 @@ fun Map<String, ChannelUnread>.withActivity(
     return this + (channelId to next)
 }
 
+/**
+ * The unread map, kept right while a snapshot is in flight.
+ *
+ * A `channel-activity` frame that lands between the moment
+ * `GET /unread` is asked and the moment it answers is not in that answer,
+ * so the answer would erase it. The ledger remembers every frame since the
+ * newest request started and replays them over the snapshot; a snapshot from
+ * an older request than the newest is dropped. Confined to one thread (the
+ * screen's effects run on the main dispatcher).
+ */
+class UnreadLedger {
+    private var generation = 0
+    private val since = mutableListOf<Pair<String, Boolean>>()
+
+    var current: Map<String, ChannelUnread> = emptyMap()
+        private set
+
+    /** A request is about to start; returns its ticket. */
+    fun begin(): Int {
+        since.clear()
+        return ++generation
+    }
+
+    fun activity(channelId: String, mention: Boolean): Map<String, ChannelUnread> {
+        since += channelId to mention
+        current = current.withActivity(channelId, mention)
+        return current
+    }
+
+    /** The request holding [ticket] answered. Null when a newer one has started since. */
+    fun snapshot(ticket: Int, snapshot: Map<String, ChannelUnread>): Map<String, ChannelUnread>? {
+        if (ticket != generation) return null
+        var next = snapshot
+        since.forEach { (channelId, mention) -> next = next.withActivity(channelId, mention) }
+        since.clear()
+        current = next
+        return next
+    }
+}
+
 /** How a channel row reads. */
 enum class RowEmphasis {
     /** Nothing new. */

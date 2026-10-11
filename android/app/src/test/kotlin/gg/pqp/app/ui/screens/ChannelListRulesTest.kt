@@ -6,6 +6,7 @@ import gg.pqp.app.ui.screens.channels.ChannelUnread
 import gg.pqp.app.ui.screens.channels.FoldedSummary
 import gg.pqp.app.ui.screens.channels.RowEmphasis
 import gg.pqp.app.ui.screens.channels.ServerActivity
+import gg.pqp.app.ui.screens.channels.UnreadLedger
 import gg.pqp.app.ui.screens.channels.channelsInCategory
 import gg.pqp.app.ui.screens.channels.foldedSummary
 import gg.pqp.app.ui.screens.channels.mutedChannelIds
@@ -33,6 +34,27 @@ class ChannelListRulesTest {
         val next = start.withActivity("a", mention = false).withActivity("b", mention = true)
         assertEquals(ChannelUnread("a", 3, 1), next["a"])
         assertEquals(ChannelUnread("b", 1, 1), next["b"])
+    }
+
+    @Test
+    fun `a snapshot in flight cannot erase activity that arrived meanwhile`() {
+        val ledger = UnreadLedger()
+        val ticket = ledger.begin()
+        ledger.activity("a", mention = true)
+        val after = ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 2, 0)))
+        assertEquals(ChannelUnread("a", 3, 1), after?.get("a"))
+        // The next snapshot starts clean: the replayed frame is not counted twice.
+        val next = ledger.begin()
+        assertEquals(ChannelUnread("a", 3, 1), ledger.snapshot(next, mapOf("a" to ChannelUnread("a", 3, 1)))?.get("a"))
+    }
+
+    @Test
+    fun `an older snapshot is dropped once a newer request started`() {
+        val ledger = UnreadLedger()
+        val old = ledger.begin()
+        val fresh = ledger.begin()
+        assertEquals(null, ledger.snapshot(old, mapOf("a" to ChannelUnread("a", 9, 0))))
+        assertEquals(1, ledger.snapshot(fresh, mapOf("a" to ChannelUnread("a", 1, 0)))?.get("a")?.count)
     }
 
     @Test
