@@ -280,15 +280,26 @@ jobs:
           else
             # A rerun. `--clobber` would delete the published bundle before
             # the upload, and a failed upload would leave the release without
-            # one. Upload beside it, then swap the names.
+            # one. Upload beside it, then swap the names; the old file is only
+            # deleted once the new one carries the name.
+            rename() { gh api -X PATCH "${api}/assets/$1" -f name="$2" > /dev/null; }
             staged="$RUNNER_TEMP/staged/${NAME}.new"
             mkdir -p "$(dirname "$staged")"
             cp "$file" "$staged"
             # --clobber here only replaces a .new left by an earlier failed run.
             gh release upload "$TAG" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
             staged_id=$(asset_id "${NAME}.new")
+            leftover=$(asset_id "${NAME}.old")
+            if [ -n "$leftover" ]; then
+              gh api -X DELETE "${api}/assets/${leftover}"
+            fi
+            rename "$existing" "${NAME}.old"
+            if ! rename "$staged_id" "$NAME"; then
+              rename "$existing" "$NAME"
+              echo "::error::could not rename ${NAME}.new; the previous bundle is back in place"
+              exit 1
+            fi
             gh api -X DELETE "${api}/assets/${existing}"
-            gh api -X PATCH "${api}/assets/${staged_id}" -f name="$NAME" > /dev/null
           fi
           {
             echo "### Flatpak bundle"
