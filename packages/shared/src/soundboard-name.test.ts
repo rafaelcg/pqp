@@ -70,4 +70,12 @@ describe("soundboard clip names", () => {
     expect(soundboardNameSchema.parse("  Buzina  ")).toBe("Buzina");
     expect(soundboardNameSchema.safeParse("  a  ").success).toBe(false);
   });
+
+  it("refuses separators and the rarer format controls", () => {
+    // Line and paragraph separators, deprecated format controls, the
+    // interlinear annotation marks and the shorthand format controls.
+    for (const hidden of ["\u2028", "\u2029", "\u206A", "\u206F", "\uFFF9", "\u{1BCA0}"]) {
+      expect(soundboardNameProblem(`ab${hidden}cd`), JSON.stringify(hidden)).toBe("hidden");
+    }
+  });
 });

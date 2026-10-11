@@ -126,7 +126,7 @@ export const soundboardEmojiSchema = z
 // A combining mark and the tag characters in one class are the point: all hidden.
 const HIDDEN_NAME_CHARS =
   // eslint-disable-next-line no-misleading-character-class
-  /[\p{Cc}\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u2800\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}]/u;
+  /[\p{Cc}\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B\u200C\u200E\u200F\u202A-\u202E\u2028\u2029\u2060-\u2064\u2066-\u206F\u2800\u3164\uFEFF\uFFA0\uFFF9-\uFFFB\u{1BCA0}-\u{1BCA3}\u{E0000}-\u{E007F}]/u;
 
 /**
  * A clip name, counted the way Postgres's `char_length` counts it (code

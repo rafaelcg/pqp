@@ -193,7 +193,14 @@ describeDb("soundboard management audit rows", () => {
     expect((await call(owner, "PATCH", path, { volume: 0.3 })).status).toBe(200);
     expect((await call(owner, "PATCH", path, { volume: 0.3 })).status).toBe(200);
     expect(await audit("soundboard.update")).toEqual([
-      { action: "soundboard.update", changes: [{ key: "volume", old: 1, new: 0.3 }] },
+      {
+        action: "soundboard.update",
+        // A volume-only edit still names the clip it was made to.
+        changes: [
+          { key: "clip", old: null, new: "steady" },
+          { key: "volume", old: 1, new: 0.3 },
+        ],
+      },
     ]);
   });
 });
