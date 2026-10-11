@@ -1503,20 +1503,30 @@ export async function listUnread(serverId: string, userId: string) {
     count: string;
     mentions: string;
   }>(
-    `-- The viewer's mentions inside forum posts, read FIRST and on their own
-     -- (MATERIALIZED), so the forum roll-up below is driven by the viewer's
-     -- mention rows (idx_message_mentions_user) and never by the posts. Left
-     -- to the planner, the grouped join was happy to start from a forum's
-     -- posts and walk every message in them instead.
+    `-- The forum roll-up below must be driven by the viewer's mention rows
+     -- (idx_message_mentions_user), never by the posts. Written as a plain
+     -- join, the planner was free to start from this server's forums and walk
+     -- every message in every post (11k to 32k buffers at 500 posts). So the
+     -- viewer's mention ids come first, alone (keyed by user, which is the
+     -- index there is), and each one is then resolved by primary key through
+     -- a LATERAL, which leaves the planner no other order: a message, its
+     -- post, and whether that post's forum is in this server.
      WITH my_post_mentions AS MATERIALIZED (
-       SELECT fp.forum_id, fp.channel_id AS post_id, m.created_at
+       SELECT hit.forum_id, hit.post_id, hit.created_at
          FROM message_mentions mm
-         JOIN messages m ON m.id = mm.message_id
-         JOIN forum_posts fp ON fp.channel_id = m.channel_id
+         CROSS JOIN LATERAL (
+           SELECT fp.forum_id, fp.channel_id AS post_id, m.created_at
+             FROM messages m
+             JOIN forum_posts fp ON fp.channel_id = m.channel_id
+            WHERE m.id = mm.message_id
+              AND m.author_id <> $2
+              AND fp.published_at IS NOT NULL
+              AND ${notBlockedSql("$2", "m.author_id")}
+              AND EXISTS (
+                SELECT 1 FROM channels f WHERE f.id = fp.forum_id AND f.server_id = $1
+              )
+         ) hit
         WHERE mm.user_id = $2
-          AND m.author_id <> $2
-          AND fp.published_at IS NOT NULL
-          AND ${notBlockedSql("$2", "m.author_id")}
      )
      SELECT c.id AS channel_id,
             COUNT(m.id)::text AS count,
