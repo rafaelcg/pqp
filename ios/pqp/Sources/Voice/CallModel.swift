@@ -494,6 +494,11 @@ final class CallModel {
     private func applySelf(_ participant: VoiceParticipant) {
         let wasServerMuted = isServerMuted
         isServerMuted = participant.serverMuted
+        // Before the mute below, so the room already knows the mute is a
+        // moderator's when it decides what that mute does to a share's sound.
+        // A no-op on mesh and when nothing changed.
+        let serverMuted = participant.serverMuted
+        Task { await sfu.setSelfServerMuted(serverMuted) }
         guard participant.serverMuted, !wasServerMuted else { return }
         isMuted = ServerMute.selfMuted(currentlyMuted: isMuted, serverMuted: true)
     }

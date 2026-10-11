@@ -240,8 +240,8 @@ let sfuLargeRoomScreenHeight = 720
 let sfuLargeRoomScreenBitrate = 1_500_000
 
 /// What `auto` asks a screen capture for, in lines. The web's
-/// `SCREEN_CAPTURE_HEIGHT`; on a phone the bridge already caps the long
-/// side at `ScreenShareWire.maxLongSide`, so this is a ceiling the capture
+/// `SCREEN_CAPTURE_HEIGHT`; on a phone the bridge already holds the short
+/// side at `ScreenShareWire.maxShortSide`, so this is a ceiling the capture
 /// rarely reaches rather than a size it is scaled up to.
 let sfuScreenCaptureHeight = 1080
 

@@ -8220,6 +8220,36 @@
           }
         }
       }
+    },
+    "Share screen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartilhar tela"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parar"
+          }
+        }
+      }
+    },
+    "Presenting the picture only, without sound" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apresentando só a imagem, sem o som"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
