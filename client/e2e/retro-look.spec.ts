@@ -66,20 +66,26 @@ async function befriend(a: string, aId: string, b: string, bId: string) {
 /** A socket that keeps somebody online for as long as it is open. */
 async function online(suffix: string): Promise<WebSocket> {
   const socket = new WebSocket(WS_URL);
-  await new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve());
-    socket.addEventListener("error", () => reject(new Error("ws error")));
-  });
-  const ready = new Promise<void>((resolve) => {
-    socket.addEventListener("message", (event) => {
-      if ((JSON.parse(String(event.data)) as { type: string }).type === "ready") {
-        resolve();
-      }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("ws error")));
     });
-  });
-  socket.send(JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }));
-  await ready;
-  return socket;
+    const ready = new Promise<void>((resolve, reject) => {
+      socket.addEventListener("message", (event) => {
+        if ((JSON.parse(String(event.data)) as { type: string }).type === "ready") {
+          resolve();
+        }
+      });
+      socket.addEventListener("close", () => reject(new Error("ws closed before ready")));
+    });
+    socket.send(JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }));
+    await ready;
+    return socket;
+  } catch (error) {
+    socket.close();
+    throw error;
+  }
 }
 
 async function messageBodies(suffix: string, channelId: string): Promise<string[]> {
@@ -145,10 +151,13 @@ test("/2005 turns Modo 2005 on, never sends, and /2005 turns it off", async ({
   ).json()) as { conversation: { channelId: string } };
   const channelId = conversation.channelId;
 
-  const luSocket = await online(lu);
-  const gugaSocket = await online(guga);
-  const anaSocket = await online(ana);
+  const sockets: WebSocket[] = [];
   try {
+    const luSocket = await online(lu);
+    sockets.push(luSocket);
+    sockets.push(await online(guga));
+    const anaSocket = await online(ana);
+    sockets.push(anaSocket);
     await send(luSocket, lu, channelId, "oiii");
     await send(anaSocket, ana, channelId, "calma kkkk tava pegando água :)");
     await send(luSocket, lu, channelId, "vai jogar hj?? (H)");
@@ -209,9 +218,7 @@ test("/2005 turns Modo 2005 on, never sends, and /2005 turns it off", async ({
     expect(await messageBodies(ana, channelId)).not.toContain("/2005");
     await context.close();
   } finally {
-    luSocket.close();
-    gugaSocket.close();
-    anaSocket.close();
+    for (const socket of sockets) socket.close();
   }
 });
 

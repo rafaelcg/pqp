@@ -74,6 +74,8 @@ export interface RetroState {
 
 const listeners = new Set<() => void>();
 let foundCardPending = false;
+let soundsOverride: boolean | null = null;
+let toastsOverride: boolean | null = null;
 let snapshot: RetroState = buildSnapshot();
 
 function buildSnapshot(): RetroState {
@@ -81,8 +83,8 @@ function buildSnapshot(): RetroState {
     foundAt: read(RETRO_FOUND_KEY),
     available: isRetroLookAvailable(),
     on: isRetroLookOn(),
-    sounds: read(RETRO_SOUNDS_KEY) !== "0",
-    toasts: read(RETRO_TOASTS_KEY) !== "0",
+    sounds: soundsOverride ?? read(RETRO_SOUNDS_KEY) !== "0",
+    toasts: toastsOverride ?? read(RETRO_TOASTS_KEY) !== "0",
     foundCardPending,
   };
 }
@@ -126,11 +128,15 @@ export function isRetroNew(
 }
 
 export function setRetroSounds(on: boolean): void {
+  // Held in memory too, so the switch sticks for this page even when the
+  // browser refuses the write (private mode, full storage).
+  soundsOverride = on;
   write(RETRO_SOUNDS_KEY, on ? null : "0");
   changed();
 }
 
 export function setRetroToasts(on: boolean): void {
+  toastsOverride = on;
   write(RETRO_TOASTS_KEY, on ? null : "0");
   changed();
 }
@@ -167,6 +173,8 @@ export function useRetroState(): RetroState {
 // ------------------------------------------------------------ kill switch
 
 let probe: Promise<boolean> | null = null;
+/** Bumped per request: only the newest answer may move the switch. */
+let probeGeneration = 0;
 
 async function askServer(): Promise<boolean> {
   try {
@@ -184,11 +192,18 @@ async function askServer(): Promise<boolean> {
 
 /** Ask once per page (and again on every config refresh pass). */
 export function ensureRetroLookFlag(): Promise<boolean> {
-  probe ??= askServer().then((available) => {
-    setRetroLookAvailable(available);
-    changed();
-    return available;
-  });
+  if (!probe) {
+    const generation = ++probeGeneration;
+    probe = askServer().then((available) => {
+      // A slower, older answer must not undo a newer one.
+      if (generation !== probeGeneration) {
+        return isRetroLookAvailable();
+      }
+      setRetroLookAvailable(available);
+      changed();
+      return available;
+    });
+  }
   return probe;
 }
 
@@ -271,8 +286,19 @@ async function switchWithTransition(update: () => void): Promise<void> {
 
 export type RetroToggleResult = "found" | "on" | "off" | "unavailable";
 
-/** `/2005` and the Konami code. Same toggle, same card on the first find. */
-export async function toggleRetroLook(): Promise<RetroToggleResult> {
+let toggling: Promise<RetroToggleResult> = Promise.resolve("off");
+
+/**
+ * `/2005` and the Konami code. Same toggle, same card on the first find.
+ * Serialized: a second toggle while the first is still fetching the chunk
+ * waits for it, so two quick toggles land on and then off, not on twice.
+ */
+export function toggleRetroLook(): Promise<RetroToggleResult> {
+  toggling = toggling.catch(() => "off" as const).then(toggleOnce);
+  return toggling;
+}
+
+async function toggleOnce(): Promise<RetroToggleResult> {
   const available = await ensureRetroLookFlag();
   if (!available) {
     return "unavailable";
@@ -316,6 +342,9 @@ export function retroStatusKey(status: UserStatus | "invisible"): MessageKey {
 /** Tests only. */
 export function resetRetroLookForTests(): void {
   probe = null;
+  toggling = Promise.resolve("off");
+  soundsOverride = null;
+  toastsOverride = null;
   foundCardPending = false;
   snapshot = buildSnapshot();
 }

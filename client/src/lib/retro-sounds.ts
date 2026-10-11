@@ -28,6 +28,11 @@ function bus(ctx: AudioContext, destination: AudioNode, volume: number): GainNod
   return out;
 }
 
+/** Unplug the cue's bus once its last source has stopped, so nothing piles up. */
+function releaseAfter(last: OscillatorNode, out: GainNode): void {
+  last.onended = () => out.disconnect();
+}
+
 /**
  * "Acabou de entrar": two marimba-like notes, A5 then E6 90 ms later. A sine
  * plus a quick fourth partial for the mallet.
@@ -35,6 +40,7 @@ function bus(ctx: AudioContext, destination: AudioNode, volume: number): GainNod
 export const friendOnlineSynth: SynthCue = (ctx, destination) => {
   const t = ctx.currentTime;
   const out = bus(ctx, destination, 0.35);
+  let last: OscillatorNode | null = null;
   for (const [frequency, delay] of [
     [880, 0],
     [1318.5, 0.09],
@@ -55,6 +61,10 @@ export const friendOnlineSynth: SynthCue = (ctx, destination) => {
     partial.start(t + delay);
     tone.stop(t + delay + 0.7);
     partial.stop(t + delay + 0.1);
+    last = tone;
+  }
+  if (last) {
+    releaseAfter(last, out);
   }
 };
 
@@ -79,4 +89,5 @@ export const messageSynth: SynthCue = (ctx, destination) => {
   tick.connect(tickGain).connect(out);
   tick.start(t + 0.07);
   tick.stop(t + 0.2);
+  releaseAfter(tick, out);
 };

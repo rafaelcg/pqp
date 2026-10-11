@@ -11,7 +11,7 @@ vi.mock("./api", async () => {
 });
 
 import { ApiError } from "./api";
-import { getLook, reloadRetroLookForTests, setRetroLook } from "./appearance";
+import { getLook, reloadRetroLookForTests, setRetroLook, setRetroLookAvailable } from "./appearance";
 import { queuePreferenceSync } from "./preferences";
 import {
   RETRO_FOUND_KEY,
@@ -20,8 +20,10 @@ import {
   isRetroOffered,
   resetRetroLookForTests,
   setRetroChunkLoaderForTests,
+  startRetroLookFlag,
   toggleRetroLook,
 } from "./retro-look";
+import { requestConfigRefresh } from "./config-refresh";
 import { executeSlashCommand, listSlashCommands } from "./slash-commands";
 
 const store = new Map<string, string>();
@@ -61,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setRetroLook(false);
+  setRetroLookAvailable(true);
   vi.unstubAllGlobals();
 });
 
@@ -110,6 +113,37 @@ describe("discovery", () => {
     expect(getLook()).not.toBe("retro");
     expect(store.has(RETRO_FOUND_KEY)).toBe(false);
     expect(ctx.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("two quick toggles land on and then off, not on twice", async () => {
+    apiFetch.mockResolvedValue({ retroLook: true });
+    let release: () => void = () => {};
+    setRetroChunkLoaderForTests(
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    const first = toggleRetroLook();
+    const second = toggleRetroLook();
+    await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
+    release();
+    expect(await first).toBe("found");
+    expect(await second).toBe("off");
+    expect(getLook()).not.toBe("retro");
+  });
+
+  it("an older kill-switch answer never overrides a newer one", async () => {
+    store.set(RETRO_FOUND_KEY, "2026-10-01T00:00:00.000Z");
+    let answerOld: (value: unknown) => void = () => {};
+    apiFetch
+      .mockImplementationOnce(() => new Promise((resolve) => (answerOld = resolve)))
+      .mockResolvedValueOnce({ retroLook: false });
+    const stop = startRetroLookFlag();
+    requestConfigRefresh({ force: true });
+    await vi.waitFor(() => expect(getRetroState().available).toBe(false));
+    answerOld({ retroLook: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getRetroState().available).toBe(false);
+    stop();
   });
 
   it("a server without the route counts as switched on", async () => {
