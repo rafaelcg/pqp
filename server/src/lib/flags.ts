@@ -591,6 +591,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/dms/config (phoneTabs)",
   },
+  forum_channels: {
+    description:
+      "Canais fórum: posts com título, tags e respostas, em vez de um chat corrido (desligado: ninguém cria fórum nem post novo; o que já existe continua aberto pra ler e responder).",
+    env: "FORUM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody once the web and
+    // the phones handle forums. See docs/plans/FORUM_CHANNELS.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the forum routes from a channel, and the client asks
+    // `GET /api/forum/config?serverId=`. The Discord import is the exception
+    // (a new server has no override yet) and asks without one: global only.
+    perServer: true,
+    clientVia: "GET /api/forum/config?serverId= (enabled)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

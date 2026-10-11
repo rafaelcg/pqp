@@ -87,6 +87,12 @@ enum class MessageRejectReason(val wire: String) {
      * wait-shaped in `hold()`.
      */
     DatabaseUnavailable("database-unavailable"),
+    /**
+     * A reply in a forum post that staff closed. Android draws no forum yet
+     * (posts arrive with forum PR 7), so today this only gives the line its
+     * own sentence instead of "failed to send".
+     */
+    Locked("locked"),
     ;
 
     companion object {
