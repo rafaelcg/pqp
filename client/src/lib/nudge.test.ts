@@ -161,6 +161,15 @@ describe("handleNudgeRefused", () => {
     });
   });
 
+  it("an answer arriving after the button was let go changes nothing", () => {
+    vi.useFakeTimers();
+    const sent: Array<{ nonce: string }> = [];
+    sendNudge(CHANNEL, { send: (frame) => sent.push(frame), connected: true });
+    vi.advanceTimersByTime(NUDGE_PENDING_TIMEOUT_MS);
+    handleNudgeRefused({ channelId: CHANNEL, reason: "busy", nonce: sent[0]!.nonce });
+    expect(getNudgeChannelState(CHANNEL)).toMatchObject({ pending: false, notice: null });
+  });
+
   it("a cooldown with no wait in it falls back to the rule's ten seconds", () => {
     handleNudgeRefused({ channelId: CHANNEL, reason: "cooldown" }, NOW);
     expect(getNudgeChannelState(CHANNEL).cooldownUntil).toBe(NOW + NUDGE_COOLDOWN_MS);

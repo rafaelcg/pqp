@@ -341,9 +341,11 @@ export interface NudgeRefusedFrame {
 /** The server said no. */
 export function handleNudgeRefused(frame: NudgeRefusedFrame, now: number = Date.now()): void {
   const inFlight = pendingNonces.get(frame.channelId);
-  // An answer to an older request (one that timed out before this arrived)
-  // must not settle, or speak over, the request that is in flight now.
-  if (frame.nonce && inFlight && inFlight !== frame.nonce) {
+  // An answer to a request this tab is no longer waiting for (it timed out,
+  // or a newer one is in flight) must not settle or speak over anything: the
+  // person already got their button back. Only an answer without a nonce
+  // (another client's) or to the request in flight counts.
+  if (frame.nonce && inFlight !== frame.nonce) {
     return;
   }
   pendingNonces.delete(frame.channelId);
