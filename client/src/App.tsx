@@ -11661,6 +11661,7 @@ function MainAppContent({
                 }
               : undefined
           }
+          footer={sidebarFooter(false, { userPanel: false })}
         />
       )}
       {phoneShell && phoneTab === "tu" && (
