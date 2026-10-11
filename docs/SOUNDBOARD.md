@@ -126,14 +126,47 @@ Muting one person is in their audio menu (click them under the voice
 channel or on the stage): "Soundboard" turns their clips off for you only,
 sound and mark both. Discord has only the global slider.
 
+The call bar button is the party popper icon. The waveform it used before
+is the "speaking" mark elsewhere in the call. Watch party and onboarding use
+the same icon, but only outside a call.
+
 In the panel the arrow keys move between clips, Home and End jump to the
-ends, and Tab moves on to the mute, the volume and Add. A custom clip's
-full name shows in a tooltip on hover and focus, since a long name is cut
-to two lines on the tile. At 24 of 24 the Add button stays focusable and
-its tooltip says the board is full. When a lock arrives (deafened, a
-moderator mute) while focus is in the panel, the panel closes and focus
-returns to the call bar button. Muting the board shows a small muted mark
-on that button, and its name says so.
+ends, and Tab moves on to the mute, the volume and Add. The arrows step by
+the number of columns the grid draws, which is one number for both. A custom
+clip's full name shows in a tooltip on hover and focus, since a long name is
+cut to two lines on the tile. At 24 of 24 the Add button stays focusable and
+its tooltip says the board is full. The count reads "21 of 24 sounds"; the
+noun agrees with the maximum, so it is plural-aware on that number. The
+footer wraps, so the volume slider keeps at least seven rem. When a lock
+arrives (deafened, a moderator mute) while focus is in the panel, the panel
+closes and focus returns to the call bar button. Muting the board shows a
+small muted mark on that button, and its name says so.
+
+A locked button is an outline with a small lock badge. It keeps the
+secondary text colour, because a dimmed icon measured 3.0:1 in the light
+theme. It stays focusable (`aria-disabled`). A tap or Enter on it shows the
+reason in a small note above the button, with the same text the tooltip uses.
+The note goes after four seconds, on a tap anywhere else, on Escape, or on a
+second tap on the button. It never takes focus. A tooltip is inert on touch,
+so this note is the only place a phone shows the reason.
+
+On a phone the board is a sheet, not the 280px popover. The sheet is used when
+the window is under 640px wide or under 520px tall. The height half is what
+catches a phone on its side, which is wide but short. The sheet sits above the
+call bar, not over it, so the mic and the other controls stay usable. It is up
+to 640px wide, with as many columns as fit tiles at least 76px wide (up to
+six), and has a close button. Tapping outside it also closes it. On a larger
+window the board stays the popover, anchored to the button, with three
+columns. Both measure their natural height each time the window changes, so a
+panel placed in a short window grows back when the window gets taller.
+
+On a coarse pointer, and always in the sheet, the mute button, the volume
+slider's hit area and Add are at least 40px. The drawn slider track and thumb
+do not change.
+
+The "didn't play" notice is a soft warning fill with a small alert icon. Its
+text uses the soft warning text token, which the design bench measures at 4.5:1
+in every theme. It does not rely on colour alone.
 
 A play lights that person's row under the voice channel, and the same
 icon on their tile when the stage is up. It lasts a couple of seconds.

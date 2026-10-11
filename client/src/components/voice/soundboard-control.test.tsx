@@ -281,6 +281,25 @@ describe("holding a key or mashing the board", () => {
     expect(status.textContent).not.toBe("");
   });
 
+  it("is readable in the light theme and does not rely on colour alone", () => {
+    mount();
+    open();
+    act(() => {
+      for (let i = 0; i < 6; i += 1) {
+        tiles()[0]!.click();
+      }
+    });
+    const status = panel()!.querySelector("[role='status']")!;
+    // The soft warning pair is the one the bench measures at 4.5:1; the bare
+    // warning colour is a 3:1 token for fills and icons, and was 4.45:1 as text.
+    expect(status.className).toContain("bg-warning-soft");
+    expect(status.className).toContain("text-on-warning-soft");
+    expect(status.className).not.toMatch(/(^| )text-warning/);
+    const icon = status.querySelector("svg")!;
+    expect(icon).not.toBeNull();
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("keeps the panel's layout when the notice shows: it takes the title's line", () => {
     mount();
     open();
@@ -291,7 +310,7 @@ describe("holding a key or mashing the board", () => {
     });
     const status = panel()!.querySelector("[role='status']")!;
     expect(status.className).toContain("absolute");
-    expect(status.className).toContain("truncate");
+    expect(status.querySelector(".truncate")).not.toBeNull();
   });
 });
 
@@ -391,10 +410,26 @@ describe("the trigger's name", () => {
     expect(trigger().hasAttribute("aria-disabled")).toBe(false);
   });
 
-  it("dims a locked trigger to the design system's disabled opacity", () => {
+  it("shows a locked trigger as an outline with a lock badge, not a dimmed icon", () => {
     mount("serverMuted");
-    expect(trigger().className).toContain("opacity-40");
-    expect(trigger().className).not.toContain("opacity-50");
+    const className = trigger().className;
+    // An icon at 40% opacity measured 3.0:1 in the light theme.
+    expect(className).not.toMatch(/(^| )opacity-/);
+    expect(className).toContain("text-text-secondary");
+    const badge = host!.querySelector("[data-soundboard-lock-badge]")!;
+    expect(badge).not.toBeNull();
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
+    expect(badge.querySelector("svg")).not.toBeNull();
+
+    render(null);
+    expect(host!.querySelector("[data-soundboard-lock-badge]")).toBeNull();
+  });
+
+  it("does not use the waveform that means somebody is speaking", () => {
+    mount();
+    const svg = trigger().querySelector("svg")!;
+    expect(svg.getAttribute("class")).toContain("lucide-party-popper");
+    expect(svg.getAttribute("class")).not.toContain("lucide-audio-lines");
   });
 
   it("shows a muted badge on the closed trigger and puts it in the name", () => {
@@ -607,5 +642,265 @@ describe("Add when the board is full", () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(panel()!.querySelector("[aria-disabled='true']")).toBeNull();
+  });
+});
+
+function stubViewport(width: number, height: number, sheet: boolean) {
+  vi.stubGlobal("innerWidth", width);
+  vi.stubGlobal("innerHeight", height);
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    media: query,
+    matches: sheet && query.includes("max-width: 639px"),
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
+}
+
+function lockHint(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-soundboard-lock-hint]");
+}
+
+describe("why a locked button does nothing, on a screen with no hover", () => {
+  it("says the reason when the button is tapped, and the button stays focusable", () => {
+    mount("deafened");
+    expect(lockHint()).toBeNull();
+    act(() => trigger().click());
+    expect(lockHint()).not.toBeNull();
+    // The visible reason is the one the accessible name ends with.
+    expect(accessibleName(trigger()).endsWith(lockHint()!.textContent!)).toBe(true);
+    expect(trigger().getAttribute("aria-disabled")).toBe("true");
+    expect(panel()).toBeNull();
+    // Reading it never moves focus off the button.
+    act(() => trigger().focus());
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("names the lock that is in force", () => {
+    mount("serverMuted");
+    act(() => trigger().click());
+    const first = lockHint()!.textContent;
+    render("micLocked");
+    expect(lockHint()!.textContent).not.toBe(first);
+  });
+
+  it("goes after a few seconds", () => {
+    mount("audience");
+    act(() => trigger().click());
+    expect(lockHint()).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(lockHint()).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(lockHint()).toBeNull();
+  });
+
+  it("goes on a tap anywhere else, on Escape, and on a second tap on the button", () => {
+    mount("audience");
+    act(() => trigger().click());
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(lockHint()).toBeNull();
+
+    act(() => trigger().click());
+    act(() => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(lockHint()).toBeNull();
+
+    act(() => trigger().click());
+    press("Escape");
+    expect(lockHint()).toBeNull();
+
+    // The button itself is not "outside": a tap on it toggles, never re-opens.
+    act(() => trigger().click());
+    act(() => {
+      trigger().dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(lockHint()).not.toBeNull();
+    act(() => trigger().click());
+    expect(lockHint()).toBeNull();
+  });
+
+  it("is gone when the lock lifts", () => {
+    mount("audience");
+    act(() => trigger().click());
+    render(null);
+    expect(lockHint()).toBeNull();
+  });
+});
+
+describe("the board on a phone", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is an anchored popover on a desktop-sized window", () => {
+    stubViewport(1280, 800, false);
+    mount();
+    open();
+    expect(panel()!.getAttribute("data-presentation")).toBe("popover");
+    expect(panel()!.querySelector("[data-soundboard-close]")).toBeNull();
+    expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
+      "repeat(3, minmax(0, 1fr))",
+    );
+  });
+
+  it("is a sheet on a narrow window, with more columns and a close button", () => {
+    stubViewport(390, 664, true);
+    mount();
+    open();
+    expect(panel()!.getAttribute("data-presentation")).toBe("sheet");
+    expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
+      "repeat(4, minmax(0, 1fr))",
+    );
+    const close = panel()!.querySelector<HTMLButtonElement>("[data-soundboard-close]")!;
+    expect(close.className).toContain("h-10");
+    act(() => close.click());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("is a sheet in landscape, where the window is wide but short", () => {
+    vi.stubGlobal("innerWidth", 750);
+    vi.stubGlobal("innerHeight", 342);
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      media: query,
+      matches: query.includes("max-height: 520px"),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    mount();
+    open();
+    expect(panel()!.getAttribute("data-presentation")).toBe("sheet");
+    expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
+      "repeat(6, minmax(0, 1fr))",
+    );
+  });
+
+  it("steps the arrow keys by the columns it draws", () => {
+    stubViewport(390, 664, true);
+    mount();
+    open();
+    const all = tiles();
+    expect(document.activeElement).toBe(all[0]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(all[4]);
+    press("ArrowUp");
+    expect(document.activeElement).toBe(all[0]);
+  });
+
+  it("fits a 280px screen without leaving it", () => {
+    stubViewport(280, 568, true);
+    mount();
+    open();
+    const style = panel()!.style;
+    const left = Number.parseFloat(style.left);
+    const width = Number.parseFloat(style.width);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left + width).toBeLessThanOrEqual(280 - 8);
+  });
+
+  it("gives the mute button, the slider and Add a thumb-sized target", async () => {
+    stubViewport(390, 664, true);
+    mount(null, true);
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    const mute = panel()!.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+    const add = buttonsNamed(panel()!, /^(add|adicionar|añadir|agregar)$/i)[0]!;
+    const slider = panel()!.querySelector<HTMLElement>("[data-slider='volume']")!;
+    expect(mute.className).toContain("h-10 w-10");
+    expect(add.className).toContain("h-10");
+    expect(slider.className).toContain("h-10");
+  });
+
+  it("asks for the same sizes on a coarse pointer at any width", () => {
+    stubViewport(1280, 800, false);
+    mount();
+    open();
+    expect(panel()!.querySelector("button[aria-pressed]")!.className).toContain(
+      "pointer-coarse:h-10",
+    );
+    expect(panel()!.querySelector("[data-slider='volume']")!.className).toContain(
+      "pointer-coarse:h-10",
+    );
+  });
+
+  it("keeps the slider's width when the count and Add are there", async () => {
+    stubViewport(390, 664, true);
+    mount(null, true);
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    const slider = panel()!.querySelector<HTMLElement>("[data-slider='volume']")!;
+    expect(slider.className).toContain("min-w-[7rem]");
+    expect(slider.parentElement!.className).toContain("flex-wrap");
+    expect(panel()!.textContent).toMatch(/0 (de|of) 24 (sons|sounds|sonidos)/);
+  });
+});
+
+describe("the panel's height follows the window", () => {
+  const NATURAL = 400;
+  let anchorTop = 0;
+  let rectSpy: { mockRestore: () => void } | null = null;
+  let heightSpy: { mockRestore: () => void } | null = null;
+
+  beforeEach(() => {
+    // A capped panel reports its cap; an uncapped one reports what it wants.
+    heightSpy = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.id !== "soundboard-panel") {
+          return 0;
+        }
+        const cap = Number.parseFloat(this.style.maxHeight);
+        return Number.isFinite(cap) ? Math.min(NATURAL, cap) : NATURAL;
+      });
+    rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("aria-haspopup") === "dialog") {
+          return {
+            top: anchorTop,
+            bottom: anchorTop + 40,
+            left: 300,
+            right: 340,
+            width: 40,
+            height: 40,
+            x: 300,
+            y: anchorTop,
+            toJSON: () => ({}),
+          };
+        }
+        return new DOMRect(0, 0, 0, 0);
+      });
+  });
+
+  afterEach(() => {
+    heightSpy?.mockRestore();
+    rectSpy?.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns to full size after the window gets taller", () => {
+    stubViewport(1280, 300, false);
+    anchorTop = 250;
+    mount();
+    open();
+    // 250 above the button, less the gap and the margin: the panel is capped.
+    expect(Number.parseFloat(panel()!.style.maxHeight)).toBeLessThan(NATURAL);
+
+    vi.stubGlobal("innerHeight", 900);
+    anchorTop = 850;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(Number.parseFloat(panel()!.style.maxHeight)).toBe(NATURAL);
   });
 });
