@@ -24,6 +24,7 @@ import {
   playSoundboardClip,
   registerSoundboardSender,
   showSoundboardMark,
+  stopSoundboardClips,
 } from "@/lib/soundboard";
 import {
   audibleScreenPeerIds,
@@ -6197,6 +6198,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       preservedSelfVoice = null;
       state.isDeafened = !state.isDeafened;
+      if (state.isDeafened) {
+        // A clip that already started would otherwise play out its 5 seconds.
+        stopSoundboardClips();
+      }
       // Deafening also mutes; undeafening restores an open mic, unless the
       // room never allowed one or a moderator has it pinned.
       state.isMuted =

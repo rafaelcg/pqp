@@ -6,7 +6,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * decoded.
  */
 
-const started = vi.hoisted(() => ({ count: 0, release: null as null | (() => void) }));
+const started = vi.hoisted(() => ({
+  count: 0,
+  stops: 0,
+  release: null as null | (() => void),
+}));
 
 vi.mock("@/lib/sounds", () => ({
   sharedAudioContext: () => ({
@@ -23,7 +27,9 @@ vi.mock("@/lib/sounds", () => ({
       start: () => {
         started.count += 1;
       },
-      stop: () => undefined,
+      stop: () => {
+        started.stops += 1;
+      },
     }),
   }),
   decodeAudioBuffer: async () => {
@@ -38,6 +44,7 @@ vi.mock("@/lib/sounds", () => ({
 describe("playSoundboardClip", () => {
   beforeEach(() => {
     started.count = 0;
+    started.stops = 0;
     started.release = null;
     vi.stubGlobal(
       "fetch",
@@ -54,5 +61,29 @@ describe("playSoundboardClip", () => {
     started.release?.();
     await pending;
     expect(started.count).toBe(0);
+  });
+
+  it("cuts a clip that already started when the listener deafens", async () => {
+    const { playSoundboardClip, stopSoundboardClips } = await import("./soundboard");
+    // The pack is already decoded by the test above, so this starts at once.
+    await playSoundboardClip("builtin:buzina", true);
+    expect(started.count).toBe(1);
+    const before = started.stops;
+    stopSoundboardClips();
+    expect(started.stops).toBe(before + 1);
+  });
+
+  it("tells an open board when the catalog changes", async () => {
+    const { noteSoundboardCatalog, subscribeSoundboardCatalog } = await import(
+      "./soundboard"
+    );
+    const seen: string[][] = [];
+    const off = subscribeSoundboardCatalog((serverId, sounds) => {
+      seen.push([serverId, ...sounds.map((sound) => sound.id)]);
+    });
+    noteSoundboardCatalog("s1", []);
+    off();
+    noteSoundboardCatalog("s1", []);
+    expect(seen).toEqual([["s1"]]);
   });
 });

@@ -175,6 +175,23 @@ export function setSoundboardCatalogServer(serverId: string | null): void {
   }
 }
 
+type CatalogListener = (
+  serverId: string,
+  sounds: readonly SoundboardSound[],
+) => void;
+const catalogListeners = new Set<CatalogListener>();
+
+/**
+ * The open call board follows the catalog: a clip added or deleted in server
+ * settings, or a fresher fetch, reaches it here instead of on the next mount.
+ */
+export function subscribeSoundboardCatalog(listener: CatalogListener): () => void {
+  catalogListeners.add(listener);
+  return () => {
+    catalogListeners.delete(listener);
+  };
+}
+
 export function noteSoundboardCatalog(
   serverId: string,
   sounds: readonly SoundboardSound[],
@@ -222,6 +239,9 @@ function rememberCustom(
       serverId,
     });
   }
+  for (const listener of catalogListeners) {
+    listener(serverId, sounds);
+  }
 }
 
 /** The name a custom clip was saved under. Builtins use the locale tables. */
@@ -251,9 +271,11 @@ export async function loadSoundboardCatalog(
   catalogTokens.set(serverId, token);
   try {
     const page = await fetchSoundboard(serverId);
-    if (catalogTokens.get(serverId) === token) {
-      rememberCustom(serverId, page.sounds);
+    // A newer request owns the catalog; this older answer must not be shown.
+    if (catalogTokens.get(serverId) !== token) {
+      return null;
     }
+    rememberCustom(serverId, page.sounds);
     return page.sounds;
   } catch {
     return null;
@@ -447,7 +469,27 @@ export async function playSoundboardClip(
   if (!buffer || !mayHear()) {
     return;
   }
-  startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
+  const source = startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
+  if (source) {
+    playingSources.add(source);
+    source.onended = () => {
+      playingSources.delete(source);
+    };
+  }
+}
+
+const playingSources = new Set<AudioBufferSourceNode>();
+
+/** Cut every clip still sounding, for a listener who just deafened. */
+export function stopSoundboardClips(): void {
+  for (const source of playingSources) {
+    try {
+      source.stop();
+    } catch {
+      // Already ended.
+    }
+  }
+  playingSources.clear();
 }
 
 let previewNode: AudioBufferSourceNode | null = null;

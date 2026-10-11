@@ -20,6 +20,7 @@ import {
 } from "@/lib/soundboard-icons";
 import {
   loadSoundboardCatalog,
+  subscribeSoundboardCatalog,
   warmSoundboardBuiltins,
   pulseSoundboardActive,
   requestSoundboardPlay,
@@ -74,16 +75,19 @@ export function SoundboardControl({
       return;
     }
     let cancelled = false;
-    // One catalog request fills the tiles; warming the built-in pack runs
-    // beside it and never holds them back.
-    void loadSoundboardCatalog(serverId).then((list) => {
-      if (!cancelled && list) {
-        setSounds(list);
+    // The tiles follow the catalog store: the request below, a clip added
+    // or deleted in server settings, a fresher fetch. One request fills them;
+    // warming the built-in pack runs beside it and never holds them back.
+    const unsubscribe = subscribeSoundboardCatalog((id, list) => {
+      if (!cancelled && id === serverId) {
+        setSounds([...list]);
       }
     });
+    void loadSoundboardCatalog(serverId);
     void warmSoundboardBuiltins();
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [serverId, canUse]);
 
@@ -303,11 +307,7 @@ export function SoundboardControl({
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
-          void loadSoundboardCatalog(serverId).then((list) => {
-            if (list) {
-              setSounds(list);
-            }
-          });
+          void loadSoundboardCatalog(serverId);
         }}
       />
     </>
