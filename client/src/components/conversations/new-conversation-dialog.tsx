@@ -337,7 +337,7 @@ function PersonRow({
       data-new-conversation-person={person.id}
       className={cn(
         "group flex items-center gap-1 rounded-[var(--radius-control)] pr-2",
-        checked ? "bg-surface-2" : "hover:bg-surface-2/70",
+        checked ? "bg-surface-3" : "hover:bg-surface-3/50",
       )}
     >
       <button
@@ -350,14 +350,14 @@ function PersonRow({
             name={person.displayName}
             avatarUrl={person.avatarUrl}
             className="h-8 w-8"
-            fallbackClassName="bg-surface-3 text-xs font-semibold text-text"
+            fallbackClassName="bg-surface-1 text-xs font-semibold text-text"
             rounded="full"
           />
           {person.status && (
             <StatusDot
               status={person.status}
-              className="absolute -bottom-0.5 -right-0.5 bg-surface-1"
-              ringClassName="rounded-full ring-2 ring-surface-1"
+              className="absolute -bottom-0.5 -right-0.5 bg-surface-2"
+              ringClassName="rounded-full ring-2 ring-surface-2"
             />
           )}
         </span>

@@ -347,3 +347,52 @@ test("a friend accepts: a card offers to say hi and opens the conversation", asy
 
   await page.context().close();
 });
+
+test("Ctrl/Cmd+K jumps to a person from a server; message search moved to Ctrl/Cmd+F", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const { ana, dm } = await pair(Date.now().toString(36));
+  const { server } = (await (
+    await fetch(`${API}/api/servers`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ name: `Sala ${Date.now().toString(36)}` }),
+    })
+  ).json()) as { server: { id: string } };
+
+  const page = await openAs(browser, ana, `/app/server/${server.id}`);
+  await expect(page.getByRole("button", { name: "Search messages" })).toBeVisible({
+    timeout: 20_000,
+  });
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+  // F: message search, as K used to be.
+  await page.keyboard.press(`${mod}+f`);
+  const search = page.getByRole("dialog", { name: "Search messages" });
+  await expect(search).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(search).toBeHidden();
+
+  // K: "go to". Two letters and Enter open Bia's conversation from a server.
+  await page.keyboard.press(`${mod}+k`);
+  const switcher = page.locator("[data-quick-switcher]");
+  await expect(switcher).toBeVisible();
+  await page.keyboard.type("bi");
+  await expect(switcher.locator("[data-switcher-active]")).toContainText("Bia");
+  await page.keyboard.press("Enter");
+  await expect(switcher).toBeHidden();
+  await expect(page).toHaveURL(new RegExp(`/app/dm/${dm}`));
+
+  // The switcher's last row hands its words to message search.
+  await page.goto(`/app/server/${server.id}?lang=en`);
+  await expect(page.getByRole("button", { name: "Search messages" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press(`${mod}+k`);
+  await page.keyboard.type("bora");
+  await switcher.getByRole("option", { name: /Search “bora”/ }).click();
+  await expect(search.getByRole("searchbox").or(search.locator("input")).first()).toHaveValue("bora");
+
+  await page.context().close();
+});

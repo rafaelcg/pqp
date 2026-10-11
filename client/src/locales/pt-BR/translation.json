@@ -4777,5 +4777,20 @@
   "conversations.new.noLocalMatch": "Ninguém da tua lista bate com isso. A busca aí em cima procura em todo o pqp.",
   "conversations.friendAccepted.title": "Tu e {name} agora são amigos",
   "conversations.friendAccepted.cta": "Mandar um oi",
-  "conversations.profileLast": "Última conversa · {time}"
+  "conversations.profileLast": "Última conversa · {time}",
+  "switcher.title": "Ir pra",
+  "switcher.placeholder": "Pra onde tu quer ir?",
+  "switcher.scope": "pessoas, conversas, servidores, #canais",
+  "switcher.section.people": "Pessoas",
+  "switcher.section.conversations": "Conversas",
+  "switcher.section.servers": "Servidores",
+  "switcher.section.channels": "Canais",
+  "switcher.searchMessages": "Buscar “{query}” nas mensagens de {server}",
+  "switcher.friend": "amigo",
+  "switcher.open": "Abrir",
+  "switcher.empty": "Nada com esse nome por aqui.",
+  "switcher.emptyStart": "Digita um nome, um servidor ou um #canal.",
+  "switcher.hint.move": "pra escolher",
+  "switcher.hint.open": "pra abrir",
+  "switcher.hint.close": "fecha"
 }

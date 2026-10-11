@@ -465,6 +465,8 @@ import {
 } from "@/lib/conversations-config";
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
+import { QuickSwitcher } from "@/components/conversations/quick-switcher";
+import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
 import {
   dismissNewcomerInvite,
   isNewcomerInviteDismissed,
@@ -3334,6 +3336,8 @@ function MainAppContent({
   }, [inCall, voiceState.isMuted, voiceState.isDeafened]);
 
   const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
+  // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
     unreadHoldRef.current.delete(channelId);
@@ -8967,6 +8971,29 @@ function MainAppContent({
     [conversationsConfigUserId],
   );
   const conversationsHome = useConversationsHome();
+  // Ctrl/Cmd+K is the "ir pra" switcher while Conversas is on (message search
+  // moved to F, see `channel-list.tsx`). Off, K stays message search and this
+  // listener does not exist.
+  useEffect(() => {
+    if (!conversationsHome) {
+      setSwitcherOpen(false);
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        setSwitcherOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [conversationsHome]);
   // Conversas: the profile card's "Última conversa", read off the list.
   const lastConversationWith = useCallback(
     (userId: string) =>
@@ -12613,7 +12640,45 @@ function MainAppContent({
       )}
 
       {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
+      {conversationsHome && (
+        <QuickSwitcher
+          open={switcherOpen}
+          onClose={() => setSwitcherOpen(false)}
+          sources={{
+            viewerId: user?.id ?? null,
+            friends: friends.data.friends,
+            conversations,
+            unread,
+            members: selection.kind === "server" ? serverMembers : [],
+            servers,
+            channels: selection.kind === "server" ? channels : [],
+            openServerName:
+              selection.kind === "server" ? (selectedServer?.name ?? null) : null,
+          }}
+          searchServerName={
+            selection.kind === "server" ? (selectedServer?.name ?? null) : null
+          }
+          onOpenConversation={(channelId) => {
+            setWhatsNewOpen(false);
+            void selectConversation(channelId);
+          }}
+          onMessagePerson={stableOnMessagePerson}
+          onSelectServer={(serverId) => {
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId });
+            void loadChannels(serverId);
+          }}
+          onSelectChannel={stableOnSelectChannel}
+          onSearchMessages={(query) =>
+            window.dispatchEvent(
+              new CustomEvent(SEARCH_MESSAGES_EVENT, { detail: { query } }),
+            )
+          }
+        />
+      )}
+
       <ShortcutOverlay
+        conversationsHome={conversationsHome}
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
