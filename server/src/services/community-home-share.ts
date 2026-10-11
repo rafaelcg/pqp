@@ -53,6 +53,9 @@ export function toPostCard(
 ): CommunityHomePostCard {
   let mediaKind: CommunityHomePostCard["mediaKind"] = null;
   let mediaUrl: string | null = null;
+  // The author's cover of an uploaded video. It lives inside `media`, so a
+  // locked reader, who gets no media, never gets it here either.
+  let posterUrl: string | null = null;
   if (post.locked) {
     // Only the public YouTube poster ever reaches a locked reader.
     if (post.posterUrl) {
@@ -63,6 +66,9 @@ export function toPostCard(
     mediaKind = post.media.kind;
     if (post.media.kind === "image" || post.media.kind === "video") {
       mediaUrl = post.media.url;
+    }
+    if (post.media.kind === "video") {
+      posterUrl = post.media.posterUrl ?? null;
     } else if (post.media.kind === "youtube") {
       mediaUrl = post.posterUrl;
     }
@@ -85,6 +91,7 @@ export function toPostCard(
         },
     mediaKind,
     mediaUrl,
+    posterUrl,
     visibility: post.visibility,
     locked: post.locked,
     pinned: post.pinned,

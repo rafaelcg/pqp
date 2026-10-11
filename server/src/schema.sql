@@ -4108,6 +4108,34 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
+-- The cover of a post's uploaded video: the picture the player shows before
+-- play, chosen by the author (a frame of the video they picked in the
+-- composer, or an image they uploaded). Without one the player paints the
+-- video's first frame, which is what every video had before. Same mint / PUT /
+-- claim as any Baú image (type allowlist, byte sniff, HEAD), so its upload row
+-- is an ordinary one and the orphan sweep and the delete path treat it the
+-- same way. Only ever set when media_kind = 'video' (the service enforces it;
+-- the CHECK is the backstop). Served only while the runtime flag
+-- `bau_custom_cover` is on for the server.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS poster_storage_key TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS poster_content_type TEXT;
+
+-- Added once, never dropped and re-added (same reasoning as the phone cut's).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_posts_poster_check'
+       AND conrelid = 'community_home_posts'::regclass
+  ) THEN
+    ALTER TABLE community_home_posts
+      ADD CONSTRAINT community_home_posts_poster_check
+      CHECK (poster_storage_key IS NULL OR media_kind = 'video');
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;

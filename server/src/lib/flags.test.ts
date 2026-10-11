@@ -74,6 +74,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   community_home_translation: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   bau_mobile_rendition: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  bau_custom_cover: offWords,
   community_home_video_captions: (raw) => raw === "true",
   bau_post_push: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

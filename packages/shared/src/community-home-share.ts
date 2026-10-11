@@ -111,6 +111,13 @@ export const communityHomePostCardSchema = z.object({
    * embed with no poster.
    */
   mediaUrl: z.string().nullable(),
+  /**
+   * The cover the author chose for a video (`media.posterUrl`), a signed GET of
+   * an image. Null for anything else, for a video on its automatic cover and
+   * for a locked card. Defaulted, so a card from an older API still parses; a
+   * client that ignores it paints the video's first frame from `mediaUrl`.
+   */
+  posterUrl: z.string().nullable().optional().transform((value) => value ?? null),
   visibility: communityHomeVisibilitySchema,
   locked: z.boolean(),
   pinned: z.boolean(),

@@ -585,6 +585,16 @@ private fun MediaView(media: BauMedia) {
                 .testTag("bau.media.video"),
             contentAlignment = Alignment.Center,
         ) {
+            // The author's cover under the badge. A cover that fails to load
+            // leaves the plain surface, which is how this card always looked.
+            media.coverUrl?.let { cover ->
+                AsyncImage(
+                    model = cover,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().testTag("bau.media.video.cover"),
+                )
+            }
             PlayBadge(media.name.ifBlank { stringResource(R.string.bau_media_video) })
         }
 

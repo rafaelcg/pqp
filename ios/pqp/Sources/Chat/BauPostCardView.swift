@@ -61,7 +61,7 @@ struct BauPostCardView: View {
 
     private var hasPicture: Bool {
         switch card.poster {
-        case .image, .videoFrame, .plate: true
+        case .image, .coverImage, .videoFrame, .plate: true
         case .none: false
         }
     }
@@ -84,7 +84,7 @@ struct BauPostCardView: View {
         ZStack {
             Palette.surfaceRaised
             switch card.poster {
-            case .image(let url):
+            case .image(let url), .coverImage(let url):
                 AsyncImage(url: url) { phase in
                     if let image = phase.image {
                         image.resizable().scaledToFill()
@@ -154,11 +154,11 @@ struct BauPostCardView: View {
             }
     }
 
-    /// A real picture is behind the wash (image or first video frame), so the
+    /// A real picture is behind the wash (image, video cover or first video frame), so the
     /// bottom gradient is what keeps the chips legible rather than the lime.
     private var isPictureBacked: Bool {
         switch card.poster {
-        case .image, .videoFrame: true
+        case .image, .coverImage, .videoFrame: true
         case .plate, .none: false
         }
     }

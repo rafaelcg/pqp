@@ -159,6 +159,13 @@ fun BauPostCardView(
                     modifier = Modifier.fillMaxSize().then(blurred),
                 )
 
+                BauCardPoster.Cover -> AsyncImage(
+                    model = card.posterUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().then(blurred),
+                )
+
                 BauCardPoster.VideoFrame -> {
                     val frame = rememberVideoFirstFrame(card.mediaUrl)
                     if (frame != null) {

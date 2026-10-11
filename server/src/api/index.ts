@@ -364,6 +364,7 @@ import {
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isBauCustomCoverOn,
   isBauMobileRenditionOn,
   getCommunityHomePostCaptions,
   isCommunityHomeEnabled,
@@ -4450,6 +4451,7 @@ router.get(
         posts,
         translationEnabled: translationActiveFor(serverId!),
         mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+        customCoverEnabled: isBauCustomCoverOn(serverId!),
       };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -4468,6 +4470,7 @@ router.get(
         posts,
         translationEnabled: translationActiveFor(serverId!),
         mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+        customCoverEnabled: isBauCustomCoverOn(serverId!),
       };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -4619,6 +4622,7 @@ router.post(
         commentsEnabled: raw.commentsEnabled !== false,
         mediaUploadId: raw.mediaUploadId ?? null,
         mobileMediaUploadId: raw.mobileMediaUploadId ?? null,
+        posterUploadId: raw.posterUploadId ?? null,
         youtubeUrl: raw.youtubeUrl ?? null,
         status: raw.status,
         scheduledAt: raw.scheduledAt ?? null,
@@ -4672,6 +4676,7 @@ router.patch(
         youtubeUrl: raw.youtubeUrl,
         clearMedia: raw.clearMedia,
         mobileMediaUploadId: raw.mobileMediaUploadId,
+        posterUploadId: raw.posterUploadId,
       });
       await notifyHome(serverId!);
       return { post };
