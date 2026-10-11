@@ -1602,6 +1602,8 @@ export interface DbMessage {
   mention_everyone?: boolean;
   mention_here?: boolean;
   chance?: unknown;
+  /** `messages.system_kind`: `nudge`, or null for an ordinary message. */
+  system_kind?: string | null;
 }
 
 export interface DbInvite {

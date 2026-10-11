@@ -562,6 +562,15 @@ CREATE INDEX IF NOT EXISTS idx_messages_reply_to
 -- than a JSON blob: votes need a real unique constraint per option and user.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
 
+-- ------------------------------------------------------------------ system messages
+-- A message the server wrote for a product action rather than somebody typing
+-- it. Today only 'nudge' (chamar a atenção, packages/shared/src/nudge.ts),
+-- stored with the plaintext body every older client renders. Nullable, no
+-- index, no backfill: an ordinary message is NULL. The unanswered-nudge check
+-- reads the newest rows of one conversation through the existing
+-- (channel_id, created_at) index, so it needs nothing of its own.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS system_kind TEXT;
+
 -- Idempotent sends. A client that queued a message offline may deliver the
 -- same frame twice (a reconnect flush and a reload both replay it), so the
 -- nonce it already put on the wire is stored and made unique per author and

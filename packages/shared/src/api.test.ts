@@ -256,7 +256,7 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });
 
-  it("accepts the four appearance skins and rejects a brand name", () => {
+  it("accepts the five appearance skins and reads an unknown one as the default", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
       true,
     );
@@ -275,11 +275,39 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "night" }).success).toBe(
       true,
     );
+    expect(userPreferencesSchema.parse({ appearance: "retro" })).toEqual({
+      appearance: "retro",
+    });
+    // An id this build does not know never fails the whole object: the rest of
+    // the patch still lands and the look reads as the default.
     expect(
-      userPreferencesSchema.safeParse({ appearance: "discord" }).success,
-    ).toBe(false);
+      userPreferencesSchema.parse({ appearance: "discord", theme: "dark" }),
+    ).toEqual({ appearance: "signal", theme: "dark" });
+    expect(userPreferencesSchema.parse({ appearance: "onyx" })).toEqual({
+      appearance: "signal",
+    });
+    expect(userPreferencesSchema.parse({ appearance: 7 })).toEqual({
+      appearance: "signal",
+    });
+    // Absent stays absent: the catch must not invent a look for a patch that
+    // did not mention one, or every save would reset it.
+    expect(userPreferencesSchema.parse({ theme: "dark" })).toEqual({ theme: "dark" });
+  });
+
+  it("keeps the nudge opt-out, the easter-egg finds and the new sound cues", () => {
     expect(
-      userPreferencesSchema.safeParse({ appearance: "onyx" }).success,
+      userPreferencesSchema.parse({
+        allowNudges: false,
+        easterEggs: { retro: "2026-10-11T12:00:00.000Z" },
+        sounds: { nudge: false, friendOnline: true },
+      }),
+    ).toEqual({
+      allowNudges: false,
+      easterEggs: { retro: "2026-10-11T12:00:00.000Z" },
+      sounds: { nudge: false, friendOnline: true },
+    });
+    expect(
+      userPreferencesSchema.safeParse({ easterEggs: { retro: "yesterday" } }).success,
     ).toBe(false);
   });
 

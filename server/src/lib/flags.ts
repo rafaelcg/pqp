@@ -619,6 +619,22 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  nudge: {
+    description:
+      "Chamar a atenção: em DM entre amigos, um toque chacoalha a janela do outro (com som) e deixa uma linha na conversa. Desligado, o servidor recusa todo pedido e os apps escondem o botão.",
+    env: "NUDGE",
+    parseEnv: exactTrue,
+    // Off until the web build that draws the line and the shake is live, and
+    // one phone build renders the pill: before that, an old client shows a
+    // bare 📳 bubble, which is readable but not the feature.
+    codeDefault: false,
+    // Conversations have no server: a per-server override would never be
+    // read. Checked on every nudge frame, so off is a real kill switch (the
+    // server refuses the frame whatever a stale client thinks), and served
+    // as `nudge` on `GET /api/fun/config`. No `clientVia` until a client reads
+    // it: the contract test rightly fails a field nobody reads.
+    perServer: false,
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

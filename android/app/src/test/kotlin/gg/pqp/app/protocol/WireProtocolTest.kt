@@ -315,6 +315,11 @@ class WireProtocolTest {
         // here when Android draws forums (forum PR 7).
         "forum-post-upsert" to "no forum list on the phone yet; the channel list hides forums",
         "forum-post-removed" to "no forum list on the phone yet; the channel list hides forums",
+        // Chamar a atenção's refusal, addressed only to the socket that sent a
+        // `nudge` frame. The phone sends none yet, so it can never be refused;
+        // a nudge somebody else sends arrives as an ordinary message whose
+        // body is a 📳. The phone PR that adds the send handles this frame.
+        "nudge-refused" to "the phone sends no nudge yet, so there is nothing to refuse",
     )
 
     /**

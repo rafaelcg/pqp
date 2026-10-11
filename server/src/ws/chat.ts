@@ -21,6 +21,10 @@ import {
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
+  type MessageSystemKind,
+  NUDGE_BODY,
+  type NudgeFrame,
+  type NudgeRefusalReason,
   type PollRequest,
   type ProfileUpdate,
   type ServerRemoved,
@@ -70,6 +74,11 @@ import {
 } from "../services/sanctions.js";
 import { isEnabled } from "../lib/flags.js";
 import { pushChannelActivity } from "../services/push.js";
+import {
+  decideNudge,
+  recordNudgeRefused,
+  recordNudgeSent,
+} from "../services/nudge.js";
 import {
   getChannel,
   getChannelAudience,
@@ -1758,6 +1767,12 @@ async function notifyChannelActivity(
      * below, on their own `notifications.previewInApp`.
      */
     preview?: { authorId: string; authorName: string } & MessagePreview;
+    /**
+     * The message is a system message (`nudge`). Rides the frame so a client
+     * not looking at the conversation can say who called for its attention,
+     * and the push so the lock screen says so too.
+     */
+    systemKind?: MessageSystemKind | null;
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -1849,6 +1864,10 @@ async function notifyChannelActivity(
               authorId: options!.preview!.authorId,
             }
           : {}),
+        // Not content: "this was a nudge" is the whole of it, and a person who
+        // hid previews still gets the shake. Left out for an ordinary message,
+        // so that frame is byte for byte what it was.
+        ...(options?.systemKind ? { systemKind: options.systemKind } : {}),
       }),
     );
   });
@@ -1875,6 +1894,7 @@ async function notifyChannelActivity(
       voiceDurationMs: options?.preview?.isVoice
         ? options.preview.voiceDurationMs
         : null,
+      systemKind: options?.systemKind ?? null,
     });
   }
 }
@@ -2078,6 +2098,99 @@ function sendMessageRejected(
 }
 
 /**
+ * Tell the sender their nudge did not land, and count why. This socket only,
+ * like `sendMessageRejected`: never the channel, never the bus.
+ */
+function sendNudgeRefused(
+  socket: WebSocket,
+  channelId: string,
+  nonce: string | undefined,
+  reason: NudgeRefusalReason,
+  retryAfterMs?: number,
+): void {
+  recordNudgeRefused(reason);
+  if (socket.readyState !== 1) {
+    return;
+  }
+  socket.send(
+    encode({
+      type: "nudge-refused",
+      channelId,
+      reason,
+      ...(nonce ? { nonce } : {}),
+      ...(retryAfterMs && retryAfterMs > 0
+        ? { retryAfterMs: Math.ceil(retryAfterMs) }
+        : {}),
+    }),
+  );
+}
+
+/**
+ * Chamar a atenção. The rules are `decideNudge`'s; once they pass, the nudge
+ * is an ordinary send with a fixed body and `systemKind: "nudge"`, so it goes
+ * through every check `postChannelMessage` makes (access, the block guard
+ * again, the closed-1:1 restore) and out through the same broadcast, cluster
+ * relay, `channel-activity` and push as a typed message. Success is therefore
+ * not a frame of its own: the sender learns it landed from the echo of the
+ * stored message, exactly like a text.
+ */
+async function handleNudge(
+  conn: ChatConnection,
+  frame: NudgeFrame,
+): Promise<void> {
+  // A replay of a nudge that already landed (an offline queue, a reconnect)
+  // is answered with the stored message, before any rule: the cooldown it
+  // would now hit was spent by the original.
+  if (frame.nonce) {
+    const existing = await findMessageByNonce(
+      frame.channelId,
+      conn.user.id,
+      frame.nonce,
+    );
+    if (existing) {
+      if (conn.socket.readyState === 1) {
+        conn.socket.send(
+          encode({
+            type: "message-broadcast",
+            message: mapMessage(existing),
+            nonce: frame.nonce,
+          }),
+        );
+      }
+      return;
+    }
+  }
+
+  const decision = await decideNudge(conn.user.id, frame.channelId);
+  if (!decision.ok) {
+    sendNudgeRefused(
+      conn.socket,
+      frame.channelId,
+      frame.nonce,
+      decision.reason,
+      decision.retryAfterMs,
+    );
+    return;
+  }
+
+  const posted = await postChannelMessage({
+    author: conn.user,
+    channelId: frame.channelId,
+    body: NUDGE_BODY,
+    nonce: frame.nonce,
+    senderSocket: conn.socket,
+    systemKind: "nudge",
+  });
+  if (!posted.ok) {
+    // No access, a block that landed between the two reads, the database:
+    // all of them are the one neutral token, for the same reason as above.
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+    return;
+  }
+  recordNudgeSent();
+}
+
+/**
  * The shared create + fan-out path. The WebSocket `message-create` handler
  * and `POST /api/channels/:channelId/messages` both land here so a bot HTTP
  * send is the same message a person would have typed: history, mentions,
@@ -2101,6 +2214,11 @@ export type PostChannelMessageInput = {
   nonce?: string;
   senderSocket?: WebSocket;
   beforeCreate?: () => void | Promise<void>;
+  /**
+   * A message the server writes on the sender's behalf (`nudge`). Only the
+   * nudge handler sets it, after its own rules; every check below still runs.
+   */
+  systemKind?: MessageSystemKind;
 };
 
 export type PostChannelMessageResult =
@@ -2333,8 +2451,8 @@ async function postChannelMessageAttempt(
       extraUserIds: hereUserIds,
       canMentionEveryone,
     },
-    input.chance || input.poll
-      ? { chance: input.chance, poll: input.poll }
+    input.chance || input.poll || input.systemKind
+      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind }
       : undefined,
     input.nonce,
   );
@@ -2447,6 +2565,10 @@ async function postChannelMessageAttempt(
       // the old one.
       ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
       preview: preview ?? null,
+      // Same rule: absent for an ordinary message. A sibling that predates
+      // the field ignores it and fans out a plain activity, which is the
+      // `📳` preview every old client already shows.
+      ...(message.systemKind ? { systemKind: message.systemKind } : {}),
     });
   }
   await notifyChannelActivity(
@@ -2459,6 +2581,7 @@ async function postChannelMessageAttempt(
       mentionHereUserIds: hereUserIds,
       mentionedUserIds,
       preview,
+      systemKind: message.systemKind,
     },
   );
 
@@ -2759,6 +2882,11 @@ export async function handleChatMessage(
         posted.automodMessage,
       );
     }
+    return;
+  }
+
+  if (payload.type === "nudge") {
+    await handleNudge(conn, payload);
     return;
   }
 
@@ -3080,6 +3208,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       mentionHereUserIds,
       mentionedUserIds: asStringArray(frame?.mentionedUserIds) ?? [],
       preview: asMessagePreview(frame?.preview),
+      systemKind: frame?.systemKind === "nudge" ? "nudge" : null,
     },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);

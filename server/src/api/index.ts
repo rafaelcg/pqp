@@ -5060,6 +5060,18 @@ router.get("/api/onboarding/config", async () => ({
 }));
 
 /**
+ * The small, playful switches a client reads with its other configs
+ * (`client/src/lib/config-refresh.ts` asks again on focus and every 10 min).
+ * One field today: `nudge`, the runtime flag of the same name (global, off by
+ * default; docs/FEATURE_FLAGS.md), which shows or hides chamar a atenção. The
+ * server refuses the `nudge` frame while it is off regardless of what a stale
+ * client believes, so this only decides whether the button is drawn.
+ */
+router.get("/api/fun/config", async () => ({
+  nudge: isEnabled("nudge"),
+}));
+
+/**
  * The gate every other route in this section runs first.
  *
  * 404 AND NOT 503, unlike the GIF and attachment routes. Those two are
@@ -7738,6 +7750,12 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   await requireChannelAccess(existing.channel_id, user.id);
   if (existing.author_id !== user.id) {
     throw new Forbidden("You can only edit your own messages");
+  }
+  // A nudge is the server's sentence, not the sender's: editing it into text
+  // would turn a "chamou tua atenção" line into an arbitrary message that
+  // still carries the kind. It can be deleted like any message.
+  if (existing.system_kind) {
+    throw new HttpError(400, "This message cannot be edited");
   }
 
   // Editing is a send. The WebSocket paths all consult this guard, but an edit

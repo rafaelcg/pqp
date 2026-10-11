@@ -11,6 +11,7 @@ import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
+import { messageSystemKindSchema } from "./nudge.js";
 
 /**
  * `watch_party` is a voice room with one stage: only holders of
@@ -85,16 +86,35 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * Named token skins, independent of light/dark/system. `signal` is the
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
- * skin for dark, not a clone of another product's AMOLED theme.
+ * skin for dark, not a clone of another product's AMOLED theme. `retro` is
+ * Modo 2005, the hidden look a person finds with `/2005`; it is accepted here
+ * before any client can pick it, so the API that stores it ships first.
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
+ *
+ * `.catch("signal")`: an id this build does not know (a look added later and
+ * picked on a newer client) reads as the default look instead of failing the
+ * whole preferences object. The patch route parses with this schema, so one
+ * unknown look must not throw away the rest of somebody's settings. Web tabs
+ * that predate `retro` never parse it at all: they adopt the stored string,
+ * find no stylesheet for it and draw the default look (`signal` is `:root`),
+ * and the boot script ignores ids it does not list.
  */
-export const appearancePreferenceSchema = z.preprocess(
-  (value) =>
-    value === "guild" || value === "accord" ? "harmony" : value,
-  z.enum(["signal", "harmony", "hearth", "night"]),
-);
+export const APPEARANCE_PREFERENCES = [
+  "signal",
+  "harmony",
+  "hearth",
+  "night",
+  "retro",
+] as const;
+export const appearancePreferenceSchema = z
+  .preprocess(
+    (value) =>
+      value === "guild" || value === "accord" ? "harmony" : value,
+    z.enum(APPEARANCE_PREFERENCES),
+  )
+  .catch("signal");
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
 /**
@@ -221,6 +241,10 @@ export const soundPreferencesSchema = z.object({
   voiceLeave: z.boolean().optional(),
   incomingCall: z.boolean().optional(),
   outgoingCall: z.boolean().optional(),
+  /** The chamar a atenção cue. Absent reads as on. */
+  nudge: z.boolean().optional(),
+  /** Modo 2005's "acabou de entrar" chime. Absent reads as on. */
+  friendOnline: z.boolean().optional(),
 });
 
 export type SoundPreferences = z.infer<typeof soundPreferencesSchema>;
@@ -455,6 +479,24 @@ export const userPreferencesSchema = z.object({
       mine: z.boolean().optional(),
       show: z.boolean().optional(),
     })
+    .optional(),
+  /**
+   * Chamar a atenção (`nudge.ts`). Absent reads as true. False turns it off in
+   * BOTH directions: nobody can nudge this person and they cannot nudge
+   * anybody, which is what makes "off" impossible to abuse ("I can poke you,
+   * you can't poke me"). Read server side on every nudge, for both people.
+   */
+  allowNudges: z.boolean().optional(),
+  /**
+   * Hidden things this person has found, as ISO instants, so a find on the
+   * desktop shows up on the phone's web too. `retro` is Modo 2005: once set,
+   * its tile stays in Aparência. Replaced as a whole on write, like `sounds`.
+   */
+  easterEggs: z
+    .object({
+      retro: z.string().datetime({ offset: true }).optional(),
+    })
+    .partial()
     .optional(),
 });
 
@@ -928,6 +970,13 @@ export const messageSchema = z.object({
    * counts only and the client merges.
    */
   poll: pollSchema.nullable().default(null),
+  /**
+   * Set when the server wrote this message for a product action rather than
+   * somebody typing it: `nudge` is chamar a atenção (`nudge.ts`). Null for an
+   * ordinary message, and for any kind this build does not know, which then
+   * renders as its plaintext `body`. Defaulted so an older API still parses.
+   */
+  systemKind: messageSystemKindSchema,
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;
