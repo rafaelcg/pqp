@@ -11389,6 +11389,11 @@ function MainAppContent({
         onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
+        conversationsHome={conversationsHome}
+        conversations={conversations}
+        openConversationId={
+          selection.kind === "dm" && !whatsNewOpen ? selectedChannelId : null
+        }
         selectedPinnedId={selectedPinnedId}
         onSelectPinned={(channelId) => {
           setWhatsNewOpen(false);

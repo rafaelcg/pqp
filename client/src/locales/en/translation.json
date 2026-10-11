@@ -4737,5 +4737,12 @@
   "conversations.empty.unread": "All caught up.",
   "conversations.empty.groups": "No groups yet. Pick two or more people in New conversation.",
   "conversations.noMatch": "No conversation with “{query}”.",
-  "conversations.noMatch.cta": "Look for someone else"
+  "conversations.noMatch.cta": "Look for someone else",
+  "conversations.rail.tooltip_zero": "Conversations",
+  "conversations.rail.tooltip_one": "Conversations · {count} waiting",
+  "conversations.rail.tooltip_other": "Conversations · {count} waiting",
+  "conversations.rail.waitingSr_one": "{count} conversation waiting",
+  "conversations.rail.waitingSr_other": "{count} conversations waiting",
+  "conversations.rail.more_one": "{count} more conversation waiting",
+  "conversations.rail.more_other": "{count} more conversations waiting"
 }
