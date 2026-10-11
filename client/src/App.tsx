@@ -481,6 +481,7 @@ import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
 import { QuickSwitcher } from "@/components/conversations/quick-switcher";
 import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
+import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
 import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
 import {
   dismissNewcomerInvite,
@@ -3149,7 +3150,10 @@ function MainAppContent({
   // Conversas: "Mensagem" on a member row and "Mandar um oi" after a friend
   // accepts. Opens or reuses the 1:1; a refusal (privacy, a block) comes back
   // in the server's own words on the app's error line.
-  const stableOnMessagePerson = useStableCallback((userId: string) => {
+  const stableOnMessagePerson = useStableCallback((userId: string, door?: DmDoor) => {
+    if (door) {
+      trackDmStart(door);
+    }
     // The account that asked. A sign-out or account switch while the request
     // is in flight must not drop this conversation into the next account.
     const askedBy = userIdRef.current;
@@ -11370,6 +11374,7 @@ function MainAppContent({
       moderation={cardModeration}
       watchParty={cardWatchParty}
       onOpenConversation={(conversation) => {
+        trackDmOpen("profile");
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
       }}
@@ -11475,12 +11480,17 @@ function MainAppContent({
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       {conversationsHome && (
-        <FriendAcceptedToast onSayHi={(person) => stableOnMessagePerson(person.id)} />
+        <FriendAcceptedToast
+          onSayHi={(person) => stableOnMessagePerson(person.id, "friend-accepted")}
+        />
       )}
       <DmToasts
         conversations={conversations}
         selectedChannelId={selectedChannelId}
-        onOpen={(channelId) => void selectConversation(channelId)}
+        onOpen={(channelId) => {
+          trackDmOpen("toast");
+          void selectConversation(channelId);
+        }}
         onActiveChange={setDmToastActive}
       />
 
@@ -11616,6 +11626,7 @@ function MainAppContent({
         }
         selectedPinnedId={selectedPinnedId}
         onSelectPinned={(channelId) => {
+          trackDmOpen(pinnedChannelIds.has(channelId) ? "rail-pinned" : "rail-unread");
           setWhatsNewOpen(false);
           void selectConversation(channelId);
           setMobileNavOpen(false);
@@ -11737,7 +11748,10 @@ function MainAppContent({
           viewerId={user?.id ?? null}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
-          onSelectConversation={(id) => void selectConversation(id)}
+          onSelectConversation={(id) => {
+            trackDmOpen("list");
+            void selectConversation(id);
+          }}
           onStartConversation={() => setNewDmOpen(true)}
           // Home-with-nothing-selected IS the Friends view, so "open friends"
           // is just deselecting the conversation.
@@ -11981,7 +11995,7 @@ function MainAppContent({
                           : window.location.origin
                       }
                       onAddFriend={openAdd}
-                      onSayHi={stableOnMessagePerson}
+                      onSayHi={(userId) => stableOnMessagePerson(userId, "suggestion")}
                     />
                   )
                 : undefined
@@ -11989,6 +12003,7 @@ function MainAppContent({
             currentUserId={user?.id ?? null}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
+              trackDmOpen("friends");
               setConversations((prev) => upsertConversation(prev, conversation));
               void selectConversation(conversation.channelId);
             }}
@@ -12285,7 +12300,11 @@ function MainAppContent({
           members={serverMembers}
           onMemberNickname={stableOnMemberNickname}
           onMention={stableOnMention}
-          onMessageMember={conversationsHome ? stableOnMessagePerson : undefined}
+          onMessageMember={
+            conversationsHome
+              ? (userId) => stableOnMessagePerson(userId, "member-row")
+              : undefined
+          }
           onBlockUser={stableOnBlockUser}
           onUnblockUser={stableOnUnblockUser}
           onReportUser={stableOnReportUser}
@@ -12513,6 +12532,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         onClose={() => setNewDmOpen(false)}
         onCreated={(conversation) => {
+          trackDmStart("new-conversation", conversation.kind === "group" ? "group" : "dm");
           setConversations((prev) => upsertConversation(prev, conversation));
           void selectConversation(conversation.channelId);
         }}
@@ -12891,6 +12911,7 @@ function MainAppContent({
             selection.kind === "server" ? (selectedServer?.name ?? null) : null
           }
           onOpenConversation={(channelId) => {
+            trackDmOpen("switcher");
             setWhatsNewOpen(false);
             selectConversation(channelId).catch((error: unknown) =>
               setAppError(
@@ -12898,7 +12919,7 @@ function MainAppContent({
               ),
             );
           }}
-          onMessagePerson={stableOnMessagePerson}
+          onMessagePerson={(userId) => stableOnMessagePerson(userId, "switcher")}
           onSelectServer={(serverId) => {
             phoneFollowRef.current?.("servidores");
             setWhatsNewOpen(false);
