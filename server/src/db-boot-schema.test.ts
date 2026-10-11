@@ -426,10 +426,25 @@ describeDb("initDb on a real Postgres", () => {
       expect(await validated()).toMatchObject({ convalidated: true });
       await client.query("ROLLBACK");
 
+      // From a validated constraint written in another shape: its literals
+      // are all on the list, but it allows anything else, so nothing is
+      // proven and it validates.
+      await client.query("BEGIN");
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type <> 'voice' OR type = 'voice');`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
       // From a constraint that allows a type this list lacks (a rollback
       // image meeting a newer schema): it validates, so rows of that type
       // would keep the newer constraint in place.
       await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM channels WHERE type NOT IN ('text', 'voice', 'category', 'thread', 'watch_party')`,
+      );
       await client.query(`
         ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
         ALTER TABLE channels ADD CONSTRAINT channels_type_check

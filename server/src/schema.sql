@@ -5348,7 +5348,13 @@ BEGIN
        AND conname = 'channels_type_check'
        AND pg_get_constraintdef(oid) LIKE '%''forum''%'
   ) THEN
-    SELECT c.convalidated AND NOT EXISTS (
+    -- Proof needs the canonical shape every block in this file writes
+    -- (`type IN (...)`, which Postgres prints as `type = ANY (ARRAY[...])`).
+    -- A differently written constraint (`type <> 'x'`, an OR) could be valid
+    -- and still allow types outside the list, so it validates instead.
+    SELECT c.convalidated
+           AND pg_get_constraintdef(c.oid) ~ '^CHECK \(\(type = ANY \(ARRAY\[[^]]*\]\)\)\)$'
+           AND NOT EXISTS (
              SELECT 1
                FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
               WHERE m.v[1] NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')
