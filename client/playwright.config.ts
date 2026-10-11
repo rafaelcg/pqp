@@ -43,6 +43,16 @@ export const E2E_TRANSLATION_STUB_PORT = Number(
   process.env.E2E_TRANSLATION_STUB_PORT ?? SERVER_PORT + 98,
 );
 process.env.E2E_TRANSLATION_STUB_PORT = String(E2E_TRANSLATION_STUB_PORT);
+/**
+ * `E2E_CLIENT_DIST`: serve a client already built with `vite build` (by
+ * `vite preview`) instead of `vite dev`. CI builds once and hands the bundle
+ * to every shard: on a hosted runner `vite dev` serves the app as hundreds of
+ * unbundled modules on every page load, and every test loads the app afresh.
+ * The bundle must be built with `VITE_DEV_AUTH_BYPASS=true` and VITE_API_URL /
+ * VITE_WS_URL pointing at `E2E_SERVER_PORT`, since a build bakes them in.
+ * Unset (every local run), nothing changes.
+ */
+const CLIENT_DIST = process.env.E2E_CLIENT_DIST?.trim() || "";
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql://pqp:pqp@localhost:5432/pqp_test";
@@ -136,6 +146,12 @@ export default defineConfig({
     // their own light context explicitly.
     locale: "en-US",
     colorScheme: "dark",
+    // `vite dev` never registers the PWA worker (devOptions.enabled is off);
+    // a build does. Block it so a prebuilt bundle behaves like the dev server
+    // every spec was written against: no precache answering navigations, and
+    // `page.route` sees every request. The worker has its own suite,
+    // `e2e/stale-bundle/`, which registers it on purpose.
+    ...(CLIENT_DIST ? { serviceWorkers: "block" as const } : {}),
   },
 
   projects,
@@ -230,7 +246,9 @@ export default defineConfig({
       },
     },
     {
-      command: `pnpm exec vite --port ${CLIENT_PORT} --strictPort`,
+      command: CLIENT_DIST
+        ? `pnpm exec vite preview --port ${CLIENT_PORT} --strictPort --outDir ${CLIENT_DIST}`
+        : `pnpm exec vite --port ${CLIENT_PORT} --strictPort`,
       port: CLIENT_PORT,
       reuseExistingServer: !process.env.CI,
       stdout: "pipe",
