@@ -83,6 +83,7 @@ const { searchMessages } = await import("./search.js");
 const { assignRole, createRole, upsertChannelOverwrite } = await import("./roles.js");
 const { createAutomodRule } = await import("./automod.js");
 const { blockUser } = await import("./blocks.js");
+const { createWebhook } = await import("./webhooks.js");
 const { Permission, WEBHOOK_FORUM_THREAD_NAME_CODE } = await import("@pqp/shared");
 
 type Account = Awaited<ReturnType<typeof upsertUser>>;
@@ -409,12 +410,27 @@ describeDb("forum guards", () => {
         [forumId],
       );
 
-      const spy = vi.spyOn(getPool(), "query");
+      // Every statement, whether sent through the pool or on the client the
+      // delete's transaction holds.
+      const pool = getPool();
+      const poolQuery = vi.spyOn(pool, "query");
+      const clientQueries: { mock: { calls: unknown[][] }; mockRestore: () => void }[] = [];
+      const realConnect = pool.connect.bind(pool);
+      const connect = vi.spyOn(pool, "connect").mockImplementation((async () => {
+        const client = await realConnect();
+        clientQueries.push(vi.spyOn(client, "query"));
+        return client;
+      }) as unknown as typeof pool.connect);
       expect(await deleteChannel(forumId)).toBe(true);
-      const keyReads = spy.mock.calls.filter(([sql]) =>
-        String(sql).includes("FROM message_attachments"),
-      );
-      spy.mockRestore();
+      connect.mockRestore();
+      const sqls = [poolQuery, ...clientQueries]
+        .flatMap((spy) => spy.mock.calls.map(([sql]) => sql))
+        .map((sql) => (typeof sql === "string" ? sql : String((sql as { text?: string })?.text)));
+      poolQuery.mockRestore();
+      for (const spy of clientQueries) {
+        spy.mockRestore();
+      }
+      const keyReads = sqls.filter((sql) => sql.includes("FROM message_attachments"));
       expect(keyReads).toHaveLength(1);
 
       await vi.waitFor(() => expect(stubs.deletedKeys).toHaveLength(200));
@@ -539,6 +555,23 @@ describeDb("forum guards", () => {
       expect(body.code).toBe(WEBHOOK_FORUM_THREAD_NAME_CODE);
       expect(body.message).toBe(body.error);
       const rows = await getPool().query(`SELECT 1 FROM messages WHERE channel_id = $1`, [forumId]);
+      expect(rows.rowCount).toBe(0);
+    });
+
+    it("refuse an execute from a webhook that already sat on a forum post", async () => {
+      // Made before the create route refused threads: straight through the service.
+      const { postId } = await insertPost(forumId, alice, { locked: true });
+      const legacy = await createWebhook(postId, serverId, "Velho", null, alice.id);
+      const response = await fetch(`${baseUrl}/api/webhooks/${legacy.id}/${legacy.token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "passando por cima do cadeado" }),
+      });
+      expect(response.status).toBe(400);
+      const rows = await getPool().query(
+        `SELECT 1 FROM messages WHERE channel_id = $1 AND body LIKE 'passando%'`,
+        [postId],
+      );
       expect(rows.rowCount).toBe(0);
     });
 
