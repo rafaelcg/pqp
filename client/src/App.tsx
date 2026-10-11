@@ -9251,6 +9251,8 @@ function MainAppContent({
   // phone layout outranks the tabs, so the landing must not open a list on
   // top of the film.
   const partyPhoneLayoutRef = useRef(false);
+  // The same fact as state, so the landing runs again once a party ends.
+  const [phonePartyLayout, setPhonePartyLayout] = useState(false);
   const phoneOpenedPathRef = useRef(
     typeof window === "undefined" ? "" : window.location.pathname,
   );
@@ -9258,6 +9260,7 @@ function MainAppContent({
     if (
       !phoneShellAllowed ||
       phoneLandedRef.current ||
+      phonePartyLayout ||
       !bootstrapReady ||
       connection !== "online"
     ) {
@@ -9281,7 +9284,7 @@ function MainAppContent({
     return () => window.clearTimeout(timer);
     // Once, when the shell and the boot are both ready; later tabs are taps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phoneShellAllowed, bootstrapReady, connection]);
+  }, [phoneShellAllowed, bootstrapReady, connection, phonePartyLayout]);
 
   phoneFollowRef.current = phoneShellAllowed
     ? (tab: PhoneTab) => {
@@ -9623,6 +9626,10 @@ function MainAppContent({
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
   const phoneShell = phoneShellAllowed && !partyPhoneLayout;
   partyPhoneLayoutRef.current = partyPhoneLayout;
+  if (phonePartyLayout !== partyPhoneLayout) {
+    // A render-time mirror of a derived fact, guarded so it settles at once.
+    setPhonePartyLayout(partyPhoneLayout);
+  }
   // The bar is the way between the three lists. Inside a conversation or a
   // channel the screen is the conversation's, the way every phone chat app
   // does it; the header's back arrow returns to the list and the bar.
