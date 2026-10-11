@@ -9,9 +9,10 @@
  *
  *  - The first snapshot is a baseline. Nothing toasts from it.
  *  - A friend ARRIVES when they are not offline now, and the snapshots before
- *    this one saw them offline at least twice, spanning at least
- *    `MIN_OFFLINE_MS`. A socket that blips through a deploy reconnects well
- *    inside that, so it never counts as leaving and coming back.
+ *    this one saw them offline at least twice, the first and last of those
+ *    sightings at least `MIN_OFFLINE_MS` apart (two polls, 15 s apart). A
+ *    socket that blips through a deploy reconnects well inside that, so it
+ *    never counts as leaving and coming back.
  *  - `invisible` friends are `offline` on the wire, so they never toast.
  *  - A friend new to the list (just accepted) has no history and never toasts.
  *
@@ -21,7 +22,8 @@
 
 import type { UserStatus } from "@pqp/shared";
 
-export const MIN_OFFLINE_MS = 15_000;
+/** Two polls 15 s apart, with room for a late timer. */
+export const MIN_OFFLINE_MS = 12_000;
 export const TOAST_GAP_MS = 8_000;
 export const TOAST_VISIBLE_MS = 5_000;
 /** A tab hidden longer than this restarts from a baseline: no stale burst. */
@@ -31,6 +33,8 @@ interface FriendTrack {
   status: UserStatus;
   /** When the current offline stretch was first seen, or null. */
   offlineSince: number | null;
+  /** When it was last seen, still offline, or null. */
+  lastOfflineAt: number | null;
   /** Consecutive snapshots that saw them offline. */
   offlineFrames: number;
 }
@@ -54,22 +58,30 @@ export function observePresence(
     const previous = memory.tracks.get(id);
     const offline = status === "offline";
     if (offline) {
+      const stillOffline = previous?.status === "offline";
       tracks.set(id, {
         status,
-        offlineSince:
-          previous?.status === "offline" ? previous.offlineSince : now,
-        offlineFrames:
-          previous?.status === "offline" ? previous.offlineFrames + 1 : 1,
+        offlineSince: stillOffline ? previous.offlineSince : now,
+        lastOfflineAt: now,
+        offlineFrames: stillOffline ? previous.offlineFrames + 1 : 1,
       });
       continue;
     }
-    tracks.set(id, { status, offlineSince: null, offlineFrames: 0 });
+    tracks.set(id, {
+      status,
+      offlineSince: null,
+      lastOfflineAt: null,
+      offlineFrames: 0,
+    });
+    // The span is between OFFLINE sightings, not up to this one: a late poll
+    // after two quick offline reads must not stretch a blip into an absence.
     if (
       !baseline &&
       previous?.status === "offline" &&
       previous.offlineFrames >= 2 &&
       previous.offlineSince !== null &&
-      now - previous.offlineSince >= MIN_OFFLINE_MS
+      previous.lastOfflineAt !== null &&
+      previous.lastOfflineAt - previous.offlineSince >= MIN_OFFLINE_MS
     ) {
       arrived.push(id);
     }

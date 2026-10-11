@@ -52,6 +52,14 @@ describe("observePresence", () => {
     expect(MIN_OFFLINE_MS).toBeGreaterThan(3_000);
   });
 
+  it("a late poll does not stretch two quick offline reads into an absence", () => {
+    let memory: PresenceMemory = EMPTY_PRESENCE;
+    memory = observePresence(memory, [["lu", "online"]], 0).memory;
+    memory = observePresence(memory, [["lu", "offline"]], 1_000).memory;
+    memory = observePresence(memory, [["lu", "offline"]], 2_000).memory;
+    expect(observePresence(memory, [["lu", "online"]], 60_000).arrived).toEqual([]);
+  });
+
   it("idle and dnd count as here; only offline is away", () => {
     expect(run([{ lu: "offline" }, { lu: "offline" }, { lu: "dnd" }])).toEqual([
       [],
