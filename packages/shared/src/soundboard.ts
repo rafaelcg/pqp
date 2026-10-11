@@ -110,11 +110,23 @@ export const soundboardEmojiSchema = z
   .refine(isSoundboardEmoji, "Pick one emoji");
 
 /**
- * Zero-width spaces, word joiners, the byte-order mark and every bidi
- * override or isolate. They make a name blank or render it as other text.
- * The emoji joiner (U+200D) and variation selectors are allowed.
+ * Characters that make a name blank or render it as other text, or that no
+ * person typed on purpose: zero-width spaces and joiners (not U+200D, the
+ * emoji joiner), word joiners, the byte-order mark, every bidi override,
+ * isolate or mark, the soft hyphen and other invisible marks, the Hangul
+ * fillers (U+115F, U+1160, U+3164, U+FFA0), the Braille blank (U+2800),
+ * every control character (tab, newline, BEL, ...) and the tag characters
+ * (U+E0000 to U+E007F). Variation selectors are allowed.
+ *
+ * The fillers are letters (U+2800 a symbol) to Unicode, so the visible-
+ * character test below would count them. Refusing them anywhere in the name,
+ * not only when nothing else is there, keeps "a<filler><filler>b" from
+ * passing as a name that draws two letters and a gap.
  */
-const HIDDEN_NAME_CHARS = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+// A combining mark and the tag characters in one class are the point: all hidden.
+const HIDDEN_NAME_CHARS =
+  // eslint-disable-next-line no-misleading-character-class
+  /[\p{Cc}\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u2800\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}]/u;
 
 /**
  * A clip name, counted the way Postgres's `char_length` counts it (code
