@@ -12660,7 +12660,11 @@ function MainAppContent({
           }
           onOpenConversation={(channelId) => {
             setWhatsNewOpen(false);
-            void selectConversation(channelId);
+            selectConversation(channelId).catch((error: unknown) =>
+              setAppError(
+                error instanceof Error ? error.message : t("dm.dialog.failed"),
+              ),
+            );
           }}
           onMessagePerson={stableOnMessagePerson}
           onSelectServer={(serverId) => {
