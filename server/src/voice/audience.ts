@@ -71,6 +71,8 @@ export interface PublishBits {
   canSpeak: boolean;
   canStream: boolean;
   canShowFace?: boolean;
+  /** Clips ride the room's audio, so they follow the mic. See below. */
+  canUseSoundboard?: boolean;
 }
 
 /**
@@ -88,6 +90,25 @@ export interface PublishBits {
  * that is the honest answer), `audience` otherwise.
  */
 export function applyAudienceMode<G extends PublishBits>(
+  grant: G,
+  context: {
+    audience: Pick<AudienceRoom, "speakers"> | null;
+    permissions: bigint;
+    userId: string;
+  },
+): G & { speakReason: SpeakReason | null } {
+  const applied = applyAudienceRule(grant, context);
+  // A soundboard clip is a sound in the room, so whoever may not speak may
+  // not play one: the audience, and a watch party's seated viewers, whose
+  // SPEAK is denied. Taken away here, in the one place that already does it,
+  // so the join, the live re-check and the client's button all agree.
+  if (applied.canUseSoundboard && !applied.canSpeak) {
+    return { ...applied, canUseSoundboard: false };
+  }
+  return applied;
+}
+
+function applyAudienceRule<G extends PublishBits>(
   grant: G,
   context: {
     audience: Pick<AudienceRoom, "speakers"> | null;

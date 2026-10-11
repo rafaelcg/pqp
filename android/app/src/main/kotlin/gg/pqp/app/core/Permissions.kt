@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * BITFIELDS ARE DECIMAL STRINGS ON THE WIRE, because the server holds them as
  * Postgres `BIGINT` and computes them as a JS `bigint` (`permissions.ts`'s own
  * doc: "Never do this math in JS number"). The highest bit defined today is
- * 24 (`MANAGE_MUSIC`), so a signed 64-bit [Long] carries every bit in use
+ * 26 (`MANAGE_SOUNDBOARD`), so a signed 64-bit [Long] carries every bit in use
  * with headroom to spare -- no need for `java.math.BigInteger` unless the bit
  * count ever approaches 63.
  *

@@ -63,6 +63,7 @@ import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { userHasAuthenticatedSocket } from "./ws/sockets.js";
 import { hasClusterSocket } from "./ws/status.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
+import { sweepSoundboardUploads } from "./services/soundboard.js";
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -217,6 +218,9 @@ export function startColdJobs(): ColdJobs {
       "server-create-idempotency-keys",
       pruneExpiredServerIdempotencyKeys,
     ),
+    // Expired soundboard upload tickets and the files behind them. Leased and
+    // SKIP LOCKED, so two processes cannot take the same ticket.
+    every(60_000, "soundboard-uploads", sweepSoundboardUploads),
     every(DAILY_MS, "retention", sweepMessageRetention),
     // Spent slow-mode clocks. Nothing depends on this running: a stale row is
     // inert, because enforcement compares it against the channel's current

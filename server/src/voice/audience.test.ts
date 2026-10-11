@@ -113,6 +113,47 @@ describe("applyAudienceMode", () => {
   });
 });
 
+describe("the soundboard follows the microphone", () => {
+  const withBoard = { canSpeak: true, canStream: true, canUseSoundboard: true };
+
+  it("an uninvited listener cannot play a clip, an invited speaker and the stage can", () => {
+    const listener = applyAudienceMode(withBoard, {
+      audience: room(),
+      permissions: EVERYONE,
+      userId: "a",
+    });
+    expect(listener.canUseSoundboard).toBe(false);
+    const invited = applyAudienceMode(withBoard, {
+      audience: room(["a"]),
+      permissions: EVERYONE,
+      userId: "a",
+    });
+    expect(invited.canUseSoundboard).toBe(true);
+    const moderator = applyAudienceMode(withBoard, {
+      audience: room(),
+      permissions: MODERATOR,
+      userId: "a",
+    });
+    expect(moderator.canUseSoundboard).toBe(true);
+  });
+
+  it("a seat the channel denies SPEAK (a watch party viewer) gets no clips either", () => {
+    const viewer = applyAudienceMode(
+      { canSpeak: false, canStream: false, canUseSoundboard: true },
+      { audience: null, permissions: EVERYONE, userId: "a" },
+    );
+    expect(viewer.canUseSoundboard).toBe(false);
+  });
+
+  it("never grants a bit the channel denied", () => {
+    const denied = applyAudienceMode(
+      { canSpeak: true, canStream: true, canUseSoundboard: false },
+      { audience: room(["a"]), permissions: EVERYONE, userId: "a" },
+    );
+    expect(denied.canUseSoundboard).toBe(false);
+  });
+});
+
 describe("who runs the stage", () => {
   it("is exactly MUTE_MEMBERS, MANAGE_CHANNELS or Administrator", () => {
     expect(isAudienceStage(EVERYONE)).toBe(false);

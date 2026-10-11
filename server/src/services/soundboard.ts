@@ -10,6 +10,7 @@ import {
   type SoundboardSound,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { publishToCluster, subscribeToCluster } from "../lib/bus.js";
 import {
   deleteObject,
   getObjectPrefix,
@@ -130,11 +131,50 @@ function rememberPlayable(serverId: string, sound: PlayableSound): void {
       playableCache.delete(oldest);
     }
   }
+  missCache.delete(sound.id);
   playableCache.set(sound.id, { serverId, sound, at: Date.now() });
 }
 
-function forgetPlayable(soundId: string): void {
+const PLAYABLE_FORGET_TOPIC = "soundboard.forget";
+
+function dropPlayable(soundId: string): void {
   playableCache.delete(soundId);
+  missCache.delete(soundId);
+}
+
+/**
+ * A sound was edited, deleted or just claimed. Forget it here and tell the
+ * sibling machine, so a deleted clip stops passing the play gate everywhere
+ * at once instead of lingering in the other process's cache for 30 seconds.
+ */
+function forgetPlayable(soundId: string): void {
+  dropPlayable(soundId);
+  publishToCluster(PLAYABLE_FORGET_TOPIC, { soundId });
+}
+
+subscribeToCluster(PLAYABLE_FORGET_TOPIC, (data) => {
+  const soundId = (data as { soundId?: unknown } | null)?.soundId;
+  if (typeof soundId === "string") {
+    dropPlayable(soundId);
+  }
+});
+
+/**
+ * Ids that did not resolve, for a few seconds. A seated member can send a
+ * play frame with any id they like; without this each one is a pooled query.
+ * Keyed by server and id, bounded like the hit cache.
+ */
+const missCache = new Map<string, { serverId: string; until: number }>();
+const MISS_TTL_MS = 5_000;
+
+function rememberMiss(serverId: string, soundId: string): void {
+  if (missCache.size >= PLAYABLE_CACHE_MAX) {
+    const oldest = missCache.keys().next().value;
+    if (oldest !== undefined) {
+      missCache.delete(oldest);
+    }
+  }
+  missCache.set(soundId, { serverId, until: Date.now() + MISS_TTL_MS });
 }
 
 /**
@@ -163,6 +203,10 @@ export async function resolvePlayableSound(
   ) {
     return cached.sound;
   }
+  const missed = missCache.get(soundId);
+  if (missed && missed.serverId === serverId && missed.until > Date.now()) {
+    return null;
+  }
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
             duration_ms, volume
@@ -173,6 +217,7 @@ export async function resolvePlayableSound(
   const row = result.rows[0];
   if (!row) {
     playableCache.delete(soundId);
+    rememberMiss(serverId, soundId);
     return null;
   }
   const sound: PlayableSound = {
@@ -273,13 +318,15 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-if (typeof setInterval === "function") {
-  setInterval(() => {
-    if (!isStorageConfigured()) {
-      return;
-    }
-    void sweepPendingUploads().catch(() => undefined);
-  }, 60_000).unref?.();
+/**
+ * The timer body for the cold-jobs runner (`jobs.ts`): it starts with the
+ * other batch jobs, behind the role check, rather than at import.
+ */
+export async function sweepSoundboardUploads(): Promise<void> {
+  if (!isStorageConfigured()) {
+    return;
+  }
+  await sweepPendingUploads();
 }
 
 export async function createSoundboardUpload(input: {

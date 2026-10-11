@@ -7900,7 +7900,7 @@ export async function handleVoiceMessage(
       // for this server and this is a plain voice channel.
       joinAudience = await loadAudience(channel, payload.voiceChannelId);
       const applied = applyAudienceMode(
-        { canSpeak, canStream },
+        { canSpeak, canStream, canUseSoundboard },
         {
           audience: joinAudience,
           permissions: resolved.permissions,
@@ -7909,6 +7909,7 @@ export async function handleVoiceMessage(
       );
       canSpeak = applied.canSpeak;
       canStream = applied.canStream;
+      canUseSoundboard = applied.canUseSoundboard;
       speakReason = applied.speakReason;
     }
     // THE ROOM GATE for the egress, read off the same row as the stage gate
