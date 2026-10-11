@@ -5062,13 +5062,17 @@ router.get("/api/onboarding/config", async () => ({
 /**
  * The small, playful switches a client reads with its other configs
  * (`client/src/lib/config-refresh.ts` asks again on focus and every 10 min).
- * One field today: `nudge`, the runtime flag of the same name (global, off by
- * default; docs/FEATURE_FLAGS.md), which shows or hides chamar a atenção. The
- * server refuses the `nudge` frame while it is off regardless of what a stale
- * client believes, so this only decides whether the button is drawn.
+ * `nudge`, the runtime flag of the same name (global, off by default;
+ * docs/FEATURE_FLAGS.md), shows or hides chamar a atenção; the server refuses
+ * the `nudge` frame while it is off regardless of what a stale client
+ * believes, so this only decides whether the button is drawn. `retroLook` is
+ * Modo 2005's kill switch (`retro_look`, on by default).
  */
 router.get("/api/fun/config", async () => ({
   nudge: isEnabled("nudge"),
+  // Modo 2005's kill switch (`retro_look`, default on). A client reads
+  // anything but `false` as on.
+  retroLook: isEnabled("retro_look"),
 }));
 
 /**

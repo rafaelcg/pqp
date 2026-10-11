@@ -105,13 +105,17 @@ describeDb("chamar a atenção over HTTP", () => {
     actor = alice;
   });
 
-  it("GET /api/fun/config follows the nudge flag: off by default, on by a row", async () => {
+  it("GET /api/fun/config: nudge off by default, Modo 2005 on by default, each flipped by a row", async () => {
     expect(await call("GET", "/api/fun/config")).toEqual({
       status: 200,
-      json: { nudge: false },
+      json: { nudge: false, retroLook: true },
     });
     await setGlobalFlag("nudge", true, { kind: "dashboard" });
-    expect((await call("GET", "/api/fun/config")).json).toEqual({ nudge: true });
+    await setGlobalFlag("retro_look", false, { kind: "dashboard" });
+    expect((await call("GET", "/api/fun/config")).json).toEqual({
+      nudge: true,
+      retroLook: false,
+    });
   });
 
   it("history returns the kind, and a nudge cannot be edited into text", async () => {

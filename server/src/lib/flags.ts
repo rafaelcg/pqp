@@ -634,6 +634,19 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/fun/config (nudge)",
   },
+  retro_look: {
+    description:
+      "Modo 2005 (só cliente): o visual escondido que a pessoa acha com /2005. Ligado por padrão; é o interruptor de emergência: desligado, quem estava nele volta pro visual padrão no próximo refresh da config e o atalho some.",
+    env: "RETRO_LOOK",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. Off only if the look breaks.
+    codeDefault: true,
+    // A look belongs to a person, not a server.
+    perServer: false,
+    // Served as `retroLook` on `GET /api/fun/config`. No `clientVia` until the
+    // client that reads it (the Modo 2005 PR) lands: the contract test fails
+    // a field no client source names.
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
