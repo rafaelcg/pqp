@@ -20,14 +20,18 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  CommunityHomeUnreadAllResponse,
   CommunityHomeUnreadResponse,
   PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
   UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
+  CommunityHomePostCard,
   CommunityHomePostResponse,
+  ShareCommunityHomePostRequest,
   CommunityHomePostsResponse,
   CommunityHomePostTranslationsResponse,
+  CommunityHomeCaptionsResponse,
   CreateCommunityHomeCommentRequest,
   CreateCommunityHomeMediaUploadRequest,
   CreateCommunityHomeMediaUploadResponse,
@@ -761,10 +765,18 @@ export interface VoiceConfig {
    * state and its off switch whatever this says.
    */
   audienceMode?: boolean;
+  /**
+   * `voice_audio_self_heal`: watch this call's audio and repair it
+   * (`lib/audio-health.ts`). Global, so it is read without a server.
+   */
+  audioSelfHeal?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
   apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** The global answer, for the switches that are not per server. */
+export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/config");
 
 /** Turn audience mode on or off in the call running in this voice channel. */
 export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
@@ -2020,6 +2032,22 @@ export const fetchCommunityHomeTranslations = (
     `/api/servers/${serverId}/home/posts/${postId}/translations`,
   );
 
+/**
+ * The automatic subtitles of a post's video as WebVTT: the source track and,
+ * when one exists, its translation into `lang` (the reader's UI locale).
+ * Authorised like the video itself; `tracks: []` when there are none.
+ */
+export const fetchCommunityHomeCaptions = (
+  serverId: string,
+  postId: string,
+  lang?: string,
+) =>
+  apiFetch<CommunityHomeCaptionsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/captions${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
 /** Staff-only: drafts + scheduled, never mixed into the published feed. */
 export const fetchCommunityHomeDrafts = (serverId: string) =>
   apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/drafts`);
@@ -2029,10 +2057,41 @@ export const fetchCommunityHomePost = (serverId: string, postId: string) =>
     `/api/servers/${serverId}/home/posts/${postId}`,
   );
 
+/** `announced` is true when the card also landed in `announceChannelId`. */
 export const createCommunityHomePost = (
   serverId: string,
   body: CreateCommunityHomePostRequest,
-) => post<CommunityHomePostResponse>(`/api/servers/${serverId}/home/posts`, body);
+) =>
+  post<CommunityHomePostResponse & { announced?: boolean }>(
+    `/api/servers/${serverId}/home/posts`,
+    body,
+  );
+
+/**
+ * The small card a chat message with this post's permalink is drawn as. A
+ * 404 means "not yours to see": the caller falls back to the plain link.
+ */
+export const fetchCommunityHomePostCard = (
+  serverId: string,
+  postId: string,
+  lang?: string,
+) =>
+  apiFetch<{ card: CommunityHomePostCard }>(
+    `/api/servers/${serverId}/home/posts/${postId}/card${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
+/** Staff: post the permalink (so the card) into a text channel of the server. */
+export const shareCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: ShareCommunityHomePostRequest,
+) =>
+  post<{ ok: boolean }>(
+    `/api/servers/${serverId}/home/posts/${postId}/share`,
+    body,
+  );
 
 export const updateCommunityHomePost = (
   serverId: string,
@@ -2051,6 +2110,14 @@ export const deleteCommunityHomePost = (serverId: string, postId: string) =>
 export const fetchCommunityHomeUnread = (serverId: string) =>
   apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
 
+/**
+ * Unread Baú posts for every server this account is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one.
+ * Servers with nothing unread are absent.
+ */
+export const fetchCommunityHomeUnreadAll = () =>
+  apiFetch<CommunityHomeUnreadAllResponse>("/api/community-home/unread");
+
 /** Stamp the feed read up to now. Fire and forget; the badge is not truth. */
 export const markCommunityHomeRead = (serverId: string) =>
   post<{ ok: boolean }>(`/api/servers/${serverId}/home/read`);
@@ -2066,9 +2133,16 @@ export const pinCommunityHomePost = (
     body,
   );
 
-export const publishCommunityHomePost = (serverId: string, postId: string) =>
-  post<CommunityHomePostResponse>(
+export const publishCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  options?: { announceChannelId?: string | null },
+) =>
+  post<CommunityHomePostResponse & { announced?: boolean }>(
     `/api/servers/${serverId}/home/posts/${postId}/publish`,
+    options?.announceChannelId
+      ? { announceChannelId: options.announceChannelId }
+      : undefined,
   );
 
 export const unpublishCommunityHomePost = (serverId: string, postId: string) =>

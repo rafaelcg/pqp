@@ -172,7 +172,12 @@ fun ConversationAvatar(
  * needs no help telling itself apart from anything.
  */
 @Composable
-fun CountBadge(count: Int, loud: Boolean, modifier: Modifier = Modifier) {
+fun CountBadge(
+    count: Int,
+    loud: Boolean,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+) {
     if (count <= 0) return
     Box(
         modifier = modifier
@@ -200,7 +205,7 @@ fun CountBadge(count: Int, loud: Boolean, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (count > 99) "99+" else count.toString(),
+            text = label ?: if (count > 99) "99+" else count.toString(),
             style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = TabularFigures),
             color = if (loud) {
                 MaterialTheme.colorScheme.onPrimary

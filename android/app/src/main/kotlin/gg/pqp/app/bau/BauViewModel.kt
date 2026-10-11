@@ -3,6 +3,7 @@ package gg.pqp.app.bau
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,12 @@ data class BauState(
     val submitting: Set<String> = emptySet(),
     /** Posts whose last comment did not land, for the composer to say so. */
     val commentFailed: Set<String> = emptySet(),
+    /**
+     * The channels this person can see in this server, for drawing `#channel`
+     * in a post. The API stores only an id; a reader who cannot see the
+     * channel is not in this list, so it never gets a name.
+     */
+    val channels: List<Channel> = emptyList(),
 )
 
 /**
@@ -47,7 +54,14 @@ class BauViewModel(
     init {
         viewModelScope.launch { _state.value = _state.value.copy(config = CommunityHomeConfigs.resolve(session.api)) }
         viewModelScope.launch { load() }
+        viewModelScope.launch { loadChannels() }
         viewModelScope.launch { listen() }
+    }
+
+    /** Best effort: without it a `#channel` is the neutral "unavailable" mark. */
+    private suspend fun loadChannels() {
+        runCatching { session.api.channels(serverId) }
+            .onSuccess { _state.value = _state.value.copy(channels = it) }
     }
 
     fun refresh() {
@@ -83,6 +97,10 @@ class BauViewModel(
     private suspend fun listen() {
         session.realtime.frames.collect { frame ->
             when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                "channels-update" -> {
+                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+                    loadChannels()
+                }
                 "community-home-update" -> {
                     if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
                     // A nudge, not a payload: the server says something changed

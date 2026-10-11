@@ -275,6 +275,44 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (translationEnabled)",
   },
+  bau_mobile_rendition: {
+    description:
+      "Versão pro celular dos vídeos do Baú: quem posta anexa um segundo corte (vertical) e o celular toca esse.",
+    env: "BAU_MOBILE_RENDITION",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the feed and post reads hydrate posts of
+    // one server, and create / update are routes under `/servers/:id`.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
+  },
+  bau_post_push: {
+    description:
+      "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
+    env: "BAU_POST_PUSH",
+    parseEnv: exactTrue,
+    // Off: a push is the one Baú surface that interrupts people who are not
+    // looking at the app. Turned on one server at a time first (its override),
+    // then everybody. Needs `community_home` and a configured push transport.
+    codeDefault: false,
+    // The fan-out starts from a post, and a post has a server.
+    perServer: true,
+  },
+  community_home_video_captions: {
+    description:
+      "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",
+    env: "COMMUNITY_HOME_VIDEO_CAPTIONS",
+    parseEnv: exactTrue,
+    // Off: it sends a video's sound to a third party (Cloudflare Workers AI,
+    // outside Brazil) and costs money per minute. One server first.
+    codeDefault: false,
+    // Every reader works from a post, and a post has a server: the enqueue at
+    // publish and in the sweep, the worker before it calls the provider (a
+    // flip mid-queue drops the job with no call), and every read. Off also
+    // HIDES stored captions, so it is a kill switch like voice_note_transcription.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (captions)",
+  },
   desktop_share_audio_native: {
     description:
       "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",
@@ -372,6 +410,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
   },
+  voice_audio_self_heal: {
+    description:
+      "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",
+    env: "VOICE_AUDIO_SELF_HEAL",
+    parseEnv: onUnlessOff,
+    // On: the repairs are the ones the call already does on its own (reopen
+    // the mic, replay an element, resubscribe, ICE restart), each bounded per
+    // call, and the off switch is here for a misfire seen live. Global, not
+    // per server: half of the reports are DM calls, which have no server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (audioSelfHeal)",
+  },
   watch_now_banner: {
     description:
       "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",
@@ -448,6 +499,20 @@ export const FEATURE_FLAGS = {
     // (`flag-client-contract.test.ts`) would rightly fail a field nobody
     // reads. The client PR that reads it adds the line back.
   },
+  notify_open_channel: {
+    description:
+      "Aviso do canal aberto (só cliente: com a janela minimizada, escondida ou sem foco, uma mensagem no canal ou na conversa que está aberta vira banner do sistema, respeitando nível, mudo e não perturbe).",
+    env: "NOTIFY_OPEN_CHANNEL",
+    parseEnv: exactTrue,
+    // Off until it has been checked on a real desktop: the open channel used to
+    // be the one place that never raised a banner, so turning it on changes
+    // what a blurred window does for everybody who has banners enabled.
+    codeDefault: false,
+    // The client asks `GET /api/push/config`, which has no server in hand, and
+    // keeps one answer per page: a per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/push/config (notifyOpenChannel)",
+  },
   push_attention_gate: {
     description:
       "Push pelo que a pessoa está olhando: o celular recebe a notificação a menos que um app ou aba esteja na frente dela e ativo. Desligado, qualquer conexão aberta em qualquer lugar (uma aba esquecida, o desktop minimizado) cala o celular.",
@@ -471,6 +536,15 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/client-update/config (forceUpdate)",
   },
+  client_force_update_in_call: {
+    description:
+      "Atualização crítica: com a atualização forçada ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega mesmo no meio de uma call. Derruba quem está em call; só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
+    env: "CLIENT_FORCE_UPDATE_IN_CALL",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/client-update/config (interruptCalls)",
+  },
   mention_ids_from_db: {
     description:
       "Menção de cargo (@cargo) avisa de verdade: o selo ao vivo e o push usam as pessoas que a mensagem registrou, não só o @usuário digitado (desligado: só quem foi citado pelo nome recebe).",
@@ -481,6 +555,19 @@ export const FEATURE_FLAGS = {
     // Read once per send, on the instance that took it, where the server is
     // known but a conversation has no roles: global on purpose.
     perServer: false,
+  },
+  newcomer_invite_moment: {
+    description:
+      "Chama teus amigos (só cliente): quem chegou sem convite e só está em comunidades públicas (o QG) vê uma faixa pra criar uma sala e mandar o link, e a lista de primeiros passos para de contar o QG como sala.",
+    env: "NEWCOMER_INVITE_MOMENT",
+    parseEnv: exactTrue,
+    // Off until the strip has been seen on production by a real newcomer.
+    codeDefault: false,
+    // About an account, not a server: the strip asks whether ANY of your
+    // servers is a room of your own, and the hub's checklist has no server in
+    // hand. A per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (inviteMoment)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

@@ -92,6 +92,7 @@ import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
+import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
@@ -122,6 +123,7 @@ import {
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
+import { shareAppTarget } from "@/lib/share-app-hint";
 import {
   NO_SCREEN_FULLSCREEN,
   escapeExitsExpandedFullscreen,
@@ -679,6 +681,13 @@ export interface CallStageProps {
    * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
    */
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -797,6 +806,8 @@ export function CallStage({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -869,6 +880,8 @@ export function CallStage({
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
+      onRepairAudio={onRepairAudio}
+      onDismissAudioHealthPrompt={onDismissAudioHealthPrompt}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -919,6 +932,8 @@ function ActiveCall({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -965,6 +980,13 @@ function ActiveCall({
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -2582,6 +2604,14 @@ function ActiveCall({
           visible={!chrome.hidden}
           onDismiss={onDismissMicFallbackNotice}
         />
+        {onRepairAudio && onDismissAudioHealthPrompt ? (
+          <AudioHealthNotice
+            prompt={voiceState.audioHealthPrompt ?? null}
+            visible={!chrome.hidden}
+            onRepair={onRepairAudio}
+            onDismiss={onDismissAudioHealthPrompt}
+          />
+        ) : null}
         <ShareGameCaptureNotice
           hint={voiceState.shareCaptureHint}
           visible={!chrome.hidden}
@@ -2833,6 +2863,12 @@ export function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // A phone browser that cannot capture still has a native app that can. Only
+  // used to point at it once the person taps the greyed-out button.
+  const shareAppLink = useMemo(
+    () => shareAppTarget({ canShareInBrowser: canShare }),
+    [canShare],
+  );
   // Watch party is a Chrome tab plus that tab's sound. The shell picker
   // lists screens and windows only, so the same door there would start a
   // silent share and the prompt would be a lie.
@@ -3622,8 +3658,31 @@ export function CallControls({
       </div>
       </div>
     {shareHint && (
-      <p role="status" className="text-center text-[11px] text-paper-muted">
+      <p
+        role="status"
+        data-testid="share-unavailable-hint"
+        className="text-center text-[11px] text-paper-muted"
+      >
         {shareHint}
+        {shareAppLink && (
+          <>
+            {" "}
+            {t("voice.share.useApp")}{" "}
+            <a
+              href={shareAppLink.url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="share-get-app-link"
+              className="font-medium text-signal underline underline-offset-2"
+            >
+              {t(
+                shareAppLink.platform === "android"
+                  ? "voice.share.useApp.android"
+                  : "voice.share.useApp.ios",
+              )}
+            </a>
+          </>
+        )}
       </p>
     )}
     </div>

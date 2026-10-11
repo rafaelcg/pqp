@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NO_FORCE,
+  isCriticalBuild,
   isForcedBuild,
   isStaleBuild,
   parseForceConfig,
@@ -68,7 +69,13 @@ describe("parseForceConfig", () => {
     expect(parseForceConfig({ forceUpdate: true, minBuiltAt: 5_000 })).toEqual({
       forceUpdate: true,
       minBuiltAt: 5_000,
+      interruptCalls: false,
+      criticalMinBuiltAt: null,
     });
+    expect(
+      parseForceConfig({ interruptCalls: true, criticalMinBuiltAt: 7_000 }),
+    ).toMatchObject({ interruptCalls: true, criticalMinBuiltAt: 7_000 });
+    expect(parseForceConfig({ interruptCalls: "true" }).interruptCalls).toBe(false);
   });
 
   it("reads anything that is not plainly yes as no force", () => {
@@ -98,6 +105,37 @@ describe("isForcedBuild", () => {
   it("never forces a dev build", () => {
     expect(
       isForcedBuild({ build: "dev", builtAt: 0 }, { forceUpdate: true, minBuiltAt: 9 }),
+    ).toBe(false);
+  });
+});
+
+describe("isCriticalBuild", () => {
+  const bundle = { build: "abc123", builtAt: 1_000 };
+
+  it("is off by default, and a plain force is not critical", () => {
+    expect(isCriticalBuild(bundle, NO_FORCE)).toBe(false);
+    expect(isCriticalBuild(bundle, { ...NO_FORCE, forceUpdate: true })).toBe(false);
+  });
+
+  it("is critical when the operator lets a force interrupt calls", () => {
+    expect(
+      isCriticalBuild(bundle, { ...NO_FORCE, forceUpdate: true, interruptCalls: true }),
+    ).toBe(true);
+    expect(
+      isCriticalBuild(bundle, { ...NO_FORCE, minBuiltAt: 2_000, interruptCalls: true }),
+    ).toBe(true);
+    // Interrupting calls without anything forced forces nothing.
+    expect(isCriticalBuild(bundle, { ...NO_FORCE, interruptCalls: true })).toBe(false);
+  });
+
+  it("is critical for a bundle built before the critical minimum, and not after", () => {
+    expect(isCriticalBuild(bundle, { ...NO_FORCE, criticalMinBuiltAt: 2_000 })).toBe(true);
+    expect(isCriticalBuild(bundle, { ...NO_FORCE, criticalMinBuiltAt: 500 })).toBe(false);
+  });
+
+  it("never applies to a dev build", () => {
+    expect(
+      isCriticalBuild({ build: "dev", builtAt: 0 }, { ...NO_FORCE, criticalMinBuiltAt: 2_000 }),
     ).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  isCriticalBuild,
   isForcedBuild,
   isStaleBuild,
   parseVersionManifest,
@@ -16,10 +17,17 @@ import { FRESH_BUILD, type BuildStaleness } from "@/lib/update-prompt-state";
  * A window that never navigates, which is what the desktop app and a pinned tab
  * are, is told nothing for as long as it lives: a Windows desktop app running a
  * build from before a deploy was found on 2026-09-30 with the new shell around
- * it and the old site inside. So the page asks, on three occasions: when it
- * starts, when it comes back into focus or view, and on a timer of about twelve
- * minutes while it is open. The question is one small request:
- * `/version.json`, written by the build, never cached.
+ * it and the old site inside. So the page asks, on four occasions: when it
+ * starts, when it comes back into focus or view, when the realtime socket
+ * (re)connects (`requestVersionCheck`, called from `realtime.ts`; a reconnect
+ * after an API deploy is the moment a new build is most likely), and on a timer
+ * of about ten minutes while it is open, hidden or not. The question is one
+ * small request: `/version.json`, written by the build, never cached.
+ *
+ * WHY `/version.json` AND NOT THE API. The web bundle and the API deploy apart
+ * (a client-only change never restarts the API), so the API's own version says
+ * nothing about which bundle is current. `/version.json` is written by the same
+ * build that wrote the bundle and lands in the same atomic Pages deploy.
  *
  * It asks the browser to look for a new worker at the same time, because
  * finding out the build is stale and having the new precache ready are two
@@ -32,9 +40,9 @@ import { FRESH_BUILD, type BuildStaleness } from "@/lib/update-prompt-state";
 
 /** Between two checks however often focus flickers. */
 export const MIN_GAP_MS = 60_000;
-/** The timer; jittered so a deploy's worth of tabs do not ask in the same second. */
-export const CHECK_INTERVAL_MS = 12 * 60_000;
-export const CHECK_JITTER_MS = 3 * 60_000;
+/** The timer (8 to 12 minutes); jittered so a deploy's worth of tabs do not ask in the same second. */
+export const CHECK_INTERVAL_MS = 8 * 60_000;
+export const CHECK_JITTER_MS = 4 * 60_000;
 /** After the page starts; long enough not to compete with the first paint. */
 export const FIRST_CHECK_DELAY_MS = 4_000;
 
@@ -93,12 +101,17 @@ export function createVersionWatch(deps: VersionWatchDeps): VersionWatch {
     // away before the force lookup, the failure read as "no force", and the
     // blocking screen turned into an automatic reload. Only an answer changes
     // the answer; the operator turning it off is an answer.
+    const known = lastPublished?.latestBuild === latest.build ? lastPublished : null;
     const forced = config
       ? isForcedBuild(deps.running, config)
-      : lastPublished?.latestBuild === latest.build && lastPublished.forced;
+      : Boolean(known?.forced);
+    const critical = config
+      ? isCriticalBuild(deps.running, config)
+      : Boolean(known?.critical);
     publish({
       stale: true,
       forced,
+      critical,
       latestBuild: latest.build,
       // The deployed build's age is how long this page has been behind, even
       // if it only just learned of it (a laptop that slept for two days).
@@ -173,6 +186,18 @@ async function updateRegisteredWorker(): Promise<void> {
  * `fetchForceConfig` is injected because the API client needs a signed-in
  * session and this module must not know about that.
  */
+/** The page's live watch, for `requestVersionCheck`. Null until started. */
+let activeWatch: VersionWatch | null = null;
+
+/**
+ * Ask now (within `MIN_GAP_MS`), from outside the watch: the realtime socket
+ * calls it on every connect and reconnect. A no-op before the watch starts, in
+ * a dev build, and in tests that never start one.
+ */
+export function requestVersionCheck(): void {
+  void activeWatch?.check();
+}
+
 export function startVersionWatch(options: {
   running: BuildIdentity;
   fetchForceConfig: () => Promise<ForceConfig | null>;
@@ -190,18 +215,27 @@ export function startVersionWatch(options: {
     running: options.running,
     fetchLatest: () => fetchLatestBuild(),
     fetchForceConfig: options.fetchForceConfig,
-    updateWorker: updateRegisteredWorker,
+    // A hidden tab reads the version file (a tiny static file) but leaves the
+    // worker alone: the worker checks for itself on the page's fetches
+    // (`sw-build-script.ts`), and a hundred background tabs each asking for
+    // `sw.js` every ten minutes would be a hundred update jobs for one answer.
+    // A stale hidden tab reloads through `applyUpdate`, which updates first.
+    updateWorker: () =>
+      document.visibilityState === "hidden"
+        ? Promise.resolve()
+        : updateRegisteredWorker(),
     publish: options.publish,
   });
+  activeWatch = watch;
 
   let timer: number | undefined;
   const schedule = () => {
     const delay = CHECK_INTERVAL_MS + Math.random() * CHECK_JITTER_MS;
     timer = window.setTimeout(() => {
-      // A hidden tab skips its turn; the visibility handler catches it up.
-      if (document.visibilityState === "visible") {
-        void watch.check();
-      }
+      // Hidden tabs ask too. A hidden tab is the SAFEST place to reload
+      // (`update-policy.ts`), and one that skipped its turn only learned it was
+      // stale the moment somebody looked at it again, which is the worst moment.
+      void watch.check();
       schedule();
     }, delay);
   };
@@ -227,6 +261,9 @@ export function startVersionWatch(options: {
   navigator.serviceWorker?.addEventListener("controllerchange", onController);
 
   return () => {
+    if (activeWatch === watch) {
+      activeWatch = null;
+    }
     window.clearTimeout(first);
     window.clearTimeout(timer);
     window.removeEventListener("focus", onFocus);

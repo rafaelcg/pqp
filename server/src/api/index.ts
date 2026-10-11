@@ -132,6 +132,8 @@ import {
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createCommunityHomePostSchema,
+  publishCommunityHomePostSchema,
+  shareCommunityHomePostSchema,
   communityHomeCommentBodySchema,
   parseCommunityHomeBody,
   parseCommunityHomeTeaser,
@@ -355,12 +357,15 @@ import {
   claimCommunityHomeMediaUpload,
   CommunityHomeError,
   countUnreadCommunityHomePosts,
+  countUnreadCommunityHomePostsAllServers,
   markCommunityHomeRead,
   setCommunityHomePostPinned,
   createCommunityHomePost,
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isBauMobileRenditionOn,
+  getCommunityHomePostCaptions,
   isCommunityHomeEnabled,
   isCommunityHomeMediaConfigured,
   isCommunityHomeVipEnabled,
@@ -374,6 +379,14 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
+import {
+  getCommunityHomePostCard,
+  safeShareOrigin,
+  shareCommunityHomePost,
+  type ShareFailure,
+} from "../services/community-home-share.js";
+import { resolveRedirectOrigin } from "../services/connections.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -3240,6 +3253,26 @@ router.post("/api/voice/token", async ({ req, user }) => {
     } else {
       transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
     }
+  } else if (
+    transport !== "livekit" &&
+    isVoiceRegistryEnabled() &&
+    isRoomPinnedLocally(body.voiceChannelId)
+  ) {
+    // A PROMOTION THIS REPLICA HAS NOT HEARD YET. A mid-call promotion
+    // (`promoteRoomPastMeshCap` in ws/voice.ts) rewrites the room row first
+    // and tells the cluster second, over the bus. The seats on the replica
+    // that decided it are told at once and ask for a token at once, and HTTP
+    // is balanced per request, so the ask can land here, on a replica that
+    // holds seats in the room and still has `mesh` in its own map because
+    // the bus frame is a few milliseconds behind. Answering 409 there hung
+    // up a person whose call had just been moved for them. The row is the
+    // authority the promotion wrote, so a local `mesh` is checked against it
+    // before refusing. Only on this refusal path: a room that is really mesh
+    // pays one indexed read to be refused, everyone else pays nothing.
+    const stored = await readVoiceRoomTransport(body.voiceChannelId);
+    if (stored === "livekit") {
+      transport = stored;
+    }
   }
   if (transport !== "livekit") {
     throw new HttpError(409, "This room runs peer-to-peer");
@@ -4387,6 +4420,64 @@ function takeHomeBudget(
   }
 }
 
+/**
+ * Post the card for a post that just went live into a channel of the same
+ * server. Best effort by design: a publish is the point, the announcement is
+ * the garnish, so a channel the author cannot send in, a slow mode, AutoMod or
+ * a database blip must never turn a published post into an error.
+ */
+async function announceHomePost(
+  req: IncomingMessage,
+  user: DbUser,
+  serverId: string,
+  postId: string,
+  channelId: string | null | undefined,
+): Promise<boolean> {
+  if (!channelId) {
+    return false;
+  }
+  try {
+    const result = await shareCommunityHomePost({
+      author: user,
+      serverId,
+      postId,
+      channelId,
+      // A retried publish must not post the card twice.
+      nonce: `bau:${postId}`,
+      origin: safeShareOrigin(
+        resolveRedirectOrigin(
+          typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        ),
+      ),
+    });
+    return result.ok;
+  } catch (error) {
+    console.error("[community-home] announce failed:", error);
+    return false;
+  }
+}
+
+function throwShareFailure(reason: ShareFailure): never {
+  switch (reason) {
+    case "no-post":
+      throw new NotFound("Post not found");
+    case "no-access":
+      throw new NotFound("Channel not found");
+    case "cannot-send":
+      throw new Forbidden("You cannot send messages in that channel");
+    case "slow-mode":
+      throw new HttpError(429, "Slow down");
+    case "blocked":
+      throw new HttpError(422, "This message was blocked by AutoMod");
+    case "bad-channel":
+      throw new HttpError(400, "Pick a text channel of this server");
+    default:
+      // The chat could not take it right now (database breaker, an unknown
+      // refusal): a retry is the right answer, so not a 4xx.
+      throw new HttpError(503, "Could not post the card, try again");
+  }
+}
+
 function requireCommunityHome(): void {
   if (!isCommunityHomeEnabled()) {
     throw new NotFound("Not found");
@@ -4481,7 +4572,11 @@ router.get(
         user.id,
         url.searchParams.get("lang"),
       );
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4495,7 +4590,11 @@ router.get(
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
-      return { posts, translationEnabled: translationActiveFor(serverId!) };
+      return {
+        posts,
+        translationEnabled: translationActiveFor(serverId!),
+        mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4518,6 +4617,91 @@ router.get(
     } catch (error) {
       mapCommunityHomeError(error);
     }
+  },
+);
+
+/**
+ * The automatic subtitles of a post's uploaded video, as WebVTT: the source
+ * track and, when there is a current one, its translation into `?lang=` (the
+ * reader's UI locale). Any member who may play the video may read them: the
+ * post goes through the same read as the feed, so a draft, another server's
+ * post or a members-only video the viewer cannot open answers with no tracks
+ * or a 404, never with words. `tracks: []` when the flag is off for the server
+ * or nothing has been made yet.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/captions",
+  async ({ url, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const tracks = await getCommunityHomePostCaptions(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { tracks };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The small card a chat message with this post's permalink is drawn as. Same
+ * authorization as the feed (membership, then the lock), so a reader who may
+ * not open the post gets 404 or the locked teaser and the client falls back to
+ * the plain link. Drafts and scheduled posts are 404 even for staff.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/card",
+  async ({ url, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const card = await getCommunityHomePostCard(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { card };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * Staff: post a normal chat message carrying the post's permalink into a text
+ * channel of the same server, as the caller. The chat's own send path decides
+ * whether the caller may speak there.
+ */
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/share",
+  async ({ req, res, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(homePostLimiter, res, user.id);
+    const body = shareCommunityHomePostSchema.parse(await readJsonBody(req));
+    const result = await shareCommunityHomePost({
+      author: user,
+      serverId: serverId!,
+      postId: postId!,
+      channelId: body.channelId,
+      message: body.message ?? null,
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+      origin: safeShareOrigin(
+        resolveRedirectOrigin(
+          typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        ),
+      ),
+    });
+    if (!result.ok) {
+      throwShareFailure(result.reason);
+    }
+    return { ok: true };
   },
 );
 
@@ -4560,13 +4744,27 @@ router.post(
         visibility: raw.visibility,
         commentsEnabled: raw.commentsEnabled !== false,
         mediaUploadId: raw.mediaUploadId ?? null,
+        mobileMediaUploadId: raw.mobileMediaUploadId ?? null,
         youtubeUrl: raw.youtubeUrl ?? null,
         status: raw.status,
         scheduledAt: raw.scheduledAt ?? null,
         scheduleTimezone: raw.scheduleTimezone ?? null,
       });
       await notifyHome(serverId!);
-      return created({ post });
+      // A post created as published is announced by push (flag permitting).
+      // Not awaited: it never fails the publish, and it never throws.
+      void pushPendingCommunityHomePosts(serverId!);
+      const announced =
+        post.status === "published"
+          ? await announceHomePost(
+              req,
+              user,
+              serverId!,
+              post.id,
+              raw.announceChannelId,
+            )
+          : false;
+      return created({ post, announced });
     } catch (error) {
       if (error instanceof z.ZodError) {
         throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
@@ -4599,6 +4797,7 @@ router.patch(
         mediaUploadId: raw.mediaUploadId,
         youtubeUrl: raw.youtubeUrl,
         clearMedia: raw.clearMedia,
+        mobileMediaUploadId: raw.mobileMediaUploadId,
       });
       await notifyHome(serverId!);
       return { post };
@@ -4627,6 +4826,23 @@ router.delete(
 );
 
 /**
+ * The Baú badge for EVERY server this person is in, in one read: what the
+ * server rail needs to light an icon for a server that is not the open one
+ * (the per-server route below answers only the one asked about, and the rail
+ * would otherwise need a request per server). Only servers whose owner turned
+ * the Baú on are counted, and only servers with something unread appear, so
+ * the answer is usually `{ servers: {} }`.
+ */
+router.get("/api/community-home/unread", async ({ user }) => {
+  requireCommunityHome();
+  try {
+    return await countUnreadCommunityHomePostsAllServers(user.id);
+  } catch (error) {
+    mapCommunityHomeError(error);
+  }
+});
+
+/**
  * The Baú badge: how many posts this person has not seen. Its own endpoint
  * rather than a field on the feed, because the sidebar row needs the number
  * without loading the posts.
@@ -4637,7 +4853,7 @@ router.get(
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      return { count: await countUnreadCommunityHomePosts(serverId!, user.id) };
+      return await countUnreadCommunityHomePosts(serverId!, user.id);
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4681,13 +4897,25 @@ router.post(
 
 router.post(
   "/api/servers/:serverId/home/posts/:postId/publish",
-  async ({ user }, { serverId, postId }) => {
+  async ({ req, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    // The body is optional: older clients publish with none.
+    const options = publishCommunityHomePostSchema.parse(
+      await readJsonBody(req),
+    );
     try {
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
-      return { post };
+      void pushPendingCommunityHomePosts(serverId!);
+      const announced = await announceHomePost(
+        req,
+        user,
+        serverId!,
+        post.id,
+        options.announceChannelId,
+      );
+      return { post, announced };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4904,6 +5132,19 @@ router.post(
  */
 router.get("/api/communities/config", async () => ({
   enabled: isCommunitiesEnabled(),
+}));
+
+/**
+ * First-run switches the client reads once per page and again on every config
+ * refresh (`client/src/lib/newcomer-invite.ts`). One field today:
+ * `inviteMoment`, the runtime flag `newcomer_invite_moment` (global, off by
+ * default; docs/FEATURE_FLAGS.md). Client presentation only, read per request,
+ * so a flip reaches open tabs on their next refresh. Not behind
+ * `COMMUNITIES_ENABLED`: an instance with no communities still has newcomers,
+ * and answering `false` there is the same as the flag being off.
+ */
+router.get("/api/onboarding/config", async () => ({
+  inviteMoment: isEnabled("newcomer_invite_moment"),
 }));
 
 /**
@@ -11435,6 +11676,10 @@ router.get("/api/push/config", async ({ user }) => {
     // starts offering notifications the moment this answers true, no update
     // required.
     fcm: isFcmEnabled(),
+    // Runtime flag, global, off by default: the open channel raises an OS
+    // banner while the window is away. Read per request, so a flip reaches an
+    // open tab on its next config refresh (`lib/config-refresh.ts`).
+    notifyOpenChannel: isEnabled("notify_open_channel"),
     ...(await getPushSettings(user.id)),
   };
 });

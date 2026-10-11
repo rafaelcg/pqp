@@ -153,6 +153,10 @@ export const cookiesEn: LegalDocument = {
               receive.
             </li>
             <li>
+              <code>pqp:share-priority</code>: whether your screen share keeps
+              its frame rate or its resolution when the connection tightens.
+            </li>
+            <li>
               <code>pqp:video-fit</code>: whether camera, screen and watch
               video fill the tile or fit inside it.
             </li>

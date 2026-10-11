@@ -17,7 +17,9 @@ Staging is the proving ground. Production has the flags unset.
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
 A third switch, `community_home_translation`, is a **runtime flag** (per
-server, default off) and is described in "Translation" below.
+server, default off) and is described in "Translation" below. A fourth,
+`community_home_video_captions` (per server, default off), puts automatic
+subtitles on uploaded videos; see "Video subtitles".
 
 **Plus one per-server switch.** With the instance flag on, each server still
 starts with Baú off. An owner turns it on in **Server settings**, the same
@@ -124,7 +126,11 @@ for what would replace it.
   not seen (`GET …/home/unread`; own posts never count, and the VIP filter
   matches the feed so the badge cannot promise a post the feed will not
   show). Opening the live feed stamps `community_home_reads` and clears it.
-  The count outranks the "New" chip: a number says more.
+  The count is lime (the brand signal, not the mention red) and outranks the
+  discovery "New" chip: a number says more. While the newest unread post is
+  under 24 h old it also wears a pulsing "New" chip (still under
+  `prefers-reduced-motion`), a different chip from the discovery one, driven by
+  `newestAt` on the unread reads; an API that does not send it shows no chip.
   Landing (`client/src/lib/community-home/landing.ts`): a **community**
   always lands on this pane (identity header, then the feed). A private hall
   still needs the server's own Baú opt-in. If the instance flag or the
@@ -148,6 +154,25 @@ for what would replace it.
   16:9 here (pin a Baú post instead). Private halls that turned Baú on
   keep today's feed with no identity header. One channel-list row, still
   called Baú.
+- **Server rail** (web): an unread Baú post lights the white pip on that
+  server's icon, as an unread channel does, and adds the Baú's own cue in lime
+  (the brand signal): a count at the icon's corner, capped at "9+". The red
+  count on an icon stays for mentions ("addressed to you"), so when the server
+  has mentions the red count keeps the corner and the Baú moves to a lime ring
+  and glow around the icon instead: one corner, one meaning, no second badge to
+  read. A muted server stays silent, as for channels. The tab title and app
+  badge count mentions only, so the Baú is not in them. One read
+  (`GET /api/community-home/unread`, `{ servers: { [id]: count }, newest: { [id]: iso } }`,
+  only servers whose owner turned Baú on) feeds every icon; it is re-asked on
+  any `community-home-update` frame and when you move between servers. The open
+  server's own number still comes from `…/home/unread` (`{ count, newestAt }`)
+  and drives the row and the corner card
+  (`client/src/lib/community-home/rail-unread.ts`).
+- **iOS and Android** read the aggregate for a lime count on the server tile
+  (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
+  too. Neither list carries mention counts, so there is no ring there.
+- **Push** on a new post, behind the runtime flag `bau_post_push` (default off,
+  per server, see below).
 - **Live corner card** when a post is published while you are in that
   server, looking at another channel (`community-home-update` plus unread
   going up). Not the author: own posts never count as unread. Not if you
@@ -179,6 +204,25 @@ for what would replace it.
   the locked version too for a VIP post. **Publish**, **Save draft**, or
   **Schedule** (a `datetime-local` in the browser's timezone; the API stores
   the instant plus the IANA name).
+- **Channel links**: `#geral` in a post is a link to that channel. The composer
+  helps write it: type `#` and the server's channels open as a dropdown
+  (filtered as you type, arrows + Enter/Tab or a click to pick; the chat
+  composer's `AutocompleteMenu`). The textarea holds a readable `#name`; on
+  save it is stored as **`<#channelId>`** (the channel's uuid, grammar in
+  `packages/shared/src/community-home-channel-refs.ts`), so a rename never
+  breaks the link and the body never carries a name. Readers resolve the id
+  against the channels **they** can see (the same list the sidebar shows), so
+  a private or deleted channel is a muted `#unavailable-channel` with no name
+  and no link: the server does not resolve names and leaks nothing. A plain
+  `#name` in an older post (or one typed without the picker) links too when
+  exactly one visible channel has that name; two with the same name are never
+  guessed. Automatic translation swaps the ids for numbered placeholders
+  (`<#1>`) before the model sees the text and puts them back; a field whose
+  placeholders did not all come back keeps the author's words
+  (`communityHomeTranslation.channelRefsKept`). iOS and Android draw the same
+  links (tap opens the channel in the app) and offer the picker as a row of
+  chips while the draft ends in `#query`. Stored limit: the 4000 characters are
+  counted on the stored form, where a link is 40.
 - **Drafts tab**: drafts and scheduled posts with Publish now / Unschedule /
   Edit / Delete.
 - **Pinned post**: one per server, enforced by a partial unique index rather
@@ -203,6 +247,92 @@ for what would replace it.
   or unlock (VIP visibility). Delete is a two-step in that overflow, not a
   browser dialog. Heart with a count. The two newest comments under an
   unlocked card, "See all N" fetches the rest.
+
+## Push on a new post (`bau_post_push`)
+
+Runtime flag, **default off, per server** (`docs/FEATURE_FLAGS.md`): turn it on
+for one server with `PUT /api/admin/flag-overrides { key: "bau_post_push",
+serverId, enabled: true }`, then globally. It needs `community_home`, the
+server's own Baú switch and a configured push transport (web push, FCM, APNs;
+the same pipeline as mentions and DMs).
+
+- **When.** A post going live: published from the composer, "Publish now", or a
+  scheduled time arriving. Exactly once: `community_home_posts.push_claimed_at`
+  is stamped by one `UPDATE ... RETURNING` (`services/community-home-push.ts`),
+  by the publish route and by the 30 s sweep alike, so two API machines, a
+  feed read's catch-up and an unpublish followed by a publish cannot announce a
+  post twice. The stamp is taken **even with the flag off**, so turning it on
+  never announces what was published while it was off. A post unannounced for
+  more than 30 minutes is stamped and dropped (in one statement, never loaded),
+  and a claim is at most 200 fresh posts per call. If the fan-out fails before
+  anything was sent the claim is handed back and the next tick retries; once a
+  page of pushes has gone out the posts stay claimed, because finishing could
+  tell some people twice and a missed push is the lesser harm. The walk is
+  capped at 50 000 members (`capped` on the `push.bauPost` line).
+- **Who.** Every member except: the author; anybody who blocked the author; for
+  a members-only post, anybody who could not open it in full (only
+  `MANAGE_SERVER` and the VIP cargo can; with the VIP flag off a members-only
+  post is not announced). Then the push-only rules, each counted under
+  `product.pushSkipped.bau.*` on `GET /api/admin/metrics`: a socket in front of
+  the person (`live_socket`, or `attentive_socket` with `push_attention_gate`;
+  the live corner card is that notice), stored do-not-disturb (`dnd`), the
+  server muted (`muted`: an explicit `none` for the server or a `none` default)
+  or explicitly set to mentions only for this server (`level`). The account-wide
+  "mentions" default for servers does **not** silence it: a staff post is not
+  chat noise. No device (`no_subscription`) and no configured transport
+  (`transport_off`) are counted the same way. Sends land in
+  `product.pushDelivery` by platform like every other push, and one
+  `push.bauPost` log line per server per claim.
+- **Quiet.** Posts claimed together are one push per person that says how many
+  ("3 posts novos no Baú do X"). The notification `tag` is per server
+  (`bau:<serverId>`), so on the device (and as the APNs collapse id) a later
+  post replaces an earlier one. TTL is a day.
+- **Copy.** Title `Baú`; body `Post novo no Baú do {server}: {title}` (en, es,
+  pt-BR by the recipient's `settings.locale`). Never the body of the post.
+- **Tap.** `path` is `/app/server/<id>/home`. The web client lands on the Baú
+  for any server URL with no channel; iOS (`DeepLinkTarget.bau`) and Android
+  (`DeepLinkTarget.Bau`) open their Baú screen.
+
+## Promoting a post in chat
+
+A post has one stable address, `/app/server/<serverId>/bau/<postId>` (client
+route `home` in `client/src/lib/app-route.ts`; `bauPostPath` in
+`packages/shared/src/community-home-share.ts`). Opening it lands on the server's
+Baú, scrolls to the post and rings it for a moment. It survives sign-up
+(`signedOutRedirectPath`), so a logged-out visitor lands on the post, not the
+door. A post older than the 50 the feed loads is fetched on its own and shown
+at the top.
+
+A chat message containing that address, on this instance (the page origin or
+`pqp.gg`), is drawn as a **card** under the sender's words: poster (first frame
+of a video, the picture, a YouTube poster, or a lime plate), a play badge for
+anything that plays, title, a two-line teaser, author, likes and comments, and
+an **Open in Baú / Ver no Baú** button. The pasted URL is not repeated above
+its own card. The data comes from `GET /api/servers/:id/home/posts/:postId/card`,
+which runs the feed's own authorization (member, the VIP lock, published only,
+the server's own Baú switch). Anything else is a 404 and the link stays plain.
+A locked post leaks only its title, teaser and public YouTube poster.
+
+Two ways to put a card in a channel, both posting a **normal chat message**
+through `postChannelMessage` (so SEND_MESSAGES, slow mode, AutoMod and the
+broadcast are chat's own, and the card shows up everywhere the link does):
+
+- **Announce on publish.** The composer carries "Anunciar no #geral", ticked
+  by default, with the server's general channel (else the first public text
+  channel you may speak in). `announceChannelId` on create, or in the body of
+  `POST …/publish`. Best effort: a channel you cannot speak in, a slow mode or
+  an AutoMod hit never fails the publish (`announced: false` comes back and the
+  composer says so). Immediate publishes only; a scheduled post is not announced.
+- **Share to a channel.** Staff menu on a published post (web) opens a picker
+  (channel, optional words) and calls `POST …/posts/:postId/share`
+  (`MANAGE_SERVER`). The link is built from the request `Origin` when it is an
+  allowed app origin, else `pqp.gg`.
+
+Tests: `server/src/services/community-home-share.test.ts` (card
+authorization, locked leaks nothing, share and announce through the real chat
+path, send permission), `packages/shared/src/community-home-share.test.ts`
+(permalink parsing), `client/src/lib/community-home/share-card.test.ts` (which
+links get a card), `client/src/components/chat/bau-post-card.test.tsx`.
 
 ## Limits
 
@@ -260,6 +390,44 @@ downloads, never inline.
 
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
+
+### A phone cut of a video
+
+An uploaded video can carry a second, vertical (9:16) edit beside the main,
+landscape one: an owner posting a launch video with both cuts. Phones play the
+vertical one, everything else the main one. Runtime flag
+`bau_mobile_rendition` (**per server**, default off, env default
+`BAU_MOBILE_RENDITION`), served to the composer as `mobileRenditionEnabled` on
+`GET .../home/posts` and `.../home/drafts`.
+
+- **Storage.** Four nullable columns on the post row
+  (`mobile_media_name`, `_content_type`, `_byte_size`, `_storage_key`), not a
+  child table: there is exactly one alternate, it lives and dies with the main
+  video, and a CHECK refuses one on a post whose `media_kind` is not `video`.
+  The bytes take the same mint / PUT / claim as any Baú media (same 100 MiB
+  cap, same type allowlist, same HEAD), so the upload row is an ordinary one
+  and the orphan sweep needs nothing new.
+- **Writes.** `mobileMediaUploadId` on create and on PATCH. Refused unless the
+  flag is on, the main media is an uploaded video, the cut is a video, and it
+  is not the main file twice. On PATCH, omitted keeps the cut while the main
+  file stays the same; replacing or clearing the main media drops it (it was an
+  edit of the old video); `null` removes it. A removed or replaced cut, and
+  both files of a deleted post (main media included), are handed to the
+  orphan sweep inside the same transaction (upload row unclaimed and
+  unverified), then deleted right after COMMIT without the answer waiting on
+  it. Whatever that quick cleanup does not finish, the sweep does.
+- **Reads.** `media.mobile` = `{ name, contentType, byteSize, url }`, inside
+  `media`, so a locked viewer (who gets no media) never gets it. Flag off: the
+  field is null and every client plays the main video; stored cuts are kept,
+  so turning it back on brings them back. A client that ignores the field
+  plays the main video.
+- **Who plays which.** Web: `communityHomeVideoUrl` in
+  `client/src/lib/community-home/rendition.ts`. The vertical cut when the
+  viewport is at most 640 CSS px wide, or the pointer is coarse and the screen
+  is portrait; decided when the player mounts, never on rotate (a phone turned
+  sideways mid-video keeps playing). iOS and Android always prefer it
+  (`CommunityHomeMedia.inlineVideoURL`, `BauMedia.videoUrl`). The composers on
+  the phones do not offer it yet; staff attach it from the web.
 
 ## Schedule
 
@@ -345,6 +513,28 @@ only because the key is sent to it).
   found nothing missing the sweep rescans only every 10 minutes (or at once when
   the flag's servers change); a publish or an edit never waits for it.
 
+- *Brand and names never reach the model.* Both the post translator and the
+  subtitle translator go through `communityHomeTranslatorFor` ->
+  `server/src/services/translation-brand-guard.ts`. "pqp" (standalone word,
+  any case), "pqp.gg", "QG do pqp", "Baú", "QG", URLs, @handles, `#channel`
+  tokens and the server's own name are swapped for placeholders (`<k1>`) before
+  the call and put back after it, so the product name cannot be "helpfully"
+  translated (it once came back as "WTF", because "pqp" is also a pt-BR swear).
+  A string whose placeholders did not all come back keeps the author's words
+  (`communityHomeTranslation.brandNamesKept`). The system prompt says the same
+  as a second line of defence. Translations stored before this change keep
+  their old text; to make them again for one post (the sweep redoes the post
+  text within about ten minutes, the subtitles on the next read):
+
+  ```sql
+  BEGIN;
+  DELETE FROM community_home_post_translations     WHERE post_id = '<post id>' AND NOT same_language;
+  DELETE FROM community_home_translation_jobs      WHERE post_id = '<post id>';
+  DELETE FROM community_home_post_captions         WHERE post_id = '<post id>' AND NOT is_source;
+  DELETE FROM community_home_caption_translation_jobs WHERE post_id = '<post id>';
+  COMMIT;
+  ```
+
 **What is never translated.** Comments (a follow-up), the author's name,
 the cover, media, anything in a draft or scheduled post (it is translated when
 it goes live). A members-only post is translated like any other, but the lock
@@ -388,6 +578,102 @@ right after a publish, the worker runs the minute sweep.) The sweep
 translates what is already published within a minute (newest first, bounded by
 the daily budget). Turning the flag off is instant and keeps the stored rows.
 
+## Video subtitles
+
+A video uploaded to the Baú gets automatic subtitles in the language it was
+spoken in, and a translation of them into the reader's language, so the owner's
+launch video in Portuguese can be followed in English or Spanish. Uploaded
+videos only: YouTube, Twitch, TikTok and Instagram bring their own.
+
+**Switches.** `community_home_video_captions`, a runtime flag, **per server**,
+default off (env default `COMMUNITY_HOME_VIDEO_CAPTIONS`). It sends the video's
+sound to the speech provider (Cloudflare Workers AI, outside Brazil), so it goes
+on one server first. Off is a kill switch: no new jobs, a queued job is dropped
+before any call, and stored subtitles are hidden on every read. The translated
+track also needs `community_home_translation` on for that server (same
+provider, same consent as the post text). Producing anything needs
+`VOICE_STT_PROVIDER` and its key on the worker, and ffmpeg (the worker image
+has it; a process without ffmpeg never claims the job).
+
+**Pipeline** (`server/src/services/community-home-captions*.ts`,
+`server/src/speech/captions.ts`):
+
+1. Publishing a video post (now, scheduled, or editing in a new video) queues
+   a `speech_jobs` row of kind `community_home_captions`, keyed by `post_id`.
+   The minute sweep (`jobs.ts`) queues any published video on a flagged server
+   that has no job, which is also the backfill.
+2. The worker runs one captions job at a time, in a lane of its own so voice
+   notes never wait behind a long video: it streams the video to a temporary
+   file, ffmpeg takes the first audio stream as 16 kHz mono PCM (at most
+   `COMMUNITY_HOME_CAPTIONS_MAX_SECONDS`, default 1800), reserves the length
+   (overlaps included) from the shared daily speech budget
+   (`VOICE_STT_DAILY_SECONDS`, `speech_usage_daily`), and sends 30 s windows
+   with 1 s of overlap, one at a time, as WAV. The language Whisper hears in
+   the first window with words is held for the rest. The flag is asked again
+   before every call.
+3. The windows are stitched (`stitchWindows`), Whisper's silence and loops are
+   dropped, long lines are cut into two-line cues, and the result is stored as
+   the source track in `community_home_post_captions` (cues as JSONB, the
+   storage key of the video they came from, md5 of the cues).
+4. Each other UI language (`en`, `pt`, `es`) gets a translation of the cue
+   **text only**, in batches, through the post translator
+   (`communityHomeTranslator`, same model, same daily character budget, same
+   claim and backoff shape in `community_home_caption_translation_jobs`). The
+   timings are never sent and never change. The worker does it right after the
+   transcription; the minute sweep and a reader's request (on whichever process
+   has `OPENROUTER_API_KEY`) catch anything missed.
+
+**Reading.** `post.captions` is `{ sourceLang, langs }` when there is a current
+source track (null for a locked viewer, for anything but an uploaded video, and
+with the flag off). The words come from
+`GET /api/servers/:id/home/posts/:postId/captions?lang=<reader locale>`, which
+answers `{ tracks: [{ lang, source, auto, vtt }] }` (the source and, when
+current, the reader's language). It goes through the same read as the feed, so
+a draft, another server's post or a members-only video the viewer cannot open
+has no subtitles. The web player fetches them when the reader first comes near
+the player, gives them to `<track kind="subtitles">` as `blob:` URLs (a track
+cannot send the Authorization header), and draws the current cue above its own
+bar. Subtitles start **on** when the video's language differs from the
+reader's and **off** otherwise; the CC button flips them, and that choice is
+remembered in this browser (`pqp:community-home-captions`). In the iPhone's
+native fullscreen the browser draws them itself.
+
+**A replaced video** loses its job and its tracks in the edit's transaction,
+and a read only serves tracks whose storage key is still the post's, so new
+pictures never get old words. A worker that was mid-job on the old file loses
+its fence and writes nothing.
+
+**Backfill.** Turning the flag on for a server is the backfill: the minute
+sweep queues every published video there, newest first, five per minute. A
+job that settled as `no-provider` or `over-budget` is offered again after an
+hour. To make one post again by hand (a better provider, a gave-up job):
+`DELETE FROM speech_jobs WHERE kind = 'community_home_captions' AND post_id = '<id>'`
+and the next sweep queues it.
+
+**Cost.** Workers AI Whisper is 0.000513 USD per audio minute, so a 3 minute
+video is about 0.0016 USD (3.1 minutes billed with the overlaps) and 186 s of
+the 36,000 s daily budget. Translating its cues (roughly 2,500 characters) into
+two languages is about a third of a cent with flash-lite.
+
+**Counters.** `communityHomeCaptions` on `GET /api/admin/metrics`: jobs done,
+skipped and failed in the last 24 h and what is queued or running (from the
+database, so it covers the worker), how many videos have a track and how many
+translations exist, and this process's own counters. Logs say why at every
+step: `communityHome.captions.enqueued`, `.skipped` (`flag-off`,
+`no-provider`, `over-budget`), `.noSpeech`, `.done`, `.failed`, and
+`communityHome.captions.translation.done | skipped | failed`.
+
+**Native apps** do not show subtitles yet. AVPlayer only takes external
+WebVTT through an HLS wrapper or an `AVMutableComposition`, and ExoPlayer
+through a `SubtitleConfiguration`; the endpoint above is what they will read.
+**The phone cut** (`bau_mobile_rendition`, the vertical second file of a
+post) is transcribed once, through the main video: the tracks are keyed to the
+post and the main video's storage key. The web player shows them on the cut
+too, but only while the cut's length is within 1.5 s of what was transcribed
+(`post.captions.durationMs`), so a cut that was edited differently shows no
+subtitles rather than lines at the wrong moment. Transcribing the cut on its
+own would be the follow-up if authors start posting different edits.
+
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
@@ -411,9 +697,21 @@ the expected shape of a self-host without storage, not a bug.
   card's contract (no free chip, no author row, locked leaks nothing, likes
   and comment count stay on locked cards, two comments max, Twitch / TikTok /
   Instagram iframes).
+- `packages/shared/src/community-home-channel-refs.test.ts`,
+  `client/src/lib/community-home/channel-refs.test.ts`,
+  `client/src/components/community-home/community-home-channel-refs.test.tsx`,
+  Android `BauChannelRefsTest`, iOS `BauChannelRefsTests`: the `<#id>` grammar,
+  rendering and the privacy fallback, the `#` picker (filter, keyboard,
+  mouse), the `#name` to `<#id>` round trip, the translation guard.
 - `client/src/lib/community-home/embed-preview.test.ts` and
   `community-home-compose-embed.test.tsx`: composer live unfurl (player after
   debounce, skeleton while settling, muted hint after idle).
+- `server/src/services/community-home-mobile-rendition.test.ts`: the phone
+  cut. Flag off refuses and hides, only beside an uploaded video and only a
+  video, add / replace / remove on edit, a new main video drops the old cut,
+  delete removes both objects, the lock covers it, the CHECK backstop.
+- `client/src/lib/community-home/rendition.test.ts`: which cut a viewport
+  plays.
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
   visibility helpers, media helpers, live-post toast gating.
 - `client/src/components/layout/channel-list-community-home.test.tsx`: the
@@ -424,12 +722,27 @@ the expected shape of a self-host without storage, not a bug.
   never reaches a reader who cannot open it, two machines racing for one
   claim, edit invalidation, the daily budget, per-post truncation, backoff and
   give up, the sweep and the per-server flag, the staff list.
+- `server/src/services/community-home-captions.test.ts` (real Postgres) and
+  `server/src/speech/captions.test.ts`: flag off means no job and no words,
+  publish to source track to translations with the same timings to WebVTT,
+  the lock, the flag asked again before the provider, the budget, a replaced
+  video, the sweep as backfill, and the worker tick through the real ffmpeg
+  when the machine has it.
+- `client/src/components/community-home/community-home-media-captions.test.tsx`
+  and `client/src/lib/community-home/captions.test.ts`: when the player asks,
+  the `<track>` elements, which track is live, on by default only for another
+  language, the CC button and what it remembers.
 - `client/e2e/community-home-translation.spec.ts`: the real pipeline against a
   stub chat endpoint, the reader's toggle (and that it sticks), a phone, the
   staff note and per-language list.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →
   preview → publish → like, member intro + lock + comments, unread badge +
   live corner card, private-hall landing.
+- `server/src/services/community-home-push.test.ts`: the push audience (author,
+  mute, mentions level, DND, live socket, VIP, blocks), once-only claim, flag
+  off stamps without sending, scheduled posts, the aggregate unread read.
+- `client/src/lib/community-home/rail-unread.test.ts` and
+  `client/src/components/layout/server-rail-bau.test.tsx`: the rail's pip.
 
 ## Not here yet (see the strategy doc)
 
@@ -441,5 +754,5 @@ to report the *person*. Worth closing before this is on by default for
 strangers; the queue and the moderation surfaces already exist.
 
 Checkout, plans and prices, polls as a post type, older pages of the feed,
-push or email on publish, Electron / Android / iOS surfaces (web only for now;
-the native apps show nothing and lose nothing).
+email on publish, a permalink route to one post (a push opens the Baú, not the
+post), the Electron surface.

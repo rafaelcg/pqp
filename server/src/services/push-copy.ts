@@ -156,3 +156,62 @@ export function buildStreamStartedPushCopy(
       };
   }
 }
+
+export interface CommunityHomePostCopyInput {
+  locale: StreamAlertLocale;
+  /** Already truncated by the caller (`truncateLabel`). */
+  serverName: string;
+  /**
+   * The posts this person is being told about, titles already truncated; a
+   * post with no title is `null`. One entry reads as a sentence about that
+   * post, several as a count, so a burst of posts is one line and not a wall.
+   */
+  titles: readonly (string | null)[];
+}
+
+/**
+ * A new post in a server's Baú. Fixed pairs per language, names and a title
+ * the person can already open in the feed; never the body. The notification's
+ * own title is the product noun, which every language spells the same.
+ */
+export function buildCommunityHomePostPushCopy(
+  input: CommunityHomePostCopyInput,
+): PushCopy {
+  const { serverName, titles, locale } = input;
+  const title = "Baú";
+  const only = titles.length === 1 ? (titles[0] ?? null) : null;
+  if (titles.length > 1) {
+    const n = titles.length;
+    switch (locale) {
+      case "en":
+        return { title, body: `${n} new posts in ${serverName}'s Baú` };
+      case "es":
+        return { title, body: `${n} posts nuevos en el Baú de ${serverName}` };
+      default:
+        return { title, body: `${n} posts novos no Baú do ${serverName}` };
+    }
+  }
+  switch (locale) {
+    case "en":
+      return {
+        title,
+        body: only
+          ? `New post in ${serverName}'s Baú: ${only}`
+          : `New post in ${serverName}'s Baú`,
+      };
+    case "es":
+      return {
+        title,
+        body: only
+          ? `Post nuevo en el Baú de ${serverName}: ${only}`
+          : `Post nuevo en el Baú de ${serverName}`,
+      };
+    default:
+      return {
+        title,
+        body: only
+          ? `Post novo no Baú do ${serverName}: ${only}`
+          : `Post novo no Baú do ${serverName}`,
+      };
+  }
+}

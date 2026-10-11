@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,7 +38,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
+import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
+import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.ui.chat.LocalOpenBauPost
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.RealtimeClient
@@ -94,8 +98,15 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class ChannelsRoute(val serverId: String, val serverName: String)
 
-/** A server's Baú. Reached from its channel list only, so it carries what that list knew. */
-@Serializable data class BauRoute(val serverId: String, val serverName: String)
+/**
+ * A server's Baú. Reached from its channel list, or from a post card or address
+ * in chat; the latter carries [focusPostId], which the feed scrolls to.
+ */
+@Serializable data class BauRoute(
+    val serverId: String,
+    val serverName: String,
+    val focusPostId: String? = null,
+)
 
 /**
  * `channelName` defaults because a notification tap knows the channel's id and
@@ -215,6 +226,17 @@ private fun SignedInNav(
     watchPartyHost: WatchPartyHostController,
 ) {
     val nav = rememberNavController()
+    // A Baú post card (or a bare post address) in any chat opens the post here.
+    // The server's name rides along when the card knows it; an address alone
+    // does not, so the list of servers this phone already holds fills it in.
+    val openBauPost = remember(nav, session) {
+        { target: BauPostTarget ->
+            val name = target.serverName.ifEmpty {
+                session.servers.value.firstOrNull { it.id == target.ref.serverId }?.name.orEmpty()
+            }
+            nav.navigate(BauRoute(target.ref.serverId, name, target.ref.postId))
+        }
+    }
     val voiceState by voice.state.collectAsStateWithLifecycle()
     val callState by calls.state.collectAsStateWithLifecycle()
 
@@ -389,6 +411,7 @@ private fun SignedInNav(
             // Compose's are the platform's, they cooperate with the predictive
             // back gesture the manifest opts into, and a bespoke slide would
             // break that cooperation.
+            CompositionLocalProvider(LocalOpenBauPost provides openBauPost) {
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
                     // The start destination is the three-tab home (servers,
@@ -443,7 +466,23 @@ private fun SignedInNav(
                         session = session,
                         serverId = route.serverId,
                         serverName = route.serverName,
+                        focusPostId = route.focusPostId,
                         onBack = nav::popBackStack,
+                        callActive = voiceState.isActive || callState.outgoing != null,
+                        // A `#channel` in a post opens that channel, the same way
+                        // the channel list does.
+                        onOpenChannel = { channel ->
+                            nav.navigate(
+                                ChatRoute(
+                                    channel.id,
+                                    channel.name,
+                                    channel.slowmodeSeconds,
+                                    serverId = route.serverId,
+                                    isVoiceChannel = channel.isVoice,
+                                    isWatchParty = channel.type == "watch_party",
+                                ),
+                            )
+                        },
                     )
                 }
                 composable<ChatRoute> { entry ->
@@ -660,6 +699,7 @@ private fun SignedInNav(
                     YouScreen(session = session, onBack = nav::popBackStack)
                 }
             }
+            }
 
             arrival?.let { landing ->
                 ArrivalBanner(
@@ -683,6 +723,14 @@ private fun SignedInNav(
             }
         }
     }
+}
+
+/** The two yeses the Baú row needs (see `ChannelsScreen`), asked for a push tap. */
+internal suspend fun bauIsOn(session: SessionStore, serverId: String): Boolean {
+    if (!CommunityHomeConfigs.resolve(session.api).enabled) {
+        return false
+    }
+    return session.servers.value.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
 }
 
 /**
@@ -730,6 +778,19 @@ private suspend fun navigateToPush(
 
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
+
+        // The push for a new Baú post. The channel list first, with the Baú on
+        // top of it, so back lands on the server like it does for a channel.
+        // Only when this server's Baú is actually on (the instance flag and the
+        // owner's switch, the two the row itself needs): a tap that outlived
+        // the switch stays on the list rather than opening a screen that 404s.
+        is DeepLinkTarget.Bau -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            if (bauIsOn(session, target.serverId)) {
+                nav.navigate(BauRoute(target.serverId, name))
+            }
+        }
 
         // A conversation id IS a channel id, but it is not a *channel* route:
         // a conversation's app bar is a person's name and opening one moves a

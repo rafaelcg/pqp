@@ -108,6 +108,8 @@ class VoiceEngine(
     private val onRemoteCamera: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
     /** The person stopped the share from the system UI rather than from ours. */
     private val onScreenShareEnded: () -> Unit = {},
+    /** The share's game sound started going out (true) or stopped for good (false). */
+    private val onScreenAudioChanged: (Boolean) -> Unit = {},
 ) : VoiceTransport {
     private var factory: PeerConnectionFactory? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
@@ -177,6 +179,32 @@ class VoiceEngine(
     private val screenStreamId = "pqp-screen-${java.util.UUID.randomUUID()}"
 
     override val isSharingScreen: Boolean get() = screenTrack != null
+
+    /**
+     * The game's sound, while a share carries it. Read on the microphone
+     * thread by the ADM's buffer callback, written on the main thread.
+     */
+    @Volatile private var gameAudio: GameAudioCapture? = null
+
+    override val isSharingScreenAudio: Boolean
+        get() = carryingGameAudio() && gameAudio?.live == true
+
+    /** The person wants to be heard: not muted, not deafened. */
+    @Volatile private var micWanted = true
+
+    /** A moderator holds the microphone. Nothing goes out, game included. */
+    @Volatile private var serverMuted = false
+
+    override fun setSelfServerMuted(muted: Boolean) {
+        if (serverMuted == muted) return
+        serverMuted = muted
+        applyLocalAudio()
+        // The call bar's "com o som" follows the moderator too.
+        if (gameAudio != null) onScreenAudioChanged(isSharingScreenAudio)
+    }
+
+    private fun carryingGameAudio(): Boolean =
+        !serverMuted && gameAudio?.usable == true
 
     /** For a renderer: the same GL context the decoders draw into. */
     private val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
@@ -259,6 +287,26 @@ class VoiceEngine(
             val adm = JavaAudioDeviceModule.builder(context)
                 .setUseHardwareAcousticEchoCanceler(true)
                 .setUseHardwareNoiseSuppressor(true)
+                // The one seam where a share's game audio can join the call:
+                // see [GameAudioCapture]. A no-op unless a share attached it.
+                .setAudioBufferCallback { buffer, format, channels, rate, bytes, captureTimeNs ->
+                    // A moderator's mute disables the track too, but this is
+                    // the buffer itself: zeroed, so nothing leaves in the
+                    // moment between the roster and the track-enable.
+                    if (serverMuted) {
+                        zeroPcm(buffer, bytes)
+                    } else {
+                        gameAudio?.process(
+                            buffer,
+                            format,
+                            channels,
+                            rate,
+                            bytes,
+                            micOn = micWanted && canPublishAudio,
+                        )
+                    }
+                    captureTimeNs
+                }
                 .createAudioDeviceModule()
             audioDeviceModule = adm
             // A GL context is what lets the hardware codecs hand frames around
@@ -286,7 +334,25 @@ class VoiceEngine(
     }
 
     override fun setMuted(muted: Boolean) {
-        localAudio?.setEnabled(!muted && canPublishAudio)
+        micWanted = !muted
+        applyLocalAudio()
+    }
+
+    /**
+     * Whether the local track sends anything, in one place.
+     *
+     * While a share carries the game's sound the track stays on even when the
+     * person is muted, and the buffer callback zeroes the microphone half
+     * instead (`micOn` above): muting yourself must not cut the game the room
+     * is watching. Without SPEAK nothing goes out at all, game included; the
+     * controller also stops the share in that case. A moderator's mute
+     * ([serverMuted]) silences the game too: it is the room's decision about
+     * this person, not the person's own.
+     */
+    private fun applyLocalAudio() {
+        localAudio?.setEnabled(
+            canPublishAudio && !serverMuted && (micWanted || carryingGameAudio()),
+        )
     }
 
     /**
@@ -310,7 +376,10 @@ class VoiceEngine(
 
     override fun setCanPublishAudio(allowed: Boolean) {
         canPublishAudio = allowed
-        if (!allowed) localAudio?.setEnabled(false)
+        // Both directions. A grant does not unmute anybody (the controller
+        // keeps a seat that was listen-only muted, so `micWanted` is false),
+        // but a share's game sound has to come back with it.
+        applyLocalAudio()
     }
 
     /**
@@ -337,7 +406,8 @@ class VoiceEngine(
         // because undeafening is the one path that enables the track without
         // going through it. The controller keeps a listen-only seat muted, so
         // this is belt and braces on the failure that matters.
-        localAudio?.setEnabled(!(value || mutedByUser) && canPublishAudio)
+        micWanted = !(value || mutedByUser)
+        applyLocalAudio()
     }
 
     /**
@@ -550,6 +620,7 @@ class VoiceEngine(
             screenHelper = helper
             screenSource = source
             screenTrack = track
+            attachGameAudio(capturer.mediaProjection)
             Log.i(
                 TAG,
                 "screen capture started at ${profile.width}x${profile.height}" +
@@ -590,7 +661,38 @@ class VoiceEngine(
         requestNegotiation(peerId, peer)
     }
 
+    /**
+     * Start carrying the phone's sound with the share, where Android allows it.
+     *
+     * The projection only exists once the capture has started, which is why
+     * this runs after `startCapture` and not before.
+     */
+    private fun attachGameAudio(projection: MediaProjection?) {
+        if (projection == null || !gameAudioSupported()) return
+        lateinit var capture: GameAudioCapture
+        capture = GameAudioCapture(projection) { live ->
+            // Off the setup or microphone thread, and only for the share
+            // that is still current.
+            scope.launch {
+                if (gameAudio !== capture) return@launch
+                applyLocalAudio()
+                onScreenAudioChanged(live && carryingGameAudio())
+            }
+        }
+        gameAudio = capture
+        applyLocalAudio()
+    }
+
+    private fun detachGameAudio() {
+        val capture = gameAudio ?: return
+        gameAudio = null
+        capture.release()
+        applyLocalAudio()
+        onScreenAudioChanged(false)
+    }
+
     private fun releaseScreenCapture() {
+        detachGameAudio()
         runCatching { screenCapturer?.stopCapture() }
         runCatching { screenCapturer?.dispose() }
         runCatching { screenSource?.dispose() }

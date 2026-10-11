@@ -954,5 +954,150 @@ class PoolWaitTests(unittest.TestCase):
         self.assertIsNone(exporter.pool_wait_across([_base_payload(), _base_payload()]))
 
 
+def _voice_notes(refusals: dict | None = None, **health_overrides) -> dict:
+    """A `voiceNotes` block shaped like VoiceNoteMetrics
+    (server/src/services/voice-note-metrics.ts)."""
+    health = {
+        "queue": {
+            "transcription": {"queued": 3, "running": 1, "retrying": 1, "oldestQueuedSeconds": 42, "expiredLeases": 0},
+            "transcode": {"queued": 0, "running": 0, "retrying": 0, "oldestQueuedSeconds": 0, "expiredLeases": 2},
+        },
+        "jobs": {
+            "transcription": {"ok24h": 18, "skipped24h": 4, "failed24h": 2, "successRate24h": 0.9, "p50Seconds": 6.5, "p95Seconds": 21.0},
+            "transcode": {"ok24h": 30, "skipped24h": 0, "failed24h": 0, "successRate24h": 1.0, "p50Seconds": 2.1, "p95Seconds": None},
+        },
+        "transcripts24h": {"none": 5, "pending": 1, "done": 18, "no_speech": 1, "failed": 2, "unavailable": 0},
+        "budget": {
+            "dailySeconds": 3600, "usedSeconds": 2988, "calls": 40, "refused": 0,
+            "usedShare": 0.83, "exhausted": False,
+        },
+    }
+    health.update(health_overrides)
+    return {
+        "usage": {
+            "minted24h": 40, "minted7d": 200, "sent24h": 33, "sent7d": 180,
+            "byScope24h": {"dm": 20, "group": 3, "server": 10},
+            "byScope7d": {"dm": 100, "group": 30, "server": 50},
+            "byContentType24h": {"audio/mp4": 25, "audio/webm": 8},
+            "byContentType7d": {"audio/mp4": 120, "audio/webm": 60},
+            "senders24h": 12, "senders7d": 40,
+            "durationSeconds": {"total24h": 900, "total7d": 5000, "median24h": 14.5, "median7d": None},
+            "listens24h": 50, "listeners24h": 20,
+            "listenedNotes7d": 90, "listenedShare7d": 0.5,
+        },
+        "health": health,
+        "refusals": refusals if refusals is not None else {"mint-flag-off": 0, "mint-too-large": 0},
+    }
+
+
+class RenderVoiceNotesTests(unittest.TestCase):
+    def test_usage_series(self):
+        body = exporter.render(_base_payload(voiceNotes=_voice_notes()))
+        self.assertIn('pqp_api_voice_notes_sent{window="24h",scope="dm"} 20', body)
+        self.assertIn('pqp_api_voice_notes_sent{window="7d",scope="server"} 50', body)
+        self.assertIn('pqp_api_voice_notes_sent_by_type{window="24h",type="audio/mp4"} 25', body)
+        self.assertIn('pqp_api_voice_notes_sent_by_type{window="7d",type="audio/webm"} 60', body)
+        self.assertIn('pqp_api_voice_notes_senders{window="24h"} 12', body)
+        self.assertIn('pqp_api_voice_notes_minted{window="7d"} 200', body)
+        self.assertIn('pqp_api_voice_notes_duration_seconds{window="24h",stat="total"} 900', body)
+        self.assertIn('pqp_api_voice_notes_duration_seconds{window="24h",stat="median"} 14.5', body)
+        self.assertIn("pqp_api_voice_notes_listens_24h 50", body)
+        self.assertIn("pqp_api_voice_notes_listened_share_7d 0.5", body)
+
+    def test_a_null_median_is_omitted_not_zero(self):
+        body = exporter.render(_base_payload(voiceNotes=_voice_notes()))
+        self.assertNotIn('window="7d",stat="median"', body)
+
+    def test_null_share_and_latency_are_omitted(self):
+        vn = _voice_notes()
+        vn["usage"]["listenedShare7d"] = None
+        vn["health"]["budget"]["usedShare"] = None
+        body = exporter.render(_base_payload(voiceNotes=vn))
+        self.assertNotIn("pqp_api_voice_notes_listened_share_7d", body)
+        self.assertNotIn("pqp_api_voice_notes_budget_used_ratio", body)
+        # transcode has no p95 (null), transcription has both.
+        self.assertIn('pqp_api_voice_notes_job_latency_seconds{kind="transcode",quantile="0.5"} 2.1', body)
+        self.assertNotIn('kind="transcode",quantile="0.95"', body)
+        self.assertIn('pqp_api_voice_notes_job_latency_seconds{kind="transcription",quantile="0.95"} 21.0', body)
+
+    def test_health_series(self):
+        body = exporter.render(_base_payload(voiceNotes=_voice_notes()))
+        self.assertIn('pqp_api_voice_notes_queue{kind="transcription",state="queued"} 3', body)
+        self.assertIn('pqp_api_voice_notes_queue{kind="transcription",state="retrying"} 1', body)
+        self.assertIn('pqp_api_voice_notes_queue{kind="transcode",state="expired_leases"} 2', body)
+        self.assertIn('pqp_api_voice_notes_queue_oldest_seconds{kind="transcription"} 42', body)
+        self.assertIn('pqp_api_voice_notes_queue_oldest_seconds{kind="transcode"} 0', body)
+        self.assertIn('pqp_api_voice_notes_jobs_24h{kind="transcription",outcome="failed"} 2', body)
+        self.assertIn('pqp_api_voice_notes_jobs_24h{kind="transcription",outcome="skipped"} 4', body)
+        self.assertIn('pqp_api_voice_notes_jobs_24h{kind="transcode",outcome="ok"} 30', body)
+        self.assertIn('pqp_api_voice_notes_transcripts_24h{status="no_speech"} 1', body)
+        self.assertIn("pqp_api_voice_notes_budget_used_ratio 0.83", body)
+        self.assertIn("pqp_api_voice_notes_budget_used_seconds 2988", body)
+        self.assertIn("pqp_api_voice_notes_budget_daily_seconds 3600", body)
+        self.assertIn("pqp_api_voice_notes_budget_refused 0", body)
+
+    def test_refusals_are_a_counter(self):
+        body = exporter.render(_base_payload(voiceNotes=_voice_notes({"mint-flag-off": 7})))
+        self.assertIn("# TYPE pqp_api_voice_notes_refusal_total counter", body)
+        self.assertIn('pqp_api_voice_notes_refusal_total{reason="mint-flag-off"} 7', body)
+
+    def test_absent_block_emits_nothing_and_does_not_crash(self):
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_voice_notes", body)
+        self.assertIn("pqp_api_metrics_scrape_ok 1", body)
+
+    def test_empty_block_emits_nothing(self):
+        body = exporter.render(_base_payload(voiceNotes={}))
+        self.assertNotIn("pqp_api_voice_notes", body)
+
+    def test_quote_in_a_content_type_cannot_break_the_textfile(self):
+        vn = _voice_notes()
+        vn["usage"]["byContentType24h"] = {'audio/x"y': 1}
+        body = exporter.render(_base_payload(voiceNotes=vn))
+        self.assertIn('type="audio/xy"} 1', body)
+
+
+class MergeVoiceNotesTests(unittest.TestCase):
+    def test_refusals_are_summed_and_the_body_is_not_doubled(self):
+        a = _base_payload(voiceNotes=_voice_notes({"mint-flag-off": 3, "mint-too-large": 1}))
+        b = _base_payload(voiceNotes=_voice_notes({"mint-flag-off": 4, "claim-flag-off": 2}))
+        merged = exporter.merge_admin_metrics([a, b])
+        vn = merged["voiceNotes"]
+        self.assertEqual(vn["refusals"], {"mint-flag-off": 7, "mint-too-large": 1, "claim-flag-off": 2})
+        # DB-derived: identical on both replicas, taken once.
+        self.assertEqual(vn["usage"]["sent24h"], 33)
+        self.assertEqual(vn["health"]["queue"]["transcription"]["queued"], 3)
+        self.assertEqual(vn["health"]["budget"]["usedSeconds"], 2988)
+        body = exporter.render(merged, replicas_scraped=2)
+        self.assertIn('pqp_api_voice_notes_refusal_total{reason="mint-flag-off"} 7', body)
+        self.assertIn('pqp_api_voice_notes_sent{window="24h",scope="dm"} 20', body)
+        self.assertIn('pqp_api_voice_notes_jobs_24h{kind="transcription",outcome="ok"} 18', body)
+
+    def test_both_replicas_merge_without_an_unclassified_warning(self):
+        import contextlib
+        import io
+
+        exporter._warned_unclassified_keys.discard("voiceNotes")
+        a = _base_payload(voiceNotes=_voice_notes())
+        b = _base_payload(voiceNotes=_voice_notes())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            exporter.merge_admin_metrics([a, b])
+        self.assertNotIn("unclassified", err.getvalue())
+
+    def test_one_replica_on_an_older_api_uses_the_other_block_whole(self):
+        old = _base_payload()
+        new = _base_payload(voiceNotes=_voice_notes({"mint-flag-off": 5}))
+        for pair in ([old, new], [new, old]):
+            merged = exporter.merge_admin_metrics(pair)
+            self.assertEqual(merged["voiceNotes"]["refusals"], {"mint-flag-off": 5})
+            self.assertEqual(merged["voiceNotes"]["usage"]["sent24h"], 33)
+
+    def test_neither_replica_has_the_block(self):
+        merged = exporter.merge_admin_metrics([_base_payload(), _base_payload()])
+        self.assertNotIn("voiceNotes", merged)
+        self.assertNotIn("pqp_api_voice_notes", exporter.render(merged))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1206,6 +1206,18 @@ function recheckRoomTransport(
   return decision;
 }
 
+/**
+ * Test hook: pin a room on this process as if a seat here had opened it,
+ * without a socket. For the token mint's view of a replica that holds seats
+ * in a room another replica has just promoted.
+ */
+export function pinRoomTransportLocallyForTests(
+  voiceChannelId: string,
+  transport: VoiceRoomTransport,
+): void {
+  roomTransports.set(voiceChannelId, transport);
+}
+
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();

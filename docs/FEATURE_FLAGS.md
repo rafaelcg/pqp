@@ -111,7 +111,24 @@ default off; automatic translation of Baú posts, which also needs
 `OPENROUTER_API_KEY` on the API: no key, no translation, no error; served to
 the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
 `docs/COMMUNITY_HOME.md` §Translation).
+`BAU_POST_PUSH` (`bau_post_push`, **per server**, default off, born as a flag):
+a push when a Baú post goes live, to members who have not muted the server;
+never the author, members-only posts only to people who can open them. Server
+only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
+`docs/COMMUNITY_HOME.md` §"Push on a new post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
+Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
+(`community_home_video_captions`, **per server**, default off), automatic
+subtitles on videos uploaded to the Baú. It sends the video's sound to the
+speech provider (Cloudflare Workers AI), so it goes on one server first. Read at
+the enqueue (publish and the minute sweep, which is also the backfill for videos
+already posted), by the worker before every provider call (a flip mid-queue
+drops the job with no call), and on every read: **off hides stored subtitles
+too**. Served as `captions` on each post of `GET /api/servers/:id/home/posts`.
+The translated track also needs `community_home_translation` on for the server.
+Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
+it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
+`docs/COMMUNITY_HOME.md` §"Video subtitles".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one
@@ -121,6 +138,19 @@ byte. Turn it on for one server with `PUT /api/admin/flag-overrides
 { key: "watch_party_server_audience", serverId, enabled: true }` or from controles →
 interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
 `docs/WATCH_PARTY.md` §"How many people watched".
+
+Born as a flag (no old reader): `VOICE_AUDIO_SELF_HEAL`
+(`voice_audio_self_heal`, default **on**, global, client-only), the web call
+watching its own audio and repairing it (`client/src/lib/audio-health.ts`): a
+voice the local meter hears that the room never gets, a voice the SFU says is
+talking that never arrives, an element the browser will not play, a speaker
+that went away. Quiet repairs first (re-attach the track, reopen the mic,
+replay, resubscribe or restart the path), then a card with "Arrumar". Served as
+`audioSelfHeal` on the global `GET /api/voice/config`; off stops it on the next
+config refresh, mid-call, no reload. The same answer is the client's proof that
+the API takes `mediaQuality.audioHealth` on a call rating, which feeds
+`callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
+event `voice.audioHealth`.
 
 Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
 default off, **per server**, client-only), the presenter's camera held to the
@@ -132,6 +162,13 @@ party: turn it on for one test server (the server's override), then globally.
 Off, the camera plays loose exactly as before: nothing writes its rate or its
 position, and nothing reads the film's clock. Only `true` turns the variable
 on. An API older than the flag sends no field, which the client reads as off.
+
+Born as a flag (no old reader): `BAU_MOBILE_RENDITION` (`bau_mobile_rendition`,
+default off, **per server**), a second, vertical cut of a Baú video that phones
+play instead of the main one. Served to the composer as `mobileRenditionEnabled`
+on `GET /api/servers/:id/home/posts`. Off, a write that names a cut is refused
+and reads leave `media.mobile` null, so everyone plays the main video; stored
+cuts are kept. See `docs/COMMUNITY_HOME.md` §"A phone cut of a video".
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
@@ -149,6 +186,13 @@ every web or desktop client that is not on the latest build puts up the blocking
 only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
 (ISO date or epoch ms) forces bundles built before a moment and is environment-only.
 See `docs/PWA.md` §"Nobody stays on an old bundle".
+
+`CLIENT_FORCE_UPDATE_IN_CALL` (`client_force_update_in_call`, default off, global),
+born as a flag: with a force on (the flag above or `CLIENT_MIN_BUILT_AT`), the
+forced bundles reload even in a call, which ends the call. For a critical fix only.
+Served as `interruptCalls` by the same endpoint. Its environment-only sibling
+`CLIENT_CRITICAL_MIN_BUILT_AT` (same format as `CLIENT_MIN_BUILT_AT`) does the same
+for bundles built before a moment, served as `criticalMinBuiltAt`.
 
 Also born as a flag: `SHARE_HIGH_MOTION_GUARD` (`share_high_motion_guard`,
 default off, **per server**), served to the client by the same
@@ -311,6 +355,20 @@ making new ones". Served as `voiceTranscription` on
 settles `unavailable`. The AAC playback copy of Opus notes is NOT behind this
 flag: it runs for every webm/ogg note while `voice_notes` is on.
 
+Born as a flag (no old reader): `NOTIFY_OPEN_CHANNEL` (`notify_open_channel`,
+default off, **global only**), client-only. The server sends no `channel-activity`
+for a channel a socket has open, so the open channel never raised an OS banner,
+even with the window minimised behind a game. With the flag on, a
+`message-broadcast` from somebody else in the open channel (or conversation)
+goes through the ordinary banner path when the window is hidden, minimised or
+without focus (`notifyOpenChannelWhileAway` in `client/src/lib/notifications.ts`):
+levels, channel and server mutes, Do Not Disturb, blocked authors, the desktop
+opt-in and the 10 s burst coalescing all apply. A window that is visible and
+focused stays quiet, as before. Served as `notifyOpenChannel` on
+`GET /api/push/config`; an open tab follows on the next config refresh (focus or
+10 min). Global on purpose: that endpoint has no server in hand, so a
+per-server override would never be read.
+
 Born as a flag (no old reader): `MENTION_IDS_FROM_DB` (`mention_ids_from_db`,
 default off, **global**), role mentions that actually notify. `recordMentions`
 always wrote `message_mentions` rows for the members of a mentioned role (the
@@ -393,3 +451,39 @@ server's override) or `PUT /api/admin/flag-overrides
 token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
+
+## `newcomer_invite_moment` (global, client presentation only)
+
+"Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,
+global, born as a flag). The client learns it from `GET /api/onboarding/config`
+as `inviteMoment`, asked once the age gate has passed (every `/api` route is
+403 before that) and again on every config refresh
+(`client/src/lib/newcomer-invite.ts`). Two behaviours:
+
+- **The strip.** In the arrival strip's slot, under a public community's
+  channel or Baú header: one line and a **Chamar amigos** button that opens
+  Criar sala with "Sala de {nome}" in the field. The dialog ends on the invite
+  link and the pastes, tagged `?ref=chama`, so the joins it brings are counted
+  apart in `server_members.join_ref`. Shown to an account whose first-run
+  finished in the last 7 days, with no friends and no sent requests, that is in
+  nothing but public communities it does not own (the QG it was placed in, or a
+  streamer's community). Never over a live party or a watch-now strip.
+  "Agora não" is remembered in `pqp:newcomer-invite-2026-10`.
+- **The hub checklist stops counting the placed community.** The first-run
+  card's "server" row is done only with a room of your own or a private one you
+  were invited to (`ownRoomCount`). Before, the QG placement ticked it on the
+  first request, so the only surface that offered Criar said there was nothing
+  left to do.
+
+Why, from production on 2026-10-10 (accounts created in the 14 days before):
+organic accounts placed in the QG whose own room got a second member came back
+the next day at 35%, invited accounts at 26%, and organic accounts with nobody
+of their own at 12 to 13%. Half of the QG-only accounts did nothing at all and
+3% of those came back. Measure it with Umami (`newcomer_invite_view`,
+`newcomer_invite_click`, `newcomer_invite_dismiss`) and with
+`SELECT COUNT(*) FROM server_members WHERE join_ref = 'chama'`.
+
+Turn it on from controles → interruptores or `PUT /api/admin/flags
+{ key: "newcomer_invite_moment", enabled: true }`. Open tabs follow on the next
+config refresh (focus or 10 min).
+

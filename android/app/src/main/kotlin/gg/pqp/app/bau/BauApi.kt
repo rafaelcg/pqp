@@ -46,6 +46,14 @@ suspend fun ApiClient.bauUnread(serverId: String): Int =
     getJson<BauUnreadResponse>("/api/servers/$serverId/home/unread").count
 
 /**
+ * Unread Baú posts for EVERY server, in one read: what the server list needs
+ * to badge a server whose channel list is not open. Servers with nothing
+ * unread are absent from the map.
+ */
+suspend fun ApiClient.bauUnreadAll(): Map<String, Int> =
+    getJson<BauUnreadAllResponse>("/api/community-home/unread").servers
+
+/**
  * "I have seen the feed." The read marker is per person and shared across
  * every client they use, so a Baú read on the phone must say so or the web
  * keeps a badge up for posts this person has already scrolled past.

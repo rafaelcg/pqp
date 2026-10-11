@@ -25,6 +25,8 @@ export function VoiceChannelStage({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -68,6 +70,9 @@ export function VoiceChannelStage({
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
+  /** The audio self-repair's card (`lib/audio-health-monitor.ts`). */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -124,6 +129,8 @@ export function VoiceChannelStage({
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
+      onRepairAudio={onRepairAudio}
+      onDismissAudioHealthPrompt={onDismissAudioHealthPrompt}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}

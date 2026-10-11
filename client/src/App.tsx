@@ -338,6 +338,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchCommunityHomeUnreadAll,
   fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
@@ -418,6 +419,8 @@ import {
 } from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
+import { startNotifyConfig } from "@/lib/notify-config";
+import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -455,6 +458,16 @@ import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
+import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import {
+  dismissNewcomerInvite,
+  isNewcomerInviteDismissed,
+  isRecentNewcomer,
+  newcomerInviteVisible,
+  ownRoomCount,
+  startNewcomerInviteConfig,
+  useNewcomerInviteMoment,
+} from "@/lib/newcomer-invite";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import {
@@ -515,6 +528,9 @@ import {
   mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
+  bauIsFresh,
+  withServerBauNewest,
+  withServerBauUnread,
 } from "@/lib/community-home";
 import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -538,6 +554,7 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
 import {
@@ -556,6 +573,7 @@ import {
 } from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
+import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
@@ -1296,6 +1314,14 @@ function MainAppContent({
    * effect beside the arrival intents).
    */
   const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
+  /**
+   * What the newcomer invite strip hands Criar sala: a name already in the
+   * field and the `?ref=chama` its invite link carries. Null for every other
+   * door, and cleared when the dialog closes.
+   */
+  const [createServerPrefill, setCreateServerPrefill] = useState<{
+    name: string;
+  } | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -1366,6 +1392,12 @@ function MainAppContent({
   const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
     isPartyNewcomerStripDismissed(),
   );
+  // `newcomer_invite_moment`: the "chama teus amigos" strip was closed on
+  // this device. Read once; the write is `dismissNewcomerInvite`.
+  const [newcomerInviteClosed, setNewcomerInviteClosed] = useState(() =>
+    isNewcomerInviteDismissed(),
+  );
+  const newcomerInviteMomentOn = useNewcomerInviteMoment();
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -1752,6 +1784,13 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // A Baú permalink (or a card in chat) names a post to scroll to. The nonce
+  // makes following the same card twice scroll twice.
+  const [communityHomeFocus, setCommunityHomeFocus] = useState<{
+    serverId: string;
+    postId: string;
+    nonce: number;
+  } | null>(null);
   // A ticket for every fetch of the open server's channel list that the
   // `channels-update` refetch has to order itself against. Only the newest
   // ticket may write the list, so two quick frames (a create and a rename a
@@ -1806,6 +1845,37 @@ function MainAppContent({
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  /**
+   * Unread Baú posts for EVERY server, for the rail's icons. The open server's
+   * own count above drives the sidebar row and the corner card; this is the
+   * same number for the servers whose channel list is not on screen.
+   */
+  const [communityHomeUnreadByServer, setCommunityHomeUnreadByServer] =
+    useState<Record<string, number>>({});
+  /**
+   * When each server's newest unread Baú post went live (ISO), for the "New"
+   * chip's 24 hour window. Servers with nothing unread are absent, and so is
+   * every server on an API that predates the field.
+   */
+  const [communityHomeNewestByServer, setCommunityHomeNewestByServer] =
+    useState<Record<string, string>>({});
+  /**
+   * Re-renders once a minute while the open server has unread Baú posts, so the
+   * row's "New" chip lets go at 24 h instead of waiting for some other render.
+   */
+  const [communityHomeFreshTick, setCommunityHomeFreshTick] = useState(0);
+  useEffect(() => {
+    if (communityHomeUnread <= 0) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => setCommunityHomeFreshTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [communityHomeUnread]);
+  /** Bumped by every Baú frame, for any server, to re-read the map above. */
+  const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
   const communityHomeUnreadServerRef = useRef<string | null>(null);
   const communityHomeUpdateNudgeRef = useRef(0);
@@ -2392,6 +2462,22 @@ function MainAppContent({
   });
 
   /**
+   * Whether this window is in front of the person (visible and focused, with a
+   * grace before "background"), for the server's push attention gate: a tab
+   * left in the background or a minimised desktop window no longer keeps the
+   * phone quiet. Re-announced on every reconnect, like idle, because the
+   * server forgets it with the socket. See `lib/attention.ts`.
+   */
+  useAttentionReport({
+    sendAttention: useCallback(
+      (foreground: boolean) =>
+        transport.sendChat({ type: "set-attention", foreground }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
+
+  /**
    * The status hook, through a ref: the socket handler is installed once per
    * connection and must not be rebuilt each time the account changes it.
    */
@@ -2561,6 +2647,20 @@ function MainAppContent({
   // (the teaser, the camera size, a server switched on) shows without a
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
+  // The notification switches (`notify_open_channel`) ride the same refresh.
+  // Only with an account: `/api/push/config` needs a token, and a signed-out
+  // page (or one still resolving `/api/me`) would be answered with a 401.
+  const notifyConfigUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyConfigUserId ? startNotifyConfig() : undefined),
+    [notifyConfigUserId],
+  );
+  // `voice_audio_self_heal` (`lib/audio-health.ts`), same refresh, same reason
+  // to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
+    [notifyConfigUserId],
+  );
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -4516,7 +4616,8 @@ function MainAppContent({
         // bootstrap's `onReady` openChannel(initial) can overwrite the deep
         // link's landing (Home, or first text) and leave "Pick a channel".
         const deepLink = parseAppRoute(window.location.pathname);
-        const deepLinksServer = deepLink?.kind === "channel";
+        const deepLinksServer =
+          deepLink?.kind === "channel" || deepLink?.kind === "home";
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
         // A conversation link owns the navigation outright: opening a server
@@ -4983,6 +5084,8 @@ function MainAppContent({
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
+            // Any server's frame, the open one included: the rail's icons.
+            setCommunityHomeAllNudge((n) => n + 1);
             return;
           }
 
@@ -7603,6 +7706,31 @@ function MainAppContent({
   );
 
   /**
+   * Apply a `/app/server/<id>/bau[/<postId>]` target: open the server on its
+   * Baú and, with a post id, scroll to that post. A server with Baú off (or a
+   * server this account is not in) lands wherever the plain server link would,
+   * and no focus is set, so a dead card never leaves a stale highlight.
+   */
+  const applyHomeRoute = useCallback(
+    async (
+      serverId: string,
+      postId: string | null,
+      linkedAt: number = Date.now(),
+    ) => {
+      await applyChannelRoute(serverId, null, null, linkedAt);
+      const target = serversRef.current.find((server) => server.id === serverId);
+      if (postId && target?.communityHomeEnabled === true) {
+        setCommunityHomeFocus((previous) => ({
+          serverId,
+          postId,
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
+      }
+    },
+    [applyChannelRoute],
+  );
+
+  /**
    * Apply a `/app/dm[/<channelId>]` target.
    *
    * The list is refetched first rather than trusted from state, because this is
@@ -7681,6 +7809,12 @@ function MainAppContent({
     isCommunityHomeChannelId(selectedChannelId) &&
     (communityHomeFeedLive || selectedIsCommunity);
   useEffect(() => {
+    // Leaving the Baú spends the focus: coming back later is not a follow.
+    if (!communityHomeOpen) {
+      setCommunityHomeFocus((current) => (current ? null : current));
+    }
+  }, [communityHomeOpen]);
+  useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
       return;
@@ -7746,6 +7880,12 @@ function MainAppContent({
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast(null);
       const serverId = selectedServerId;
+      setCommunityHomeUnreadByServer((current) =>
+        withServerBauUnread(current, serverId, 0),
+      );
+      setCommunityHomeNewestByServer((current) =>
+        withServerBauNewest(current, serverId, null),
+      );
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -7766,9 +7906,15 @@ function MainAppContent({
     const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
     void fetchCommunityHomeUnread(selectedServerId)
-      .then(({ count }) => {
+      .then(({ count, newestAt }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          setCommunityHomeUnreadByServer((current) =>
+            withServerBauUnread(current, selectedServerId, count),
+          );
+          setCommunityHomeNewestByServer((current) =>
+            withServerBauNewest(current, selectedServerId, count > 0 ? newestAt : null),
+          );
           communityHomeUnreadRef.current = count;
           communityHomeUnreadBaselineRef.current = true;
           if (
@@ -7802,6 +7948,88 @@ function MainAppContent({
     communityHomeOpen,
     selectedServerId,
     communityHomeUpdateNudge,
+  ]);
+
+  /**
+   * Unread Baú posts for every server, for the rail.
+   *
+   * The sidebar effect above only knows the server that is open, so before this
+   * a post published in any other server left its icon untouched. One request
+   * for all of them, re-asked when a Baú frame arrives (debounced: a staff
+   * member publishing three posts is one read), when the set of servers with a
+   * Baú changes, and when the person moves between servers (a feed they just
+   * left has been stamped read by then). The open server's own entry is not
+   * trusted from here: the rail draws it as selected anyway, and the sidebar
+   * effect owns its number.
+   */
+  const bauServerKey = servers
+    .filter((row) => row.communityHomeEnabled === true)
+    .map((row) => row.id)
+    .join(",");
+  useEffect(() => {
+    if (!communityHomeFeatureOn || bauServerKey === "") {
+      setCommunityHomeUnreadByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      setCommunityHomeNewestByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    // The first read waits a beat so a burst of frames is one request; a read
+    // that fails is retried with a bounded backoff, so a blip does not leave a
+    // new post's pip off until the next frame or navigation.
+    const delays = [250, 5_000, 20_000, 60_000];
+    const attempt = (n: number): void => {
+      timer = window.setTimeout(() => {
+        void fetchCommunityHomeUnreadAll()
+          .then(({ servers: counts, newest }) => {
+            if (cancelled) {
+              return;
+            }
+            setCommunityHomeNewestByServer((current) => {
+              const next = { ...(newest ?? {}) };
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+            setCommunityHomeUnreadByServer((current) => {
+              const next = { ...counts };
+              // The server whose feed is open has just been stamped read; a
+              // read that raced the stamp must not light its icon on leaving.
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+          })
+          .catch(() => {
+            // Keep what is on screen (no pip is better than a wrong one) and
+            // ask again, a few times.
+            if (!cancelled && n + 1 < delays.length) {
+              attempt(n + 1);
+            }
+          });
+      }, delays[n]);
+    };
+    attempt(0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    communityHomeFeatureOn,
+    bauServerKey,
+    communityHomeAllNudge,
+    selectedServerId,
+    communityHomeOpen,
   ]);
 
   /**
@@ -7970,6 +8198,10 @@ function MainAppContent({
       return;
     }
     const linkedAt = linkFollowedAt(location.state);
+    if (target.kind === "home") {
+      void applyHomeRoute(target.serverId, target.postId, linkedAt);
+      return;
+    }
     if (target.kind === "conversation") {
       void applyConversationRoute(
         target.channelId,
@@ -8472,6 +8704,11 @@ function MainAppContent({
     () => new Set(blockedUsers.map((blocked) => blocked.id)),
     [blockedUsers],
   );
+  // The open channel's banner (`notify_open_channel`) has to skip the same
+  // authors the server skips for every other channel's activity.
+  useEffect(() => {
+    setNotificationBlockedAuthors(blockedUserIds);
+  }, [blockedUserIds]);
 
   // --- watch now: the strip that says a stream is live ----------------------
   // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this
@@ -8660,6 +8897,15 @@ function MainAppContent({
   useEffect(
     () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
     [notifyDefaultsUserId],
+  );
+  // `newcomer_invite_moment`, same refresh pass. Asked only once the age
+  // gate has passed: before that every `/api` route answers 403, and the
+  // account this strip is for is exactly the one that just passed it, in this
+  // very session, with no focus change to trigger a refresh afterwards.
+  const newcomerInviteUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
+    [newcomerInviteUserId],
   );
   useChannelNotifications({ channels: notificationChannels, unread });
   // The desktop shell hides to the tray on close (Windows, Linux) only while
@@ -9020,6 +9266,35 @@ function MainAppContent({
   }
 
   /**
+   * `newcomer_invite_moment` (`lib/newcomer-invite.ts`): somebody new, with
+   * no friends and no room of their own, standing in a public community (the
+   * QG they were placed in). Off, this is false and nothing differs.
+   */
+  const newcomerInvite = newcomerInviteVisible({
+    flagOn: newcomerInviteMomentOn,
+    // `justOnboarded` for the session that just finished the wizard, whose
+    // local `user` does not carry `onboardedAt` yet (see `partyNewcomerFacts`).
+    newcomer:
+      justOnboarded || isRecentNewcomer(user?.preferences?.onboardedAt),
+    friendsLoaded: !friends.loading && friends.error === null,
+    friendCount: friends.data.friends.length + friends.data.outgoing.length,
+    ownRooms: ownRoomCount(servers, user?.id ?? null),
+    inCommunity: selectedServer?.isCommunity === true,
+    partyLive: Boolean(selectedPartyLive),
+    dismissed: newcomerInviteClosed,
+  });
+  function openNewcomerInviteCreate() {
+    const first = (user?.displayName ?? "").trim().split(/\s+/)[0] ?? "";
+    setCreateServerPrefill({
+      name: first
+        ? t("newcomerInvite.roomName", { name: first }).slice(0, 100)
+        : "",
+    });
+    setCreateServerStart({ mode: "name", source: null });
+    setShowCreateServer(true);
+  }
+
+  /**
    * The arrival banner for whatever is on screen, or nothing. One builder for
    * the two places it mounts (the channel pane and the community home), so
    * the rule deciding what it says lives in `arrivalVariant` and nowhere else.
@@ -9034,6 +9309,19 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A newcomer alone in a public community: the one thing that changes that
+    // is bringing somebody, so this strip takes the arrival strip's place.
+    if (surface !== "party" && newcomerInvite) {
+      return (
+        <NewcomerInviteStrip
+          onInvite={openNewcomerInviteCreate}
+          onDismiss={() => {
+            dismissNewcomerInvite();
+            setNewcomerInviteClosed(true);
+          }}
+        />
+      );
     }
     if (
       !arrivalServerId ||
@@ -10483,6 +10771,8 @@ function MainAppContent({
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+            onRepairAudio={() => void voice.repairAudio()}
+            onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10540,6 +10830,8 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          onRepairAudio={() => void voice.repairAudio()}
+          onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -11041,6 +11333,7 @@ function MainAppContent({
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
+        serverBauUnread={communityHomeUnreadByServer}
         homeSelected={
           selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
         }
@@ -11262,6 +11555,15 @@ function MainAppContent({
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
+          communityHomeUnreadFresh={
+            communityHomeFreshTick >= 0 &&
+            communityHomeUnread > 0 &&
+            bauIsFresh(
+              selectedServerId
+                ? communityHomeNewestByServer[selectedServerId]
+                : null,
+            )
+          }
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}
@@ -11359,7 +11661,12 @@ function MainAppContent({
               user
                 ? {
                     user,
-                    serverCount: servers.length,
+                    // With `newcomer_invite_moment` on, a public community
+                    // you were placed in (the QG) is not "a server": the row
+                    // stays open and keeps offering Criar.
+                    serverCount: newcomerInviteMomentOn
+                      ? ownRoomCount(servers, user.id)
+                      : servers.length,
                     onCreateServer: () => setShowCreateServer(true),
                     onJoinServer: () => setInviteMode("join"),
                     onImportDiscord: () =>
@@ -11478,6 +11785,16 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            canSendInChannel={(channelId) =>
+              perms.serverBits === 0n ||
+              perms.can(Permission.SEND_MESSAGES, channelId)
+            }
+            focusPostId={
+              communityHomeFocus?.serverId === selectedServer.id
+                ? communityHomeFocus.postId
+                : null
+            }
+            focusNonce={communityHomeFocus?.nonce ?? 0}
           />
         )}
 
@@ -11744,9 +12061,12 @@ function MainAppContent({
         open={showCreateServer}
         startMode={createServerStart.mode}
         startSource={createServerStart.source}
+        startName={createServerPrefill?.name ?? null}
+        inviteRef={createServerPrefill ? "chama" : "convite"}
         onClose={() => {
           setShowCreateServer(false);
           setCreateServerStart({ mode: "name", source: null });
+          setCreateServerPrefill(null);
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           // Their own room, empty but for them: the owner banner and the

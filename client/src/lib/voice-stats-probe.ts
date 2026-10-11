@@ -159,10 +159,60 @@ export interface CandidatePairSample {
   packetsReceived: number | null;
 }
 
+/**
+ * One copy of the MICROPHONE leaving this machine: one per mesh peer, one on
+ * the SFU. Read by the audio self-repair (`audio-health.ts`), which compares
+ * it with what the local meter hears.
+ */
+export interface AudioSenderSample {
+  /** Mesh: the peer this copy goes to. SFU: our own peer id. */
+  peerId: string;
+  /** The track the sender is carrying, off `media-source.trackIdentifier`. */
+  trackId: string | null;
+  /** Packets sent since the previous sample; null on the first one. */
+  packetsDelta: number | null;
+  /** `media-source.audioLevel`, linear 0..1; null where not reported. */
+  audioLevel: number | null;
+  /**
+   * `media-source.totalAudioEnergy` since the previous sample: the energy the
+   * sender was actually fed over the whole window, where `audioLevel` is one
+   * instant that can land between two words. Null where not reported and on
+   * the first sample.
+   */
+  energyDelta: number | null;
+}
+
+/**
+ * One remote voice arriving here. Mesh rows carry the receiving track's id so
+ * the caller can tell a microphone from a share's audio; SFU rows are the
+ * microphone publication only, with the server's speaking detector.
+ */
+export interface AudioReceiverSample {
+  peerId: string;
+  trackId: string | null;
+  /** Packets received since the previous sample; null on the first one. */
+  packetsDelta: number | null;
+  /** `inbound-rtp.audioLevel`, linear 0..1; null where not reported. */
+  audioLevel: number | null;
+  /** SFU only: the server says this participant is speaking right now. */
+  remoteSpeaking?: boolean;
+}
+
+export interface AudioStatsSample {
+  senders: AudioSenderSample[];
+  receivers: AudioReceiverSample[];
+}
+
 export interface VoiceStatsSnapshot {
   senders: VideoSenderSample[];
   receivers: VideoReceiverSample[];
   paths: CandidatePairSample[];
+  /**
+   * The audio half, for the self-repair. Optional so every consumer that
+   * builds or reads a snapshot without it (the readouts, the rating, tests)
+   * is unchanged.
+   */
+  audio?: AudioStatsSample;
 }
 
 /**
@@ -449,6 +499,94 @@ export function summariseStats(
 }
 
 /**
+ * A lifetime counter turned into "since the last sample". Null the first time
+ * a key is seen, and null rather than negative when the counter went
+ * backwards (a new connection reusing the key), so a rebuilt transport never
+ * reads as one sample of nothing having arrived.
+ */
+const MAX_COUNTER_MARKS = 4_000;
+
+export function counterDelta(
+  marks: Map<string, number>,
+  key: string,
+  value: number | null,
+): number | null {
+  if (value === null) {
+    return null;
+  }
+  const previous = marks.get(key);
+  // Keys are per stats row, and rows churn with every reconnect and every
+  // speaker in a big room. A long-lived tab must not keep them all: past the
+  // cap the table starts over, which costs one sample of "no reading".
+  if (previous === undefined && marks.size >= MAX_COUNTER_MARKS) {
+    marks.clear();
+  }
+  marks.set(key, value);
+  if (previous === undefined || value < previous) {
+    return null;
+  }
+  return value - previous;
+}
+
+/**
+ * The audio rows of one `getStats()` report: every outbound audio copy with
+ * the track feeding it and that track's level, and every inbound audio row.
+ * Which of them is the microphone (and not a share's audio) is the caller's
+ * call: it knows the track ids, this function does not.
+ */
+export function summariseAudioStats(
+  peerId: string,
+  stats: Iterable<RtcStatLike>,
+  marks: Map<string, number> = packetMarks,
+): AudioStatsSample {
+  const byId = new Map<string, RtcStatLike>();
+  const all: RtcStatLike[] = [];
+  for (const stat of stats) {
+    all.push(stat);
+    if (typeof stat.id === "string") {
+      byId.set(stat.id, stat);
+    }
+  }
+  const senders: AudioSenderSample[] = [];
+  const receivers: AudioReceiverSample[] = [];
+  for (const stat of all) {
+    if (stat.kind !== "audio") {
+      continue;
+    }
+    if (stat.type === "outbound-rtp") {
+      const source = byId.get(str(stat.mediaSourceId) ?? "");
+      senders.push({
+        peerId,
+        trackId: str(source?.trackIdentifier),
+        packetsDelta: counterDelta(
+          marks,
+          `aout:${peerId}:${str(stat.id) ?? "?"}`,
+          num(stat.packetsSent),
+        ),
+        audioLevel: num(source?.audioLevel),
+        energyDelta: counterDelta(
+          marks,
+          `aen:${peerId}:${str(stat.id) ?? "?"}`,
+          num(source?.totalAudioEnergy),
+        ),
+      });
+    } else if (stat.type === "inbound-rtp") {
+      receivers.push({
+        peerId,
+        trackId: str(stat.trackIdentifier),
+        packetsDelta: counterDelta(
+          marks,
+          `ain:${peerId}:${str(stat.id) ?? "?"}`,
+          num(stat.packetsReceived),
+        ),
+        audioLevel: num(stat.audioLevel),
+      });
+    }
+  }
+  return { senders, receivers };
+}
+
+/**
  * One simulcast layer from `getSenderStats()`, which is the only shape this
  * picker needs. LiveKit reports one entry per encoding; Chrome pauses the
  * top one under congestion and leaves it in the list at 0 fps with its
@@ -622,6 +760,8 @@ const registrations = new Map<RTCPeerConnection, Registration>();
 const sources = new Set<() => Promise<VoiceStatsSnapshot>>();
 const byteMarks = new Map<string, ByteMark>();
 const lossMarks = new Map<string, LossMark>();
+/** Packet counters for the audio rows, shared with the SFU's own sampler. */
+const packetMarks = new Map<string, number>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -781,12 +921,17 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
   const senders: VideoSenderSample[] = [];
   const receivers: VideoReceiverSample[] = [];
   const paths: CandidatePairSample[] = [];
+  const audio: AudioStatsSample = { senders: [], receivers: [] };
   for (const registration of registrations.values()) {
     try {
       const report = await registration.pc.getStats();
+      const rows = statRows(report);
+      const audioRows = summariseAudioStats(registration.peerId, rows, packetMarks);
+      audio.senders.push(...audioRows.senders);
+      audio.receivers.push(...audioRows.receivers);
       const snapshot = summariseStats(
         registration.peerId,
-        statRows(report),
+        rows,
         registration.roleOfTrack,
         byteMarks,
         ceilingLookup(registration.pc),
@@ -811,11 +956,20 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
       senders.push(...snapshot.senders);
       receivers.push(...snapshot.receivers);
       paths.push(...snapshot.paths);
+      if (snapshot.audio) {
+        audio.senders.push(...snapshot.audio.senders);
+        audio.receivers.push(...snapshot.audio.receivers);
+      }
     } catch {
       // The room went away mid-sample. Same answer as above.
     }
   }
-  return { senders, receivers, paths };
+  return { senders, receivers, paths, audio };
+}
+
+/** `counterDelta` on the probe's own marks, for a transport sampling itself. */
+export function measurePacketDelta(key: string, value: number | null): number | null {
+  return counterDelta(packetMarks, key, value);
 }
 
 /**

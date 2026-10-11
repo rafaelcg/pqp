@@ -44,13 +44,23 @@ struct VideoSurface: View {
     /// Mirrored, like every self-view on a phone. Never applied to a remote
     /// track: you are the only person you see reversed in real life.
     var mirrored: Bool = false
+    /// The picture's size once it is the right way up, whenever it changes.
+    /// For a caller that chooses fill or fit by the picture's shape
+    /// (`cameraStageShouldFill`); nil for everyone else.
+    var onVideoSize: (@MainActor (CGSize) -> Void)?
 
     var body: some View {
         switch track {
         case .mesh(let track):
-            MeshVideoSurface(track: track, contentMode: contentMode, mirrored: mirrored)
+            MeshVideoSurface(
+                track: track, contentMode: contentMode, mirrored: mirrored,
+                onVideoSize: onVideoSize
+            )
         case .livekit(let track):
-            LiveKitVideoSurface(track: track, contentMode: contentMode, mirrored: mirrored)
+            LiveKitVideoSurface(
+                track: track, contentMode: contentMode, mirrored: mirrored,
+                onVideoSize: onVideoSize
+            )
         case nil:
             Color.clear
         }
@@ -66,11 +76,14 @@ private struct MeshVideoSurface: UIViewRepresentable {
     let track: RTCVideoTrack
     var contentMode: UIView.ContentMode
     var mirrored: Bool
+    var onVideoSize: (@MainActor (CGSize) -> Void)?
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView(frame: .zero)
         view.videoContentMode = contentMode
         view.backgroundColor = .clear
+        view.delegate = context.coordinator
+        context.coordinator.onVideoSize = onVideoSize
         // The renderer is attached in updateUIView, which SwiftUI always calls
         // right after make, so keeping attach/detach in one place means one rule
         // to get right instead of two.
@@ -79,6 +92,7 @@ private struct MeshVideoSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ view: RTCMTLVideoView, context: Context) {
+        context.coordinator.onVideoSize = onVideoSize
         view.videoContentMode = contentMode
         view.transform = mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity
         context.coordinator.attach(track: track, to: view)
@@ -92,8 +106,21 @@ private struct MeshVideoSurface: UIViewRepresentable {
 
     /// Holds the currently-rendered track so a re-render with the same track is
     /// a no-op rather than a detach/attach flicker.
-    final class Coordinator {
+    ///
+    /// Also the view's delegate, for the frame size. WebRTC's renderer adapter
+    /// reports it already swapped for the frame's rotation, so a phone on its
+    /// side reads as landscape here, which is the shape a person sees.
+    @MainActor
+    final class Coordinator: NSObject, RTCVideoViewDelegate {
         private var attached: RTCVideoTrack?
+        var onVideoSize: (@MainActor (CGSize) -> Void)?
+
+        // `RTCMTLVideoView.setSize:` hops to the main queue before calling.
+        nonisolated func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
+            MainActor.assumeIsolated {
+                self.onVideoSize?(size)
+            }
+        }
 
         func attach(track: RTCVideoTrack?, to view: RTCMTLVideoView) {
             guard attached !== track else { return }
@@ -116,20 +143,61 @@ private struct LiveKitVideoSurface: UIViewRepresentable {
     let track: VideoTrack
     var contentMode: UIView.ContentMode
     var mirrored: Bool
+    var onVideoSize: (@MainActor (CGSize) -> Void)?
 
     func makeUIView(context: Context) -> LiveKit.VideoView {
         let view = LiveKit.VideoView(frame: .zero)
         view.backgroundColor = .clear
         apply(to: view)
+        context.coordinator.onVideoSize = onVideoSize
+        context.coordinator.watch(track)
         return view
     }
 
     func updateUIView(_ view: LiveKit.VideoView, context: Context) {
+        context.coordinator.onVideoSize = onVideoSize
         apply(to: view)
+        context.coordinator.watch(track)
     }
 
-    static func dismantleUIView(_ view: LiveKit.VideoView, coordinator: ()) {
+    static func dismantleUIView(_ view: LiveKit.VideoView, coordinator: Coordinator) {
         view.track = nil
+        coordinator.watch(nil)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// The SDK's track knows its rendered size (rotation applied, set by the
+    /// `VideoView` drawing it) and announces changes to its delegates, from
+    /// whichever queue it is on. Only listened to while a caller asked.
+    final class Coordinator: NSObject, TrackDelegate, @unchecked Sendable {
+        @MainActor var onVideoSize: (@MainActor (CGSize) -> Void)?
+        @MainActor private var watched: VideoTrack?
+
+        @MainActor
+        func watch(_ track: VideoTrack?) {
+            guard watched !== track else { return }
+            watched?.remove(delegate: self)
+            watched = track
+            guard let track else { return }
+            track.add(delegate: self)
+            if let dimensions = track.dimensions {
+                report(dimensions)
+            }
+        }
+
+        @MainActor
+        private func report(_ dimensions: Dimensions) {
+            onVideoSize?(CGSize(width: Int(dimensions.width), height: Int(dimensions.height)))
+        }
+
+        nonisolated func track(_ track: VideoTrack, didUpdateDimensions dimensions: Dimensions?) {
+            guard let dimensions else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.watched === track else { return }
+                self.report(dimensions)
+            }
+        }
     }
 
     private func apply(to view: LiveKit.VideoView) {
@@ -150,12 +218,16 @@ struct VideoTile: View {
     let track: VideoFeed?
     var contentMode: UIView.ContentMode = .scaleAspectFill
     var mirrored: Bool = false
+    var onVideoSize: (@MainActor (CGSize) -> Void)?
 
     var body: some View {
         ZStack {
             Palette.inkDeep
             if let track {
-                VideoSurface(track: track, contentMode: contentMode, mirrored: mirrored)
+                VideoSurface(
+                    track: track, contentMode: contentMode, mirrored: mirrored,
+                    onVideoSize: onVideoSize
+                )
             }
         }
     }

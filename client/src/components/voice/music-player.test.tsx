@@ -120,6 +120,7 @@ const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
     errorKind: null,
     notice: null,
     micFallback: null,
+    audioHealthPrompt: null,
     voiceChannelId: CHANNEL,
     self: {
       peerId: "peer-me",

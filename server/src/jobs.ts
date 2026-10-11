@@ -32,6 +32,7 @@ import {
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
+import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
@@ -166,6 +167,21 @@ async function sweepCommunityHomeTranslation(): Promise<void> {
   }
 }
 
+/**
+ * Every minute too: queues subtitles for Baú videos on servers with
+ * `community_home_video_captions` on that have none (which is also how videos
+ * published before the flag get them), and translates source tracks that
+ * miss a current translation. With the flag off everywhere it is an
+ * in-memory check.
+ */
+async function sweepCommunityHomeVideoCaptions(): Promise<void> {
+  try {
+    await sweepCommunityHomeCaptions();
+  } catch (error) {
+    console.error("[community-home] captions sweep failed:", error);
+  }
+}
+
 /** A registered job's own cleanup. Most are `clearInterval` on a plain
  *  timer; the outgoing webhook poller's is its own `stop()` (see below) —
  *  same list, same accounting, one shape. */
@@ -243,6 +259,11 @@ export function startColdJobs(): ColdJobs {
       COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
       "community-home-translation",
       sweepCommunityHomeTranslation,
+    ),
+    every(
+      COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
+      "community-home-captions",
+      sweepCommunityHomeVideoCaptions,
     ),
     (() => {
       const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);

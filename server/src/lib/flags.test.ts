@@ -65,11 +65,17 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  voice_audio_self_heal: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
   community_home: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   community_home_translation: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  bau_mobile_rendition: (raw) => raw === "true",
+  community_home_video_captions: (raw) => raw === "true",
+  bau_post_push: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
@@ -78,6 +84,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   watch_camera_sync: (raw) => raw === "true",
   watch_party_server_audience: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  client_force_update_in_call: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   push_attention_gate: (raw) => raw === "true",
   share_high_motion_guard: (raw) => raw === "true",
@@ -98,7 +106,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  notify_open_channel: (raw) => raw === "true",
   mention_ids_from_db: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  newcomer_invite_moment: (raw) => raw === "true",
 };
 
 const SAMPLES = [

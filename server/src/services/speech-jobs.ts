@@ -23,7 +23,12 @@ import { INSTANCE_ID } from "../lib/bus.js";
  *     taken over cannot settle the job the new owner is running.
  */
 
-export type SpeechJobKind = "voice_note" | "voice_transcode" | "party_question";
+export type SpeechJobKind =
+  | "voice_note"
+  | "voice_transcode"
+  | "party_question"
+  /** Automatic subtitles of an uploaded Baú video; keyed by `post_id`, not an attachment. */
+  | "community_home_captions";
 
 /** Postgres LISTEN channel the enqueue NOTIFYs and the poller listens on. */
 export const SPEECH_JOBS_CHANNEL = "pqp_speech_job_due";
@@ -35,6 +40,14 @@ export const SPEECH_JOBS_CHANNEL = "pqp_speech_job_due";
  * that expires under a live worker means paying the provider twice.
  */
 export const SPEECH_JOB_LEASE_SECONDS = 180;
+/**
+ * A Baú video is up to 100 MiB and its sound up to
+ * `COMMUNITY_HOME_CAPTIONS_MAX_SECONDS`: a download, one ffmpeg pass and one
+ * provider call per 30 s window, in sequence. The job aborts itself well
+ * before this (`community-home-captions-worker.ts`), so the lease only ever
+ * runs out under a worker that died.
+ */
+export const CAPTIONS_JOB_LEASE_SECONDS = 1_800;
 /** Claims per job before it is given up on. */
 export const SPEECH_JOB_MAX_ATTEMPTS = 3;
 const RETRY_BASE_SECONDS = 30;
@@ -43,6 +56,8 @@ export interface SpeechJob {
   id: string;
   kind: SpeechJobKind;
   attachment_id: string | null;
+  /** Set for `community_home_captions` only. */
+  post_id: string | null;
   attempts: number;
   language_hint: string | null;
   leased_by: string;
@@ -51,7 +66,7 @@ export interface SpeechJob {
 type Queryable = Pick<PoolClient, "query">;
 
 /**
- * Queue a job. Idempotent per (kind, attachment): a second enqueue of the same
+ * Queue a job. Idempotent per (kind, attachment) and per (kind, post): a second enqueue of the same
  * note is a no-op and answers false, which is how an eager enqueue and a lazy
  * request racing each other end up as one job.
  */
@@ -59,7 +74,9 @@ export async function enqueueSpeechJob(
   db: Queryable,
   job: {
     kind: SpeechJobKind;
-    attachmentId: string;
+    /** Exactly one of these two: a voice note's attachment, or a Baú post. */
+    attachmentId?: string;
+    postId?: string;
     languageHint?: string | null;
     /**
      * Also put a SETTLED job back in the queue, if it settled at least this
@@ -70,11 +87,16 @@ export async function enqueueSpeechJob(
     requeueSettledAfterSeconds?: number;
   },
 ): Promise<boolean> {
+  const byPost = job.postId !== undefined;
+  if (byPost === (job.attachmentId !== undefined)) {
+    throw new Error("enqueueSpeechJob needs exactly one of attachmentId and postId");
+  }
+  const column = byPost ? "post_id" : "attachment_id";
   const requeue = job.requeueSettledAfterSeconds;
   const inserted = await db.query(
-    `INSERT INTO speech_jobs (kind, attachment_id, language_hint)
+    `INSERT INTO speech_jobs (kind, ${column}, language_hint)
      VALUES ($1, $2, $3)
-     ON CONFLICT (kind, attachment_id) WHERE attachment_id IS NOT NULL
+     ON CONFLICT (kind, ${column}) WHERE ${column} IS NOT NULL
      ${
        requeue === undefined
          ? "DO NOTHING"
@@ -87,8 +109,8 @@ export async function enqueueSpeechJob(
      }
      RETURNING id`,
     requeue === undefined
-      ? [job.kind, job.attachmentId, job.languageHint ?? null]
-      : [job.kind, job.attachmentId, job.languageHint ?? null, requeue],
+      ? [job.kind, byPost ? job.postId : job.attachmentId, job.languageHint ?? null]
+      : [job.kind, byPost ? job.postId : job.attachmentId, job.languageHint ?? null, requeue],
   );
   if ((inserted.rowCount ?? 0) === 0) {
     return false;
@@ -144,13 +166,15 @@ export async function claimSpeechJobs(
      UPDATE speech_jobs j
         SET status = 'running',
             leased_by = $3,
-            lease_expires_at = NOW() + make_interval(secs => $4::double precision),
+            lease_expires_at = NOW() + make_interval(secs => CASE
+              WHEN j.kind = 'community_home_captions' THEN $5::double precision
+              ELSE $4::double precision END),
             attempts = j.attempts + 1
        FROM due
       WHERE j.id = due.id
-      RETURNING j.id::text AS id, j.kind, j.attachment_id, j.attempts,
+      RETURNING j.id::text AS id, j.kind, j.attachment_id, j.post_id, j.attempts,
                 j.language_hint, j.leased_by`,
-    [kinds, limit, owner, SPEECH_JOB_LEASE_SECONDS],
+    [kinds, limit, owner, SPEECH_JOB_LEASE_SECONDS, CAPTIONS_JOB_LEASE_SECONDS],
   );
   return claimed.rows;
 }

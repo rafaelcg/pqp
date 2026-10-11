@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,13 +53,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.bau.BauBadge
+import gg.pqp.app.bau.CommunityHomeConfig
+import gg.pqp.app.bau.CommunityHomeConfigs
+import gg.pqp.app.bau.bauUnreadAll
 import gg.pqp.app.core.IdempotencyAttempt
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
@@ -66,6 +73,7 @@ import gg.pqp.app.invites.ui.InviteSheet
 import gg.pqp.app.reports.ReportDraft
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
+import gg.pqp.app.social.ui.CountBadge
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
@@ -111,6 +119,30 @@ fun ServersScreen(
     }
 
     LaunchedEffect(Unit) { session.refreshServers() }
+
+    // Unread Baú posts per server, for the lime badge on each icon. Two yeses
+    // as everywhere else: the instance flag (asked once per session, off on any
+    // failure) and then one read for all servers rather than one per row. Asked
+    // again on every resume, because the moment it is most wrong is coming back
+    // from the Baú, which stamped itself read while this screen sat behind it.
+    // A failed read keeps what is on screen: a badge one behind beats one that
+    // flickers away.
+    var communityHome by remember { mutableStateOf(CommunityHomeConfig()) }
+    LaunchedEffect(session) { communityHome = CommunityHomeConfigs.resolve(session.api) }
+    var bauUnread by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    LifecycleResumeEffect(communityHome.enabled) {
+        // Tied to this resume: a slow read that outlives it must not land after
+        // a newer one (or after the Baú stamped itself read) and put stale
+        // counts back, so pausing cancels it.
+        val read = if (communityHome.enabled) {
+            scope.launch {
+                runCatching { session.api.bauUnreadAll() }.onSuccess { bauUnread = it }
+            }
+        } else {
+            null
+        }
+        onPauseOrDispose { read?.cancel() }
+    }
 
     Scaffold(
         modifier = Modifier
@@ -215,6 +247,11 @@ fun ServersScreen(
                     items(servers, key = { it.id }) { server ->
                         ServerRow(
                             server = server,
+                            bauUnread = if (communityHome.enabled && server.communityHomeEnabled) {
+                                BauBadge.unreadFor(server.id, bauUnread)
+                            } else {
+                                0
+                            },
                             onClick = { onOpenServer(server) },
                             onLeave = { leaving = server },
                             onDelete = { deleting = server },
@@ -317,6 +354,7 @@ object ServerActions {
 @Composable
 private fun ServerRow(
     server: ServerSummary,
+    bauUnread: Int,
     onClick: () -> Unit,
     onLeave: () -> Unit,
     onDelete: () -> Unit,
@@ -365,13 +403,28 @@ private fun ServerRow(
         // The seed is the id, not the name. Two servers called "casa" are two
         // different places and should not be the same colour, and a server that
         // is renamed should not change colour under the people already in it.
-        Avatar(
-            name = server.name,
-            url = server.iconUrl,
-            size = Sizes.avatarServer,
-            cornerRadius = 14.dp,
-            seed = server.id,
-        )
+        Box {
+            Avatar(
+                name = server.name,
+                url = server.iconUrl,
+                size = Sizes.avatarServer,
+                cornerRadius = 14.dp,
+                seed = server.id,
+            )
+            // Lime, at the icon's corner: a new Baú post is news for the whole
+            // server, and the brand signal is what says so at a glance.
+            BauBadge.label(bauUnread)?.let { label ->
+                CountBadge(
+                    count = bauUnread,
+                    loud = true,
+                    label = label,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 6.dp, y = (-4).dp)
+                        .testTag("servers.bau.unread"),
+                )
+            }
+        }
         Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(

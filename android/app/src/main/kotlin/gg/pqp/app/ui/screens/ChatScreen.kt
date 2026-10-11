@@ -112,6 +112,14 @@ import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.chat.MentionAutocomplete
 import gg.pqp.app.ui.chat.MentionCandidate
 import gg.pqp.app.ui.chat.MessageBody
+import gg.pqp.app.ui.chat.BauCardState
+import gg.pqp.app.ui.chat.BauPostCardSkeleton
+import gg.pqp.app.ui.chat.BauPostCardView
+import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.ui.chat.LocalOpenBauPost
+import gg.pqp.app.ui.chat.rememberBauCardState
+import gg.pqp.app.bau.BauPostRef
+import gg.pqp.app.bau.BauShare
 import gg.pqp.app.ui.chat.MessagePermissions
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
@@ -882,11 +890,46 @@ private fun MessageRow(
                 Spacer(Modifier.height(Spacing.xs))
                 ChanceCard(message.chance)
             } else if (message.body.isNotEmpty()) {
-                MessageBody(
-                    body = message.body,
-                    editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
-                    selfUsername = selfUsername,
-                )
+                // A Baú post address on this instance is drawn as a card. While
+                // the card loads, and once it is shown, the raw URL is hidden
+                // (the words around it stay); when the server says the reader
+                // may not see the post, the message is exactly what it was.
+                val bauSelection = remember(message.body) { BauShare.select(message.body) }
+                val bauCard = rememberBauCardState(api, bauSelection)
+                val openBau = LocalOpenBauPost.current
+                val shownBody = when {
+                    bauSelection == null || bauCard is BauCardState.Unavailable -> message.body
+                    bauSelection.linkOnly -> ""
+                    else -> BauShare.stripLink(message.body, bauSelection.link)
+                }
+                if (shownBody.isNotEmpty() || message.editedAt != null) {
+                    MessageBody(
+                        body = shownBody,
+                        editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
+                        selfUsername = selfUsername,
+                    )
+                }
+                when (bauCard) {
+                    is BauCardState.Loading -> {
+                        Spacer(Modifier.height(Spacing.xs))
+                        BauPostCardSkeleton()
+                    }
+                    is BauCardState.Ready -> {
+                        Spacer(Modifier.height(Spacing.xs))
+                        BauPostCardView(
+                            card = bauCard.card,
+                            onOpen = {
+                                openBau(
+                                    BauPostTarget(
+                                        BauPostRef(bauCard.card.serverId, bauCard.card.postId),
+                                        bauCard.card.serverName,
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    else -> Unit
+                }
             }
 
             message.attachments.forEach { attachment ->

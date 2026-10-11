@@ -1035,7 +1035,7 @@ your request happened to pick.
 | **Calls** | `pqp_api_call_join_attempts_total`, `..._connected_total` (+`_by_transport`, `_by_scope`), `..._refused_total{reason}`, `..._rings_total`, `..._rings_answered_total`, `..._rings_declined_total`, `..._rings_ended_total{reason}` | `calls.*` on the payload, from `server/src/voice/call-metrics.ts`, incremented on the real signalling path in `server/src/ws/voice.ts`: `noteJoinAttempt`/`noteJoinConnected`/`noteJoinRefused` in the `join-voice-room` branch, and `noteRingStarted`/`noteRingAnswered`/`noteRingDeclined`/`noteRingEnded` in `handleCallRing` / `answerRing` / `declineRing` / `endConversationRing`. This is the number the MoonKase mesh-cap night (2026-09-05) had no way to show. |
 | **Watch party** | `pqp_api_hls_starts_total`, `..._stops_total`, `..._restarts_scheduled_total`, `..._restarts_exhausted_total`, `..._playlist_rejected_total{reason}` | `liveHls.*` from `server/src/voice/hls-egress.ts` (`voice.hlsStarted` / `voice.hlsStopped` / `scheduleRestart`) and `server/src/voice/hls-playlist-proxy.ts` (`noteHlsPlaylistRejected`, called from the proxy route ahead of the log's own rate limit — pitfall 16). The server's viewer count is `liveHls.viewers` on `GET /api/admin/metrics` (`liveViewers` is the number watching now, `docs/WATCH_PARTY.md` §"How many people watched"); read turnout from the stream's own source too. |
 | **Push delivery** | `pqp_api_push_delivery_total{platform=web\|apns\|fcm,outcome=sent\|failed\|pruned}` | `product.pushDelivery` from `server/src/services/push-metrics.ts`, incremented at each leg of `server/src/services/push.ts`. NOT the same as `product.push`, which is subscription counts. `pruned` is a dead token garbage-collected (normal); `failed` is the one to watch. |
-| **Push skipped** | `pqp_api_push_skipped_total{kind=message\|call\|stream\|reminder\|waitlist,reason=live_socket\|blocked\|dnd\|muted\|level\|no_subscription\|transport_off}` | `product.pushSkipped` from `server/src/services/push-skips.ts`: every recipient the push pipeline decided NOT to push, by the first rule that refused them. The `push.skipped` log line in Loki carries the same answer per person (`userId`, `channelId` or `conversationId`), rate limited to one line per person, kind and reason per minute with a `suppressed` count. `live_socket` is "has a socket open anywhere", the rule that silenced Rafael's fourteen DMs on 2026-10-05. Process-local, summed across replicas by the exporter. |
+| **Push skipped** | `pqp_api_push_skipped_total{kind=message\|call\|stream\|reminder\|waitlist\|bau,reason=live_socket\|blocked\|dnd\|muted\|level\|no_subscription\|transport_off}` | `product.pushSkipped` from `server/src/services/push-skips.ts`: every recipient the push pipeline decided NOT to push, by the first rule that refused them. The `push.skipped` log line in Loki carries the same answer per person (`userId`, `channelId` or `conversationId`), rate limited to one line per person, kind and reason per minute with a `suppressed` count. `live_socket` is "has a socket open anywhere", the rule that silenced Rafael's fourteen DMs on 2026-10-05. Process-local, summed across replicas by the exporter. |
 
 DAU is not a separate counter: `distinctSenders24h` (24h) and
 `userDetail.active7d` (7d) on the same payload are the cheapest honest proxies
@@ -1072,6 +1072,20 @@ events are dropped client-side (`dropNoisyItems`): on 2026-09-29 they were 99.6%
 Faro's Loki bytes (about 0.8 GB a day quiet, 3 to 6 GB on party days) and nothing
 reads them. Faro is a separate Grafana product from the
 Prometheus/Loki stack here and has its own UI; there is nothing to import.
+
+**Faro is session-sampled, because the free plan stops it dead.** The stack's
+Frontend Observability allowance is 50,000 sessions a month, and past it the
+collector answers **402 to every request** until the month turns over: no errors,
+no Web Vitals, nothing, and nothing in the page says so except a console line.
+October 2026 hit the cap on the 9th (about 6,300 sessions a day; the always-open
+desktop windows roll over to a new session after 15 idle minutes), and Faro was
+blind from then on. Since then only a share of sessions report
+(`DEFAULT_SESSION_SAMPLE_RATE` in `client/src/lib/faro.ts`, 0.2, about 38,000 a
+month), overridable with the repository variable `VITE_FARO_SESSION_SAMPLE_RATE`
+at build time. Sampling is per session: a session sends everything or nothing.
+To check the budget, `grafanacloud_org_fe_o11y_billable_sessions` against
+`grafanacloud_org_fe_o11y_included_sessions` on the `grafanacloud-usage`
+Prometheus data source. Counts read off Faro are a sample: multiply by five.
 
 ## The activation funnel
 
@@ -1232,6 +1246,9 @@ index of unfinished jobs (`idx_speech_jobs_due`), so none of them reads history.
 `voice_notes` and `voice_note_transcription` themselves are in `flags`. With
 `voice_notes` off everywhere every count is zero because nobody can send, and
 `refusals["mint-flag-off"]` is what tells that apart from nobody trying.
+
+The series, the dashboard (`/d/pqp-voice-notes`), the four alert rules and the
+deploy steps are in `tools/monitoring/README.md`, section "Voice notes".
 
 A field added to the block does not appear in Grafana until it is added to
 `render()` in `tools/monitoring/pqp-api-metrics-exporter.py` (and the block is
@@ -1451,6 +1468,8 @@ restart and would churn the series set for nothing.
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
 | `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `tools/monitoring/grafana-dashboard-voice-notes.json` | "pqp Mensagens de voz" dashboard: voice-note usage and pipeline health |
+| `tools/monitoring/grafana-alert-rules-voice-notes.json` | Voice-note alerts: queue stuck, job failure rate, speech budget exhausted and at 80% |
 | `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |
 | `tools/monitoring/grafana-alert-rules-activation.json` | The one funnel alert: "activation funnel stalled at the age gate" |
 | `server/src/services/activation.ts` | `recordActivationStep` (the funnel seam) and `activationFunnel` (the cohort report on `/api/admin/metrics`) |

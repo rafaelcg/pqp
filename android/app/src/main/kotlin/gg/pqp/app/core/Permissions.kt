@@ -55,6 +55,13 @@ suspend fun ApiClient.serverPermissions(serverId: String): PermissionsSnapshot =
  */
 object Permission {
     /**
+     * Manage the server. In the Baú it is the one bit that publishes: every
+     * write route under `/home` asks the server for it, and the phone's
+     * compose button asks the same question of the same snapshot.
+     */
+    const val MANAGE_SERVER: Long = 1L shl 5
+
+    /**
      * Start the stream in a `watch_party` channel. Everyone else there is
      * the audience -- see the bit's own doc on web for why it is not
      * `STREAM`.

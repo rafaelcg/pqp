@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=pqp
+GenericName=Voice and Text Chat
+GenericName[pt_BR]=Chat de voz e texto
+GenericName[es]=Chat de voz y texto
+Comment=Voice, text and watch parties with your friends
+Comment[pt_BR]=Voz, texto e watch party com a tua galera
+Comment[es]=Voz, texto y watch parties con tus amigos
+Exec=pqp %U
+Icon=gg.pqp.pqp
+Terminal=false
+StartupWMClass=pqp
+Categories=Network;Chat;InstantMessaging;
+Keywords=voice;chat;call;watch party;screen share;discord;
+Keywords[pt_BR]=voz;chat;call;watch party;compartilhar tela;discord;
+MimeType=x-scheme-handler/pqp;

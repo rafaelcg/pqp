@@ -126,9 +126,11 @@ sound. Reproduced with real builds and a real service worker (`client/e2e/stale-
 | Build id | `client/vite.config.ts`, `src/lib/build-info.ts` | The deployed commit (`VITE_FARO_APP_VERSION`, else `VITE_PQP_BUILD_ID`, else the local `HEAD`, else `dev`) is baked into the bundle and written to `/version.json` with the build time. A `dev` build never compares itself. `<html data-pqp-build>` shows it. |
 | Worker takes over | `workbox.skipWaiting` + `clientsClaim` | A new worker activates as soon as it installs, so a reload reaches the new precache. The running page keeps the code it loaded; it is not reloaded by this. |
 | Navigations are network-first | `src/lib/sw-build-script.ts` (imported by the worker as `sw-build-*.js`) | The worker answers a navigation from the network, and only falls back to the precached shell when offline or after 4 s. Before, every navigation was answered from the precache, which is the OLD build's until a newer worker has installed. A hard reload (Ctrl+Shift+R) bypasses the worker for ONE load, and the next navigation, the language picker's `location.replace` included, is the worker's again: reported on 2026-09-30 as "the old site came back after I changed the language". Reproduced with a second tab open (it keeps the old worker in control). The locale catalogues are hashed chunks of the same build, in the same precache, so they follow the build id like everything else, and an update reloads them with the page. |
-| The page asks | `src/lib/version-watch.ts` | `/version.json` (no-store, cache-busted) on start, on focus and visibility, and about every 12 minutes (jittered), at most once a minute. Also asks the browser to look for a new worker. A worker taking control triggers a look at once. |
-| The card | `update-prompt.tsx` | Visible whenever the page is stale or a worker is waiting. "Later" snoozes for 20 minutes and it returns; the rail keeps a way back. |
-| Safe moment | `src/lib/update-policy.ts`, `build-watcher.tsx` | Reload with no question when nobody has touched the page for 3 minutes, or when it has been out of date past 12 hours (`VITE_UPDATE_MAX_STALE_HOURS`, `0` turns it off). Never in a call, never while typing (text in the focused field, or a key in the last 20 s), never while watching a live party, and never twice in a row for the same build (`sessionStorage` guard, 15 minutes). |
+| The page asks | `src/lib/version-watch.ts` | `/version.json` (no-store, cache-busted) on start, on focus and visibility, on every realtime (re)connect, and every 8 to 12 minutes whether the tab is visible or hidden, at most once a minute. Also asks the browser to look for a new worker. A worker taking control triggers a look at once. `/version.json` and not the API's version, because the bundle and the API deploy apart. |
+| The worker asks too | `src/lib/sw-build-script.ts` | On a fetch from any page it controls, at most every 10 minutes (the time kept in Cache Storage, `pqp-sw-meta`), the worker calls `registration.update()`. This is what reaches a page whose own code never asks: see "Bundles from before any of this" below. |
+| The card | `update-prompt.tsx` | Visible whenever the page is stale or a worker is waiting, outside a call. "Later" snoozes for 20 minutes and it returns; the rail keeps a way back. |
+| In a call | `update-call-banner.tsx` | A lime strip at the top, "Nova versão disponível, recarrega", saying it reloads by itself at the hangup, with a button for whoever wants it now. |
+| Safe moment | `src/lib/update-policy.ts`, `build-watcher.tsx` | Reload with no question when the tab is hidden, right after a call ends (2 minutes), when nobody has touched the page for 3 minutes, or when it has been out of date past 12 hours (`VITE_UPDATE_MAX_STALE_HOURS`, `0` turns it off). Never in a call, never while typing on a visible tab (text in the focused field, or a key in the last 20 s), never while watching a live party, and never twice in a row for the same build (`sessionStorage` guard, 15 minutes). |
 | Applying it | `src/lib/apply-update.ts` | Updates the worker, waits for it, asks the active worker which build it is (`sw-build-*.js`), and reloads. A worker that is not the target build, or does not answer, or does not take over in 15 s, gets its caches deleted before the reload, so the page loads from the network. The worker is never unregistered: a push subscription dies with the registration and can only be re-created from a click. |
 | When applying fails | `src/lib/update-ladder.ts`, `src/hooks/use-apply-update.ts` | The card and the forced screen take the update through a ladder, because a resolved `applyUpdate` proves nothing (it can reject, hang, or end by asking for a reload a browser refuses): after each rung it waits to see the page actually leave (`pagehide`). Rung 0 is `applyUpdate`; rung 1 deletes every cache and navigates to the same URL with a `?_pqp=` cache-buster (removed from the address again in `main.tsx`); rung 2, the last resort, also unregisters the workers (which drops the push subscription, so only for somebody who has failed twice). One click walks the rungs with a 1 s and 3 s backoff; if all fail the button comes back with the reason ("sem internet" or "não deu para atualizar", pt-BR, en, es) and the NEXT click starts on a heavier rung than the last one ended on (remembered in `sessionStorage` for 15 minutes). Offline is answered at once and touches nothing. Nothing reloads by itself in this path, so it cannot loop; the automatic path keeps its own guard. A button can never stay disabled past 120 s. |
 | Forced update | `forced-update-screen.tsx`, `server/src/lib/client-update-config.ts` | See below. |
@@ -145,6 +147,14 @@ answers `{ forceUpdate, minBuiltAt }`, read per request, both off by default:
 - `minBuiltAt`: `CLIENT_MIN_BUILT_AT`, an ISO date or epoch milliseconds. Bundles
   built before it are forced. Self-limiting (a later deploy is built after it), but
   an environment variable, so it needs a recreate.
+- `interruptCalls`: the runtime flag `client_force_update_in_call`. With either lever
+  above forcing a bundle, that bundle reloads by itself even in a call (and the
+  blocking screen is up meanwhile). It ends calls: a critical fix only, off again
+  after.
+- `criticalMinBuiltAt`: `CLIENT_CRITICAL_MIN_BUILT_AT`, same format as
+  `CLIENT_MIN_BUILT_AT`. Bundles built before it reload even in a call.
+
+The last two are read by bundles from 2026-10-10 on; an older bundle ignores them.
 
 A force that was already known for a build is kept when a later lookup FAILS (offline, signed out, timeout); only an answer from the server, the operator turning it off included, changes it. A client asks only when it already knows it is stale, so an up-to-date client never
 makes this request. The screen waits while the person is in a call and appears when
@@ -157,11 +167,115 @@ still on a bundle from before this change has none of it: it gets the new worker
 bundle on its next reload or relaunch, or when the old card is pressed. From that
 load on, everything above applies.
 
+**Bundles from before any of this** (built up to 2026-09-29) cannot run any of
+the above, and the failed installs of 2026-09-30 to 2026-10-10 kept some of them
+open. What still reaches them, all of it in code they already carry:
+
+1. Their `virtual:pwa-register` (vite-plugin-pwa prompt mode, no `onNeedReload`)
+   reloads the page when a worker it did not register takes control
+   (`installed` with `isExternal`, then `controlling` with `isUpdate`). So once
+   any update check finds a new worker more than a minute after the page loaded,
+   the page reloads itself, **in a call too**: that is their code, not ours. Every
+   bundle up to this change did it, the 2026-09-30 to 10-10 ones included; from
+   this change on `register-sw.ts` passes `onNeedReload`, so the plugin never
+   reloads and `update-policy.ts` decides (a call is never interrupted).
+2. An update check happens on any navigation of the origin (another tab), on
+   `registration.update()` from a newer tab of the same browser, from the worker
+   itself once a current worker controls the page ("The worker asks too"), and
+   from the browser after 24 hours.
+3. Once a current worker controls the page, the old precache is gone, so the
+   first lazy chunk the page asks for 404s and their `chunk-reload.ts` reloads
+   (deferred with a banner in a call).
+4. A page that loaded under the old worker in the same minute its update was
+   found sees that update as its own, does not reload, and is current on its
+   next navigation or at the next deploy (path 1).
+
+The server has no lever of its own here: the WebSocket of those bundles has no
+version or reload message, and a close only makes them reconnect.
+
 **One thing to set by hand.** In the Cloudflare dashboard for `pqp.gg`, Caching >
 Configuration > Browser Cache TTL: "Respect Existing Headers" (or a Cache Rule that
 bypasses `/sw.js` and `/sw-notification-click.js`). Nothing in this repository can
 set it. The client does not depend on it: the version file is read past every
 cache, and an update whose worker turns out stale is delivered by purging.
+
+### A precache entry that 404s
+
+Found on 2026-10-10. Symptom: a plain reload showed the old site and a hard
+reload (Cmd+Shift+R) showed the new one, every time. Seen in Zen (Firefox) and
+earlier on Windows.
+
+Cause:
+
+1. The worker precached every `**/*.html`, which included three standalone
+   pages in `client/public/` (`share-diagnostic.html`,
+   `share-diagnostic-game.html`, `share-audio-tone.html`).
+2. Pages answers `/x.html` with a 308 to `/x`.
+3. Since #917 (2026-09-30), the edge middleware answers a path that
+   `isUnknownSpaPath` does not know with a 404. It did not know these three.
+4. One non-200 entry fails Workbox's install. Every new worker went
+   `redundant`, on every deploy, in every browser.
+
+Effects from 2026-09-30 to the fix:
+
+- A new visitor never got a worker, so web push was unavailable to them.
+- An existing worker was never replaced. A worker from before the
+  network-first handler (installed before 2026-10-01) kept answering every
+  navigation from its old precache. A hard reload skips the worker, which is
+  why it showed the new build.
+
+What prevents it now:
+
+| Guard | Where |
+|---|---|
+| HTML in the precache is `index.html` only | `globPatterns` in `client/vite.config.ts` |
+| Every `public/*.html` is a known path | `spa-routes.ts`, enforced by `spa-routes.test.ts` |
+| The e2e stand-in for Pages has the pretty-URL 308 and the middleware's 404 | `client/e2e/stale-bundle/pages-server.ts` |
+| A fresh worker must reach `activated`, and every precache URL must answer 200 (Chromium and Firefox) | `client/e2e/stale-bundle/update.spec.ts` |
+| Before production is touched, the build goes to the `precache-check` preview branch and every precache URL must answer 200 there. On failure production keeps its build and the job is red | "Deploy a preview and check its precache" in `deploy-web.yml`, `client/scripts/check-precache.mjs` |
+| After the production deploy, the same check on that deployment | "Verify every precached file answers 200 in production" in `deploy-web.yml` |
+| Every 10 minutes, every precache URL of the live `pqp.gg/sw.js` must answer 200 (opens an issue) | `sw-precache` in `scripts/monitor/availability.mjs` |
+| A worker that fails to install is reported to Faro as `pwa_sw_install_failed`, with the failing `path`, `status`, `reason` (Workbox's error name) and `build` | The worker posts `PQP_SW_INSTALL_FAILED` from its install listener (`client/src/lib/sw-build-script.ts`); the page joins it with the `redundant` state it sees (`installFailureReporter` in `client/src/lib/register-sw.ts`). Every open tab hears it; `onceAcrossTabs` (a Web Lock plus a time in `localStorage`) makes it one event. A worker from before the message reports `reason: unknown` |
+
+Recovery needs no code. A stuck worker still fetches `sw.js` on navigation.
+Once the new worker installs, `skipWaiting` lets it take over, and the next
+normal reload is on the new build.
+
+To read the reports: in Grafana, Faro events named `pwa_sw_install_failed`.
+The `path` and `status` name the file to fix. A burst of them right after a
+deploy means that deploy's precache is broken for everybody.
+
+### If a worker itself is broken (the kill switch)
+
+Everything above assumes the new worker can install and take over. If a
+shipped worker is broken in a way that keeps the page from working (a fetch
+handler that fails every request, for example), the standard remedy is a
+"no-op" worker: a `sw.js` with no fetch handler that skips waiting, claims
+the open pages, deletes the caches and reloads them. Google's guide:
+[Removing buggy service workers](https://developer.chrome.com/docs/workbox/remove-buggy-service-workers).
+pqp does not ship one, and does not need to for an install failure like the
+one above.
+
+What pqp already has, in order of weight:
+
+1. The update card and the automatic safe-moment reload (above).
+2. The update ladder (`client/src/lib/update-ladder.ts`): rung 1 deletes every
+   cache and navigates with a cache-buster; rung 2 also unregisters the workers.
+3. The forced update (`client_force_update` on the dashboard), which puts every
+   out-of-date client through that ladder.
+
+These run in the PAGE, so they need a page that loads. If the worker is so
+broken that no page loads at all, ship the no-op worker:
+
+1. Replace the generated worker with a static `client/public/sw.js` that has an
+   `install` listener calling `self.skipWaiting()`, and an `activate` listener
+   that deletes every cache from `caches.keys()`, calls `self.clients.claim()`,
+   and navigates every window client to its own URL.
+2. Turn off the PWA plugin's worker generation for that build, so the static file
+   is the one served.
+3. Deploy, and check `pqp.gg/sw.js` is the no-op file.
+4. Keep it live until Faro shows no more sessions on the broken build, then
+   restore the generated worker.
 
 ## Icons
 

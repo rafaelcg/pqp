@@ -30,6 +30,8 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
+| `grafana-dashboard-voice-notes.json` | Standing "pqp Mensagens de voz" dashboard (uid `pqp-voice-notes`): a usage row (sent by scope and recorder, senders, length, first plays, listened share, refused requests) and a health row (oldest due job, queue depth, jobs settled and success rate, time to done, transcript status, speech budget). Built on `payload.voiceNotes`. Import and leave up. |
+| `grafana-alert-rules-voice-notes.json` | Always-on group `pqp-voice-notes`: queue stuck, job failure rate high, speech budget exhausted, speech budget at 80%. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
 | `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 6 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, pool waits over 1 s (see "Pool waits" below), HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
@@ -251,6 +253,113 @@ see the comment above the `liveHls` gauges in `pqp-api-metrics-exporter.py`.
 `pqp_api_hls_sessions` (already exported) is the only session count there is,
 so a distinct "active sessions" gauge would just be a second name for the
 same number.
+
+## Voice notes (mensagens de voz)
+
+`payload.voiceNotes` (PR #984, `server/src/services/voice-note-metrics.ts`) is
+read from Postgres, so both replicas report the same numbers and the exporter
+takes it from one. The one exception is `refusals`, counted in memory since
+boot by whichever replica turned the request away: `_merge_voice_notes()` sums
+it, like `calls`. An API older than the block simply has no `voiceNotes`, and
+then the exporter emits no `pqp_api_voice_notes_*` series at all (nothing
+logs "unclassified", nothing is written as a fake zero).
+
+| Series | Reads |
+|---|---|
+| `pqp_api_voice_notes_minted{window}` | `usage.minted24h` / `minted7d` (a row exists, sent or not) |
+| `pqp_api_voice_notes_sent{window,scope}` | `usage.byScope24h` / `byScope7d` (dm, group, server) |
+| `pqp_api_voice_notes_sent_by_type{window,type}` | `usage.byContentType24h` / `7d` (`audio/mp4`, `audio/webm`, `audio/ogg`; no series for a type with no notes) |
+| `pqp_api_voice_notes_senders{window}` | `usage.senders24h` / `senders7d` |
+| `pqp_api_voice_notes_duration_seconds{window,stat}` | `usage.durationSeconds` (`stat` is `total` or `median`; no median series when nothing was sent) |
+| `pqp_api_voice_notes_listens_24h`, `_listeners_24h` | `usage.listens24h`, `listeners24h` |
+| `pqp_api_voice_notes_listened_share_7d` | `usage.listenedShare7d` (omitted when null) |
+| `pqp_api_voice_notes_queue{kind,state}` | `health.queue` (`state`: queued, running, retrying, expired_leases) |
+| `pqp_api_voice_notes_queue_oldest_seconds{kind}` | `health.queue.*.oldestQueuedSeconds` |
+| `pqp_api_voice_notes_jobs_24h{kind,outcome}` | `health.jobs` (`outcome`: ok, skipped, failed) |
+| `pqp_api_voice_notes_job_latency_seconds{kind,quantile}` | `health.jobs.*.p50Seconds` / `p95Seconds` (`quantile` 0.5, 0.95; omitted when null) |
+| `pqp_api_voice_notes_transcripts_24h{status}` | `health.transcripts24h` |
+| `pqp_api_voice_notes_budget_used_seconds`, `_budget_daily_seconds`, `_budget_refused`, `_budget_used_ratio` | `health.budget` (the ratio is omitted when the budget is 0) |
+| `pqp_api_voice_notes_refusal_total{reason}` | `refusals`, the only counter; summed across replicas |
+
+`kind` is `transcription` or `transcode`. Everything except the refusal
+counter is a **rolling-window gauge** (24 h or 7 d, or "right now"): it falls
+as old rows age out, so `rate()` and `increase()` are wrong on it. Use them
+only on `pqp_api_voice_notes_refusal_total`.
+
+The refusal counter is summed across replicas like `calls`, so it shares that
+caveat: if a replica's scrape is missing for a run (see
+`pqp_api_metrics_replicas_scraped`), the sum dips and `increase()` reads it as a
+reset. It is a diagnostic panel, not an alert input.
+
+**The failure-rate alert is on a 24 h window, on purpose and with a cost.**
+Voice-note volume is far too low for a 1 h window to hold five settled jobs, so
+anything shorter would either never reach the volume floor or flap on one bad
+note. The price: the series is a rolling count, so after a fix the alert stays
+firing until the failures age out of the 24 h window, and a failure that starts
+now needs a few jobs to move the ratio. The queue-stuck rule is the fast signal
+for a dead worker; this one catches a provider or ffmpeg that is up but
+failing. If volume grows, add a 1 h `health.jobs` window to the API and switch
+the rule to it.
+
+### Deploying it (the orchestrator does this, in this order)
+
+This is the three manual steps in the memory note
+`pqp-metrics-pipeline-manual-steps`; none of them is in the API deploy. Do it
+after the API carrying PR #984 is live (before that the block is absent and
+every panel reads "No data", which is harmless).
+
+1. Exporter onto the SFU box (from the repo root, after this PR is merged and
+   checked out):
+
+   ```bash
+   scp tools/monitoring/pqp-api-metrics-exporter.py root@216.238.114.79:/tmp/pqp-api-metrics-exporter.py
+   ssh root@216.238.114.79 'install -m0755 /tmp/pqp-api-metrics-exporter.py /usr/local/bin/pqp-api-metrics-exporter \
+     && systemctl start pqp-api-metrics.service \
+     && grep -c "^pqp_api_voice_notes" /var/lib/node_exporter/textfile_collector/pqp_api.prom'
+   ```
+
+   A count above 0 means the box exporter now emits the series. Do not rerun
+   `install.sh`: it prompts for the admin token and the unit files are
+   unchanged.
+
+2. Dashboard and alert rules (Grafana API; `~/.config/pqp/grafana.env` has
+   `GRAFANA_URL` and `GRAFANA_SA_TOKEN`):
+
+   ```bash
+   source ~/.config/pqp/grafana.env
+   cd tools/monitoring
+
+   # dashboard
+   jq '{dashboard: (del(._comment) + {id: null}), overwrite: true}' grafana-dashboard-voice-notes.json \
+     | curl -sS -X POST "$GRAFANA_URL/api/dashboards/db" \
+         -H "Authorization: Bearer $GRAFANA_SA_TOKEN" -H 'Content-Type: application/json' -d @-
+
+   # alert rules, one POST per rule, editable in the UI (X-Disable-Provenance)
+   jq -c '.groups[] | .name as $g | .rules[] | . + {folderUID: "ffxfigbmjr2f4e", ruleGroup: $g}' \
+       grafana-alert-rules-voice-notes.json \
+     | while read -r rule; do
+         printf '%s' "$rule" | curl -sS -X POST "$GRAFANA_URL/api/v1/provisioning/alert-rules" \
+           -H "Authorization: Bearer $GRAFANA_SA_TOKEN" -H 'Content-Type: application/json' \
+           -H 'X-Disable-Provenance: true' -d @-
+         echo
+       done
+   ```
+
+   Re-running the rule POSTs fails with a uid conflict; to update, `PUT
+   /api/v1/provisioning/alert-rules/<uid>` instead. The dashboard is
+   idempotent (`overwrite`).
+
+3. Verify through the datasource before saying it is tracked:
+
+   ```bash
+   curl -sG "$GRAFANA_URL/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query" \
+     -H "Authorization: Bearer $GRAFANA_SA_TOKEN" \
+     --data-urlencode 'query=pqp_api_voice_notes_queue_oldest_seconds'
+   ```
+
+   The dashboard lands at `$GRAFANA_URL/d/pqp-voice-notes`. The series arrive
+   about a minute after step 1 (the timer ticks every 20 s, Alloy scrapes the
+   textfile, remote-write adds a little).
 
 ## Pool waits (added 2026-10-01)
 

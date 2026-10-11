@@ -61,9 +61,30 @@ export interface ForceConfig {
   forceUpdate: boolean;
   /** Epoch milliseconds; bundles built before it are forced. Null when unset. */
   minBuiltAt: number | null;
+  /**
+   * The runtime flag `client_force_update_in_call`: a FORCED update also
+   * reloads a page that is in a call. For a critical fix only.
+   */
+  interruptCalls?: boolean;
+  /**
+   * Epoch milliseconds (`CLIENT_CRITICAL_MIN_BUILT_AT`): bundles built before it
+   * reload even mid-call. Null when unset.
+   */
+  criticalMinBuiltAt?: number | null;
 }
 
-export const NO_FORCE: ForceConfig = { forceUpdate: false, minBuiltAt: null };
+export const NO_FORCE: ForceConfig = {
+  forceUpdate: false,
+  minBuiltAt: null,
+  interruptCalls: false,
+  criticalMinBuiltAt: null,
+};
+
+function epochMs(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
 
 /**
  * An older API answers 404 and a newer one may add fields: anything that is not
@@ -73,18 +94,17 @@ export function parseForceConfig(raw: unknown): ForceConfig {
   if (!raw || typeof raw !== "object") {
     return NO_FORCE;
   }
-  const { forceUpdate, minBuiltAt } = raw as {
+  const { forceUpdate, minBuiltAt, interruptCalls, criticalMinBuiltAt } = raw as {
     forceUpdate?: unknown;
     minBuiltAt?: unknown;
+    interruptCalls?: unknown;
+    criticalMinBuiltAt?: unknown;
   };
   return {
     forceUpdate: forceUpdate === true,
-    minBuiltAt:
-      typeof minBuiltAt === "number" &&
-      Number.isFinite(minBuiltAt) &&
-      minBuiltAt > 0
-        ? minBuiltAt
-        : null,
+    minBuiltAt: epochMs(minBuiltAt),
+    interruptCalls: interruptCalls === true,
+    criticalMinBuiltAt: epochMs(criticalMinBuiltAt),
   };
 }
 
@@ -104,4 +124,24 @@ export function isForcedBuild(
     return true;
   }
   return config.minBuiltAt !== null && running.builtAt < config.minBuiltAt;
+}
+
+/**
+ * Whether the update is CRITICAL for this bundle: it reloads even in a call.
+ * Either the operator turned `client_force_update_in_call` on while the build is
+ * forced, or the bundle was built before `criticalMinBuiltAt`. Same rule as
+ * `isForcedBuild` about only being asked for a page that is already stale.
+ */
+export function isCriticalBuild(
+  running: BuildIdentity,
+  config: ForceConfig,
+): boolean {
+  if (running.build === DEV_BUILD_ID) {
+    return false;
+  }
+  if (config.interruptCalls && isForcedBuild(running, config)) {
+    return true;
+  }
+  const critical = config.criticalMinBuiltAt ?? null;
+  return critical !== null && running.builtAt < critical;
 }

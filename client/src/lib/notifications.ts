@@ -24,6 +24,7 @@ import {
   onNotifyDefaultsChange,
 } from "@/lib/notify-defaults-config";
 import { translateMessage } from "@/lib/i18n";
+import { isNotifyOpenChannelEnabled } from "@/lib/notify-config";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { getSoundState, playActivitySound, playCue } from "@/lib/sounds";
 
@@ -1342,6 +1343,86 @@ export function notifyOpenChannelMessage(
     return;
   }
   playActivitySound(1);
+}
+
+/**
+ * Whether a message in the channel on screen should go through the ordinary
+ * banner path. Pure so the rule can be read, and tested, on its own.
+ *
+ * The server sends no `channel-activity` for a channel a socket has open (the
+ * full `message-broadcast` arrives instead), so until `notify_open_channel`
+ * the open channel could never raise a banner, even with the window minimised
+ * behind a game. A window that is visible AND focused is the reader looking at
+ * it, which stays quiet exactly as before; anything else is "away".
+ */
+export function shouldBannerOpenChannel(input: {
+  flagOn: boolean;
+  documentVisible: boolean;
+  windowFocused: boolean;
+}): boolean {
+  return input.flagOn && !(input.documentVisible && input.windowFocused);
+}
+
+/**
+ * Authors this account blocked. The server leaves them out of
+ * `channel-activity` altogether (a block takes away the notification, not the
+ * message), but a message in the open channel arrives as a broadcast, so the
+ * same rule has to be applied here or a blocked person could still make the
+ * window flash.
+ */
+let blockedAuthors: ReadonlySet<string> = new Set();
+
+export function setNotificationBlockedAuthors(ids: ReadonlySet<string>): void {
+  blockedAuthors = ids;
+}
+
+/**
+ * A message from somebody else in the channel on screen, while the window is
+ * away (minimised, hidden or without focus). With `notify_open_channel` on it
+ * is treated like any other channel's activity: the account's levels, the
+ * channel and server mutes, Do Not Disturb, the desktop opt-in and the burst
+ * coalescing all apply, and a sound plays through the same path.
+ *
+ * Returns whether it took the message. `false` means "not mine": the flag is
+ * off or the window is in front, and the caller falls back to
+ * `notifyOpenChannelMessage`, which is exactly what ran before. `true` means
+ * this handled it, including the cases that deliberately say nothing (Do Not
+ * Disturb, a blocked author), so the caller must not also play the mention
+ * sound.
+ */
+export function notifyOpenChannelWhileAway(
+  channelId: string,
+  mention: boolean,
+  context: {
+    authorId?: string | null;
+    documentVisible: boolean;
+    windowFocused: boolean;
+  },
+): boolean {
+  if (
+    !shouldBannerOpenChannel({
+      flagOn: isNotifyOpenChannelEnabled(),
+      documentVisible: context.documentVisible,
+      windowFocused: context.windowFocused,
+    })
+  ) {
+    return false;
+  }
+  if (doNotDisturb) {
+    return true;
+  }
+  if (context.authorId && blockedAuthors.has(context.authorId)) {
+    return true;
+  }
+  notifyChannelActivity(
+    describeActivity(channelId, { count: 1, mentions: mention ? 1 : 0 }),
+    {
+      selectedChannelId: channelId,
+      documentVisible: context.documentVisible,
+      windowFocused: context.windowFocused,
+    },
+  );
+  return true;
 }
 
 /** Drop pending bursts, e.g. when the app shell unmounts on sign-out. */

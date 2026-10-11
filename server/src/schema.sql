@@ -4001,6 +4001,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_community_home_posts_pinned_one
   ON community_home_posts (server_id)
   WHERE pinned_at IS NOT NULL;
 
+-- WHEN A PUBLISHED POST HAS BEEN ANNOUNCED BY PUSH (`bau_post_push`,
+-- services/community-home-push.ts). Stamped by one UPDATE ... RETURNING, so the
+-- machine that gets the row back is the only one that sends: exactly once
+-- across API instances, across the publish route and the sweep, and across an
+-- unpublish followed by a publish. Stamped even when nothing is sent, so
+-- turning the flag on never announces what was published while it was off.
+-- The existing published posts are backfilled ONCE, in the block that adds the
+-- column, because this file runs on every boot and a plain UPDATE here would
+-- also swallow the pushes of posts published just before a restart.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'community_home_posts'
+       AND column_name = 'push_claimed_at'
+  ) THEN
+    ALTER TABLE community_home_posts ADD COLUMN push_claimed_at TIMESTAMPTZ;
+    UPDATE community_home_posts
+       SET push_claimed_at = COALESCE(published_at, NOW())
+     WHERE status = 'published';
+  END IF;
+END $$;
+
+-- The sweep asks "any published post nobody has announced?" every 30 s across
+-- every server; this keeps that a lookup of the (almost always empty) set.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_unannounced
+  ON community_home_posts (published_at)
+  WHERE status = 'published' AND push_claimed_at IS NULL;
+
 -- How far each person has read this server's Baú. Mirrors `channel_reads`:
 -- one row per (server, person), stamped when the feed is opened. The unread
 -- count is derived from it, never stored, so it cannot drift.
@@ -4050,6 +4080,36 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
+
+-- The phone cut of a post's uploaded video: the vertical (9:16) edit a phone
+-- plays instead of the landscape one. A second stored object on the same row,
+-- through the same mint / PUT / claim and the same size, type and HEAD checks
+-- as the main media, so its upload row is the same kind of row and the orphan
+-- sweep and the delete path treat it the same way. NULL on every post that
+-- does not have one. Only ever set when media_kind = 'video', and always a
+-- video itself (the service enforces both; the CHECK is the backstop). Served
+-- only while the runtime flag `bau_mobile_rendition` is on for the server.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_name TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_content_type TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_byte_size BIGINT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS mobile_media_storage_key TEXT;
+
+-- Added once, never dropped and re-added: a re-add re-validates every row
+-- under a strong lock on each schema run.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_posts_mobile_media_check'
+       AND conrelid = 'community_home_posts'::regclass
+  ) THEN
+    ALTER TABLE community_home_posts
+      ADD CONSTRAINT community_home_posts_mobile_media_check
+      CHECK (mobile_media_storage_key IS NULL OR media_kind = 'video');
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
@@ -4107,6 +4167,89 @@ CREATE TABLE IF NOT EXISTS community_home_translation_usage (
   day DATE PRIMARY KEY,
   chars BIGINT NOT NULL DEFAULT 0,
   requests INTEGER NOT NULL DEFAULT 0
+);
+
+-- Automatic subtitles of an uploaded Baú video, behind the runtime flag
+-- `community_home_video_captions` (services/community-home-captions.ts).
+--
+-- The worker's job is a `speech_jobs` row like a voice note's, keyed by the
+-- POST rather than an attachment: the column and the kind are added here,
+-- after `community_home_posts` exists, because speech_jobs is created long
+-- before it. The constraint rewrites are guarded so a boot that finds them
+-- already in place takes no lock on the table.
+ALTER TABLE speech_jobs ADD COLUMN IF NOT EXISTS post_id UUID
+  REFERENCES community_home_posts(id) ON DELETE CASCADE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%community_home_captions%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_kind_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_kind_check CHECK (
+      kind IN ('voice_note', 'voice_transcode', 'party_question', 'community_home_captions')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_check'
+       AND pg_get_constraintdef(oid) LIKE '%post_id%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_check CHECK (
+      kind = 'party_question' OR attachment_id IS NOT NULL OR post_id IS NOT NULL
+    );
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- One captions job per post EVER, like one transcription per note: the
+-- enqueue's dedupe. Replacing a post's video deletes the row, so the next
+-- enqueue (or the sweep) makes a fresh one for the new file.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_post
+  ON speech_jobs (kind, post_id) WHERE post_id IS NOT NULL;
+
+-- The tracks. One row per (post, language): the transcription itself
+-- (`is_source`) and its translations, cues as JSONB ({start, end, text},
+-- seconds) because a translation swaps the words and keeps the timings, and
+-- the WebVTT is rendered on read. `media_key` is the object the sound came
+-- from: a read serves only rows whose key is still the post's, so a replaced
+-- video never shows the old subtitles even before anything deletes them.
+-- `source_hash` is md5 of the source cues (`captionCuesHash`): a translated
+-- row made from an older transcription is stale and not served.
+CREATE TABLE IF NOT EXISTS community_home_post_captions (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  is_source BOOLEAN NOT NULL,
+  media_key TEXT NOT NULL,
+  cues JSONB NOT NULL,
+  source_lang TEXT,
+  source_hash TEXT NOT NULL,
+  -- The speech provider for the source, the translation model otherwise.
+  made_by TEXT NOT NULL,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, lang)
+);
+
+-- The claim for one caption translation, the same shape and the same reason
+-- as community_home_translation_jobs: a translation is a network call, never
+-- made in a transaction, and two processes must not both pay for it.
+CREATE TABLE IF NOT EXISTS community_home_caption_translation_jobs (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  PRIMARY KEY (post_id, lang)
 );
 
 -- Watch party scheduling: an admin/mod announces the next session on a

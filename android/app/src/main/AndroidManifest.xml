@@ -62,10 +62,18 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Pqp.Starting">
+            <!-- supportsPictureInPicture: ONLY the Baú full screen video ever
+                 asks for it (BauPip, armed while it plays). Nothing else
+                 calls enterPictureInPictureMode or sets auto-enter, so no
+                 other screen, and no call, changes behaviour. The call UI is
+                 a bar inside this activity, not a PiP of its own.
+                 smallestScreenSize joins configChanges because a PiP resize
+                 would otherwise recreate the activity under the video. -->
             <!-- singleTask: an invite link tapped in a browser while the app is
                  already running has to reach the running Activity's
                  onNewIntent, not stack a second MainActivity (with a second

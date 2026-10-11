@@ -208,6 +208,11 @@ struct RootView: View {
         .onChange(of: voice.remoteScreen == nil && call.remoteScreen == nil) { _, none in
             if none { WatchOrientation.releaseAllScreenShares() }
         }
+        // The same net for the call stage's own claim (`CallStageView`): the
+        // cover can go down with the call rather than through a dismiss.
+        .onChange(of: call.phase.isLive && !call.isCollapsed) { _, shown in
+            if !shown { WatchOrientation.setCallStage(false) }
+        }
         // Presented from the root rather than from the chat screen: a call
         // answered from the servers tab has to have somewhere to appear, and
         // collapsing it must not depend on which screen started it.
@@ -273,6 +278,13 @@ struct RootView: View {
         // universal-link path on a cold launch, which does NOT come through
         // `onOpenURL`. Both are needed — shipping only the first is why "the
         // link works, but only the second time" is such a common bug.
+        // A tap on a link in a message: a Baú post of this instance opens in
+        // the Baú, everything else goes where the system sends it.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let target = BauShare.inAppTarget(for: url) else { return .systemAction }
+            session.requestNavigation(target)
+            return .handled
+        })
         .onOpenURL { url in
             guard let target = DeepLink.target(url: url) else { return }
             session.requestNavigation(target)

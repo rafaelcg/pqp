@@ -189,3 +189,109 @@ final class YoutubeLinksTests: XCTestCase {
         XCTAssertNil(YoutubeLinks.thumbnailURL("https://example.com"))
     }
 }
+
+/// The two Baú media decisions that were placeholders: which uploaded media
+/// plays inline, and which comment bodies are a picture.
+final class CommunityHomeMediaDecisionTests: XCTestCase {
+    private let author = PublicUser(
+        id: "33333333-3333-3333-3333-333333333333", displayName: "Rafa",
+        username: "rafa", tag: "rafa#0001", avatarUrl: nil
+    )
+
+    private func comment(_ body: String) -> CommunityHomeComment {
+        CommunityHomeComment(id: "c", author: author, body: body, createdAt: Date())
+    }
+
+    func testAStoredVideoWithAnHTTPSURLPlaysInline() {
+        let media = CommunityHomeMedia(
+            kind: "video", name: "pqp-bau-lancamento-small.mp4", contentType: "video/mp4",
+            url: "https://files.example.com/bau/clip.mp4?X-Amz-Signature=abc"
+        )
+        XCTAssertEqual(media.inlineVideoURL?.host, "files.example.com")
+    }
+
+    func testOnlyAStoredVideoWithAReadableURLPlaysInline() {
+        XCTAssertNil(CommunityHomeMedia(kind: "video", name: "x.mp4", url: nil).inlineVideoURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "video", name: "x.mp4", url: "/relative.mp4").inlineVideoURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "video", name: "x.mp4", url: "file:///etc/hosts").inlineVideoURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "image", name: "x.png", url: "https://a.example/x.png").inlineVideoURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "youtube", youtubeUrl: "https://youtu.be/dQw4w9WgXcQ").inlineVideoURL)
+    }
+
+    func testAVideoWithAPhoneCutPlaysTheCut() {
+        let media = CommunityHomeMedia(
+            kind: "video", name: "launch-16x9.mp4",
+            url: "https://files.example.com/bau/landscape.mp4?sig=1",
+            mobile: CommunityHomeMobileRendition(
+                name: "launch-9x16.mp4", url: "https://files.example.com/bau/vertical.mp4?sig=1"
+            )
+        )
+        XCTAssertEqual(media.inlineVideoURL?.path, "/bau/vertical.mp4")
+        XCTAssertEqual(media.openURL?.path, "/bau/vertical.mp4")
+    }
+
+    func testAPhoneCutWithoutAReadableURLFallsBackToTheMainVideo() {
+        let main = "https://files.example.com/bau/landscape.mp4?sig=1"
+        for cut in [nil, CommunityHomeMobileRendition(url: nil), CommunityHomeMobileRendition(url: "/relative.mp4")] {
+            let media = CommunityHomeMedia(kind: "video", name: "x.mp4", url: main, mobile: cut)
+            XCTAssertEqual(media.inlineVideoURL?.absoluteString, main)
+        }
+    }
+
+    func testThePhoneCutDecodesAndAnOlderPayloadStillDoes() throws {
+        let withCut = Data("""
+            {"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+             "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null,
+             "mobile":{"name":"b.mp4","contentType":"video/mp4","byteSize":5,"url":"https://s.example/b.mp4"}}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: withCut).inlineVideoURL?.absoluteString,
+            "https://s.example/b.mp4"
+        )
+        let older = Data("""
+            {"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+             "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: older).inlineVideoURL?.absoluteString,
+            "https://s.example/a.mp4"
+        )
+        let garbled = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","mobile":"nope"}
+            """.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(CommunityHomeMedia.self, from: garbled).inlineVideoURL?.absoluteString,
+            "https://s.example/a.mp4"
+        )
+    }
+
+    func testACommentThatIsOnlyAKlipyURLIsAGIF() {
+        let url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        XCTAssertEqual(comment(url).gifURL?.absoluteString, url)
+        XCTAssertEqual(comment("  \(url)\n").gifURL?.absoluteString, url)
+    }
+
+    func testAnythingElseInACommentStaysText() {
+        let url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        XCTAssertNil(comment("olha isso \(url)").gifURL)
+        XCTAssertNil(comment("https://evil.example/x.gif").gifURL)
+        XCTAssertNil(comment("http://static.klipy.com/ii/x.gif").gifURL)
+        XCTAssertNil(comment("https://static.klipy.com/ii/page.html?x=.gif").gifURL)
+        XCTAssertNil(comment("tá bom").gifURL)
+    }
+}
+
+final class BauVideoHealthTests: XCTestCase {
+    func testAFailedItemIsBroken() {
+        XCTAssertTrue(BauVideoHealth.isFailure(status: .failed, error: nil))
+    }
+
+    func testAnErrorOnAReadyItemIsBroken() {
+        XCTAssertTrue(BauVideoHealth.isFailure(status: .readyToPlay, error: URLError(.networkConnectionLost)))
+    }
+
+    func testAHealthyItemIsNot() {
+        XCTAssertFalse(BauVideoHealth.isFailure(status: .unknown, error: nil))
+        XCTAssertFalse(BauVideoHealth.isFailure(status: .readyToPlay, error: nil))
+    }
+}
