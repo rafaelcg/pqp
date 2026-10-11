@@ -8450,15 +8450,16 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
     await applyForumPostPatch(post, patch);
   }
 
-  // The live row goes out before the audit writes, so a failed audit insert
-  // cannot leave every open list showing the old state of a committed change.
-  const summary = await getForumPostSummary(post.channel_id);
-  if (!summary) {
-    throw new NotFound("Post not found");
-  }
-  if (changed) {
-    announceForumPostUpdate(summary);
-  }
+  // The change is committed. Its two after-effects, the live row and the audit
+  // rows, run side by side and neither can skip the other: a failed audit
+  // insert must not leave every open list on the old state, and a failed
+  // summary read must not leave the change out of the audit log.
+  const live = getForumPostSummary(post.channel_id).then((summary) => {
+    if (summary && changed) {
+      announceForumPostUpdate(summary);
+    }
+    return summary;
+  });
 
   const audit = (
     action: ForumAuditAction,
@@ -8472,23 +8473,39 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       targetId: post.channel_id,
       changes: entries,
     });
+  const audits: Promise<void>[] = [];
   if (pinChange) {
-    await audit("forum.post_pin", [
-      { key: "pinned", old: !body.pinned, new: body.pinned },
-      { key: "title", old: post.title, new: post.title },
-    ]);
+    audits.push(
+      audit("forum.post_pin", [
+        { key: "pinned", old: !body.pinned, new: body.pinned },
+        { key: "title", old: post.title, new: post.title },
+      ]),
+    );
   }
   if (lockChange) {
-    await audit("forum.post_lock", [
-      { key: "locked", old: !body.locked, new: body.locked },
-      { key: "title", old: post.title, new: post.title },
-    ]);
+    audits.push(
+      audit("forum.post_lock", [
+        { key: "locked", old: !body.locked, new: body.locked },
+        { key: "title", old: post.title, new: post.title },
+      ]),
+    );
   }
   // An author editing their own post is not a moderator action.
   if (changes.length > 0 && !isAuthor) {
-    await audit("forum.post_edit", changes);
+    audits.push(audit("forum.post_edit", changes));
   }
-  return { post: summary };
+
+  const [summary, ...audited] = await Promise.allSettled([live, ...audits]);
+  for (const result of [summary, ...audited]) {
+    if (result!.status === "rejected") {
+      throw result!.reason;
+    }
+  }
+  const updated = (summary as PromiseFulfilledResult<Awaited<typeof live>>).value;
+  if (!updated) {
+    throw new NotFound("Post not found");
+  }
+  return { post: updated };
 });
 
 /**

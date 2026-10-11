@@ -1964,20 +1964,24 @@ function bumpForumPost(postId: string, at: Date): void {
     let next: Date | null = at;
     try {
       while (next) {
-        const forumId = await bumpForumPostActivity(postId, next);
-        if (!forumId) {
-          // A chat thread, or a shell: nothing listed moved.
-          return;
-        }
-        const summary = await getForumPostSummary(postId);
-        if (summary) {
-          announceForumPostUpdate(summary);
+        // Each round on its own: a failed summary read must not drop a reply
+        // that arrived meanwhile, whose time is the next round's bump.
+        try {
+          const forumId = await bumpForumPostActivity(postId, next);
+          if (!forumId) {
+            // A chat thread, or a shell: nothing listed moved, nor will.
+            return;
+          }
+          const summary = await getForumPostSummary(postId);
+          if (summary) {
+            announceForumPostUpdate(summary);
+          }
+        } catch (error) {
+          console.error("[forums] bump failed:", error);
         }
         next = state.latest;
         state.latest = null;
       }
-    } catch (error) {
-      console.error("[forums] bump failed:", error);
     } finally {
       forumBumps.delete(postId);
     }
