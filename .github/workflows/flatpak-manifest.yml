@@ -274,7 +274,13 @@ jobs:
           asset_id() {
             gh api "${api}/tags/${TAG}" --jq ".assets[] | select(.name == \"$1\") | .id"
           }
+          rename() { gh api -X PATCH "${api}/assets/$1" -f name="$2" > /dev/null; }
           existing=$(asset_id "$NAME")
+          # An earlier run stopped mid-swap: put the old bundle back first.
+          if [ -z "$existing" ] && [ -n "$(asset_id "${NAME}.old")" ]; then
+            existing=$(asset_id "${NAME}.old")
+            rename "$existing" "$NAME"
+          fi
           if [ -z "$existing" ]; then
             gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
           else
@@ -282,7 +288,6 @@ jobs:
             # the upload, and a failed upload would leave the release without
             # one. Upload beside it, then swap the names; the old file is only
             # deleted once the new one carries the name.
-            rename() { gh api -X PATCH "${api}/assets/$1" -f name="$2" > /dev/null; }
             staged="$RUNNER_TEMP/staged/${NAME}.new"
             mkdir -p "$(dirname "$staged")"
             cp "$file" "$staged"
