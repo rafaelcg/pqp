@@ -290,16 +290,21 @@ class VoiceEngine(
                 // The one seam where a share's game audio can join the call:
                 // see [GameAudioCapture]. A no-op unless a share attached it.
                 .setAudioBufferCallback { buffer, format, channels, rate, bytes, captureTimeNs ->
-                    // A moderator's mute leaves the track disabled, so nothing
-                    // mixed here is sent; skipping is only the cheaper path.
-                    if (!serverMuted) gameAudio?.process(
-                        buffer,
-                        format,
-                        channels,
-                        rate,
-                        bytes,
-                        micOn = micWanted && canPublishAudio && !serverMuted,
-                    )
+                    // A moderator's mute disables the track too, but this is
+                    // the buffer itself: zeroed, so nothing leaves in the
+                    // moment between the roster and the track-enable.
+                    if (serverMuted) {
+                        zeroPcm(buffer, bytes)
+                    } else {
+                        gameAudio?.process(
+                            buffer,
+                            format,
+                            channels,
+                            rate,
+                            bytes,
+                            micOn = micWanted && canPublishAudio,
+                        )
+                    }
                     captureTimeNs
                 }
                 .createAudioDeviceModule()
@@ -345,7 +350,9 @@ class VoiceEngine(
      * this person, not the person's own.
      */
     private fun applyLocalAudio() {
-        localAudio?.setEnabled(canPublishAudio && (micWanted || carryingGameAudio()))
+        localAudio?.setEnabled(
+            canPublishAudio && !serverMuted && (micWanted || carryingGameAudio()),
+        )
     }
 
     /**

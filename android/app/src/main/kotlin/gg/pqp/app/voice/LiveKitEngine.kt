@@ -278,7 +278,11 @@ class LiveKitEngine(
             bytesRead: Int,
             captureTimeNs: Long,
         ): Long {
-            if (!serverMuted) {
+            // Zeroed, not passed through, under a moderator's mute: the track
+            // is disabled as well, and this holds in the moment between.
+            if (serverMuted) {
+                zeroPcm(buffer, bytesRead)
+            } else {
                 gameAudio?.process(
                     buffer,
                     audioFormat,
@@ -1238,7 +1242,8 @@ class LiveKitEngine(
      * [gameAudioHook] in that second case, so the publication stays live
      * without anyone hearing the room they muted themselves from.
      */
-    private fun sendingAudio(): Boolean = !(muted || deafened) || carryingGameAudio()
+    private fun sendingAudio(): Boolean =
+        !serverMuted && (!(muted || deafened) || carryingGameAudio())
 
     private fun micTrackEnabled(): Boolean = canPublishAudio && sendingAudio()
 

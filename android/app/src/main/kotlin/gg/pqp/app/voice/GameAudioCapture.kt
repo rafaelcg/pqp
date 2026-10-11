@@ -14,6 +14,15 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
 
+/**
+ * Silence one recorder buffer in place. Used wherever a buffer must not leave
+ * with anything in it, so a mute holds even if a track-enable is a moment late.
+ */
+fun zeroPcm(buffer: ByteBuffer, bytes: Int) {
+    val view = buffer.duplicate().apply { position(0) }
+    for (i in 0 until minOf(bytes, view.capacity())) view.put(i, 0)
+}
+
 /** Whether this device can carry a game's sound in a screen share at all. */
 fun gameAudioSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
@@ -312,10 +321,7 @@ class GameAudioCapture(
         runCatching { recorder.release() }
     }
 
-    private fun zero(buffer: ByteBuffer, bytes: Int) {
-        val view = buffer.duplicate().apply { position(0) }
-        for (i in 0 until minOf(bytes, view.capacity())) view.put(i, 0)
-    }
+    private fun zero(buffer: ByteBuffer, bytes: Int) = zeroPcm(buffer, bytes)
 
     private companion object {
         const val TAG = "GameAudioCapture"
