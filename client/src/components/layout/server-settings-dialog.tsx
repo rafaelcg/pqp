@@ -6,9 +6,9 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
-  AudioLines,
   Image as ImageIcon,
   KeyRound,
+  PartyPopper,
   ScrollText,
   ShieldBan,
   ShieldCheck,
@@ -302,7 +302,7 @@ const SECTIONS: SectionDef[] = [
     id: "soundboard",
     label: "serverSettings.section.soundboard",
     description: "serverSettings.soundboard.description",
-    icon: AudioLines,
+    icon: PartyPopper,
     ownerOnly: false,
   },
   {
