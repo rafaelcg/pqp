@@ -480,6 +480,7 @@ import {
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
 import { QuickSwitcher } from "@/components/conversations/quick-switcher";
+import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
 import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
 import {
   dismissNewcomerInvite,
@@ -11968,6 +11969,23 @@ function MainAppContent({
             only serves the server-side selections. */}
         {selection.kind === "dm" && !selectedChannel && !channelsLoading && (
           <FriendsView
+            hero={
+              conversationsHome && !conversationsLoading && conversations.length === 0
+                ? ({ openAdd }) => (
+                    <ConversationsEmpty
+                      viewerId={user?.id ?? null}
+                      servers={servers}
+                      inviteHref={
+                        user?.handle
+                          ? `${window.location.origin}/@${user.handle}`
+                          : window.location.origin
+                      }
+                      onAddFriend={openAdd}
+                      onSayHi={stableOnMessagePerson}
+                    />
+                  )
+                : undefined
+            }
             currentUserId={user?.id ?? null}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
