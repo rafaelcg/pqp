@@ -4760,5 +4760,6 @@
   "conversations.rail.waitingSr_one": "{count} conversation waiting",
   "conversations.rail.waitingSr_other": "{count} conversations waiting",
   "conversations.rail.more_one": "{count} more conversation waiting",
-  "conversations.rail.more_other": "{count} more conversations waiting"
+  "conversations.rail.more_other": "{count} more conversations waiting",
+  "conversations.rail.label": "Chats"
 }

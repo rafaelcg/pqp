@@ -236,7 +236,7 @@ test("the rail: the door counts conversations, the people waiting surface under 
 
   const rail = anaPage.getByRole("navigation");
   const door = rail.locator("[data-rail-conversations]");
-  await expect(door.locator("[data-rail-conversations-label]")).toHaveText("Conversations");
+  await expect(door.locator("[data-rail-conversations-label]")).toHaveText("Chats");
   await expect(door.locator("[data-conversations-waiting]")).toHaveText("2", {
     timeout: 20_000,
   });
