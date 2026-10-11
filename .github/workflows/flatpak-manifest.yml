@@ -50,7 +50,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: flatpak-manifest-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  # One group per release tag: a shared group keeps only one PENDING run, so a
+  # third release published while a bundle builds would drop the second.
+  group: flatpak-manifest-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -64,7 +66,6 @@ jobs:
     timeout-minutes: 15
     outputs:
       version: ${{ steps.pin.outputs.version }}
-      main_version: ${{ steps.pin.outputs.main_version }}
       deb_sha: ${{ steps.pin.outputs.deb_sha }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -86,9 +87,6 @@ jobs:
           set -euo pipefail
           case "$TAG" in v[0-9]*) ;; *) echo "::error::not a desktop tag: $TAG"; exit 1 ;; esac
           version="${TAG#v}"
-          # What main's manifest is on before this run touches it, so a
-          # backfill of an older tag does not offer to move main backwards.
-          echo "main_version=$(node flatpak/bump.mjs --pinned)" >> "$GITHUB_OUTPUT"
           mkdir -p "$RUNNER_TEMP/flatpak"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern "pqp-${version}-amd64.deb" --dir "$RUNNER_TEMP/flatpak"
@@ -112,11 +110,15 @@ jobs:
           docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
             appstream gg.pqp.pqp.metainfo.xml
 
-      # The bumped manifest, for `pr` to commit and `bundle` to build.
+      # The bumped manifest and metainfo, for `pr` to commit and `bundle` to
+      # build. Only those two: an artifact drops the executable bit, and the
+      # rest of flatpak/ comes from each job's own checkout.
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak-manifest
-          path: flatpak/
+          path: |
+            flatpak/gg.pqp.pqp.yml
+            flatpak/gg.pqp.pqp.metainfo.xml
           retention-days: 7
 
   pr:
@@ -130,12 +132,21 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       VERSION: ${{ needs.bump.outputs.version }}
-      MAIN_VERSION: ${{ needs.bump.outputs.main_version }}
       DEB_SHA: ${{ needs.bump.outputs.deb_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # What main's manifest is on now, before the bump lands on it, so a
+      # backfill of an older tag does not offer to move main backwards.
+      - name: Read main's version
+        id: main
+        run: echo "version=$(node flatpak/bump.mjs --pinned)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -143,6 +154,8 @@ jobs:
           path: flatpak/
 
       - name: Open the PR
+        env:
+          MAIN_VERSION: ${{ steps.main.outputs.version }}
         run: |
           set -euo pipefail
           if git diff --quiet -- flatpak/; then
@@ -236,7 +249,7 @@ jobs:
             exit 1
           fi
           file="pqp-${version}-x86_64.flatpak"
-          FLATPAK_WORK_DIR="$RUNNER_TEMP/flatpak" flatpak/build-bundle.sh "$RUNNER_TEMP/out/$file"
+          FLATPAK_WORK_DIR="$RUNNER_TEMP/flatpak" bash flatpak/build-bundle.sh "$RUNNER_TEMP/out/$file"
           echo "file=$RUNNER_TEMP/out/$file" >> "$GITHUB_OUTPUT"
           echo "name=$file" >> "$GITHUB_OUTPUT"
 
