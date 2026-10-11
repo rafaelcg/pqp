@@ -36,6 +36,7 @@ const customUrls = new Map<
   { url: string; volume: number; serverId: string }
 >();
 const customNames = new Map<string, string>();
+const customDurations = new Map<string, number>();
 
 export interface SoundboardMark {
   userId: string;
@@ -64,18 +65,52 @@ export function registerSoundboardSender(
   };
 }
 
+/** A click that has gone out and is waiting for the room's echo. */
+interface PendingPlay {
+  token: number;
+  /** When it was sent: the earliest the server can have admitted it. */
+  sentAt: number;
+}
+
 /** Clicks still waiting for their echo, per sound. */
-const pendingById = new Map<string, number[]>();
+const pendingById = new Map<string, PendingPlay[]>();
 let pendingSeq = 0;
 let refusedUntil = 0;
 let refusedKind: "refused" | "removed" = "refused";
 
 /**
- * A local copy of the server's play budget, in front of the socket. Holding
- * Enter on a tile repeats about thirty times a second, which spends the
- * socket's whole frame budget and gets it closed, and the server would
- * refuse all of those plays anyway. So they are never sent, and the person
- * is told at once.
+ * How many of one person's own clips may sound at once in a room. This is
+ * `SOUNDBOARD_USER_CONCURRENCY` in `server/src/ws/soundboard.ts`, which this
+ * package cannot import. Change both together.
+ */
+const OWN_CONCURRENCY = 3;
+
+/** This person's echoed plays in the room, as when each one stops sounding. */
+let ownPlayEnds: number[] = [];
+
+function ownClipDurationMs(soundId: string): number | null {
+  return soundboardBuiltin(soundId)?.durationMs ?? customDurations.get(soundId) ?? null;
+}
+
+/**
+ * True when `OWN_CONCURRENCY` of this person's own clips are still sounding.
+ * The server refuses the next one in silence, so the click is refused here
+ * and told at once. The clock starts at the click, not at the echo: the
+ * server admitted the play somewhere in between, so this can only run early,
+ * and the echo wait still catches a refusal this cannot predict.
+ */
+function ownClipsFull(now: number): boolean {
+  ownPlayEnds = ownPlayEnds.filter((end) => end > now);
+  return ownPlayEnds.length >= OWN_CONCURRENCY;
+}
+
+/**
+ * A local copy of the server's play budget (`takePlayToken` in
+ * `server/src/ws/soundboard.ts`), in front of the socket. Holding Enter on a
+ * tile repeats about thirty times a second, which spends the socket's whole
+ * frame budget and gets it closed, and the server would refuse all of those
+ * plays anyway. So they are never sent, and the person is told at once.
+ * Keep it the same arithmetic as the server's, step for step.
  */
 const SEND_BURST = SOUNDBOARD_PLAY_BURST;
 const SEND_REFILL_MS = SOUNDBOARD_PLAY_REFILL_MS;
@@ -83,13 +118,14 @@ let sendTokens = SEND_BURST;
 let sendRefilledAt = 0;
 
 function takeSendToken(now: number): boolean {
-  if (sendRefilledAt === 0) {
-    sendRefilledAt = now;
-  }
   const earned = Math.floor((now - sendRefilledAt) / SEND_REFILL_MS);
   if (earned > 0) {
     sendTokens = Math.min(SEND_BURST, sendTokens + earned);
     sendRefilledAt += earned * SEND_REFILL_MS;
+  }
+  if (sendTokens >= SEND_BURST) {
+    // A full bucket banks no time: the next refill counts from now.
+    sendRefilledAt = now;
   }
   if (sendTokens <= 0) {
     return false;
@@ -130,18 +166,20 @@ export function requestSoundboardPlay(soundId: string): void {
   if (!sender) {
     return;
   }
-  if (!takeSendToken(Date.now())) {
+  const now = Date.now();
+  // The overlap cap is asked first and spends nothing, as on the server.
+  if (ownClipsFull(now) || !takeSendToken(now)) {
     flagRefused("refused");
     return;
   }
   sender(soundId);
   const token = ++pendingSeq;
   const list = pendingById.get(soundId) ?? [];
-  list.push(token);
+  list.push({ token, sentAt: now });
   pendingById.set(soundId, list);
   globalThis.setTimeout(() => {
     const current = pendingById.get(soundId);
-    const index = current?.indexOf(token) ?? -1;
+    const index = current?.findIndex((entry) => entry.token === token) ?? -1;
     if (!current || index < 0) {
       return;
     }
@@ -156,11 +194,13 @@ export function requestSoundboardPlay(soundId: string): void {
 /** The room echoed one of this person's own plays: it went out. */
 export function noteOwnSoundboardEcho(soundId: string): void {
   const list = pendingById.get(soundId);
-  if (list) {
-    list.shift();
-    if (list.length === 0) {
-      pendingById.delete(soundId);
-    }
+  const sentAt = list?.shift()?.sentAt ?? Date.now();
+  if (list && list.length === 0) {
+    pendingById.delete(soundId);
+  }
+  const duration = ownClipDurationMs(soundId);
+  if (duration !== null) {
+    ownPlayEnds.push(sentAt + duration);
   }
   if (refusedUntil !== 0) {
     refusedUntil = 0;
@@ -181,6 +221,7 @@ export function useSoundboardRefused(): "refused" | "removed" | null {
 /** Test seam. */
 export function resetSoundboardPendingForTests(): void {
   pendingById.clear();
+  ownPlayEnds = [];
   refusedUntil = 0;
   sendTokens = SEND_BURST;
   sendRefilledAt = 0;
@@ -347,6 +388,7 @@ export function setSoundboardCatalogServer(serverId: string | null): void {
       for (const id of [...customUrls.keys()]) {
         customUrls.delete(id);
         customNames.delete(id);
+        customDurations.delete(id);
         buffers.delete(id);
         loading.delete(id);
       }
@@ -364,6 +406,7 @@ export function setSoundboardCatalogServer(serverId: string | null): void {
     }
     customUrls.delete(id);
     customNames.delete(id);
+    customDurations.delete(id);
     buffers.delete(id);
     loading.delete(id);
   }
@@ -435,11 +478,13 @@ function rememberCustom(
     }
     customUrls.delete(id);
     customNames.delete(id);
+    customDurations.delete(id);
     buffers.delete(id);
     loading.delete(id);
   }
   for (const sound of sounds) {
     customNames.set(sound.id, sound.name);
+    customDurations.set(sound.id, sound.durationMs);
     if (!sound.url) {
       continue;
     }
@@ -620,6 +665,8 @@ const roomSources = new Set<AudioBufferSourceNode>();
  * clip from the old room play on for seconds after the hangup.
  */
 export function stopSoundboardClips(): void {
+  // The overlap count is per room, and leaving one ends its clips here.
+  ownPlayEnds = [];
   for (const source of roomSources) {
     try {
       source.stop();

@@ -1190,6 +1190,8 @@
   "soundboard.removed": "That sound was removed.",
   "soundboard.preview": "Preview",
   "soundboard.add.tile": "Add",
+  "soundboard.mutedNote": "muted",
+  "soundboard.add.full": "This server has {max} sounds. Delete one to add another.",
   "soundboard.add.choose": "Choose a file",
   "soundboard.add.title": "Add a sound",
   "soundboard.add.description": "mp3 or ogg, up to 5.2 seconds and 512 KB.",

@@ -61,17 +61,17 @@ let root: Root | null = null;
 let unregister: (() => void) | null = null;
 const sent: string[] = [];
 
-function mount(lock: "deafened" | "serverMuted" | "audience" | "micLocked" | null = null, canManage = false) {
-  host = document.createElement("div");
-  document.body.appendChild(host);
-  root = createRoot(host);
+type Lock = "deafened" | "serverMuted" | "audience" | "micLocked" | null;
+let canManageNow = false;
+
+function render(lock: Lock) {
   act(() => {
     root!.render(
       <TooltipProvider>
         <SoundboardControl
           serverId="00000000-0000-4000-8000-000000000001"
           canUse
-          canManage={canManage}
+          canManage={canManageNow}
           lock={lock}
           size="h-10 w-10"
           iconSize="h-5 w-5"
@@ -79,6 +79,25 @@ function mount(lock: "deafened" | "serverMuted" | "audience" | "micLocked" | nul
       </TooltipProvider>,
     );
   });
+}
+
+function mount(lock: Lock = null, canManage = false) {
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  canManageNow = canManage;
+  render(lock);
+}
+
+/** The accessible name a screen reader gets: aria-label, else the text. */
+function accessibleName(element: Element): string {
+  return (element.getAttribute("aria-label") ?? element.textContent ?? "").trim();
+}
+
+function buttonsNamed(container: ParentNode, name: RegExp): HTMLButtonElement[] {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
+    name.test(accessibleName(button)),
+  );
 }
 
 function trigger(): HTMLButtonElement {
@@ -126,6 +145,7 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  localStorage.clear();
   sent.length = 0;
   board.sounds = [];
   board.fetches = 0;
@@ -351,5 +371,241 @@ describe("moving around the board", () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(panel()!.textContent).toMatch(/1 (de|of) 24/);
+  });
+});
+
+
+describe("the trigger's name", () => {
+  it("is found by role and name in every state, not only while locked", () => {
+    mount();
+    // An icon-only button with no name is invisible to a screen reader.
+    expect(accessibleName(trigger())).not.toBe("");
+    expect(buttonsNamed(host!, /^soundboard$/i)).toHaveLength(1);
+
+    render("deafened");
+    expect(buttonsNamed(host!, /^soundboard: ./i)).toHaveLength(1);
+    expect(trigger().getAttribute("aria-disabled")).toBe("true");
+
+    render(null);
+    expect(buttonsNamed(host!, /^soundboard$/i)).toHaveLength(1);
+    expect(trigger().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("dims a locked trigger to the design system's disabled opacity", () => {
+    mount("serverMuted");
+    expect(trigger().className).toContain("opacity-40");
+    expect(trigger().className).not.toContain("opacity-50");
+  });
+
+  it("shows a muted badge on the closed trigger and puts it in the name", () => {
+    mount();
+    const plain = accessibleName(trigger());
+    expect(host!.querySelector("[data-soundboard-muted]")).toBeNull();
+
+    open();
+    const mute = panel()!.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+    act(() => mute.click());
+    act(() => trigger().click());
+
+    expect(host!.querySelector("[data-soundboard-muted]")).not.toBeNull();
+    expect(host!.querySelector("[data-soundboard-muted]")!.getAttribute("aria-hidden")).toBe("true");
+    expect(accessibleName(trigger())).not.toBe(plain);
+    expect(accessibleName(trigger()).startsWith(plain)).toBe(true);
+  });
+});
+
+describe("a lock that arrives while the panel is open", () => {
+  it("closes the panel and returns focus to the trigger when focus was inside it", () => {
+    mount();
+    open();
+    expect(panel()!.contains(document.activeElement)).toBe(true);
+
+    render("deafened");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("leaves focus alone when it was somewhere else", () => {
+    mount();
+    open();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    act(() => elsewhere.focus());
+
+    render("serverMuted");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+});
+
+describe("the per-person overlap cap", () => {
+  function clickAndEcho(index: number) {
+    act(() => tiles()[index]!.click());
+    act(() => noteOwnSoundboardEcho(sent.at(-1)!));
+  }
+
+  it("refuses the fourth click at once while three of your own clips still sound", () => {
+    mount();
+    open();
+    const status = panel()!.querySelector("[role='status']")!;
+    // Trombone runs 4.6 s.
+    for (let i = 0; i < 3; i += 1) {
+      clickAndEcho(5);
+    }
+    expect(sent).toHaveLength(3);
+    expect(status.textContent).toBe("");
+
+    act(() => tiles()[5]!.click());
+    expect(sent).toHaveLength(3);
+    expect(status.textContent).not.toBe("");
+  });
+
+  it("lets a click through again once one of the three has ended", () => {
+    mount();
+    open();
+    clickAndEcho(1); // laugh, 2.2 s
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    clickAndEcho(5);
+    clickAndEcho(5);
+    act(() => tiles()[5]!.click());
+    expect(sent).toHaveLength(3);
+
+    act(() => {
+      vi.advanceTimersByTime(1300); // 2.3 s since the laugh
+    });
+    act(() => tiles()[5]!.click());
+    expect(sent).toHaveLength(4);
+  });
+
+  it("does not spend budget on a click it refused", () => {
+    mount();
+    open();
+    for (let i = 0; i < 3; i += 1) {
+      clickAndEcho(5);
+    }
+    for (let i = 0; i < 6; i += 1) {
+      act(() => tiles()[5]!.click());
+    }
+    expect(sent).toHaveLength(3);
+
+    // Every trombone has ended; two tokens were spent minus the two earned.
+    act(() => {
+      vi.advanceTimersByTime(4700);
+    });
+    for (let i = 0; i < 6; i += 1) {
+      act(() => tiles()[1]!.click());
+    }
+    // 5 - 3 spent + 2 earned = 4. Had the refused clicks paid, only 2 go out.
+    expect(sent).toHaveLength(3 + 4);
+  });
+
+  it("forgets the count when the call is left", async () => {
+    const { stopSoundboardClips } = await import("@/lib/soundboard");
+    mount();
+    open();
+    for (let i = 0; i < 3; i += 1) {
+      clickAndEcho(5);
+    }
+    act(() => stopSoundboardClips());
+    act(() => tiles()[5]!.click());
+    expect(sent).toHaveLength(4);
+  });
+});
+
+describe("the send budget matches the server's", () => {
+  it("banks no time while the bucket is full", () => {
+    mount();
+    open();
+    act(() => tiles()[0]!.click()); // t0: 4 left, refill clock starts here
+    act(() => {
+      vi.advanceTimersByTime(3500); // full again; the clock restarts now
+    });
+    for (let i = 0; i < SOUNDBOARD_PLAY_BURST; i += 1) {
+      act(() => tiles()[0]!.click());
+    }
+    expect(sent).toHaveLength(1 + SOUNDBOARD_PLAY_BURST);
+
+    // 500 ms after the bucket emptied: nothing earned yet.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    act(() => tiles()[0]!.click());
+    expect(sent).toHaveLength(1 + SOUNDBOARD_PLAY_BURST);
+
+    // One full refill period after it emptied.
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    act(() => tiles()[0]!.click());
+    expect(sent).toHaveLength(2 + SOUNDBOARD_PLAY_BURST);
+  });
+});
+
+describe("a long custom name", () => {
+  const long = "Uma risada muito longa que não cabe";
+
+  it("is readable in full on focus, and the tile keeps its name", async () => {
+    board.sounds = [customSound("44444444-4444-4444-8444-444444444444", long)];
+    mount();
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    const custom = tiles()[6]!;
+    expect(custom.getAttribute("aria-label")).toBe(long);
+
+    act(() => custom.focus());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    const tips = [...document.querySelectorAll("[role='tooltip']")];
+    expect(tips.some((tip) => tip.textContent?.includes(long))).toBe(true);
+  });
+});
+
+describe("Add when the board is full", () => {
+  function fullBoard() {
+    return Array.from({ length: 24 }, (_, i) =>
+      customSound(`55555555-5555-4555-8555-${String(i).padStart(12, "0")}`, `Som ${i + 1}`),
+    );
+  }
+
+  it("stays reachable, does nothing, and says why", async () => {
+    board.sounds = fullBoard();
+    mount(null, true);
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    const add = [...panel()!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.getAttribute("aria-disabled") === "true",
+    )!;
+    expect(add).toBeDefined();
+    expect(add.disabled).toBe(false);
+    expect(add.className).toContain("opacity-40");
+
+    // Opening the add dialog closes the panel, so an open panel is a no-op.
+    act(() => add.click());
+    expect(panel()).not.toBeNull();
+
+    act(() => add.focus());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    const tips = [...document.querySelectorAll("[role='tooltip']")];
+    expect(tips.some((tip) => tip.textContent?.includes("24"))).toBe(true);
+  });
+
+  it("is a live button while there is room", async () => {
+    board.sounds = fullBoard().slice(0, 23);
+    mount(null, true);
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(panel()!.querySelector("[aria-disabled='true']")).toBeNull();
   });
 });

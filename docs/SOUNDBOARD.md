@@ -75,17 +75,36 @@ For all of these the button stays, disabled, and its tooltip says why.
 Only a missing permission or the flag being off hides it. The server
 refuses the play either way.
 
-Each person has a play budget on top of the overlap caps: five plays in a
-row, then one every two seconds (`SOUNDBOARD_PLAY_BURST`,
-`SOUNDBOARD_PLAY_REFILL_MS`). The caps alone let one person replay a short
-clip back to back forever. The client keeps the same budget, so a click
-over it is told at once.
+Each person has two limits on plays.
+
+1. At most three of your own clips may sound at once
+   (`SOUNDBOARD_USER_CONCURRENCY` on the server). A built-in clip lasts 2.2
+   to 4.6 seconds, so three quick clicks fill the limit and the fourth waits
+   until the first clip ends.
+2. A play budget: five plays, then one more every two seconds
+   (`SOUNDBOARD_PLAY_BURST`, `SOUNDBOARD_PLAY_REFILL_MS`). A full budget
+   banks no time. The two-second clock starts at the play that takes the
+   budget below full. The caps alone let one person replay a short clip back
+   to back forever.
+
+With the built-in pack, the first limit stops you at three clips in a row.
+Five in a row works only with custom clips short enough to end before the
+fourth click. A click the server
+refuses for the first limit does not spend budget.
+
+The client keeps a copy of both limits (`takeSendToken` and the overlap
+count in `client/src/lib/soundboard.ts`). A click over either limit is not
+sent, and the panel says at once that it did not play. The overlap count
+starts each clip's clock at the click and uses the clip's known length. It
+can let through a click the server then refuses, never block one the server
+would accept. Leaving the call resets it.
 
 A click is only shown as played when the room echoes it back. The server
 refuses in silence (the room's twelve, your own three, the budget, a
-mute), so a click with no echo in three seconds tells the person it did
-not play, or that the clip was removed when the refreshed list no longer
-has it. Holding a key does not repeat plays.
+mute). The client cannot predict every one of these, so a click with no echo
+in three seconds tells the person it did not play, or that the clip was
+removed when the refreshed list no longer has it. Holding a key does not
+repeat plays.
 
 `MANAGE_SOUNDBOARD` adds, renames, and deletes clips. In server settings,
 the pencil on a row renames it (Enter saves, Escape cancels). Delete asks
@@ -108,7 +127,13 @@ channel or on the stage): "Soundboard" turns their clips off for you only,
 sound and mark both. Discord has only the global slider.
 
 In the panel the arrow keys move between clips, Home and End jump to the
-ends, and Tab moves on to the mute, the volume and Add.
+ends, and Tab moves on to the mute, the volume and Add. A custom clip's
+full name shows in a tooltip on hover and focus, since a long name is cut
+to two lines on the tile. At 24 of 24 the Add button stays focusable and
+its tooltip says the board is full. When a lock arrives (deafened, a
+moderator mute) while focus is in the panel, the panel closes and focus
+returns to the call bar button. Muting the board shows a small muted mark
+on that button, and its name says so.
 
 A play lights that person's row under the voice channel, and the same
 icon on their tile when the stage is up. It lasts a couple of seconds.

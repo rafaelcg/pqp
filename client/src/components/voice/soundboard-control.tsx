@@ -105,9 +105,16 @@ export function SoundboardControl({
   }, [serverId, canUse]);
 
   useEffect(() => {
-    if (lock) {
-      setOpen(false);
+    if (!lock) {
+      return;
     }
+    // The panel is still mounted here. If the person was inside it, closing
+    // it would drop their focus on <body>; the locked trigger stays focusable
+    // (it is aria-disabled, not disabled) and its tooltip says why.
+    if (panelRef.current?.contains(document.activeElement)) {
+      triggerRef.current?.focus();
+    }
+    setOpen(false);
   }, [lock]);
 
   // Somebody else may have added, renamed or deleted a clip since the call
@@ -265,7 +272,14 @@ export function SoundboardControl({
     tiles[Math.min(last, Math.max(0, next))]?.focus();
   }
 
-  const label = lock ? t(LOCK_COPY[lock]) : t("soundboard.title");
+  // The trigger's name comes from the Tooltip (`name`), never from an
+  // `aria-label` on the button: a child's prop beats the one the Tooltip
+  // injects, and an `undefined` one erased the name of the unlocked trigger.
+  const mutedNote = muted ? ` (${t("soundboard.mutedNote")})` : "";
+  const label = lock ? t(LOCK_COPY[lock]) : `${t("soundboard.title")}${mutedNote}`;
+  const triggerName = lock
+    ? `${t("soundboard.title")}: ${t(LOCK_COPY[lock])}${mutedNote}`
+    : label;
   // A deleted clip can leave the remembered tile past the end of the grid.
   const rovingTile = Math.min(activeTile, SOUNDBOARD_BUILTINS.length + sounds.length - 1);
   const panel =
@@ -332,6 +346,7 @@ export function SoundboardControl({
                     icon={soundboardIcon(sound.id)}
                     monogram={monogramOf(sound.name)}
                     name={sound.name}
+                    fullNameTip
                     playing={activeIds.has(sound.id)}
                     tabIndex={index === rovingTile ? 0 : -1}
                     onFocus={() => setActiveTile(index)}
@@ -386,20 +401,40 @@ export function SoundboardControl({
                 </span>
               )}
               {canManage && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 shrink-0 px-2"
-                  disabled={boardFull}
-                  onClick={() => {
-                    setOpen(false);
-                    setAdding(true);
-                  }}
+                // aria-disabled, not disabled: a keyboard user can reach the
+                // button and hear why it does nothing. The reason is the
+                // tooltip's detail, which a screen reader gets as the
+                // description.
+                <Tooltip
+                  label={t("soundboard.add.tile")}
+                  detail={
+                    boardFull
+                      ? t("soundboard.add.full", { max: catalog?.maxSounds ?? 0 })
+                      : undefined
+                  }
                 >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  {t("soundboard.add.tile")}
-                </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-disabled={boardFull ? true : undefined}
+                    className={cn(
+                      "h-8 shrink-0 px-2",
+                      boardFull &&
+                        "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-tertiary active:scale-100",
+                    )}
+                    onClick={() => {
+                      if (boardFull) {
+                        return;
+                      }
+                      setOpen(false);
+                      setAdding(true);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t("soundboard.add.tile")}
+                  </Button>
+                </Tooltip>
               )}
             </div>
           </div>,
@@ -409,7 +444,7 @@ export function SoundboardControl({
 
   return (
     <>
-      <Tooltip label={label}>
+      <Tooltip label={label} name={triggerName}>
         <button
           ref={triggerRef}
           type="button"
@@ -418,13 +453,12 @@ export function SoundboardControl({
           aria-controls={open ? "soundboard-panel" : undefined}
           // Focusable while locked, so the reason in the tooltip can be read.
           aria-disabled={lock ? true : undefined}
-          aria-label={lock ? `${t("soundboard.title")}: ${t(LOCK_COPY[lock])}` : undefined}
           data-locked={lock ?? undefined}
           className={cn(
-            "group flex items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-95 motion-reduce:transition-none motion-reduce:transform-none",
+            "group relative flex items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-95 motion-reduce:transition-none motion-reduce:transform-none",
             size,
             lock
-              ? "cursor-not-allowed bg-ink-3 text-paper opacity-50 active:scale-100"
+              ? "cursor-not-allowed bg-ink-3 text-paper opacity-40 active:scale-100"
               : open
                 ? "bg-signal/20 text-signal"
                 : "bg-ink-3 text-paper hover:bg-ink-4",
@@ -438,6 +472,15 @@ export function SoundboardControl({
           <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
             <AudioLines className={iconSize} />
           </span>
+          {muted && (
+            <span
+              aria-hidden="true"
+              data-soundboard-muted=""
+              className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-danger-soft text-danger"
+            >
+              <VolumeX className="h-2.5 w-2.5" />
+            </span>
+          )}
         </button>
       </Tooltip>
       {panel}
@@ -459,6 +502,7 @@ function SoundTile({
   icon: Icon,
   monogram = null,
   name,
+  fullNameTip = false,
   playing,
   tabIndex,
   onFocus,
@@ -468,6 +512,11 @@ function SoundTile({
   /** A custom clip's letter, drawn instead of the generic mark. */
   monogram?: string | null;
   name: string;
+  /**
+   * Show the whole name on hover and focus. A custom name can run past the
+   * two lines the tile has room for; the built-in names always fit.
+   */
+  fullNameTip?: boolean;
   /** Somebody's clip of this sound is sounding. Shown, not a toggle state. */
   playing: boolean;
   tabIndex: number;
@@ -475,7 +524,7 @@ function SoundTile({
   onPlay: () => void;
 }) {
   const [burst, setBurst] = useState(0);
-  return (
+  const tile = (
     <button
       type="button"
       aria-label={name}
@@ -529,6 +578,7 @@ function SoundTile({
       </span>
     </button>
   );
+  return fullNameTip ? <Tooltip label={name}>{tile}</Tooltip> : tile;
 }
 
 function builtinNameKey(id: SoundboardBuiltinId): MessageKey {

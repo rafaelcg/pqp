@@ -1194,6 +1194,8 @@
   "soundboard.removed": "Ese sonido fue eliminado.",
   "soundboard.preview": "Escuchar",
   "soundboard.add.tile": "Agregar",
+  "soundboard.mutedNote": "silenciado",
+  "soundboard.add.full": "Este servidor tiene {max} sonidos. Elimina uno para agregar otro.",
   "soundboard.add.choose": "Elegir un archivo",
   "soundboard.add.title": "Agregar un sonido",
   "soundboard.add.description": "mp3 u ogg, hasta 5,2 segundos y 512 KB.",
