@@ -170,6 +170,16 @@ on `GET /api/servers/:id/home/posts`. Off, a write that names a cut is refused
 and reads leave `media.mobile` null, so everyone plays the main video; stored
 cuts are kept. See `docs/COMMUNITY_HOME.md` §"A phone cut of a video".
 
+Born as a flag (no old reader): `BAU_CUSTOM_COVER` (`bau_custom_cover`,
+default **on**, **per server**, `false` / `0` / `off` turns it off), the cover
+of a Baú video: the author picks a frame of it or uploads an image, and the
+player shows that before play instead of the first frame. Served to the
+composer as `customCoverEnabled` on `GET /api/servers/:id/home/posts`. Off, a
+write that names a cover is refused, reads leave `media.posterUrl` (and the
+chat card's `posterUrl`) null so every player paints the first frame again,
+and the composer stops offering it; stored covers are kept and come back when
+it is on again. See `docs/COMMUNITY_HOME.md` §"A cover for a video".
+
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
 share from the Windows desktop app through WASAPI process loopback, Windows 10

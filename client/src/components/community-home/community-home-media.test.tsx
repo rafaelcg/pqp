@@ -220,3 +220,23 @@ describe("the phone cut of a video", () => {
     expect(el.querySelector("video")?.getAttribute("src")).toBe(`${video.url}#t=0.001`);
   });
 });
+
+describe("the Baú video cover", () => {
+  it("with no cover, paints the first frame (the automatic cover)", async () => {
+    const el = await mount(video);
+    const v = el.querySelector("video")!;
+    expect(v.hasAttribute("poster")).toBe(false);
+    expect(v.getAttribute("src")).toBe(`${video.url}#t=0.001`);
+    expect(v.dataset.homeVideoPoster).toBe("first-frame");
+  });
+
+  it("with the author's cover, shows it before play and does not seek past it", async () => {
+    const el = await mount({ ...video, posterUrl: "https://bucket.example/capa.jpg?sig=1" });
+    const v = el.querySelector("video")!;
+    expect(v.getAttribute("poster")).toBe("https://bucket.example/capa.jpg?sig=1");
+    // `#t=` is a seek, and a seek hides the poster.
+    expect(v.getAttribute("src")).toBe(video.url);
+    expect(v.dataset.homeVideoPoster).toBe("custom");
+    expect(el.querySelector("[data-home-video-play]")).not.toBeNull();
+  });
+});

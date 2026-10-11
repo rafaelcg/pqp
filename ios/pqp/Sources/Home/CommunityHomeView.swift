@@ -415,7 +415,7 @@ private struct MediaView: View {
             // A stored video plays in place, like the web's `<video>`. It is
             // not wrapped in the open-out button: that button would swallow
             // the tap meant for the player's own controls.
-            BauInlineVideo(url: videoURL, name: media.name, postID: postID)
+            BauInlineVideo(url: videoURL, name: media.name, postID: postID, posterURL: media.posterURL)
         } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)

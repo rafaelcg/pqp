@@ -286,6 +286,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
   },
+  bau_custom_cover: {
+    description:
+      "Capa dos vídeos do Baú: quem posta escolhe um frame do vídeo ou sobe uma imagem (desligado: todo mundo vê o primeiro frame, as capas ficam guardadas).",
+    env: "BAU_CUSTOM_COVER",
+    parseEnv: onUnlessOff,
+    // On: it only changes the picture shown before play, and the off switch
+    // is here for a misfire seen live. Per server for the same reason as the
+    // phone cut: every reader hydrates posts of one server, and create /
+    // update are routes under `/servers/:id`.
+    codeDefault: true,
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (customCoverEnabled)",
+  },
   bau_post_push: {
     description:
       "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
