@@ -198,7 +198,8 @@ export function soundboardAuditDetails(
       ? `${Math.round(value * 100)}%`
       : null;
   const change = (key: string) => entry.changes?.find((c) => c.key === key);
-  const nameChange = change("name");
+  // A rename carries `name`; a volume-only edit names the clip as `clip`.
+  const nameChange = change("name") ?? change("clip");
   const oldName = text(nameChange?.old);
   const newName = text(nameChange?.new);
   const details: string[] = [];

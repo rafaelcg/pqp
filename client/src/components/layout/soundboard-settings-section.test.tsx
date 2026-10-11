@@ -50,6 +50,7 @@ vi.mock("@/lib/soundboard", () => ({
   noteSoundboardCatalog: () => undefined,
   prefetchSoundboard: async () => undefined,
   previewSoundboardClip: () => undefined,
+  stopSoundboardPreview: () => undefined,
 }));
 
 vi.mock("@/components/voice/soundboard-add-dialog", () => ({

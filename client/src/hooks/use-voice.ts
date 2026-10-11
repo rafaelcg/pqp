@@ -5843,6 +5843,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         break;
       }
+      case "voice-moderation":
+        // The moderator's own word on this person's mute, sent to every one
+        // of their sockets. The roster says the same, but a delta can be
+        // refused while this client's view of the room is out of step (a
+        // seat of ours still held for its resume window), and the mic and
+        // the soundboard lock must not wait for the next full roster.
+        if (
+          message.voiceChannelId === state.voiceChannelId &&
+          (message.action === "muted" || message.action === "unmuted")
+        ) {
+          applySelfServerMute(message.action === "muted");
+          emit();
+        }
+        break;
       case "peer-updated": {
         // A rename or a new picture, not an arrival: no join cue, no new
         // connection, and the tile keeps whatever media it already has.

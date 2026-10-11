@@ -16,6 +16,7 @@ import { soundboardIcon } from "@/lib/soundboard-icons";
 import {
   noteSoundboardCatalog,
   previewSoundboardClip,
+  stopSoundboardPreview,
   prefetchSoundboard,
 } from "@/lib/soundboard";
 import { soundboardErrorKey, soundboardNameErrorKey } from "@/lib/soundboard-upload";
@@ -104,6 +105,9 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
     (next ? previewRefs.current.get(next.id) : addRef.current)?.focus();
   }, [sounds]);
 
+  // A row's preview must not outlive the settings page.
+  useEffect(() => () => stopSoundboardPreview(), []);
+
   const cancelEdit = useCallback((id: string) => {
     pencilToFocus.current = id;
     setEditingId(null);
@@ -115,8 +119,10 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
       saved = await updateSoundboardSound(serverId, sound.id, { name });
     } catch (err) {
       if (isGone(err)) {
-        // Someone else deleted it. Show the list as it is now.
-        cancelEdit(sound.id);
+        // Someone else deleted it. Show the list as it is now, and put focus
+        // on the row that took its place, as a delete does: its pencil is gone.
+        focusAfterDelete.current = sounds?.findIndex((entry) => entry.id === sound.id) ?? 0;
+        setEditingId(null);
         await reload();
         return;
       }
@@ -180,7 +186,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
             <p className="text-xs text-text-tertiary">
               {t("soundboard.settings.pending", { count: pending })}
               {full && stored < maxSounds
-                ? ` ${t("soundboard.settings.fullPending")}`
+                ? `. ${t("soundboard.settings.fullPending")}`
                 : ""}
             </p>
           )}

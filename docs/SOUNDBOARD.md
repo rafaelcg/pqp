@@ -106,7 +106,9 @@ in three seconds tells the person it did not play, or that the clip was
 removed when the refreshed list no longer has it. Holding a key does not
 repeat plays.
 
-`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. A member who holds only
+`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. It is on for manager
+and owner, off for `@everyone`, and a server can hand it to a role. A member
+who holds only
 this permission still gets "Community settings" in the server header menu, and
 the dialog opens on the Soundboard tab. In server settings, the pencil on a row
 renames it (Enter saves). Escape cancels the rename and nothing else, wherever
@@ -133,10 +135,13 @@ row, and old to new on a rename or a volume change. Each row is written once:
 only the claim that created a clip writes `create` (a retry or a parallel claim
 of the same upload does not), only the delete that removed the row writes
 `delete` (the others get 404), and an edit that changes nothing writes no
-`update`. A delete removes the row first, which decides the winner, and then
-the object. If storage fails, the row is put back and the delete answers 503.
-It is on for manager and owner, off for `@everyone`. A server can hand it to a
-role.
+`update`. A volume-only edit names the clip as `clip` beside the change.
+
+A delete removes the row and hands the file to the upload ledger as an expired
+ticket, in one transaction, then deletes the file. The row decides the winner
+of parallel deletes. If storage fails, or the process dies first, the ticket's
+lease lapses and the upload sweep deletes the file later, so nothing is
+orphaned. Until then the settings page counts it as an upload in flight.
 
 A clip name needs 2 to 24 characters and something people can see. Hangul
 fillers, the Braille blank, control characters, tag characters, zero-width
@@ -269,6 +274,3 @@ sheet it wraps to a second line on a very narrow screen instead of being cut. It
 text uses the soft warning text token, which the design bench measures at 4.5:1
 in every theme. It does not rely on colour alone.
 
-A play lights that person's row under the voice channel, and the same
-icon on their tile when the stage is up. It lasts a couple of seconds.
-Another click swaps the icon. Muting the board does not hide it.

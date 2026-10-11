@@ -4380,6 +4380,37 @@ describe("telling the SFU what this listener wants to hear", () => {
     );
   });
 
+  it("takes a moderator mute from the moderation frame even when no roster delta arrives", async () => {
+    // A seat of ours still held for its resume window can put this client's
+    // view of the room out of step, so the server's delta is refused. The
+    // mic and the soundboard lock must follow the moderator anyway.
+    const voice = await connectedSfu();
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator muted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "unmuted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator unmuted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    // Another room's frame changes nothing here.
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: "00000000-0000-4000-8000-0000000000ff",
+      message: "x",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+  });
+
   it("names the peer whose voice was turned all the way down", async () => {
     const voice = await connectedSfu();
 

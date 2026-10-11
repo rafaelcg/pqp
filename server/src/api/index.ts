@@ -3611,7 +3611,7 @@ router.patch(
     // Only what actually moved is on the record, with what it was before.
     // The emoji is not audited (the app never edits it); a save that changes
     // nothing writes no row.
-    const changes = [
+    const changes: Array<{ key: string; old: string | number | null; new: string | number }> = [
       ...(sound.name !== before.name
         ? [{ key: "name", old: before.name, new: sound.name }]
         : []),
@@ -3620,6 +3620,11 @@ router.patch(
         : []),
     ];
     if (changes.length > 0) {
+      // A volume-only edit still names the clip, so the log never says
+      // "edited a sound" without saying which. `clip` is context, not a change.
+      if (!changes.some((change) => change.key === "name")) {
+        changes.unshift({ key: "clip", old: null, new: sound.name });
+      }
       await logAudit({
         serverId: serverId!,
         actorId: user.id,
