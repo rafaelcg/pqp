@@ -49,13 +49,20 @@ export function OnlineToasts({
   const hiddenSince = useRef<number | null>(null);
   const [shown, setShown] = useState<ShownToast | null>(null);
   const timer = useRef<number | null>(null);
-  const latest = useRef({ friends: friends.data.friends, sounds });
-  latest.current = { friends: friends.data.friends, sounds };
+  const allowed = enabled && myStatus !== "dnd";
+  const latest = useRef({ friends: friends.data.friends, sounds, allowed });
+  latest.current = { friends: friends.data.friends, sounds, allowed };
 
   const pump = useCallback(() => {
     if (timer.current !== null) {
       window.clearTimeout(timer.current);
       timer.current = null;
+    }
+    // Checked again when a held card comes due: the person may have turned
+    // the cards off or gone Não perturbe while it waited.
+    if (!latest.current.allowed) {
+      pacing.current = { ...pacing.current, pending: [] };
+      return;
     }
     const next = takeToast(pacing.current, Date.now());
     pacing.current = next.pacing;
@@ -80,6 +87,20 @@ export function OnlineToasts({
     },
     [],
   );
+
+  // Turning the cards off, or going Não perturbe, also drops what is queued
+  // and what is on screen.
+  useEffect(() => {
+    if (allowed) {
+      return;
+    }
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    pacing.current = { ...pacing.current, pending: [] };
+    setShown(null);
+  }, [allowed]);
 
   // A tab that sat hidden for a long time starts from a fresh baseline, so it
   // does not come back to a burst of everybody who signed in meanwhile.
@@ -112,7 +133,7 @@ export function OnlineToasts({
       Date.now(),
     );
     memory.current = result.memory;
-    if (!enabled || myStatus === "dnd" || result.arrived.length === 0) {
+    if (!allowed || result.arrived.length === 0) {
       return;
     }
     const arrived = result.arrived.filter(

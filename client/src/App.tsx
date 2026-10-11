@@ -9667,6 +9667,7 @@ function MainAppContent({
         displayName: user.displayName,
         avatarUrl: user.avatarUrl,
         status: status.effective,
+        invisible: status.manual === "invisible",
         customStatus: customStatus.value,
       }
     : null;

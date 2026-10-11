@@ -176,7 +176,8 @@ export function RetroLogFrame({
   children: ReactNode;
 }) {
   const peer = usePeer(conversation);
-  const other = conversation.participants[0] ?? null;
+  // Only a 1:1 has "their" picture; a group's first member is not the group.
+  const other = peer?.person ?? null;
   return (
     <div className="retro-log-frame">
       {children}

@@ -41,6 +41,8 @@ export interface RetroContactsProps {
     avatarUrl: string | null;
     status: UserStatus;
     customStatus: string | null;
+    /** Chose "Aparecer offline": the tile says so instead of "Offline". */
+    invisible?: boolean;
   } | null;
 }
 
@@ -359,7 +361,9 @@ function OwnTile({
         <p className="truncate text-sm font-bold text-text">{me.displayName}</p>
         <p className="flex items-center gap-1 text-xs text-text-secondary">
           <StatusDot status={me.status} label="" />
-          <span className="text-accent">({t(retroStatusKey(me.status))})</span>
+          <span className="text-accent">
+            ({t(retroStatusKey(me.invisible ? "invisible" : me.status))})
+          </span>
         </p>
         {me.customStatus && (
           <p
