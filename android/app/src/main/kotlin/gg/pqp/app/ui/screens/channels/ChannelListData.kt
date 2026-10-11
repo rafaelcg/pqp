@@ -25,8 +25,10 @@ suspend fun ApiClient.serverUnread(serverId: String): Map<String, ChannelUnread>
 /**
  * The channels this person silenced, read fresh from `GET /api/me` when a
  * server is opened: a channel muted on the web a minute ago should be dimmed
- * here without relaunching the app. Empty on any failure, which draws every
- * row at full strength, the same as before this existed.
+ * here without relaunching the app. Throws on failure on purpose: the screen
+ * keeps the set it already had (the session's own `/api/me`), which is a
+ * better answer than an empty set that would undim every muted row because
+ * one request failed.
  */
 suspend fun ApiClient.mutedChannels(): Set<String> =
     mutedChannelIds(me().preferences?.notifications?.channels)

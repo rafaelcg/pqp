@@ -335,29 +335,33 @@ fun ChannelsScreen(
             val ticket = unreadLedger.begin()
             var reconciled: UnreadLedger.Reconciled? = null
             var answered = false
-            for (attempt in 1..CHANNELS_REFETCH_TRIES) {
-                val snapshot = try {
-                    session.api.serverUnread(serverId)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    null
-                }
-                if (snapshot != null) {
-                    answered = true
-                    reconciled = unreadLedger.snapshot(ticket, snapshot)
-                    reconciled?.let { fresh ->
-                        unread.keys.retainAll(fresh.counts.keys)
-                        unread.putAll(fresh.counts)
+            try {
+                for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+                    val snapshot = try {
+                        session.api.serverUnread(serverId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
                     }
-                    break
+                    if (snapshot != null) {
+                        answered = true
+                        reconciled = unreadLedger.snapshot(ticket, snapshot)
+                        reconciled?.let { fresh ->
+                            unread.keys.retainAll(fresh.counts.keys)
+                            unread.putAll(fresh.counts)
+                        }
+                        break
+                    }
+                    if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
                 }
-                if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
+            } finally {
+                // Gave up, or cancelled mid-request (a resume restarting this
+                // effect): stop buffering for this ticket. A no-op when a newer
+                // request has already begun, which keeps its buffer.
+                if (!answered) unreadLedger.abandon(ticket)
             }
-            if (!answered) {
-                unreadLedger.abandon(ticket)
-                return@LaunchedEffect
-            }
+            if (!answered) return@LaunchedEffect
             if (reconciled?.unsettled != true) return@LaunchedEffect
         }
     }

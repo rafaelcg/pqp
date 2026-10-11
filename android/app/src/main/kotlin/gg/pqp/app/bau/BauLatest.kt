@@ -30,6 +30,11 @@ data class BauLatest(
     val unread: Int,
     val lastSeenAt: String?,
     val posts: List<BauLatestPost>,
+    /**
+     * How many posts the server sent, decoded or not. A Baú whose posts this
+     * build cannot read is not an empty Baú.
+     */
+    val sentPostCount: Int = posts.size,
 )
 
 /**
@@ -39,7 +44,8 @@ data class BauLatest(
  * not decode is skipped instead of failing the whole preview.
  */
 fun parseBauLatest(body: JsonObject): BauLatest {
-    val posts = runCatching { body["posts"]!!.jsonArray }.getOrNull().orEmpty().mapNotNull { element ->
+    val sent = runCatching { body["posts"]!!.jsonArray }.getOrNull().orEmpty()
+    val posts = sent.mapNotNull { element ->
         runCatching {
             val obj = element.jsonObject
             BauLatestPost(
@@ -52,6 +58,7 @@ fun parseBauLatest(body: JsonObject): BauLatest {
         unread = (body["unread"] as? JsonPrimitive)?.intOrNull?.coerceAtLeast(0) ?: 0,
         lastSeenAt = (body["lastSeenAt"] as? JsonPrimitive)?.contentOrNull,
         posts = posts,
+        sentPostCount = sent.size,
     )
 }
 
@@ -103,8 +110,14 @@ sealed interface BauPreviewState {
 fun bauPreviewState(latest: BauLatest?, legacyUnread: Int, canPost: Boolean): BauPreviewState {
     if (latest == null) return BauPreviewState.Plain(legacyUnread)
     val first = latest.posts.firstOrNull()
-        // Posts were sent but none decoded: say what the count says, never "empty".
-        ?: return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Empty(canPost)
+        // Nothing decoded. Posts were sent (a newer shape this build cannot
+        // read): the plain row with the count, never "empty". Nothing sent:
+        // the Baú really is empty.
+        ?: return if (latest.sentPostCount > 0 || latest.unread > 0) {
+            BauPreviewState.Plain(latest.unread)
+        } else {
+            BauPreviewState.Empty(canPost)
+        }
     // The card leads with the newest post that is new to this person, not the
     // newest post: their own post is never new and can sit on top.
     val fresh = latest.posts.filter { it.isNew }
@@ -127,6 +140,24 @@ fun bauPreviewState(latest: BauLatest?, legacyUnread: Int, canPost: Boolean): Ba
  * Twitch, TikTok and Instagram get the server-coloured plate with a play mark.
  */
 enum class BauThumb { Image, Plate, Text }
+
+/**
+ * The address the thumbnail may load, or null for the plate. The server
+ * writes `mediaUrl` (a signed storage URL or a YouTube poster), but the list
+ * loads it with no tap from the viewer, so it is held to the same rule as iOS:
+ * https only, and plain http only for this app's own API (a debug build
+ * against the local stack). Never a LAN or loopback address somebody typed.
+ */
+fun bauThumbUrl(raw: String?, apiUrl: String): String? {
+    if (raw.isNullOrBlank()) return null
+    val api = apiUrl.trimEnd('/')
+    val url = if (raw.startsWith("/")) api + raw else raw
+    return when {
+        url.startsWith("https://") -> url
+        url.startsWith("http://") && url.startsWith("$api/") -> url
+        else -> null
+    }
+}
 
 fun bauThumb(card: BauPostCard): BauThumb = when (card.poster) {
     BauCardPoster.Image -> if (card.locked) BauThumb.Plate else BauThumb.Image

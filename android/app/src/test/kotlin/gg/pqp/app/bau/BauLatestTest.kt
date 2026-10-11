@@ -124,6 +124,27 @@ class BauLatestTest {
     }
 
     @Test
+    fun `the thumbnail loads https or our own API, nothing else`() {
+        val api = "http://10.0.2.2:3001"
+        assertEquals("https://i.ytimg.com/vi/x/hq.jpg", bauThumbUrl("https://i.ytimg.com/vi/x/hq.jpg", api))
+        assertEquals("$api/api/media/1", bauThumbUrl("/api/media/1", api))
+        assertEquals("$api/api/media/1", bauThumbUrl("$api/api/media/1", api))
+        assertNull(bauThumbUrl("http://192.168.0.1/admin", api))
+        assertNull(bauThumbUrl("http://127.0.0.1:8080/x", "https://api.pqp.gg"))
+        assertNull(bauThumbUrl("file:///sdcard/x.jpg", api))
+        assertNull(bauThumbUrl(null, api))
+    }
+
+    @Test
+    fun `posts this build cannot decode are never an empty Bau`() {
+        // Read already (unread 0), but the server did send posts.
+        val unreadable = parse("""{"unread":0,"posts":[{"postId":42}]}""")
+        assertEquals(1, unreadable.sentPostCount)
+        assertTrue(unreadable.posts.isEmpty())
+        assertEquals(BauPreviewState.Plain(0), bauPreviewState(unreadable, 0, canPost = true))
+    }
+
+    @Test
     fun `the thumbnail never pulls a frame out of a video`() {
         fun c(kind: String?, url: String?, locked: Boolean = false) =
             BauPostCard(postId = "p", serverId = s, mediaKind = kind, mediaUrl = url, locked = locked)

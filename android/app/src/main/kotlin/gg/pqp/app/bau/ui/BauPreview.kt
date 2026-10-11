@@ -48,6 +48,7 @@ import gg.pqp.app.bau.BauPostCard
 import gg.pqp.app.bau.BauPreviewState
 import gg.pqp.app.bau.BauThumb
 import gg.pqp.app.bau.bauThumb
+import gg.pqp.app.bau.bauThumbUrl
 import gg.pqp.app.core.Backend
 import gg.pqp.app.social.ui.relativeTime
 import gg.pqp.app.social.ui.CountBadge
@@ -230,14 +231,14 @@ private fun Thumb(post: BauPostCard, serverId: String, size: Dp, width: Dp = siz
             ),
         contentAlignment = Alignment.Center,
     ) {
-        when (bauThumb(post)) {
-            BauThumb.Image -> AsyncImage(
-                model = Backend.absolute(post.mediaUrl),
+        val imageUrl = if (bauThumb(post) == BauThumb.Image) bauThumbUrl(post.mediaUrl, Backend.apiUrl) else null
+        if (imageUrl != null) {
+            AsyncImage(
+                model = imageUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            BauThumb.Plate, BauThumb.Text -> Unit
         }
         if (post.mediaKind in BauPostCard.PLAYABLE && !post.locked) {
             Box(
