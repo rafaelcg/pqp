@@ -7,10 +7,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Plus, Volume2, VolumeX } from "lucide-react";
+import { CircleAlert, Lock, PartyPopper, Plus, Volume2, VolumeX, X } from "lucide-react";
 import { SOUNDBOARD_BUILTINS, type SoundboardBuiltinId } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { useMediaQuery } from "@/components/ui/use-media-query";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
@@ -47,10 +48,74 @@ const LOCK_COPY: Record<SoundboardLock, MessageKey> = {
   micLocked: "soundboard.lock.micLocked",
 };
 
-const GRID_COLUMNS = 3;
-
+/** The popover: three columns, anchored to the button. */
+const POPOVER_COLUMNS = 3;
 const PANEL_WIDTH = 280;
 const PANEL_HEIGHT = 304;
+
+/**
+ * A phone, or any window too short for the popover (a phone on its side is
+ * 750 wide and 342 tall, and the 280px popover showed 1.3 rows there). Both
+ * halves matter: the width alone leaves landscape on the popover.
+ */
+export const SOUNDBOARD_SHEET_QUERY = "(max-width: 639px), (max-height: 520px)";
+
+/** The sheet spans the screen, up to this wide, and sits above the call bar. */
+const SHEET_MAX_WIDTH = 640;
+const SHEET_MARGIN = 8;
+const PANEL_PADDING = 20;
+const GRID_GAP = 6;
+/** A tile is at least this wide, so a thumb lands on one tile. */
+const TILE_MIN_WIDTH = 76;
+const SHEET_MAX_COLUMNS = 6;
+
+/** How long the lock's reason stays up after a tap. */
+const LOCK_HINT_MS = 4000;
+const LOCK_HINT_WIDTH = 240;
+
+function sheetWidthFor(viewportWidth: number): number {
+  return Math.max(0, Math.min(SHEET_MAX_WIDTH, viewportWidth - 2 * SHEET_MARGIN));
+}
+
+/** The number of columns for a sheet this wide. One number for layout and keys. */
+export function sheetColumnsFor(sheetWidth: number): number {
+  const inner = sheetWidth - PANEL_PADDING;
+  const fit = Math.floor((inner + GRID_GAP) / (TILE_MIN_WIDTH + GRID_GAP));
+  return Math.min(SHEET_MAX_COLUMNS, Math.max(2, fit));
+}
+
+/**
+ * The height an element wants with no cap. `offsetHeight` of a capped panel
+ * is the cap, so a panel placed once in a short window never grew back.
+ */
+function naturalHeight(element: HTMLElement | null): number {
+  if (!element) {
+    return 0;
+  }
+  const capped = element.style.maxHeight;
+  element.style.maxHeight = "none";
+  const height = element.offsetHeight;
+  element.style.maxHeight = capped;
+  return height;
+}
+
+/**
+ * Where the call controls start. On a phone the bar wraps onto several rows;
+ * the sheet opens above the highest of them so none is covered. Only boxes
+ * about the size of a few buttons count, never a whole stage.
+ */
+function controlRowTop(trigger: HTMLElement): number {
+  const own = trigger.getBoundingClientRect();
+  let top = own.top;
+  let node = trigger.parentElement;
+  for (let depth = 0; node && depth < 3; depth += 1, node = node.parentElement) {
+    const rect = node.getBoundingClientRect();
+    if (rect.height > 0 && rect.height <= own.height * 3.5) {
+      top = Math.min(top, rect.top);
+    }
+  }
+  return top;
+}
 
 export function SoundboardControl({
   serverId,
@@ -89,7 +154,21 @@ export function SoundboardControl({
   const portalHost = useFullscreenPortalHost();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [placement, setPlacement] = useState<CSSProperties | null>(null);
+  const [placement, setPlacement] = useState<
+    (CSSProperties & { width: number }) | null
+  >(null);
+  const sheet = useMediaQuery(SOUNDBOARD_SHEET_QUERY, false);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? 1024 : window.innerWidth,
+  );
+  const panelWidth = sheet ? sheetWidthFor(viewportWidth) : PANEL_WIDTH;
+  // The one column count: the grid is drawn with it and the arrows step by it.
+  const columns = sheet ? sheetColumnsFor(panelWidth) : POPOVER_COLUMNS;
+  // Why the locked button does nothing, said on the surface: a tooltip is
+  // inert on touch, so a tap shows it here instead.
+  const [lockHint, setLockHint] = useState(false);
+  const hintRef = useRef<HTMLDivElement>(null);
+  const [hintPlacement, setHintPlacement] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     setSoundboardCatalogServer(serverId);
@@ -106,6 +185,7 @@ export function SoundboardControl({
 
   useEffect(() => {
     if (!lock) {
+      setLockHint(false);
       return;
     }
     // The panel is still mounted here. If the person was inside it, closing
@@ -136,30 +216,37 @@ export function SoundboardControl({
       return;
     }
     function place() {
-      const anchor = triggerRef.current?.getBoundingClientRect();
-      if (!anchor) {
+      const trigger = triggerRef.current;
+      const anchor = trigger?.getBoundingClientRect();
+      if (!trigger || !anchor) {
         return;
       }
-      const height = panelRef.current?.offsetHeight || PANEL_HEIGHT;
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      setViewportWidth(viewport.width);
+      const width = sheet ? sheetWidthFor(viewport.width) : PANEL_WIDTH;
+      const height = naturalHeight(panelRef.current) || PANEL_HEIGHT;
       const next = placeAnchoredPanel(
         {
-          top: anchor.top,
+          top: sheet ? controlRowTop(trigger) : anchor.top,
           bottom: anchor.bottom,
-          left: anchor.right - PANEL_WIDTH,
+          left: sheet ? (viewport.width - width) / 2 : anchor.right - width,
           right: anchor.right,
         },
-        { width: PANEL_WIDTH, height },
-        { width: window.innerWidth, height: window.innerHeight },
+        { width, height },
+        viewport,
       );
       setPlacement({
         top: next.top,
         left: next.left,
         maxHeight: next.maxHeight,
+        width: next.maxWidth,
       });
     }
     place();
     const frame = window.requestAnimationFrame(place);
     window.addEventListener("resize", place);
+    // Browser chrome sliding away changes the visible height with no resize.
+    window.visualViewport?.addEventListener("resize", place);
     // Follow the trigger when something around it scrolls. Closing on any
     // scroll shut the panel under a keyboard user whose focus scrolled the
     // member list into view.
@@ -167,15 +254,65 @@ export function SoundboardControl({
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
-  }, [open, sounds.length, canManage]);
+    // The width and column count change the natural height, so place again.
+  }, [open, sounds.length, canManage, sheet, panelWidth, columns]);
+
+  // The lock's reason: placed above the button, gone after a few seconds, on a
+  // tap anywhere else, or on Escape. It never takes focus.
+  useLayoutEffect(() => {
+    if (!lockHint) {
+      setHintPlacement(null);
+      return;
+    }
+    const anchor = triggerRef.current?.getBoundingClientRect();
+    if (!anchor) {
+      return;
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const width = Math.min(LOCK_HINT_WIDTH, viewport.width - 2 * SHEET_MARGIN);
+    const centre = (anchor.left + anchor.right) / 2;
+    const next = placeAnchoredPanel(
+      { top: anchor.top, bottom: anchor.bottom, left: centre - width / 2, right: centre + width / 2 },
+      { width, height: hintRef.current?.offsetHeight || 40 },
+      viewport,
+    );
+    setHintPlacement({ top: next.top, left: next.left, width: next.maxWidth });
+  }, [lockHint, lock]);
+
+  useEffect(() => {
+    if (!lockHint) {
+      return;
+    }
+    const timer = window.setTimeout(() => setLockHint(false), LOCK_HINT_MS);
+    function dismissOutside(event: Event) {
+      if (!triggerRef.current?.contains(event.target as Node)) {
+        setLockHint(false);
+      }
+    }
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setLockHint(false);
+      }
+    }
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("mousedown", dismissOutside);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("mousedown", dismissOutside);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [lockHint]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
-    function handlePointerDown(event: MouseEvent) {
+    function handlePointerDown(event: Event) {
       const target = event.target as Node;
       if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) {
         return;
@@ -217,9 +354,11 @@ export function SoundboardControl({
         first.focus();
       }
     }
+    document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("mousedown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
@@ -257,9 +396,9 @@ export function SoundboardControl({
         : event.key === "ArrowLeft"
           ? index - 1
           : event.key === "ArrowDown"
-            ? index + GRID_COLUMNS
+            ? index + columns
             : event.key === "ArrowUp"
-              ? index - GRID_COLUMNS
+              ? index - columns
               : event.key === "Home"
                 ? 0
                 : event.key === "End"
@@ -291,40 +430,71 @@ export function SoundboardControl({
             role="dialog"
             aria-label={t("soundboard.title")}
             data-soundboard-panel=""
+            data-presentation={sheet ? "sheet" : "popover"}
             style={{
               position: "fixed",
               top: placement?.top ?? 0,
               left: placement?.left ?? 0,
+              width: placement?.width ?? panelWidth,
               maxHeight: placement?.maxHeight,
               visibility: placement ? "visible" : "hidden",
             }}
-            className="elevation-3 z-[100] flex w-[17.5rem] origin-bottom-right flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-pop-in"
+            className={cn(
+              "elevation-3 z-[100] flex max-w-full flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-pop-in",
+              sheet ? "origin-bottom" : "origin-bottom-right",
+            )}
           >
             {/* The notice takes the title's line, so nothing below it moves. */}
-            <div className="relative flex h-5 items-center px-0.5 mb-1.5">
+            <div className={cn("relative mb-1.5 flex items-center px-0.5", sheet ? "h-10" : "h-5")}>
               <p
                 aria-hidden={refused ? true : undefined}
                 className={cn("text-xs font-medium text-text", refused && "invisible")}
               >
                 {t("soundboard.title")}
               </p>
+              {/* A soft warning fill with its own text token (the pair the
+                  bench measures at 4.5:1) and an icon, so the notice is not
+                  carried by colour alone. */}
               <p
                 role="status"
                 aria-live="polite"
-                className={cn(
-                  "absolute inset-x-0.5 truncate text-xs font-medium text-warning",
-                  !refused && "sr-only",
-                )}
+                data-soundboard-notice=""
+                className={
+                  refused
+                    ? cn(
+                        "absolute left-0.5 flex h-5 items-center gap-1 rounded-full bg-warning-soft px-2 text-xs font-medium text-on-warning-soft",
+                        sheet ? "max-w-[calc(100%-3.25rem)]" : "max-w-[calc(100%-0.25rem)]",
+                      )
+                    : "sr-only"
+                }
               >
-                {refused === "removed"
-                  ? t("soundboard.removed")
-                  : refused === "refused"
-                    ? t("soundboard.refused")
-                    : ""}
+                <CircleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">
+                  {refused === "removed"
+                    ? t("soundboard.removed")
+                    : refused === "refused"
+                      ? t("soundboard.refused")
+                      : ""}
+                </span>
               </p>
+              {sheet && (
+                <button
+                  type="button"
+                  aria-label={t("soundboard.close")}
+                  data-soundboard-close=""
+                  className="absolute right-0 top-0 flex h-10 w-10 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-border-strong hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  onClick={() => {
+                    setOpen(false);
+                    triggerRef.current?.focus();
+                  }}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              )}
             </div>
             <div
-              className="grid min-h-0 grid-cols-3 gap-1.5 overflow-y-auto"
+              className="grid min-h-0 gap-1.5 overflow-y-auto"
+              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
               onKeyDown={moveBetweenTiles}
             >
               {SOUNDBOARD_BUILTINS.map((sound, index) => (
@@ -355,13 +525,14 @@ export function SoundboardControl({
                 );
               })}
             </div>
-            <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-2">
               <button
                 type="button"
                 aria-pressed={muted}
                 aria-label={t("soundboard.mute")}
                 className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none",
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none pointer-coarse:h-10 pointer-coarse:w-10",
+                  sheet && "h-10 w-10",
                   muted
                     ? "bg-danger-soft text-danger hover:bg-danger-soft-hover"
                     : "text-text-tertiary hover:bg-border-strong hover:text-text",
@@ -376,6 +547,9 @@ export function SoundboardControl({
                   )}
                 </span>
               </button>
+              {/* The root is the hit area: a tap anywhere along its height
+                  sets the value, so a taller root is a bigger target with the
+                  same drawn track and thumb. */}
               <Slider
                 variant="volume"
                 min={0}
@@ -384,7 +558,10 @@ export function SoundboardControl({
                 value={muted ? 0 : volume}
                 aria-label={t("soundboard.volume")}
                 aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
-                className="min-w-0 flex-1"
+                className={cn(
+                  "min-w-[7rem] flex-1 basis-28 pointer-coarse:h-10",
+                  sheet && "h-10",
+                )}
                 onValueChange={(next) => {
                   if (muted) {
                     setMuted(false);
@@ -392,51 +569,79 @@ export function SoundboardControl({
                   setVolume(next);
                 }}
               />
-              {canManage && catalog && (
-                <span className="shrink-0 text-[11px] tabular-nums text-text-secondary">
-                  {t("soundboard.slots", {
-                    used: catalog.slotsUsed,
-                    max: catalog.maxSounds,
-                  })}
-                </span>
-              )}
               {canManage && (
-                // aria-disabled, not disabled: a keyboard user can reach the
-                // button and hear why it does nothing. The reason is the
-                // tooltip's detail, which a screen reader gets as the
-                // description.
-                <Tooltip
-                  label={t("soundboard.add.tile")}
-                  detail={
-                    boardFull
-                      ? t("soundboard.add.full", { max: catalog?.maxSounds ?? 0 })
-                      : undefined
-                  }
-                >
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-disabled={boardFull ? true : undefined}
-                    className={cn(
-                      "h-8 shrink-0 px-2",
-                      boardFull &&
-                        "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-tertiary active:scale-100",
-                    )}
-                    onClick={() => {
-                      if (boardFull) {
-                        return;
-                      }
-                      setOpen(false);
-                      setAdding(true);
-                    }}
+                // Count and Add wrap together, so the slider keeps its width.
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  {catalog && (
+                    <span className="text-[11px] tabular-nums text-text-secondary">
+                      {t("soundboard.slots", {
+                        count: catalog.maxSounds,
+                        used: catalog.slotsUsed,
+                        max: catalog.maxSounds,
+                      })}
+                    </span>
+                  )}
+                  {/* aria-disabled, not disabled: a keyboard user can reach
+                      the button and hear why it does nothing. The reason is
+                      the tooltip's detail, which a screen reader gets as the
+                      description. */}
+                  <Tooltip
+                    label={t("soundboard.add.tile")}
+                    detail={
+                      boardFull
+                        ? t("soundboard.add.full", { max: catalog?.maxSounds ?? 0 })
+                        : undefined
+                    }
                   >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                    {t("soundboard.add.tile")}
-                  </Button>
-                </Tooltip>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-disabled={boardFull ? true : undefined}
+                      className={cn(
+                        "h-8 shrink-0 px-2 pointer-coarse:h-10 pointer-coarse:px-3",
+                        sheet && "h-10 px-3",
+                        boardFull &&
+                          "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-tertiary active:scale-100",
+                      )}
+                      onClick={() => {
+                        if (boardFull) {
+                          return;
+                        }
+                        setOpen(false);
+                        setAdding(true);
+                      }}
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      {t("soundboard.add.tile")}
+                    </Button>
+                  </Tooltip>
+                </div>
               )}
             </div>
+          </div>,
+          portalHost ?? document.body,
+        )
+      : null;
+
+  const hint =
+    lock && lockHint && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={hintRef}
+            role="status"
+            data-soundboard-lock-hint=""
+            style={{
+              position: "fixed",
+              top: hintPlacement?.top ?? 0,
+              left: hintPlacement?.left ?? 0,
+              width: hintPlacement?.width ?? LOCK_HINT_WIDTH,
+              visibility: hintPlacement ? "visible" : "hidden",
+            }}
+            className="elevation-3 z-[100] flex max-w-full items-start gap-2 rounded-[var(--radius-control)] px-3 py-2 text-xs leading-snug text-text animate-fade-in"
+          >
+            <Lock className="mt-px h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+            <span>{t(LOCK_COPY[lock])}</span>
           </div>,
           portalHost ?? document.body,
         )
@@ -451,27 +656,42 @@ export function SoundboardControl({
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? "soundboard-panel" : undefined}
-          // Focusable while locked, so the reason in the tooltip can be read.
+          // Focusable while locked, so the reason can be read.
           aria-disabled={lock ? true : undefined}
           data-locked={lock ?? undefined}
           className={cn(
             "group relative flex items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-95 motion-reduce:transition-none motion-reduce:transform-none",
             size,
+            // Locked is an outline with a lock badge, not a dimmed fill: the
+            // icon keeps a measured contrast (secondary text on the bar), and
+            // the state reads without hover.
             lock
-              ? "cursor-not-allowed bg-ink-3 text-paper opacity-40 active:scale-100"
+              ? "cursor-not-allowed bg-transparent text-text-secondary ring-1 ring-inset ring-border-strong active:scale-100"
               : open
                 ? "bg-signal/20 text-signal"
                 : "bg-ink-3 text-paper hover:bg-ink-4",
           )}
           onClick={() => {
-            if (!lock) {
-              setOpen((next) => !next);
+            if (lock) {
+              // A tooltip is inert on touch. Tell the person why, here.
+              setLockHint((shown) => !shown);
+              return;
             }
+            setOpen((next) => !next);
           }}
         >
           <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
-            <AudioLines className={iconSize} />
+            <PartyPopper className={iconSize} />
           </span>
+          {lock && (
+            <span
+              aria-hidden="true"
+              data-soundboard-lock-badge=""
+              className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-surface-2 text-text ring-1 ring-border-strong"
+            >
+              <Lock className="h-2.5 w-2.5" />
+            </span>
+          )}
           {muted && (
             <span
               aria-hidden="true"
@@ -483,6 +703,7 @@ export function SoundboardControl({
           )}
         </button>
       </Tooltip>
+      {hint}
       {panel}
       <SoundboardAddDialog
         open={adding}
