@@ -51,6 +51,16 @@
         }
       }
     },
+    "%@ streaming" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ transmitindo"
+          }
+        }
+      }
+    },
     "%@ was banned." : {
       "localizations" : {
         "pt-BR" : {
@@ -67,6 +77,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ foi removido da comunidade."
+          }
+        }
+      }
+    },
+    "%lld channels" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld channel"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld channels"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld canal"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld canais"
+                }
+              }
+            }
           }
         }
       }
@@ -107,6 +157,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "%lld in call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld em call"
           }
         }
       }
@@ -171,6 +231,56 @@
         }
       }
     },
+    "%lld live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ao vivo"
+          }
+        }
+      }
+    },
+    "%lld mentions" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld mention"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld mentions"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld menção"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld menções"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld other members" : {
       "localizations" : {
         "pt-BR" : {
@@ -191,6 +301,16 @@
         }
       }
     },
+    "(that's you)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(tu)"
+          }
+        }
+      }
+    },
     "(you)" : {
       "localizations" : {
         "pt-BR" : {
@@ -207,6 +327,96 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "+%lld"
+          }
+        }
+      }
+    },
+    "+%lld new posts" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld new post"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld new posts"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld post novo"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld posts novos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "+%lld people" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld person"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld people"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld pessoa"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld pessoas"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "+1 new post: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+1 post novo: %@"
           }
         }
       }
@@ -601,6 +811,16 @@
         }
       }
     },
+    "Audio off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Áudio desligado"
+          }
+        }
+      }
+    },
     "Audit log" : {
       "localizations" : {
         "pt-BR" : {
@@ -737,6 +957,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Post do Baú: %@"
+          }
+        }
+      }
+    },
+    "Baú, new post: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baú, post novo: %@"
           }
         }
       }
@@ -1067,6 +1297,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fechar o painel de emoji"
+          }
+        }
+      }
+    },
+    "Collapsed" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recolhido"
           }
         }
       }
@@ -1811,6 +2051,16 @@
         }
       }
     },
+    "Expanded" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aberto"
+          }
+        }
+      }
+    },
     "Export community data" : {
       "localizations" : {
         "pt-BR" : {
@@ -2341,6 +2591,26 @@
         }
       }
     },
+    "Latest: \"%@\"" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Último: \"%@\""
+          }
+        }
+      }
+    },
+    "Latest: \"%@\" · %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Último: \"%@\" · %@"
+          }
+        }
+      }
+    },
     "Leave" : {
       "localizations" : {
         "pt-BR" : {
@@ -2571,6 +2841,16 @@
         }
       }
     },
+    "Microphone off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microfone desligado"
+          }
+        }
+      }
+    },
     "Moderation records of actions you took in other people's communities, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else." : {
       "localizations" : {
         "pt-BR" : {
@@ -2671,6 +2951,16 @@
         }
       }
     },
+    "Muted channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal silenciado"
+          }
+        }
+      }
+    },
     "Name" : {
       "localizations" : {
         "pt-BR" : {
@@ -2687,6 +2977,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Novo"
+          }
+        }
+      }
+    },
+    "NEW" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NOVO"
           }
         }
       }
@@ -3397,6 +3697,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ver vídeo"
+          }
+        }
+      }
+    },
+    "Post the first clip, screenshot or announcement. Here it does not get lost in the chat." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posta o primeiro clipe, print ou aviso. Aqui ele não some no meio do chat."
           }
         }
       }
@@ -4331,6 +4641,16 @@
         }
       }
     },
+    "Still empty. When the staff posts, it shows up here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda vazio. Quando a staff postar, aparece aqui."
+          }
+        }
+      }
+    },
     "Stop sharing your screen" : {
       "localizations" : {
         "pt-BR" : {
@@ -5041,6 +5361,16 @@
         }
       }
     },
+    "Unread" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não lido"
+          }
+        }
+      }
+    },
     "Unusable" : {
       "localizations" : {
         "pt-BR" : {
@@ -5137,6 +5467,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Voz ligada. Seu microfone entra desligado."
+          }
+        }
+      }
+    },
+    "Watch" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistir"
           }
         }
       }
@@ -5497,6 +5837,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você, perfil e ajustes"
+          }
+        }
+      }
+    },
+    "Your Baú is empty" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu Baú tá vazio"
           }
         }
       }
