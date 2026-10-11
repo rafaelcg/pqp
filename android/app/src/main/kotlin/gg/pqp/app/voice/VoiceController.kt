@@ -213,6 +213,29 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
+    /**
+     * Who is in every voice room this account can see, for the channel list.
+     * Built here because this object lives as long as the app and so is
+     * already listening when the socket's catch-up rosters arrive after `auth`.
+     */
+    val rooms: VoiceRoomsStore = VoiceRoomsStore(
+        frames = session.realtime.frames,
+        realtimeState = session.realtime.state,
+        scope = scope,
+    )
+
+    private val _speakingPeers = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Peer ids talking right now in THIS device's call, local peer included.
+     *
+     * Only the media server reports it today (LiveKit's active speakers); a
+     * peer-to-peer call leaves it empty and draws no ring rather than a guess.
+     * Never anything about rooms this device is not in: the roster does not
+     * carry `speaking`, on purpose (see `packages/shared/src/signaling.ts`).
+     */
+    val speakingPeers: StateFlow<Set<String>> = _speakingPeers.asStateFlow()
+
     private val _remoteScreens = MutableStateFlow<Map<String, RemoteVideoFeed>>(emptyMap())
 
     /**
@@ -384,6 +407,7 @@ class VoiceController(
         },
         onRemoteScreen = ::onRemoteScreen,
         onRemoteCamera = ::onRemoteCamera,
+        onActiveSpeakers = { speakers -> _speakingPeers.value = speakers },
         isMetered = {
             // Mobile data, or a hotspot the OS knows is metered: the SFU is
             // asked for the 360p layer of a share instead of 720p.
@@ -410,6 +434,7 @@ class VoiceController(
         if (kind == engineKind) return
         Log.i(TAG, "voice transport ${engineKind.name} -> ${kind.name}; disposing the old engine")
         runCatching { engine.dispose() }
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         engine = when (kind) {
@@ -526,6 +551,7 @@ class VoiceController(
         // leaving, and `welcome` carries no sequence of its own: the first
         // full roster after the join is what supplies the next baseline.
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _state.value = VoiceState(
             channelId = channelId,
             channelName = channelName,
@@ -979,6 +1005,7 @@ class VoiceController(
         // number would refuse every delta of the rebuilt call until a keyframe;
         // holding no number accepts the first one it is offered.
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         // `engine.stop` released the capture, so the service must stop
@@ -1561,6 +1588,7 @@ class VoiceController(
         resumeToken = null
         peerMedia.clear()
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         releaseAudioFocus()

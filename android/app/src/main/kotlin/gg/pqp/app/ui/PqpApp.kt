@@ -489,6 +489,19 @@ private fun SignedInNav(
                 composable<ChatRoute> { entry ->
                     val route = entry.toRoute<ChatRoute>()
 
+                    // The channel list now shows unread per channel, so
+                    // opening one has to move the read cursor, the way a
+                    // conversation already does (`SocialNav`): on the way in,
+                    // and on the way out, because the server sends no
+                    // `channel-activity` to the socket viewing the channel.
+                    if (route.serverId != null) {
+                        val social = gg.pqp.app.social.SocialRepository.of(session)
+                        androidx.compose.runtime.DisposableEffect(route.channelId) {
+                            social.markRead(route.channelId)
+                            onDispose { social.markRead(route.channelId) }
+                        }
+                    }
+
                     // Offered only while this room is not already the call.
                     // Once joining or connected, the call bar above the
                     // NavHost owns every voice control, and a second `join`

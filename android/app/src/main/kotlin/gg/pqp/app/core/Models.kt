@@ -66,6 +66,18 @@ data class Me(
 data class MePreferences(
     /** Finished, skipped, or grandfathered. Present means "not again", on every device. */
     val onboardedAt: String? = null,
+    /**
+     * The notification levels the web's menus write. Only the per-channel map
+     * is read on Android, to dim the channels this person silenced.
+     */
+    val notifications: MeNotificationPreferences? = null,
+)
+
+/** `notificationPreferencesSchema`, the one key this client reads. */
+@Serializable
+data class MeNotificationPreferences(
+    /** Channel id to `"all" | "mentions" | "none"`. */
+    val channels: Map<String, String> = emptyMap(),
 )
 
 // --- servers and channels ---
