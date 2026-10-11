@@ -561,7 +561,9 @@ async function createPostFromWebhook(
 
   // A repeat costs no post budget: answered before the bucket. The locked
   // check inside the shell transaction below is what makes it exact; this
-  // read only keeps an ordinary re-send off the bucket.
+  // read only keeps an ordinary re-send off the bucket. Copies of one item
+  // arriving at the same instant all miss it and each spend a token before
+  // the lock answers all but one: a cost of concurrency, not a double post.
   if (windowHours > 0) {
     const existing = await findDuplicate(forum.id, dedupeKey, windowHours);
     if (existing) {

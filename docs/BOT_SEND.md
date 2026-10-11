@@ -179,7 +179,7 @@ URL as if it were a Discord webhook makes one post per item.
 | no title anywhere | `400` with Discord's `code: 220001` |
 | `applied_tags` | Tags by id or by name (case and accents ignored), at most 5. A webhook never creates a tag; unknown or disallowed entries come back in `ignored_tags` |
 | `content`, `embeds`, `username`, `avatar_url` | The opening message, as in a text channel |
-| `?thread_id=<postId>` | A reply in that post. `404` unless it is a post of this forum, `403` when the post is locked |
+| `?thread_id=<postId>` | A reply in that post. `404` unless it is a post of this forum, `403` when the post is locked. `thread_name` and `applied_tags` are ignored on a reply (Discord would refuse the pair with a 400) |
 | `Idempotency-Key` header | The dedupe key (pqp extension) |
 
 The answer is `200 { message, post, ignored_tags? }`. A repeat of the same item
