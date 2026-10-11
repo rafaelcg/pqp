@@ -159,3 +159,15 @@ object DeepLink {
 
     private const val PQP_SCHEME = "pqp://"
 }
+
+/**
+ * Whether a tap on a channel push should open a chat on top of the list.
+ *
+ * `null` is "the list did not have it", which is how a thread arrives (threads
+ * are not in the channel list) and how a failed fetch looks, so both open as
+ * before. A row that IS in the list but is neither text nor voice is a type
+ * this build cannot draw (a forum, a future one): the person stays on the
+ * channel list instead of landing in a chat with nothing in it.
+ */
+fun pushOpensChat(channel: gg.pqp.app.core.Channel?): Boolean =
+    channel == null || channel.isText || channel.isVoice

@@ -57,6 +57,7 @@ import gg.pqp.app.onboarding.shouldRunOnboarding
 import gg.pqp.app.onboarding.ui.ArrivalBanner
 import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
+import gg.pqp.app.push.pushOpensChat
 import gg.pqp.app.push.PushPrompt
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
@@ -765,6 +766,10 @@ private suspend fun navigateToPush(
             val channel = runCatching { session.api.channels(target.serverId) }
                 .getOrNull()
                 ?.firstOrNull { it.id == target.channelId }
+            // A row this build cannot render (a forum, say) stays on the list
+            // rather than opening an empty chat. A miss (null) still opens: a
+            // thread is not in the channel list at all.
+            if (!pushOpensChat(channel)) return
             nav.navigate(
                 ChatRoute(
                     target.channelId,
