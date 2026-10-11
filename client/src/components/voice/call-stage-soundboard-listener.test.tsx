@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { resetSoundboardMarksForTests, setSoundboardUserMuted, showSoundboardMark } from "@/lib/soundboard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { CameraTile, OccupantFaces, personAudioTracks } = await import("./call-stage");
+const { CameraTile, OccupantFaces, ScreenTileFrame, personAudioTracks } = await import("./call-stage");
 type StagePerson = Parameters<typeof personAudioTracks>[0];
 type Face = Parameters<typeof OccupantFaces>[0]["faces"][number];
 
@@ -249,5 +249,110 @@ describe("a camera tile's overlay", () => {
     act(() => open.click());
     const row = document.querySelector('[data-testid="peer-audio-soundboard"]');
     expect(row).not.toBeNull();
+  });
+});
+
+function play(userId: string, displayName: string, soundId = "builtin:buzina") {
+  act(() => {
+    showSoundboardMark({ userId, displayName, emoji: "x", soundId });
+  });
+}
+
+describe("a clip from somebody behind the count", () => {
+  const five = () => ["Ana", "Bia", "Cai", "Duda", "Eli"].map((n) => face(n));
+  const more = () =>
+    host!.querySelector<HTMLButtonElement>('[data-testid="call-bar-more"]')!;
+
+  it("shows no cue on the count while nobody it covers plays", () => {
+    mount(<OccupantFaces faces={five()} />);
+    expect(host!.querySelector("[data-soundboard-group-mark]")).toBeNull();
+    expect(more().getAttribute("aria-label")).toBe("2 more in the call");
+  });
+
+  it("puts a badge on the count and names who is playing", () => {
+    mount(<OccupantFaces faces={five()} />);
+    play("u-eli", "Eli");
+    const badge = more().querySelector<HTMLElement>("[data-soundboard-group-mark]");
+    expect(badge).not.toBeNull();
+    expect(badge!.className).toContain("h-3.5");
+    expect(more().getAttribute("aria-label")).toContain("Eli played Airhorn");
+    expect(host!.querySelector('[role="status"]')?.textContent).toContain(
+      "Eli played Airhorn",
+    );
+  });
+
+  it("ignores a clip from one of the three faces the bar already draws", () => {
+    mount(<OccupantFaces faces={five()} />);
+    play("u-ana", "Ana");
+    expect(more().querySelector("[data-soundboard-group-mark]")).toBeNull();
+    expect(host!.querySelector('[data-soundboard-float="sm"]')).not.toBeNull();
+  });
+
+  it("marks the playing person's row inside the list, and only theirs", () => {
+    mount(<OccupantFaces faces={five()} />);
+    act(() => more().click());
+    play("u-duda", "Duda", "builtin:palmas");
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>('[data-testid="call-bar-person"]'),
+    ];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.querySelector('[data-soundboard-mark="builtin:palmas"]')).not.toBeNull();
+    expect(rows[0]!.getAttribute("aria-label")).toContain("Duda played");
+    expect(rows[1]!.querySelector("[data-soundboard-mark]")).toBeNull();
+  });
+
+  it("shows the cue on a count that is only a chip, too", () => {
+    const faces = ["Ana", "Bia", "Cai", "Duda"].map((n) =>
+      face(n, { soundboardUserId: undefined, onSetVolume: undefined }),
+    );
+    mount(<OccupantFaces faces={faces} />);
+    play("u-duda", "Duda");
+    expect(host!.querySelector("[data-soundboard-group-mark]")).not.toBeNull();
+  });
+
+  it("takes the cue away when the clip ends", () => {
+    vi.useFakeTimers();
+    try {
+      mount(<OccupantFaces faces={five()} />);
+      play("u-eli", "Eli");
+      expect(more().querySelector("[data-soundboard-group-mark]")).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(6000);
+      });
+      expect(more().querySelector("[data-soundboard-group-mark]")).toBeNull();
+      expect(more().getAttribute("aria-label")).toBe("2 more in the call");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a shared screen's tile", () => {
+  const tile = {
+    peerId: "peer-ana",
+    stream: null,
+    presenterName: "Ana",
+    isSelf: false,
+    userId: "u-ana" as string | null,
+    hasAudio: false,
+  };
+
+  it("shows the presenter's clip where a camera tile does, without taking the pointer", () => {
+    mount(<ScreenTileFrame tile={tile} isFullscreen={false} onToggleFullscreen={() => {}} />);
+    expect(host!.querySelector("[data-soundboard-float]")).toBeNull();
+    play("u-ana", "Ana");
+    const float = host!.querySelector<HTMLElement>('[data-soundboard-float="md"]')!;
+    expect(float).not.toBeNull();
+    expect(float.className).toContain("pointer-events-none");
+    expect(float.textContent).toContain("Ana played Airhorn");
+    // The share's own controls are still there and are not inside the float.
+    expect(host!.querySelector('[data-testid="share-fullscreen"]')).not.toBeNull();
+    expect(float.contains(host!.querySelector('[data-testid="share-fullscreen"]'))).toBe(false);
+  });
+
+  it("shows nothing for another person's clip", () => {
+    mount(<ScreenTileFrame tile={tile} isFullscreen={false} />);
+    play("u-bia", "Bia");
+    expect(host!.querySelector("[data-soundboard-float]")).toBeNull();
   });
 });

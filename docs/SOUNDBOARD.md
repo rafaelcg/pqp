@@ -185,7 +185,10 @@ menu opens from:
 The row is there for any other person in a server call whose board is on,
 even when their voice track failed or has not started: their clips arrive
 over the voice socket, not over the voice track. It is never there for
-yourself, and never in a DM.
+yourself, and never in a DM. The sidebar row under the voice channel follows
+the same rule: it reads `soundboard` from `GET /api/voice/config?serverId=` for
+the server the channel belongs to, so a server whose board is off shows no
+switch there either.
 
 On a coarse pointer each face and the "+N" is a 40px target and the faces no
 longer overlap, so a tap never lands on the neighbour. The drawn faces stay
@@ -202,6 +205,17 @@ A play lights that person's row under the voice channel, and a small badge
 on their face when the stage is up. On the collapsed bar and the listener row
 the badge is a corner badge inside the small avatar, so it never hides the
 face. On the large room-view face it is a disc over the top.
+
+A person behind the "+N" has no face on the bar. While anyone the count
+covers plays a clip, the chip gets the same corner badge (the newest clip's
+icon) and its name lists who is playing. Inside the list, that person's row
+shows the same mark as the sidebar row and its name says what is playing.
+
+While someone's screen share is on stage, the sidebar is a rail and the
+presenter is not a chip, so the share's tile carries their badge, at the top
+centre like a camera tile's. It takes no pointer, so the share controls at the
+top left stay usable. It is missing on your own share, whose tile does not know
+your account id.
 
 The mark lasts as long as the clip: a built-in's length, or a custom
 clip's length from the catalog, never under 1.2 seconds and never over the

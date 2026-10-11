@@ -232,8 +232,14 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
 import {
   SoundboardFloat,
+  SoundboardGroupBadge,
   SoundboardMutedMark,
+  SoundboardOccupantMark,
+  soundboardGroupLabel,
+  soundboardSoundLabel,
+  useSoundboardGroup,
 } from "@/components/voice/soundboard-float";
+import { useSoundboardMark } from "@/lib/soundboard";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { shouldSuppressHints } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
@@ -4480,6 +4486,15 @@ const BANNER_TARGET_CLASS =
 function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLSpanElement>();
+  // A clip from anyone behind the count has no face to land on, so the count
+  // carries a corner badge while one sounds, and its name says who.
+  const group = useSoundboardGroup(
+    faces.map((face) => ({ userId: face.userId, name: face.displayName })),
+  );
+  const playingLabel = soundboardGroupLabel(group.playing, t);
+  const countLabel = playingLabel
+    ? `${t("voice.audio.moreFaces", { count: faces.length })}. ${playingLabel}`
+    : t("voice.audio.moreFaces", { count: faces.length });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const picked = faces.find((face) => face.key === pickedKey) ?? null;
@@ -4492,12 +4507,15 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
   if (!faces.some(faceActionable)) {
     return (
       <span aria-hidden="true" className={BANNER_CHIP_CLASS}>
+        {group.probes}
         +{faces.length}
+        <SoundboardGroupBadge playing={group.playing} />
       </span>
     );
   }
   return (
     <span ref={menu.rootRef} className="relative inline-flex">
+      {group.probes}
       <button
         ref={triggerRef}
         type="button"
@@ -4505,7 +4523,7 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
         data-banner-target=""
         aria-haspopup="dialog"
         aria-expanded={menu.open}
-        aria-label={t("voice.audio.moreFaces", { count: faces.length })}
+        aria-label={countLabel}
         className={cn(
           BANNER_TARGET_CLASS,
           "group rounded-full focus:outline-none",
@@ -4519,8 +4537,16 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
           )}
         >
           +{faces.length}
+          <SoundboardGroupBadge playing={group.playing} />
         </span>
       </button>
+      {/* A button's children are presentational, so the live announcement
+          sits beside it. */}
+      {playingLabel && (
+        <span role="status" className="sr-only">
+          {playingLabel}
+        </span>
+      )}
       {menu.open && !picked && (
         <AnchoredPanel
           label={t("voice.audio.peopleInCall")}
@@ -4533,31 +4559,10 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
           <ul className="flex flex-col gap-0.5">
             {faces.map((face) => (
               <li key={face.key}>
-                <button
-                  type="button"
-                  disabled={!faceActionable(face)}
-                  aria-haspopup="dialog"
-                  aria-label={t("voice.audio.title", { name: face.displayName })}
-                  data-testid="call-bar-person"
-                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-paper hover:bg-ink-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal disabled:cursor-default disabled:text-paper-muted disabled:hover:bg-transparent"
-                  onClick={() => setPickedKey(face.key)}
-                >
-                  <VoiceAvatar
-                    name={face.displayName}
-                    avatarUrl={face.avatarUrl}
-                    size="sm"
-                    isSpeaking={face.speaking}
-                  />
-                  <span className="min-w-0 flex-1 truncate">
-                    {face.displayName}
-                  </span>
-                  {face.soundboardUserId && (
-                    <SoundboardMutedMark
-                      userId={face.soundboardUserId}
-                      name={face.displayName}
-                    />
-                  )}
-                </button>
+                <OverflowPersonRow
+                  face={face}
+                  onPick={() => setPickedKey(face.key)}
+                />
               </li>
             ))}
           </ul>
@@ -4575,6 +4580,54 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
         />
       )}
     </span>
+  );
+}
+
+/**
+ * One person in the "+N" list. While their clip sounds the row carries the
+ * same mark the sidebar row does, and its name says so.
+ */
+function OverflowPersonRow({
+  face,
+  onPick,
+}: {
+  face: OccupantFace;
+  onPick: () => void;
+}) {
+  const { t } = useTranslation();
+  const mark = useSoundboardMark(face.userId);
+  const title = t("voice.audio.title", { name: face.displayName });
+  const label = mark
+    ? `${title}. ${t("soundboard.float.played", {
+        name: face.displayName,
+        sound: soundboardSoundLabel(mark.soundId, t),
+      })}`
+    : title;
+  return (
+    <button
+      type="button"
+      disabled={!faceActionable(face)}
+      aria-haspopup="dialog"
+      aria-label={label}
+      data-testid="call-bar-person"
+      className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-paper hover:bg-ink-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal disabled:cursor-default disabled:text-paper-muted disabled:hover:bg-transparent"
+      onClick={onPick}
+    >
+      <VoiceAvatar
+        name={face.displayName}
+        avatarUrl={face.avatarUrl}
+        size="sm"
+        isSpeaking={face.speaking}
+      />
+      <span className="min-w-0 flex-1 truncate">{face.displayName}</span>
+      {face.userId && <SoundboardOccupantMark userId={face.userId} />}
+      {face.soundboardUserId && (
+        <SoundboardMutedMark
+          userId={face.soundboardUserId}
+          name={face.displayName}
+        />
+      )}
+    </button>
   );
 }
 
@@ -4943,6 +4996,10 @@ export function ScreenTileFrame({
           </div>
         )}
       </div>
+      {/* The presenter's clip, where a camera tile puts it. While a share is
+          on stage the sidebar is a rail and the presenter is not a strip chip,
+          so this is the one place their clip shows. It takes no pointer. */}
+      <SoundboardFloat userId={tile.userId ?? undefined} />
       {/* The name goes where every other tile keeps its name: the bottom left,
           always visible, out of the title overlay's corner. It names the
           picture rather than the act ("Sua tela"), because "X is presenting"
