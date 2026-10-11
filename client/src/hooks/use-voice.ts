@@ -133,6 +133,7 @@ import {
   type PeerConnectionState,
   type RemotePeer,
 } from "@/lib/peer-connection-manager";
+import { planMeshHandoff } from "@/lib/mesh-handoff";
 import type { RealtimeTransport } from "@/lib/realtime";
 import {
   remoteAudioPlan,
@@ -236,6 +237,29 @@ const AUDIO_HEALTH_LEVEL_POLL_MS = 250;
  * The black-holed-host case this timer exists for still ends, just later.
  */
 const SFU_JOIN_TIMEOUT_MS = 45_000;
+
+/**
+ * FOLLOWING A PROMOTION (`voice-transport-changed`) WITHOUT A GAP.
+ *
+ * The mesh stays up while the SFU session comes up, and each peer's mesh
+ * connection is retired the moment the SFU carries that peer
+ * (`lib/mesh-handoff.ts`). This is how long a mesh connection may outlive our
+ * own SFU session being up, for a peer whose media never showed up on the SFU
+ * (a phone that could not follow, somebody whose connect is slow): long
+ * enough for a slow peer's connect, short enough that a room is not paying
+ * for two copies of everything for long.
+ */
+export const MESH_HANDOFF_GRACE_MS = 8_000;
+
+/**
+ * Retries for the SFU session a promotion asks for, before giving up and
+ * leaving. A promotion is not a join: the person did not ask for anything and
+ * is mid-sentence, so one transient failure (a token request that landed on
+ * the API replica the promotion had not reached yet, a 503 while permissions
+ * were being read, a connect that hit a blip) must not hang up their call.
+ * The mesh keeps their audio flowing between attempts.
+ */
+export const PROMOTION_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 
 /**
  * One wording for "this browser cannot capture a screen", shared with the UI.
@@ -1313,6 +1337,28 @@ const SCREEN_PUBLISH_MISS_CONFIRM = 2;
 export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
+  /**
+   * Bumped by every SFU connect attempt and every teardown. A connect that
+   * resolves under an older number lost a race (a promotion and a rejoin both
+   * building a session) and disconnects itself instead of replacing the live
+   * one, which would leave an orphan session publishing this microphone.
+   */
+  let sfuAttempt = 0;
+  /** The SFU's own view of the room, before any mesh is folded in. */
+  let sfuRemotePeers: RemotePeer[] = [];
+  /**
+   * THE MESH A PROMOTION IS LEAVING BEHIND, still carrying audio until the SFU
+   * carries each peer (`lib/mesh-handoff.ts`). Null outside a promotion.
+   * Deliberately not `manager`: nothing else may connect it to a newcomer,
+   * answer an offer on it or publish into it. It only plays out.
+   */
+  let retiringMesh: ReturnType<typeof createPeerConnectionManager> | null =
+    null;
+  let retiringMeshPeers: RemotePeer[] = [];
+  let meshHandoffDeadlineId: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped whenever a promotion in flight must stop (leave, rejoin, retry). */
+  let promotionGeneration = 0;
+  let promotionGiveUpId: ReturnType<typeof setTimeout> | null = null;
   // The receive ceiling is a device preference set from the call's menu; the
   // menu writes the store and the live SFU session follows it here, so the
   // choice needs no thread through the stage's props.
@@ -1621,7 +1667,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
     string,
-    { analyser: AnalyserNode; dispose: () => void }
+    { analyser: AnalyserNode; dispose: () => void; stream?: MediaStream }
   >();
   const speakingTracker = createSpeakingTracker();
   /**
@@ -2048,6 +2094,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void teardownSfu();
         manager?.dispose();
         manager = null;
+        abandonMeshHandoff();
         sendLeave();
         state.error = translateMessage("voice.error.joinTimeout");
         state.errorKind = "connection";
@@ -2088,6 +2135,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     disposeRemoteAnalysers();
     manager?.dispose();
     manager = null;
+    abandonMeshHandoff();
     void teardownSfu();
     stopMicPipeline(pipeline);
     pipeline = null;
@@ -2212,6 +2260,14 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function sendRelay(message: ClientRelayMessage) {
     if (!state.peerId) {
+      return;
+    }
+    // Mesh signaling has no business leaving a room that runs on the SFU.
+    // The one mesh that can still be alive there is a promotion's retiring
+    // one, which plays out on the connections it already has: an ICE restart
+    // or a renegotiation from it would only be dropped by the server
+    // (`voice.meshRelayInSfuRoom`), so it is never sent.
+    if (state.roomTransport === "livekit") {
       return;
     }
     transport.sendVoice({ ...message, from: state.peerId });
@@ -3080,14 +3136,27 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
     }
     for (const peer of peers) {
-      if (!peer.stream || remoteAnalysers.has(peer.peerId)) {
+      if (!peer.stream) {
         continue;
+      }
+      const existing = remoteAnalysers.get(peer.peerId);
+      if (existing) {
+        // Same peer, different stream: the voice moved (a promotion handing
+        // this peer from the mesh to the SFU, or a resubscribe). A meter left
+        // on the old stream reads a dead track and the speaking ring never
+        // lights for them again.
+        if (!existing.stream || existing.stream === peer.stream) {
+          continue;
+        }
+        existing.dispose();
+        remoteAnalysers.delete(peer.peerId);
       }
       const created = createStreamAnalyser(peer.stream);
       if (created) {
         remoteAnalysers.set(peer.peerId, {
           analyser: created.analyser,
           dispose: created.dispose,
+          stream: peer.stream,
         });
       }
     }
@@ -3404,6 +3473,9 @@ export function createVoiceController(transport: RealtimeTransport) {
   async function teardownSfu() {
     const session = sfu;
     sfu = null;
+    // Any connect still in flight belongs to the session being torn down.
+    sfuAttempt += 1;
+    sfuRemotePeers = [];
     sfuPublicationMuted = null;
     state.usingSfu = false;
     // The publish watchdog is meaningless without a session; stop it (and clear
@@ -4437,13 +4509,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       return true;
     }
+    const attempt = ++sfuAttempt;
     try {
       const session = await sessionProvider(voiceChannelId, peerId);
       if (!session) {
         return false;
       }
       // A leave() may have landed while the token request was in flight.
-      if (state.peerId !== peerId) {
+      if (state.peerId !== peerId || attempt !== sfuAttempt) {
         return true;
       }
 
@@ -4455,15 +4528,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       // about applies to no publication. Forgetting it makes the next emit
       // push the current one, whatever it is.
       pushedAudioPlan = null;
-      sfu = await connectLiveKit({
+      const connected = await connectLiveKit({
         session,
         // The list this tab already holds for the mesh, read now so a refresh
         // between calls reaches the next connection and this one is left be.
         iceServers,
         lookupIdentity: (id) => identities.get(id),
         onPeersChanged: (remote) => {
-          state.remotePeers = remote;
-          syncRemoteAnalysers(remote);
+          if (attempt !== sfuAttempt) {
+            return;
+          }
+          sfuRemotePeers = remote;
+          // Folds in a promotion's retiring mesh, if there is one; otherwise
+          // this is exactly the SFU's list.
+          publishRemotePeers();
           // A guest's stream can arrive (or drop, on their own disconnect)
           // independent of anything on this browser changing, so the mix
           // has to be reconciled here too, not only from `setWatchPartyGuests`.
@@ -4471,6 +4549,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         },
         onError: (msg) => {
+          if (attempt !== sfuAttempt) {
+            return;
+          }
           state.error = msg;
           emit();
         },
@@ -4478,16 +4559,32 @@ export function createVoiceController(transport: RealtimeTransport) {
         // the server notice and restart the HLS egress, which is otherwise
         // left transcoding a track that no longer exists.
         onScreenRepublished: () => {
+          if (attempt !== sfuAttempt) {
+            return;
+          }
           if (screenCaptureStream) {
             announceSharing();
           }
         },
       });
 
+      if (attempt !== sfuAttempt) {
+        // Lost a race to another session (or to a teardown) while connecting.
+        // This one is nobody's: drop it without touching the live one.
+        void connected.disconnect().catch(() => {});
+        return true;
+      }
+      sfu = connected;
       if (state.peerId !== peerId) {
         await teardownSfu();
         return true;
       }
+      // Every await below can outlive this attempt: a leave or a rebuild
+      // tears the session down underneath it. Checked after each one, so a
+      // publish that rejects BECAUSE the session went away is never mistaken
+      // for an optional step that failed, and nothing past it (the media
+      // frames, `usingSfu`) is committed for a call that is already over.
+      const stale = () => attempt !== sfuAttempt || state.peerId !== peerId;
       // No publish for a listener: the token carries no grant for one and
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
@@ -4498,34 +4595,86 @@ export function createVoiceController(transport: RealtimeTransport) {
         // Mute the publication after publish, but the track was already
         // disabled above so the first packet is not live.
         await applyPublicationMute();
+        if (stale()) {
+          return true;
+        }
         preservedSelfVoice = null;
       }
       // Before anything is published, so a camera or a share carried across a
       // reconnect is republished at the chosen quality. Without this a session
       // rebuilt after a WS drop silently reverted both to the defaults, and
       // nothing recomputed them until the user next touched the menu.
-      await sfu.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
-      await sfu.setScreenPriority?.(getSharePriority());
-      await sfu.setScreenQuality(videoQuality);
-      // The viewer's half: the largest layer this device wants, remembered
-      // per device. Applied before anything is subscribed so the first frame
-      // of a share arriving at a phone is already the phone-sized layer.
-      await sfu.setReceiveQuality(getReceiveQuality());
+      //
+      // Quality is a preference, not the call: a tuning call that throws costs
+      // the defaults, never the session.
+      try {
+        await connected.setCameraMaxBitrate(
+          cameraBitrateFor(currentCameraQuality()),
+        );
+        await connected.setScreenPriority?.(getSharePriority());
+        await connected.setScreenQuality(videoQuality);
+        // The viewer's half: the largest layer this device wants, remembered
+        // per device. Applied before anything is subscribed so the first frame
+        // of a share arriving at a phone is already the phone-sized layer.
+        await connected.setReceiveQuality(getReceiveQuality());
+      } catch (err) {
+        if (!stale()) {
+          console.warn("[pqp] SFU quality settings rejected; keeping defaults", err);
+        }
+      }
+      if (stale()) {
+        return true;
+      }
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
       // tied to the connection), only the publish needs redoing.
+      //
+      // THE SHARE, NOT THE CALL. This republish is the one step a promotion
+      // and a rebuilt session take that a cold join never does, and it used
+      // to sit inside the session's own try: a capture that refused its new
+      // constraints, or a publish the SFU turned down, threw out of here and
+      // the caller hung up the whole call. A promotion triggered by a share
+      // is exactly when every presenter in the room republishes at once. Now
+      // a share that cannot move stops, says so, and the call carries on.
       if (screenCaptureStream) {
-        syncWatchPartyPublishCeiling();
-        await sfu.publishScreen(screenCaptureStream);
-        announceSharing();
+        try {
+          syncWatchPartyPublishCeiling();
+          await connected.publishScreen(screenCaptureStream);
+          if (stale()) {
+            return true;
+          }
+          announceSharing();
+        } catch (err) {
+          if (stale()) {
+            return true;
+          }
+          console.warn("[pqp] share could not be republished on the SFU; stopping it", err);
+          state.error = screenShareErrorMessage(err);
+          await stopScreenShareInternal().catch(() => {});
+        }
       }
       // Same story for the camera in a conversation call.
       if (cameraCaptureStream) {
-        await sfu.publishCamera(cameraCaptureStream);
-        transport.sendVoice({
-          type: "set-camera",
-          streamId: cameraCaptureStream.id,
-        });
+        try {
+          await connected.publishCamera(cameraCaptureStream);
+          if (stale()) {
+            return true;
+          }
+          transport.sendVoice({
+            type: "set-camera",
+            streamId: cameraCaptureStream.id,
+          });
+        } catch (err) {
+          if (stale()) {
+            return true;
+          }
+          console.warn("[pqp] camera could not be republished on the SFU; turning it off", err);
+          state.error = translateMessage("voice.error.cameraFailed");
+          await stopCameraInternal().catch(() => {});
+        }
+      }
+      if (stale()) {
+        return true;
       }
       state.usingSfu = true;
       // Now that the (rebuilt) session is up and any carried-over share is
@@ -4534,10 +4683,204 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
       return true;
     } catch (err) {
-      console.warn("[pqp] SFU session failed — leaving the call", err);
-      await teardownSfu();
+      console.warn("[pqp] SFU session failed", err);
+      // Only this attempt's session: a stale attempt failing late must not
+      // tear down the one that replaced it.
+      if (attempt === sfuAttempt) {
+        await teardownSfu();
+      }
       return false;
     }
+  }
+
+  // --- following a promotion ---------------------------------------------------
+  //
+  // `voice-transport-changed` moves a live mesh room onto the SFU. The seat,
+  // the peer id, the mute, the camera and the share all stay; only the media
+  // path changes, and it changes under the conversation without a gap:
+  //
+  // 1. the mesh becomes the RETIRING mesh: nothing new is connected, offered
+  //    or answered on it, and `sendRelay` stops all mesh signaling, but its
+  //    connections keep playing (`beginMeshHandoff`);
+  // 2. the SFU session comes up, retried on a transient failure while the
+  //    mesh keeps the audio going (`followPromotion`);
+  // 3. each peer's mesh connection is closed the moment the SFU carries that
+  //    peer, and never both copies are played (`publishRemotePeers`,
+  //    `lib/mesh-handoff.ts`);
+  // 4. whatever is left of the mesh goes `MESH_HANDOFF_GRACE_MS` after our own
+  //    session is up (`finishMeshHandoff`).
+
+  /**
+   * What the call plays: the SFU's peers, with a retiring mesh folded in while
+   * one exists. Retires every mesh connection the SFU has fully replaced, but
+   * only once our own SFU session is publishing: before that, the mesh is
+   * still how the others hear us.
+   */
+  function publishRemotePeers() {
+    const plan = planMeshHandoff(
+      sfuRemotePeers,
+      retiringMesh ? retiringMeshPeers : [],
+    );
+    state.remotePeers = plan.peers;
+    syncRemoteAnalysers(plan.peers);
+    if (!retiringMesh || !state.usingSfu) {
+      return;
+    }
+    for (const peerId of plan.retire) {
+      // Re-enters through the retiring mesh's own state handler, which
+      // publishes the list again without this peer.
+      retiringMesh?.removePeer(peerId);
+    }
+    if (retiringMesh && retiringMeshPeers.length === 0) {
+      finishMeshHandoff();
+    }
+  }
+
+  /** Detach and close the retiring mesh, if any. Publishes nothing. */
+  function closeRetiringMesh() {
+    if (meshHandoffDeadlineId !== null) {
+      clearTimeout(meshHandoffDeadlineId);
+      meshHandoffDeadlineId = null;
+    }
+    const mesh = retiringMesh;
+    retiringMesh = null;
+    retiringMeshPeers = [];
+    if (mesh) {
+      mesh.onPeerStateChange(() => {});
+      mesh.dispose();
+    }
+  }
+
+  /** The handoff is over: the SFU carries the call on its own. */
+  function finishMeshHandoff() {
+    closeRetiringMesh();
+    publishRemotePeers();
+  }
+
+  /**
+   * Any promotion in flight stops here: the call is being left, rebuilt or
+   * refused, and whoever called this owns what happens to the media next.
+   */
+  function abandonMeshHandoff() {
+    promotionGeneration += 1;
+    if (promotionGiveUpId !== null) {
+      clearTimeout(promotionGiveUpId);
+      promotionGiveUpId = null;
+    }
+    closeRetiringMesh();
+  }
+
+  function beginMeshHandoff() {
+    abandonMeshHandoff();
+    const mesh = manager;
+    if (!mesh) {
+      return;
+    }
+    manager = null;
+    retiringMesh = mesh;
+    retiringMeshPeers = state.remotePeers;
+    mesh.onPeerStateChange((remote) => {
+      if (retiringMesh !== mesh) {
+        return;
+      }
+      retiringMeshPeers = remote;
+      publishRemotePeers();
+      emit();
+    });
+  }
+
+  /**
+   * Bring the SFU session up for a promoted room, keeping the seat.
+   *
+   * Retried on failure (`PROMOTION_RETRY_DELAYS_MS`), and bounded overall by
+   * the same `SFU_JOIN_TIMEOUT_MS` a cold join gets. Only when every attempt
+   * has failed does the person leave, with the same sentence as a join that
+   * could not reach the voice server: building a mesh back would put them
+   * alone in a room everybody else has left.
+   */
+  async function followPromotion(
+    voiceChannelId: string,
+    peerId: string,
+    peers: VoiceParticipant[],
+  ) {
+    const generation = ++promotionGeneration;
+    const current = () =>
+      generation === promotionGeneration &&
+      state.peerId === peerId &&
+      state.voiceChannelId === voiceChannelId;
+    const giveUp = () => {
+      if (promotionGiveUpId !== null) {
+        clearTimeout(promotionGiveUpId);
+        promotionGiveUpId = null;
+      }
+      refuseTransport({ transport: "livekit", reason: "unreachable" });
+      emit();
+    };
+    if (promotionGiveUpId !== null) {
+      clearTimeout(promotionGiveUpId);
+    }
+    promotionGiveUpId = setTimeout(() => {
+      promotionGiveUpId = null;
+      if (current() && !state.usingSfu) {
+        giveUp();
+      }
+    }, SFU_JOIN_TIMEOUT_MS);
+    for (let attempt = 0; ; attempt += 1) {
+      const ok = await startSfuSession(
+        voiceChannelId,
+        peerId,
+        attempt === 0 ? peers : othersInRoom(voiceChannelId, peerId, peers),
+      );
+      if (!current()) {
+        return;
+      }
+      if (ok) {
+        if (!state.usingSfu) {
+          // Somebody else owns the session now; nothing left for us to do.
+          return;
+        }
+        if (promotionGiveUpId !== null) {
+          clearTimeout(promotionGiveUpId);
+          promotionGiveUpId = null;
+        }
+        redeclareLocalMedia();
+        meshHandoffDeadlineId = setTimeout(() => {
+          meshHandoffDeadlineId = null;
+          finishMeshHandoff();
+          emit();
+        }, MESH_HANDOFF_GRACE_MS);
+        // Anybody the SFU already carries can lose their mesh connection now.
+        publishRemotePeers();
+        emit();
+        return;
+      }
+      // The failed session's peers are gone; the mesh is what plays until
+      // the next attempt.
+      publishRemotePeers();
+      emit();
+      const delay = PROMOTION_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (!current()) {
+        return;
+      }
+    }
+    giveUp();
+  }
+
+  /** The room as the roster has it now, without us, for a retried session. */
+  function othersInRoom(
+    voiceChannelId: string,
+    peerId: string,
+    fallback: VoiceParticipant[],
+  ): VoiceParticipant[] {
+    const roster = state.occupancy[voiceChannelId];
+    if (!roster) {
+      return fallback;
+    }
+    return roster.filter((peer) => peer.peerId !== peerId);
   }
 
   /**
@@ -4685,6 +5028,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     remoteAnalysers.clear();
     manager?.dispose();
     manager = null;
+    abandonMeshHandoff();
     void teardownSfu();
     const closingPipeline = pipeline;
     pipeline = null;
@@ -5188,6 +5532,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         // a new one, or its connections and ICE-restart timers leak.
         manager?.dispose();
         manager = null;
+        abandonMeshHandoff();
         void teardownSfu();
 
         if (roomTransport === "livekit") {
@@ -5294,6 +5639,9 @@ export function createVoiceController(transport: RealtimeTransport) {
        * (muted if we are muted), the camera and the screen capture from the
        * state this hook is already holding, which is what "keeping the
        * intent" means here.
+       *
+       * And without a gap: the mesh keeps playing until the SFU carries each
+       * peer. See "following a promotion" above `followPromotion`.
        */
       case "voice-transport-changed": {
         if (
@@ -5338,33 +5686,17 @@ export function createVoiceController(transport: RealtimeTransport) {
         for (const peer of message.participants) {
           knownPeerIds.add(peer.peerId);
         }
-        // The mesh goes first and unconditionally: every peer connection in
-        // it is addressed to a room whose signaling the server no longer
-        // relays, so leaving one up is a dead connection and a stale tile.
-        manager?.dispose();
-        manager = null;
+        // The mesh is NOT torn down here. Every peer connection in it keeps
+        // carrying audio without any signaling (the server stopped relaying
+        // mesh frames when it rewrote the pin, and `sendRelay` stops sending
+        // them from this side now that the room reads `livekit`), so it plays
+        // on until the SFU carries each peer. Tearing it down first is what
+        // made a promotion sound like the call breaking.
+        beginMeshHandoff();
         const others = message.participants.filter(
           (peer) => peer.peerId !== peerId,
         );
-        void startSfuSession(message.voiceChannelId, peerId, others).then(
-          (ok) => {
-            if (state.peerId !== peerId) {
-              return;
-            }
-            if (!ok) {
-              // Same rule as a join that cannot reach the SFU: leave and say
-              // so. Building a mesh back would put us alone in a room that
-              // has moved.
-              refuseTransport({
-                transport: "livekit",
-                reason: "unreachable",
-              });
-              return;
-            }
-            redeclareLocalMedia();
-            emit();
-          },
-        );
+        void followPromotion(message.voiceChannelId, peerId, others);
         emit();
         break;
       }
@@ -5479,6 +5811,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           );
         }
         manager?.removePeer(message.peerId);
+        retiringMesh?.removePeer(message.peerId);
         {
           const entry = remoteAnalysers.get(message.peerId);
           if (entry) {
@@ -6119,6 +6452,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         remoteAnalysers.clear();
         manager?.dispose();
         manager = null;
+        abandonMeshHandoff();
         void teardownSfu();
         for (const entry of closingAnalysers) {
           entry.dispose();

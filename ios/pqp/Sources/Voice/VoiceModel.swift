@@ -877,6 +877,10 @@ final class VoiceModel {
 
     private func relay(_ signal: VoiceClient.VoiceSignal) async {
         guard let session, let selfPeerId else { return }
+        // Mesh signaling never leaves a room on the SFU. After a promotion the
+        // server drops it anyway (`voice.meshRelayInSfuRoom`); an answer or a
+        // late candidate from a mesh still being torn down is not sent at all.
+        guard transport != .livekit else { return }
         switch signal {
         case .offer(let to, let sdp):
             await session.realtime.sendOffer(to: to, from: selfPeerId, sdp: sdp)
