@@ -705,6 +705,8 @@
     <string name="voice_note_heard_at">Heard at %1$s</string>
 
     <!-- Channel list: live rows, voice occupants, Baú preview -->
+    <string name="channels_section_text">Text</string>
+    <string name="channels_section_voice">Voice</string>
     <string name="channels_muted">Muted</string>
     <string name="channels_category_fold">Collapse %1$s</string>
     <string name="channels_category_unfold">Expand %1$s</string>

@@ -698,6 +698,8 @@
     <string name="voice_note_heard_at">Ouviu às %1$s</string>
 
     <!-- Lista de canais: linhas vivas, quem tá na call, prévia do Baú -->
+    <string name="channels_section_text">Texto</string>
+    <string name="channels_section_voice">Voz</string>
     <string name="channels_muted">Silenciado</string>
     <string name="channels_category_fold">Recolher %1$s</string>
     <string name="channels_category_unfold">Abrir %1$s</string>

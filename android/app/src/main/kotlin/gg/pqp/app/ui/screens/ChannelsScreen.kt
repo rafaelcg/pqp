@@ -1,9 +1,11 @@
 package gg.pqp.app.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
@@ -453,7 +458,11 @@ fun ChannelsScreen(
     val list = channels
     // Derived from the channel list only, so a roster or unread change does
     // not regroup and sort every channel again.
-    val sections = remember(list) { list?.let(::sectionsOf).orEmpty() }
+    val textTitle = stringResource(R.string.channels_section_text)
+    val voiceTitle = stringResource(R.string.channels_section_voice)
+    val sections = remember(list, textTitle, voiceTitle) {
+        list?.let { sectionsOf(it, textTitle, voiceTitle) }.orEmpty()
+    }
     // Every `watch_party` channel this server has, folded into ONE block: a
     // live or pending party sits above everything, and the "Criar watch
     // party" row sits at the end of the list, where creating one belongs.
@@ -615,20 +624,26 @@ private fun LazyListScope.channelListItems(
             }
         }
         if (isFolded) return@forEachIndexed
-        section.channels.forEach { channel ->
-            channelItems(
+        // One lazy interval per section, not one per channel: a busy server
+        // recomposes on every unread frame and roster change, and only the
+        // rows on screen should pay for it. Each item is the row plus the
+        // people in it, worked out when the item is drawn.
+        items(section.channels, key = { it.id }, contentType = { "channel" }) { channel ->
+            val inCall = channel.id == callChannelId
+            ChannelEntry(
                 channel = channel,
                 badge = rowBadge(unread[channel.id], channel.id in muted),
                 live = liveChannels[channel.id]?.live == true,
                 people = when {
                     !channel.isVoice -> emptyList()
-                    channel.id == callChannelId -> rooms[channel.id] ?: callParticipants
+                    inCall -> rooms[channel.id] ?: callParticipants
                     else -> rooms[channel.id].orEmpty()
                 },
-                inCall = channel.id == callChannelId,
+                inCall = inCall,
                 speakingPeers = speakingPeers,
                 myUserId = myUserId,
                 onOpenChannel = onOpenChannel,
+                modifier = Modifier.listMotion(this),
             )
         }
     }
@@ -642,8 +657,13 @@ private fun LazyListScope.channelListItems(
     }
 }
 
-/** One channel's row, then the people in it when it is a voice room. */
-private fun LazyListScope.channelItems(
+/**
+ * One channel's row, then the people in it when it is a voice room. People
+ * joining and leaving grow and shrink the entry on a spring
+ * (`animateContentSize`), which the system animator scale turns off.
+ */
+@Composable
+private fun ChannelEntry(
     channel: Channel,
     badge: gg.pqp.app.ui.screens.channels.RowBadge,
     live: Boolean,
@@ -652,9 +672,14 @@ private fun LazyListScope.channelItems(
     speakingPeers: Set<String>,
     myUserId: String?,
     onOpenChannel: (Channel) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val summary = occupantSummary(people, myUserId)
-    item(key = channel.id) {
+    val summary = remember(people, myUserId) { occupantSummary(people, myUserId) }
+    Column(
+        modifier.animateContentSize(
+            spring(dampingRatio = 0.85f, stiffness = 380f, visibilityThreshold = IntSize.VisibilityThreshold),
+        ),
+    ) {
         ChannelRow(
             channel = channel,
             badge = badge,
@@ -664,34 +689,27 @@ private fun LazyListScope.channelItems(
             // Opening a voice channel shows its transcript; it does not ask
             // for the microphone. The chat header owns the explicit join.
             onClick = { onOpenChannel(channel) },
-            modifier = Modifier.listMotion(this),
         )
-    }
-    summary.listed.forEach { person ->
-        item(key = "occupant-${channel.id}-${person.userId}") {
-            VoiceOccupantRow(
-                participant = person,
-                isSelf = person.userId == myUserId,
-                // Only in this device's own call; see [VoiceController.speakingPeers].
-                speaking = inCall && person.peerId in speakingPeers,
-                onClick = { onOpenChannel(channel) },
-                modifier = Modifier.listMotion(this),
-            )
+        summary.listed.forEach { person ->
+            key(person.userId) {
+                VoiceOccupantRow(
+                    participant = person,
+                    isSelf = person.userId == myUserId,
+                    // Only in this device's own call; see [VoiceController.speakingPeers].
+                    speaking = inCall && person.peerId in speakingPeers,
+                    onClick = { onOpenChannel(channel) },
+                )
+            }
         }
-    }
-    if (summary.overflowCount > 0) {
-        item(key = "occupants-more-${channel.id}") {
+        if (summary.overflowCount > 0) {
             VoiceOverflowRow(
                 faces = summary.overflowFaces,
                 count = summary.overflowCount,
                 onClick = { onOpenChannel(channel) },
-                modifier = Modifier.listMotion(this),
             )
         }
-    }
-    if (people.isNotEmpty()) {
-        item(key = "occupants-gap-${channel.id}") {
-            Spacer(Modifier.height(Spacing.xs).listMotion(this))
+        if (people.isNotEmpty()) {
+            Spacer(Modifier.height(Spacing.xs))
         }
     }
 }

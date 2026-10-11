@@ -6,7 +6,9 @@ import gg.pqp.app.ui.screens.channels.ChannelUnread
 import gg.pqp.app.ui.screens.channels.FoldedSummary
 import gg.pqp.app.ui.screens.channels.RowEmphasis
 import gg.pqp.app.ui.screens.channels.ServerActivity
+import gg.pqp.app.ui.screens.channels.TEXT_SECTION
 import gg.pqp.app.ui.screens.channels.UnreadLedger
+import gg.pqp.app.ui.screens.channels.VOICE_SECTION
 import gg.pqp.app.ui.screens.channels.channelsInCategory
 import gg.pqp.app.ui.screens.channels.foldedSummary
 import gg.pqp.app.ui.screens.channels.mutedChannelIds
@@ -190,7 +192,7 @@ class ChannelListRulesTest {
             ch("top", "text"),
         )
         val sections = sectionsOf(all)
-        assertEquals(listOf("top-text", "cat-cat-text", "cat-cat-voice"), sections.map { it.key })
+        assertEquals(listOf("text", "cat-cat-text", "cat-cat-voice"), sections.map { it.key })
         assertEquals(listOf("avisos", "geral"), sections[1].channels.map { it.id })
         assertEquals(listOf("lobby"), sections[2].channels.map { it.id })
         assertEquals(null, sections[0].categoryId)
@@ -198,5 +200,21 @@ class ChannelListRulesTest {
             listOf("avisos", "geral", "lobby"),
             channelsInCategory(sections, "cat").map { it.id },
         )
+    }
+
+    @Test
+    fun `texto, then the categories, then voz, each with a heading that folds`() {
+        val all = listOf(
+            ch("cat", "category", pos = 0.0),
+            ch("debug", "text", parent = "cat"),
+            ch("geral", "text"),
+            ch("lobby", "voice"),
+        )
+        val sections = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz")
+        assertEquals(listOf("text", "cat-cat-text", "voice"), sections.map { it.key })
+        assertEquals(listOf("text", "cat-cat", "voice"), sections.map { it.group })
+        assertEquals(listOf(TEXT_SECTION, "cat", VOICE_SECTION), sections.map { it.categoryId })
+        assertEquals(listOf("Texto", "cat", "Voz"), sections.map { it.title })
+        assertEquals(listOf("lobby"), channelsInCategory(sections, VOICE_SECTION).map { it.id })
     }
 }

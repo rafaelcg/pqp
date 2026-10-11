@@ -223,8 +223,9 @@ fun serverActivity(
  * A section of the list: one category's text channels, or its voice channels,
  * or the top-level ones.
  *
- * [categoryId] is null for the top-level groups, which have no heading to tap
- * and so never fold.
+ * [categoryId] is the fold key: a category's id, [TEXT_SECTION] or
+ * [VOICE_SECTION] for the top-level groups when they have a heading, and null
+ * for a top-level group drawn without one (it never folds).
  */
 data class ChannelSection(
     val key: String,
@@ -240,8 +241,15 @@ data class ChannelSection(
     val group: String get() = key.substringBeforeLast('-')
 }
 
+/** Fold keys of the two top-level sections. Category ids are UUIDs, so these never collide. */
+const val TEXT_SECTION = "text"
+const val VOICE_SECTION = "voice"
+
 /**
- * Categories first as containers, then whatever sits at the top level.
+ * Top-level text channels, then the categories, then top-level voice rooms:
+ * the order the web sidebar and iOS draw (TEXTO, the categories, VOZ). With
+ * [textTitle] / [voiceTitle] set, the two top-level groups get a heading and
+ * fold like a category.
  *
  * Ordering has one trap in it: `position` is unique only within a sibling
  * group, and top-level text channels, top-level voice channels and categories
@@ -253,7 +261,7 @@ data class ChannelSection(
  * "Criar watch party" row are where it lives), and neither is any channel type
  * this build does not know how to open: only text and voice rows are drawn.
  */
-fun sectionsOf(all: List<Channel>): List<ChannelSection> {
+fun sectionsOf(all: List<Channel>, textTitle: String = "", voiceTitle: String = ""): List<ChannelSection> {
     val categories = all.filter { it.isCategory }.sortedBy { it.position }
     val byParent = all.filterNot { it.isCategory }.groupBy { it.parentId }
 
@@ -268,14 +276,17 @@ fun sectionsOf(all: List<Channel>): List<ChannelSection> {
     fun voiceRooms(list: List<Channel>) = list.filter { it.isVoice && it.type != "watch_party" }
 
     val topLevel = byParent[null].orEmpty()
-    add("top-text", "", null, topLevel.filter { it.isText })
-    add("top-voice", "", null, voiceRooms(topLevel))
+    // Keys without a '-' so each is its own `group`: the two top-level
+    // sections are never one category's two halves.
+    add(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, topLevel.filter { it.isText })
 
     categories.forEach { category ->
         val children = byParent[category.id].orEmpty()
         add("cat-${category.id}-text", category.name, category.id, children.filter { it.isText })
         add("cat-${category.id}-voice", category.name, category.id, voiceRooms(children))
     }
+
+    add(VOICE_SECTION, voiceTitle, VOICE_SECTION.takeIf { voiceTitle.isNotBlank() }, voiceRooms(topLevel))
 
     return sections
 }
