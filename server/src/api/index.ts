@@ -11105,7 +11105,14 @@ async function handleWebhookExecute(
   // below would write one that no surface ever shows. Answer with Discord's
   // own error instead, so a tool that already handles Discord forums
   // recognises it: `error` is our shape, `message` and `code` are Discord's.
-  if ((await getChannel(webhook.channel_id))?.type === "forum") {
+  // A webhook that sits on a forum POST (one made before the create route
+  // refused threads) is refused too: it would write past the post's lock.
+  const target = await getChannel(webhook.channel_id);
+  if (target?.type === "thread" && (await isForumPost(target.id))) {
+    sendError(res, 400, "Webhooks cannot post into a forum post directly", req);
+    return;
+  }
+  if (target?.type === "forum") {
     sendJson(
       res,
       400,

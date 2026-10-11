@@ -4,6 +4,7 @@ import {
   type ChannelKind,
   type VoiceRoomTransport,
 } from "@pqp/shared";
+import type { PoolClient } from "pg";
 import { getPool, type DbChannel, type DbServer, type MemberRole } from "../db.js";
 import {
   isBusEnabled,
@@ -101,13 +102,14 @@ const DELETE_CONCURRENCY = 8;
  */
 async function channelAttachmentKeys(
   channelIds: readonly string[],
+  db: Pick<PoolClient, "query"> = getPool(),
 ): Promise<string[]> {
   if (!isStorageConfigured() || channelIds.length === 0) {
     return [];
   }
   // `ATTACHMENT_OBJECT_KEYS`, not `storage_key`: a voice note's AAC copy is a
   // second object, and the cascade takes the only row that names it too.
-  const result = await getPool().query<{ storage_key: string }>(
+  const result = await db.query<{ storage_key: string }>(
     `SELECT ${ATTACHMENT_OBJECT_KEYS}
      FROM message_attachments a
      ${ATTACHMENT_VOICE_JOIN}
@@ -670,17 +672,26 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
   // attachment keys of the channel and every thread are read here, in one
   // query, before anything is deleted: the cascade destroys the only rows
   // that name the objects.
-  const threadIds = (
-    await getPool().query<{ id: string }>(
-      `SELECT id FROM channels WHERE parent_id = $1 AND type = 'thread'`,
-      [channelId],
-    )
-  ).rows.map((row) => row.id);
-  const keys = await channelAttachmentKeys([channelId, ...threadIds]);
-
+  //
+  // Read AFTER locking the channel row: a thread (or a forum post) being
+  // created takes FOR KEY SHARE on its parent through the foreign key, which
+  // FOR UPDATE blocks. So no thread can appear between this list and the
+  // delete; one that did used to escape it and land with a NULL parent.
   const client = await getPool().connect();
+  let threadIds: string[] = [];
+  let keys: string[] = [];
   try {
     await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, [
+      channelId,
+    ]);
+    threadIds = (
+      await client.query<{ id: string }>(
+        `SELECT id FROM channels WHERE parent_id = $1 AND type = 'thread'`,
+        [channelId],
+      )
+    ).rows.map((row) => row.id);
+    keys = await channelAttachmentKeys([channelId, ...threadIds], client);
 
     // Before the orphan read below: with the threads already gone, the
     // category-uncategorising logic can never mistake a thread for a channel
