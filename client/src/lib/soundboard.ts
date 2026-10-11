@@ -339,7 +339,7 @@ function onStorage(event: StorageEvent): void {
   if (event.key === null) {
     // localStorage.clear() in another tab: every setting is back to its default.
     mutedUsersCache = null;
-    applySoundboardBus();
+    applySoundboardBus(true);
     notify();
     return;
   }
@@ -356,7 +356,7 @@ function onStorage(event: StorageEvent): void {
     return;
   }
   if (event.key === VOLUME_KEY || event.key === MUTE_KEY) {
-    applySoundboardBus();
+    applySoundboardBus(true);
     notify();
   }
 }
@@ -682,7 +682,12 @@ function soundboardBus(): GainNode | null {
   return bus;
 }
 
-function applySoundboardBus(): void {
+function applySoundboardBus(onlyIfBuilt = false): void {
+  // A storage event from another tab must not start audio in a tab that has
+  // none: a bus built later reads the current level when it is made.
+  if (onlyIfBuilt && !bus) {
+    return;
+  }
   const node = soundboardBus();
   if (!node) {
     return;

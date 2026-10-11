@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const audio = vi.hoisted(() => ({
   starts: 0,
   stops: 0,
+  contexts: 0,
   sources: [] as Array<{ stop: (when?: number) => void }>,
 }));
 const api = vi.hoisted(() => ({
@@ -17,7 +18,16 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/sounds", () => ({
-  sharedAudioContext: () => ({
+  sharedAudioContext: () => {
+    audio.contexts += 1;
+    return audioContext();
+  },
+  decodeAudioBuffer: async () => ({}) as AudioBuffer,
+  unlockSounds: () => undefined,
+}));
+
+function audioContext() {
+  return {
     state: "running",
     currentTime: 0,
     destination: {},
@@ -42,10 +52,8 @@ vi.mock("@/lib/sounds", () => ({
       audio.sources.push(source);
       return source;
     },
-  }),
-  decodeAudioBuffer: async () => ({}) as AudioBuffer,
-  unlockSounds: () => undefined,
-}));
+  };
+}
 vi.mock("@/lib/api", () => ({ fetchSoundboard: api.fetchSoundboard }));
 
 const RAFA = "user-rafa";
@@ -65,15 +73,35 @@ function custom(name: string, durationMs = 1500) {
   };
 }
 
+/** Each fresh module adds a `storage` listener; the old ones must not answer. */
+const storageHandlers: EventListener[] = [];
+
 async function load() {
+  for (const handler of storageHandlers.splice(0)) {
+    window.removeEventListener("storage", handler);
+  }
   vi.resetModules();
-  return import("./soundboard");
+  const add = window.addEventListener.bind(window);
+  const spy = vi
+    .spyOn(window, "addEventListener")
+    .mockImplementation((type: string, handler: unknown, options?: unknown) => {
+      if (type === "storage") {
+        storageHandlers.push(handler as EventListener);
+      }
+      add(type, handler as EventListener, options as AddEventListenerOptions);
+    });
+  try {
+    return await import("./soundboard");
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 beforeEach(() => {
   localStorage.clear();
   audio.starts = 0;
   audio.stops = 0;
+  audio.contexts = 0;
   audio.sources = [];
   api.fetchSoundboard.mockReset();
   vi.stubGlobal(
@@ -291,6 +319,17 @@ describe("two tabs of one account", () => {
     localStorage.setItem("pqp:soundboard-muted-users", "[]");
     storage("pqp:soundboard-muted-users", "[]");
     expect(lib.isSoundboardUserMuted(RAFA)).toBe(false);
+  });
+
+  it("does not start audio in a tab that has none just because the volume moved", async () => {
+    const lib = await load();
+    audio.contexts = 0;
+    localStorage.setItem("pqp:soundboard-volume", "0.4");
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "pqp:soundboard-volume", newValue: "0.4" }),
+    );
+    expect(audio.contexts).toBe(0);
+    expect(lib.soundboardListenerVolume()).toBe(0.4);
   });
 
   it("follows the board mute and the volume, and tells the panel", async () => {

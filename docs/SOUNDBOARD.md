@@ -144,8 +144,9 @@ room nothing. Your own clicks still go out.
 ### Where the person mute is
 
 It is the "Soundboard" switch in a person's audio menu. On means their clips
-play. The switch is named "{name}'s soundboard sounds" (the row word comes
-first, so the visible word and the name agree). The menu opens from:
+play. The switch is named "{name}'s soundboard sounds". The name contains the
+row's visible word "Soundboard", so the visible word and the name agree. The
+menu opens from:
 
 - their row under the voice channel (click, Enter or Space; Escape returns the
   focus to the row),
