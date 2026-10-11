@@ -63,7 +63,7 @@ struct CommunityHomeView: View {
                                 vipEnabled: config.vipEnabled,
                                 channels: channels,
                                 onOpenChannel: { channel in
-                                    if chatDestination != nil { openedChannel = channel }
+                                    if chatDestination != nil, channel.opensAsChat { openedChannel = channel }
                                 },
                                 expanded: expanded[post.id],
                                 loadingComments: loadingComments.contains(post.id),

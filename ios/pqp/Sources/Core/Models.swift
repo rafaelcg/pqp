@@ -214,6 +214,10 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
      */
     var isWatchParty: Bool { type == "watch_party" }
     var isCategory: Bool { type == "category" }
+    /// A row this build can open as a chat. `type` decodes as a plain string, so
+    /// a type added server-side later (a forum) arrives here as an unknown one:
+    /// it is hidden rather than drawn as a dead "#" row.
+    var opensAsChat: Bool { isText || isVoice }
 }
 
 struct ReactionUser: Codable, Hashable, Sendable {
