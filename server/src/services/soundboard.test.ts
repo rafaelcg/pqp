@@ -232,14 +232,31 @@ describeDb("soundboard upload ledger", () => {
     expect(await countSoundboardSlotsUsed(serverId)).toBe(before + 1);
   });
 
-  it("answers 503 storage, not a 500, when the object delete fails", async () => {
+  it("deletes the clip even when storage fails, and leaves the file to the sweep", async () => {
     const sound = await claim(await upload(), "fails");
     s3.failDeletes = true;
-    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
-      code: "storage",
-    });
-    s3.failDeletes = false;
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(sound.name);
+    s3.failDeletes = false;
+    const rows = await getPool().query(`SELECT 1 FROM soundboard_sounds WHERE id = $1`, [sound.id]);
+    expect(rows.rowCount).toBe(0);
+    // The file is a leased, expired ticket now: once the lease lapses the
+    // sweep deletes it, so nothing is orphaned.
+    const ticket = await getPool().query<{ storage_key: string }>(
+      `SELECT storage_key FROM soundboard_pending_uploads WHERE server_id = $1
+         AND cleanup_until > NOW() AND expires_at < NOW()`,
+      [serverId],
+    );
+    expect(ticket.rows).toHaveLength(1);
+    await getPool().query(
+      `UPDATE soundboard_pending_uploads SET cleanup_until = NOW() - INTERVAL '1 second'
+        WHERE storage_key = $1`,
+      [ticket.rows[0]!.storage_key],
+    );
+    s3.deleted.length = 0;
+    await sweepPendingUploads();
+    expect(s3.deleted).toContain(ticket.rows[0]!.storage_key);
+    // A second delete finds nothing.
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBeNull();
   });
 
   it("tells the other API machines to forget a deleted clip", async () => {
@@ -290,19 +307,6 @@ describeDb("soundboard upload ledger", () => {
     ]);
     expect(results.filter((name) => name === "contested")).toHaveLength(1);
     expect(results.filter((name) => name === null)).toHaveLength(2);
-  });
-
-  it("puts the row back when the object cannot be deleted", async () => {
-    const sound = await claim(await upload(), "stays");
-    s3.failDeletes = true;
-    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
-      code: "storage",
-    });
-    const rows = await getPool().query(
-      `SELECT name, created_by FROM soundboard_sounds WHERE id = $1`,
-      [sound.id],
-    );
-    expect(rows.rows).toEqual([{ name: "stays", created_by: userId }]);
   });
 
   it("reports what an edit changed from, and nothing for a no-op", async () => {

@@ -626,16 +626,16 @@ export async function updateSoundboardSound(input: {
  * Deletes the clip. Its name for the audit row, or null when there was none
  * (already deleted, or deleted by a parallel request).
  *
- * The row goes first and `DELETE ... RETURNING` picks the winner: exactly one
- * of any number of parallel callers gets the row back, so exactly one gets
- * the name (and writes the audit row) and the rest see null. The object is
- * deleted after that, and if storage fails the row is put back, so the
- * delete can still be retried and no file is left with its key forgotten.
- * The one gap is a process dying between the two steps, which leaves an
- * unreferenced object in the bucket; before this ordering that case left the
- * row, which the caller could retry. Not worth a schema column to close.
- * With no storage configured the file cannot be removed, so the row is kept
- * without touching it.
+ * One transaction, no network inside it: `DELETE ... RETURNING` picks the
+ * winner (exactly one of any number of parallel callers gets the row, so
+ * exactly one writes the audit row), and the same transaction hands the file
+ * to the upload ledger as an expired ticket this call holds the lease on.
+ * The object is deleted after the commit. If storage fails, or the process
+ * dies first, the lease lapses and `sweepPendingUploads` deletes the file
+ * later. So no file is ever left with its key forgotten, the clip is gone for
+ * everybody at once, and the board never counts it twice.
+ *
+ * With no storage configured the file cannot be removed, so the row is kept.
  */
 export async function deleteSoundboardSound(
   serverId: string,
@@ -651,50 +651,40 @@ export async function deleteSoundboardSound(
     }
     throw new SoundboardError("storage");
   }
-  const removed = await getPool().query<
-    SoundRow & { created_by: string | null; created_at: Date }
-  >(
-    `DELETE FROM soundboard_sounds
-      WHERE id = $1 AND server_id = $2
-      RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
-                duration_ms, volume, created_by, created_at`,
-    [soundId, serverId],
-  );
-  const row = removed.rows[0];
+  const client = await getPool().connect();
+  let row: { name: string; storage_key: string } | undefined;
+  try {
+    await client.query("BEGIN");
+    const removed = await client.query<{ name: string; storage_key: string }>(
+      `DELETE FROM soundboard_sounds
+        WHERE id = $1 AND server_id = $2
+        RETURNING name, storage_key`,
+      [soundId, serverId],
+    );
+    row = removed.rows[0];
+    if (row) {
+      await client.query(
+        `INSERT INTO soundboard_pending_uploads
+           (storage_key, server_id, expires_at, cleanup_until)
+         VALUES ($1, $2, NOW() - INTERVAL '1 day', NOW() + make_interval(secs => $3))
+         ON CONFLICT (storage_key) DO UPDATE
+           SET expires_at = EXCLUDED.expires_at,
+               cleanup_until = EXCLUDED.cleanup_until`,
+        [row.storage_key, serverId, CLEANUP_LEASE_SECONDS],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
   if (!row) {
     return null;
   }
-  try {
-    // A missing object still counts as gone (`deleteObject` treats 404 as
-    // success).
-    await deleteObject(row.storage_key);
-  } catch {
-    await getPool()
-      .query(
-        `INSERT INTO soundboard_sounds (
-           id, server_id, name, emoji, storage_key, content_type, bytes,
-           duration_ms, volume, created_by, created_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT DO NOTHING`,
-        [
-          row.id,
-          row.server_id,
-          row.name,
-          row.emoji,
-          row.storage_key,
-          row.content_type,
-          row.bytes,
-          row.duration_ms,
-          row.volume,
-          row.created_by,
-          row.created_at,
-        ],
-      )
-      .catch(() => undefined);
-    forgetPlayable(soundId);
-    throw new SoundboardError("storage");
-  }
   forgetPlayable(soundId);
+  // Best effort now; the sweep owns the file if this fails.
+  await finishCleanup([row.storage_key]);
   return row.name;
 }
