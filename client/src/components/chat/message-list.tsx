@@ -1489,7 +1489,12 @@ export const MessageList = memo(function MessageList({
       return;
     }
     unreadLandedRef.current = key;
-    if (forumLandAtTop && !hasMore) {
+    // Only when the post is taller than the pane: a short one shows its
+    // question at the top anyway, and unpinning it would offer "Ir ao
+    // presente" over a transcript that has nowhere to go.
+    const overflows =
+      scrollRef.current.scrollHeight > scrollRef.current.clientHeight + 4;
+    if (forumLandAtTop && !hasMore && overflows) {
       // Unpinned NOW, through the ref too: the follow-the-tail effects read
       // the ref in this same commit, and a late image would pull the reader
       // to the bottom past the question they came to read.
