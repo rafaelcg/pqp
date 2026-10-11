@@ -15,6 +15,7 @@ import {
   coverImageProblem,
 } from "@/lib/community-home/cover";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { formatVideoDuration } from "./community-home-media";
 
 type CoverMode = "frame" | "image";
@@ -158,12 +159,23 @@ export function ComposeCover({
     await upload(file);
   }
 
-  function scrub(value: number) {
+  /**
+   * While the thumb is dragged, `fastSeek` (Safari, Firefox) jumps to the
+   * nearest keyframe, so the preview keeps up with the finger instead of
+   * stuttering on exact seeks. Letting go seeks to the exact frame, which is
+   * the one "Usar este frame" takes. Browsers without `fastSeek` seek exactly
+   * all along.
+   */
+  function scrub(value: number, exact: boolean) {
     const video = videoRef.current;
     if (!video || !Number.isFinite(value)) {
       return;
     }
-    video.currentTime = value;
+    if (!exact && typeof video.fastSeek === "function") {
+      video.fastSeek(value);
+    } else {
+      video.currentTime = value;
+    }
     setTime(value);
   }
 
@@ -198,9 +210,12 @@ export function ComposeCover({
       {current ? (
         <div className="flex items-center gap-3" data-home-compose-cover-current>
           <img
+            // Keyed by the picture, so a new cover fades in instead of popping
+            // (`animate-fade-in` is off under prefers-reduced-motion, index.css).
+            key={current}
             src={current}
             alt={t("communityHome.compose.coverChosen")}
-            className="h-12 w-20 shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-0 object-cover"
+            className="h-12 w-20 shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-0 object-cover animate-fade-in"
           />
           <span className="min-w-0 flex-1 text-text-secondary">
             {t("communityHome.compose.coverChosen")}
@@ -225,7 +240,7 @@ export function ComposeCover({
 
       {mode === "frame" ? (
         videoUrl ? (
-          <div className="space-y-2" data-home-compose-cover-frame>
+          <div className="space-y-2 animate-fade-in" data-home-compose-cover-frame>
             <video
               ref={videoRef}
               key={videoUrl}
@@ -266,7 +281,8 @@ export function ComposeCover({
                 max={duration ?? 1}
                 step={0.04}
                 disabled={!duration || busy}
-                onValueChange={scrub}
+                onValueChange={(value) => scrub(value, false)}
+                onValueCommit={(value) => scrub(value, true)}
                 aria-label={t("communityHome.compose.coverScrub")}
                 aria-valuetext={`${formatVideoDuration(time)} / ${formatVideoDuration(duration ?? 0)}`}
                 className="h-8 min-w-0 flex-1"
@@ -294,7 +310,7 @@ export function ComposeCover({
           </div>
         ) : null
       ) : (
-        <label className="block" data-home-compose-cover-image>
+        <label className="block animate-fade-in" data-home-compose-cover-image>
           <span className="flex items-center gap-2">
             <span className="inline-flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-border">
               <Upload className="h-3.5 w-3.5" aria-hidden />
@@ -322,9 +338,18 @@ export function ComposeCover({
       )}
 
       {uploading !== null && (
-        <p className="tabular-nums" data-home-compose-cover-uploading>
-          {Math.round(uploading * 100)}%
-        </p>
+        <div className="flex items-center gap-2" data-home-compose-cover-uploading>
+          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-3">
+            <div
+              className={cn(
+                "h-full bg-accent",
+                "motion-safe:transition-[width] motion-safe:duration-[var(--duration-fast)]",
+              )}
+              style={{ width: `${Math.round(uploading * 100)}%` }}
+            />
+          </div>
+          <span className="shrink-0 tabular-nums">{Math.round(uploading * 100)}%</span>
+        </div>
       )}
       {error && (
         <p className="text-danger" data-home-compose-cover-error>
