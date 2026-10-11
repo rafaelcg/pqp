@@ -17,7 +17,14 @@ import {
 const VOLUME_KEY = "pqp:soundboard-volume";
 const MUTE_KEY = "pqp:soundboard-muted";
 const MUTED_USERS_KEY = "pqp:soundboard-muted-users";
-const MARK_MS = 2200;
+/** A mark lasts as long as its clip, and never less than this or more than the cap. */
+const MARK_MIN_MS = 1200;
+/** What a custom clip not in the catalog yet is assumed to last, until it is. */
+const MARK_FALLBACK_MS = 2200;
+/** Most people kept in the "no soundboard from them" list. The newest win. */
+const MUTED_USERS_MAX = 500;
+/** How stale the catalog may be before a custom clip's play pulls it again. */
+const PLAY_REFRESH_GAP_MS = 15_000;
 /**
  * How long a click waits for the room's echo before it counts as refused.
  * The server answers a refusal with silence (a full room, your own cap, a
@@ -298,18 +305,64 @@ export function isSoundboardUserMuted(userId: string): boolean {
 
 export function setSoundboardUserMuted(userId: string, muted: boolean): void {
   const next = new Set(mutedUsers());
+  // Delete before add so a person muted again moves to the end: the list is
+  // pruned from the front, and the newest mutes are the ones that matter.
+  next.delete(userId);
   if (muted) {
     next.add(userId);
-  } else {
-    next.delete(userId);
   }
-  mutedUsersCache = next;
+  mutedUsersCache = pruneMutedUsers(next);
   try {
-    localStorage.setItem(MUTED_USERS_KEY, JSON.stringify([...next]));
+    localStorage.setItem(MUTED_USERS_KEY, JSON.stringify([...mutedUsersCache]));
   } catch {
     // Private mode: the mute holds for this page only.
   }
+  if (muted) {
+    silenceSoundboardUser(userId);
+  }
   notify();
+}
+
+function pruneMutedUsers(ids: Set<string>): Set<string> {
+  if (ids.size <= MUTED_USERS_MAX) {
+    return ids;
+  }
+  return new Set([...ids].slice(ids.size - MUTED_USERS_MAX));
+}
+
+/**
+ * Another tab of this account changed a soundboard setting. The cache and the
+ * bus are per page, so without this a mute made in one tab left the other
+ * tab playing the person, at the old volume, until it was reloaded.
+ */
+function onStorage(event: StorageEvent): void {
+  if (event.key === null) {
+    // localStorage.clear() in another tab: every setting is back to its default.
+    mutedUsersCache = null;
+    applySoundboardBus(true);
+    notify();
+    return;
+  }
+  if (event.key === MUTED_USERS_KEY) {
+    const before = mutedUsers();
+    mutedUsersCache = null;
+    const after = mutedUsers();
+    for (const id of after) {
+      if (!before.has(id)) {
+        silenceSoundboardUser(id);
+      }
+    }
+    notify();
+    return;
+  }
+  if (event.key === VOLUME_KEY || event.key === MUTE_KEY) {
+    applySoundboardBus(true);
+    notify();
+  }
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", onStorage);
 }
 
 export function useSoundboardUserMuted(
@@ -418,6 +471,8 @@ export function noteSoundboardCatalog(
 ): void {
   catalogTokens.set(serverId, (catalogTokens.get(serverId) ?? 0) + 1);
   rememberCustom(serverId, sounds);
+  // Marks and floats read the names from here.
+  notify();
 }
 
 function clipIdentity(url: string): string {
@@ -627,7 +682,12 @@ function soundboardBus(): GainNode | null {
   return bus;
 }
 
-function applySoundboardBus(): void {
+function applySoundboardBus(onlyIfBuilt = false): void {
+  // A storage event from another tab must not start audio in a tab that has
+  // none: a bus built later reads the current level when it is made.
+  if (onlyIfBuilt && !bus) {
+    return;
+  }
   const node = soundboardBus();
   if (!node) {
     return;
@@ -657,8 +717,25 @@ function startSoundboardClip(buffer: AudioBuffer, soundVolume: number): AudioBuf
   return source;
 }
 
-/** Clips sounding in the call, so leaving it can cut them. Previews are separate. */
-const roomSources = new Set<AudioBufferSourceNode>();
+/**
+ * Clips sounding in the call, with who played each, so leaving the call can
+ * cut them all and muting a person can cut theirs. Previews are separate.
+ */
+const roomSources = new Map<AudioBufferSourceNode, string | null>();
+
+function stopSources(match?: (userId: string | null) => boolean): void {
+  for (const [source, userId] of [...roomSources]) {
+    if (match && !match(userId)) {
+      continue;
+    }
+    try {
+      source.stop();
+    } catch {
+      // Already finished.
+    }
+    roomSources.delete(source);
+  }
+}
 
 /**
  * Stop every clip from the call. Leaving or switching rooms used to let a
@@ -667,14 +744,26 @@ const roomSources = new Set<AudioBufferSourceNode>();
 export function stopSoundboardClips(): void {
   // The overlap count is per room, and leaving one ends its clips here.
   ownPlayEnds = [];
-  for (const source of roomSources) {
-    try {
-      source.stop();
-    } catch {
-      // Already finished.
-    }
+  stopSources();
+}
+
+/**
+ * Cut what is sounding without leaving: the listener deafened. The overlap
+ * count is left alone, because the server still counts those clips as the
+ * players' own, and deafening ends nothing for them.
+ */
+export function silenceSoundboardClips(): void {
+  stopSources();
+}
+
+/** Stop one person's sounding clips and take down their mark. */
+function silenceSoundboardUser(userId: string): void {
+  stopSources((from) => from === userId);
+  const mark = marks.get(userId);
+  if (mark) {
+    marks.delete(userId);
+    clearSound(mark.soundId, mark.until);
   }
-  roomSources.clear();
 }
 
 const catalogRefresh = new Map<string, Promise<void>>();
@@ -717,10 +806,14 @@ async function refreshCustomCatalog(
 export async function playSoundboardClip(
   soundId: string,
   hear: boolean | (() => boolean),
+  fromUserId?: string,
 ): Promise<void> {
   // A function is asked again after the fetch and decode, so a listener who
   // deafened or left the call while the clip loaded does not hear it start.
-  const mayHear = (): boolean => (typeof hear === "function" ? hear() : hear);
+  // So is the per-person mute: it can land while the clip loads.
+  const mayHear = (): boolean =>
+    (typeof hear === "function" ? hear() : hear) &&
+    !(fromUserId !== undefined && isSoundboardUserMuted(fromUserId));
   if (!mayHear()) {
     return;
   }
@@ -735,7 +828,7 @@ export async function playSoundboardClip(
   }
   const source = startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
   if (source) {
-    roomSources.add(source);
+    roomSources.set(source, fromUserId ?? null);
     source.addEventListener?.("ended", () => roomSources.delete(source));
   }
 }
@@ -779,19 +872,62 @@ export function previewSoundboardClip(soundId: string): void {
   })();
 }
 
-export function showSoundboardMark(mark: Omit<SoundboardMark, "until">): void {
-  const until = Date.now() + MARK_MS;
-  marks.set(mark.userId, { ...mark, until });
-  lightSound(mark.soundId, until);
+/**
+ * How long a play stays marked: as long as the clip sounds. A built-in's
+ * length is known; a custom clip's comes with the catalog. A clip this
+ * machine has not heard of yet gets a short guess, corrected once the
+ * catalog arrives.
+ */
+function markDurationMs(soundId: string): number {
+  const known = soundboardBuiltin(soundId)?.durationMs ?? customDurations.get(soundId);
+  return Math.min(
+    SOUNDBOARD_MAX_DURATION_MS,
+    Math.max(MARK_MIN_MS, known ?? MARK_FALLBACK_MS),
+  );
+}
+
+function scheduleMark(mark: SoundboardMark): void {
+  marks.set(mark.userId, mark);
+  lightSound(mark.soundId, mark.until);
   notify();
-  globalThis.setTimeout(() => {
+  globalThis.setTimeout(
+    () => {
+      const current = marks.get(mark.userId);
+      if (current && current.until === mark.until) {
+        marks.delete(mark.userId);
+      }
+      clearSound(mark.soundId, mark.until);
+      notify();
+    },
+    Math.max(0, mark.until - Date.now()),
+  );
+}
+
+export function showSoundboardMark(mark: Omit<SoundboardMark, "until">): void {
+  const startedAt = Date.now();
+  const shown: SoundboardMark = {
+    ...mark,
+    until: startedAt + markDurationMs(mark.soundId),
+  };
+  scheduleMark(shown);
+  if (soundboardBuiltin(mark.soundId) || !catalogServerId) {
+    return;
+  }
+  // A custom clip: this machine's copy of its name and length may be old
+  // (renamed, or new since the call began). Pull the list in the background,
+  // not more often than every few seconds, and then fix the mark.
+  void refreshCustomCatalog(catalogServerId, false, PLAY_REFRESH_GAP_MS).then(() => {
     const current = marks.get(mark.userId);
-    if (current && current.until === until) {
-      marks.delete(mark.userId);
+    if (!current || current.until !== shown.until || current.soundId !== mark.soundId) {
+      return;
     }
-    clearSound(mark.soundId, until);
-    notify();
-  }, MARK_MS);
+    const until = startedAt + markDurationMs(mark.soundId);
+    if (until === shown.until) {
+      return;
+    }
+    clearSound(shown.soundId, shown.until);
+    scheduleMark({ ...shown, until });
+  });
 }
 
 export function useSoundboardMark(userId: string | undefined): SoundboardMark | null {

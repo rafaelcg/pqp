@@ -145,12 +145,71 @@ characters and bidi controls are refused.
 DMs have no library. Phones do not play the frame yet. Web and Electron do.
 
 The room accepts twelve clips at once, including several from the same
-person. Extra clicks past that are dropped. Muting the board is local.
-It cuts what you are hearing, including a clip already playing. The
-volume slider does the same. Your clicks still go out to the room.
-Muting one person is in their audio menu (click them under the voice
-channel or on the stage): "Soundboard" turns their clips off for you only,
-sound and mark both. Discord has only the global slider.
+person. Extra clicks past that are dropped.
+
+## What a listener controls
+
+Everything here is local. It changes what you hear and see, and tells the
+room nothing. Your own clicks still go out.
+
+1. Muting the board cuts what you are hearing, including a clip already
+   playing. The volume slider does the same.
+2. Deafening cuts every clip already playing. Before, it only stopped the next
+   one. Self-muting does not cut anything, as on Discord. The server still
+   counts those clips toward the player's own three.
+3. Muting one person stops their clips, sound and mark both, even a clip
+   already playing or still loading.
+4. A muted person shows a small muted speaker on their row under the voice
+   channel, on their chip in the listener row, and in their menu header. It
+   has an accessible name. The row's name says it too.
+5. Two tabs of one account share the board mute, the volume and the person
+   mutes. A change in one tab reaches the other at once, and a person muted in
+   the other tab is cut here too.
+6. The muted list keeps the newest 500 people.
+
+### Where the person mute is
+
+It is the "Soundboard" switch in a person's audio menu. On means their clips
+play. The switch is named "{name}'s soundboard sounds". The name contains the
+row's visible word "Soundboard", so the visible word and the name agree. The
+menu opens from:
+
+- their row under the voice channel (click, Enter or Space; Escape returns the
+  focus to the row),
+- their chip in the listener row under the stage,
+- their face on the collapsed call bar,
+- the "+N" after the three faces on that bar, which lists the rest and opens
+  the picked person's menu,
+- the room view, and the overlay of their camera or screen tile.
+
+The row is there for any other person in a server call whose board is on,
+even when their voice track failed or has not started: their clips arrive
+over the voice socket, not over the voice track. It is never there for
+yourself, and never in a DM.
+
+The call bar's menu is drawn outside the bar, fixed beside the face. It opens
+upward and flips when there is no room, so the bar's hidden overflow cannot
+clip it.
+
+### The mark
+
+A play lights that person's row under the voice channel, and a small badge
+on their face when the stage is up. On the collapsed bar and the listener row
+the badge is a corner badge inside the small avatar, so it never hides the
+face. On the large room-view face it is a disc over the top.
+
+The mark lasts as long as the clip: a built-in's length, or a custom
+clip's length from the catalog, never under 1.2 seconds and never over the
+5.2 second cap. A custom clip this machine has not heard of yet is assumed
+to be 2.2 seconds, and corrected when the list arrives. Another click from
+the same person swaps the icon. Muting the board does not hide it.
+
+A custom clip's name is read when the mark is drawn. When somebody plays a
+custom clip, this machine asks the server for the list again in the
+background, at most every 15 seconds, so a rename shows up in the mark and
+the float without reopening the panel. An open panel also polls every 20
+seconds and listens to the same store, so uploads, renames and deletes appear
+in it.
 
 The call bar button is the party popper icon. The waveform it used before
 is the "speaking" mark elsewhere in the call. Watch party and onboarding use

@@ -26,6 +26,7 @@ import {
   playSoundboardClip,
   registerSoundboardSender,
   showSoundboardMark,
+  silenceSoundboardClips,
   stopSoundboardClips,
 } from "@/lib/soundboard";
 import {
@@ -2263,9 +2264,17 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the soundboard's clips belong to. Leaving it, or moving to
   // another, cuts whatever is still sounding from it.
   let soundboardRoom: string | null = null;
+  let soundboardDeafened = false;
 
   function emit() {
     pushAudioDelivery();
+    // Deafening cuts the clips already sounding: the check at the start of a
+    // play only stops the next one. Muting is not deafening, so a muted
+    // listener still hears the board, as on Discord.
+    if (state.isDeafened && !soundboardDeafened) {
+      silenceSoundboardClips();
+    }
+    soundboardDeafened = state.isDeafened;
     if (state.voiceChannelId !== soundboardRoom) {
       if (soundboardRoom !== null) {
         stopSoundboardClips();
@@ -6024,6 +6033,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void playSoundboardClip(
           message.soundId,
           () => !state.isDeafened && state.voiceChannelId === message.channelId,
+          message.userId,
         );
         break;
       case "channel-live":
