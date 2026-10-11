@@ -4753,5 +4753,12 @@
   "conversations.empty.unread": "Tudo lido por aqui.",
   "conversations.empty.groups": "Nenhum grupo ainda. Marca duas pessoas ou mais em Nova conversa.",
   "conversations.noMatch": "Nenhuma conversa com “{query}”.",
-  "conversations.noMatch.cta": "Procurar outra pessoa"
+  "conversations.noMatch.cta": "Procurar outra pessoa",
+  "conversations.rail.tooltip_zero": "Conversas",
+  "conversations.rail.tooltip_one": "Conversas · {count} te esperando",
+  "conversations.rail.tooltip_other": "Conversas · {count} te esperando",
+  "conversations.rail.waitingSr_one": "{count} conversa te esperando",
+  "conversations.rail.waitingSr_other": "{count} conversas te esperando",
+  "conversations.rail.more_one": "Mais {count} conversa te esperando",
+  "conversations.rail.more_other": "Mais {count} conversas te esperando"
 }

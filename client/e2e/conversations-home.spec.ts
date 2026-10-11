@@ -175,3 +175,84 @@ test("flag off: the classic list is exactly what it was", async ({ browser }) =>
     await setGlobalFlag("conversations_home", true);
   }
 });
+
+async function sendAs(
+  browser: Browser,
+  suffix: string,
+  channelId: string,
+  body: string,
+): Promise<void> {
+  const page = await openAs(browser, suffix, `/app/dm/${channelId}`);
+  const composer = page.getByPlaceholder(/Message/);
+  await expect(composer).toBeVisible({ timeout: 20_000 });
+  await composer.fill(body);
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(body, { exact: true }).last()).toBeVisible();
+  await page.context().close();
+}
+
+async function idOf(suffix: string): Promise<string> {
+  const me = (await (await fetch(`${API}/api/me`, { headers: headers(suffix) })).json()) as {
+    user?: { id: string };
+    id?: string;
+  };
+  return (me.user ?? me).id!;
+}
+
+test("the rail: the door counts conversations, the people waiting surface under it", async ({
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const stamp = Date.now().toString(36);
+  const { ana, bia, dm: withBia } = await pair(stamp);
+  const cris = `conv-cris-${stamp}`;
+  const crisId = await person(cris, "Cris");
+  // Friends, so Ana's privacy setting lets Cris write first.
+  await fetch(`${API}/api/friends`, {
+    method: "POST",
+    headers: headers(ana),
+    body: JSON.stringify({ userId: crisId }),
+  });
+  await fetch(`${API}/api/friends/${await idOf(ana)}/accept`, {
+    method: "POST",
+    headers: headers(cris),
+  });
+  const { conversation: withCris } = (await (
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers(cris),
+      body: JSON.stringify({ userIds: [await idOf(ana)] }),
+    })
+  ).json()) as { conversation: { channelId: string } };
+
+  const anaPage = await openAs(browser, ana, "/app/dm");
+  await expect(anaPage.locator("aside[data-conversations]")).toBeVisible({ timeout: 20_000 });
+
+  // Three lines from Bia, one from Cris: two conversations waiting, not four.
+  for (const line of ["um", "dois", "três"]) {
+    await sendAs(browser, bia, withBia, line);
+  }
+  await sendAs(browser, cris, withCris.channelId, "e aí");
+
+  const rail = anaPage.getByRole("navigation");
+  const door = rail.locator("[data-rail-conversations]");
+  await expect(door.locator("[data-rail-conversations-label]")).toHaveText("Conversations");
+  await expect(door.locator("[data-conversations-waiting]")).toHaveText("2", {
+    timeout: 20_000,
+  });
+  const faces = rail.locator('[data-rail-conversation="waiting"]');
+  await expect(faces).toHaveCount(2);
+
+  // One click: Cris's face opens the conversation, and once read she leaves
+  // the rail and the door says 1.
+  await rail.getByRole("button", { name: "Cris" }).click();
+  await expect(anaPage).toHaveURL(new RegExp(`/app/dm/${withCris.channelId}`));
+  await expect(faces).toHaveCount(1);
+  await expect(door.locator("[data-conversations-waiting]")).toHaveText("1");
+
+  // The door itself opens Conversas.
+  await door.getByRole("button").first().click();
+  await expect(anaPage.locator("aside[data-conversations]")).toBeVisible();
+
+  await anaPage.context().close();
+});
