@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +62,7 @@ import gg.pqp.app.voice.OutgoingPhase
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.voice.VoiceStage
 import gg.pqp.app.voice.VoiceState
+import gg.pqp.app.voice.gameAudioSupported
 import gg.pqp.app.voice.muteControlEnabled
 import gg.pqp.app.voice.serverMutedPeers
 
@@ -241,16 +244,6 @@ fun CallBar(
                         // genuinely mean something is switched off.
                         on = false,
                     )
-                    // Absent, not disabled, on a transport that cannot carry
-                    // this device's screen. The button's whole job is to raise
-                    // Android's consent dialog, and offering that when nothing
-                    // can be published with the grant is worse than not
-                    // offering at all. See `VoiceState.screenShareSupported`.
-                    // Nor on a listen-only seat: the server refuses the
-                    // announce and the roster never carries it.
-                    if (state.screenShareSupported && state.canSpeak) {
-                        ShareScreenButton(state, controller)
-                    }
                     FilledIconButton(
                         onClick = controller::leave,
                         colors = IconButtonDefaults.filledIconButtonColors(
@@ -266,6 +259,16 @@ fun CallBar(
                     }
                 }
 
+                // Absent, not disabled, where this seat may not present. The
+                // button's whole job is to raise Android's consent dialog, and
+                // offering that when nothing can be published with the grant is
+                // worse than not offering at all. See
+                // `VoiceState.screenShareSupported`. Nor on a listen-only seat:
+                // the server refuses the announce and the roster never carries
+                // it.
+                if (state.screenShareSupported && state.canSpeak) {
+                    ShareScreenRow(state, controller)
+                }
                 ServerMutedRow(state)
                 WatchScreenRow(state, controller)
                 // Last of the three, and the only one made of pictures. The
@@ -377,15 +380,21 @@ private fun CallControl(
 }
 
 /**
- * The button that raises Android's screen-capture consent dialog.
+ * "Compartilhar tela", in words, under the call controls.
  *
- * The dialog is the system's and can only be raised by a user gesture, which is
- * why the launcher lives on the control rather than anywhere more central. The
- * grant it returns is single use: from Android 15 a fresh one is required for
- * every capture session, so nothing here caches it.
+ * It used to be a sixth glyph in a row of five, and the people asking for
+ * screen share from a phone were looking straight at it. A labelled button is
+ * the difference between a feature that exists and one people find, and it
+ * says up front whether the game's sound goes with it, which is the first
+ * thing anybody sharing a game asks.
+ *
+ * The consent dialog is the system's and can only be raised by a user gesture,
+ * which is why the launcher lives on the control rather than anywhere more
+ * central. The grant it returns is single use: from Android 15 a fresh one is
+ * required for every capture session, so nothing here caches it.
  */
 @Composable
-private fun ShareScreenButton(state: VoiceState, controller: VoiceController) {
+private fun ShareScreenRow(state: VoiceState, controller: VoiceController) {
     val context = LocalContext.current
     val consent = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -398,26 +407,65 @@ private fun ShareScreenButton(state: VoiceState, controller: VoiceController) {
         // said no, and the button they pressed is still there.
     }
 
-    CallControl(
-        onClick = {
-            if (state.sharingScreen) {
-                controller.stopScreenShare()
-            } else {
-                val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
-                consent.launch(manager.createScreenCaptureIntent())
-            }
-        },
-        icon = if (state.sharingScreen) PqpIcons.StopSharing else PqpIcons.ShareScreen,
-        contentDescription = stringResource(
-            if (state.sharingScreen) {
-                R.string.voice_stop_sharing
-            } else {
-                R.string.voice_share_screen
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.gutter, end = Spacing.sm, bottom = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val sharing = state.sharingScreen
+        FilledTonalButton(
+            onClick = {
+                if (sharing) {
+                    controller.stopScreenShare()
+                } else {
+                    val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+                        as MediaProjectionManager
+                    consent.launch(manager.createScreenCaptureIntent())
+                }
             },
-        ),
-        on = state.sharingScreen,
-    )
+            // Joining has no media to put a screen on yet.
+            enabled = state.stage != VoiceStage.Joining || sharing,
+            colors = if (sharing) {
+                ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                ButtonDefaults.filledTonalButtonColors()
+            },
+            contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+        ) {
+            Icon(
+                imageVector = if (sharing) PqpIcons.StopSharing else PqpIcons.ShareScreen,
+                contentDescription = null,
+                modifier = Modifier.size(ButtonDefaults.IconSize),
+            )
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(
+                text = stringResource(
+                    if (sharing) R.string.voice_stop_sharing else R.string.voice_share_screen,
+                ),
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.width(Spacing.md))
+        Text(
+            text = stringResource(
+                when {
+                    sharing && state.sharingScreenAudio -> R.string.voice_sharing_with_audio
+                    sharing -> R.string.voice_sharing_without_audio
+                    gameAudioSupported() -> R.string.voice_share_hint_audio
+                    else -> R.string.voice_share_hint_no_audio
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
 
 /**

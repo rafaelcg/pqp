@@ -259,8 +259,12 @@
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
     <string name="voice_notification_sharing">Compartilhando sua tela</string>
-    <string name="voice_share_screen">Compartilhar sua tela</string>
+    <string name="voice_share_screen">Compartilhar tela</string>
     <string name="voice_stop_sharing">Parar de compartilhar</string>
+    <string name="voice_share_hint_audio">Com o som do jogo</string>
+    <string name="voice_share_hint_no_audio">Som só no Android 10 ou mais novo</string>
+    <string name="voice_sharing_with_audio">Transmitindo com o som do celular</string>
+    <string name="voice_sharing_without_audio">Transmitindo sem som</string>
     <string name="voice_screen_share_denied">Esta chamada já tem todas as telas que consegue carregar.</string>
     <string name="voice_screen_share_failed">O Android não iniciou a captura de tela.</string>
     <string name="voice_watch_screen">%1$s está compartilhando uma tela</string>
