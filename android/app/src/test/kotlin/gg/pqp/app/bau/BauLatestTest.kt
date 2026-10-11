@@ -105,6 +105,17 @@ class BauLatestTest {
     }
 
     @Test
+    fun `the card leads with the newest new post, not with my own newer one`() {
+        val latest = parse(
+            """{"unread":2,"posts":[${card("mine", "Meu", false)},${card("p2", "B", true)},${card("p3", "C", true)}]}""",
+        )
+        val state = bauPreviewState(latest, 0, canPost = true) as BauPreviewState.Fresh
+        assertEquals("p2", state.post.postId)
+        assertEquals("p3", state.next?.postId)
+        assertEquals(1, state.moreCount)
+    }
+
+    @Test
     fun `an unread count with no decodable new post keeps the count instead of hiding it`() {
         val oldOnly = parse("""{"unread":2,"posts":[${card("p1", "A", false)}]}""")
         assertEquals(BauPreviewState.Plain(2), bauPreviewState(oldOnly, 0, canPost = false))

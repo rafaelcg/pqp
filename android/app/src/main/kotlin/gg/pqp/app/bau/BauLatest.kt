@@ -105,17 +105,18 @@ fun bauPreviewState(latest: BauLatest?, legacyUnread: Int, canPost: Boolean): Ba
     val first = latest.posts.firstOrNull()
         // Posts were sent but none decoded: say what the count says, never "empty".
         ?: return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Empty(canPost)
-    // The server counts something new that did not survive decoding (a newer
-    // shape this build cannot read): the plain row with the count, rather
-    // than a "seen" row that hides it.
-    if (!first.isNew) {
-        return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Seen(first.card)
-    }
-    val newCount = maxOf(latest.unread, latest.posts.count { it.isNew })
-    val second = latest.posts.getOrNull(1)?.takeIf { it.isNew }?.card
+    // The card leads with the newest post that is new to this person, not the
+    // newest post: their own post is never new and can sit on top.
+    val fresh = latest.posts.filter { it.isNew }
+    val lead = fresh.firstOrNull()
+        // The server counts something new that did not survive decoding (a
+        // newer shape this build cannot read): the plain row with the count,
+        // rather than a "seen" row that hides it.
+        ?: return if (latest.unread > 0) BauPreviewState.Plain(latest.unread) else BauPreviewState.Seen(first.card)
+    val newCount = maxOf(latest.unread, fresh.size)
     return BauPreviewState.Fresh(
-        post = first.card,
-        next = second,
+        post = lead.card,
+        next = fresh.getOrNull(1)?.card,
         moreCount = (newCount - 1).coerceAtLeast(0),
     )
 }

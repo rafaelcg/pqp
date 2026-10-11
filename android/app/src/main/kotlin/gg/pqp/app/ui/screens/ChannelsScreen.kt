@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -315,7 +316,8 @@ fun ChannelsScreen(
     // arithmetic the iOS list does, and [UnreadLedger] replays any frame that
     // lands while a snapshot is in flight so the snapshot cannot erase it.
     val unreadLedger = remember(serverId) { UnreadLedger() }
-    var unread by remember(serverId) { mutableStateOf<Map<String, ChannelUnread>>(emptyMap()) }
+    // A state map, so a frame changes one entry in place.
+    val unread = remember(serverId) { mutableStateMapOf<String, ChannelUnread>() }
     LaunchedEffect(serverId, retryTick) {
         val ticket = unreadLedger.begin()
         for (attempt in 1..CHANNELS_REFETCH_TRIES) {
@@ -327,11 +329,15 @@ fun ChannelsScreen(
                 null
             }
             if (snapshot != null) {
-                unreadLedger.snapshot(ticket, snapshot)?.let { unread = it }
+                unreadLedger.snapshot(ticket, snapshot)?.let { fresh ->
+                    unread.keys.retainAll(fresh.keys)
+                    unread.putAll(fresh)
+                }
                 return@LaunchedEffect
             }
             if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
         }
+        unreadLedger.abandon(ticket)
     }
     LaunchedEffect(serverId) {
         session.realtime.frames.collect { frame ->
@@ -339,7 +345,7 @@ fun ChannelsScreen(
             if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
             val channelId = frame["channelId"]?.jsonPrimitive?.contentOrNull ?: return@collect
             val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false
-            unread = unreadLedger.activity(channelId, mention)
+            unread[channelId] = unreadLedger.activity(channelId, mention)
         }
     }
 
@@ -376,7 +382,7 @@ fun ChannelsScreen(
             val latest = if (bauLatestUnsupported) null else session.api.bauLatest(serverId)
             if (latest == null) {
                 bauLatestUnsupported = true
-                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrElse { bauLegacyUnread }
             }
             bauLatest = latest
             bauAnswered = true
@@ -385,7 +391,7 @@ fun ChannelsScreen(
         } catch (_: Exception) {
             // Keep what is on screen; a first failure draws today's row.
             if (!bauAnswered) {
-                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrElse { bauLegacyUnread }
                 bauAnswered = true
             }
         }
@@ -647,10 +653,11 @@ private fun LazyListScope.channelItems(
             )
         }
     }
-    if (summary.overflow.isNotEmpty()) {
+    if (summary.overflowCount > 0) {
         item(key = "occupants-more-${channel.id}") {
             VoiceOverflowRow(
-                people = summary.overflow,
+                faces = summary.overflowFaces,
+                count = summary.overflowCount,
                 onClick = { onOpenChannel(channel) },
                 modifier = Modifier.listMotion(this),
             )

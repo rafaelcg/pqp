@@ -25,60 +25,73 @@ data class ChannelUnread(
 data class ServerUnreadResponse(val unread: List<ChannelUnread> = emptyList())
 
 /**
- * A `channel-activity` frame, folded into what the list already holds: one
- * more unread, and one more mention when the frame says it was one. Same
- * arithmetic the iOS list does on the same frame.
+ * A `channel-activity` frame on top of [existing]: one more unread, and one
+ * more mention when the frame says it was one. Same arithmetic the iOS list
+ * does on the same frame.
  */
-fun Map<String, ChannelUnread>.withActivity(
-    channelId: String,
-    mention: Boolean,
-): Map<String, ChannelUnread> {
-    val existing = this[channelId]
-    val next = ChannelUnread(
-        channelId = channelId,
-        count = (existing?.count ?: 0) + 1,
-        mentions = (existing?.mentions ?: 0) + if (mention) 1 else 0,
-    )
-    return this + (channelId to next)
-}
+fun bumped(existing: ChannelUnread?, channelId: String, mention: Boolean): ChannelUnread = ChannelUnread(
+    channelId = channelId,
+    count = (existing?.count ?: 0) + 1,
+    mentions = (existing?.mentions ?: 0) + if (mention) 1 else 0,
+)
 
 /**
- * The unread map, kept right while a snapshot is in flight.
+ * The unread counts, kept right while a `GET /unread` snapshot is in flight.
  *
- * A `channel-activity` frame that lands between the moment
- * `GET /unread` is asked and the moment it answers is not in that answer,
- * so the answer would erase it. The ledger remembers every frame since the
- * newest request started and replays them over the snapshot; a snapshot from
- * an older request than the newest is dropped. Confined to one thread (the
- * screen's effects run on the main dispatcher).
+ * A `channel-activity` frame that lands while the request is out may or may
+ * not be in its answer, depending on which side of the query the message was
+ * committed. Replaying it on top could count it twice, and dropping it could
+ * lose it, so the frames seen during the request are a floor: per channel the
+ * answer is the larger of what the server said and what arrived meanwhile.
+ * Frames are only buffered while a request is pending, a snapshot from a
+ * request older than the newest is dropped, and [activity] changes one entry
+ * in place rather than copying the map. Confined to one thread (the screen's
+ * effects run on the main dispatcher).
  */
 class UnreadLedger {
     private var generation = 0
-    private val since = mutableListOf<Pair<String, Boolean>>()
-
-    var current: Map<String, ChannelUnread> = emptyMap()
-        private set
+    private var pending = false
+    private val inFlight = HashMap<String, ChannelUnread>()
+    private val counts = HashMap<String, ChannelUnread>()
 
     /** A request is about to start; returns its ticket. */
     fun begin(): Int {
-        since.clear()
+        inFlight.clear()
+        pending = true
         return ++generation
     }
 
-    fun activity(channelId: String, mention: Boolean): Map<String, ChannelUnread> {
-        since += channelId to mention
-        current = current.withActivity(channelId, mention)
-        return current
+    /** The request holding [ticket] gave up; stop buffering for it. */
+    fun abandon(ticket: Int) {
+        if (ticket != generation) return
+        pending = false
+        inFlight.clear()
+    }
+
+    /** A frame arrived. Returns that channel's new entry. */
+    fun activity(channelId: String, mention: Boolean): ChannelUnread {
+        val next = bumped(counts[channelId], channelId, mention)
+        counts[channelId] = next
+        if (pending) inFlight[channelId] = bumped(inFlight[channelId], channelId, mention)
+        return next
     }
 
     /** The request holding [ticket] answered. Null when a newer one has started since. */
     fun snapshot(ticket: Int, snapshot: Map<String, ChannelUnread>): Map<String, ChannelUnread>? {
         if (ticket != generation) return null
-        var next = snapshot
-        since.forEach { (channelId, mention) -> next = next.withActivity(channelId, mention) }
-        since.clear()
-        current = next
-        return next
+        counts.clear()
+        counts.putAll(snapshot)
+        inFlight.forEach { (channelId, seen) ->
+            val said = counts[channelId]
+            counts[channelId] = ChannelUnread(
+                channelId = channelId,
+                count = maxOf(said?.count ?: 0, seen.count),
+                mentions = maxOf(said?.mentions ?: 0, seen.mentions),
+            )
+        }
+        inFlight.clear()
+        pending = false
+        return HashMap(counts)
     }
 }
 
@@ -143,12 +156,16 @@ fun foldedSummary(
  */
 data class OccupantSummary(
     val listed: List<VoiceParticipant>,
-    val overflow: List<VoiceParticipant>,
+    /** How many people the "+N" line stands for. */
+    val overflowCount: Int,
+    /** The first few of them, for the faces on that line; never the whole room. */
+    val overflowFaces: List<VoiceParticipant>,
 ) {
-    val total: Int get() = listed.size + overflow.size
+    val total: Int get() = listed.size + overflowCount
 }
 
 const val OCCUPANT_LINES = 3
+const val OVERFLOW_FACES = 3
 
 fun occupantSummary(participants: List<VoiceParticipant>, selfUserId: String? = null): OccupantSummary {
     // One person on two devices is one person in the room as far as anybody
@@ -157,9 +174,13 @@ fun occupantSummary(participants: List<VoiceParticipant>, selfUserId: String? = 
     // own line is never folded into "+N".
     val people = participants.distinctBy { it.userId }
         .sortedByDescending { selfUserId != null && it.userId == selfUserId }
-    if (people.size <= OCCUPANT_LINES) return OccupantSummary(people, emptyList())
+    if (people.size <= OCCUPANT_LINES) return OccupantSummary(people, 0, emptyList())
     val keep = OCCUPANT_LINES - 1
-    return OccupantSummary(people.take(keep), people.drop(keep))
+    return OccupantSummary(
+        listed = people.take(keep),
+        overflowCount = people.size - keep,
+        overflowFaces = people.subList(keep, minOf(people.size, keep + OVERFLOW_FACES)),
+    )
 }
 
 /** The line under the server's name: how many are in a call, how many rooms are live. */

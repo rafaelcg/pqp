@@ -14,7 +14,7 @@ import gg.pqp.app.ui.screens.channels.occupantSummary
 import gg.pqp.app.ui.screens.channels.rowBadge
 import gg.pqp.app.ui.screens.channels.sectionsOf
 import gg.pqp.app.ui.screens.channels.serverActivity
-import gg.pqp.app.ui.screens.channels.withActivity
+import gg.pqp.app.ui.screens.channels.bumped
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,22 +30,32 @@ class ChannelListRulesTest {
 
     @Test
     fun `activity adds one unread and counts a mention only when it is one`() {
-        val start = mapOf("a" to ChannelUnread("a", count = 2, mentions = 1))
-        val next = start.withActivity("a", mention = false).withActivity("b", mention = true)
-        assertEquals(ChannelUnread("a", 3, 1), next["a"])
-        assertEquals(ChannelUnread("b", 1, 1), next["b"])
+        assertEquals(ChannelUnread("a", 3, 1), bumped(ChannelUnread("a", 2, 1), "a", mention = false))
+        assertEquals(ChannelUnread("b", 1, 1), bumped(null, "b", mention = true))
     }
 
     @Test
-    fun `a snapshot in flight cannot erase activity that arrived meanwhile`() {
+    fun `frames during a request are a floor, never added twice`() {
+        val ledger = UnreadLedger()
+        var ticket = ledger.begin()
+        ledger.activity("a", mention = true)
+        // The answer predates the frame: the frame survives.
+        assertEquals(ChannelUnread("a", 1, 1), ledger.snapshot(ticket, emptyMap())?.get("a"))
+        ticket = ledger.begin()
+        ledger.activity("a", mention = false)
+        // The answer already includes the frame: it is not counted again.
+        assertEquals(ChannelUnread("a", 2, 1), ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 2, 1)))?.get("a"))
+    }
+
+    @Test
+    fun `frames are not buffered once no request is pending`() {
         val ledger = UnreadLedger()
         val ticket = ledger.begin()
-        ledger.activity("a", mention = true)
-        val after = ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 2, 0)))
-        assertEquals(ChannelUnread("a", 3, 1), after?.get("a"))
-        // The next snapshot starts clean: the replayed frame is not counted twice.
+        ledger.abandon(ticket)
+        assertEquals(ChannelUnread("a", 1, 0), ledger.activity("a", mention = false))
         val next = ledger.begin()
-        assertEquals(ChannelUnread("a", 3, 1), ledger.snapshot(next, mapOf("a" to ChannelUnread("a", 3, 1)))?.get("a"))
+        // Read elsewhere meanwhile: the server's zero wins, nothing stale is replayed.
+        assertEquals(0, ledger.snapshot(next, mapOf("a" to ChannelUnread("a", 0, 0)))?.get("a")?.count)
     }
 
     @Test
@@ -88,14 +98,14 @@ class ChannelListRulesTest {
     fun `up to three people get a line each`() {
         val three = occupantSummary(listOf(person("1"), person("2"), person("3")))
         assertEquals(3, three.listed.size)
-        assertTrue(three.overflow.isEmpty())
+        assertTrue(three.overflowFaces.isEmpty() && three.overflowCount == 0)
     }
 
     @Test
     fun `past three, two keep their lines and the rest fold into one`() {
         val five = occupantSummary((1..5).map { person("$it") })
         assertEquals(listOf("1", "2"), five.listed.map { it.userId })
-        assertEquals(listOf("3", "4", "5"), five.overflow.map { it.userId })
+        assertEquals(listOf("3", "4", "5"), five.overflowFaces.map { it.userId })
         assertEquals(5, five.total)
     }
 
@@ -103,7 +113,7 @@ class ChannelListRulesTest {
     fun `the person holding the phone is never folded away`() {
         val summary = occupantSummary((1..5).map { person("$it") }, selfUserId = "5")
         assertEquals(listOf("5", "1"), summary.listed.map { it.userId })
-        assertEquals(listOf("2", "3", "4"), summary.overflow.map { it.userId })
+        assertEquals(listOf("2", "3", "4"), summary.overflowFaces.map { it.userId })
     }
 
     @Test

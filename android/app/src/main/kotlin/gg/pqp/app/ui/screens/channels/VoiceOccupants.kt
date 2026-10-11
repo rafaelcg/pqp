@@ -106,12 +106,13 @@ private fun StatusMark(icon: ImageVector, description: String, danger: Boolean =
 /** "+N pessoas", with the first faces of the people folded into it. */
 @Composable
 fun VoiceOverflowRow(
-    people: List<VoiceParticipant>,
+    faces: List<VoiceParticipant>,
+    count: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
-    val faces = people.take(3)
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -143,7 +144,7 @@ fun VoiceOverflowRow(
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = pluralStringResource(R.plurals.voice_occupants_more, people.size, people.size),
+            text = pluralStringResource(R.plurals.voice_occupants_more, count, count),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant,
             maxLines = 1,
