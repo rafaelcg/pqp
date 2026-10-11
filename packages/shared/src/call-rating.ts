@@ -94,6 +94,68 @@ export const inboundStreamQualitySchema = z
 export type InboundStreamQuality = z.infer<typeof inboundStreamQualitySchema>;
 
 /**
+ * The audio faults the web client watches for during a call
+ * (`client/src/lib/audio-health.ts`), named the way they are counted.
+ *
+ * - `micNotSending`: the local meter heard a voice and the room got nothing
+ *   (the sender was fed silence, a stale track, or sent no packets), or the
+ *   published track ended.
+ * - `micUnavailable`: the call was joined without a microphone (denied,
+ *   missing, held by another app) by somebody who did not choose to listen.
+ * - `playbackBlocked`: the browser refused to play the call's sound (autoplay)
+ *   or paused it on its own.
+ * - `inboundStalled`: somebody was talking, by the SFU's own detector or by
+ *   the roster, and nothing of theirs arrived here.
+ * - `outputMissing`: the chosen speaker or headset is gone.
+ *
+ * WHY FIVE FIXED KEYS AND NOT AN OPEN MAP. Same discipline as the rest of
+ * this object: closed shape, bounded numbers, nothing a client can grow.
+ */
+export const AUDIO_HEALTH_KINDS = [
+  "micNotSending",
+  "micUnavailable",
+  "playbackBlocked",
+  "inboundStalled",
+  "outputMissing",
+] as const;
+export type AudioHealthKind = (typeof AUDIO_HEALTH_KINDS)[number];
+
+const audioHealthCountSchema = z.number().int().nonnegative().max(1_000);
+
+/**
+ * One fault's story over a call. `detected` is every episode; each episode
+ * ends one of four ways, so `autoFixed + manualFixed + unresolved` never
+ * exceeds it. `asked` counts the times the "Arrumar" card went up, which is
+ * the autos that did not work.
+ */
+export const audioHealthKindCountsSchema = z
+  .object({
+    detected: audioHealthCountSchema,
+    /** Repaired with nobody pressing anything. */
+    autoFixed: audioHealthCountSchema,
+    /** The card asked. */
+    asked: audioHealthCountSchema,
+    /** The card's button repaired it. */
+    manualFixed: audioHealthCountSchema,
+    /** Still broken when the call ended, or came straight back after a tap. */
+    unresolved: audioHealthCountSchema,
+  })
+  .strict();
+export type AudioHealthKindCounts = z.infer<typeof audioHealthKindCountsSchema>;
+
+/** Only the kinds that happened are present; an empty object is not sent. */
+export const audioHealthSummarySchema = z
+  .object({
+    micNotSending: audioHealthKindCountsSchema.optional(),
+    micUnavailable: audioHealthKindCountsSchema.optional(),
+    playbackBlocked: audioHealthKindCountsSchema.optional(),
+    inboundStalled: audioHealthKindCountsSchema.optional(),
+    outputMissing: audioHealthKindCountsSchema.optional(),
+  })
+  .strict();
+export type AudioHealthSummary = z.infer<typeof audioHealthSummarySchema>;
+
+/**
  * What actually happened to the media during a call, bounded by construction:
  * no peer id, no ip, no free text -- only closed-shape numbers and one
  * boolean, same discipline as `stream-quality-telemetry.ts`. Collected on the
@@ -126,6 +188,15 @@ export const mediaQualitySchema = z
      *  came back during the call. Zero, not null, when nothing ever did --
      *  the absence of a reconnect is itself the answer. */
     reconnectCount: z.number().int().nonnegative().max(1_000),
+    /**
+     * What the audio self-repair saw and did (`audioHealthSummarySchema`).
+     * Absent on a build without it, with the `voice_audio_self_heal` flag
+     * off, and on a call where nothing went wrong. A client only sends it
+     * after this API said `audioSelfHeal: true` on `GET /api/voice/config`,
+     * which is how it knows the field is understood here: the object is
+     * strict, and an older API would refuse the whole rating over it.
+     */
+    audioHealth: audioHealthSummarySchema.optional(),
   })
   .strict();
 export type MediaQualitySummary = z.infer<typeof mediaQualitySchema>;
@@ -201,5 +272,14 @@ export const callRatingSummarySchema = z.object({
       mediaQuality: mediaQualitySchema.nullable().optional(),
     }),
   ),
+  /**
+   * What the audio self-repair reported on rated calls since this API
+   * process started, every score included (the stored `media_quality` keeps
+   * only scores of 3 or less). Keys are `<kind>.<field>` from
+   * `audioHealthKindCountsSchema`, plus `<kind>.calls` and `<kind>.lowRated`,
+   * the calls that saw that kind at all and how many of them scored 2 or
+   * less. Absent from a summary read on its own.
+   */
+  audioHealthSinceBoot: z.record(z.string(), z.number()).optional(),
 });
 export type CallRatingSummary = z.infer<typeof callRatingSummarySchema>;

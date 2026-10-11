@@ -47,6 +47,31 @@ interface ManagerStub {
   offers: string[];
 }
 
+/**
+ * The shared stats poll, driven by hand: the audio self-repair rides it, and a
+ * real two-second interval shared with every other test's leftover call is
+ * not something a test can wait on.
+ */
+const statsListeners = vi.hoisted(() => new Set<(snapshot: unknown) => void>());
+vi.mock("@/lib/voice-stats-probe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/voice-stats-probe")>();
+  return {
+    ...actual,
+    subscribeVoiceStats: (listener: (snapshot: unknown) => void) => {
+      statsListeners.add(listener);
+      return () => {
+        statsListeners.delete(listener);
+      };
+    },
+  };
+});
+
+function emitStatsTick() {
+  for (const listener of [...statsListeners]) {
+    listener({ senders: [], receivers: [], paths: [], audio: { senders: [], receivers: [] } });
+  }
+}
+
 const playCueMock = vi.hoisted(() => vi.fn());
 const whenCueSettledMock = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -2502,6 +2527,71 @@ describe("lobby presence sounds", () => {
     // No pipeline, so unmuting is a no-op rather than a crash.
     voice.toggleMute();
     expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("audio self-repair: a listen-only call offers to fix the mic, and the tap tries the microphone again", async () => {
+    const { setAudioSelfHealForTests } = await import("@/lib/audio-self-heal-flag");
+    const missing = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw missing;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+    setAudioSelfHealForTests(true);
+    try {
+      const { transport, sent } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL);
+      voice.handleSignaling(welcome("mesh"));
+      await settle();
+      emitStatsTick();
+      await settle();
+      expect(voice.getState().audioHealthPrompt).toBe("micUnavailable");
+
+      const callsBefore = getUserMedia.mock.calls.length;
+      await voice.repairAudio();
+      // The repair is the join path's own way of adding a microphone: leave
+      // and come back, asking the browser again.
+      expect(getUserMedia.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(sent.filter((m) => m.type === "join-voice-room").length).toBe(2);
+      expect(voice.getState().audioHealthPrompt).toBeNull();
+      voice.leave();
+    } finally {
+      setAudioSelfHealForTests(false);
+    }
+  });
+
+  it("audio self-repair: with the flag off, a listen-only call shows no card", async () => {
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw Object.assign(new Error("Requested device not found"), { name: "NotFoundError" });
+        },
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    emitStatsTick();
+    await settle();
+    expect(voice.getState().status).toBe("connected");
+    expect(voice.getState().audioHealthPrompt).toBeNull();
+    voice.leave();
   });
 
   it("plays join when someone else enters the lobby, leave when they go", async () => {

@@ -419,6 +419,7 @@ import {
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
 import { startNotifyConfig } from "@/lib/notify-config";
+import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -2651,6 +2652,12 @@ function MainAppContent({
   const notifyConfigUserId = user?.id ?? null;
   useEffect(
     () => (notifyConfigUserId ? startNotifyConfig() : undefined),
+    [notifyConfigUserId],
+  );
+  // `voice_audio_self_heal` (`lib/audio-health.ts`), same refresh, same reason
+  // to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
     [notifyConfigUserId],
   );
   const watchPartyWaitlist = useWatchPartyWaitlist(
@@ -10760,6 +10767,8 @@ function MainAppContent({
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+            onRepairAudio={() => void voice.repairAudio()}
+            onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10817,6 +10826,8 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          onRepairAudio={() => void voice.repairAudio()}
+          onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}

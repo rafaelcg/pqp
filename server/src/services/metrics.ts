@@ -120,7 +120,7 @@ import {
   dbTxByPath,
 } from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
-import { callRatingSummary } from "./call-ratings.js";
+import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
@@ -1778,7 +1778,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     acquisition,
     activation,
     retention,
-    callRatings,
+    // Since-boot tallies of what the audio self-repair reported on rated
+    // calls, every score, kept in process (`call-ratings.ts`).
+    callRatings: { ...callRatings, audioHealthSinceBoot: callRatingAudioHealthCounts() },
     // The denominator travels with the numerators rather than leaving the
     // dashboard to pick one: it is the users total in this same payload.
     connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
