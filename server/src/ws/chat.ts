@@ -79,6 +79,7 @@ import {
   recordNudgeRefused,
   recordNudgeSent,
   refundNudgeBudget,
+  takeNudgeAttempt,
 } from "../services/nudge.js";
 import {
   getChannel,
@@ -2139,9 +2140,27 @@ async function handleNudge(
   conn: ChatConnection,
   frame: NudgeFrame,
 ): Promise<void> {
-  // A replay of a nudge that already landed (an offline queue, a reconnect)
-  // is answered with the stored message, before any rule: the cooldown it
-  // would now hit was spent by the original.
+  // Every frame spends an attempt before anything reads the database, and
+  // nothing reads it while the feature is off.
+  const attempt = takeNudgeAttempt(conn.user.id);
+  if (!attempt.ok) {
+    sendNudgeRefused(
+      conn.socket,
+      frame.channelId,
+      frame.nonce,
+      "cooldown",
+      attempt.retryAfterMs,
+    );
+    return;
+  }
+  if (!isEnabled("nudge")) {
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+    return;
+  }
+
+  // A replay of a nudge that already landed is answered with the stored
+  // message, before the rules: the cooldown it would now hit was spent by the
+  // original.
   if (frame.nonce) {
     const existing = await findMessageByNonce(
       frame.channelId,
@@ -2174,27 +2193,22 @@ async function handleNudge(
     return;
   }
 
-  let posted: PostChannelMessageResult;
-  try {
-    posted = await postChannelMessage({
-      author: conn.user,
-      channelId: frame.channelId,
-      body: NUDGE_BODY,
-      nonce: frame.nonce,
-      senderSocket: conn.socket,
-      systemKind: "nudge",
-    });
-  } catch (error) {
-    // Nothing may have been stored: give the cooldown back before the
-    // socket router logs it, so a retry is not told to wait for a nudge
-    // that never arrived.
-    await refundNudgeBudget(conn.user.id, frame.channelId);
-    throw error;
-  }
+  const posted = await postChannelMessage({
+    author: conn.user,
+    channelId: frame.channelId,
+    body: NUDGE_BODY,
+    nonce: frame.nonce,
+    senderSocket: conn.socket,
+    systemKind: "nudge",
+  });
+  // A throw is NOT refunded: it may come after the row committed (a fan-out
+  // step), and a refund then would allow a second nudge inside the cooldown.
   if (!posted.ok) {
     // No access, a block that landed between the two reads, the database:
     // all of them are the one neutral token, for the same reason as above.
-    // Nothing was stored, so nothing was spent either.
+    // A not-ok answer is always decided before the insert, so nothing was
+    // stored and the cooldown is handed back; the attempt limiter above still
+    // bounds how often this can be tried.
     await refundNudgeBudget(conn.user.id, frame.channelId);
     sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
     return;

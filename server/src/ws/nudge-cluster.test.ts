@@ -431,6 +431,18 @@ describeDb("chamar a atenção across two instances on the Postgres bus", () => 
     expect(await countNudges(channelId)).toBe(1);
   }, 30_000);
 
+  it("refused frames are still attempts: a burst of them is cut off before any read", async () => {
+    const { one: alice, two: bob, channelId } = await friendsInDm("Ivy", "Jao");
+    await a.preferences.mergePreferences(bob.id, { allowNudges: false });
+    const reasons: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      reasons.push(refusal(await nudge(a, alice, channelId))!.reason!);
+    }
+    // Six attempts are judged (and refused: Bob opted out), the rest never are.
+    expect(reasons.slice(0, 6)).toEqual(Array(6).fill("unavailable"));
+    expect(reasons.slice(6)).toEqual(["cooldown", "cooldown"]);
+  }, 30_000);
+
   it("the sender's own switch off: self-off", async () => {
     const { one: alice, channelId } = await friendsInDm("Rui", "Sol");
     await a.preferences.mergePreferences(alice.id, { allowNudges: false });

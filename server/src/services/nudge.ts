@@ -111,6 +111,7 @@ export function resetNudgeStateForTests(): void {
   refused.clear();
   conversationLimiter.reset();
   senderLimiter.reset();
+  attemptLimiter.reset();
 }
 
 // ---------------------------------------------------------------- the rules
@@ -159,21 +160,39 @@ async function takeBudget(
     };
   }
   if (!senderLimiter.take(senderId)) {
+    conversationLimiter.take(conversationKey, -1);
     return { ok: false, retryAfterMs: senderLimiter.retryAfter(senderId) * 1000 };
   }
+  // From here a refusal rolls back everything spent before it, so a "wait"
+  // never costs more than the one budget that said no.
+  const rollBackLocal = () => {
+    conversationLimiter.take(conversationKey, -1);
+    senderLimiter.take(senderId, -1);
+  };
   if (!(await spendShared(CONVERSATION_BUCKET, conversationKey))) {
+    rollBackLocal();
     return {
       ok: false,
       retryAfterMs: await sharedRetryAfterMs(CONVERSATION_BUCKET, conversationKey),
     };
   }
   if (!(await spendShared(SENDER_BUCKET, senderId))) {
+    rollBackLocal();
+    await refundShared(CONVERSATION_BUCKET, conversationKey);
     return {
       ok: false,
       retryAfterMs: await sharedRetryAfterMs(SENDER_BUCKET, senderId),
     };
   }
   return { ok: true };
+}
+
+async function refundShared(options: SharedBucketOptions, subject: string): Promise<void> {
+  try {
+    await refundSharedRateLimit(options, subject);
+  } catch (error) {
+    console.error(`[nudge] refund of ${options.bucket} failed:`, error);
+  }
 }
 
 /**
@@ -188,12 +207,29 @@ export async function refundNudgeBudget(senderId: string, channelId: string): Pr
   const conversationKey = `${senderId}:${channelId}`;
   conversationLimiter.take(conversationKey, -1);
   senderLimiter.take(senderId, -1);
-  try {
-    await refundSharedRateLimit(CONVERSATION_BUCKET, conversationKey);
-    await refundSharedRateLimit(SENDER_BUCKET, senderId);
-  } catch (error) {
-    console.error("[nudge] budget refund failed:", error);
+  await refundShared(CONVERSATION_BUCKET, conversationKey);
+  await refundShared(SENDER_BUCKET, senderId);
+}
+
+/**
+ * Attempts, not nudges: every `nudge` frame spends one, before any database
+ * read (the nonce lookup included). The cooldown above is spent only by a
+ * nudge that lands, so without this a refused frame (not friends, busy,
+ * unanswered, a replayed nonce) could be repeated as fast as the socket
+ * allows, each one a few reads. Generous enough that a person never meets it:
+ * a burst of 6, then one every 2 s. Per process, which is fine for a backstop
+ * whose job is database load, not fairness.
+ */
+const attemptLimiter = createRateLimiter({ capacity: 6, refillPerSecond: 0.5 });
+
+/** Spend one attempt. On refusal, how long until the next one is taken. */
+export function takeNudgeAttempt(
+  senderId: string,
+): { ok: true } | { ok: false; retryAfterMs: number } {
+  if (attemptLimiter.take(senderId)) {
+    return { ok: true };
   }
+  return { ok: false, retryAfterMs: attemptLimiter.retryAfter(senderId) * 1000 };
 }
 
 /**
