@@ -852,15 +852,12 @@ describe("the panel's height follows the window", () => {
   let heightSpy: { mockRestore: () => void } | null = null;
 
   beforeEach(() => {
-    // A capped panel reports its cap; an uncapped one reports what it wants.
+    // The grid reports its full content whatever the panel's cap is, which is
+    // what the panel measures. The chrome around it is nothing here.
     heightSpy = vi
-      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
       .mockImplementation(function (this: HTMLElement) {
-        if (this.id !== "soundboard-panel") {
-          return 0;
-        }
-        const cap = Number.parseFloat(this.style.maxHeight);
-        return Number.isFinite(cap) ? Math.min(NATURAL, cap) : NATURAL;
+        return this.classList.contains("grid") ? NATURAL : 0;
       });
     rectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
@@ -902,5 +899,199 @@ describe("the panel's height follows the window", () => {
       window.dispatchEvent(new Event("resize"));
     });
     expect(Number.parseFloat(panel()!.style.maxHeight)).toBe(NATURAL);
+  });
+});
+
+describe("the clip grid scrolls", () => {
+  function gridScrollState(grid: HTMLElement) {
+    const state = { top: 0 };
+    Object.defineProperty(grid, "scrollTop", {
+      configurable: true,
+      get: () => state.top,
+      set: (value: number) => {
+        state.top = value;
+      },
+    });
+    return state;
+  }
+
+  it("keeps its scroll position when a scroll event comes from inside the panel", () => {
+    stubViewport(390, 664, true);
+    board.sounds = Array.from({ length: 20 }, (_, i) => customSound(`c${i}`, `Clip ${i}`));
+    mount();
+    open();
+    const grid = panel()!.querySelector<HTMLElement>(".grid")!;
+    const state = gridScrollState(grid);
+    // A browser clamps a grid's scrollTop to 0 the moment its panel's cap is
+    // lifted (the old measurement did exactly that, on every scroll event).
+    const setMax = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "maxHeight");
+    const liftedCaps: string[] = [];
+    const livePanel = panel()!;
+    const style = livePanel.style;
+    Object.defineProperty(style, "maxHeight", {
+      configurable: true,
+      get: () => setMax?.get?.call(style) as string,
+      set: (value: string) => {
+        if (value === "none") {
+          liftedCaps.push(value);
+          state.top = 0;
+        }
+        setMax?.set?.call(style, value);
+      },
+    });
+    state.top = 140;
+    act(() => {
+      grid.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(50);
+    });
+    expect(liftedCaps).toEqual([]);
+    expect(state.top).toBe(140);
+    expect(panel()).not.toBeNull();
+  });
+
+  it("scrolls the focused tile into view when the arrows or End move focus", async () => {
+    stubViewport(390, 664, true);
+    board.sounds = Array.from({ length: 20 }, (_, i) => customSound(`c${i}`, `Clip ${i}`));
+    mount();
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      await act(async () => {
+        trigger().click();
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      const all = tiles();
+      expect(all.length).toBeGreaterThan(10);
+      press("End");
+      expect(document.activeElement).toBe(all.at(-1));
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+});
+
+describe("the sheet's header and size on a phone", () => {
+  let anchorRect: { top: number; bottom: number } = { top: 0, bottom: 40 };
+  let rectSpy: { mockRestore: () => void } | null = null;
+  let heightSpy: { mockRestore: () => void } | null = null;
+
+  beforeEach(() => {
+    heightSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("grid") ? 600 : 0;
+      });
+    rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("aria-haspopup") === "dialog") {
+          return {
+            top: anchorRect.top,
+            bottom: anchorRect.bottom,
+            left: 300,
+            right: 340,
+            width: 40,
+            height: anchorRect.bottom - anchorRect.top,
+            x: 300,
+            y: anchorRect.top,
+            toJSON: () => ({}),
+          };
+        }
+        return new DOMRect(0, 0, 0, 0);
+      });
+  });
+
+  afterEach(() => {
+    heightSpy?.mockRestore();
+    rectSpy?.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("gives the header its own fixed height, with the close button inside the line", () => {
+    stubViewport(390, 664, true);
+    anchorRect = { top: 560, bottom: 600 };
+    mount();
+    open();
+    const header = panel()!.querySelector<HTMLElement>("[data-soundboard-header]")!;
+    expect(header.className).toContain("shrink-0");
+    expect(header.className).toContain("h-10");
+    const close = header.querySelector<HTMLElement>("[data-soundboard-close]")!;
+    expect(close).not.toBeNull();
+    // Inline, not floated over the grid below.
+    expect(close.className).not.toContain("absolute");
+    expect(close.className).toContain("h-10");
+    // The grid and the footer start below the header.
+    expect(header.nextElementSibling!.classList.contains("grid")).toBe(true);
+  });
+
+  it("keeps two rows of tiles on a phone on its side, 300px tall", () => {
+    stubViewport(750, 300, true);
+    // The call bar's row sits in the lower half: a tall bar leaves little room.
+    anchorRect = { top: 190, bottom: 230 };
+    mount();
+    open();
+    const maxHeight = Number.parseFloat(panel()!.style.maxHeight);
+    // Two 68px rows and a 6px gap, plus the compact header (40) and footer (40+).
+    const twoRows = 68 * 2 + 6;
+    expect(maxHeight - (40 + 40 + 20)).toBeGreaterThanOrEqual(twoRows);
+    // It took the call bar's room: the sheet reaches the bottom margin.
+    const bottom = Number.parseFloat(panel()!.style.top) + maxHeight;
+    expect(bottom).toBe(300 - 8);
+    expect(panel()!.querySelector("[data-soundboard-close]")).not.toBeNull();
+  });
+
+  it("stays above the call bar when there is room for two rows", () => {
+    stubViewport(390, 664, true);
+    anchorRect = { top: 560, bottom: 600 };
+    mount();
+    open();
+    const bottom =
+      Number.parseFloat(panel()!.style.top) + Number.parseFloat(panel()!.style.maxHeight);
+    expect(bottom).toBeLessThanOrEqual(560 - 8);
+  });
+});
+
+describe("the lock note and the notice on a narrow screen", () => {
+  it("keeps the lock note inside the viewport when the button is at the right edge", () => {
+    stubViewport(360, 640, true);
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("aria-haspopup") === "dialog") {
+          return {
+            top: 580,
+            bottom: 620,
+            left: 316,
+            right: 356,
+            width: 40,
+            height: 40,
+            x: 316,
+            y: 580,
+            toJSON: () => ({}),
+          };
+        }
+        return new DOMRect(0, 0, 0, 0);
+      });
+    mount("deafened");
+    act(() => trigger().click());
+    const note = lockHint()!;
+    const left = Number.parseFloat(note.style.left);
+    const width = Number.parseFloat(note.style.width);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left + width).toBeLessThanOrEqual(360 - 8);
+    spy.mockRestore();
+  });
+
+  it("lets the did-not-play notice wrap in the sheet instead of cutting it off", () => {
+    stubViewport(280, 568, true);
+    mount();
+    open();
+    for (let i = 0; i < SOUNDBOARD_PLAY_BURST + 1; i += 1) {
+      act(() => tiles()[0]!.click());
+    }
+    const notice = panel()!.querySelector<HTMLElement>("[data-soundboard-notice]")!;
+    expect(notice.className).toContain("min-h-5");
+    expect(notice.querySelector(".truncate")).toBeNull();
   });
 });

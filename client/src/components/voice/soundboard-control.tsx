@@ -68,6 +68,18 @@ const GRID_GAP = 6;
 /** A tile is at least this wide, so a thumb lands on one tile. */
 const TILE_MIN_WIDTH = 76;
 const SHEET_MAX_COLUMNS = 6;
+/**
+ * A window this short (a phone on its side) gets compact chrome and may cover
+ * the call bar, so the grid keeps room. Closing is the X, one tap.
+ */
+const SHEET_COMPACT_MAX_HEIGHT = 480;
+/**
+ * Two rows of tiles (68px each and a 6px gap) plus the chrome around them.
+ * The sheet asks for at least this much, or all it needs if that is less, and
+ * covers the call bar rather than settle for less.
+ */
+const SHEET_MIN_HEIGHT = 268;
+const SHEET_MIN_HEIGHT_COMPACT = 252;
 
 /** How long the lock's reason stays up after a tap. */
 const LOCK_HINT_MS = 4000;
@@ -84,19 +96,36 @@ export function sheetColumnsFor(sheetWidth: number): number {
   return Math.min(SHEET_MAX_COLUMNS, Math.max(2, fit));
 }
 
+function px(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /**
- * The height an element wants with no cap. `offsetHeight` of a capped panel
- * is the cap, so a panel placed once in a short window never grew back.
+ * The height the panel wants with no cap, read without touching the live
+ * layout. Clearing `maxHeight` to measure made the browser clamp the grid's
+ * `scrollTop` to 0, and a scroll inside the grid ran this, so the grid never
+ * scrolled. The grid's `scrollHeight` is its full content whatever its cap.
  */
-function naturalHeight(element: HTMLElement | null): number {
-  if (!element) {
+function naturalPanelHeight(panel: HTMLElement | null, grid: HTMLElement | null): number {
+  if (!panel || !grid) {
     return 0;
   }
-  const capped = element.style.maxHeight;
-  element.style.maxHeight = "none";
-  const height = element.offsetHeight;
-  element.style.maxHeight = capped;
-  return height;
+  const own = getComputedStyle(panel);
+  // The border is what offsetHeight has over clientHeight.
+  let total =
+    px(own.paddingTop) + px(own.paddingBottom) + (panel.offsetHeight - panel.clientHeight);
+  for (const child of Array.from(panel.children)) {
+    if (!(child instanceof HTMLElement)) {
+      continue;
+    }
+    const style = getComputedStyle(child);
+    total +=
+      (child === grid ? child.scrollHeight : child.offsetHeight) +
+      px(style.marginTop) +
+      px(style.marginBottom);
+  }
+  return Math.ceil(total);
 }
 
 /**
@@ -154,6 +183,7 @@ export function SoundboardControl({
   const portalHost = useFullscreenPortalHost();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<
     (CSSProperties & { width: number }) | null
   >(null);
@@ -161,6 +191,11 @@ export function SoundboardControl({
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1024 : window.innerWidth,
   );
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === "undefined" ? 800 : window.innerHeight,
+  );
+  // A phone on its side: tighter chrome, and room taken from the call bar.
+  const compact = sheet && viewportHeight <= SHEET_COMPACT_MAX_HEIGHT;
   const panelWidth = sheet ? sheetWidthFor(viewportWidth) : PANEL_WIDTH;
   // The one column count: the grid is drawn with it and the arrows step by it.
   const columns = sheet ? sheetColumnsFor(panelWidth) : POPOVER_COLUMNS;
@@ -223,12 +258,28 @@ export function SoundboardControl({
       }
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       setViewportWidth(viewport.width);
+      setViewportHeight(viewport.height);
       const width = sheet ? sheetWidthFor(viewport.width) : PANEL_WIDTH;
-      const height = naturalHeight(panelRef.current) || PANEL_HEIGHT;
+      const height = naturalPanelHeight(panelRef.current, gridRef.current) || PANEL_HEIGHT;
+      let top = anchor.top;
+      if (sheet) {
+        top = controlRowTop(trigger);
+        const wanted = Math.min(
+          height,
+          viewport.height <= SHEET_COMPACT_MAX_HEIGHT
+            ? SHEET_MIN_HEIGHT_COMPACT
+            : SHEET_MIN_HEIGHT,
+        );
+        // Not enough room above the controls for two rows: cover them. The
+        // close button is one tap away.
+        if (top - 2 * SHEET_MARGIN < wanted) {
+          top = viewport.height;
+        }
+      }
       const next = placeAnchoredPanel(
         {
-          top: sheet ? controlRowTop(trigger) : anchor.top,
-          bottom: anchor.bottom,
+          top,
+          bottom: sheet && top === viewport.height ? viewport.height : anchor.bottom,
           left: sheet ? (viewport.width - width) / 2 : anchor.right - width,
           right: anchor.right,
         },
@@ -250,15 +301,22 @@ export function SoundboardControl({
     // Follow the trigger when something around it scrolls. Closing on any
     // scroll shut the panel under a keyboard user whose focus scrolled the
     // member list into view.
-    document.addEventListener("scroll", place, true);
+    // A scroll inside the panel (the clip grid) moves nothing around it.
+    function placeOnOuterScroll(event: Event) {
+      if (event.target instanceof Node && panelRef.current?.contains(event.target)) {
+        return;
+      }
+      place();
+    }
+    document.addEventListener("scroll", placeOnOuterScroll, true);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", place);
       window.visualViewport?.removeEventListener("resize", place);
-      document.removeEventListener("scroll", place, true);
+      document.removeEventListener("scroll", placeOnOuterScroll, true);
     };
     // The width and column count change the natural height, so place again.
-  }, [open, sounds.length, canManage, sheet, panelWidth, columns]);
+  }, [open, sounds.length, canManage, sheet, compact, panelWidth, columns]);
 
   // The lock's reason: placed above the button, gone after a few seconds, on a
   // tap anywhere else, or on Escape. It never takes focus.
@@ -408,7 +466,10 @@ export function SoundboardControl({
       return;
     }
     event.preventDefault();
-    tiles[Math.min(last, Math.max(0, next))]?.focus();
+    const target = tiles[Math.min(last, Math.max(0, next))];
+    target?.focus();
+    // Focus alone left an off-screen tile off screen on some browsers.
+    target?.scrollIntoView?.({ block: "nearest" });
   }
 
   // The trigger's name comes from the Tooltip (`name`), never from an
@@ -440,12 +501,23 @@ export function SoundboardControl({
               visibility: placement ? "visible" : "hidden",
             }}
             className={cn(
-              "elevation-3 z-[100] flex max-w-full flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-pop-in",
+              "elevation-3 z-[100] flex max-w-full flex-col overflow-hidden rounded-[var(--radius-card)] animate-pop-in",
+              compact ? "p-1.5" : "p-2.5",
               sheet ? "origin-bottom" : "origin-bottom-right",
             )}
           >
             {/* The notice takes the title's line, so nothing below it moves. */}
-            <div className={cn("relative mb-1.5 flex items-center px-0.5", sheet ? "h-10" : "h-5")}>
+            {/* A fixed height that never shrinks: in the sheet it is the close
+                button's own 40px, which sits in the line instead of over the
+                first row of tiles. */}
+            <div
+              data-soundboard-header=""
+              className={cn(
+                "relative flex shrink-0 items-center px-0.5",
+                compact ? "mb-1" : "mb-1.5",
+                sheet ? "h-10" : "h-5",
+              )}
+            >
               <p
                 aria-hidden={refused ? true : undefined}
                 className={cn("text-xs font-medium text-text", refused && "invisible")}
@@ -462,14 +534,18 @@ export function SoundboardControl({
                 className={
                   refused
                     ? cn(
-                        "absolute left-0.5 flex h-5 items-center gap-1 rounded-full bg-warning-soft px-2 text-xs font-medium text-on-warning-soft",
-                        sheet ? "max-w-[calc(100%-3.25rem)]" : "max-w-[calc(100%-0.25rem)]",
+                        "absolute left-0.5 flex min-h-5 items-center gap-1 bg-warning-soft px-2 text-xs font-medium text-on-warning-soft",
+                        // On a narrow screen the sentence wraps to two lines
+                        // beside the close button instead of being cut off.
+                        sheet
+                          ? "max-w-[calc(100%-3.25rem)] rounded-xl py-0.5 leading-tight"
+                          : "h-5 max-w-[calc(100%-0.25rem)] rounded-full",
                       )
                     : "sr-only"
                 }
               >
                 <CircleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">
+                <span className={sheet ? "min-w-0 [overflow-wrap:anywhere]" : "truncate"}>
                   {refused === "removed"
                     ? t("soundboard.removed")
                     : refused === "refused"
@@ -482,7 +558,7 @@ export function SoundboardControl({
                   type="button"
                   aria-label={t("soundboard.close")}
                   data-soundboard-close=""
-                  className="absolute right-0 top-0 flex h-10 w-10 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-border-strong hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  className="ml-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-border-strong hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                   onClick={() => {
                     setOpen(false);
                     triggerRef.current?.focus();
@@ -493,7 +569,8 @@ export function SoundboardControl({
               )}
             </div>
             <div
-              className="grid min-h-0 gap-1.5 overflow-y-auto"
+              ref={gridRef}
+              className="grid min-h-0 gap-1.5 overflow-y-auto overscroll-contain"
               style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
               onKeyDown={moveBetweenTiles}
             >
@@ -525,7 +602,12 @@ export function SoundboardControl({
                 );
               })}
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-2">
+            <div
+              className={cn(
+                "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-t border-border",
+                compact ? "mt-1.5 pt-1.5" : "mt-2 pt-2",
+              )}
+            >
               <button
                 type="button"
                 aria-pressed={muted}
