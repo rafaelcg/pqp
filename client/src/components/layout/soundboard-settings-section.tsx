@@ -49,6 +49,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);
+  const prefetchedIds = useRef("");
   const addRef = useRef<HTMLButtonElement>(null);
   const pencilRefs = useRef(new Map<string, HTMLButtonElement>());
   const previewRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -70,7 +71,14 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         setMaxSounds(page.maxSounds);
         setSlotsUsed(page.slotsUsed ?? null);
         setError(null);
-        void prefetchSoundboard(serverId);
+        // Warming the clips is keyed by clip, so only a changed set needs it;
+        // the poll while uploads are in flight would otherwise fetch the whole
+        // list a second time on every tick.
+        const ids = page.sounds.map((entry) => entry.id).join(",");
+        if (ids !== prefetchedIds.current) {
+          prefetchedIds.current = ids;
+          void prefetchSoundboard(serverId);
+        }
       })
       .catch(() => setError(t("soundboard.settings.loadFailed")));
   }
@@ -156,8 +164,9 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
     }
     const timer = window.setTimeout(() => void reload(), PENDING_REFRESH_MS);
     return () => window.clearTimeout(timer);
-    // Re-armed by every answer (`sounds` is a new array each time).
-  }, [pending, sounds]);
+    // Re-armed by every answer (`sounds` is a new array each time) and by a
+    // failed one (`error` changes), so a dropped poll does not end the polling.
+  }, [pending, sounds, error]);
   const confirmSound = sounds?.find((sound) => sound.id === confirmId) ?? null;
 
   return (
