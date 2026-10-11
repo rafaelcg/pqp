@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ForumPostSummary, ThreadSummary } from "@pqp/shared";
-import {
-  applyForumFrameToOpenPost,
-  resolveRoutedThread,
-  threadSummaryForPost,
-} from "./forum-route";
+import { resolveRoutedThread } from "./forum-route";
 
 const FORUM = "f0000000-0000-4000-8000-000000000000";
 const POST = "p0000000-0000-4000-8000-000000000000";
@@ -93,60 +89,5 @@ describe("resolveRoutedThread", () => {
         fetchThreads: () => Promise.reject(new Error("down")),
       }),
     ).resolves.toBeNull();
-  });
-});
-
-describe("applyForumFrameToOpenPost", () => {
-  const open = {
-    thread: threadSummaryForPost(post),
-    origin: null,
-    forumPost: { post, removed: false },
-  };
-
-  it("follows a retitle of the open post into the panel's header", () => {
-    const next = applyForumFrameToOpenPost(open, {
-      type: "forum-post-upsert",
-      forumId: FORUM,
-      post: { ...post, title: "Notebook não liga (resolvido)", replyCount: 5 },
-    });
-    expect(next?.thread.name).toBe("Notebook não liga (resolvido)");
-    expect(next?.thread.replyCount).toBe(5);
-    expect(next?.forumPost?.post.replyCount).toBe(5);
-  });
-
-  it("marks the open post removed instead of closing it", () => {
-    const next = applyForumFrameToOpenPost(open, {
-      type: "forum-post-removed",
-      forumId: FORUM,
-      postId: POST,
-    });
-    expect(next?.forumPost?.removed).toBe(true);
-  });
-
-  it("returns the same object for another post or a chat thread", () => {
-    const other = { ...post, id: "o0000000-0000-4000-8000-000000000000" };
-    expect(
-      applyForumFrameToOpenPost(open, { type: "forum-post-upsert", forumId: FORUM, post: other }),
-    ).toBe(open);
-    const chat = { thread, origin: null };
-    expect(
-      applyForumFrameToOpenPost(chat, { type: "forum-post-removed", forumId: FORUM, postId: POST }),
-    ).toBe(chat);
-    expect(applyForumFrameToOpenPost(null, { type: "forum-post-removed", forumId: FORUM, postId: POST })).toBeNull();
-  });
-});
-
-describe("threadSummaryForPost", () => {
-  it("is a rootless, never-archived thread under the forum, named by the title", () => {
-    expect(threadSummaryForPost(post)).toEqual({
-      channelId: POST,
-      parentChannelId: FORUM,
-      rootMessageId: null,
-      name: "Notebook não liga",
-      replyCount: 4,
-      lastActivityAt: post.lastActivityAt,
-      archived: false,
-      participants: [],
-    });
   });
 });

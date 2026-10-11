@@ -1,9 +1,4 @@
-import type {
-  ForumPostRemoved,
-  ForumPostSummary,
-  ForumPostUpsert,
-  ThreadSummary,
-} from "@pqp/shared";
+import type { ForumPostSummary, ThreadSummary } from "@pqp/shared";
 
 /**
  * Where a link to a channel id that is not in the channel list should go.
@@ -62,62 +57,4 @@ export async function resolveRoutedThread(
     // Nothing more to try.
   }
   return null;
-}
-
-/**
- * Keep the open post's panel in step with the forum's live frames: a retitle,
- * a new tag, a lock or a resolve shows in its header at once, and a delete
- * marks it removed so the panel can say so instead of vanishing. Anything
- * about another post, or an open thread that is not a post, returns the
- * same object, so React skips the render.
- */
-export function applyForumFrameToOpenPost<
-  T extends {
-    thread: ThreadSummary;
-    forumPost?: { post: ForumPostSummary; removed: boolean } | null;
-  },
->(open: T | null, frame: ForumPostUpsert | ForumPostRemoved): T | null {
-  const current = open?.forumPost;
-  if (!open || !current) {
-    return open;
-  }
-  if (frame.type === "forum-post-removed") {
-    if (frame.postId !== current.post.id || current.removed) {
-      return open;
-    }
-    return { ...open, forumPost: { ...current, removed: true } };
-  }
-  if (frame.post.id !== current.post.id) {
-    return open;
-  }
-  return {
-    ...open,
-    thread: {
-      ...open.thread,
-      name: frame.post.title,
-      replyCount: frame.post.replyCount,
-      lastActivityAt: frame.post.lastActivityAt,
-    },
-    forumPost: { post: frame.post, removed: current.removed },
-  };
-}
-
-/**
- * A post as the thread panel takes it. A post IS a thread channel (with no
- * root message), so App's existing panel, controller and read cursor carry
- * it; forum PR 3b teaches the panel to draw it as a post
- * (`variant="forum-post"`) from the summary App keeps beside it.
- */
-export function threadSummaryForPost(post: ForumPostSummary): ThreadSummary {
-  return {
-    channelId: post.id,
-    parentChannelId: post.forumId,
-    rootMessageId: null,
-    name: post.title,
-    replyCount: post.replyCount,
-    lastActivityAt: post.lastActivityAt,
-    // A post never archives (spec §3.7); the panel must not say "Arquivada".
-    archived: false,
-    participants: [],
-  };
 }

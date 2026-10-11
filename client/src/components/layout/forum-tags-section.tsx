@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { GripVertical, Plus, Smile, Trash2 } from "lucide-react";
 import { FORUM_MAX_TAGS, FORUM_TAG_NAME_MAX } from "@pqp/shared";
 import { Badge } from "@/components/ui/badge";
@@ -455,10 +455,32 @@ function EmojiButton({
   onClose: () => void;
   disabled?: boolean;
 }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // The picker is portalled out of the settings sheet, so the sheet's own
+  // Escape (which asks "leave without saving?") would win. While the picker
+  // is open, Escape belongs to it: caught first, at the window, and the
+  // keyboard goes back to the square that opened it.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      buttonRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open, onClose]);
   return (
     <span className="relative shrink-0">
       <Tooltip label={label}>
         <button
+          ref={buttonRef}
           type="button"
           disabled={disabled}
           aria-expanded={open}

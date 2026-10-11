@@ -50,7 +50,6 @@ import type {
   ChannelSession,
   ChannelType,
   DmSummary,
-  ForumPostSummary,
   MemberRole,
   SanctionNotice,
   Server,
@@ -86,7 +85,8 @@ import {
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
-import { dispatchForumFrame, ForumPane } from "@/components/forum";
+import { ForumPane } from "@/components/forum";
+import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -390,11 +390,7 @@ import {
   signedOutRedirectPath,
   messageRoutePath,
 } from "@/lib/app-route";
-import {
-  applyForumFrameToOpenPost,
-  resolveRoutedThread,
-  threadSummaryForPost,
-} from "@/lib/forum-route";
+import { resolveRoutedThread } from "@/lib/forum-route";
 import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
@@ -3858,6 +3854,26 @@ function MainAppContent({
     };
   }, [selectedServerId, timeoutsEpoch, moderationBits.timeout]);
 
+  // --- forums --- state the forum pane is handed (see the header of
+  // `components/forum/forum-pane.tsx`).
+  /**
+   * The mark-read that opening a channel sends, kept for one answer: the
+   * forum pane's first `markRead(forumId)` gets the cursor from BEFORE this
+   * visit instead of moving it a second time and getting back "just now".
+   */
+  const visitReadCursorRef = useRef<{
+    channelId: string;
+    cursor: Promise<string | null>;
+    taken: boolean;
+  } | null>(null);
+  /** The post in the address bar while a forum is open (`/post/<id>`). */
+  const [forumRoutePost, setForumRoutePost] = useState<{
+    forumId: string;
+    postId: string;
+  } | null>(null);
+  /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
+  const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
+
   /**
    * Open a channel by id, whatever kind it is.
    *
@@ -3866,20 +3882,6 @@ function MainAppContent({
    * already, and a conversation is a channel. Resolving which channel exists is
    * the caller's job, and asking for one that does not simply loads nothing.
    */
-  /**
-   * --- forums --- the open forum's read cursor from BEFORE this visit, for
-   * the pane's "Novo" badges (see `ForumPaneProps.previousReadAt`). Null
-   * while the mark-read that opening the forum sends is still out.
-   */
-  const [forumVisit, setForumVisit] = useState<{
-    channelId: string;
-    previousReadAt: string | null;
-  } | null>(null);
-  /** Goes up on every socket reconnect; the forum pane refetches on it. */
-  const [connectionEpoch, setConnectionEpoch] = useState(0);
-  /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
-  const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
-
   const openChannel = useCallback(
     async (channelId: string) => {
       const leaving = selectedChannelIdRef.current;
@@ -3913,21 +3915,12 @@ function MainAppContent({
         ? Promise.resolve(unreadCursorByChannelRef.current[channelId] ?? null)
         : clearUnread(channelId);
       // --- forums --- the forum pane measures "Novo" against the cursor as
-      // it was BEFORE this visit, and this mark-read is what moves it. Kept
-      // apart from the history read below so a failed page (a forum has no
-      // messages of its own) cannot lose it. `clearUnread` never rejects.
-      setForumVisit(null);
+      // it was BEFORE this visit, and this mark-read is what moves it: keep
+      // its answer for the pane's first ask (`forumMarkRead`). A new channel
+      // also closes whatever post or drop the last forum had.
+      visitReadCursorRef.current = { channelId, cursor: readCursor, taken: false };
+      setForumRoutePost(null);
       setForumDroppedFiles(null);
-      void readCursor.then((previousReadAt) => {
-        if (
-          selectedChannelIdRef.current === channelId &&
-          channelsRef.current.some(
-            (one) => one.id === channelId && one.type === "forum",
-          )
-        ) {
-          setForumVisit({ channelId, previousReadAt });
-        }
-      });
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
@@ -4029,14 +4022,6 @@ function MainAppContent({
   const [openThread, setOpenThread] = useState<{
     thread: ThreadSummary;
     origin: ChatMessage | null;
-    /**
-     * --- forums --- set when the open thread is a forum post: the summary
-     * the panel draws its post header from (title, tags, status), kept live
-     * by `forum-post-upsert`. `removed` is set by `forum-post-removed` while
-     * the post is open, so the panel can say "Esse post foi excluído."
-     * instead of closing under the reader.
-     */
-    forumPost?: { post: ForumPostSummary; removed: boolean } | null;
   } | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   /**
@@ -4209,16 +4194,8 @@ function MainAppContent({
   closeThreadPanelRef.current = closeThreadPanel;
 
   const openThreadPanel = useCallback(
-    async (
-      thread: ThreadSummary,
-      origin: ChatMessage | null,
-      forumPost: ForumPostSummary | null = null,
-    ) => {
-      setOpenThread({
-        thread,
-        origin,
-        forumPost: forumPost ? { post: forumPost, removed: false } : null,
-      });
+    async (thread: ThreadSummary, origin: ChatMessage | null) => {
+      setOpenThread({ thread, origin });
       setStashedThread(null);
       setThreadLoading(true);
       setThreadUnreadSince(null);
@@ -5279,16 +5256,15 @@ function MainAppContent({
             return;
           }
 
-          // --- forums --- the forum list's live rows go to the pane, and the
-          // open post's header follows them here. They stop here either way
-          // rather than falling through to the voice signaling handler,
-          // which is typed for voice frames only.
+          // --- forums --- the forum list's live rows go to the pane (the
+          // transport has one handler, and this is it). They stop here rather
+          // than falling through to the voice signaling handler, which is
+          // typed for voice frames only.
           if (
             message.type === "forum-post-upsert" ||
             message.type === "forum-post-removed"
           ) {
             dispatchForumFrame(message);
-            setOpenThread((previous) => applyForumFrameToOpenPost(previous, message));
             return;
           }
 
@@ -5564,7 +5540,7 @@ function MainAppContent({
           }
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
-          setConnectionEpoch((epoch) => epoch + 1);
+          dispatchForumReconnected();
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -5691,35 +5667,41 @@ function MainAppContent({
   );
 
   /**
-   * --- forums --- open a post: App's thread panel (beside the list on a
-   * wide screen, full screen on a phone) with the post's summary, and the
-   * post's own address in the bar so a refresh or a copied URL lands on it.
+   * --- forums --- the forum pane opened or closed a post: its own address
+   * goes in the bar (`/channel/<forumId>/post/<postId>`), so a refresh or a
+   * copied URL lands on the same post, and closing it puts the forum's back.
    */
-  const openForumPost = useCallback(
-    async (post: ForumPostSummary) => {
+  const setForumPostRoute = useCallback(
+    (forumId: string, postId: string | null) => {
+      setForumRoutePost(postId ? { forumId, postId } : null);
       const serverId = selectedServerIdRef.current;
-      if (serverId) {
-        syncPath(forumPostRoutePath(serverId, post.forumId, post.id));
+      if (serverId && selectedChannelIdRef.current === forumId) {
+        syncPath(
+          postId
+            ? forumPostRoutePath(serverId, forumId, postId)
+            : channelRoutePath(serverId, forumId),
+        );
       }
-      await openThreadPanel(threadSummaryForPost(post), null, post);
     },
-    [openThreadPanel, syncPath],
+    [syncPath],
   );
 
   /**
-   * The panel's own close (its X, Escape, "Voltar pra lista"). A post puts
-   * the forum's address back; a channel switch closes the panel too, but
-   * through `closeThreadPanel` directly, after the new channel's address is
-   * already in the bar.
+   * `markRead` for the forum pane: the first ask for the channel this visit
+   * opened answers the cursor from before the visit (`openChannel` already
+   * moved it), every other ask moves the cursor, as `markChannelRead` does.
    */
-  const closeThreadPanelFromPanel = useCallback(() => {
-    const post = openThreadRef.current?.forumPost?.post ?? null;
-    closeThreadPanel();
-    const serverId = selectedServerIdRef.current;
-    if (post && serverId && selectedChannelIdRef.current === post.forumId) {
-      syncPath(channelRoutePath(serverId, post.forumId));
-    }
-  }, [closeThreadPanel, syncPath]);
+  const forumMarkRead = useCallback(
+    (channelId: string): Promise<string | null> => {
+      const visit = visitReadCursorRef.current;
+      if (visit && visit.channelId === channelId && !visit.taken) {
+        visit.taken = true;
+        return visit.cursor;
+      }
+      return clearUnread(channelId);
+    },
+    [clearUnread],
+  );
 
   /**
    * Where "stop watching" goes: the server's first ordinary text channel.
@@ -7888,7 +7870,7 @@ function MainAppContent({
         }
         if (routedThread?.kind === "forum-post") {
           await selectChannel(routedThread.forumId, targetServerId);
-          await openForumPost(routedThread.post);
+          setForumPostRoute(routedThread.forumId, routedThread.post.id);
         } else if (routedThread?.kind === "thread") {
           await selectChannel(routedThread.thread.parentChannelId, targetServerId);
           await openThreadFromSidebar(routedThread.thread);
@@ -7897,20 +7879,10 @@ function MainAppContent({
           if (targetMessageId && !sentSince(requested.id, linkedAt)) {
             setHighlightMessageId(targetMessageId);
           }
-          // `/channel/<forumId>/post/<postId>`: the forum, then the post on
-          // top. A post that is gone or hidden leaves the reader on the forum
-          // with the same line any dead link gets.
+          // `/channel/<forumId>/post/<postId>`: the forum, with the post on
+          // top. The pane reads the post itself and says so when it is gone.
           if (targetPostId && requested.type === "forum") {
-            try {
-              const { post } = await fetchForumPost(targetPostId);
-              if (post.forumId === requested.id) {
-                await openForumPost(post);
-              } else {
-                setAppError("That channel no longer exists or is private.");
-              }
-            } catch {
-              setAppError("That channel no longer exists or is private.");
-            }
+            setForumPostRoute(requested.id, targetPostId);
           }
         } else {
           const targetServer = serversRef.current.find(
@@ -7951,10 +7923,10 @@ function MainAppContent({
       channelListTickets,
       communityHomeOn,
       loadUnread,
-      openForumPost,
       openThreadFromSidebar,
       selectChannel,
       sentSince,
+      setForumPostRoute,
     ],
   );
 
@@ -12364,36 +12336,104 @@ function MainAppContent({
             <ForumPane
               key={selectedChannel.id}
               channel={selectedChannel}
-              serverId={selectedServerId}
-              currentUserId={user?.id ?? null}
-              postingEnabled={forumConfig.enabled}
-              configLoaded={forumConfig.loaded}
+              server={{
+                id: selectedServerId,
+                name: selectedServer?.name ?? "",
+              }}
+              viewerId={user?.id ?? null}
+              currentUser={user}
               canPost={canSendHere}
-              canModerate={
+              isStaff={
                 perms.can(Permission.MANAGE_MESSAGES, selectedChannel.id) ||
                 perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)
               }
               canManage={perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)}
-              previousReadAt={
-                forumVisit?.channelId === selectedChannel.id
-                  ? forumVisit.previousReadAt
-                  : undefined
-              }
-              openPostId={
-                openThread?.forumPost?.post.forumId === selectedChannel.id
-                  ? openThread.forumPost.post.id
+              creationEnabled={forumConfig.loaded ? forumConfig.enabled : undefined}
+              postController={threadChat}
+              markRead={forumMarkRead}
+              routePostId={
+                forumRoutePost?.forumId === selectedChannel.id
+                  ? forumRoutePost.postId
                   : null
               }
-              onOpenPost={(post) => void openForumPost(post)}
+              onRoutePostChange={(postId) =>
+                setForumPostRoute(selectedChannel.id, postId)
+              }
+              onOpenNav={() => setMobileNavOpen(true)}
               onOpenSettings={(section) =>
                 setChannelSettings({
                   channelId: selectedChannel.id,
-                  section,
+                  section: section ?? "overview",
                   forceAdvanced: false,
                 })
               }
-              onOpenNav={() => setMobileNavOpen(true)}
-              connectionEpoch={connectionEpoch}
+              headerActions={
+                <>
+                  {(canManageChannels || canManageRoles) && (
+                    <Tooltip label={t("chrome.channelSettings")}>
+                      <button
+                        type="button"
+                        className={HEADER_ACTION_TILE}
+                        data-channel-header-settings=""
+                        aria-label={t("chrome.channelSettings")}
+                        onClick={() =>
+                          setChannelSettings({
+                            channelId: selectedChannel.id,
+                            section: canManageChannels ? "overview" : "permissions",
+                            forceAdvanced: false,
+                          })
+                        }
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                  {memberSidebarAvailable && (
+                    <Tooltip label={t("memberList.toggle")}>
+                      <button
+                        type="button"
+                        aria-pressed={memberSidebar.open}
+                        data-member-sidebar-toggle=""
+                        className={cn(
+                          HEADER_ACTION_TILE,
+                          memberSidebar.open && "text-paper",
+                        )}
+                        onClick={() => memberSidebar.toggle()}
+                      >
+                        <Users className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                </>
+              }
+              mentionCandidates={mentionCandidates}
+              blockedAuthorIds={blockedUserIds}
+              authors={messageAuthors}
+              roles={serverRoles}
+              showLinkEmbeds={localSettings.showLinkEmbeds}
+              slashContext={{
+                updateDisplayName: async (name: string) => {
+                  const updated = await updateMe({ displayName: name });
+                  setUser(updated);
+                  chat.setCurrentUser(updated);
+                },
+                openInvite: (mode: "create" | "join") => setInviteMode(mode),
+                joinByCode: async (code: string) => {
+                  const result = await joinInvite(code);
+                  await refreshAfterJoin(result.serverId);
+                },
+                setMuted: (muted: boolean) => voice.setMuted(muted),
+                isInVoice: voiceState.status === "connected",
+                isMuted: voiceState.isMuted,
+              }}
+              onReportMessage={(message) =>
+                setReportTarget({
+                  kind: "message",
+                  messageId: message.id,
+                  subjectName: message.authorName,
+                })
+              }
+              onForward={setForwardMessage}
               droppedFiles={forumDroppedFiles}
               onDroppedFilesTaken={() => setForumDroppedFiles(null)}
             />
@@ -12457,7 +12497,7 @@ function MainAppContent({
           onToggleJoined={(joined) =>
             void handleThreadMembership(openThread.thread, joined)
           }
-          onClose={closeThreadPanelFromPanel}
+          onClose={closeThreadPanel}
           onReportMessage={(message) =>
             setReportTarget({
               kind: "message",

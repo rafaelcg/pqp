@@ -1,15 +1,8 @@
 import type {
-  CreateForumPostRequest,
   ForumPostDetailResponse,
-  ForumPostListResponse,
-  ForumPostSummary,
-  ForumPostViewer,
   ForumSettings,
-  ForumSort,
-  ForumStatusFilter,
   ForumTag,
   PutForumTagsRequest,
-  UpdateForumPostRequest,
   UpdateForumSettingsRequest,
   VoiceAudienceResponse,
   ChannelType,
@@ -806,78 +799,10 @@ export const fetchForumConfig = (serverId: string) =>
 
 // ------------------------------------------------------------------ forums
 //
-// The REST surface frozen in `packages/shared/src/forums.ts` (its header has
-// the table). Every route below 404s on an API that predates forum PR 1; the
-// callers treat that as "nothing here yet", never as a crash.
-
-/** The list query as `GET /api/channels/:forumId/posts` takes it. */
-export interface ForumPostsQuery {
-  sort?: ForumSort;
-  /** AND: posts carrying every one of these. */
-  tag?: readonly string[];
-  status?: ForumStatusFilter;
-  mine?: boolean;
-  q?: string;
-  cursor?: string;
-  limit?: number;
-}
-
-/** The list query as a search string, `?` included, empty when there is none. */
-export function forumPostsQueryString(query: ForumPostsQuery): string {
-  const params = new URLSearchParams();
-  if (query.sort) {
-    params.set("sort", query.sort);
-  }
-  for (const tag of query.tag ?? []) {
-    params.append("tag", tag);
-  }
-  if (query.status) {
-    params.set("status", query.status);
-  }
-  if (query.mine) {
-    params.set("mine", "true");
-  }
-  const q = query.q?.trim();
-  if (q) {
-    params.set("q", q);
-  }
-  if (query.cursor) {
-    params.set("cursor", query.cursor);
-  }
-  if (query.limit !== undefined) {
-    params.set("limit", String(query.limit));
-  }
-  const text = params.toString();
-  return text ? `?${text}` : "";
-}
-
-export const fetchForumPosts = (
-  forumId: string,
-  query: ForumPostsQuery = {},
-  signal?: AbortSignal,
-) =>
-  apiFetch<ForumPostListResponse>(
-    `/api/channels/${encodeURIComponent(forumId)}/posts${forumPostsQueryString(query)}`,
-    signal ? { signal } : {},
-  );
-
-/** "Posts parecidos" while the composer's title is typed. */
-export const fetchSimilarForumPosts = (
-  forumId: string,
-  title: string,
-  signal?: AbortSignal,
-) =>
-  apiFetch<{ posts: ForumPostSummary[] }>(
-    `/api/channels/${encodeURIComponent(forumId)}/posts/similar?title=${encodeURIComponent(title)}`,
-    signal ? { signal } : {},
-  );
-
-/** 201 with the new post; 200 with the same post on a nonce retry. */
-export const createForumPost = (forumId: string, body: CreateForumPostRequest) =>
-  post<{ post: ForumPostSummary; viewer: ForumPostViewer }>(
-    `/api/channels/${encodeURIComponent(forumId)}/posts`,
-    body,
-  );
+// The routes the shell needs (deep links and the forum's settings) from the
+// REST surface frozen in `packages/shared/src/forums.ts`. The pane's own
+// routes (list, create, edit) live beside it. Every route below 404s on an
+// API that predates forum PR 1; the callers read that as "nothing here yet".
 
 /**
  * One post by its own id: the deep link, a search hit, a push. 404 when the
@@ -887,31 +812,6 @@ export const createForumPost = (forumId: string, body: CreateForumPostRequest) =
 export const fetchForumPost = (postId: string) =>
   apiFetch<ForumPostDetailResponse>(
     `/api/forum-posts/${encodeURIComponent(postId)}`,
-  );
-
-export const updateForumPost = (postId: string, body: UpdateForumPostRequest) =>
-  patch<{ post: ForumPostSummary }>(
-    `/api/forum-posts/${encodeURIComponent(postId)}`,
-    body,
-  );
-
-/** Answered 204, which `apiFetch` (JSON only) reports as an error. */
-export async function deleteForumPost(postId: string): Promise<void> {
-  try {
-    await del<unknown>(`/api/forum-posts/${encodeURIComponent(postId)}`);
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 204) {
-      return;
-    }
-    throw error;
-  }
-}
-
-/** P2: follow or stop following a post. */
-export const setForumPostFollow = (postId: string, following: boolean) =>
-  put<{ viewer: ForumPostViewer }>(
-    `/api/forum-posts/${encodeURIComponent(postId)}/follow`,
-    { following },
   );
 
 export const fetchForumTags = (forumId: string) =>

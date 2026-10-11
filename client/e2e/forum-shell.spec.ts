@@ -450,9 +450,32 @@ test.describe("forum shell", () => {
     await settings.getByRole("button", { name: COPY.add, exact: true }).click();
     await expect(settings.locator("[data-forum-tag-row]")).toHaveCount(5);
 
+    // Reorder from the keyboard: the handle's arrow keys move the row.
+    const rows = settings.locator("[data-forum-tag-row]");
+    const firstName = await rows.nth(0).getByRole("textbox").inputValue();
+    await rows.nth(0).getByRole("button", { name: new RegExp(firstName) }).first().focus();
+    await owner.page.keyboard.press("ArrowDown");
+    await expect(rows.nth(1).getByRole("textbox")).toHaveValue(firstName);
+
+    // The emoji square opens the app's picker over the sheet, and Escape
+    // closes the picker without throwing the whole sheet away.
+    await rows.nth(4).getByRole("button", { expanded: false }).last().click();
+    await expect(owner.page.locator(".emoji-mart-shell")).toBeVisible();
+    await shot(owner.page, "05b-emoji-picker");
+    await owner.page.keyboard.press("Escape");
+    await expect(owner.page.locator(".emoji-mart-shell")).toHaveCount(0);
+    await expect(settings.locator("[data-forum-tag-row]")).toHaveCount(5);
+    // And a pick lands on that row.
+    await rows.nth(4).getByRole("button", { expanded: false }).last().click();
+    await owner.page.locator(".emoji-mart-shell").getByRole("button", { name: "👍" }).first().click();
+    await expect(owner.page.locator(".emoji-mart-shell")).toHaveCount(0);
+    await expect(rows.nth(4)).toContainText("👍");
+
     await owner.page.getByRole("button", { name: COPY.save, exact: true }).click();
     await expect.poll(() => forum.puts.length).toBe(1);
-    expect((forum.puts[0] as { tags: unknown[] }).tags).toHaveLength(5);
+    const saved = (forum.puts[0] as { tags: Array<{ name: string }> }).tags;
+    expect(saved).toHaveLength(5);
+    expect(saved[1]!.name).toBe(firstName);
     await expect(owner.page.locator("[data-forum-tags-unsaved]")).toHaveCount(0);
 
     // The switch is its own PATCH; nothing else is resent.
@@ -486,7 +509,7 @@ test.describe("forum shell", () => {
     await member.context.close();
   });
 
-  test("a post link opens the forum with the post on top, and closing it restores the forum's address", async ({
+  test("a post link opens its forum and keeps the post's address; a post id as a channel finds its forum", async ({
     browser,
   }) => {
     const seeded = await seed({ forumsOn: true });
@@ -515,21 +538,25 @@ test.describe("forum shell", () => {
     await page.goto(`${postPath}?lang=${LANG}`);
     await expect(page.getByText(COPY.devBypass)).toBeVisible({ timeout: 20_000 });
 
-    const panel = page.locator('aside[aria-label$=": Valorant fecha sozinho depois do patch"]');
-    await expect(panel).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator("[data-forum-pane]")).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`/post/${postId}`));
+    // The forum is open, the post's own address stays (the pane draws the
+    // post from `routePostId`; that half is forum PR 3b's spec), and no
+    // "no longer exists" line.
+    await expect(page.locator("[data-forum-pane]")).toBeVisible({ timeout: 20_000 });
+    await expect(forumRow(page, "showcase")).toHaveAttribute("data-channel-id", forumChannel.id);
+    await expect(page).toHaveURL(new RegExp(`/channel/${forumChannel.id}/post/${postId}`));
+    await expect(page.getByText(COPY.stillGone)).toHaveCount(0);
     await shot(page, "08-post-deep-link");
 
-    // The panel's own close puts the forum back in the address bar.
-    await panel.getByRole("button", { name: /^(Close thread|Fechar thread|Fechar|Close)/ }).first().click();
-    await expect(panel).toHaveCount(0);
-    await expect(page).toHaveURL(new RegExp(`/channel/${forumChannel.id}$`));
-
-    // A post id given as the channel (a search hit, a push) lands the same way.
+    // A post id given as the channel (a search hit, a push): asked as a post,
+    // it opens its forum and the address becomes the post's real one.
     await page.goto(`/app/server/${seeded.serverId}/channel/${postId}?lang=${LANG}`);
-    await expect(panel).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator("[data-forum-pane]")).toBeVisible();
+    await expect(page.locator("[data-forum-pane]")).toBeVisible({ timeout: 20_000 });
+    await expect(page).toHaveURL(new RegExp(`/channel/${forumChannel.id}/post/${postId}`));
+    await expect(page.getByText(COPY.stillGone)).toHaveCount(0);
+
+    // An id that is neither a channel, a post nor a thread still says so.
+    await page.goto(`/app/server/${seeded.serverId}/channel/${uuid(9999)}?lang=${LANG}`);
+    await expect(page.getByText(COPY.stillGone)).toBeVisible({ timeout: 20_000 });
 
     await context.close();
   });
