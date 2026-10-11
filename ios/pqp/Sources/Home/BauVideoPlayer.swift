@@ -522,8 +522,9 @@ struct BauInlineVideo: View {
     /// The person tapped the cover (or the video was already playing when the
     /// card was rebuilt): from here on the player itself is what shows.
     @State private var coverDismissed = false
-    /// The cover was tapped before the session existed: play once it does.
-    @State private var playWhenReady = false
+    /// The cover of this URL was tapped before its session existed: play it
+    /// once it does. Scoped to the URL, so a tap never plays another video.
+    @State private var playWhenReady: URL?
     /// Tracked apart from the session: `onAppear` can fire before the task
     /// below has produced one.
     @State private var cardVisible = false
@@ -568,16 +569,18 @@ struct BauInlineVideo: View {
             }
             session = next
             // Decided per video: a new URL (a replaced video, a re-signed one)
-            // shows its cover again, unless it is already playing, as when a
-            // card is rebuilt while its video kept going.
-            coverDismissed = next.isPlaying || playWhenReady
+            // shows its cover again. Kept dismissed only when this very URL is
+            // already playing (`session(for:)` returns a live session only for
+            // the same URL, as in PiP or a rebuilt card) or its tap is waiting.
+            if playWhenReady != url { playWhenReady = nil }
+            coverDismissed = next.isPlaying || playWhenReady == url
             next.callActive = callActive
             if cardVisible { next.cardDidAppear() }
             await next.prepareIfNeeded()
             // A task for a URL the card has already moved past must not eat
             // the pending tap: the task for the new URL plays it.
-            if !Task.isCancelled, playWhenReady {
-                playWhenReady = false
+            if !Task.isCancelled, playWhenReady == url {
+                playWhenReady = nil
                 playIfStillHere(next)
             }
         }
@@ -640,7 +643,7 @@ extension BauInlineVideo {
         guard let session else {
             // Tapped before the task above made a session: it plays this one
             // as soon as it has it, instead of losing the tap.
-            playWhenReady = true
+            playWhenReady = url
             return
         }
         Task { @MainActor in
