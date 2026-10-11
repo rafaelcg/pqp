@@ -522,6 +522,8 @@ struct BauInlineVideo: View {
     /// The person tapped the cover (or the video was already playing when the
     /// card was rebuilt): from here on the player itself is what shows.
     @State private var coverDismissed = false
+    /// The cover was tapped before the session existed: play once it does.
+    @State private var playWhenReady = false
     /// Tracked apart from the session: `onAppear` can fire before the task
     /// below has produced one.
     @State private var cardVisible = false
@@ -565,11 +567,17 @@ struct BauInlineVideo: View {
                 old.stopCompletely()
             }
             session = next
-            // A card rebuilt while its video kept playing must not cover it.
-            if next.isPlaying { coverDismissed = true }
+            // Decided per video: a new URL (a replaced video, a re-signed one)
+            // shows its cover again, unless it is already playing, as when a
+            // card is rebuilt while its video kept going.
+            coverDismissed = next.isPlaying || playWhenReady
             next.callActive = callActive
             if cardVisible { next.cardDidAppear() }
             await next.prepareIfNeeded()
+            if playWhenReady {
+                playWhenReady = false
+                playIfStillHere(next)
+            }
         }
         .onChange(of: callActive, initial: true) { _, now in session?.callActive = now }
         .onAppear {
@@ -627,11 +635,24 @@ extension BauInlineVideo {
 
     private func playFromCover() {
         coverDismissed = true
-        guard let session else { return }
+        guard let session else {
+            // Tapped before the task above made a session: it plays this one
+            // as soon as it has it, instead of losing the tap.
+            playWhenReady = true
+            return
+        }
         Task { @MainActor in
             await session.prepareIfNeeded()
-            session.player?.play()
+            playIfStillHere(session)
         }
+    }
+
+    /// Play only while the card is on screen and still holds this session: a
+    /// slow load must not start sound in a card that was scrolled away or
+    /// that moved on to another video meanwhile.
+    private func playIfStillHere(_ played: BauVideoSession) {
+        guard cardVisible, session === played else { return }
+        played.player?.play()
     }
 }
 

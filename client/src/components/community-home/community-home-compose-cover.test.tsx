@@ -202,6 +202,39 @@ describe("ComposeCover", () => {
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for a seek to land before it will take the frame", async () => {
+    await mount();
+    const video = await loadVideo();
+    const use = host!.querySelector<HTMLButtonElement>("[data-home-compose-cover-use-frame]")!;
+    await act(async () => {
+      video.dispatchEvent(new Event("seeking"));
+    });
+    expect(use.disabled).toBe(true);
+    await act(async () => {
+      video.dispatchEvent(new Event("seeked"));
+    });
+    expect(use.disabled).toBe(false);
+  });
+
+  it("a frame captured after the picker went away is never uploaded", async () => {
+    let finishCapture: (file: File) => void = () => {};
+    captureCoverFrame.mockImplementation(
+      () =>
+        new Promise<File>((resolve) => {
+          finishCapture = resolve;
+        }),
+    );
+    await mount();
+    await loadVideo();
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>("[data-home-compose-cover-use-frame]")!.click();
+    });
+    await act(async () => root!.unmount());
+    root = null;
+    await act(async () => finishCapture(new File(["jpeg"], "capa.jpg", { type: "image/jpeg" })));
+    expect(uploadHomeMedia).not.toHaveBeenCalled();
+  });
+
   it("a cover still uploading when the picker goes away never lands", async () => {
     const onUploaded = vi.fn();
     let finish: (value: unknown) => void = () => {};

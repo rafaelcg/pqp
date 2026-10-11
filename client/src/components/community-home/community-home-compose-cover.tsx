@@ -53,14 +53,31 @@ export function ComposeCover({
   const [duration, setDuration] = useState<number | null>(null);
   const [time, setTime] = useState(0);
   const [frameReady, setFrameReady] = useState(false);
+  /** A seek is in flight: the frame on screen is not the one the scrubber names yet. */
+  const [seeking, setSeeking] = useState(false);
   const [uploading, setUploading] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const abort = useRef<AbortController | null>(null);
+  /**
+   * False once the picker is gone (a new main video remounts it). Checked
+   * after every await that comes before an upload, so a capture or a byte
+   * check that finishes late never starts an upload nobody can abort.
+   */
+  const alive = useRef(true);
 
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      abort.current?.abort();
+    };
+  }, []);
 
   async function upload(file: File) {
+    if (!alive.current) {
+      return;
+    }
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -100,6 +117,9 @@ export function ComposeCover({
     try {
       file = await captureCoverFrame(video);
     } catch (caught) {
+      if (!alive.current) {
+        return;
+      }
       setError(
         caught instanceof CoverFrameError && caught.reason === "no-frame"
           ? t("communityHome.compose.uploadFailed")
@@ -116,6 +136,9 @@ export function ComposeCover({
     }
     setError(null);
     const problem = await coverImageProblem(file);
+    if (!alive.current) {
+      return;
+    }
     if (problem === "size") {
       setError(
         t("communityHome.compose.coverTooBig", {
@@ -227,6 +250,8 @@ export function ComposeCover({
                 }
               }}
               onLoadedData={() => setFrameReady(true)}
+              onSeeking={() => setSeeking(true)}
+              onSeeked={() => setSeeking(false)}
               onError={() => {
                 setFrameReady(false);
                 setError(t("communityHome.compose.coverVideoFailed"));
@@ -258,7 +283,7 @@ export function ComposeCover({
                 size="sm"
                 variant="secondary"
                 onClick={() => void takeFrame()}
-                disabled={!frameReady || busy}
+                disabled={!frameReady || seeking || busy}
                 data-home-compose-cover-use-frame
               >
                 <Film className="h-3.5 w-3.5" aria-hidden />
