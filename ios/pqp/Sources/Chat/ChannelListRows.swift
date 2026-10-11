@@ -191,9 +191,10 @@ struct VoiceOccupantList: View {
     var selfUserId: String?
     var speakingPeerIds: Set<String> = []
 
-    private var summary: VoiceOccupantSummary { VoiceOccupantSummary(participants) }
-
     var body: some View {
+        // Built once per render: the listed lines, the "+N" count and its
+        // faces all read this one value.
+        let summary = VoiceOccupantSummary(participants)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(summary.listed) { person in
                 VoiceOccupantLine(
@@ -206,17 +207,18 @@ struct VoiceOccupantList: View {
                     removal: .opacity
                 ))
             }
-            if !summary.overflow.isEmpty {
-                overflowLine
+            if summary.overflowCount > 0 {
+                overflowLine(summary)
                     .transition(.opacity)
             }
         }
         .padding(.leading, 32)
-        .animation(.channelList(reduceMotion: reduceMotion), value: participants.map(\.peerId))
+        .animation(.channelList(reduceMotion: reduceMotion), value: summary.listed.map(\.peerId))
+        .animation(.channelList(reduceMotion: reduceMotion), value: summary.overflowCount)
         .animation(.channelList(reduceMotion: reduceMotion), value: speakingPeerIds)
     }
 
-    private var overflowLine: some View {
+    private func overflowLine(_ summary: VoiceOccupantSummary) -> some View {
         HStack(spacing: 8) {
             HStack(spacing: -6) {
                 ForEach(summary.overflowFaces) { person in
@@ -224,7 +226,7 @@ struct VoiceOccupantList: View {
                         .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 1.5))
                 }
             }
-            Text("+\(summary.overflow.count) people")
+            Text("+\(summary.overflowCount) people")
                 .font(.system(size: 14))
                 .foregroundStyle(Palette.paperMuted)
             Spacer(minLength: 0)

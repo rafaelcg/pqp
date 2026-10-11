@@ -22,8 +22,8 @@ struct BauPreview: View {
             case .fresh(let lead, let moreNew, let next):
                 BauFreshCard(lead: lead, moreNew: moreNew, next: next)
                     .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
-            case .seen(let post):
-                BauSeenRow(post: post)
+            case .seen(let post, let unread):
+                BauSeenRow(post: post, unread: unread)
                     .transition(.opacity)
             case .empty(let canPost):
                 if canPost {
@@ -176,10 +176,18 @@ private struct BauFreshCard: View {
 
 private struct BauSeenRow: View {
     let post: CommunityHomeLatestPost
+    var unread: Int = 0
 
     var body: some View {
         HStack(spacing: 12) {
             BauThumbnail(post: post, width: 40, height: 40, playSize: 16)
+                .overlay(alignment: .topTrailing) {
+                    if unread > 0 {
+                        UnreadBadge(count: unread, isMention: true)
+                            .scaleEffect(0.8)
+                            .offset(x: 8, y: -8)
+                    }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Baú")
                     .font(Typography.bodyMedium)

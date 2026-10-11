@@ -99,13 +99,19 @@ final class ChannelListLiveTests: XCTestCase {
         let three = try ["a", "b", "c"].map(peer)
         let summary = VoiceOccupantSummary(three)
         XCTAssertEqual(summary.listed.map(\.peerId), ["a", "b", "c"])
-        XCTAssertTrue(summary.overflow.isEmpty)
+        XCTAssertEqual(summary.overflowCount, 0)
+        XCTAssertTrue(summary.overflowFaces.isEmpty)
 
         let five = try ["a", "b", "c", "d", "e"].map(peer)
         let folded = VoiceOccupantSummary(five)
         XCTAssertEqual(folded.listed.map(\.peerId), ["a", "b"])
-        XCTAssertEqual(folded.overflow.map(\.peerId), ["c", "d", "e"])
-        XCTAssertEqual(folded.overflowFaces.count, 3)
+        XCTAssertEqual(folded.overflowCount, 3)
+        XCTAssertEqual(folded.overflowFaces.map(\.peerId), ["c", "d", "e"])
+
+        let crowd = try (0..<200).map { try peer("p\($0)") }
+        let big = VoiceOccupantSummary(crowd)
+        XCTAssertEqual(big.overflowCount, 198)
+        XCTAssertEqual(big.overflowFaces.count, 3, "only the faces drawn are copied")
 
         XCTAssertTrue(VoiceOccupantSummary([]).listed.isEmpty)
     }
@@ -178,7 +184,29 @@ final class ChannelListLiveTests: XCTestCase {
         ].joined(separator: ",")))
         XCTAssertEqual(
             BauPreviewMode.resolve(answer: .ok(latest), legacyUnread: 0, canPost: true),
-            .seen(latest.posts[0])
+            .seen(latest.posts[0], unread: 0)
+        )
+    }
+
+    func testTheViewersOwnNewestPostDoesNotHideSomebodyElsesNewOne() throws {
+        // p1 is the viewer's own (never new); p2 underneath is new.
+        let latest = try decode(latestJSON(unread: 1, posts: [
+            postJSON("p1", isNew: false), postJSON("p2", isNew: true), postJSON("p3", isNew: false),
+        ].joined(separator: ",")))
+        let mode = BauPreviewMode.resolve(answer: .ok(latest), legacyUnread: 0, canPost: true)
+        guard case .fresh(let lead, let moreNew, let next) = mode else { return XCTFail("expected the card, got \(mode)") }
+        XCTAssertEqual(lead.id, "p2")
+        XCTAssertEqual(moreNew, 0)
+        XCTAssertNil(next)
+    }
+
+    func testNewPostsBeyondTheLimitStillBadgeTheRow() throws {
+        let latest = try decode(latestJSON(unread: 2, posts: [
+            postJSON("own1", isNew: false), postJSON("own2", isNew: false), postJSON("own3", isNew: false),
+        ].joined(separator: ",")))
+        XCTAssertEqual(
+            BauPreviewMode.resolve(answer: .ok(latest), legacyUnread: 0, canPost: true),
+            .seen(latest.posts[0], unread: 2)
         )
     }
 

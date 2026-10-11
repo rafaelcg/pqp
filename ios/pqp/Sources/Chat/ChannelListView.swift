@@ -47,6 +47,8 @@ struct ChannelListView: View {
     /// API without the route, which keeps today's row and `/home/unread`.
     @State private var bauLatest: CommunityHomeLatestAnswer?
     @State private var composingBau = false
+    /// Bumped by every `refreshBau`; an answer for an older number is dropped.
+    @State private var bauRequest = 0
 
     @State private var channels: [Channel] = []
     @State private var unread: [String: UnreadEntry] = [:]
@@ -773,20 +775,29 @@ struct ChannelListView: View {
     /// `/home/unread` and today's row. A failure leaves what was showing.
     private func refreshBau() async {
         guard showsBau else { return }
+        // Load, pull-to-refresh, coming back and a `community-home-update` can
+        // all be in flight at once; only the newest request may write, or a
+        // slow older answer would put back a card the reader already saw.
+        bauRequest += 1
+        let request = bauRequest
         do {
             let answer = try await session.api.communityHomeLatest(
                 serverId: server.id, lang: BauShare.cardLanguage()
             )
+            guard request == bauRequest else { return }
             if case .ok(let latest) = answer { bauUnread = latest.unread }
             withAnimation(.channelList(reduceMotion: reduceMotion)) { bauLatest = answer }
             if answer == .unsupported { await refreshLegacyBauUnread() }
         } catch {
+            guard request == bauRequest else { return }
             if bauLatest == .unsupported { await refreshLegacyBauUnread() }
         }
     }
 
     private func refreshLegacyBauUnread() async {
-        if let count = try? await session.api.communityHomeUnread(serverId: server.id) {
+        let request = bauRequest
+        if let count = try? await session.api.communityHomeUnread(serverId: server.id),
+           request == bauRequest {
             bauUnread = count
         }
     }

@@ -131,8 +131,11 @@ enum BauPreviewMode: Equatable {
     /// posts sit behind it (`next` is the first of them, when the response
     /// carried it).
     case fresh(lead: CommunityHomeLatestPost, moreNew: Int, next: CommunityHomeLatestPost?)
-    /// Seen: the slim row with the newest post's thumbnail.
-    case seen(CommunityHomeLatestPost)
+    /// Seen: the slim row with the newest post's thumbnail. `unread` is
+    /// non-zero only when every post the response carried is old or the
+    /// viewer's own but older new posts sit beyond them; the row still badges
+    /// those rather than pretending there is nothing.
+    case seen(CommunityHomeLatestPost, unread: Int)
     /// No posts at all. Staff get the invitation to post, members a quiet row.
     case empty(canPost: Bool)
 
@@ -143,13 +146,18 @@ enum BauPreviewMode: Equatable {
         case .unsupported:
             return .legacy(unread: legacyUnread)
         case .ok(let latest):
-            guard let lead = latest.posts.first else { return .empty(canPost: canPost) }
-            guard lead.isNew else { return .seen(lead) }
-            let behind = latest.posts.dropFirst().filter(\.isNew)
+            guard let newest = latest.posts.first else { return .empty(canPost: canPost) }
+            // The card leads with the newest post the viewer has NOT seen,
+            // which is not always the newest post: the viewer's own post is
+            // never new, and it can sit on top of somebody else's.
+            let fresh = latest.posts.filter(\.isNew)
+            guard let lead = fresh.first else {
+                return .seen(newest, unread: max(0, latest.unread))
+            }
             // `unread` counts every new post, `posts` only the first few; the
             // larger of the two is the honest number behind the lead.
-            let moreNew = max(latest.unread - 1, behind.count)
-            return .fresh(lead: lead, moreNew: moreNew, next: behind.first)
+            let moreNew = max(latest.unread - 1, fresh.count - 1)
+            return .fresh(lead: lead, moreNew: moreNew, next: fresh.dropFirst().first)
         }
     }
 }

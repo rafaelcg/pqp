@@ -69,24 +69,27 @@ final class VoiceOccupancyStore {
 struct VoiceOccupantSummary: Equatable {
     /// Drawn one per line, with name and state icons.
     let listed: [VoiceParticipant]
-    /// Folded into the "+N" line.
-    let overflow: [VoiceParticipant]
+    /// How many people the "+N" line stands for.
+    let overflowCount: Int
+    /// Up to three of them, for the faces on that line. Only these are
+    /// copied: a room of two hundred costs the same to draw as a room of six.
+    let overflowFaces: [VoiceParticipant]
 
     static let maxListed = 3
+    static let maxFaces = 3
 
     init(_ participants: [VoiceParticipant], maxListed: Int = VoiceOccupantSummary.maxListed) {
         if participants.count <= maxListed {
             listed = participants
-            overflow = []
+            overflowCount = 0
+            overflowFaces = []
         } else {
             // One line goes to the "+N" row, so a full room never grows past
             // `maxListed` lines under its name.
             let shown = max(0, maxListed - 1)
             listed = Array(participants.prefix(shown))
-            overflow = Array(participants.dropFirst(shown))
+            overflowCount = participants.count - shown
+            overflowFaces = Array(participants.dropFirst(shown).prefix(Self.maxFaces))
         }
     }
-
-    /// Up to three faces for the "+N" line.
-    var overflowFaces: [VoiceParticipant] { Array(overflow.prefix(3)) }
 }
