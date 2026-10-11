@@ -5,6 +5,11 @@
 #   scripts/ci/e2e-lanes.sh "<playwright project flags>" <total shards> <shard>...
 #   scripts/ci/e2e-lanes.sh "--project=chromium --project=mobile-pixel" 6 1 2
 #
+# E2E_ALONGSIDE, if set, is one more command (run from client/) started as an
+# extra lane next to the shards, for a suite that needs no API and no database
+# of its own (the stale-bundle one). It must use its own --output directory:
+# Playwright empties the output directory when a run starts.
+#
 # Why lanes rather than more jobs: the suite runs one Playwright worker per
 # database (shared server state, computed-colour assertions), and a hosted
 # runner sat mostly idle under one worker. Every extra job also pays ~1.5 min
@@ -76,6 +81,16 @@ for shard in "${shards[@]}"; do
   pids+=($!)
 done
 
+alongside_pid=""
+if [ -n "${E2E_ALONGSIDE:-}" ]; then
+  (
+    # shellcheck disable=SC2086 # a command line on purpose.
+    ${E2E_ALONGSIDE} 2>&1 | sed -u "s/^/[alongside] /"
+    exit "${PIPESTATUS[0]}"
+  ) &
+  alongside_pid=$!
+fi
+
 status=0
 lane=0
 for pid in "${pids[@]}"; do
@@ -85,4 +100,8 @@ for pid in "${pids[@]}"; do
     status=1
   fi
 done
+if [ -n "$alongside_pid" ] && ! wait "$alongside_pid"; then
+  echo "::error::e2e alongside (${E2E_ALONGSIDE}) failed"
+  status=1
+fi
 exit "$status"
