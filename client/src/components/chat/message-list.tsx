@@ -7,6 +7,7 @@ import type {
 import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
 import {
   AlertCircle,
+  CircleCheck,
   WifiOff,
   ArrowDown,
   Check,
@@ -38,6 +39,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -353,6 +355,31 @@ interface MessageListProps {
   variant?: "default" | "stream";
   /** Who is running the party, for the badges before their names. */
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
+  /** A forum post's transcript. See `ForumPostDecor`. */
+  forumPost?: ForumPostDecor | null;
+}
+
+/**
+ * What a forum post adds to its transcript (`ThreadPanel variant="forum-post"`):
+ * the OP badge on the author's name wherever they speak, the accepted
+ * answer's green edge, "Marcar como solução" on replies for whoever may pick
+ * one, and the Solução card right under the opening message.
+ */
+export interface ForumPostDecor {
+  /** The post's author: an OP badge on every one of their rows. */
+  authorId: string | null;
+  /** The reply marked as the answer. */
+  acceptedAnswerId: string | null;
+  /** Drawn under the opening message, once it is loaded. */
+  afterOpening?: ReactNode;
+  /** Present when this reader may pick the answer (the author, or staff). */
+  onToggleAnswer?: (messageId: string) => void;
+  /**
+   * A first visit lands on the question, not on the newest reply. Only once
+   * the opening message is loaded (a short post); a long one lands at the
+   * tail like any channel, with history above it.
+   */
+  landAtTop?: boolean;
 }
 
 interface Row {
@@ -550,6 +577,7 @@ export const MessageList = memo(function MessageList({
   onEditMessageHandled,
   variant = "default",
   streamBadges = null,
+  forumPost = null,
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -803,6 +831,11 @@ export const MessageList = memo(function MessageList({
     () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
     [messages, unreadSince, currentUserId],
   );
+  // A forum post's opening message is its first: known only once nothing
+  // older is left to page in.
+  const forumOpeningId =
+    forumPost && !hasMore && messages.length > 0 ? messages[0].id : null;
+  const forumLandAtTop = forumPost?.landAtTop === true;
   /**
    * The ids a selection may contain, in the order they are on screen.
    *
@@ -1456,6 +1489,20 @@ export const MessageList = memo(function MessageList({
       return;
     }
     unreadLandedRef.current = key;
+    if (forumLandAtTop && !hasMore) {
+      // Unpinned NOW, through the ref too: the follow-the-tail effects read
+      // the ref in this same commit, and a late image would pull the reader
+      // to the bottom past the question they came to read.
+      isPinnedRef.current = false;
+      setIsPinned(false);
+      scrollRef.current.scrollTop = 0;
+      const frame = requestAnimationFrame(() => {
+        if (scrollRef.current && !isPinnedRef.current) {
+          scrollRef.current.scrollTop = 0;
+        }
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     setIsPinned(true);
     scrollToBottom("auto");
     // One more frame: the first layout can still be short if the composer or
@@ -1473,6 +1520,8 @@ export const MessageList = memo(function MessageList({
     messages.length,
     scrollToBottom,
     isLoading,
+    forumLandAtTop,
+    hasMore,
   ]);
 
   useEffect(() => {
@@ -1779,10 +1828,29 @@ export const MessageList = memo(function MessageList({
             // forward), so this only changes identity for the message you
             // just sent, in the seconds after you sent it.
             const elementKey = row.message.nonce ?? rowId;
+            const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
             return (
+            <Fragment key={elementKey}>
             <MessageRow
-              key={elementKey}
               row={row}
+              forumOp={
+                forumPost !== null &&
+                forumPost.authorId !== null &&
+                row.message.authorId === forumPost.authorId
+              }
+              forumAnswer={
+                forumPost !== null && forumPost.acceptedAnswerId === rowId
+              }
+              onToggleAnswer={
+                forumPost?.onToggleAnswer && !isOpening && !row.message.pending
+                  ? stableRowCallback(
+                      rowId,
+                      "toggleAnswer",
+                      [forumPost.onToggleAnswer],
+                      () => () => forumPost.onToggleAnswer?.(rowId),
+                    )
+                  : undefined
+              }
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
               stream={variant === "stream"}
@@ -2028,6 +2096,8 @@ export const MessageList = memo(function MessageList({
                 rowId === firstUnreadId ? unreadDividerRef : undefined
               }
             />
+            {isOpening && forumPost?.afterOpening}
+            </Fragment>
             );
           })
         )}
@@ -2611,6 +2681,12 @@ interface MessageRowProps {
   /** Every other stream row gets a faint wash, Twitch's alternating background. */
   zebra?: boolean;
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
+  /** A forum post: this row's author opened it. */
+  forumOp?: boolean;
+  /** A forum post: this row is the accepted answer. */
+  forumAnswer?: boolean;
+  /** A forum post: mark (or unmark) this reply as the answer. */
+  onToggleAnswer?: () => void;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -2669,6 +2745,9 @@ const MessageRow = memo(function MessageRow({
   stream = false,
   streamBadges = null,
   zebra = false,
+  forumOp = false,
+  forumAnswer = false,
+  onToggleAnswer,
 }: MessageRowProps) {
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
@@ -2930,7 +3009,19 @@ const MessageRow = memo(function MessageRow({
           },
         ]
       : []),
-    ...(canReply || threadAction
+    ...(onToggleAnswer && isReal
+      ? [
+          {
+            id: "forum-answer",
+            label: forumAnswer
+              ? t("forum.solution.unmark")
+              : t("forum.solution.mark"),
+            icon: CircleCheck,
+            onSelect: selectAndClose(onToggleAnswer, true),
+          },
+        ]
+      : []),
+    ...(canReply || threadAction || (onToggleAnswer && isReal)
       ? [{ id: "sep-reply", label: "", separator: true }]
       : []),
     {
@@ -3138,7 +3229,9 @@ const MessageRow = memo(function MessageRow({
             selecting && "rounded-md",
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
+            forumAnswer && "shadow-[inset_3px_0_0_var(--color-success)]",
           )}
+          data-forum-answer={forumAnswer ? "" : undefined}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
@@ -3265,6 +3358,14 @@ const MessageRow = memo(function MessageRow({
                       })}
                     />
                   </span>
+                  {forumOp && (
+                    <span
+                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-bold uppercase tracking-wide text-text-secondary"
+                      title={t("forum.badge.opHint")}
+                    >
+                      {t("forum.badge.op")}
+                    </span>
+                  )}
                   {message.isAutomod ? (
                     <span
                       className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
