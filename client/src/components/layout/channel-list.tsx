@@ -73,6 +73,10 @@ import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { useConversationsHome } from "@/lib/conversations-config";
 import {
+  CommunityHomePreview,
+  type CommunityHomePreviewProps,
+} from "@/components/community-home/community-home-preview";
+import {
   ChannelIcon,
   channelIconIsPrivateLock,
 } from "@/components/layout/channel-icon";
@@ -376,6 +380,12 @@ interface ChannelListProps {
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
   /**
+   * The Baú preview (`GET …/home/latest`): a card while something is new, a
+   * slim row with the last post once seen. Null or absent (the server has the
+   * preview off, or the read has not landed) keeps the plain row.
+   */
+  communityHomePreview?: CommunityHomePreviewProps | null;
+  /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
    */
@@ -477,6 +487,7 @@ export const ChannelList = memo(function ChannelList({
   communityHomeShowNew = false,
   communityHomeUnread = 0,
   communityHomeUnreadFresh = false,
+  communityHomePreview = null,
   communityHomeSelected = false,
   onSelectCommunityHome,
   members = [],
@@ -1627,17 +1638,40 @@ export const ChannelList = memo(function ChannelList({
             server &&
             onSelectCommunityHome && (
               <div className="mb-3 px-1">
-                <CommunityHomeNavButton
-                  server={server}
-                  selected={communityHomeSelected}
-                  unread={communityHomeUnread}
-                  fresh={communityHomeUnreadFresh}
-                  showNew={communityHomeShowNew}
-                  onSelect={() => {
-                    onSelectCommunityHome();
-                    onMobileClose?.();
-                  }}
-                />
+                {communityHomePreview ? (
+                  <CommunityHomePreview
+                    latest={communityHomePreview.latest}
+                    canPost={communityHomePreview.canPost}
+                    serverName={server.name}
+                    serverHueSeed={server.communitySlug ?? server.name}
+                    selected={communityHomeSelected}
+                    face={<CommunityHomeFace server={server} />}
+                    onOpen={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                    onOpenPost={(postId) => {
+                      communityHomePreview.onOpenPost(postId);
+                      onMobileClose?.();
+                    }}
+                    onCompose={() => {
+                      communityHomePreview.onCompose();
+                      onMobileClose?.();
+                    }}
+                  />
+                ) : (
+                  <CommunityHomeNavButton
+                    server={server}
+                    selected={communityHomeSelected}
+                    unread={communityHomeUnread}
+                    fresh={communityHomeUnreadFresh}
+                    showNew={communityHomeShowNew}
+                    onSelect={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                  />
+                )}
               </div>
             )}
 

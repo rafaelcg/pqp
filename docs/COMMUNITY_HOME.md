@@ -181,6 +181,17 @@ for what would replace it.
   route is 404 and clients fall back to `…/home/unread` and the plain row.
   Schema: `communityHomeLatestResponseSchema` in
   `packages/shared/src/community-home-share.ts`.
+  **Web** (`client/src/components/community-home/community-home-preview.tsx`,
+  rules in `client/src/lib/community-home/latest.ts`): while anything is new
+  the row is a card (16:9 cover, "Novo" pill, title, author and time, likes and
+  comments, "+N novos" footer); opening the Baú, from the card or anywhere,
+  folds it into a slim row with the last post's thumbnail ("Último: …"). The
+  card opens the Baú on that post. Covers: image, YouTube poster, the chosen
+  video cover; anything else is a plate in the server's hue with a play mark,
+  never a `<video preload>`. Empty: staff get "Teu Baú tá vazio" with "Postar
+  no Baú" (opens the composer), members the quiet "Ainda vazio" row. The
+  expand and fold animate height and opacity, off under reduced motion. The
+  compact rail keeps the plain icon.
 - **iOS and Android** read the aggregate for a lime count on the server tile
   (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
   too. Neither list carries mention counts, so there is no ring there.
