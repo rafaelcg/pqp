@@ -4829,5 +4829,20 @@
   "conversations.new.noLocalMatch": "Nadie de tu lista coincide. La búsqueda de arriba busca en todo pqp.",
   "conversations.friendAccepted.title": "Tú y {name} ahora son amigos",
   "conversations.friendAccepted.cta": "Saludar",
-  "conversations.profileLast": "Última conversación · {time}"
+  "conversations.profileLast": "Última conversación · {time}",
+  "switcher.title": "Ir a",
+  "switcher.placeholder": "¿A dónde quieres ir?",
+  "switcher.scope": "personas, conversaciones, servidores, #canales",
+  "switcher.section.people": "Personas",
+  "switcher.section.conversations": "Conversaciones",
+  "switcher.section.servers": "Servidores",
+  "switcher.section.channels": "Canales",
+  "switcher.searchMessages": "Buscar “{query}” en los mensajes de {server}",
+  "switcher.friend": "amigo",
+  "switcher.open": "Abrir",
+  "switcher.empty": "Nada con ese nombre por aquí.",
+  "switcher.emptyStart": "Escribe un nombre, un servidor o un #canal.",
+  "switcher.hint.move": "para elegir",
+  "switcher.hint.open": "para abrir",
+  "switcher.hint.close": "cierra"
 }

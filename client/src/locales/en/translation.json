@@ -4761,5 +4761,20 @@
   "conversations.new.noLocalMatch": "Nobody on your list matches. The search above looks across pqp.",
   "conversations.friendAccepted.title": "You and {name} are friends now",
   "conversations.friendAccepted.cta": "Say hi",
-  "conversations.profileLast": "Last conversation · {time}"
+  "conversations.profileLast": "Last conversation · {time}",
+  "switcher.title": "Go to",
+  "switcher.placeholder": "Where do you want to go?",
+  "switcher.scope": "people, conversations, servers, #channels",
+  "switcher.section.people": "People",
+  "switcher.section.conversations": "Conversations",
+  "switcher.section.servers": "Servers",
+  "switcher.section.channels": "Channels",
+  "switcher.searchMessages": "Search “{query}” in {server}'s messages",
+  "switcher.friend": "friend",
+  "switcher.open": "Open",
+  "switcher.empty": "Nothing with that name here.",
+  "switcher.emptyStart": "Type a name, a server or a #channel.",
+  "switcher.hint.move": "to move",
+  "switcher.hint.open": "to open",
+  "switcher.hint.close": "closes"
 }
