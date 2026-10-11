@@ -981,6 +981,14 @@ export interface CreateShellInput {
   /** Null for webhook posts, which dedupe instead (P1b). */
   nonce: string | null;
   dedupeKey?: string | null;
+  /**
+   * Webhook posts (P1b): with a `dedupeKey`, a post of this forum carrying
+   * the same key and created within this many hours is answered instead of a
+   * new one, checked under a per-(forum, key) advisory lock so two executes
+   * of one item on two connections or two machines cannot both insert. 0 or
+   * absent skips the check (the key is still stored).
+   */
+  dedupeWindowHours?: number;
   /** Staged against the FORUM id by the composer; moved to the post here. */
   attachmentIds?: readonly string[];
 }
@@ -988,7 +996,9 @@ export interface CreateShellInput {
 export type CreateShellResult =
   | { kind: "created"; postId: string }
   /** The nonce already names a post of this author in this forum. */
-  | { kind: "existing"; postId: string; published: boolean };
+  | { kind: "existing"; postId: string; published: boolean }
+  /** The dedupe key names a post of this forum inside the window (P1b). */
+  | { kind: "duplicate"; postId: string; published: boolean };
 
 /**
  * Step one of a post: the thread channel, the `forum_posts` row with
@@ -1012,6 +1022,31 @@ export async function createForumPostShell(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    if (input.dedupeKey && (input.dedupeWindowHours ?? 0) > 0) {
+      // Held to COMMIT, so a second execute of the same item waits here and
+      // its lookup then sees this row (even as a shell, which is the point).
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1::text || $2::text))`,
+        [input.forumId, input.dedupeKey],
+      );
+      const hit = await client.query<{ channel_id: string; published_at: Date | null }>(
+        `SELECT channel_id, published_at FROM forum_posts
+          WHERE forum_id = $1 AND dedupe_key = $2
+            AND created_at > NOW() - make_interval(hours => $3::int)
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [input.forumId, input.dedupeKey, input.dedupeWindowHours],
+      );
+      const row = hit.rows[0];
+      if (row) {
+        await client.query("ROLLBACK");
+        return {
+          kind: "duplicate",
+          postId: row.channel_id,
+          published: row.published_at !== null,
+        };
+      }
+    }
     const channel = await client.query<{ id: string }>(
       `INSERT INTO channels
          (server_id, name, type, position, is_private, kind, parent_id, thread_root_message_id)

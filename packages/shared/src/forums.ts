@@ -148,13 +148,16 @@ import { clampChatNewlines } from "./chat-text.js";
  * - `executeWebhookSchema` (`webhooks.ts`) accepts Discord's `thread_name`
  *   and `applied_tags`. Until P1b they are parsed and ignored, which is what
  *   happened to them before (silently stripped).
- * - An execute into a forum answers `{ message, post?, ignored_tags? }`
+ * - An execute into a forum answers `{ id, channel_id, message, post, ignored_tags? }`
  *   (`webhookForumExecuteExtrasSchema` is the part beside `message`), and a
  *   dedupe hit adds the header `WEBHOOK_DEDUPLICATED_HEADER: 1`.
  * - `?thread_id=<postId>` replies into an existing post of that forum.
  * - No title derivable: 400 with Discord's code `WEBHOOK_FORUM_THREAD_NAME_CODE`.
  * - `PUT /api/webhooks/:webhookId/forum-settings` takes
- *   `webhookForumSettingsSchema`.
+ *   `webhookForumSettingsSchema`. `GET /api/channels/:forumId/webhooks`
+ *   answers each webhook with its `forumSettings` and the forum's tags as
+ *   `forumTags` beside the list (null on any other channel), so the settings
+ *   section draws from one request.
  */
 
 // ------------------------------------------------------------------ caps
@@ -619,11 +622,29 @@ export const webhookForumSettingsSchema = z.object({
 });
 export type WebhookForumSettings = z.infer<typeof webhookForumSettingsSchema>;
 
+/** What a webhook on a forum with no `webhook_forum_settings` row gets (P1b). */
+export const WEBHOOK_FORUM_SETTINGS_DEFAULTS: WebhookForumSettings = {
+  allowedTagIds: null,
+  defaultTagIds: [],
+  dedupeWindowHours: FORUM_WEBHOOK_DEDUPE_HOURS_DEFAULT,
+};
+
 /**
  * What an execute into a forum adds beside `message` in its answer. Snake
  * case like the rest of the webhook surface: a Discord tool reads it.
  */
 export const webhookForumExecuteExtrasSchema = z.object({
+  /**
+   * Discord's message `id` and `channel_id`, top level, because that is where
+   * a Discord tool reads them. On Discord a forum post's starter message has
+   * the thread's own id, and tools rely on it: MonitoRSS sends the rest of a
+   * long item to `?thread_id=<id>` of the answer. So a new post (or a repeat
+   * of one) answers `id` = `channel_id` = the post id; a `?thread_id=` reply
+   * answers the reply's id and the post id. pqp's own `message.id` is the
+   * real message id either way.
+   */
+  id: uuid.optional(),
+  channel_id: uuid.optional(),
   post: forumPostSummarySchema.optional(),
   /** `applied_tags` entries that matched no allowed tag of this forum. */
   ignored_tags: z.array(z.string()).optional(),

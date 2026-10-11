@@ -143,7 +143,11 @@ import {
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
-  WEBHOOK_FORUM_THREAD_NAME_CODE,
+  WEBHOOK_DEDUPLICATED_HEADER,
+  WEBHOOK_FORUM_SETTINGS_DEFAULTS,
+  type WebhookForumSettings,
+  WEBHOOK_THREAD_ID_PARAM,
+  webhookForumSettingsSchema,
   liveHlsTelemetryBatchSchema,
   liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
@@ -262,8 +266,14 @@ import {
 import {
   FORUM_POST_USE_POST_ROUTES,
   isForumPost,
-  WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
 } from "../services/forum-guards.js";
+import {
+  executeForumWebhook,
+  ForumWebhookRefusal,
+  putWebhookForumSettings,
+  readWebhookForumSettings,
+  webhookRateLimitedBody,
+} from "../services/forum-webhooks.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -7481,8 +7491,12 @@ async function tryHlsReplayCapabilityDoor(
 }
 
 // -------------------------------------------------------------- webhooks
+//
+// Every check below names the webhook's CHANNEL, so a cargo given
+// MANAGE_CHANNELS on one channel manages that channel's webhooks and nothing
+// else (a channel overwrite), the same rule the channel's own settings follow.
 
-function mapWebhook(w: DbWebhook) {
+function mapWebhook(w: DbWebhook, forumSettings?: WebhookForumSettings) {
   return {
     id: w.id,
     channelId: w.channel_id,
@@ -7490,6 +7504,7 @@ function mapWebhook(w: DbWebhook) {
     avatarUrl: w.avatar_url,
     url: `/api/webhooks/${w.id}/${w.token}`,
     createdAt: w.created_at.toISOString(),
+    ...(forumSettings ? { forumSettings } : {}),
   };
 }
 
@@ -7497,9 +7512,25 @@ router.get(
   "/api/channels/:channelId/webhooks",
   async ({ user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    );
+    const webhooks = await listWebhooksForChannel(channelId!);
+    if (channel.type !== "forum") {
+      return { webhooks: webhooks.map((webhook) => mapWebhook(webhook)), forumTags: null };
+    }
+    // A forum's webhooks carry their tag settings, and the forum's tags come
+    // along, so the settings section draws from this one answer.
+    const [settings, forumTags] = await Promise.all([
+      readWebhookForumSettings(webhooks.map((webhook) => webhook.id)),
+      listForumTags(channel.id),
+    ]);
     return {
-      webhooks: (await listWebhooksForChannel(channelId!)).map(mapWebhook),
+      webhooks: webhooks.map((webhook) => mapWebhook(webhook, settings.get(webhook.id))),
+      forumTags,
     };
   },
 );
@@ -7508,15 +7539,19 @@ router.post(
   "/api/channels/:channelId/webhooks",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    );
     // A webhook writes messages, so it needs a channel that shows them as a
-    // feed: a text channel, or a forum (whose executes are refused with
-    // Discord's forum error until forum PR 4 turns them into posts). Not a
-    // category (never holds a message), not a voice room (its chat is the
-    // conversation beside a call), and not a thread: a webhook on a forum
-    // post would write past the post's lock, which is the send path's rule.
-    // Discord's way to reply into a post is `?thread_id=` on the forum's
-    // webhook (forum PR 4).
+    // feed: a text channel, or a forum (where each execute becomes a post,
+    // `services/forum-webhooks.ts`). Not a category (never holds a message),
+    // not a voice room (its chat is the conversation beside a call), and not
+    // a thread: a webhook on a forum post would write past the post's lock,
+    // which is the send path's rule. Discord's way to reply into a post is
+    // `?thread_id=` on the forum's webhook.
     if (channel.type !== "text" && channel.type !== "forum") {
       throw new HttpError(400, "Webhooks can only post to a text channel or a forum");
     }
@@ -7536,7 +7571,64 @@ router.post(
       targetId: webhook.id,
       changes: [{ key: "name", old: null, new: webhook.name }],
     });
-    return created({ webhook: mapWebhook(webhook) });
+    return created({
+      webhook: mapWebhook(
+        webhook,
+        channel.type === "forum" ? { ...WEBHOOK_FORUM_SETTINGS_DEFAULTS } : undefined,
+      ),
+    });
+  },
+);
+
+/**
+ * A forum webhook's tag allowlist, default tags and dedupe window (plan
+ * §7.3 and §7.4). Replaces all three. 400 on a webhook that is not on a
+ * forum, and on a tag id that is not one of the forum's tags.
+ */
+router.put(
+  "/api/webhooks/:webhookId/forum-settings",
+  async ({ req, user }, { webhookId }) => {
+    const webhook = await getWebhook(webhookId!);
+    if (!webhook) {
+      throw new NotFound("Webhook not found");
+    }
+    await requirePermission(
+      webhook.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      webhook.channel_id,
+    );
+    const channel = await getChannel(webhook.channel_id);
+    if (channel?.type !== "forum") {
+      throw new HttpError(400, "This webhook does not post to a forum");
+    }
+    const body = webhookForumSettingsSchema.parse(await readJsonBody(req));
+    const { before, after } = await putWebhookForumSettings(webhook.id, channel.id, body);
+    const changes: { key: string; old: unknown; new: unknown }[] = [];
+    if (JSON.stringify(before.allowedTagIds) !== JSON.stringify(after.allowedTagIds)) {
+      changes.push({ key: "allowed_tags", old: before.allowedTagIds, new: after.allowedTagIds });
+    }
+    if (JSON.stringify(before.defaultTagIds) !== JSON.stringify(after.defaultTagIds)) {
+      changes.push({ key: "default_tags", old: before.defaultTagIds, new: after.defaultTagIds });
+    }
+    if (before.dedupeWindowHours !== after.dedupeWindowHours) {
+      changes.push({
+        key: "dedupe_window_hours",
+        old: before.dedupeWindowHours,
+        new: after.dedupeWindowHours,
+      });
+    }
+    if (changes.length > 0) {
+      await logAudit({
+        serverId: webhook.server_id,
+        actorId: user.id,
+        action: "webhook.forum_settings",
+        targetType: "webhook",
+        targetId: webhook.id,
+        changes,
+      });
+    }
+    return { settings: after };
   },
 );
 
@@ -7545,7 +7637,13 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   if (!webhook) {
     throw new NotFound("Webhook not found");
   }
-  await requirePermission(webhook.server_id, user.id, Permission.MANAGE_CHANNELS);
+  await requirePermission(
+    webhook.server_id,
+    user.id,
+    Permission.MANAGE_CHANNELS,
+    webhook.channel_id,
+  );
+  // `webhook_forum_settings` goes with the row (ON DELETE CASCADE).
   await deleteWebhook(webhookId!);
   await logAudit({
     serverId: webhook.server_id,
@@ -11578,7 +11676,7 @@ const WEBHOOK_EXECUTE_PATH =
  * Slow mode does not reach here, on purpose. This path has its own INSERT and
  * never goes through `postChannelMessage`, and that is the right shape: a
  * webhook is a pipe, not a resident. Its URL was configured once by somebody
- * who held MANAGE_WEBHOOKS on the channel, what comes out of it is a build
+ * who held MANAGE_CHANNELS on the channel, what comes out of it is a build
  * result or an alert that is useless late, and there is no person on the other
  * end to show a countdown to. A flood from one is a webhook to revoke rather
  * than a member to slow down. `webhookExecuteLimiter` above is its budget. A
@@ -11593,11 +11691,11 @@ async function handleWebhookExecute(
   token: string,
 ): Promise<void> {
   if (!webhookExecuteLimiter.take(`webhook:${webhookId}`)) {
-    res.setHeader(
-      "Retry-After",
-      String(webhookExecuteLimiter.retryAfter(`webhook:${webhookId}`)),
-    );
-    sendError(res, 429, "Too many requests", req);
+    const retryAfter = webhookExecuteLimiter.retryAfter(`webhook:${webhookId}`);
+    res.setHeader("Retry-After", String(retryAfter));
+    // Discord's body beside our `error`: RSS tools built for Discord read
+    // `retry_after` (seconds) to back off.
+    sendJson(res, 429, webhookRateLimitedBody(retryAfter), req);
     return;
   }
 
@@ -11615,29 +11713,56 @@ async function handleWebhookExecute(
     return;
   }
 
-  // --- forums --- (forum PR 2; forum PR 4 replaces this block with the
-  // post path.) A forum never holds a message of its own, so the INSERT
-  // below would write one that no surface ever shows. Answer with Discord's
-  // own error instead, so a tool that already handles Discord forums
-  // recognises it: `error` is our shape, `message` and `code` are Discord's.
-  // A webhook that sits on a forum POST (one made before the create route
-  // refused threads) is refused too: it would write past the post's lock.
+  // --- forums --- A forum never holds a message of its own. An execute on a
+  // forum's webhook makes a post (or, with `?thread_id=`, a reply in one):
+  // `services/forum-webhooks.ts`. A webhook that sits on a forum POST (one
+  // made before the create route refused threads) is refused: it would write
+  // past the post's lock, and `?thread_id=` on the forum's webhook is how a
+  // reply is made.
   const target = await getChannel(webhook.channel_id);
   if (target?.type === "thread" && (await isForumPost(target.id))) {
     sendError(res, 400, "Webhooks cannot post into a forum post directly", req);
     return;
   }
   if (target?.type === "forum") {
-    sendJson(
-      res,
-      400,
-      {
-        error: WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
-        message: WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
-        code: WEBHOOK_FORUM_THREAD_NAME_CODE,
-      },
-      req,
-    );
+    const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+    const idempotencyKey = req.headers["idempotency-key"];
+    try {
+      const result = await executeForumWebhook({
+        webhook,
+        forum: target,
+        body,
+        threadId: query.get(WEBHOOK_THREAD_ID_PARAM),
+        idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
+      });
+      if (result.deduplicated) {
+        res.setHeader(WEBHOOK_DEDUPLICATED_HEADER, "1");
+      }
+      sendJson(
+        res,
+        200,
+        {
+          // Discord's `id` / `channel_id`, where a Discord tool reads them
+          // (`webhookForumExecuteExtrasSchema`): a post answers its own id,
+          // so a follow-up to `?thread_id=<id>` lands in it.
+          id: result.reply && result.message ? result.message.id : result.post.id,
+          channel_id: result.post.id,
+          message: result.message,
+          post: result.post,
+          ...(result.ignoredTags.length > 0 ? { ignored_tags: result.ignoredTags } : {}),
+        },
+        req,
+      );
+    } catch (error) {
+      if (error instanceof ForumWebhookRefusal) {
+        if (error.retryAfterSeconds) {
+          res.setHeader("Retry-After", String(error.retryAfterSeconds));
+        }
+        sendJson(res, error.status, error.body, req);
+        return;
+      }
+      throw error;
+    }
     return;
   }
 

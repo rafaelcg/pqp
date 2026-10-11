@@ -1906,8 +1906,26 @@ export const deleteChannelOverwrite = (
     `/api/channels/${channelId}/overwrites/${targetType}/${targetId}`,
   );
 
+/**
+ * A channel's webhooks. On a forum each one carries `forumSettings` and the
+ * answer brings the forum's tags as `forumTags` (forum PR 4); anything else,
+ * or an older API, answers `forumTags` null or absent.
+ */
 export const fetchWebhooks = (channelId: string) =>
-  apiFetch<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`);
+  apiFetch<{
+    webhooks: Webhook[];
+    forumTags?: import("@pqp/shared").ForumTag[] | null;
+  }>(`/api/channels/${channelId}/webhooks`);
+
+/** Replaces a forum webhook's tag allowlist, default tags and dedupe window. */
+export const putWebhookForumSettings = (
+  webhookId: string,
+  body: import("@pqp/shared").WebhookForumSettings,
+) =>
+  put<{ settings: import("@pqp/shared").WebhookForumSettings }>(
+    `/api/webhooks/${encodeURIComponent(webhookId)}/forum-settings`,
+    body,
+  );
 
 export const createWebhook = (
   channelId: string,

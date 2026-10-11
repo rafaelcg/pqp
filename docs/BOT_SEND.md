@@ -7,7 +7,9 @@ browser or holding a WebSocket.
 This is not a second messaging system. It is the same `createMessage` +
 fan-out path the WebSocket `message-create` frame uses. Incoming Discord-style
 webhooks (`POST /api/webhooks/:id/:token`) are unchanged: they still post as a
-pseudo-user, cannot reply in a thread, and skip notifications.
+pseudo-user and skip notifications. The one thread they can reach is a forum
+post, through `?thread_id=` on the forum's webhook (see "Incoming webhooks into
+a forum" below).
 
 ## Auth
 
@@ -71,10 +73,17 @@ there to make a busy channel readable for whoever is reading. A resident that
 posts through the wait is exactly the flood a moderator turned slow mode on to
 stop. An **incoming webhook** (`POST /api/webhooks/:id/:token`) is exempt for
 the mirror-image reason: it is a pipe, not a resident, its URL is configured
-once by someone who already held MANAGE_WEBHOOKS on the channel, and what
+once by someone who already held MANAGE_CHANNELS on the channel, and what
 comes out of it is a build result or an alert that is useless late. It carries
 its own per-webhook budget instead (burst 20, 1/s) and never touches
 `postChannelMessage`, which is where slow mode is decided.
+
+A character in a **forum** is a person, not a pipe. It opens a post through
+the people's route, `POST /api/channels/:forumId/posts`, with every gate a
+member's post goes through (AutoMod on the title, slow mode on the forum, the
+post bucket). A `POST /api/channels/:forumId/messages` into the forum id itself
+is refused like any message into a forum. Replying in a post works as above:
+the post is a thread, so POST to the post's id.
 
 ## Response
 
@@ -153,6 +162,41 @@ an `active` outgoing hook, and offline once the hook is `failing` or
 
 Characters still cannot DM, join voice, create servers, or delete/export
 themselves. This route does not change that.
+
+## Incoming webhooks into a forum
+
+Not the character route, but the same question comes up. A webhook is created
+on a channel's settings (or `POST /api/channels/:channelId/webhooks`) by
+someone holding MANAGE_CHANNELS **on that channel**: a channel overwrite
+counts, and the same check covers listing, deleting and the forum settings
+below. On a forum, each execute becomes a post, so an RSS tool pointed at the
+URL as if it were a Discord webhook makes one post per item.
+
+| Payload | In a forum |
+|---|---|
+| `thread_name` | The post title (trimmed, cut to 100 characters) |
+| no `thread_name` | The first embed's `title`, else the first line of `content` with markdown and bare links stripped |
+| no title anywhere | `400` with Discord's `code: 220001` |
+| `applied_tags` | Tags by id or by name (case and accents ignored), at most 5. A webhook never creates a tag; unknown or disallowed entries come back in `ignored_tags` |
+| `content`, `embeds`, `username`, `avatar_url` | The opening message, as in a text channel |
+| `?thread_id=<postId>` | A reply in that post. `404` unless it is a post of this forum, `403` when the post is locked |
+| `Idempotency-Key` header | The dedupe key (pqp extension) |
+
+The answer is `200 { message, post, ignored_tags? }`. A repeat of the same item
+inside the webhook's dedupe window (default 72 h) answers the existing post with
+`X-Pqp-Deduplicated: 1` and writes nothing; the key is the `Idempotency-Key`
+header, else the title plus the item's first link with `utm_*` and the
+fragment removed. Posts have a cluster-wide budget of 10 burst then 1 a minute
+per webhook; a `429` carries `Retry-After` and Discord's `retry_after` (seconds)
+in the body. With the `forum_channels` flag off for the server a new post is
+`403` and nothing is written; `?thread_id=` replies still land.
+
+Per webhook, `PUT /api/webhooks/:webhookId/forum-settings` (same permission,
+audit `webhook.forum_settings`) sets `{ allowedTagIds, defaultTagIds,
+dedupeWindowHours }`: `allowedTagIds: null` allows every tag that is not staff
+only, and a staff-only tag has to be listed by id; `defaultTagIds` apply when
+nothing the payload names resolves; `dedupeWindowHours: 0` turns dedupe off.
+The full design is `docs/plans/FORUM_CHANNELS.md` section 7.
 
 ## Follow-ups
 

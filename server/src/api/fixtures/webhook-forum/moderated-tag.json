@@ -1,0 +1,8 @@
+{
+  "source": "A release script posting to a forum webhook with thread_name and applied_tags naming the forum's staff-only tag ('Oficial') beside an open one, the way a team's own deploy job would label its announcements.",
+  "body": {
+    "content": "Versão 2.0 no ar.",
+    "thread_name": "Versão 2.0",
+    "applied_tags": ["Oficial", "Lançamento"]
+  }
+}

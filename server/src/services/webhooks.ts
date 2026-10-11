@@ -120,10 +120,16 @@ export async function getWebhookForExecution(
  * the normal compose path — nothing here claims an upload or unfurls a
  * link, matching how `createMessage` leaves the same fields empty for a
  * message no client has round-tripped through yet.
+ *
+ * `channelId` is the webhook's own channel unless the caller says otherwise,
+ * which only the forum path does: a webhook on a forum writes each item into
+ * the post it just created, or into the post `?thread_id=` names
+ * (`services/forum-webhooks.ts`). A forum never holds a message itself.
  */
 export async function executeWebhook(
   webhook: DbWebhook,
   body: ExecuteWebhookBody,
+  channelId: string = webhook.channel_id,
 ): Promise<HydratedMessage> {
   const result = await getPool().query<{
     id: string;
@@ -141,7 +147,7 @@ export async function executeWebhook(
      RETURNING id, channel_id, author_id, body, created_at, edited_at,
                webhook_embeds, webhook_username, webhook_avatar_url`,
     [
-      webhook.channel_id,
+      channelId,
       webhook.pseudo_user_id,
       body.content ?? "",
       body.embeds ? JSON.stringify(body.embeds) : null,
