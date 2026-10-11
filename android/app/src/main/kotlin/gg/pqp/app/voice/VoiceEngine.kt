@@ -376,7 +376,10 @@ class VoiceEngine(
 
     override fun setCanPublishAudio(allowed: Boolean) {
         canPublishAudio = allowed
-        if (!allowed) applyLocalAudio()
+        // Both directions. A grant does not unmute anybody (the controller
+        // keeps a seat that was listen-only muted, so `micWanted` is false),
+        // but a share's game sound has to come back with it.
+        applyLocalAudio()
     }
 
     /**

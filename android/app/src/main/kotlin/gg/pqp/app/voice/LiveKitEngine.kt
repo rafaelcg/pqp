@@ -1211,6 +1211,13 @@ class LiveKitEngine(
             micTrack?.enabled = false
             return
         }
+        // An existing track (SPEAK revoked and granted back) is re-enabled by
+        // the same rule as everywhere else: the person's own mute still
+        // holds, a share's game sound comes back.
+        micTrack?.let { track ->
+            track.enabled = micTrackEnabled()
+            scope.launch { applyMuteToPublication() }
+        }
         val room = room ?: return
         if (micTrack != null || localPeerId == null) return
         // Granted after a listen-only join: publish now, in whatever mute
