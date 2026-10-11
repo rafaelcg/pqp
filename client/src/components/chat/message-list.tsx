@@ -686,6 +686,8 @@ export const MessageList = memo(function MessageList({
   const highlightRef = useRef<string | null>(highlightMessageId);
   highlightRef.current = highlightMessageId;
   const lastCountRef = useRef(messages.length);
+  /** The newest row last time: unchanged means only history above moved. */
+  const lastTailIdRef = useRef<string | null>(messages[messages.length - 1]?.id ?? null);
   /** Scroll height captured before prepending history, to keep the view still. */
   const restoreRef = useRef<{ height: number; top: number } | null>(null);
   /**
@@ -1286,6 +1288,16 @@ export const MessageList = memo(function MessageList({
     prependedRef.current = 0;
     const appended = appendedRef.current;
     appendedRef.current = 0;
+    const current = messagesRef.current;
+    const tailId = current[current.length - 1]?.id ?? null;
+    const tailUnchanged = tailId !== null && tailId === lastTailIdRef.current;
+    lastTailIdRef.current = tailId;
+    // Older pages read by the owner of the controller rather than by this
+    // list's own "load older" (the forum post paging back to its question)
+    // leave the newest row where it was: nothing arrived.
+    if (tailUnchanged) {
+      return;
+    }
     // The first page of a visit is not an "arrival". The landing effect below
     // puts the viewport on the NEW rule (or the tail), or the permalink jump
     // puts it on its message, without treating the whole history as missed
