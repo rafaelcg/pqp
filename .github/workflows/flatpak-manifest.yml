@@ -187,7 +187,7 @@ jobs:
     # After a successful bump, or on its own for a pull request. Read-only on
     # purpose: on a pull request this runs the branch's build script.
     if: >-
-      always() &&
+      !cancelled() &&
       (needs.bump.result == 'success' ||
        (github.event_name == 'pull_request' && needs.bump.result == 'skipped'))
     runs-on: ubuntu-latest
