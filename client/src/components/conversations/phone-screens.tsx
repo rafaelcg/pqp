@@ -45,6 +45,7 @@ export function PhoneServersScreen({
   onCreateServer,
   onJoinServer,
   onOpenCommunities,
+  footer,
 }: {
   servers: readonly Server[];
   serverUnread: Record<string, UnreadState>;
@@ -53,6 +54,8 @@ export function PhoneServersScreen({
   onCreateServer: () => void;
   onJoinServer: () => void;
   onOpenCommunities?: () => void;
+  /** The call bar and the music player, so a call stays in reach on this tab. */
+  footer?: ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -138,6 +141,7 @@ export function PhoneServersScreen({
           </span>
         </button>
       </div>
+      {footer && <div className="shrink-0">{footer}</div>}
     </section>
   );
 }
