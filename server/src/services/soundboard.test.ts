@@ -57,6 +57,7 @@ const {
   createSoundboardUpload,
   deleteSoundboardSound,
   sweepPendingUploads,
+  updateSoundboardSound,
 } = await import("./soundboard.js");
 const { createMemoryHub, createMemoryTransport, setBusTransport } = await import(
   "../lib/bus.js"
@@ -76,8 +77,12 @@ describeDb("soundboard upload ledger", () => {
     return key;
   }
 
-  function claim(key: string, name = "airhorn") {
+  function claimOutcome(key: string, name = "airhorn") {
     return claimSoundboardSound({ serverId, userId, key, name, emoji: "📣" });
+  }
+
+  async function claim(key: string, name = "airhorn") {
+    return (await claimOutcome(key, name)).sound;
   }
 
   beforeAll(async () => {
@@ -254,5 +259,79 @@ describeDb("soundboard upload ledger", () => {
     } finally {
       setBusTransport(null);
     }
+  });
+
+  it("reports that only the first claim of a key created the clip", async () => {
+    const key = await upload();
+    const first = await claimOutcome(key);
+    const second = await claimOutcome(key);
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.sound.id).toBe(first.sound.id);
+  });
+
+  it("lets exactly one of several parallel claims of a key create the clip", async () => {
+    const key = await upload();
+    const outcomes = await Promise.all([
+      claimOutcome(key),
+      claimOutcome(key),
+      claimOutcome(key),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.created)).toHaveLength(1);
+    expect(new Set(outcomes.map((outcome) => outcome.sound.id)).size).toBe(1);
+  });
+
+  it("gives exactly one of several parallel deletes the clip's name", async () => {
+    const sound = await claim(await upload(), "contested");
+    const results = await Promise.all([
+      deleteSoundboardSound(serverId, sound.id),
+      deleteSoundboardSound(serverId, sound.id),
+      deleteSoundboardSound(serverId, sound.id),
+    ]);
+    expect(results.filter((name) => name === "contested")).toHaveLength(1);
+    expect(results.filter((name) => name === null)).toHaveLength(2);
+  });
+
+  it("puts the row back when the object cannot be deleted", async () => {
+    const sound = await claim(await upload(), "stays");
+    s3.failDeletes = true;
+    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
+      code: "storage",
+    });
+    const rows = await getPool().query(
+      `SELECT name, created_by FROM soundboard_sounds WHERE id = $1`,
+      [sound.id],
+    );
+    expect(rows.rows).toEqual([{ name: "stays", created_by: userId }]);
+  });
+
+  it("reports what an edit changed from, and nothing for a no-op", async () => {
+    const sound = await claim(await upload(), "before");
+    const renamed = await updateSoundboardSound({
+      serverId,
+      soundId: sound.id,
+      name: "after",
+      volume: 0.35,
+    });
+    expect(renamed).toMatchObject({
+      changed: true,
+      before: { name: "before", volume: 1 },
+      sound: { name: "after", volume: 0.35 },
+    });
+    const same = await updateSoundboardSound({
+      serverId,
+      soundId: sound.id,
+      name: "after",
+      volume: 0.35,
+    });
+    expect(same?.changed).toBe(false);
+    expect(same?.sound.name).toBe("after");
+    expect(
+      await updateSoundboardSound({
+        serverId,
+        soundId: "00000000-0000-4000-8000-000000000000",
+        name: "nothing",
+      }),
+    ).toBeNull();
   });
 });

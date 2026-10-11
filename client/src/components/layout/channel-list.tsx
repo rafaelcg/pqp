@@ -167,6 +167,19 @@ function sortByPosition(list: Channel[]): Channel[] {
   return [...list].sort((a, b) => a.position - b.position);
 }
 
+/**
+ * Whether the server header menu offers the settings entry. Each cargo that
+ * has a pane in server settings to land on must be here, or its holder has no
+ * way in (a Manage Soundboard cargo has the Soundboard tab and nothing else).
+ */
+export function showsServerSettingsEntry(access: {
+  canManage: boolean;
+  canManageMessages: boolean;
+  canManageSoundboard: boolean;
+}): boolean {
+  return access.canManage || access.canManageMessages || access.canManageSoundboard;
+}
+
 interface ChannelListProps {
   server: Server | null;
   /**
@@ -196,6 +209,12 @@ interface ChannelListProps {
    * renames and deletes channels, and neither implies the other.
    */
   canManageMessages?: boolean;
+  /**
+   * MANAGE_SOUNDBOARD with the soundboard on for this server. Opens the
+   * server's settings from the header menu for a cargo that holds nothing else
+   * settings can show, since the Soundboard tab is theirs.
+   */
+  canManageSoundboard?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   /**
@@ -397,6 +416,7 @@ export const ChannelList = memo(function ChannelList({
   canManage,
   canManageRoles = false,
   canManageMessages = false,
+  canManageSoundboard = false,
   isLoading = false,
   voiceOccupancy = {},
   channelLive = {},
@@ -1281,7 +1301,11 @@ export const ChannelList = memo(function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
-        ...(canManage || canManageMessages
+        ...(showsServerSettingsEntry({
+          canManage,
+          canManageMessages,
+          canManageSoundboard,
+        })
           ? [
               { id: "sep", label: "", separator: true },
               {

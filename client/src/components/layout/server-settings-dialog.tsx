@@ -31,7 +31,7 @@ import { SoundboardSettingsSection } from "@/components/layout/soundboard-settin
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   ApiError,
@@ -162,6 +162,70 @@ export function auditReasonKey(
   );
 }
 
+/**
+ * The first section of the rail a non-owner can see, in the rail's own order,
+ * so the dialog never opens on a pane that is not theirs (a Manage Soundboard
+ * cargo alone lands on Soundboard, a Manage Messages one on AutoMod).
+ */
+export function firstVisibleSection(
+  visible: Partial<Record<SectionId, boolean>>,
+): SectionId {
+  return SECTIONS.find((section) => visible[section.id])?.id ?? "overview";
+}
+
+/**
+ * The clip a soundboard entry is about, and for an edit what changed. Audio
+ * is not scanned, so the name is the part of this row a moderator needs, and
+ * a deleted clip's id points at nothing. Other actions render no detail.
+ * An edit written before the old value was stored (`old: null`) shows the
+ * new value alone.
+ */
+export function soundboardAuditDetails(
+  entry: Pick<AuditLogEntry, "action" | "changes">,
+  t: Translator["t"],
+): string[] {
+  if (
+    entry.action !== "soundboard.create" &&
+    entry.action !== "soundboard.update" &&
+    entry.action !== "soundboard.delete"
+  ) {
+    return [];
+  }
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value !== "" ? value : null;
+  const percent = (value: unknown): string | null =>
+    typeof value === "number" && Number.isFinite(value)
+      ? `${Math.round(value * 100)}%`
+      : null;
+  const change = (key: string) => entry.changes?.find((c) => c.key === key);
+  const nameChange = change("name");
+  const oldName = text(nameChange?.old);
+  const newName = text(nameChange?.new);
+  const details: string[] = [];
+  if (entry.action === "soundboard.update") {
+    if (oldName && newName) {
+      details.push(
+        t("serverSettings.audit.soundboard.renamed", { old: oldName, new: newName }),
+      );
+    } else if (newName) {
+      details.push(t("serverSettings.audit.soundboard.clip", { name: newName }));
+    }
+    const oldVolume = percent(change("volume")?.old);
+    const newVolume = percent(change("volume")?.new);
+    if (newVolume) {
+      details.push(
+        t("serverSettings.audit.soundboard.volume", {
+          old: oldVolume ?? "?",
+          new: newVolume,
+        }),
+      );
+    }
+    return details;
+  }
+  const name = entry.action === "soundboard.delete" ? oldName : newName;
+  return name ? [t("serverSettings.audit.soundboard.clip", { name })] : [];
+}
+
 /* ------------------------------------------------------------------ layout */
 
 /**
@@ -192,7 +256,7 @@ export function auditReasonKey(
  * their own dialogs already, reached from the rail and the channel row. Adding
  * a door here that opens another dialog would be a worse version of both.
  */
-type SectionId =
+export type SectionId =
   | "overview"
   | "access"
   | "roles"
@@ -404,6 +468,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
             )[entry.action];
             const reasonKey = auditReasonKey(entry);
+            const details = soundboardAuditDetails(entry, t);
             return (
               <li
                 key={entry.id}
@@ -428,6 +493,14 @@ function AuditLogSection({ serverId }: { serverId: string }) {
                     </span>
                   )}
                 </p>
+                {details.map((detail) => (
+                  <p
+                    key={detail}
+                    className="text-xs text-paper [overflow-wrap:anywhere]"
+                  >
+                    {detail}
+                  </p>
+                ))}
                 <p className="text-xs text-paper-muted">
                   {new Date(entry.createdAt).toLocaleString()}
                 </p>
@@ -594,17 +667,15 @@ export function ServerSettingsDialog({
   // no longer exists for them.
   const firstSection: SectionId = isOwner
     ? "overview"
-    : canSeeOverview
-      ? "overview"
-      : canSeeRoles
-        ? "roles"
-        : canSeeSoundboard
-          ? "soundboard"
-          : canSeeIntegrations
-          ? "integrations"
-          : canSeeModeration
-            ? "moderation"
-            : "audit";
+    : firstVisibleSection({
+        overview: canSeeOverview,
+        roles: canSeeRoles,
+        soundboard: canSeeSoundboard,
+        integrations: canSeeIntegrations,
+        moderation: canSeeModeration,
+        automod: canSeeAutomod,
+        audit: canSeeAudit,
+      });
   const openingSection: SectionId =
     requestedSection === "roles" && canSeeRoles ? "roles" : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,

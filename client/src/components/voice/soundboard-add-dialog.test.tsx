@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useRef } from "react";
+import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +21,7 @@ vi.mock("@/lib/soundboard-upload", async (importOriginal) => ({
 
 const decodes: Array<(buffer: unknown) => void> = [];
 const previewed = vi.fn();
+const stopped = vi.fn();
 
 vi.mock("@/lib/sounds", () => ({
   sharedAudioContext: () => null,
@@ -32,6 +33,7 @@ vi.mock("@/lib/sounds", () => ({
 vi.mock("@/lib/soundboard", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/soundboard")>()),
   previewSoundboardBuffer: (...args: unknown[]) => previewed(...args),
+  stopSoundboardPreview: () => stopped(),
 }));
 
 const { ApiError } = await import("@/lib/api");
@@ -127,6 +129,7 @@ beforeEach(() => {
   onClose.mockReset();
   onAdded.mockReset();
   previewed.mockReset();
+  stopped.mockReset();
   decodes.length = 0;
 });
 
@@ -220,5 +223,128 @@ describe("soundboard add dialog", () => {
     await act(async () => decodes[0]!("first"));
     expect(previewed).toHaveBeenCalledTimes(1);
     expect(previewed).toHaveBeenCalledWith("second");
+  });
+
+  describe("closing while a save is in flight", () => {
+    function Reopenable() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button" data-testid="reopen" onClick={() => setOpen(true)}>
+            reopen
+          </button>
+          <SoundboardAddDialog
+            open={open}
+            serverId="s1"
+            onClose={() => {
+              onClose();
+              setOpen(false);
+            }}
+            onAdded={() => {
+              onAdded();
+              setOpen(false);
+            }}
+            onAddedAfterClose={onAddedAfterClose}
+          />
+        </>
+      );
+    }
+
+    const onAddedAfterClose = vi.fn();
+
+    async function escape() {
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+    }
+
+    async function reopen() {
+      await act(async () => {
+        document.body.querySelector<HTMLButtonElement>('[data-testid="reopen"]')!.click();
+      });
+    }
+
+    beforeEach(() => onAddedAfterClose.mockReset());
+
+    it("cancels the upload and never touches the next dialog when it finishes", async () => {
+      let resolve!: (value: unknown) => void;
+      upload.mockReturnValue(new Promise((r) => (resolve = r)));
+      await mount(<Reopenable />);
+      await chooseFile();
+      type(nameInput(), "Buzina");
+      await submit();
+      const signal = upload.mock.calls[0]![0].signal as AbortSignal;
+      expect(signal.aborted).toBe(false);
+
+      await escape();
+      expect(signal.aborted).toBe(true);
+      expect(document.body.querySelector("form")).toBeNull();
+
+      await reopen();
+      expect(document.body.querySelector("form")).not.toBeNull();
+      // The old upload lands now. The new dialog must not be closed by it.
+      await act(async () => resolve({ id: "x" }));
+      expect(onAdded).not.toHaveBeenCalled();
+      expect(document.body.querySelector("form")).not.toBeNull();
+      // The clip does exist, so the list is told to refresh.
+      expect(onAddedAfterClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows nothing from a failed upload that outlived its dialog", async () => {
+      let reject!: (error: unknown) => void;
+      upload.mockReturnValue(new Promise((_, r) => (reject = r)));
+      await mount(<Reopenable />);
+      await chooseFile();
+      type(nameInput(), "Buzina");
+      await submit();
+      await escape();
+      await reopen();
+      await act(async () => reject(new ApiError(409, "slots")));
+      expect(alerts()).toEqual([]);
+      expect(onAddedAfterClose).not.toHaveBeenCalled();
+      // And the new dialog can save: the old save did not leave it locked.
+      upload.mockResolvedValue({ id: "y" });
+      await chooseFile();
+      type(nameInput(), "Risada");
+      await submit();
+      expect(upload).toHaveBeenCalledTimes(2);
+      expect(onAdded).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops a running preview when the dialog closes, however it closes", async () => {
+      await mount(<Reopenable />);
+      expect(stopped).not.toHaveBeenCalled();
+      await escape();
+      expect(stopped).toHaveBeenCalled();
+    });
+
+    it("drops a preview decode that finishes after the dialog closed", async () => {
+      await mount(<Reopenable />);
+      await chooseFile();
+      const play = document.body.querySelector<HTMLButtonElement>('button[aria-label="Preview"]')!;
+      await act(async () => {
+        play.click();
+      });
+      await escape();
+      await act(async () => decodes[0]!("late"));
+      expect(previewed).not.toHaveBeenCalled();
+    });
+
+    it("uses the API's cap in the full-board message", async () => {
+      upload.mockRejectedValue(new ApiError(409, "slots"));
+      await mount(
+        <SoundboardAddDialog
+          open
+          serverId="s1"
+          maxSounds={30}
+          onClose={onClose}
+          onAdded={onAdded}
+        />,
+      );
+      await chooseFile();
+      type(nameInput(), "Buzina");
+      await submit();
+      expect(alerts()).toEqual(["This server already has 30 sounds."]);
+    });
   });
 });

@@ -29,6 +29,43 @@ describe("soundboard clip names", () => {
     expect(soundboardNameProblem("ab﻿")).toBe("hidden");
   });
 
+  it("refuses fillers, blanks, control and tag characters", () => {
+    const hidden = [
+      "\u3164\u3164", // U+3164 Hangul filler
+      "\u115f\u1160", // U+115F U+1160
+      "\uffa0\uffa0", // U+FFA0
+      "\u2800\u2800", // U+2800 Braille blank
+      "ab\tcd",
+      "ab\ncd",
+      "ab\u0007cd",
+      "ab\u007fcd",
+      "ab\u0085cd",
+      "a\u{E0041}\u{E0042}",
+      "\u{E0001}\u{E007F}",
+      "ab\u00adcd",
+      "ab\u061ccd",
+    ];
+    for (const name of hidden) {
+      expect(soundboardNameProblem(name), JSON.stringify(name)).toBe("hidden");
+      expect(soundboardNameSchema.safeParse(name).success).toBe(false);
+    }
+  });
+
+  it("does not let a filler stand in for the visible character", () => {
+    // Two of them are long enough and are letters to Unicode, and still hide.
+    expect(soundboardNameProblem("\u3164\u3164\u3164")).toBe("hidden");
+    expect(soundboardNameProblem("\u2800 \u2800")).toBe("hidden");
+    // A real name beside them is refused too, not quietly accepted.
+    expect(soundboardNameProblem("ab\u3164")).toBe("hidden");
+  });
+
+  it("still accepts ordinary names, Hangul and Braille patterns", () => {
+    expect(soundboardNameProblem("안녕하세요")).toBeNull();
+    expect(soundboardNameProblem("Grito 2")).toBeNull();
+    expect(soundboardNameProblem("⠁⠃⠉")).toBeNull();
+    expect(soundboardNameProblem("ação")).toBeNull();
+  });
+
   it("trims before measuring", () => {
     expect(soundboardNameSchema.parse("  Buzina  ")).toBe("Buzina");
     expect(soundboardNameSchema.safeParse("  a  ").success).toBe(false);

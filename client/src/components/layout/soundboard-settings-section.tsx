@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import {
+  ApiError,
   deleteSoundboardSound,
   fetchSoundboard,
   updateSoundboardSound,
@@ -23,6 +24,18 @@ import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
 /** A volume slider is dragged or nudged; save once it has rested this long. */
 const VOLUME_SAVE_DELAY_MS = 400;
 
+/**
+ * While uploads in flight hold slots, look again this often. A ticket nobody
+ * claims is swept a few minutes after it was signed, and nothing tells this
+ * page when, so it asks.
+ */
+const PENDING_REFRESH_MS = 15_000;
+
+/** The clip is gone already (someone else deleted it): not a failure. */
+function isGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
 export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const countId = useId();
@@ -36,6 +49,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);
+  const prefetchedIds = useRef("");
   const addRef = useRef<HTMLButtonElement>(null);
   const pencilRefs = useRef(new Map<string, HTMLButtonElement>());
   const previewRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -57,7 +71,14 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         setMaxSounds(page.maxSounds);
         setSlotsUsed(page.slotsUsed ?? null);
         setError(null);
-        void prefetchSoundboard(serverId);
+        // Warming the clips is keyed by clip, so only a changed set needs it;
+        // the poll while uploads are in flight would otherwise fetch the whole
+        // list a second time on every tick.
+        const ids = page.sounds.map((entry) => entry.id).join(",");
+        if (ids !== prefetchedIds.current) {
+          prefetchedIds.current = ids;
+          void prefetchSoundboard(serverId);
+        }
       })
       .catch(() => setError(t("soundboard.settings.loadFailed")));
   }
@@ -89,7 +110,18 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   }, []);
 
   async function rename(sound: SoundboardSoundDto, name: string): Promise<void> {
-    const saved = await updateSoundboardSound(serverId, sound.id, { name });
+    let saved: Awaited<ReturnType<typeof updateSoundboardSound>>;
+    try {
+      saved = await updateSoundboardSound(serverId, sound.id, { name });
+    } catch (err) {
+      if (isGone(err)) {
+        // Someone else deleted it. Show the list as it is now.
+        cancelEdit(sound.id);
+        await reload();
+        return;
+      }
+      throw err;
+    }
     const savedName = saved?.sound?.name ?? name;
     setSounds((current) =>
       current
@@ -105,24 +137,54 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   function remove(sound: SoundboardSoundDto): void {
     const index = sounds?.findIndex((entry) => entry.id === sound.id) ?? 0;
     void deleteSoundboardSound(serverId, sound.id)
+      .catch((err: unknown) => {
+        // Already deleted by someone else: the goal is met.
+        if (!isGone(err)) {
+          throw err;
+        }
+      })
       .then(() => {
         focusAfterDelete.current = Math.max(index, 0);
         return reload();
       })
-      .catch(() => setError(t("soundboard.settings.saveFailed")));
+      .catch(() => setError(t("soundboard.settings.deleteFailed")));
   }
 
-  // The server refuses at stored sounds plus uploads in flight, so count the same.
-  const used = slotsUsed ?? sounds?.length ?? 0;
+  // The server refuses at stored sounds plus uploads in flight. The counter
+  // shows the clips people can see; uploads in flight are said on their own
+  // line, so a full board never reads as "24 of 24" over a shorter list.
+  const stored = sounds?.length ?? 0;
+  const used = slotsUsed ?? stored;
+  const pending = Math.max(0, used - stored);
   const full = used >= maxSounds;
+
+  useEffect(() => {
+    if (pending <= 0) {
+      return;
+    }
+    const timer = window.setTimeout(() => void reload(), PENDING_REFRESH_MS);
+    return () => window.clearTimeout(timer);
+    // Re-armed by every answer (`sounds` is a new array each time) and by a
+    // failed one (`error` changes), so a dropped poll does not end the polling.
+  }, [pending, sounds, error]);
   const confirmSound = sounds?.find((sound) => sound.id === confirmId) ?? null;
 
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <p id={countId} className="text-xs text-text-tertiary">
-          {t("soundboard.settings.count", { count: used, max: maxSounds })}
-        </p>
+        <div id={countId} className="space-y-0.5">
+          <p className="text-xs text-text-tertiary">
+            {t("soundboard.settings.count", { count: stored, max: maxSounds })}
+          </p>
+          {pending > 0 && (
+            <p className="text-xs text-text-tertiary">
+              {t("soundboard.settings.pending", { count: pending })}
+              {full && stored < maxSounds
+                ? ` ${t("soundboard.settings.fullPending")}`
+                : ""}
+            </p>
+          )}
+        </div>
         {/* aria-disabled, not disabled: after the 24th upload the dialog hands
             focus back here, and a disabled button cannot take it. */}
         <Button
@@ -176,6 +238,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                 {editing ? (
                   <RenameForm
                     name={sound.name}
+                    suspended={adding || confirmId !== null}
                     onSave={(name) => rename(sound, name)}
                     onCancel={() => cancelEdit(sound.id)}
                   />
@@ -197,7 +260,16 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                     // slow earlier request cannot land after a later one.
                     saveQueue.current = saveQueue.current
                       .then(() => updateSoundboardSound(serverId, sound.id, { volume }))
-                      .then(() => reload())
+                      .then(
+                        () => reload(),
+                        // Deleted by someone else meanwhile: just refresh.
+                        (err: unknown) => {
+                          if (!isGone(err)) {
+                            throw err;
+                          }
+                          return reload();
+                        },
+                      )
                       .catch(() => setError(t("soundboard.settings.saveFailed")));
                   }}
                 />
@@ -246,12 +318,14 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
       <SoundboardAddDialog
         open={adding}
         serverId={serverId}
+        maxSounds={maxSounds}
         returnFocusRef={addRef}
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
           void reload();
         }}
+        onAddedAfterClose={() => void reload()}
       />
     </section>
   );
@@ -260,14 +334,18 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
 /**
  * The name field of one row while it is being renamed. Enter saves, Escape
  * cancels. Escape is taken at the window, ahead of the settings dialog's own
- * listener, or it would close all of settings instead of this one field.
+ * listener, wherever focus is (clicking away from the field must not turn the
+ * next Escape into "close all of settings"), except while another dialog
+ * (add, delete confirmation) is up and owns the key.
  */
 function RenameForm({
   name,
+  suspended,
   onSave,
   onCancel,
 }: {
   name: string;
+  suspended: boolean;
   onSave: (name: string) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -276,10 +354,11 @@ function RenameForm({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -288,11 +367,7 @@ function RenameForm({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (
-        event.key === "Escape" &&
-        event.target instanceof Node &&
-        formRef.current?.contains(event.target)
-      ) {
+      if (event.key === "Escape" && !suspendedRef.current) {
         event.stopPropagation();
         event.preventDefault();
         cancelRef.current();
@@ -334,7 +409,6 @@ function RenameForm({
 
   return (
     <form
-      ref={formRef}
       noValidate
       className="space-y-1"
       onSubmit={(event) => {

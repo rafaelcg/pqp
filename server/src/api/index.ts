@@ -3558,7 +3558,7 @@ router.post(
     requireSoundboardEnabled(serverId!);
     const body = claimSoundboardSoundSchema.parse(await readJsonBody(req));
     try {
-      const sound = await claimSoundboardSound({
+      const { sound, created } = await claimSoundboardSound({
         serverId,
         userId: user.id,
         key: body.key,
@@ -3566,14 +3566,18 @@ router.post(
         emoji: body.emoji,
         volume: body.volume,
       });
-      await logAudit({
-        serverId: serverId!,
-        actorId: user.id,
-        action: "soundboard.create",
-        targetType: "soundboard_sound",
-        targetId: sound.id,
-        changes: [{ key: "name", old: null, new: sound.name }],
-      });
+      // A retried or parallel claim of the same upload answers with the row
+      // the first one made. Only the claim that made it is on the record.
+      if (created) {
+        await logAudit({
+          serverId: serverId!,
+          actorId: user.id,
+          action: "soundboard.create",
+          targetType: "soundboard_sound",
+          targetId: sound.id,
+          changes: [{ key: "name", old: null, new: sound.name }],
+        });
+      }
       return { sound };
     } catch (error) {
       if (error instanceof SoundboardError) {
@@ -3593,27 +3597,38 @@ router.patch(
       throw new NotFound("Sound not found");
     }
     const body = updateSoundboardSoundSchema.parse(await readJsonBody(req));
-    const sound = await updateSoundboardSound({
+    const updated = await updateSoundboardSound({
       serverId,
       soundId,
       name: body.name,
       emoji: body.emoji,
       volume: body.volume,
     });
-    if (!sound) {
+    if (!updated) {
       throw new NotFound("Sound not found");
     }
-    await logAudit({
-      serverId: serverId!,
-      actorId: user.id,
-      action: "soundboard.update",
-      targetType: "soundboard_sound",
-      targetId: sound.id,
-      changes: [
-        ...(body.name !== undefined ? [{ key: "name", old: null, new: sound.name }] : []),
-        ...(body.volume !== undefined ? [{ key: "volume", old: null, new: sound.volume }] : []),
-      ],
-    });
+    const { sound, before } = updated;
+    // Only what actually moved is on the record, with what it was before.
+    // The emoji is not audited (the app never edits it); a save that changes
+    // nothing writes no row.
+    const changes = [
+      ...(sound.name !== before.name
+        ? [{ key: "name", old: before.name, new: sound.name }]
+        : []),
+      ...(Math.fround(sound.volume) !== Math.fround(before.volume)
+        ? [{ key: "volume", old: before.volume, new: sound.volume }]
+        : []),
+    ];
+    if (changes.length > 0) {
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "soundboard.update",
+        targetType: "soundboard_sound",
+        targetId: sound.id,
+        changes,
+      });
+    }
     return { sound };
   },
 );

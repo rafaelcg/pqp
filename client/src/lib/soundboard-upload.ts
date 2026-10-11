@@ -140,19 +140,27 @@ export async function uploadSoundboardFile(input: {
   name: string;
   emoji: string;
   volume?: number;
+  /**
+   * Aborting stops the file transfer and keeps the claim from being sent.
+   * A claim already on the wire cannot be recalled.
+   */
+  signal?: AbortSignal;
 }): Promise<SoundboardSoundDto> {
   const minted = await createSoundboardUpload(input.serverId, {
     contentType: input.contentType,
     byteSize: input.file.size,
   });
+  input.signal?.throwIfAborted();
   const response = await fetch(minted.uploadUrl, {
     method: "PUT",
     headers: { "Content-Type": input.contentType },
     body: input.file,
+    signal: input.signal,
   });
   if (!response.ok) {
     throw new Error("storage");
   }
+  input.signal?.throwIfAborted();
   // A claim is idempotent by key, so a lost response is retried with the SAME
   // key rather than minting a second upload that would claim a duplicate.
   const claim = () =>
@@ -170,6 +178,7 @@ export async function uploadSoundboardFile(input: {
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
       throw error;
     }
+    input.signal?.throwIfAborted();
     return (await claim()).sound;
   }
 }

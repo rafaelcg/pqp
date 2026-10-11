@@ -30,14 +30,18 @@ const board = {
 };
 const update = vi.fn();
 const remove = vi.fn();
+const fetched = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
-  fetchSoundboard: async () => ({
+  fetchSoundboard: async () => {
+    fetched();
+    return {
     sounds: board.sounds,
     maxSounds: board.maxSounds,
     slotsUsed: board.slotsUsed,
-  }),
+    };
+  },
   updateSoundboardSound: (...args: unknown[]) => update(...args),
   deleteSoundboardSound: (...args: unknown[]) => remove(...args),
 }));
@@ -53,6 +57,7 @@ vi.mock("@/components/voice/soundboard-add-dialog", () => ({
     open ? <div data-testid="add-dialog" /> : null,
 }));
 
+const { ApiError } = await import("@/lib/api");
 const { SoundboardSettingsSection } = await import("./soundboard-settings-section");
 
 let root: Root | null = null;
@@ -98,6 +103,7 @@ beforeEach(() => {
   board.slotsUsed = undefined;
   update.mockReset();
   remove.mockReset();
+  fetched.mockReset();
   update.mockImplementation(async (_s: string, id: string, body: { name?: string }) => {
     board.sounds = board.sounds.map((c) => (c.id === id ? { ...c, ...body } : c));
     return { sound: board.sounds.find((c) => c.id === id) };
@@ -143,7 +149,9 @@ describe("soundboard settings list", () => {
     board.sounds = Array.from({ length: 21 }, (_, i) => clip(`id${i}`, `Clip ${i}`));
     board.slotsUsed = 24;
     await mount();
-    expect(document.body.textContent).toContain("24 of 24 custom sounds");
+    expect(document.body.textContent).toContain("21 of 24 custom sounds");
+    expect(document.body.textContent).toContain("3 uploads in progress");
+    expect(document.body.textContent).toContain("The board is full while uploads finish.");
     expect(addButton().getAttribute("aria-disabled")).toBe("true");
     await click(addButton());
     expect(document.body.querySelector('[data-testid="add-dialog"]')).toBeNull();
@@ -254,5 +262,106 @@ describe("clip volume", () => {
     expect(id).toBe("c");
     expect(body.volume).toBeCloseTo(0.75);
     expect(slider.getAttribute("aria-valuetext")).toBe("75%");
+  });
+});
+
+describe("when the settings page and the server disagree", () => {
+  it("cancels only the rename on Escape after the person clicked away from the field", async () => {
+    await mount();
+    const behind = vi.fn();
+    document.addEventListener("keydown", behind, true);
+    await click(byLabel("Rename Buzina"));
+    type(renameInput("Buzina"), "Corneta");
+    // Focus leaves the field, as a click on empty space does.
+    await act(async () => {
+      (document.activeElement as HTMLElement).blur();
+    });
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    document.removeEventListener("keydown", behind, true);
+    // The window listener took it ahead of the settings dialog's own.
+    expect(behind).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(document.body.querySelector('input[aria-label^="New name"]')).toBeNull();
+    expect(document.body.textContent).toContain("Buzina");
+  });
+
+  it("leaves Escape to the delete confirmation while one is open over a rename", async () => {
+    await mount();
+    await click(byLabel("Rename Buzina"));
+    await click(byLabel("Delete Risada"));
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(document.body.querySelector('input[aria-label^="New name"]')).not.toBeNull();
+  });
+
+  it("treats renaming a clip someone else deleted as done, and refreshes the list", async () => {
+    await mount();
+    update.mockRejectedValueOnce(new ApiError(404, "Sound not found"));
+    await click(byLabel("Rename Buzina"));
+    const input = renameInput("Buzina");
+    type(input, "Corneta");
+    board.sounds = board.sounds.filter((c) => c.id !== "a");
+    const before = fetched.mock.calls.length;
+    await act(async () => {
+      input.form!.requestSubmit();
+    });
+    expect(fetched.mock.calls.length).toBeGreaterThan(before);
+    expect(document.body.textContent).not.toContain("Could not save");
+    expect(document.body.textContent).not.toContain("Buzina");
+    expect(document.body.querySelector('input[aria-label^="New name"]')).toBeNull();
+  });
+
+  it("treats deleting a clip someone else deleted as done, with no error", async () => {
+    await mount();
+    remove.mockRejectedValueOnce(new ApiError(404, "Sound not found"));
+    await click(byLabel("Delete Risada"));
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    const confirm = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Delete",
+    )!;
+    board.sounds = board.sounds.filter((c) => c.id !== "b");
+    await click(confirm);
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Risada");
+  });
+
+  it("says a delete failed, not that a save did", async () => {
+    await mount();
+    remove.mockRejectedValueOnce(new ApiError(503, "storage"));
+    await click(byLabel("Delete Risada"));
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    const confirm = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Delete",
+    )!;
+    await click(confirm);
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not delete that sound.",
+    );
+  });
+
+  it("shows stored clips as the count and asks again while uploads hold slots", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    board.slotsUsed = 4;
+    await mount();
+    expect(document.body.textContent).toContain("3 of 24 custom sounds");
+    expect(document.body.textContent).toContain("1 upload in progress");
+    // Room is left, so Add stays open and no "full" sentence is shown.
+    expect(addButton().hasAttribute("aria-disabled")).toBe(false);
+    expect(document.body.textContent).not.toContain("The board is full");
+    const calls = fetched.mock.calls.length;
+    board.slotsUsed = undefined;
+    await act(async () => {
+      vi.advanceTimersByTime(16_000);
+    });
+    expect(fetched.mock.calls.length).toBeGreaterThan(calls);
+    expect(document.body.textContent).not.toContain("upload in progress");
   });
 });

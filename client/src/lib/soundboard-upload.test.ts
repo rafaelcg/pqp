@@ -59,6 +59,43 @@ describe("uploadSoundboardFile claim", () => {
   });
 });
 
+describe("uploadSoundboardFile abort", () => {
+  it("does not send the claim once aborted after the file went up", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort();
+        return { ok: true };
+      }),
+    );
+    await expect(
+      uploadSoundboardFile({ ...input, signal: controller.signal }),
+    ).rejects.toBeDefined();
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("hands the signal to the file transfer", async () => {
+    claim.mockResolvedValue({ sound: { id: "x" } });
+    const controller = new AbortController();
+    await uploadSoundboardFile({ ...input, signal: controller.signal });
+    const init = vi.mocked(fetch).mock.calls[0]![1]!;
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("does not retry a lost claim response once aborted", async () => {
+    const controller = new AbortController();
+    claim.mockImplementation(async () => {
+      controller.abort();
+      throw new ApiError(502, "bad gateway");
+    });
+    await expect(
+      uploadSoundboardFile({ ...input, signal: controller.signal }),
+    ).rejects.toBeDefined();
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("soundboard error mapping", () => {
   it("maps the server's codes and a bad-name 400", () => {
     expect(soundboardErrorKey(new ApiError(409, "slots"))).toBe("soundboard.error.slots");

@@ -106,15 +106,41 @@ in three seconds tells the person it did not play, or that the clip was
 removed when the refreshed list no longer has it. Holding a key does not
 repeat plays.
 
-`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. In server settings,
-the pencil on a row renames it (Enter saves, Escape cancels). Delete asks
-for confirmation first. The count and the Add button follow the number the
-server refuses at: stored clips plus uploads in flight. Each row says who
-added the clip; the list only carries that for people who manage the board.
+`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. A member who holds only
+this permission still gets "Community settings" in the server header menu, and
+the dialog opens on the Soundboard tab. In server settings, the pencil on a row
+renames it (Enter saves). Escape cancels the rename and nothing else, wherever
+focus is, unless another dialog is open over it. Delete asks for confirmation
+first. A clip that someone else already deleted counts as done: the list
+refreshes and no error shows.
+
+The counter shows the clips on the list. Uploads in flight sit on their own
+line ("1 upload in progress"). The server still refuses at stored clips plus
+uploads in flight, so Add is off only when that sum reaches the cap, and the
+page says when uploads are the reason. While any are in flight it asks the
+server again every 15 seconds, because an upload nobody claims is swept a few
+minutes after it was signed. Each row says who added the clip; the list only
+carries that for people who manage the board.
+
+Closing the add dialog while it saves cancels the transfer. A save that ends
+after the dialog closed cannot close or fill the next one. If the clip was
+added anyway, the list refreshes.
+
 Adding, editing and deleting a clip are written to the server's audit log
 (`soundboard.create`, `soundboard.update`, `soundboard.delete`), with the
-clip's name, because audio is not scanned. It is on for manager and owner,
-off for `@everyone`. A server can hand it to a role.
+clip's name, because audio is not scanned. The log shows the name on every
+row, and old to new on a rename or a volume change. Each row is written once:
+only the claim that created a clip writes `create` (a retry or a parallel claim
+of the same upload does not), only the delete that removed the row writes
+`delete` (the others get 404), and an edit that changes nothing writes no
+`update`. A delete removes the row first, which decides the winner, and then
+the object. If storage fails, the row is put back and the delete answers 503.
+It is on for manager and owner, off for `@everyone`. A server can hand it to a
+role.
+
+A clip name needs 2 to 24 characters and something people can see. Hangul
+fillers, the Braille blank, control characters, tag characters, zero-width
+characters and bidi controls are refused.
 
 DMs have no library. Phones do not play the frame yet. Web and Electron do.
 
