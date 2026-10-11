@@ -326,6 +326,7 @@ import {
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   ApiError,
+  createConversation,
   blockUser,
   bulkDeleteMessages,
   createChannel,
@@ -463,6 +464,7 @@ import {
   useConversationsHome,
 } from "@/lib/conversations-config";
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
+import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
 import {
   dismissNewcomerInvite,
   isNewcomerInviteDismissed,
@@ -3127,6 +3129,25 @@ function MainAppContent({
   const stableOnMention = useStableCallback((username: string) =>
     setComposerInsert(`@${username}`),
   );
+  // Conversas: "Mensagem" on a member row and "Mandar um oi" after a friend
+  // accepts. Opens or reuses the 1:1; a refusal (privacy, a block) comes back
+  // in the server's own words on the app's error line.
+  const stableOnMessagePerson = useStableCallback((userId: string) => {
+    void (async () => {
+      try {
+        const { conversation } = await createConversation([userId]);
+        setConversations((prev) => upsertConversation(prev, conversation));
+        setWhatsNewOpen(false);
+        void selectConversation(conversation.channelId);
+      } catch (error) {
+        setAppError(
+          error instanceof ApiError || error instanceof Error
+            ? error.message
+            : t("dm.dialog.failed"),
+        );
+      }
+    })();
+  });
   const stableOnBlockUser = useStableCallback((userId: string) =>
     void handleBlockUser(userId),
   );
@@ -8937,6 +8958,15 @@ function MainAppContent({
     [conversationsConfigUserId],
   );
   const conversationsHome = useConversationsHome();
+  // Conversas: the profile card's "Última conversa", read off the list.
+  const lastConversationWith = useCallback(
+    (userId: string) =>
+      conversations.find(
+        (one) =>
+          one.participants.length === 1 && one.participants[0]!.id === userId,
+      )?.lastMessageAt ?? null,
+    [conversations],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
@@ -11174,6 +11204,7 @@ function MainAppContent({
       // insert effect picks this up on mount with the text already in it.
       onComposeDraft={(text) => setComposerInsert(text)}
       onMention={(username) => setComposerInsert(`@${username}`)}
+      lastConversationAt={conversationsHome ? lastConversationWith : undefined}
       roles={serverRoles}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
@@ -11257,6 +11288,9 @@ function MainAppContent({
       <VoiceNoteMiniPlayer />
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
+      {conversationsHome && (
+        <FriendAcceptedToast onSayHi={(person) => stableOnMessagePerson(person.id)} />
+      )}
       <DmToasts
         conversations={conversations}
         selectedChannelId={selectedChannelId}
@@ -11983,6 +12017,7 @@ function MainAppContent({
           members={serverMembers}
           onMemberNickname={stableOnMemberNickname}
           onMention={stableOnMention}
+          onMessageMember={conversationsHome ? stableOnMessagePerson : undefined}
           onBlockUser={stableOnBlockUser}
           onUnblockUser={stableOnUnblockUser}
           onReportUser={stableOnReportUser}
@@ -12201,6 +12236,8 @@ function MainAppContent({
       />
 
       <NewDmDialog
+        home={conversationsHome}
+        conversations={conversations}
         open={newDmOpen}
         currentUserId={user?.id ?? null}
         onClose={() => setNewDmOpen(false)}

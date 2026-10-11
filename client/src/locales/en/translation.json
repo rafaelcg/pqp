@@ -4761,5 +4761,21 @@
   "conversations.rail.waitingSr_other": "{count} conversations waiting",
   "conversations.rail.more_one": "{count} more conversation waiting",
   "conversations.rail.more_other": "{count} more conversations waiting",
-  "conversations.rail.label": "Chats"
+  "conversations.rail.label": "Chats",
+  "conversations.new.eyebrow": "Conversation",
+  "conversations.new.description": "Pick someone. Tick more people and it becomes a group (up to {max}).",
+  "conversations.new.search": "Search by name or name#0000",
+  "conversations.new.online": "Online now",
+  "conversations.new.friends": "Friends",
+  "conversations.new.recent": "Recent",
+  "conversations.new.open": "Open conversation",
+  "conversations.new.openGroup": "Create group",
+  "conversations.new.hint": "Click a name without ticking to open it straight away",
+  "conversations.new.picked": "In this conversation",
+  "conversations.new.tick": "Add {name}",
+  "conversations.new.noFriends": "No friends here yet. Search for someone by name or name#0000 above.",
+  "conversations.new.noLocalMatch": "Nobody on your list matches. The search above looks across pqp.",
+  "conversations.friendAccepted.title": "You and {name} are friends now",
+  "conversations.friendAccepted.cta": "Say hi",
+  "conversations.profileLast": "Last conversation · {time}"
 }

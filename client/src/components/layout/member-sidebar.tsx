@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Flag,
   Gavel,
+  MessageCircle,
   Search,
   TimerOff,
   TimerReset,
@@ -136,6 +137,13 @@ interface MemberSidebarProps {
   /** Writes a nickname back onto the shared roster after a successful edit. */
   onMemberNickname?: (userId: string, nickname: string | null) => void;
   onMention?: (username: string) => void;
+  /**
+   * Conversas (`conversations_home`): "Mensagem" on every row but your own and
+   * a blocked one, as a hover action and in the row's menu. The shell opens or
+   * reuses the conversation; a refusal comes back in the server's words.
+   * Absent with the flag off, and then the rows are what they were.
+   */
+  onMessageMember?: (userId: string) => void;
   onReportUser?: (member: ServerMember) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
@@ -221,6 +229,7 @@ export const MemberSidebar = memo(function MemberSidebar({
   members = EMPTY_MEMBERS,
   onMemberNickname,
   onMention,
+  onMessageMember,
   onReportUser,
   onBlockUser,
   onUnblockUser,
@@ -451,6 +460,18 @@ export const MemberSidebar = memo(function MemberSidebar({
         },
       });
     }
+    if (
+      onMessageMember &&
+      member.id !== currentUserId &&
+      !blockedUserIds.has(member.id)
+    ) {
+      items.push({
+        id: "message",
+        label: t("friends.message"),
+        icon: MessageCircle,
+        onSelect: () => onMessageMember(member.id),
+      });
+    }
     if (onMention && member.username) {
       const username = member.username;
       items.push({
@@ -587,6 +608,13 @@ export const MemberSidebar = memo(function MemberSidebar({
             nameColor={highestRoleColor(member.roleIds, roles)}
             roles={roles}
             onOpenProfile={(anchor) => openProfile(subjectOf(member), anchor)}
+            onMessage={
+              onMessageMember &&
+              member.id !== currentUserId &&
+              !blockedUserIds.has(member.id)
+                ? () => onMessageMember(member.id)
+                : undefined
+            }
           />
         ))}
         {remaining > 0 && (
@@ -794,6 +822,8 @@ interface MemberRowProps {
   nameColor: string | null;
   roles: readonly ServerRole[];
   onOpenProfile: (anchor: HTMLElement) => void;
+  /** Conversas: the row's "Mensagem" door. Absent for yourself and a block. */
+  onMessage?: () => void;
 }
 
 /**
@@ -829,6 +859,7 @@ function MemberRow({
   nameColor,
   roles,
   onOpenProfile,
+  onMessage,
 }: MemberRowProps) {
   const { t } = useTranslation();
   const status = member.status ?? null;
@@ -911,6 +942,18 @@ function MemberRow({
             )}
           </span>
         </button>
+        {onMessage && (
+          <Tooltip label={t("friends.message")} name={`${t("friends.message")}: ${shown}`}>
+            <button
+              type="button"
+              data-member-message={member.id}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary opacity-0 transition-opacity duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+              onClick={onMessage}
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
       </div>
     </ContextMenu>
   );
