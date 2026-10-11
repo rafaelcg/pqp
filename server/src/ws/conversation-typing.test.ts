@@ -217,18 +217,20 @@ describeDb("conversation typing reaches the participants' lists across two insta
     ).resolves.toBeNull();
   }, 30_000);
 
-  it("a block lands at once, not after the cache window, and so does lifting it", async () => {
+  it("a block lands at once on every machine, not after the cache window, and so does lifting it", async () => {
     await aliceTypes(group);
     await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
       timeout: 5_000,
     });
-    // The audience is cached now. Bob blocks Alice on the machine that holds
-    // her socket (the one that answers her typing).
-    await a.blocks.blockUser(bob.id, alice.id);
+    // The audience is cached on Alice's machine now. Bob blocks her from the
+    // OTHER machine: the drop has to cross the bus.
+    await b.blocks.blockUser(bob.id, alice.id);
+    await new Promise((resolve) => setTimeout(resolve, 300));
     await aliceTypes(group);
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(typingFrames(recs.get(bob.id)!)).toEqual([]);
-    await a.blocks.unblockUser(bob.id, alice.id);
+    await b.blocks.unblockUser(bob.id, alice.id);
+    await new Promise((resolve) => setTimeout(resolve, 300));
     await aliceTypes(group);
     await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
       timeout: 5_000,

@@ -1,5 +1,9 @@
 import type { ConversationKind } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { isBusEnabled, publishToCluster, subscribeToCluster } from "../lib/bus.js";
+
+/** A block or unblock anywhere: every machine drops its cached audiences. */
+const TYPING_AUDIENCE_TOPIC = "chat.typing-audience";
 
 /**
  * Conversas: who sees "digitando…" in their conversation LIST.
@@ -67,15 +71,38 @@ export function peekConversationTypingAudience(
  * typist stays visible to the members who did not block them, the same rule
  * `channel-activity` follows for badges.
  */
-export async function conversationTypingAudience(
+/**
+ * Lookups in flight, by channel and typist: a burst of frames on a cold cache
+ * shares one query instead of starting one each.
+ */
+const inFlight = new Map<string, Promise<readonly string[] | null>>();
+
+export function conversationTypingAudience(
   channelId: string,
   typistId: string,
   now: number = Date.now(),
 ): Promise<readonly string[] | null> {
   const known = peekConversationTypingAudience(channelId, typistId, now);
   if (known !== undefined) {
-    return known;
+    return Promise.resolve(known);
   }
+  const key = `${channelId}:${typistId}`;
+  const pending = inFlight.get(key);
+  if (pending) {
+    return pending;
+  }
+  const lookup = lookUpTypingAudience(channelId, typistId, now).finally(() => {
+    inFlight.delete(key);
+  });
+  inFlight.set(key, lookup);
+  return lookup;
+}
+
+async function lookUpTypingAudience(
+  channelId: string,
+  typistId: string,
+  now: number,
+): Promise<readonly string[] | null> {
   const asked = generationOf(channelId);
   const result = await getPool().query<{ kind: ConversationKind | "server"; recipients: string[] }>(
     `SELECT c.kind,
@@ -115,9 +142,10 @@ export async function conversationTypingAudience(
     return null;
   }
   // The membership changed (or a block landed) while this was in flight: the
-  // answer is still the best this frame has, but it must not be kept.
+  // answer may name somebody who just left or blocked, so this one frame
+  // lights no list at all, and nothing is kept. The next frame asks again.
   if (generationOf(channelId) !== asked) {
-    return row.recipients;
+    return [];
   }
   // Entries are only replaced when asked again, so a long uptime would keep
   // every conversation anybody ever typed in. Past the bound the conversation
@@ -128,6 +156,13 @@ export async function conversationTypingAudience(
     const oldest = typingAudience.keys().next().value;
     if (oldest !== undefined) {
       typingAudience.delete(oldest);
+    }
+  }
+  // Typists who stopped long ago are dropped while this channel is touched,
+  // so a busy group does not collect everyone who ever typed in it.
+  for (const [someone, entry] of byTypist) {
+    if (entry.expiresAt <= now) {
+      byTypist.delete(someone);
     }
   }
   byTypist.set(typistId, {
@@ -154,16 +189,34 @@ export function forgetConversationTypingAudience(channelId: string): void {
  * cache refills one query per active typist, so dropping all of it is cheaper
  * than tracking which entries named whom.
  */
-export function forgetAllConversationTypingAudiences(): void {
+export function forgetAllConversationTypingAudiences({
+  everywhere = false,
+}: { everywhere?: boolean } = {}): void {
   typingAudience.clear();
   generations.clear();
   globalGeneration += 1;
+  if (everywhere && isBusEnabled()) {
+    publishToCluster(TYPING_AUDIENCE_TOPIC, { kind: "all" });
+  }
 }
+
+// The other machines' half of a block: their caches go too. Local only, never
+// republished, so two machines cannot answer each other forever.
+subscribeToCluster(TYPING_AUDIENCE_TOPIC, (data) => {
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { kind?: unknown }).kind === "all"
+  ) {
+    forgetAllConversationTypingAudiences();
+  }
+});
 
 /** Test seam. */
 export function resetConversationTypingAudience(): void {
   forgetAllConversationTypingAudiences();
   serverChannelMemo.clear();
+  inFlight.clear();
 }
 
 // --- end typing in the list --------------------------------------------------
