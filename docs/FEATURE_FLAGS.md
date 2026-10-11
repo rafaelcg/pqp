@@ -487,3 +487,40 @@ Turn it on from controles → interruptores or `PUT /api/admin/flags
 { key: "newcomer_invite_moment", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
 
+
+## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)
+
+Conversas, the DM redesign: conversations become a first-class place instead of
+an unlabeled icon at the top of the rail. Two switches, both born as flags,
+default off, global (a conversation belongs to no server):
+
+- `conversations_home` (`CONVERSATIONS_HOME`): on desktop and tablet web, the
+  rail door is labelled "Conversas" and the people with unread conversations
+  surface under it; its badge counts conversations, not messages. The list
+  gets presence for friends, the preview, "digitando…", a Fixadas section,
+  search and the Tudo / Não lidas / Grupos chips. Nova conversa lists friends
+  before asking for a name. Ctrl/Cmd+K becomes the "ir pra" switcher (people,
+  conversations, servers, channels) and message search moves to Ctrl/Cmd+F.
+- `conversations_home_phone_tabs` (`CONVERSATIONS_HOME_PHONE_TABS`): on a
+  phone-width web window, the server rail goes and a bottom bar
+  Conversas / Servidores / Tu comes in. It opens on the last tab used; an
+  account with no stored choice starts on Servidores, so nobody's habit moves
+  until they move it. Only meaningful with `conversations_home` on: the route
+  answers `phoneTabs: false` otherwise.
+
+Every client reads both from `GET /api/dms/config` as
+`{ home: boolean, phoneTabs: boolean }` (web: `client/src/lib/conversations-config.ts`,
+asked once the age gate has passed and again on every config refresh). Anything
+but an explicit `true` is off, so a client on an older API keeps today's layout.
+
+How to judge it: `conversations` on `GET /api/admin/metrics`
+(`server/src/services/conversation-metrics.ts`, the "Conversas" row under
+produto on the dashboard). The primary number is `senders7d / activeSenders7d`,
+the share of people who wrote anything this week that wrote in a conversation.
+Read 14 days of baseline before the flip. Guardrails: `messages.byScope24h.server`
+per active person, voice joins, watch party viewers. If those dip after the
+phone tabs go on, turn `conversations_home_phone_tabs` off first; desktop stays.
+
+Turn them on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "conversations_home", enabled: true }`. Open tabs follow on the next
+config refresh (focus or 10 min).

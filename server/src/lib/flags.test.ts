@@ -110,6 +110,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   mention_ids_from_db: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   newcomer_invite_moment: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  conversations_home: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  conversations_home_phone_tabs: (raw) => raw === "true",
 };
 
 const SAMPLES = [

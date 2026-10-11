@@ -344,3 +344,37 @@ describe("newcomer_invite_moment against the onboarding config the client reads"
     expect(app).toMatch(/newcomerInviteUserId \? startNewcomerInviteConfig\(\) : undefined/);
   });
 });
+
+/**
+ * `conversations_home` and `conversations_home_phone_tabs`, Conversas. Two
+ * global client flags served on one route that web, iOS and Android all read.
+ */
+describe("conversations_home against GET /api/dms/config", () => {
+  it("both flags are global, off by default, and named under the fields the route serves", () => {
+    const home = FEATURE_FLAGS.conversations_home;
+    expect(home.perServer).toBe(false);
+    expect(home.codeDefault).toBe(false);
+    expect(home.clientVia).toBe("GET /api/dms/config (home)");
+    const tabs = FEATURE_FLAGS.conversations_home_phone_tabs;
+    expect(tabs.perServer).toBe(false);
+    expect(tabs.codeDefault).toBe(false);
+    expect(tabs.clientVia).toBe("GET /api/dms/config (phoneTabs)");
+  });
+
+  it("the route is mounted and answers from both flags", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/dms\/config"[\s\S]*?\n\}\);/.exec(api)?.[0];
+    expect(route, "GET /api/dms/config is not mounted").toBeTruthy();
+    expect(route).toContain('isEnabled("conversations_home")');
+    expect(route).toContain('isEnabled("conversations_home_phone_tabs")');
+    expect(route).toMatch(/\bhome,/);
+    expect(route).toMatch(/\bphoneTabs:/);
+  });
+
+  it("the web client asks that route and reads both fields off the answer", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/conversations-config.ts"), "utf8");
+    expect(lib).toContain('"/api/dms/config"');
+    expect(lib).toMatch(/answer\.home === true/);
+    expect(lib).toMatch(/answer\.phoneTabs === true/);
+  });
+});

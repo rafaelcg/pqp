@@ -569,6 +569,28 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/onboarding/config (inviteMoment)",
   },
+  conversations_home: {
+    description:
+      "Conversas (só cliente): a porta das DMs na barra ganha nome e mostra quem te escreveu, a lista vira estilo WhatsApp (presença, prévia, digitando, fixadas, filtros), Nova conversa já lista os amigos e Ctrl/Cmd+K vira \"ir pra\".",
+    env: "CONVERSATIONS_HOME",
+    parseEnv: exactTrue,
+    // Off until QA has walked it on both themes with two accounts.
+    codeDefault: false,
+    // About a person's conversations, which belong to no server.
+    perServer: false,
+    clientVia: "GET /api/dms/config (home)",
+  },
+  conversations_home_phone_tabs: {
+    description:
+      "Conversas no celular (só cliente, precisa de Conversas ligado): no navegador do celular a barra de servidores sai e entra uma barra embaixo com Conversas, Servidores e Tu. Abre na última aba usada; quem nunca escolheu começa em Servidores.",
+    env: "CONVERSATIONS_HOME_PHONE_TABS",
+    parseEnv: exactTrue,
+    // The riskiest half (it moves the whole phone shell), so it has its own
+    // switch: desktop can go first and this can be turned off alone.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/dms/config (phoneTabs)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
