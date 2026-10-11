@@ -61,9 +61,8 @@ const { createAutomodRule, invalidateAutomodCache } = await import(
 );
 const { issueTimeout } = await import("../services/sanctions.js");
 const { createRemoteAttachment } = await import("../services/attachments.js");
-const { sweepForumPostShells, resetUnaccentProbeForTests } = await import(
-  "../services/forums.js"
-);
+const { sweepForumPostShells, resetUnaccentProbeForTests, createForumPostShell } =
+  await import("../services/forums.js");
 const { resetFeatureFlagsForTests, setServerFlagOverride, startFeatureFlags } =
   await import("../lib/flags.js");
 
@@ -1028,6 +1027,81 @@ describeDb("forum posts", () => {
     expect(
       (await call(alice, "GET", `/api/channels/${forumId}/posts/similar?title=`)).status,
     ).toBe(400);
+  });
+
+  it("a post's thread channel is never visible without its forum_posts row", async () => {
+    // The send path (forum PR 2) caches "a thread with no forum_posts row is a
+    // chat thread" for the life of the process, so the two rows must commit
+    // together: a reader on another connection may see both or neither, never
+    // the channel alone. Poll for exactly that state on a second connection
+    // while shells are created, nonce conflicts roll back and shells are
+    // discarded.
+    const orphanSql = `SELECT count(*)::int AS n
+                         FROM channels c
+                         LEFT JOIN forum_posts p ON p.channel_id = c.id
+                        WHERE c.parent_id = $1 AND c.type = 'thread'
+                          AND p.channel_id IS NULL`;
+    let polling = true;
+    let polls = 0;
+    let orphansSeen = 0;
+    const poller = (async () => {
+      while (polling) {
+        const result = await getPool().query<{ n: number }>(orphanSql, [forumId]);
+        orphansSeen += result.rows[0]!.n;
+        polls += 1;
+      }
+    })();
+
+    // Waves of six, so the creates plus the poller stay inside the pool.
+    for (let wave = 0; wave < 6; wave += 1) {
+      await Promise.all(
+        Array.from({ length: 6 }, (_, j) => {
+          const i = wave * 6 + j;
+          return createForumPostShell({
+            forumId,
+            serverId,
+            authorId: bob.id,
+            title: `Concorrente ${i}`,
+            tagIds: [],
+            // Every third shares a nonce with the one before it: the loser's
+            // channel row is inserted, then rolled back with its forum_posts row.
+            nonce: `race-${i - (i % 3 === 2 ? 1 : 0)}`,
+          }).catch((error: unknown) => error);
+        }),
+      );
+    }
+    expect(await sweepForumPostShells()).toBe(0);
+    await getPool().query(
+      `UPDATE forum_posts SET created_at = NOW() - INTERVAL '15 minutes' WHERE forum_id = $1`,
+      [forumId],
+    );
+    await sweepForumPostShells();
+    polling = false;
+    await poller;
+
+    expect(polls).toBeGreaterThan(0);
+    expect(orphansSeen).toBe(0);
+    expect((await getPool().query<{ n: number }>(orphanSql, [forumId])).rows[0]!.n).toBe(0);
+  });
+
+  it("the post routes answer 404 for a chat thread", async () => {
+    const text = await call<{ channel: { id: string } }>(
+      alice,
+      "POST",
+      `/api/servers/${serverId}/channels`,
+      { name: "geral-3", type: "text" },
+    );
+    const thread = await getPool().query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type, position, is_private, kind, parent_id)
+       VALUES ($1, 'conversa', 'thread', 0, FALSE, 'server', $2) RETURNING id`,
+      [serverId, text.body.channel.id],
+    );
+    const id = thread.rows[0]!.id;
+    expect((await call(bob, "GET", `/api/forum-posts/${id}`)).status).toBe(404);
+    expect((await call(alice, "PATCH", `/api/forum-posts/${id}`, { pinned: true })).status).toBe(
+      404,
+    );
+    expect((await call(alice, "DELETE", `/api/forum-posts/${id}`)).status).toBe(404);
   });
 
   it("the cached first page shows a new post the moment it is published", async () => {
