@@ -221,6 +221,20 @@ describe("nudgeEffects", () => {
 });
 
 describe("applyNudgeArrival", () => {
+  it("a conversation set to mentions only gets the line and nothing loud", async () => {
+    const { setChannelNotificationLevel } = await import("@/lib/notifications");
+    setChannelNotificationLevel(CHANNEL, "mentions");
+    const effects = applyNudgeArrival(nudgeFrom(LU), {
+      viewerId: ME,
+      openChannelId: CHANNEL,
+      visible: true,
+      now: NOW,
+    });
+    expect(effects).toEqual({ landed: false, shake: false, sound: false });
+    expect(sounds.played).toEqual([]);
+    setChannelNotificationLevel(CHANNEL, null);
+  });
+
   it("plays the cue and asks the pane to shake", () => {
     applyNudgeArrival(nudgeFrom(LU), { viewerId: ME, openChannelId: CHANNEL, visible: true, now: NOW });
     expect(sounds.played).toEqual(["nudge"]);

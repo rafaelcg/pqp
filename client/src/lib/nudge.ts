@@ -372,7 +372,11 @@ export interface NudgeArrivalContext {
   openChannelId: string | null;
   /** `document.visibilityState === "visible"`. */
   visible: boolean;
-  /** The conversation's notification level resolves to "none". */
+  /**
+   * The conversation's notification level is not "all": muted, or mentions
+   * only (a nudge is not a mention). The same rule the toast, the banner and
+   * the push already apply to it.
+   */
   muted: boolean;
   now?: number;
 }
@@ -395,7 +399,8 @@ const NONE: NudgeEffects = { landed: false, shake: false, sound: false };
  *  - mine (this tab or another of my devices): the cooldown starts, nothing
  *    shakes, no sound;
  *  - somebody else's, but stale (a replay, a slow socket): the line only;
- *  - a muted conversation: the line only (D10);
+ *  - a muted conversation, or one set to mentions only: the line only (D10;
+ *    a nudge is not a mention, and the toast, banner and push say the same);
  *  - otherwise, in the conversation that is open: the cue plays, and the pane
  *    shakes if the tab is visible. Any other conversation is left to the
  *    `channel-activity` path (toast, banner, cue), so the cue never plays
@@ -433,14 +438,15 @@ export function noteOwnNudgeLanded(channelId: string, now: number = Date.now()):
  * A nudge just arrived on the live socket: work out what it should do and do
  * it. The conversation's own notification level decides `muted` (a
  * conversation has no server, so only its own entry and the DM default
- * apply). Never called for history, which is what keeps a reload still.
+ * apply; anything but "all" is quiet). Never called for history, which is
+ * what keeps a reload still.
  */
 export function applyNudgeArrival(
   message: NudgeMessageLike,
   context: Omit<NudgeArrivalContext, "muted">,
 ): NudgeEffects {
   const muted =
-    resolveNotificationLevel(getNotificationState(), null, message.channelId) === "none";
+    resolveNotificationLevel(getNotificationState(), null, message.channelId) !== "all";
   const effects = nudgeEffects(message, { ...context, muted });
   if (effects.landed) {
     noteOwnNudgeLanded(message.channelId, context.now);
