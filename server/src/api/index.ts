@@ -136,6 +136,7 @@ import {
   shareCommunityHomePostSchema,
   communityHomeCommentBodySchema,
   parseCommunityHomeBody,
+  parseCommunityHomeLatestLimit,
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
@@ -388,6 +389,7 @@ import {
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
   getCommunityHomePostCard,
+  listLatestCommunityHomeCards,
   safeShareOrigin,
   shareCommunityHomePost,
   type ShareFailure,
@@ -4766,6 +4768,35 @@ router.get(
     await requireServerMember(serverId!, user.id);
     try {
       return await countUnreadCommunityHomePosts(serverId!, user.id);
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The sidebar preview: the newest published posts as cards (each with
+ * `isNew`), the unread count and the read stamp, in one read. It replaces
+ * `…/home/unread` for a client that knows it, so the channel list makes one
+ * request, not two. Behind the per-server runtime flag `bau_latest_preview`:
+ * off, 404, and the client falls back to `…/home/unread` and the plain row.
+ * Membership, the server's own Baú switch and the VIP lock are the feed's.
+ */
+router.get(
+  "/api/servers/:serverId/home/latest",
+  async ({ url, user }, { serverId }) => {
+    requireCommunityHome();
+    if (!isEnabled("bau_latest_preview", { serverId: serverId! })) {
+      throw new NotFound("Not found");
+    }
+    await requireServerMember(serverId!, user.id);
+    try {
+      return await listLatestCommunityHomeCards(
+        serverId!,
+        user.id,
+        parseCommunityHomeLatestLimit(url.searchParams.get("limit")),
+        url.searchParams.get("lang"),
+      );
     } catch (error) {
       mapCommunityHomeError(error);
     }

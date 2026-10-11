@@ -168,6 +168,19 @@ for what would replace it.
   server's own number still comes from `…/home/unread` (`{ count, newestAt }`)
   and drives the row and the corner card
   (`client/src/lib/community-home/rail-unread.ts`).
+- **Latest preview** (`bau_latest_preview`, runtime flag, **per server**,
+  default on): `GET /api/servers/:id/home/latest?limit=3&lang=` answers
+  `{ unread, lastSeenAt, posts }`, where each post is the chat card
+  (`CommunityHomePostCard`, so a locked post has no author and no media) plus
+  `isNew`. Newest published first; the pinned post is NOT moved to the front.
+  `isNew` is the unread rule (published after `lastSeenAt`, not your own post,
+  the feed's VIP filter) computed in the same statement as `unread`, so the
+  card and the badge never disagree. `limit` defaults to 3 and is clamped to
+  1..10. It replaces `…/home/unread` for the open server: one request, and it
+  is re-asked on the same `community-home-update` frame. Off for a server, the
+  route is 404 and clients fall back to `…/home/unread` and the plain row.
+  Schema: `communityHomeLatestResponseSchema` in
+  `packages/shared/src/community-home-share.ts`.
 - **iOS and Android** read the aggregate for a lime count on the server tile
   (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
   too. Neither list carries mention counts, so there is no ring there.
@@ -751,6 +764,11 @@ the expected shape of a self-host without storage, not a bug.
   off refuses and hides, drafts never reach members, schedule sweep, a due
   scheduled post surfaces in the feed and unread without the sweep while a
   future one stays out, teaser survives an edit, comments and likes.
+- `server/src/services/community-home-latest.test.ts`: the latest preview's
+  `isNew` matches `…/home/unread` and clears on read, own posts never new,
+  limit and clamp, pinned not first, drafts and future posts out, locked cards
+  leak nothing, VIP off hides and uncounts, blocked comments uncounted, flag
+  off / Baú off / stranger refused, the feed index serves it.
 - `packages/shared/src/community-home.test.ts`: YouTube / Twitch / TikTok /
   Instagram URL classifiers (profiles, stories and short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
