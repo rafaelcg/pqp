@@ -29,6 +29,33 @@ const typingAudience = new Map<
   Map<string, { recipients: readonly string[]; expiresAt: number }>
 >();
 const serverChannelMemo = new Set<string>();
+/**
+ * Bumped by every forget, per channel, so a lookup that was already in flight
+ * when the membership changed cannot write its stale answer back afterwards.
+ */
+const generations = new Map<string, number>();
+let globalGeneration = 0;
+
+function generationOf(channelId: string): string {
+  return `${globalGeneration}:${generations.get(channelId) ?? 0}`;
+}
+
+/**
+ * The cached answer, without asking the database: the recipients, null for a
+ * server channel, or undefined when nothing fresh is known. Lets the socket
+ * path publish at once on a hit and look up off the hot path on a miss.
+ */
+export function peekConversationTypingAudience(
+  channelId: string,
+  typistId: string,
+  now: number = Date.now(),
+): readonly string[] | null | undefined {
+  if (serverChannelMemo.has(channelId)) {
+    return null;
+  }
+  const cached = typingAudience.get(channelId)?.get(typistId);
+  return cached && cached.expiresAt > now ? cached.recipients : undefined;
+}
 
 /**
  * Who should see "digitando…" in their conversation LIST when `typistId`
@@ -45,13 +72,11 @@ export async function conversationTypingAudience(
   typistId: string,
   now: number = Date.now(),
 ): Promise<readonly string[] | null> {
-  if (serverChannelMemo.has(channelId)) {
-    return null;
+  const known = peekConversationTypingAudience(channelId, typistId, now);
+  if (known !== undefined) {
+    return known;
   }
-  const cached = typingAudience.get(channelId)?.get(typistId);
-  if (cached && cached.expiresAt > now) {
-    return cached.recipients;
-  }
+  const asked = generationOf(channelId);
   const result = await getPool().query<{ kind: ConversationKind | "server"; recipients: string[] }>(
     `SELECT c.kind,
             COALESCE(
@@ -76,11 +101,17 @@ export async function conversationTypingAudience(
     return null;
   }
   if (row.kind === "server") {
+    // A channel's kind never changes, so no generation check is needed here.
     if (serverChannelMemo.size >= SERVER_CHANNEL_MEMO_MAX) {
       serverChannelMemo.clear();
     }
     serverChannelMemo.add(channelId);
     return null;
+  }
+  // The membership changed (or a block landed) while this was in flight: the
+  // answer is still the best this frame has, but it must not be kept.
+  if (generationOf(channelId) !== asked) {
+    return row.recipients;
   }
   // Entries are only replaced when asked again, so a long uptime would keep
   // every conversation anybody ever typed in. A bounded reset costs one query
@@ -100,11 +131,28 @@ export async function conversationTypingAudience(
 /** A membership changed (closed, left, evicted): ask again next time. */
 export function forgetConversationTypingAudience(channelId: string): void {
   typingAudience.delete(channelId);
+  generations.set(channelId, (generations.get(channelId) ?? 0) + 1);
+  if (generations.size > SERVER_CHANNEL_MEMO_MAX) {
+    generations.clear();
+    globalGeneration += 1;
+  }
+}
+
+/**
+ * Somebody blocked somebody: the cached audiences were filtered against the
+ * old block list, so none of them can be trusted. Blocks are rare and the
+ * cache refills one query per active typist, so dropping all of it is cheaper
+ * than tracking which entries named whom.
+ */
+export function forgetAllConversationTypingAudiences(): void {
+  typingAudience.clear();
+  generations.clear();
+  globalGeneration += 1;
 }
 
 /** Test seam. */
 export function resetConversationTypingAudience(): void {
-  typingAudience.clear();
+  forgetAllConversationTypingAudiences();
   serverChannelMemo.clear();
 }
 

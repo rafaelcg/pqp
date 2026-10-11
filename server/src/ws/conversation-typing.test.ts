@@ -217,6 +217,42 @@ describeDb("conversation typing reaches the participants' lists across two insta
     ).resolves.toBeNull();
   }, 30_000);
 
+  it("a block lands at once, not after the cache window, and so does lifting it", async () => {
+    await aliceTypes(group);
+    await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
+      timeout: 5_000,
+    });
+    // The audience is cached now. Bob blocks Alice on the machine that holds
+    // her socket (the one that answers her typing).
+    await a.blocks.blockUser(bob.id, alice.id);
+    await aliceTypes(group);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(typingFrames(recs.get(bob.id)!)).toEqual([]);
+    await a.blocks.unblockUser(bob.id, alice.id);
+    await aliceTypes(group);
+    await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
+      timeout: 5_000,
+    });
+  }, 30_000);
+
+  it("a warm cache rides on the one bus frame; a cold one sends the list copy once", async () => {
+    // Cold: the viewers' frame and then the list-only frame. Bob (a list on
+    // the other machine) still hears it exactly once.
+    await aliceTypes(dm);
+    await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
+      timeout: 5_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1);
+    // Warm: same answer, one frame.
+    await aliceTypes(dm);
+    await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
+      timeout: 5_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1);
+  }, 30_000);
+
   it("closing the conversation stops its frames at once, not after the cache window", async () => {
     await aliceTypes(dm);
     await vi.waitFor(() => expect(typingFrames(recs.get(bob.id)!)).toHaveLength(1), {
