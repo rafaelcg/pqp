@@ -113,7 +113,6 @@ export function WebhookForumSettingsPanel({
                   label={t("webhooks.forum.allowed.label")}
                   variant="segmented"
                   size="sm"
-                  fit="content"
                   value={mode}
                   options={[
                     { value: "all", label: t("webhooks.forum.allowed.all") },
