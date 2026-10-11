@@ -661,6 +661,35 @@ export const FEATURE_FLAGS = {
     // look; a `false` paints the look underneath and hides tile and command.
     clientVia: "GET /api/fun/config (retroLook)",
   },
+  stories: {
+    description:
+      "Stories nos servidores: fotos, vídeos de até 30 s e textos que somem em 24 h, com o anel no topo da lista de canais.",
+    env: "STORIES",
+    parseEnv: exactTrue,
+    // Off: one server first (the QG, by its override), then everybody.
+    codeDefault: false,
+    // Every reader knows the server: the strip and every route under
+    // `/servers/:id`, and a story's reads work from its server audiences.
+    // Off for a server hides its strip and refuses its routes; nothing is
+    // deleted, and the expiry sweep keeps running, so bytes never outlive
+    // the 24 h promise because a flag moved.
+    perServer: true,
+    // No `(field)`: the contract test would ask for a client reader, and the
+    // clients that read it land after the server.
+    clientVia: "GET /api/stories/config + GET /api/servers/:id/stories",
+  },
+  stories_friends: {
+    description:
+      "Stories pros amigos: o mesmo story vai pra quem é teu amigo, com a faixa no topo das Conversas.",
+    env: "STORIES_FRIENDS",
+    parseEnv: exactTrue,
+    // Off until the Conversas redesign lands and the per-server test is
+    // judged: the friends audience crosses servers, so it waits.
+    codeDefault: false,
+    // About a friendship, not a server: nothing that reads it has a server.
+    perServer: false,
+    clientVia: "GET /api/stories/config + GET /api/stories/friends",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

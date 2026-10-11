@@ -44,6 +44,14 @@ export const AUDIT_ACTIONS = [
    * `message.delete`).
    */
   "message.bulk_delete",
+  /**
+   * A moderator took a story out of THIS server (`MANAGE_MESSAGES`). Only
+   * this server's slice: the same story may still be up for the author's
+   * friends or in other servers, which this server's staff do not own. The
+   * target is the author; the story id travels in `changes`. Never the media
+   * or the caption.
+   */
+  "story.remove",
   "server.update",
   "server.retention_update",
   /**

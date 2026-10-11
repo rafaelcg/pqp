@@ -10257,6 +10257,11 @@ router.post("/api/reports", async ({ req, res, user }) => {
   if (body.subjectType === "server" && !isCommunitiesEnabled()) {
     throw new NotFound("Not found");
   }
+  // Story reports arrive with the stories server work; until then there is no
+  // story anybody could have seen.
+  if (body.subjectType === "story") {
+    throw new NotFound("Not found");
+  }
   try {
     const result = await createReport(
       body.subjectType === "message"

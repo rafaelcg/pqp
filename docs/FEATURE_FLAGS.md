@@ -586,3 +586,29 @@ next config refresh (focus or 10 min). Before it goes on anywhere real, the iOS
 build that hides unknown channel types must be out, or a forum inside a
 category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
+
+## `stories` (per server) and `stories_friends` (global)
+
+Stories: a photo, a video of up to 30 s or a text card that lives for 24 h
+(`packages/shared/src/stories.ts` is the contract). Two flags, both born as
+flags and both default **off**:
+
+- **`stories`** (`STORIES`, per server) is every server audience: the strip at
+  the top of a server's channel list, posting to that server, and every route
+  under `/api/servers/:serverId/stories`. Off for a server, its routes answer
+  404 and its strip `{ "enabled": false }`, so clients hide it without a 404
+  storm. QG goes first, by its override.
+- **`stories_friends`** (`STORIES_FRIENDS`, global) is the friends audience: the
+  strip at the top of Conversas and posting to Amigos. It stays off until the
+  Conversas redesign lands and the per-server run has been judged, because the
+  friends audience crosses servers.
+
+Turning either off **deletes nothing** and does not stop the expiry sweep: the
+media of a story posted while it was on is still deleted a minute after the
+story's 24 h, because that promise does not depend on a flag. Turning it back
+on brings back whatever has not expired yet.
+
+Turn the QG on from controles → interruptores (the server's override) or
+`PUT /api/admin/flag-overrides { key: "stories", serverId, enabled: true }`;
+friends with `PUT /api/admin/flags { key: "stories_friends", enabled: true }`.
+Clients read `GET /api/stories/config[?serverId=]` and the strips themselves.

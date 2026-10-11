@@ -19,6 +19,13 @@ export const REPORT_REASONS = [
   "sexual_content",
   "self_harm",
   "illegal_content",
+  /**
+   * A minor in sexual content. Its own reason, and the one reason that
+   * decides ROUTING: whatever the subject, a report with it goes to the
+   * instance queue and never to a server's own staff (see `createReport`).
+   * A server owner must not be the one holding, or closing, that accusation.
+   */
+  "minor_sexual",
   "other",
 ] as const;
 
@@ -35,8 +42,14 @@ export type ReportReason = z.infer<typeof reportReasonSchema>;
  * anti-`nordestino` communities that got Orkut's operators criminally charged
  * were the same shape with a different name. Reporting the person who posted a
  * message inside is no remedy when nobody has posted anything.
+ *
+ * `story` reports one story (stories.ts). It is filed from the story viewer
+ * with the audience it was seen through: a server's story goes to that
+ * server's queue, a friends story to the instance queue (no server owns it,
+ * exactly like a conversation). A reported story does not expire while the
+ * report is open, and its bytes are held for 30 days after it is resolved.
  */
-export const reportSubjectTypeSchema = z.enum(["message", "user", "server"]);
+export const reportSubjectTypeSchema = z.enum(["message", "user", "server", "story"]);
 export type ReportSubjectType = z.infer<typeof reportSubjectTypeSchema>;
 
 /**
@@ -118,6 +131,18 @@ export const createReportSchema = z.discriminatedUnion("subjectType", [
   z.object({
     subjectType: z.literal("server"),
     serverId: z.string().uuid(),
+    reason: reportReasonSchema,
+    details: detailsSchema,
+  }),
+  /**
+   * `serverId` is the audience the reporter saw the story through, checked
+   * against the story's own audiences and the reporter's membership. Null or
+   * absent means the friends audience.
+   */
+  z.object({
+    subjectType: z.literal("story"),
+    storyId: z.string().uuid(),
+    serverId: z.string().uuid().nullable().optional(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
@@ -205,6 +230,12 @@ export const reportSchema = z.object({
   channelId: z.string().uuid().nullable(),
   /** Snapshot of the channel name, so a renamed or deleted channel still reads. */
   channelName: z.string().nullable(),
+  /**
+   * The reported story, for a `story` report; null once its row is gone (a
+   * week after it expired, past every hold). `contentSnapshot` then carries
+   * its caption or text as it was when reported.
+   */
+  storyId: z.string().uuid().nullable().default(null),
 
   resolvedAt: z.string().nullable(),
   resolvedByName: z.string().nullable(),
@@ -294,5 +325,6 @@ export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   sexual_content: "Unwanted sexual content",
   self_harm: "Self-harm or suicide",
   illegal_content: "Illegal content",
+  minor_sexual: "A minor in sexual content",
   other: "Something else",
 };

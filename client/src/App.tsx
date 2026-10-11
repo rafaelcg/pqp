@@ -5293,6 +5293,13 @@ function MainAppContent({
             return;
           }
 
+          // Stories: a strip to refetch. Nothing draws stories on the web yet
+          // (the strip lands in its own PR), so the frame is taken here and
+          // goes no further: it is a chat frame, not a voice one.
+          if (message.type === "stories-update") {
+            return;
+          }
+
           // Somebody's name or picture changed, anywhere on the instance.
           //
           // Not addressed to a channel, so it is handled here rather than in

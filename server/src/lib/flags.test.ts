@@ -124,6 +124,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   nudge: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   retro_look: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  stories: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  stories_friends: (raw) => raw === "true",
 };
 
 const SAMPLES = [

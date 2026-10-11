@@ -21,6 +21,7 @@ import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
+import { storiesUpdateSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
@@ -188,6 +189,8 @@ const broadcastMessageSchema = z.object({
   poll: pollSchema.nullable().default(null),
   /** Same field as `messageSchema.systemKind`: `nudge`, or null. */
   systemKind: messageSystemKindSchema,
+  /** See `messageSchema.storyId`: the story a reply quotes. */
+  storyId: z.string().uuid().nullable().optional(),
 });
 
 export const pollVoteMessageSchema = z.object({
@@ -700,6 +703,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // channel the frame named.
   permissionsUpdateSchema,
   communityHomeUpdateSchema,
+  // Per person, never a channel fan-out: a server's members, an author's
+  // friends, or the author's own sockets. See `stories.ts`.
+  storiesUpdateSchema,
   // Per socket like `permissions-update`: the members who can see the change.
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,
@@ -820,6 +826,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  *
  * `community-home-update` is absent for the same reason: server-scoped, no
  * channel, clients refetch Baú. It travels on `chat.community-home`.
+ *
+ * `stories-update` is absent for the same reason: addressed to a server's
+ * members, an author's friends or the author alone, never to a channel. It
+ * travels on `chat.stories`.
  *
  * `channels-update` is absent for the same reason again: server-scoped, no
  * channel, clients refetch their own channel list. It travels on

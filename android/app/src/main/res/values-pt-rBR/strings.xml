@@ -468,6 +468,7 @@
     <string name="report_reason_sexual_content">Conteúdo sexual</string>
     <string name="report_reason_self_harm">Automutilação</string>
     <string name="report_reason_illegal_content">Conteúdo ilegal</string>
+    <string name="report_reason_minor_sexual">Menor de idade em conteúdo sexual</string>
     <string name="report_reason_other">Outra coisa</string>
     <string name="report_details_label">Mais alguma coisa? (opcional)</string>
     <string name="report_details_placeholder">Contexto, links, ou o que aconteceu antes disso.</string>
