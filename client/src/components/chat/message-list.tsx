@@ -55,6 +55,7 @@ import {
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
+import { useRetroLook } from "@/hooks/use-appearance";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -2492,6 +2493,20 @@ function EmptyState({
 
 function TypingIndicator({ users }: { users: TypingUser[] }) {
   const { t } = useTranslation();
+  const retro = useRetroLook();
+  if (retro) {
+    // Modo 2005: a status strip under the log that is always there, so the
+    // log does not jump when somebody starts typing.
+    return (
+      <p className="retro-typing" aria-live="polite" data-retro-typing="">
+        {users.length === 0
+          ? null
+          : users.length === 1
+            ? t("retro.typing_one", { name: users[0]!.displayName })
+            : t("retro.typing_other", { count: users.length })}
+      </p>
+    );
+  }
   if (users.length === 0) {
     return null;
   }
@@ -3236,6 +3251,9 @@ const MessageRow = memo(function MessageRow({
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
           data-message-stream={stream ? "" : undefined}
+          // Hooks for Modo 2005's "Fulano diz:" rows (`components/retro/retro.css`).
+          data-own={isMine ? "" : undefined}
+          data-group-start={startsGroup ? "" : undefined}
           className={cn(
             "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             stream ? "px-3" : "px-5",
@@ -3293,7 +3311,10 @@ const MessageRow = memo(function MessageRow({
             style={ROW_CONTENT_VISIBILITY}
           >
             {stream ? null : startsGroup && !compact ? (
-              <div className="flex w-14 shrink-0 items-start justify-end pr-2">
+              <div
+                className="flex w-14 shrink-0 items-start justify-end pr-2"
+                data-row-gutter=""
+              >
                 <div className="relative h-9 w-9 shrink-0">
                   <AuthorButton
                     message={message}
@@ -3336,6 +3357,7 @@ const MessageRow = memo(function MessageRow({
                 )}
                 dateTime={message.createdAt}
                 title={formatFullTimestamp(message.createdAt)}
+                data-row-gutter=""
               >
                 {formatTime(message.createdAt)}
               </time>
@@ -3355,8 +3377,14 @@ const MessageRow = memo(function MessageRow({
                 />
               )}
               {startsGroup && !stream && (
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="inline-flex items-baseline gap-1">
+                <div
+                  className="flex flex-wrap items-baseline gap-x-2"
+                  data-row-header=""
+                >
+                  <span
+                    className="inline-flex items-baseline gap-1"
+                    data-row-author=""
+                  >
                     <AuthorButton
                       message={message}
                       author={authorInfo}

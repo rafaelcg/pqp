@@ -182,6 +182,19 @@ test("/2005 turns Modo 2005 on, never sends, and /2005 turns it off", async ({
     await expect(page.getByText("Tu achou o Modo 2005!")).toBeVisible();
     await expect(composer(page)).toHaveValue("");
 
+    // The contact list, grouped by status, and the conversation window.
+    const contacts = page.locator("[data-retro-contacts]");
+    await expect(contacts.locator('[data-retro-group="online"]')).toContainText("~*Lu*~");
+    await expect(contacts.locator('[data-retro-group="dnd"]')).toContainText("Guga");
+    await expect(contacts.locator('[data-retro-group="offline"]')).toContainText("Offline (1)");
+    await expect(page.locator("[data-retro-chrome]")).toContainText("~*Lu*~ · Conversa");
+
+    // Emoticons render for this reader, and never inside code or a URL.
+    const log = page.locator("[data-retro-window]");
+    await expect(log.getByText("vai jogar hj?? 😎")).toBeVisible();
+    await expect(log.locator("code", { hasText: "(H)" })).toBeVisible();
+    await expect(log.locator('a[href="http://x.com/(L)"]')).toBeVisible();
+
     await page.screenshot({ path: join(shots, "retro-found-card.png") });
     await page.getByRole("button", { name: "Massa!" }).click();
     await expect(page.locator("[data-retro-found]")).toHaveCount(0);
@@ -196,12 +209,18 @@ test("/2005 turns Modo 2005 on, never sends, and /2005 turns it off", async ({
     // Nothing was sent: the command is local.
     expect(await messageBodies(ana, channelId)).not.toContain("/2005");
 
-    // A phone: no sideways scroll.
+    // A phone: no sideways scroll, the conversation and then the contacts.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(400);
     const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(scrollWidth).toBeLessThanOrEqual(390);
     await page.screenshot({ path: join(shots, "retro-mobile-chat.png") });
+    await page
+      .locator("[data-retro-chrome]")
+      .getByRole("button", { name: "Abrir navegação" })
+      .click();
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(shots, "retro-mobile-contacts.png") });
     await setTheme(page, "dark");
     await page.screenshot({ path: join(shots, "retro-mobile-madrugada.png") });
     await setTheme(page, "light");
@@ -214,6 +233,7 @@ test("/2005 turns Modo 2005 on, never sends, and /2005 turns it off", async ({
     await composer(page).fill("/2005");
     await composer(page).press("Enter");
     await expect(page.locator("html")).not.toHaveAttribute("data-appearance", "retro");
+    await expect(page.locator("[data-retro-contacts]")).toHaveCount(0);
     await expect(page.getByText("vai jogar hj?? (H)")).toBeVisible();
     expect(await messageBodies(ana, channelId)).not.toContain("/2005");
     await context.close();
@@ -269,11 +289,21 @@ test("the Konami code toggles the look, but not while typing", async ({ page }) 
   await expect(page.locator("html")).not.toHaveAttribute("data-appearance", "retro");
 });
 
-test("once found, the look has a tile in Aparência", async ({ browser }, testInfo) => {
+test("a friend signing in gets the corner card, and the tile sits in Aparência", async ({
+  browser,
+}, testInfo) => {
+  // Two friends-list polls (15 s apart) must see somebody offline before
+  // their sign-in counts, so a deploy reconnect never toasts.
+  test.setTimeout(180_000);
   const shots = process.env.RETRO_SHOTS_DIR ?? testInfo.outputPath("shots");
   mkdirSync(shots, { recursive: true });
-  const ana = `retro-tile-${Date.now().toString(36)}`;
-  await person(ana, "Ana");
+  const stamp = Date.now().toString(36);
+  const ana = `retro-toast-ana-${stamp}`;
+  const pedro = `retro-toast-pedro-${stamp}`;
+  const anaId = await person(ana, "Ana");
+  const pedroId = await person(pedro, "Pedrão", "♫ Charlie Brown Jr.");
+  await befriend(ana, anaId, pedro, pedroId);
+
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   await page.addInitScript((s) => {
@@ -283,8 +313,25 @@ test("once found, the look has a tile in Aparência", async ({ browser }, testIn
     localStorage.setItem("pqp-theme", "light");
   }, ana);
   await page.goto(`/app/dm?lang=pt-BR`);
-  // Painted before the bundle loads: the boot script reads the same key.
-  await expect(page.locator("html")).toHaveAttribute("data-appearance", "retro");
+  await expect(page.locator("[data-retro-contacts]")).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator('[data-retro-contacts] [data-retro-group="offline"]'),
+  ).toContainText("Offline (1)");
+
+  // Two offline polls, then Pedro connects.
+  await page.waitForTimeout(32_000);
+  const pedroSocket = await online(pedro);
+  try {
+    const card = page.locator("[data-retro-online]");
+    await expect(card).toContainText("Pedrão acabou de entrar.", { timeout: 25_000 });
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(shots, "retro-online-toast.png") });
+    await expect(
+      page.locator('[data-retro-contacts] [data-retro-group="online"]'),
+    ).toContainText("Pedrão");
+  } finally {
+    pedroSocket.close();
+  }
 
   // Found once, the look has its own tile (with the "novo" tag) in Aparência.
   await page.getByRole("button", { name: "Abrir configurações" }).click();
