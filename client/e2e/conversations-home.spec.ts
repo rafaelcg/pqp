@@ -256,3 +256,94 @@ test("the rail: the door counts conversations, the people waiting surface under 
 
   await anaPage.context().close();
 });
+
+test("Nova conversa: a friend is one click, no typing; ticks make a group", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const stamp = Date.now().toString(36);
+  const ana = `conv-new-ana-${stamp}`;
+  const dani = `conv-new-dani-${stamp}`;
+  const edu = `conv-new-edu-${stamp}`;
+  await person(ana, "Ana");
+  for (const [suffix, name] of [
+    [dani, "Dani"],
+    [edu, "Edu"],
+  ] as const) {
+    const id = await person(suffix, name);
+    await fetch(`${API}/api/friends`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ userId: id }),
+    });
+    await fetch(`${API}/api/friends/${await idOf(ana)}/accept`, {
+      method: "POST",
+      headers: headers(suffix),
+    });
+  }
+
+  const page = await openAs(browser, ana, "/app/dm");
+  const list = page.locator("aside[data-conversations]");
+  await expect(list).toBeVisible({ timeout: 20_000 });
+
+  // A brand new account: the list says how conversations arrive.
+  await expect(list.locator("[data-conversations-empty]")).toBeVisible();
+
+  await list.getByRole("button", { name: "New conversation" }).click();
+  const dialog = page.getByRole("dialog", { name: "New conversation" });
+  await expect(dialog.getByText("Dani", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Edu", { exact: true })).toBeVisible();
+
+  // Ticks build a group; the button says so.
+  await dialog.getByRole("checkbox", { name: "Add Dani" }).click();
+  await dialog.getByRole("checkbox", { name: "Add Edu" }).click();
+  await expect(dialog.getByRole("button", { name: "Create group" })).toBeEnabled();
+  await dialog.getByRole("checkbox", { name: "Add Edu" }).click();
+  await dialog.getByRole("checkbox", { name: "Add Dani" }).click();
+
+  // Nothing ticked: a name is a door.
+  await dialog.getByText("Dani", { exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/app\/dm\/[0-9a-f-]{36}/);
+  await expect(page.getByPlaceholder(/Message/)).toBeVisible();
+  await expect(list.locator("[data-conversation-row]")).toHaveCount(1);
+
+  await page.context().close();
+});
+
+test("a friend accepts: a card offers to say hi and opens the conversation", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const stamp = Date.now().toString(36);
+  const ana = `conv-acc-ana-${stamp}`;
+  const fer = `conv-acc-fer-${stamp}`;
+  await person(ana, "Ana");
+  const ferId = await person(fer, "Fer");
+
+  const page = await openAs(browser, ana, "/app/dm");
+  await expect(page.locator("aside[data-conversations]")).toBeVisible({ timeout: 20_000 });
+  await fetch(`${API}/api/friends`, {
+    method: "POST",
+    headers: headers(ana),
+    body: JSON.stringify({ userId: ferId }),
+  });
+  // Ana's tab has its friends snapshot (the request is in it) before Fer
+  // answers: the card is about a change, so it needs a before.
+  await expect(page.getByRole("tab", { name: "Online" })).toBeVisible();
+  await page.waitForTimeout(2_000);
+  // Fer accepts from somewhere else; Ana's socket is nudged.
+  await fetch(`${API}/api/friends/${await idOf(ana)}/accept`, {
+    method: "POST",
+    headers: headers(fer),
+  });
+
+  const card = page.locator(`[data-friend-accepted="${ferId}"]`);
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card).toContainText("You and Fer are friends now");
+  await card.getByRole("button", { name: "Say hi" }).click();
+  await expect(page).toHaveURL(/\/app\/dm\/[0-9a-f-]{36}/);
+  await expect(page.getByPlaceholder(/Message/)).toBeVisible();
+
+  await page.context().close();
+});

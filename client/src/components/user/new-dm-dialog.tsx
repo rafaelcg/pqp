@@ -1,6 +1,7 @@
 import { DM_MAX_RECIPIENTS, type DmSummary, type PublicUser } from "@pqp/shared";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { NewConversationDialog } from "@/components/conversations/new-conversation-dialog";
 import { UserSearch } from "@/components/user/user-search";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -13,6 +14,20 @@ interface NewDmDialogProps {
   currentUserId: string | null;
   onClose: () => void;
   onCreated: (conversation: DmSummary) => void;
+  /**
+   * Conversas (`conversations_home`): draw Nova conversa, with friends listed
+   * before anybody types. Off, this dialog is what it was.
+   */
+  home?: boolean;
+  /** For Nova conversa's Recentes section. */
+  conversations?: readonly DmSummary[];
+}
+
+export function NewDmDialog({ home = false, conversations = [], ...props }: NewDmDialogProps) {
+  if (home) {
+    return <NewConversationDialog {...props} conversations={conversations} />;
+  }
+  return <ClassicNewDmDialog {...props} />;
 }
 
 /**
@@ -23,12 +38,12 @@ interface NewDmDialogProps {
  * it would mean two pickers and a moment where the user has to know which kind
  * of conversation they want before they know who is in it.
  */
-export function NewDmDialog({
+function ClassicNewDmDialog({
   open,
   currentUserId,
   onClose,
   onCreated,
-}: NewDmDialogProps) {
+}: Omit<NewDmDialogProps, "home" | "conversations">) {
   const { t } = useTranslation();
   const [picked, setPicked] = useState<PublicUser[]>([]);
   const [busy, setBusy] = useState(false);

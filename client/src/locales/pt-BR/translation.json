@@ -4745,5 +4745,21 @@
   "conversations.rail.waitingSr_other": "{count} conversas te esperando",
   "conversations.rail.more_one": "Mais {count} conversa te esperando",
   "conversations.rail.more_other": "Mais {count} conversas te esperando",
-  "conversations.rail.label": "Conversas"
+  "conversations.rail.label": "Conversas",
+  "conversations.new.eyebrow": "Conversa",
+  "conversations.new.description": "Escolhe uma pessoa. Marca mais gente e vira grupo (até {max}).",
+  "conversations.new.search": "Procura pelo nome ou nome#0000",
+  "conversations.new.online": "Online agora",
+  "conversations.new.friends": "Amigos",
+  "conversations.new.recent": "Recentes",
+  "conversations.new.open": "Abrir conversa",
+  "conversations.new.openGroup": "Criar grupo",
+  "conversations.new.hint": "Clicar num nome sem marcar abre direto",
+  "conversations.new.picked": "Nessa conversa",
+  "conversations.new.tick": "Marcar {name}",
+  "conversations.new.noFriends": "Ainda não tem amigos aqui. Procura alguém pelo nome ou nome#0000 aí em cima.",
+  "conversations.new.noLocalMatch": "Ninguém da tua lista bate com isso. A busca aí em cima procura em todo o pqp.",
+  "conversations.friendAccepted.title": "Tu e {name} agora são amigos",
+  "conversations.friendAccepted.cta": "Mandar um oi",
+  "conversations.profileLast": "Última conversa · {time}"
 }
