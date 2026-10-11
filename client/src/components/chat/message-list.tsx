@@ -120,6 +120,7 @@ import {
   isSameDay,
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
+import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -1887,6 +1888,45 @@ export const MessageList = memo(function MessageList({
             // just sent, in the seconds after you sent it.
             const elementKey = row.message.nonce ?? rowId;
             const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
+            if (row.message.systemKind === "nudge") {
+              const mine = row.message.authorId === currentUserId;
+              const name = mine
+                ? (participants?.find((one) => one.id !== currentUserId)?.displayName ??
+                  row.message.authorName)
+                : row.message.authorName;
+              return (
+                <Fragment key={elementKey}>
+                  {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
+                  <NudgeLine
+                    messageId={rowId}
+                    createdAt={row.message.createdAt}
+                    mine={mine}
+                    name={name}
+                    registerRow={registerRow}
+                    onDelete={
+                      onDeleteMessage
+                        ? stableRowCallback(
+                            rowId,
+                            "delete",
+                            [onDeleteMessage],
+                            () => () => void onDeleteMessage(rowId),
+                          )
+                        : undefined
+                    }
+                    onReport={
+                      onReportMessage
+                        ? stableRowCallback(
+                            rowId,
+                            "report",
+                            [onReportMessage, row.message],
+                            () => () => onReportMessage(row.message),
+                          )
+                        : undefined
+                    }
+                  />
+                </Fragment>
+              );
+            }
             return (
             <Fragment key={elementKey}>
             <MessageRow
@@ -2159,6 +2199,13 @@ export const MessageList = memo(function MessageList({
             );
           })
         )}
+
+        {channelId ? (
+          <NudgeNotice
+            channelId={channelId}
+            name={participants?.find((one) => one.id !== currentUserId)?.displayName ?? ""}
+          />
+        ) : null}
 
         {hasNewer && (
           <div className="flex justify-center pt-3">

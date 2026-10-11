@@ -470,6 +470,14 @@ import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import { NudgeButton } from "@/components/dm/nudge-button";
+import { useNudgeShake } from "@/hooks/use-nudge-shake";
+import {
+  adoptAllowNudges,
+  applyNudgeArrival,
+  handleNudgeRefused,
+  startFunConfig,
+} from "@/lib/nudge";
 import {
   startConversationsConfig,
   useConversationsConfig,
@@ -4733,6 +4741,7 @@ function MainAppContent({
           adoptChatDisplay(me.preferences.chatDisplay);
         }
         adoptVoiceTranscription(me.preferences);
+        adoptAllowNudges(me.preferences);
         const merged = applyRemotePreferences(
           loadLocalSettings(),
           me.preferences,
@@ -4889,6 +4898,8 @@ function MainAppContent({
               preview?: string;
               authorName?: string;
               authorId?: string;
+              /** `nudge` for chamar a atenção; absent for a message. */
+              systemKind?: "nudge";
             };
             // Where this came from, taken from the frame rather than looked up.
             // The directory is only ever fed the SELECTED server's channel
@@ -4969,6 +4980,7 @@ function MainAppContent({
                   preview: activity.preview,
                   authorName: activity.authorName,
                   authorId: activity.authorId,
+                  systemKind: activity.systemKind,
                 },
               ),
               {
@@ -5101,6 +5113,19 @@ function MainAppContent({
                   localStampedAt,
                 }),
               );
+            }
+            // Chamar a atenção: a nudge that just arrived live shakes the open
+            // conversation and plays its cue (or, if it is mine, starts the
+            // button's cooldown). History never comes through here.
+            if (
+              message.type === "message-broadcast" &&
+              message.message.systemKind === "nudge"
+            ) {
+              applyNudgeArrival(message.message, {
+                viewerId: userIdRef.current,
+                openChannelId: selectedChannelIdRef.current,
+                visible: document.visibilityState === "visible",
+              });
             }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
@@ -5533,10 +5558,11 @@ function MainAppContent({
             return;
           }
 
-          // Chamar a atenção's refusal, sent only to a socket that sent a
-          // `nudge` frame. This build sends none, so nothing can be refused;
-          // kept out of the voice controller, which it is not for.
+          // Chamar a atenção's refusal, sent only to the socket that sent the
+          // `nudge` frame. The reason becomes a line under the log and, for a
+          // cooldown, the button's wait.
           if (message.type === "nudge-refused") {
+            handleNudgeRefused(message);
             return;
           }
 
@@ -9326,6 +9352,15 @@ function MainAppContent({
     [conversations],
   );
   useChannelNotifications({ channels: notificationChannels, unread });
+  // Chamar a atenção: whether the button exists (`nudge`, same refresh pass),
+  // and the open conversation's pane shaking when one arrives.
+  useEffect(
+    () => (newcomerInviteUserId ? startFunConfig() : undefined),
+    [newcomerInviteUserId],
+  );
+  const nudgeShake = useNudgeShake(
+    selection.kind === "dm" ? selectedChannelId : null,
+  );
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
   // this shell is only mounted for a signed-in session, and unmounts with it.
@@ -10508,7 +10543,8 @@ function MainAppContent({
 
   const chatPane = selectedChannel ? (
     <FileDropZone
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      {...nudgeShake}
+      className={cn("flex min-h-0 min-w-0 flex-1 flex-col", nudgeShake.className)}
       data-retro-window={retroWindow ? "" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
@@ -10623,6 +10659,22 @@ function MainAppContent({
                   {t("voice.join")}
                 </button>
               </Tooltip>
+            )}
+          {/* Chamar a atenção: a 1:1 with a friend, nobody blocked. The button
+              owns everything else (the flag, its states, `/nudge`). */}
+          {activeConversation &&
+            user &&
+            activeConversation.kind === "dm" &&
+            activeConversation.participants.length === 1 &&
+            friends.data.friends.some(
+              (friend) => friend.id === activeConversation.participants[0]!.id,
+            ) &&
+            !blockedUserIds.has(activeConversation.participants[0]!.id) && (
+              <NudgeButton
+                channelId={activeConversation.channelId}
+                send={transport.sendChat}
+                isConnected={transport.isConnected}
+              />
             )}
           {activeConversation &&
             user &&
