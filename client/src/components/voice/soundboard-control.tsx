@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { AudioLines, Plus, Volume2, VolumeX } from "lucide-react";
@@ -32,6 +33,22 @@ import {
 import { cn } from "@/lib/utils";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
 
+/**
+ * Why the board is unavailable for now. The button stays, disabled, and says
+ * so: hiding it read as "this call has no soundboard". No permission, or the
+ * flag off, still hides it.
+ */
+export type SoundboardLock = "deafened" | "serverMuted" | "audience" | "micLocked";
+
+const LOCK_COPY: Record<SoundboardLock, MessageKey> = {
+  deafened: "soundboard.lock.deafened",
+  serverMuted: "soundboard.lock.serverMuted",
+  audience: "soundboard.lock.audience",
+  micLocked: "soundboard.lock.micLocked",
+};
+
+const GRID_COLUMNS = 3;
+
 const PANEL_WIDTH = 280;
 const PANEL_HEIGHT = 304;
 
@@ -39,13 +56,16 @@ export function SoundboardControl({
   serverId,
   canUse: canUseSeat,
   canManage: canManageSeat,
+  lock = null,
   size,
   iconSize,
 }: {
   serverId: string | null;
-  /** The seat's grant: `USE_SOUNDBOARD` and an open mic. */
+  /** The seat's `USE_SOUNDBOARD`. */
   canUse: boolean;
   canManage: boolean;
+  /** Set while the board is locked for a reason that will pass. */
+  lock?: SoundboardLock | null;
   size: string;
   iconSize: string;
 }) {
@@ -64,6 +84,8 @@ export function SoundboardControl({
   const [volume, setVolume] = useSoundboardListenerVolume();
   const [muted, setMuted] = useSoundboardMuted();
   const refused = useSoundboardRefused();
+  // Roving focus: one tile is in the Tab order, the arrows move between them.
+  const [activeTile, setActiveTile] = useState(0);
   const portalHost = useFullscreenPortalHost();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -81,6 +103,12 @@ export function SoundboardControl({
     }
     void prefetchSoundboard(serverId);
   }, [serverId, canUse]);
+
+  useEffect(() => {
+    if (lock) {
+      setOpen(false);
+    }
+  }, [lock]);
 
   // Somebody else may have added, renamed or deleted a clip since the call
   // started. Ask again on open, and now and then while the panel is up.
@@ -168,7 +196,7 @@ export function SoundboardControl({
         ...panelRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [role="slider"], input:not([disabled])',
         ),
-      ];
+      ].filter((element) => element.tabIndex >= 0);
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!first || !last) {
@@ -198,14 +226,48 @@ export function SoundboardControl({
     if (panelRef.current?.contains(document.activeElement)) {
       return;
     }
-    panelRef.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    panelRef.current
+      ?.querySelector<HTMLElement>("[data-sound-tile]")
+      ?.focus({ preventScroll: true });
   }, [open, placement]);
 
   if (!serverId || !canUse) {
     return null;
   }
 
-  const label = t("soundboard.title");
+  function moveBetweenTiles(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const tiles = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-sound-tile]"),
+    ];
+    const index = tiles.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) {
+      return;
+    }
+    const last = tiles.length - 1;
+    const next =
+      event.key === "ArrowRight"
+        ? index + 1
+        : event.key === "ArrowLeft"
+          ? index - 1
+          : event.key === "ArrowDown"
+            ? index + GRID_COLUMNS
+            : event.key === "ArrowUp"
+              ? index - GRID_COLUMNS
+              : event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? last
+                  : null;
+    if (next === null) {
+      return;
+    }
+    event.preventDefault();
+    tiles[Math.min(last, Math.max(0, next))]?.focus();
+  }
+
+  const label = lock ? t(LOCK_COPY[lock]) : t("soundboard.title");
+  // A deleted clip can leave the remembered tile past the end of the grid.
+  const rovingTile = Math.min(activeTile, SOUNDBOARD_BUILTINS.length + sounds.length - 1);
   const panel =
     open && typeof document !== "undefined"
       ? createPortal(
@@ -247,26 +309,36 @@ export function SoundboardControl({
                     : ""}
               </p>
             </div>
-            <div className="grid min-h-0 grid-cols-3 gap-1.5 overflow-y-auto">
-              {SOUNDBOARD_BUILTINS.map((sound) => (
+            <div
+              className="grid min-h-0 grid-cols-3 gap-1.5 overflow-y-auto"
+              onKeyDown={moveBetweenTiles}
+            >
+              {SOUNDBOARD_BUILTINS.map((sound, index) => (
                 <SoundTile
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
                   name={t(builtinNameKey(sound.id))}
                   playing={activeIds.has(sound.id)}
+                  tabIndex={index === rovingTile ? 0 : -1}
+                  onFocus={() => setActiveTile(index)}
                   onPlay={() => requestSoundboardPlay(sound.id)}
                 />
               ))}
-              {sounds.map((sound) => (
-                <SoundTile
-                  key={sound.id}
-                  icon={soundboardIcon(sound.id)}
-                  monogram={monogramOf(sound.name)}
-                  name={sound.name}
-                  playing={activeIds.has(sound.id)}
-                  onPlay={() => requestSoundboardPlay(sound.id)}
-                />
-              ))}
+              {sounds.map((sound, offset) => {
+                const index = SOUNDBOARD_BUILTINS.length + offset;
+                return (
+                  <SoundTile
+                    key={sound.id}
+                    icon={soundboardIcon(sound.id)}
+                    monogram={monogramOf(sound.name)}
+                    name={sound.name}
+                    playing={activeIds.has(sound.id)}
+                    tabIndex={index === rovingTile ? 0 : -1}
+                    onFocus={() => setActiveTile(index)}
+                    onPlay={() => requestSoundboardPlay(sound.id)}
+                  />
+                );
+              })}
             </div>
             <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
               <button
@@ -305,6 +377,14 @@ export function SoundboardControl({
                   setVolume(next);
                 }}
               />
+              {canManage && catalog && (
+                <span className="shrink-0 text-[11px] tabular-nums text-text-secondary">
+                  {t("soundboard.slots", {
+                    used: catalog.slotsUsed,
+                    max: catalog.maxSounds,
+                  })}
+                </span>
+              )}
               {canManage && (
                 <Button
                   type="button"
@@ -336,14 +416,24 @@ export function SoundboardControl({
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? "soundboard-panel" : undefined}
+          // Focusable while locked, so the reason in the tooltip can be read.
+          aria-disabled={lock ? true : undefined}
+          aria-label={lock ? `${t("soundboard.title")}: ${t(LOCK_COPY[lock])}` : undefined}
+          data-locked={lock ?? undefined}
           className={cn(
             "group flex items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-95 motion-reduce:transition-none motion-reduce:transform-none",
             size,
-            open
-              ? "bg-signal/20 text-signal"
-              : "bg-ink-3 text-paper hover:bg-ink-4",
+            lock
+              ? "cursor-not-allowed bg-ink-3 text-paper opacity-50 active:scale-100"
+              : open
+                ? "bg-signal/20 text-signal"
+                : "bg-ink-3 text-paper hover:bg-ink-4",
           )}
-          onClick={() => setOpen((next) => !next)}
+          onClick={() => {
+            if (!lock) {
+              setOpen((next) => !next);
+            }
+          }}
         >
           <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
             <AudioLines className={iconSize} />
@@ -370,6 +460,8 @@ function SoundTile({
   monogram = null,
   name,
   playing,
+  tabIndex,
+  onFocus,
   onPlay,
 }: {
   icon: SoundboardIcon;
@@ -378,6 +470,8 @@ function SoundTile({
   name: string;
   /** Somebody's clip of this sound is sounding. Shown, not a toggle state. */
   playing: boolean;
+  tabIndex: number;
+  onFocus: () => void;
   onPlay: () => void;
 }) {
   const [burst, setBurst] = useState(0);
@@ -385,7 +479,10 @@ function SoundTile({
     <button
       type="button"
       aria-label={name}
+      data-sound-tile=""
       data-playing={playing ? "" : undefined}
+      tabIndex={tabIndex}
+      onFocus={onFocus}
       className={cn(
         "group flex h-[4.25rem] w-full flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] px-1 py-1.5",
         "transition-[background-color,color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
@@ -422,7 +519,7 @@ function SoundTile({
       </span>
       <span
         className={cn(
-          "line-clamp-2 w-full text-balance text-center text-[10px] leading-tight [overflow-wrap:anywhere] transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+          "line-clamp-2 w-full text-balance text-center text-[11px] leading-tight [overflow-wrap:anywhere] transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
           playing
             ? "text-on-accent-soft"
             : "text-text-secondary group-hover:text-text",

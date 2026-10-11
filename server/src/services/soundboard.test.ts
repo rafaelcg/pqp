@@ -202,9 +202,9 @@ describeDb("soundboard upload ledger", () => {
   it("deletes the object, then the row, and a second delete finds nothing", async () => {
     const key = await upload();
     const sound = await claim(key);
-    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(sound.name);
     expect(s3.deleted).toEqual([key]);
-    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(false);
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBeNull();
   });
 
   it("keeps the row when storage is not configured", async () => {
@@ -216,7 +216,7 @@ describeDb("soundboard upload ledger", () => {
       code: "storage",
     });
     s3.unconfigured = false;
-    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(sound.name);
   });
 
   it("reports stored sounds plus uploads in flight as the slots used", async () => {
@@ -234,7 +234,7 @@ describeDb("soundboard upload ledger", () => {
       code: "storage",
     });
     s3.failDeletes = false;
-    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(sound.name);
   });
 
   it("tells the other API machines to forget a deleted clip", async () => {

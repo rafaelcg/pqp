@@ -2289,6 +2289,8 @@ export interface SoundboardSoundDto {
   durationMs: number;
   volume: number;
   url: string | null;
+  /** Who added it. Only sent to people who manage the board. */
+  addedBy?: { id: string; name: string } | null;
 }
 
 export const fetchSoundboard = (serverId: string) =>

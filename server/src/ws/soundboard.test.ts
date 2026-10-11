@@ -11,6 +11,7 @@ describe("soundboard play gate", () => {
   it("needs the flag, the bit, an open mic, a matching room, and no moderator mute", () => {
     const open = {
       enabled: true,
+      deafened: false,
       canUseSoundboard: true,
       canSpeak: true,
       serverMuted: false,
@@ -18,6 +19,8 @@ describe("soundboard play gate", () => {
     };
     expect(soundboardPlayAllowed(open)).toBe(true);
     expect(soundboardPlayAllowed({ ...open, enabled: false })).toBe(false);
+    // Deafened: you would play what you cannot hear. Discord refuses it too.
+    expect(soundboardPlayAllowed({ ...open, deafened: true })).toBe(false);
     expect(soundboardPlayAllowed({ ...open, canUseSoundboard: false })).toBe(false);
     expect(soundboardPlayAllowed({ ...open, serverMuted: true })).toBe(false);
     expect(soundboardPlayAllowed({ ...open, channelMatches: false })).toBe(false);
@@ -29,6 +32,7 @@ describe("soundboard play gate", () => {
     expect(
       soundboardPlayAllowed({
         enabled: true,
+        deafened: false,
         canUseSoundboard: true,
         canSpeak: false,
         serverMuted: false,
@@ -143,5 +147,31 @@ describe("soundboard play gate", () => {
         now: now + 600,
       }),
     ).toBe(true);
+  });
+});
+
+describe("soundboard play budget", () => {
+  it("allows a burst of five, then one every two seconds", async () => {
+    const { resetSoundboardPlays, SOUNDBOARD_PLAY_REFILL_MS } = await import("./soundboard.js");
+    resetSoundboardPlays();
+    const offer = (now: number, channelId = `room-${now}`) =>
+      offerSoundboardPlay({ channelId, userId: "spammer", durationMs: 10, now });
+    // Each in its own room so the overlap caps never bind: only the budget.
+    const burst = [0, 1, 2, 3, 4].map((i) => offer(1_000 + i));
+    expect(burst).toEqual([true, true, true, true, true]);
+    expect(offer(1_010)).toBe(false);
+    expect(offer(1_004 + SOUNDBOARD_PLAY_REFILL_MS)).toBe(true);
+    expect(offer(1_005 + SOUNDBOARD_PLAY_REFILL_MS)).toBe(false);
+  });
+
+  it("spends the budget for plays the other machine admitted", async () => {
+    const { noteRemoteSoundboardPlay, resetSoundboardPlays } = await import("./soundboard.js");
+    resetSoundboardPlays();
+    for (let i = 0; i < 5; i += 1) {
+      noteRemoteSoundboardPlay({ channelId: `elsewhere-${i}`, userId: "hopper", durationMs: 10, now: 5_000 });
+    }
+    expect(
+      offerSoundboardPlay({ channelId: "here", userId: "hopper", durationMs: 10, now: 5_001 }),
+    ).toBe(false);
   });
 });

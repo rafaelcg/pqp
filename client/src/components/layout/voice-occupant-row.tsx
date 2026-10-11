@@ -244,6 +244,7 @@ export function VoiceOccupantRow({
         open={menu.open}
         voice={audio?.voice}
         share={audio?.share}
+        soundboardUserId={audio?.voice ? person.userId : undefined}
         side="bottom"
         align="start"
         className="w-[13.5rem]"

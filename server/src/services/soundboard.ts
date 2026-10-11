@@ -121,16 +121,33 @@ export async function countSoundboardSlotsUsed(serverId: string): Promise<number
 
 export async function listSoundboardSounds(
   serverId: string,
+  options: { withUploader?: boolean } = {},
 ): Promise<SoundboardSound[]> {
-  const result = await getPool().query<SoundRow>(
-    `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
-            duration_ms, volume
-       FROM soundboard_sounds
-      WHERE server_id = $1
-      ORDER BY created_at ASC, id ASC`,
+  const result = await getPool().query<
+    SoundRow & { created_by: string | null; added_by_name: string | null }
+  >(
+    `SELECT s.id, s.server_id, s.name, s.emoji, s.storage_key, s.content_type,
+            s.bytes, s.duration_ms, s.volume, s.created_by,
+            u.display_name AS added_by_name
+       FROM soundboard_sounds s
+       LEFT JOIN users u ON u.id = s.created_by
+      WHERE s.server_id = $1
+      ORDER BY s.created_at ASC, s.id ASC`,
     [serverId],
   );
-  return result.rows.map(toSound);
+  return result.rows.map((row) => {
+    const sound = toSound(row);
+    if (!options.withUploader) {
+      return sound;
+    }
+    return {
+      ...sound,
+      addedBy:
+        row.created_by && row.added_by_name
+          ? { id: row.created_by, name: row.added_by_name }
+          : null,
+    };
+  });
 }
 
 const playableCache = new Map<
@@ -548,19 +565,20 @@ export async function updateSoundboardSound(input: {
   return row ? toSound(row) : null;
 }
 
+/** Deletes the clip. Its name for the audit row, or null when there was none. */
 export async function deleteSoundboardSound(
   serverId: string,
   soundId: string,
-): Promise<boolean> {
-  const found = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key
+): Promise<string | null> {
+  const found = await getPool().query<{ storage_key: string; name: string }>(
+    `SELECT storage_key, name
        FROM soundboard_sounds
       WHERE id = $1 AND server_id = $2`,
     [soundId, serverId],
   );
   const key = found.rows[0]?.storage_key;
   if (!key) {
-    return false;
+    return null;
   }
   // Object first: a storage error leaves the row in place, so the delete can
   // be retried and no file is orphaned with its key forgotten. A missing
@@ -580,5 +598,5 @@ export async function deleteSoundboardSound(
     [soundId, serverId],
   );
   forgetPlayable(soundId);
-  return true;
+  return found.rows[0]!.name;
 }

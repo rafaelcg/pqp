@@ -23,6 +23,14 @@ export const SOUNDBOARD_MAX_DURATION_MS = 5200;
 /** Custom clips per server. No boost ladder. */
 export const SOUNDBOARD_MAX_SOUNDS = 24;
 
+/**
+ * Each person's play budget: a burst of five, then one every two seconds.
+ * The server enforces it; the client keeps the same numbers so a refused
+ * click is told at once.
+ */
+export const SOUNDBOARD_PLAY_BURST = 5;
+export const SOUNDBOARD_PLAY_REFILL_MS = 2_000;
+
 /** How many clips may be sounding in one room at once. High enough to mash the board. */
 export const SOUNDBOARD_ROOM_CONCURRENCY = 12;
 
@@ -168,6 +176,11 @@ export const soundboardSoundSchema = z.object({
   volume: soundboardVolumeSchema,
   /** Presigned read. Absent when storage cannot sign one. */
   url: z.string().min(1).nullable(),
+  /**
+   * Who added it. Sent only to people who manage the board (Discord shows
+   * the uploader to the same people); null once that account is gone.
+   */
+  addedBy: z.object({ id: z.string().uuid(), name: z.string() }).nullable().optional(),
 });
 
 export type SoundboardSound = z.infer<typeof soundboardSoundSchema>;

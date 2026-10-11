@@ -9369,7 +9369,8 @@ export async function handleVoiceMessage(
   // miss is silence, which is the right amount of effort for a joke.
   //
   // Self-mute does not block it. A locked microphone does (no SPEAK, a
-  // closed watch party floor, audience mode), and so does a moderator mute.
+  // closed watch party floor, audience mode), and so do a moderator mute
+  // and deafening yourself, as on Discord.
   // Deafening is the listener's own client. DMs have no library, so
   // `soundboardServerId` null never gets past the gate.
   if (payload.type === "soundboard-play") {
@@ -9381,6 +9382,7 @@ export async function handleVoiceMessage(
       !peer ||
       !soundboardPlayAllowed({
         enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
+        deafened: peer.deafened,
         canUseSoundboard: peer.canUseSoundboard,
         canSpeak: peer.canSpeak,
         serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
@@ -9408,6 +9410,7 @@ export async function handleVoiceMessage(
       current !== peer ||
       !soundboardPlayAllowed({
         enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
+        deafened: peer.deafened,
         canUseSoundboard: peer.canUseSoundboard,
         canSpeak: peer.canSpeak,
         serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),

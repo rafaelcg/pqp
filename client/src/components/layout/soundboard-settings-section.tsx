@@ -180,7 +180,14 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                     onCancel={() => cancelEdit(sound.id)}
                   />
                 ) : (
-                  <p className="truncate text-sm text-text">{sound.name}</p>
+                  <>
+                    <p className="truncate text-sm text-text">{sound.name}</p>
+                    {sound.addedBy && (
+                      <p className="truncate text-[11px] text-text-secondary">
+                        {t("soundboard.settings.addedBy", { name: sound.addedBy.name })}
+                      </p>
+                    )}
+                  </>
                 )}
                 <ClipVolume
                   volume={sound.volume}

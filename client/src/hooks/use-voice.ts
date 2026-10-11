@@ -21,6 +21,7 @@ import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
+  isSoundboardUserMuted,
   noteOwnSoundboardEcho,
   playSoundboardClip,
   registerSoundboardSender,
@@ -3432,6 +3433,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.status === "idle" ||
         !state.canUseSoundboard ||
         !state.canSpeak ||
+        state.isDeafened ||
         state.self?.serverMuted === true
       ) {
         return;
@@ -6007,7 +6009,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         if (
           state.status === "idle" ||
-          message.channelId !== state.voiceChannelId
+          message.channelId !== state.voiceChannelId ||
+          // Muted by this listener: neither heard nor marked.
+          isSoundboardUserMuted(message.userId)
         ) {
           break;
         }

@@ -3517,9 +3517,15 @@ function requireSoundboardEnabled(serverId: string): void {
 
 router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
   await requireServerMember(serverId, user.id);
+  // Who added each clip, for the people who manage the board only.
+  const manages = await memberHasPermission(
+    serverId!,
+    user.id,
+    SoundboardPermission.MANAGE_SOUNDBOARD,
+  );
   const [sounds, slotsUsed] = await Promise.all([
-    listSoundboardSounds(serverId),
-    countSoundboardSlotsUsed(serverId),
+    listSoundboardSounds(serverId!, { withUploader: manages }),
+    countSoundboardSlotsUsed(serverId!),
   ]);
   return { sounds, maxSounds: SOUNDBOARD_MAX_SOUNDS, slotsUsed };
 });
@@ -3560,6 +3566,14 @@ router.post(
         emoji: body.emoji,
         volume: body.volume,
       });
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "soundboard.create",
+        targetType: "soundboard_sound",
+        targetId: sound.id,
+        changes: [{ key: "name", old: null, new: sound.name }],
+      });
       return { sound };
     } catch (error) {
       if (error instanceof SoundboardError) {
@@ -3589,6 +3603,17 @@ router.patch(
     if (!sound) {
       throw new NotFound("Sound not found");
     }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "soundboard.update",
+      targetType: "soundboard_sound",
+      targetId: sound.id,
+      changes: [
+        ...(body.name !== undefined ? [{ key: "name", old: null, new: sound.name }] : []),
+        ...(body.volume !== undefined ? [{ key: "volume", old: null, new: sound.volume }] : []),
+      ],
+    });
     return { sound };
   },
 );
@@ -3600,7 +3625,7 @@ router.delete(
     if (!isUuid(soundId!)) {
       throw new NotFound("Sound not found");
     }
-    let removed: boolean;
+    let removed: string | null;
     try {
       removed = await deleteSoundboardSound(serverId, soundId);
     } catch (error) {
@@ -3609,9 +3634,17 @@ router.delete(
       }
       throw error;
     }
-    if (!removed) {
+    if (removed === null) {
       throw new NotFound("Sound not found");
     }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "soundboard.delete",
+      targetType: "soundboard_sound",
+      targetId: soundId!,
+      changes: [{ key: "name", old: removed, new: null }],
+    });
     return { ok: true };
   },
 );

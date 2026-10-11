@@ -229,6 +229,28 @@ describe("soundboard fan-out", () => {
     expect(plays(other)).toHaveLength(0);
   });
 
+  it("drops a play from a deafened seat, and plays again after undeafening", async () => {
+    const id = "77777777-7777-4777-8777-777777777777";
+    const rec = await join(recorder(), id);
+    const other = await join(recorder(), "88888888-8888-4888-8888-888888888888");
+    const state = (deafened: boolean) =>
+      handleVoiceMessage(
+        { socket: rec.socket, user: asUser(id) },
+        { type: "set-voice-state", muted: false, deafened },
+      );
+    const play = () =>
+      handleVoiceMessage(
+        { socket: rec.socket, user: asUser(id) },
+        { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
+      );
+    await state(true);
+    await play();
+    expect(plays(other)).toHaveLength(0);
+    await state(false);
+    await play();
+    expect(plays(other)).toHaveLength(1);
+  });
+
   it("drops a play from a seat the moderator muted", async () => {
     const id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
     const rec = await join(recorder(), id);

@@ -118,6 +118,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
     "serverSettings.audit.action.channel.voice_transport_update",
   "channel.sfu_region_update":
     "serverSettings.audit.action.channel.sfu_region_update",
+  "soundboard.create": "serverSettings.audit.action.soundboard.create",
+  "soundboard.update": "serverSettings.audit.action.soundboard.update",
+  "soundboard.delete": "serverSettings.audit.action.soundboard.delete",
   "member.timeout": "serverSettings.audit.action.member.timeout",
   "member.timeout_lift": "serverSettings.audit.action.member.timeout_lift",
   "member.voice_disconnect":

@@ -65,27 +65,37 @@ without a rejoin.
 ## Who can do what
 
 `USE_SOUNDBOARD` is on for `@everyone`. A channel overwrite can turn the
-board off in one room without taking Speak. You have to be seated. A
-moderator mute blocks it. Muting yourself does not. Deafening yourself
-only stops you hearing it.
+board off in one room without taking Speak. You have to be seated.
 
-A clip needs an open microphone. Whoever may not speak may not play one.
-That covers a channel that denies Speak, a watch party floor closed to
-hosts only, audience mode, and a moderator mute. The button is hidden for
-those seats and the server refuses their plays.
+The rule matches Discord's: you may play while self-muted, and not while
+deafened (you would play what you cannot hear) or moderator-muted. A clip
+also needs an open microphone, so a channel that denies Speak, a watch
+party floor closed to hosts only, and audience mode lock the board too.
+For all of these the button stays, disabled, and its tooltip says why.
+Only a missing permission or the flag being off hides it. The server
+refuses the play either way.
+
+Each person has a play budget on top of the overlap caps: five plays in a
+row, then one every two seconds (`SOUNDBOARD_PLAY_BURST`,
+`SOUNDBOARD_PLAY_REFILL_MS`). The caps alone let one person replay a short
+clip back to back forever. The client keeps the same budget, so a click
+over it is told at once.
 
 A click is only shown as played when the room echoes it back. The server
-refuses in silence (the room's twelve, your own three, a mute), so a click
-with no echo in three seconds tells the person it did not play, or that
-the clip was removed when the refreshed list no longer has it. The client
-also sends at most a short burst: holding a key does not repeat plays.
+refuses in silence (the room's twelve, your own three, the budget, a
+mute), so a click with no echo in three seconds tells the person it did
+not play, or that the clip was removed when the refreshed list no longer
+has it. Holding a key does not repeat plays.
 
 `MANAGE_SOUNDBOARD` adds, renames, and deletes clips. In server settings,
 the pencil on a row renames it (Enter saves, Escape cancels). Delete asks
 for confirmation first. The count and the Add button follow the number the
-server refuses at: stored clips plus uploads in flight. It is on for manager
-and owner, off for `@everyone`. A server can hand it to a role. Audio is
-not scanned.
+server refuses at: stored clips plus uploads in flight. Each row says who
+added the clip; the list only carries that for people who manage the board.
+Adding, editing and deleting a clip are written to the server's audit log
+(`soundboard.create`, `soundboard.update`, `soundboard.delete`), with the
+clip's name, because audio is not scanned. It is on for manager and owner,
+off for `@everyone`. A server can hand it to a role.
 
 DMs have no library. Phones do not play the frame yet. Web and Electron do.
 
@@ -93,6 +103,12 @@ The room accepts twelve clips at once, including several from the same
 person. Extra clicks past that are dropped. Muting the board is local.
 It cuts what you are hearing, including a clip already playing. The
 volume slider does the same. Your clicks still go out to the room.
+Muting one person is in their audio menu (click them under the voice
+channel or on the stage): "Soundboard" turns their clips off for you only,
+sound and mark both. Discord has only the global slider.
+
+In the panel the arrow keys move between clips, Home and End jump to the
+ends, and Tab moves on to the mute, the volume and Add.
 
 A play lights that person's row under the voice channel, and the same
 icon on their tile when the stage is up. It lasts a couple of seconds.

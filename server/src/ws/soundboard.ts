@@ -1,5 +1,7 @@
 import {
   SOUNDBOARD_MAX_DURATION_MS,
+  SOUNDBOARD_PLAY_BURST,
+  SOUNDBOARD_PLAY_REFILL_MS,
   SOUNDBOARD_ROOM_CONCURRENCY,
 } from "@pqp/shared";
 
@@ -32,6 +34,12 @@ export const SOUNDBOARD_USER_CONCURRENCY = 3;
 export interface SoundboardPlayGate {
   /** The `soundboard` runtime flag for the call's server, read now. */
   enabled: boolean;
+  /**
+   * Deafened: you would play a clip you cannot hear. Discord refuses the
+   * same (`deaf` / `self_deaf` on its send rule). Self-mute is allowed,
+   * there and here.
+   */
+  deafened: boolean;
   /** Resolved `USE_SOUNDBOARD`. False in a DM. */
   canUseSoundboard: boolean;
   /** The seat's `canSpeak`, after audience mode. Self-mute is not this. */
@@ -45,6 +53,7 @@ export interface SoundboardPlayGate {
 export function soundboardPlayAllowed(gate: SoundboardPlayGate): boolean {
   return (
     gate.enabled &&
+    !gate.deafened &&
     gate.canUseSoundboard &&
     gate.canSpeak &&
     !gate.serverMuted &&
@@ -61,6 +70,44 @@ const active = new Map<string, ActivePlay[]>();
 
 export function resetSoundboardPlays(): void {
   active.clear();
+  buckets.clear();
+}
+
+/**
+ * A rate, on top of the overlap caps. The caps alone let one person replay
+ * a short clip back to back for as long as they like (a 2 s laugh, about
+ * 1.4 a second, forever). Five plays, then one every two seconds: mashing a
+ * few in a row works, a sustained horn does not. The client keeps the same
+ * budget so a refused click is told at once rather than after the echo wait.
+ */
+export { SOUNDBOARD_PLAY_BURST, SOUNDBOARD_PLAY_REFILL_MS };
+
+const buckets = new Map<string, { tokens: number; at: number }>();
+
+function takePlayToken(
+  userId: string,
+  now: number,
+  options: { force?: boolean } = {},
+): boolean {
+  const bucket = buckets.get(userId) ?? { tokens: SOUNDBOARD_PLAY_BURST, at: now };
+  const earned = Math.floor((now - bucket.at) / SOUNDBOARD_PLAY_REFILL_MS);
+  if (earned > 0) {
+    bucket.tokens = Math.min(SOUNDBOARD_PLAY_BURST, bucket.tokens + earned);
+    bucket.at += earned * SOUNDBOARD_PLAY_REFILL_MS;
+  }
+  if (bucket.tokens >= SOUNDBOARD_PLAY_BURST) {
+    // A full bucket banks no time: the next refill counts from now.
+    bucket.at = now;
+  }
+  if (bucket.tokens <= 0 && !options.force) {
+    buckets.set(userId, bucket);
+    return false;
+  }
+  // A play the other machine admitted still spends this person's budget
+  // here, so switching machines does not reset it. Never below zero.
+  bucket.tokens = Math.max(0, bucket.tokens - 1);
+  buckets.set(userId, bucket);
+  return true;
 }
 
 function livePlays(channelId: string, now: number): ActivePlay[] {
@@ -107,6 +154,7 @@ export function noteRemoteSoundboardPlay(input: {
   now?: number;
 }): void {
   const now = input.now ?? Date.now();
+  takePlayToken(input.userId, now, { force: true });
   const plays = livePlays(input.channelId, now);
   const duration = Math.min(
     SOUNDBOARD_MAX_DURATION_MS,
@@ -116,10 +164,15 @@ export function noteRemoteSoundboardPlay(input: {
   active.set(input.channelId, plays);
 }
 
-/** Drop finished plays in rooms that have gone quiet. */
+/** Drop finished plays in rooms that have gone quiet, and full budgets. */
 export function sweepSoundboardPlays(now = Date.now()): void {
   for (const channelId of [...active.keys()]) {
     livePlays(channelId, now);
+  }
+  for (const [userId, bucket] of buckets) {
+    if (now - bucket.at >= SOUNDBOARD_PLAY_BURST * SOUNDBOARD_PLAY_REFILL_MS) {
+      buckets.delete(userId);
+    }
   }
 }
 
@@ -142,6 +195,9 @@ export function offerSoundboardPlay(input: {
 }): boolean {
   const plays = livePlays(input.channelId, input.now);
   if (soundboardRoomFull(input.channelId, input.now, input.userId)) {
+    return false;
+  }
+  if (!takePlayToken(input.userId, input.now)) {
     return false;
   }
   plays.push({

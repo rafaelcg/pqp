@@ -2,6 +2,8 @@ import {
   soundboardBuiltin,
   SOUNDBOARD_BUILTINS,
   SOUNDBOARD_MAX_DURATION_MS,
+  SOUNDBOARD_PLAY_BURST,
+  SOUNDBOARD_PLAY_REFILL_MS,
   type SoundboardSound,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
@@ -14,6 +16,7 @@ import {
 
 const VOLUME_KEY = "pqp:soundboard-volume";
 const MUTE_KEY = "pqp:soundboard-muted";
+const MUTED_USERS_KEY = "pqp:soundboard-muted-users";
 const MARK_MS = 2200;
 /**
  * How long a click waits for the room's echo before it counts as refused.
@@ -68,13 +71,14 @@ let refusedUntil = 0;
 let refusedKind: "refused" | "removed" = "refused";
 
 /**
- * A local throttle in front of the socket. Holding Enter on a tile repeats
- * about thirty times a second, which spends the socket's whole frame budget
- * and gets it closed. The server's per-person cap would refuse all of those
- * plays anyway, so they are never sent.
+ * A local copy of the server's play budget, in front of the socket. Holding
+ * Enter on a tile repeats about thirty times a second, which spends the
+ * socket's whole frame budget and gets it closed, and the server would
+ * refuse all of those plays anyway. So they are never sent, and the person
+ * is told at once.
  */
-const SEND_BURST = 4;
-const SEND_REFILL_MS = 700;
+const SEND_BURST = SOUNDBOARD_PLAY_BURST;
+const SEND_REFILL_MS = SOUNDBOARD_PLAY_REFILL_MS;
 let sendTokens = SEND_BURST;
 let sendRefilledAt = 0;
 
@@ -220,6 +224,64 @@ export function useSoundboardMuted(): [boolean, (muted: boolean) => void] {
     (next) => {
       setSoundboardMuted(next);
       setMuted(next);
+    },
+  ];
+}
+
+/**
+ * People whose clips this machine does not play or mark. Discord has only
+ * the one global slider; muting the one person who will not stop is the
+ * thing its users keep asking for. Local, like every listener setting.
+ */
+let mutedUsersCache: Set<string> | null = null;
+
+function mutedUsers(): Set<string> {
+  if (mutedUsersCache) {
+    return mutedUsersCache;
+  }
+  let ids: string[] = [];
+  try {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(MUTED_USERS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    ids = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    ids = [];
+  }
+  mutedUsersCache = new Set(ids);
+  return mutedUsersCache;
+}
+
+export function isSoundboardUserMuted(userId: string): boolean {
+  return mutedUsers().has(userId);
+}
+
+export function setSoundboardUserMuted(userId: string, muted: boolean): void {
+  const next = new Set(mutedUsers());
+  if (muted) {
+    next.add(userId);
+  } else {
+    next.delete(userId);
+  }
+  mutedUsersCache = next;
+  try {
+    localStorage.setItem(MUTED_USERS_KEY, JSON.stringify([...next]));
+  } catch {
+    // Private mode: the mute holds for this page only.
+  }
+  notify();
+}
+
+export function useSoundboardUserMuted(
+  userId: string | undefined,
+): [boolean, (muted: boolean) => void] {
+  const [, bump] = useState(0);
+  useEffect(() => subscribe(() => bump((n) => n + 1)), []);
+  return [
+    userId ? isSoundboardUserMuted(userId) : false,
+    (muted) => {
+      if (userId) {
+        setSoundboardUserMuted(userId, muted);
+      }
     },
   ];
 }

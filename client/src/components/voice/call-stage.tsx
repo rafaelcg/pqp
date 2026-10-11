@@ -3520,13 +3520,20 @@ export function CallControls({
       )}
       <SoundboardControl
         serverId={serverId}
-        // A clip is speech by other means: a locked mic (a closed watch
-        // party floor, audience mode) or a moderator mute locks the board
-        // too. The server refuses the play either way.
-        canUse={
-          voiceState.canUseSoundboard &&
-          voiceState.canSpeak &&
-          voiceState.self?.serverMuted !== true
+        canUse={voiceState.canUseSoundboard}
+        // A clip is speech by other means: whatever silences the person
+        // locks the board too, and the button says which. The server
+        // refuses the play either way. Self-mute does not, as on Discord.
+        lock={
+          voiceState.isDeafened
+            ? "deafened"
+            : voiceState.self?.serverMuted === true
+              ? "serverMuted"
+              : !voiceState.canSpeak
+                ? voiceState.speakReason === "audience"
+                  ? "audience"
+                  : "micLocked"
+                : null
         }
         canManage={voiceState.canManageSoundboard}
         size={size}
@@ -4227,6 +4234,7 @@ function RoomFace({
         open={menu.open}
         voice={audio?.voice}
         share={audio?.share}
+        soundboardUserId={audio?.voice ? person.userId : undefined}
         failed={person.failed}
         onRetry={person.onRetry}
         side="bottom"
@@ -4423,6 +4431,7 @@ function BannerFace({ person }: { person: OccupantFace }) {
         open={menu.open}
         voice={voice}
         share={share}
+        soundboardUserId={voice ? person.userId : undefined}
         failed={person.failed}
         onRetry={person.onRetry}
         side="bottom"

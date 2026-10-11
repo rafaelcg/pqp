@@ -49,6 +49,7 @@ vi.mock("@/lib/sounds", () => ({
 }));
 
 const { SoundboardControl } = await import("./soundboard-control");
+const { SOUNDBOARD_PLAY_BURST } = await import("@pqp/shared");
 const {
   noteOwnSoundboardEcho,
   registerSoundboardSender,
@@ -60,7 +61,7 @@ let root: Root | null = null;
 let unregister: (() => void) | null = null;
 const sent: string[] = [];
 
-function mount() {
+function mount(lock: "deafened" | "serverMuted" | "audience" | "micLocked" | null = null, canManage = false) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -70,7 +71,8 @@ function mount() {
         <SoundboardControl
           serverId="00000000-0000-4000-8000-000000000001"
           canUse
-          canManage={false}
+          canManage={canManage}
+          lock={lock}
           size="h-10 w-10"
           iconSize="h-5 w-5"
         />
@@ -255,7 +257,7 @@ describe("holding a key or mashing the board", () => {
     for (let i = 0; i < 10; i += 1) {
       act(() => tiles()[0]!.click());
     }
-    expect(sent.length).toBeLessThanOrEqual(4);
+    expect(sent.length).toBe(SOUNDBOARD_PLAY_BURST);
     expect(status.textContent).not.toBe("");
   });
 
@@ -308,5 +310,46 @@ describe("the clip list follows the server", () => {
     const status = panel()!.querySelector("[role='status']")!;
     expect(status.textContent).toMatch(/removed|removido|eliminado/i);
     expect(tiles()).toHaveLength(6);
+  });
+});
+
+describe("a board locked for a reason that will pass", () => {
+  it("stays visible, does not open, and says why", () => {
+    mount("deafened");
+    const button = trigger();
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-label")).not.toBeNull();
+    act(() => button.click());
+    expect(panel()).toBeNull();
+  });
+});
+
+describe("moving around the board", () => {
+  it("moves between tiles with the arrow keys and keeps one tile in the Tab order", () => {
+    mount();
+    open();
+    const all = tiles();
+    expect(all.filter((tile) => tile.tabIndex === 0)).toHaveLength(1);
+    expect(document.activeElement).toBe(all[0]);
+    press("ArrowRight");
+    expect(document.activeElement).toBe(all[1]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(all[4]);
+    press("End");
+    expect(document.activeElement).toBe(all.at(-1));
+    press("Home");
+    expect(document.activeElement).toBe(all[0]);
+    press("ArrowLeft");
+    expect(document.activeElement).toBe(all[0]);
+  });
+
+  it("shows how many slots are used next to Add", async () => {
+    board.sounds = [customSound("33333333-3333-4333-8333-333333333333", "Um")];
+    mount(null, true);
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(panel()!.textContent).toMatch(/1 (de|of) 24/);
   });
 });
