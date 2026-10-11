@@ -705,6 +705,12 @@ import { feedAudienceCount } from "@/lib/watch-party-activity";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
+import type { StoryCallLive } from "@pqp/shared";
+import { StoriesHost } from "@/components/stories/stories-host";
+import { StoryStrip } from "@/components/stories/story-strip";
+import { emitStoriesRefresh, emitStoriesUpdate } from "@/lib/stories/events";
+import { openStoryComposer } from "@/lib/stories/ui-store";
+import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -2606,6 +2612,11 @@ function MainAppContent({
   const selectedServerId = selectionServerId(selection);
   const selectedServerIdRef = useRef<string | null>(null);
   selectedServerIdRef.current = selectedServerId;
+  // The open server's strip answered `enabled` (its `stories` flag is on):
+  // the server menu offers "Postar story" only then.
+  const storiesOnHere = useStoriesEnabledFor(
+    selectedServerId ? { kind: "server", serverId: selectedServerId } : null,
+  );
   const serversRef = useRef(servers);
   serversRef.current = servers;
   const channelsRef = useRef(channels);
@@ -5318,10 +5329,11 @@ function MainAppContent({
             return;
           }
 
-          // Stories: a strip to refetch. Nothing draws stories on the web yet
-          // (the strip lands in its own PR), so the frame is taken here and
-          // goes no further: it is a chat frame, not a voice one.
+          // Stories: content-free, it names a strip to refetch (and maybe
+          // ids an open viewer can drop). The strips and the viewer listen
+          // on `lib/stories/events.ts`; nothing here knows what they draw.
           if (message.type === "stories-update") {
+            emitStoriesUpdate(message);
             return;
           }
 
@@ -5673,6 +5685,12 @@ function MainAppContent({
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
+          // Stories frames sent while the socket was down are gone; the
+          // strips on screen re-read, after the same jitter.
+          setTimeout(
+            emitStoriesRefresh,
+            uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS),
+          );
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -9889,6 +9907,38 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  // Stories: who is signed in (for "Teu story"), and the voice rooms of the
+  // open server, for the composer's "Chama pra call" picker. Plain values,
+  // not memos: this is past the early returns, where no hook may run.
+  const storiesSelf = user
+    ? { id: user.id, displayName: user.displayName, avatarUrl: user.avatarUrl ?? null }
+    : null;
+  const storiesVoiceRooms = selectedServer
+    ? {
+        serverId: selectedServer.id,
+        serverName: selectedServer.name,
+        rooms: channels
+          .filter((channel) => channel.type === "voice")
+          .map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            occupants: (voiceState.occupancy[channel.id] ?? []).map((person) => ({
+              id: person.userId,
+              displayName: person.displayName,
+            })),
+          })),
+      }
+    : null;
+  /** "Entrar na call" on a story's sticker: the same join as the sidebar's. */
+  function handleStoryJoinCall(call: StoryCallLive) {
+    if (call.serverId === selectedServerIdRef.current) {
+      handleJoinVoiceFromList(call.channelId);
+      return;
+    }
+    void applyChannelRoute(call.serverId, call.channelId).then(() => {
+      guardVoiceJoin(call.channelId, () => handleJoinVoice(call.channelId));
+    });
+  }
   /** The open channel is a watch party that is on air right now. */
   const selectedPartyLive =
     selectedChannel?.kind === "server" &&
@@ -12258,6 +12308,11 @@ function MainAppContent({
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
           footer={sidebarFooter(false, { userPanel: !phoneShell })}
+          storiesSlot={
+            storiesSelf ? (
+              <StoryStrip audience={{ kind: "friends" }} me={storiesSelf} />
+            ) : null
+          }
         />
       ) : (
         <ChannelList
@@ -12392,6 +12447,26 @@ function MainAppContent({
           communityHomePreview={communityHomePreviewProps}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}
+          storiesSlot={
+            selectedServer && storiesSelf ? (
+              <StoryStrip
+                audience={{
+                  kind: "server",
+                  serverId: selectedServer.id,
+                  serverName: selectedServer.name,
+                }}
+                me={storiesSelf}
+              />
+            ) : null
+          }
+          onPostStory={
+            selectedServer && storiesOnHere && perms.can(Permission.POST_STORIES)
+              ? () =>
+                  openStoryComposer({
+                    context: { kind: "server", serverId: selectedServer.id },
+                  })
+              : undefined
+          }
         />
       )}
 
@@ -13138,6 +13213,20 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
+      />
+
+      <StoriesHost
+        me={storiesSelf}
+        bauEnabled={communityHomeEnabled}
+        voiceRooms={storiesVoiceRooms}
+        onJoinCall={handleStoryJoinCall}
+        onOpenRoles={(serverId) => {
+          if (serverId !== selectedServerIdRef.current) {
+            return;
+          }
+          setServerSettingsSection("roles");
+          setServerSettingsOpen(true);
+        }}
       />
 
       <ForwardDialog
