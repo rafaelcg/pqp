@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { GripVertical, Plus, Smile, Trash2 } from "lucide-react";
 import { FORUM_MAX_TAGS, FORUM_TAG_NAME_MAX } from "@pqp/shared";
 import { Badge } from "@/components/ui/badge";
@@ -108,8 +115,7 @@ export function ForumTagsSection({
     setDropIndex(after ? index + 1 : index);
   }
 
-  function onRowDrop(event: DragEvent<HTMLLIElement>) {
-    event.preventDefault();
+  function commitDrop() {
     if (dragKey !== null && dropIndex !== null) {
       const from = draft.rows.findIndex((row) => row.key === dragKey);
       // Dropping below itself moves past one fewer row once it is lifted out.
@@ -117,6 +123,51 @@ export function ForumTagsSection({
     }
     setDragKey(null);
     setDropIndex(null);
+  }
+
+  function onRowDrop(event: DragEvent<HTMLLIElement>) {
+    event.preventDefault();
+    commitDrop();
+  }
+
+  /**
+   * A finger on the handle. HTML drag and drop never starts from a touch,
+   * so a phone drags with pointer events instead: the handle holds the
+   * pointer, and the drop line follows the finger across the rows' midpoints.
+   * A mouse keeps the native drag above.
+   */
+  const listRef = useRef<HTMLUListElement>(null);
+  function onHandlePointerDown(event: PointerEvent<HTMLButtonElement>, row: TagDraftRow) {
+    if (event.pointerType === "mouse") {
+      return;
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // A pointer the browser no longer tracks: the move events still reach
+      // the handle while the finger stays on it.
+    }
+    setDragKey(row.key);
+  }
+  function onHandlePointerMove(event: PointerEvent<HTMLButtonElement>) {
+    if (dragKey === null || event.pointerType === "mouse") {
+      return;
+    }
+    const items = [...(listRef.current?.querySelectorAll("[data-forum-tag-row]") ?? [])];
+    let index = 0;
+    for (const item of items) {
+      const box = item.getBoundingClientRect();
+      if (event.clientY > box.top + box.height / 2) {
+        index += 1;
+      }
+    }
+    setDropIndex(index);
+  }
+  function onHandlePointerUp(event: PointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "mouse") {
+      return;
+    }
+    commitDrop();
   }
 
   function requestDelete(row: TagDraftRow) {
@@ -232,7 +283,7 @@ export function ForumTagsSection({
             </span>
           </div>
 
-          <ul role="list" onDragLeave={() => setDropIndex(null)}>
+          <ul ref={listRef} role="list" onDragLeave={() => setDropIndex(null)}>
             {draft.rows.map((row, index) => {
               const problem = problems.get(row.key);
               const length = Array.from(row.name).length;
@@ -276,7 +327,14 @@ export function ForumTagsSection({
                           setDropIndex(null);
                         }}
                         onKeyDown={(event) => onHandleKey(event, row)}
-                        className="flex h-11 w-6 shrink-0 sm:h-8 cursor-grab items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:cursor-grabbing"
+                        onPointerDown={(event) => onHandlePointerDown(event, row)}
+                        onPointerMove={onHandlePointerMove}
+                        onPointerUp={onHandlePointerUp}
+                        onPointerCancel={() => {
+                          setDragKey(null);
+                          setDropIndex(null);
+                        }}
+                        className="flex h-11 w-8 shrink-0 touch-none sm:h-8 sm:w-6 cursor-grab items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:cursor-grabbing"
                       >
                         <GripVertical className="h-4 w-4" aria-hidden="true" />
                       </button>

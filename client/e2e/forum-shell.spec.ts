@@ -561,6 +561,67 @@ test.describe("forum shell", () => {
     await context.close();
   });
 
+  test("on a phone, a finger on the handle reorders the tags", async ({ browser }) => {
+    const seeded = await seed({ forumsOn: true });
+    const { channel } = await api<{ channel: { id: string } }>(
+      OWNER,
+      `/api/servers/${seeded.serverId}/channels`,
+      { method: "POST", body: JSON.stringify({ name: "ajuda", type: "forum" }) },
+    );
+    const forum: MockForum = {
+      tags: ["Dúvida", "Bug", "Games", "Tutorial"].map((name, position) => ({
+        id: uuid(position + 1),
+        name,
+        emoji: null,
+        moderated: false,
+        position,
+        postCount: 0,
+      })),
+      settings: { requireTag: false, defaultSort: "activity" },
+      puts: [],
+      patches: [],
+      posts: new Map(),
+    };
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await page.addInitScript((value) => {
+      localStorage.setItem("pqp:dev-user-suffix", value);
+    }, OWNER);
+    await mockForumApi(page, forum);
+    await page.goto(`/app/server/${seeded.serverId}/channel/${channel.id}?lang=${LANG}`);
+    await expect(page.locator("[data-forum-pane]")).toBeVisible({ timeout: 20_000 });
+    await page.locator('button[aria-label="' + (LANG === "en" ? "Open navigation" : "Abrir navegação") + '"]:visible').first().click();
+    await forumRow(page, "ajuda").getByRole("button", { name: COPY.channelSettings }).click();
+    const settings = page.getByRole("dialog");
+    await settings.getByRole("tab", { name: COPY.tags }).click();
+    const rows = settings.locator("[data-forum-tag-row]");
+    await expect(rows).toHaveCount(4);
+
+    // Drag "Dúvida" from the top to below "Games" with touch pointer events.
+    const handle = rows.nth(0).getByRole("button").first();
+    const target = await rows.nth(2).boundingBox();
+    const start = await handle.boundingBox();
+    const base = { pointerId: 7, pointerType: "touch", isPrimary: true, bubbles: true };
+    await handle.dispatchEvent("pointerdown", { ...base, clientX: start!.x + 4, clientY: start!.y + 4 });
+    await handle.dispatchEvent("pointermove", {
+      ...base,
+      clientX: start!.x + 4,
+      clientY: target!.y + target!.height - 2,
+    });
+    await handle.dispatchEvent("pointerup", {
+      ...base,
+      clientX: start!.x + 4,
+      clientY: target!.y + target!.height - 2,
+    });
+    await expect(rows.nth(2).getByRole("textbox")).toHaveValue("Dúvida");
+    await expect(rows.nth(0).getByRole("textbox")).toHaveValue("Bug");
+    await context.close();
+  });
+
   test("a chat thread's own id opens its channel with the thread on top (the old dead link)", async ({
     browser,
   }) => {
