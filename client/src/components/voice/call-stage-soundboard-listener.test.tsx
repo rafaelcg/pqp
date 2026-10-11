@@ -101,6 +101,41 @@ describe("the collapsed call bar's faces", () => {
     expect(switchRow()).not.toBeNull();
   });
 
+  it("gives every face and the count a 40px target on a coarse pointer, none sharing a pixel", () => {
+    const faces = ["Ana", "Bia", "Cai", "Duda"].map((n) => face(n));
+    mount(<OccupantFaces faces={faces} />);
+    const targets = [...host!.querySelectorAll<HTMLElement>("[data-banner-target]")];
+    expect(targets).toHaveLength(4);
+    for (const target of targets) {
+      expect(target.className).toContain("pointer-coarse:h-10");
+      expect(target.className).toMatch(/pointer-coarse:(min-)?w-10|pointer-coarse:min-w-10/);
+    }
+    // Each target is 40px wide and the stack stops overlapping them on touch
+    // (the desktop overlap stays), so the boxes sit edge to edge.
+    const stack = targets[0]!.closest("span.flex")!;
+    expect(stack.className).toContain("-space-x-2");
+    expect(stack.className).toContain("pointer-coarse:space-x-0");
+  });
+
+  it("does not list ourselves behind the count", () => {
+    const faces = [
+      face("Ana"),
+      face("Bia"),
+      face("Cai"),
+      face("Eu", { isSelf: true, soundboardUserId: undefined, onSetVolume: undefined }),
+      face("Duda"),
+    ];
+    mount(<OccupantFaces faces={faces} />);
+    const more = host!.querySelector<HTMLButtonElement>('[data-testid="call-bar-more"]')!;
+    expect(more.textContent).toBe("+1");
+    act(() => more.click());
+    const list = document.querySelector<HTMLElement>('[data-testid="call-bar-people"]')!;
+    const names = [...list.querySelectorAll('[data-testid="call-bar-person"]')].map(
+      (p) => p.lastElementChild?.textContent,
+    );
+    expect(names).toEqual(["Duda"]);
+  });
+
   it("closes the list on Escape and hands the focus back to the count", () => {
     const faces = ["Ana", "Bia", "Cai", "Duda"].map((n) => face(n));
     mount(<OccupantFaces faces={faces} />);

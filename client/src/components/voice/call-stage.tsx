@@ -1727,6 +1727,7 @@ function ActiveCall({
               const isSelf = person.peerId === voiceState.peerId;
               return {
                 key: person.peerId,
+                isSelf,
                 userId: person.userId,
                 // Never for ourselves, and not in a DM or with the board off.
                 soundboardUserId:
@@ -1748,6 +1749,7 @@ function ActiveCall({
             })
           : allPeople.map((person) => ({
               key: person.key,
+              isSelf: person.isSelf,
               userId: person.userId,
               soundboardUserId: person.isSelf
                 ? undefined
@@ -1772,7 +1774,7 @@ function ActiveCall({
         ),
       });
       return (
-        <div className="flex h-9 min-w-0 items-center gap-2">
+        <div className="flex h-9 min-w-0 items-center gap-2 pointer-coarse:h-10">
           <OccupantFaces faces={people} />
           <p
             className="min-w-0 flex-1 truncate text-sm leading-none text-text"
@@ -4404,6 +4406,8 @@ function TileBadge({
 
 export interface OccupantFace {
   key: string;
+  /** This is us. Our own menu has no switch, so we are not listed under "+N". */
+  isSelf?: boolean;
   userId?: string;
   /**
    * Set where this person's soundboard clips can be muted: somebody else, in a
@@ -4441,10 +4445,13 @@ function faceActionable(person: OccupantFace): boolean {
  */
 export function OccupantFaces({ faces }: { faces: OccupantFace[] }) {
   const interactive = faces.some(faceActionable);
-  const rest = faces.slice(BANNER_FACES);
+  // Ourselves are never listed behind the count: our own menu has no switch.
+  const rest = faces.slice(BANNER_FACES).filter((person) => !person.isSelf);
   return (
     <span
-      className="flex shrink-0 -space-x-2"
+      // On a touch screen the faces stop overlapping: each one is a 40px
+      // target, and two targets must not share a pixel.
+      className="flex shrink-0 -space-x-2 pointer-coarse:space-x-0"
       aria-hidden={interactive ? undefined : true}
     >
       {faces.slice(0, BANNER_FACES).map((person) => (
@@ -4457,6 +4464,13 @@ export function OccupantFaces({ faces }: { faces: OccupantFace[] }) {
 
 const BANNER_CHIP_CLASS =
   "relative inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-ink-3 px-1.5 text-[10px] font-semibold tabular-nums text-paper-muted ring-1 ring-ink-4";
+
+/**
+ * The touch target of a face or the count on the collapsed bar: the drawn
+ * circle stays 24px, the button around it is 40px on a coarse pointer.
+ */
+const BANNER_TARGET_CLASS =
+  "inline-flex shrink-0 items-center justify-center pointer-coarse:h-10 pointer-coarse:min-w-10";
 
 /**
  * The "+N" after the three faces. Pressed, it lists everybody the bar had no
@@ -4488,16 +4502,24 @@ function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
         ref={triggerRef}
         type="button"
         data-testid="call-bar-more"
+        data-banner-target=""
         aria-haspopup="dialog"
         aria-expanded={menu.open}
         aria-label={t("voice.audio.moreFaces", { count: faces.length })}
         className={cn(
-          BANNER_CHIP_CLASS,
-          "hover:bg-ink-4 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal",
+          BANNER_TARGET_CLASS,
+          "group rounded-full focus:outline-none",
         )}
         onClick={menu.toggle}
       >
-        +{faces.length}
+        <span
+          className={cn(
+            BANNER_CHIP_CLASS,
+            "group-hover:bg-ink-4 group-hover:text-paper group-focus-visible:ring-2 group-focus-visible:ring-signal",
+          )}
+        >
+          +{faces.length}
+        </span>
       </button>
       {menu.open && !picked && (
         <AnchoredPanel
@@ -4587,31 +4609,38 @@ function BannerFace({ person }: { person: OccupantFace }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuProps = faceMenuProps(person);
   const actionable = faceActionable(person);
+  // The badge belongs to the drawn face, not to the larger touch target.
   const avatar = (
-    <VoiceAvatar
-      name={person.displayName}
-      avatarUrl={person.avatarUrl}
-      size="sm"
-      isSpeaking={person.speaking}
-    />
+    <span className="relative inline-flex rounded-full">
+      <SoundboardFloat userId={person.userId} size="sm" />
+      <VoiceAvatar
+        name={person.displayName}
+        avatarUrl={person.avatarUrl}
+        size="sm"
+        isSpeaking={person.speaking}
+      />
+    </span>
   );
   return (
     <span ref={menu.rootRef} className="relative inline-flex">
-      <SoundboardFloat userId={person.userId} size="sm" />
       {actionable ? (
         <button
           ref={triggerRef}
           type="button"
+          data-banner-target=""
           aria-haspopup="dialog"
           aria-expanded={menu.open}
           aria-label={t("voice.audio.title", { name: person.displayName })}
-          className="inline-flex rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-signal"
+          className={cn(
+            BANNER_TARGET_CLASS,
+            "rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-signal",
+          )}
           onClick={menu.toggle}
         >
           {avatar}
         </button>
       ) : (
-        avatar
+        <span className={BANNER_TARGET_CLASS}>{avatar}</span>
       )}
       <PeerAudioMenu
         name={person.displayName}

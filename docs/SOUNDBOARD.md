@@ -178,14 +178,19 @@ menu opens from:
   focus to the row),
 - their chip in the listener row under the stage,
 - their face on the collapsed call bar,
-- the "+N" after the three faces on that bar, which lists the rest and opens
-  the picked person's menu,
+- the "+N" after the three faces on that bar, which lists the rest (not
+  yourself) and opens the picked person's menu,
 - the room view, and the overlay of their camera or screen tile.
 
 The row is there for any other person in a server call whose board is on,
 even when their voice track failed or has not started: their clips arrive
 over the voice socket, not over the voice track. It is never there for
 yourself, and never in a DM.
+
+On a coarse pointer each face and the "+N" is a 40px target and the faces no
+longer overlap, so a tap never lands on the neighbour. The drawn faces stay
+24px. The bar grows from 36px to 40px tall there. On a desktop the faces still
+overlap.
 
 The call bar's menu is drawn outside the bar, fixed beside the face. It opens
 upward and flips when there is no room, so the bar's hidden overflow cannot
@@ -240,16 +245,27 @@ the window is under 640px wide or under 520px tall. The height half is what
 catches a phone on its side, which is wide but short. The sheet sits above the
 call bar, not over it, so the mic and the other controls stay usable. It is up
 to 640px wide, with as many columns as fit tiles at least 76px wide (up to
-six), and has a close button. Tapping outside it also closes it. On a larger
+six), and has a close button. The header has its own fixed 40px line and never
+shrinks, with the close button in it, so the button never sits over a tile.
+When the room above the call bar is too small for two rows of tiles (a phone on
+its side), the sheet takes that room: it covers the call bar and the close
+button is one tap away. In a window 480px tall or less the chrome is also
+tighter. Any window 300px tall or more shows at least two rows. Tapping outside it also closes it. On a larger
 window the board stays the popover, anchored to the button, with three
 columns. Both measure their natural height each time the window changes, so a
-panel placed in a short window grows back when the window gets taller.
+panel placed in a short window grows back when the window gets taller. The
+measure reads the grid's content height and never lifts the panel's cap: lifting
+it made the browser reset the grid's scroll position, and a scroll inside the
+grid ran the measure, so the grid could not scroll. A scroll inside the panel
+does not place it again. Arrow keys, Home and End scroll the focused tile into
+view.
 
 On a coarse pointer, and always in the sheet, the mute button, the volume
 slider's hit area and Add are at least 40px. The drawn slider track and thumb
 do not change.
 
-The "didn't play" notice is a soft warning fill with a small alert icon. Its
+The "didn't play" notice is a soft warning fill with a small alert icon. In the
+sheet it wraps to a second line on a very narrow screen instead of being cut. Its
 text uses the soft warning text token, which the design bench measures at 4.5:1
 in every theme. It does not rely on colour alone.
 
