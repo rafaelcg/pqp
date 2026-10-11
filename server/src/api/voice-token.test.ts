@@ -50,7 +50,11 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { resetVoicePeers, resetVoiceRoomTransports } = await import(
+const {
+  pinRoomTransportLocallyForTests,
+  resetVoicePeers,
+  resetVoiceRoomTransports,
+} = await import(
   "../ws/voice.js"
 );
 const { mintVoiceResumeToken } = await import("../ws/voice-resume-token.js");
@@ -345,6 +349,57 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
       resumeToken: tokenFor(member.id, peerId),
     });
     expect(refused.status).toBe(409);
+  });
+
+  describe("a promotion this replica has not heard yet", () => {
+    // Two replicas, seats on both. The other one promoted the room: it wrote
+    // `livekit` into the row and told its own seats, who ask for a token at
+    // once. This replica still holds `mesh` in its map because the bus frame
+    // has not arrived. A 409 here hung up a call that had just been moved.
+    it("mints when the row says the room moved, whatever the local pin says", async () => {
+      process.env.VOICE_REGISTRY = "postgres";
+      const peerId = randomUUID();
+      await pinVoiceRoom(voiceChannelId, "livekit");
+      pinRoomTransportLocallyForTests(voiceChannelId, "mesh");
+
+      const minted = await call<{ identity: string }>(
+        member,
+        "POST",
+        "/api/voice/token",
+        { voiceChannelId, peerId, resumeToken: tokenFor(member.id, peerId) },
+      );
+      expect(minted.status).toBe(200);
+      expect(minted.body.identity).toBe(peerId);
+    });
+
+    it("still refuses a room that is mesh in the row too", async () => {
+      process.env.VOICE_REGISTRY = "postgres";
+      const peerId = randomUUID();
+      await pinVoiceRoom(voiceChannelId, "mesh");
+      pinRoomTransportLocallyForTests(voiceChannelId, "mesh");
+
+      const refused = await call(member, "POST", "/api/voice/token", {
+        voiceChannelId,
+        peerId,
+        resumeToken: tokenFor(member.id, peerId),
+      });
+      expect(refused.status).toBe(409);
+    });
+
+    it("does not read the row with the registry off", async () => {
+      // One process: its map is the whole truth, and a row left over from a
+      // registry that is now off must not overrule it.
+      const peerId = randomUUID();
+      await pinVoiceRoom(voiceChannelId, "livekit");
+      pinRoomTransportLocallyForTests(voiceChannelId, "mesh");
+
+      const refused = await call(member, "POST", "/api/voice/token", {
+        voiceChannelId,
+        peerId,
+        resumeToken: tokenFor(member.id, peerId),
+      });
+      expect(refused.status).toBe(409);
+    });
   });
 });
 

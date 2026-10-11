@@ -3253,6 +3253,26 @@ router.post("/api/voice/token", async ({ req, user }) => {
     } else {
       transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
     }
+  } else if (
+    transport !== "livekit" &&
+    isVoiceRegistryEnabled() &&
+    isRoomPinnedLocally(body.voiceChannelId)
+  ) {
+    // A PROMOTION THIS REPLICA HAS NOT HEARD YET. A mid-call promotion
+    // (`promoteRoomPastMeshCap` in ws/voice.ts) rewrites the room row first
+    // and tells the cluster second, over the bus. The seats on the replica
+    // that decided it are told at once and ask for a token at once, and HTTP
+    // is balanced per request, so the ask can land here, on a replica that
+    // holds seats in the room and still has `mesh` in its own map because
+    // the bus frame is a few milliseconds behind. Answering 409 there hung
+    // up a person whose call had just been moved for them. The row is the
+    // authority the promotion wrote, so a local `mesh` is checked against it
+    // before refusing. Only on this refusal path: a room that is really mesh
+    // pays one indexed read to be refused, everyone else pays nothing.
+    const stored = await readVoiceRoomTransport(body.voiceChannelId);
+    if (stored === "livekit") {
+      transport = stored;
+    }
   }
   if (transport !== "livekit") {
     throw new HttpError(409, "This room runs peer-to-peer");
