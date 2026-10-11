@@ -21,11 +21,24 @@ interface NewDmDialogProps {
   home?: boolean;
   /** For Nova conversa's Recentes section. */
   conversations?: readonly DmSummary[];
+  /** Nova conversa: made after the dialog was dismissed; list it, do not open it. */
+  onCreatedInBackground?: (conversation: DmSummary) => void;
 }
 
-export function NewDmDialog({ home = false, conversations = [], ...props }: NewDmDialogProps) {
+export function NewDmDialog({
+  home = false,
+  conversations = [],
+  onCreatedInBackground,
+  ...props
+}: NewDmDialogProps) {
   if (home) {
-    return <NewConversationDialog {...props} conversations={conversations} />;
+    return (
+      <NewConversationDialog
+        {...props}
+        conversations={conversations}
+        onCreatedInBackground={onCreatedInBackground}
+      />
+    );
   }
   return <ClassicNewDmDialog {...props} />;
 }
@@ -43,7 +56,7 @@ function ClassicNewDmDialog({
   currentUserId,
   onClose,
   onCreated,
-}: Omit<NewDmDialogProps, "home" | "conversations">) {
+}: Omit<NewDmDialogProps, "home" | "conversations" | "onCreatedInBackground">) {
   const { t } = useTranslation();
   const [picked, setPicked] = useState<PublicUser[]>([]);
   const [busy, setBusy] = useState(false);
