@@ -54,10 +54,11 @@ async function bootInstance(): Promise<Instance> {
   const typing = await import("../services/conversation-typing.js");
   await db.initDb();
   const transport = createPostgresBusTransport(DATABASE_URL);
-  bus.setBusTransport(transport);
-  await transport.whenConnected();
+  // Tracked before anything can fail, so afterAll closes a half-booted one.
   const instance = { bus, db, chat, sockets, users, servers, dms, blocks, typing, transport };
   booted.push(instance);
+  bus.setBusTransport(transport);
+  await transport.whenConnected();
   return instance;
 }
 
