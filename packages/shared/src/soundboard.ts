@@ -44,12 +44,12 @@ export const soundboardContentTypeSchema = z.enum(SOUNDBOARD_CONTENT_TYPES);
  * their own clips. The room cap is the only limit.
  */
 export const SOUNDBOARD_BUILTINS = [
-  { id: "builtin:palmas", emoji: "👏", file: "palmas.wav", durationMs: 4400 },
-  { id: "builtin:risada", emoji: "😄", file: "risada.wav", durationMs: 2200 },
-  { id: "builtin:buzina", emoji: "📣", file: "buzina.wav", durationMs: 3100 },
-  { id: "builtin:grilo", emoji: "🦗", file: "grilo.wav", durationMs: 2408 },
-  { id: "builtin:ba-dum-tss", emoji: "🥁", file: "ba-dum-tss.wav", durationMs: 3100 },
-  { id: "builtin:trombone", emoji: "🎺", file: "trombone.wav", durationMs: 4600 },
+  { id: "builtin:palmas", emoji: "👏", file: "palmas.mp3", durationMs: 4400 },
+  { id: "builtin:risada", emoji: "😄", file: "risada.mp3", durationMs: 2200 },
+  { id: "builtin:buzina", emoji: "📣", file: "buzina.mp3", durationMs: 3100 },
+  { id: "builtin:grilo", emoji: "🦗", file: "grilo.mp3", durationMs: 2408 },
+  { id: "builtin:ba-dum-tss", emoji: "🥁", file: "ba-dum-tss.mp3", durationMs: 3100 },
+  { id: "builtin:trombone", emoji: "🎺", file: "trombone.mp3", durationMs: 4600 },
 ] as const;
 
 export type SoundboardBuiltinId = (typeof SOUNDBOARD_BUILTINS)[number]["id"];
