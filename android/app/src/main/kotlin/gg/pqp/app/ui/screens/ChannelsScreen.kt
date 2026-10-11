@@ -1,77 +1,89 @@
 package gg.pqp.app.ui.screens
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.bau.BauComposeGate
+import gg.pqp.app.bau.BauLatest
+import gg.pqp.app.bau.BauPreviewState
 import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
+import gg.pqp.app.bau.bauLatest
+import gg.pqp.app.bau.bauPreviewState
 import gg.pqp.app.bau.bauUnread
+import gg.pqp.app.bau.ui.BauPreview
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.RealtimeClient
 import gg.pqp.app.core.RealtimeState
+import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.VoiceParticipant
 import gg.pqp.app.core.channelBits
 import gg.pqp.app.core.hasPermission
 import gg.pqp.app.core.serverPermissions
-import gg.pqp.app.social.ui.CountBadge
-import gg.pqp.app.ui.components.Avatar
-import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
-import gg.pqp.app.ui.components.SectionLabel
-import gg.pqp.app.ui.components.pqpTopBarColors
-import gg.pqp.app.ui.theme.Motion
+import gg.pqp.app.ui.screens.channels.CategoryHeader
+import gg.pqp.app.ui.screens.channels.ChannelSection
+import gg.pqp.app.ui.screens.channels.ChannelRow
+import gg.pqp.app.ui.screens.channels.ChannelUnread
+import gg.pqp.app.ui.screens.channels.CompactBarHeight
+import gg.pqp.app.ui.screens.channels.CompactServerBar
+import gg.pqp.app.ui.screens.channels.FoldedCategoriesStore
+import gg.pqp.app.ui.screens.channels.SectionGap
+import gg.pqp.app.ui.screens.channels.ServerBanner
+import gg.pqp.app.ui.screens.channels.ServerBannerHeight
+import gg.pqp.app.ui.screens.channels.VoiceOccupantRow
+import gg.pqp.app.ui.screens.channels.VoiceOverflowRow
+import gg.pqp.app.ui.screens.channels.channelsInCategory
+import gg.pqp.app.ui.screens.channels.foldedSummary
+import gg.pqp.app.ui.screens.channels.mutedChannelIds
+import gg.pqp.app.ui.screens.channels.mutedChannels
+import gg.pqp.app.ui.screens.channels.occupantSummary
+import gg.pqp.app.ui.screens.channels.rowBadge
+import gg.pqp.app.ui.screens.channels.sectionsOf
+import gg.pqp.app.ui.screens.channels.serverActivity
+import gg.pqp.app.ui.screens.channels.serverUnread
+import gg.pqp.app.ui.screens.channels.UnreadLedger
 import gg.pqp.app.ui.theme.PqpIcons
-import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
@@ -85,6 +97,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -94,6 +109,12 @@ import kotlinx.serialization.json.jsonPrimitive
  * span about a minute.
  */
 private const val CHANNELS_REFETCH_TRIES = 8
+
+/** How long the unread list waits before its first settling re-read; doubles after. */
+private const val UNREAD_SETTLE_DELAY_MS = 1_500L
+
+/** Settling re-reads after an overlapped answer: 1.5 s, 3 s, 6 s, 12 s. */
+private const val UNREAD_SETTLE_PASSES = 4
 
 /**
  * Tickets for every fetch of the channel list on this screen: the first load
@@ -142,22 +163,32 @@ internal class ChannelListTickets {
     }
 }
 
+/** The list's item animation: fade and settle on the shared springs, never a slide. */
+private fun Modifier.listMotion(scope: LazyItemScope): Modifier = with(scope) {
+    this@listMotion.animateItem(
+        fadeInSpec = spring(stiffness = 400f),
+        placementSpec = spring(dampingRatio = 0.85f, stiffness = 380f, visibilityThreshold = IntOffset.VisibilityThreshold),
+        fadeOutSpec = spring(stiffness = 600f),
+    )
+}
+
 /**
- * A server's channels.
+ * A server's channels: the "Lista viva".
  *
- * Ordering has one trap in it: `position` is unique only within a sibling
- * group, and top-level text channels, top-level voice channels and categories
- * are three separate groups that all carry `parentId == null`. Sorting them as
- * one list interleaves three sequences of 0, 1, 2. They are rendered as
- * separate sections for that reason, not for looks.
+ * The web sidebar on a phone. The server's banner at the top, shrinking into
+ * a compact bar as the list scrolls; a live watch party as one red card above
+ * everything; the Baú as a card while it has something new and a slim row
+ * once it has been seen; then 40dp rows with no card around them, unread in
+ * bold with a tick, mentions in lime, muted channels dimmed, categories that
+ * fold, and under every voice room the people sitting in it.
  *
- * Visually this is the web app's sidebar on a phone, and it is drawn that way
- * on purpose: chrome at the top carrying the server itself, then uppercase
- * section rules and inset pills on the page below. It is not a settings menu
- * with a title, which is what it read as before, and the difference is almost
- * entirely the app bar and the pill.
+ * Who is talking is drawn only in the room this device is in. Nothing else
+ * reaches this phone: the roster does not carry it, on purpose.
+ *
+ * The pieces live in `ui/screens/channels/` (rows, occupants, banner, rules)
+ * and `bau/ui/BauPreview.kt`, so the next things to land here (forum
+ * channels, a bottom bar) can add a piece rather than grow this file.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChannelsScreen(
     session: SessionStore,
@@ -171,56 +202,37 @@ fun ChannelsScreen(
 ) {
     var channels by remember { mutableStateOf<List<Channel>?>(null) }
 
-    // The Baú row needs two yeses: the instance flag, asked once per session,
-    // and this server's own switch, which rides on the row `/api/servers`
-    // already delivered. Either no, and the row is not drawn; there is
-    // nothing to tap into on a server that would 404 it.
+    // The Baú needs two yeses: the instance flag, asked once per session, and
+    // this server's own switch, which rides on the row `/api/servers` already
+    // delivered. Either no, and nothing is drawn; there is nothing to tap into
+    // on a server that would 404 it.
     val servers by session.servers.collectAsStateWithLifecycle()
+    val server = servers.firstOrNull { it.id == serverId }
     var communityHome by remember { mutableStateOf(CommunityHomeConfig()) }
     LaunchedEffect(session) { communityHome = CommunityHomeConfigs.resolve(session.api) }
-    val showBau = communityHome.enabled &&
-        servers.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
+    val showBau = communityHome.enabled && server?.communityHomeEnabled == true
 
-    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val scope = rememberCoroutineScope()
     val voiceState by voice.state.collectAsStateWithLifecycle()
+    val rooms by voice.rooms.rooms.collectAsStateWithLifecycle()
+    val speakingPeers by voice.speakingPeers.collectAsStateWithLifecycle()
     // Which rooms have a picture on them. The server pushes a `channel-live`
-    // for every live channel this person may see at socket auth, so this is
-    // usually already answered before the list is drawn.
+    // for every live channel this person may see at socket auth.
     val liveChannels by watch.channels.collectAsStateWithLifecycle()
     // The party running (or drafted) in every `watch_party` channel this
-    // account may see, same socket knowledge `WatchChannelPane` already
-    // reads once a channel is open -- here it drives the block above the
-    // categories instead. See `WatchPartyListState.kt`.
+    // account may see. See `WatchPartyListState.kt`.
     val parties by watch.parties.collectAsStateWithLifecycle()
-    // Voice refusals and moderation notices are shown by `PqpApp`, not here:
-    // a join now starts from the chat screen, and a screen share from the call
-    // bar, so this screen is usually not the one on top when the answer lands.
+    val phase by session.phase.collectAsStateWithLifecycle()
+    val me = (phase as? SessionPhase.Ready)?.me
 
-    // Watch-party eligibility: the server's live-hls config
-    // (`GET /api/live-hls/config`, the same route and field the web reads
-    // for "may this server run one at all") and this account's permission
-    // bits (`GET /api/servers/:serverId/permissions`, the exact route and
-    // shape `usePermissions` reads on web, resolved against
-    // `Permission.START_WATCH_PARTY` in `gg.pqp.app.core.Permissions.kt`).
-    // Both fetched here, before anybody has opened a channel, because that
-    // is what "may I host" on the list itself needs.
+    // Watch-party eligibility: the server's live-hls config and this
+    // account's permission bits, both fetched here because "may I host" on
+    // the list itself needs them before any channel is opened.
     //
-    // A FAILED LOOKUP MUST NOT READ AS A CONFIRMED NO. The first cut of this
-    // stored a failure as the same `false` / empty default a real "off"
-    // answer gets, for the rest of this screen's life -- a single dropped
-    // request during a real host's visit hid the only "Host a watch party"
-    // row they were ever going to see, with nothing that ever tried again.
-    // [liveHlsConfirmed] / [permissionsConfirmed] tell the two apart: they
-    // flip to `true` only on an actual answer (`enabled: false` from a
-    // healthy request is confirmed and correctly never retried; a thrown
-    // exception is not), and the defaults stay in force -- fail CLOSED,
-    // never offering Host on a value this phone does not actually know --
-    // for as long as they are `false`. [retryTick] gives an unconfirmed
-    // fetch two reasons to try again sooner than its own backoff: the
-    // screen returning to the foreground, and the socket reconnecting, the
-    // same two "the network may be back" signals `RealtimeClient`'s own
-    // reconnect loop already treats as worth an immediate retry.
+    // A FAILED LOOKUP MUST NOT READ AS A CONFIRMED NO. [liveHlsConfirmed] /
+    // [permissionsConfirmed] flip to `true` only on an actual answer, the
+    // defaults fail closed until then, and [retryTick] retries sooner on a
+    // resume or a socket reconnect.
     var liveHlsEnabled by remember(serverId) { mutableStateOf(false) }
     var liveHlsConfirmed by remember(serverId) { mutableStateOf(false) }
     var permissions by remember(serverId) { mutableStateOf(PermissionsSnapshot()) }
@@ -264,12 +276,7 @@ fun ChannelsScreen(
         }
     }
 
-    // Every fetch of the list takes a ticket, and a fetch may write the list
-    // unless a newer one already has (see [ChannelListTickets]): a slow first
-    // load can never land on top of a refetch's newer list, and a refetch that
-    // fails cannot throw away the list the first load did get. One set of
-    // tickets for every server, so a fetch still finishing for the server
-    // this screen just left is stale too.
+    // Every fetch of the list takes a ticket (see [ChannelListTickets]).
     val channelsTickets = remember { ChannelListTickets() }
     LaunchedEffect(serverId) {
         val ticket = channelsTickets.takeFirst()
@@ -283,18 +290,13 @@ fun ChannelsScreen(
         if (channelsTickets.tryWrite(ticket)) channels = list
     }
     // A channel this viewer can see was created, renamed, moved or deleted.
-    // The frame names no channel, so the list is refetched; the server filters
-    // it per viewer. Filtered to this server BEFORE collectLatest, so only a
-    // newer nudge, never an unrelated frame, cancels a refetch that is still
-    // in flight or waiting to retry. A failure retries on the socket's
-    // backoff, about a minute in all, and the list on screen stays meanwhile.
+    // The frame names no channel, so the list is refetched. Filtered to this
+    // server BEFORE collectLatest, so only a newer nudge cancels a refetch.
     LaunchedEffect(serverId) {
         session.realtime.frames
             .filter { frame ->
-                when (frame["type"]?.jsonPrimitive?.contentOrNull) {
-                    "channels-update" -> frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
-                    else -> false
-                }
+                frame["type"]?.jsonPrimitive?.contentOrNull == "channels-update" &&
+                    frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
             }
             .collectLatest {
                 val ticket = channelsTickets.take()
@@ -318,426 +320,396 @@ fun ChannelsScreen(
             }
     }
 
-    // The Baú's unread count, for the badge on its row.
-    //
-    // Fetched on every resume rather than once, because the moment it is most
-    // wrong is the moment this screen comes back from the Baú itself: the feed
-    // marked itself read while this screen sat in the back stack at CREATED,
-    // and a badge that survives the read it is counting is the bug on the web
-    // this whole endpoint pair exists to end. The live nudge covers the other
-    // direction, a post published while somebody is looking at the list.
-    // Zero on any failure, which is the one honest number when the count is
-    // not known, and also what an older server with no route at all answers.
-    var bauUnread by remember { mutableStateOf(0) }
-    LifecycleResumeEffect(serverId, showBau) {
-        if (showBau) {
-            scope.launch {
-                bauUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+    // Unread per channel. Fetched on every resume (via [retryTick]), because
+    // the moment it is most wrong is coming back from a channel that was just
+    // read, and on every socket reconnect; retried on the socket's backoff when
+    // it fails. The `channel-activity` frame bumps it live in between, the same
+    // arithmetic the iOS list does, and [UnreadLedger] replays any frame that
+    // lands while a snapshot is in flight so the snapshot cannot erase it.
+    val unreadLedger = remember(serverId) { UnreadLedger() }
+    // A state map, so a frame changes one entry in place.
+    val unread = remember(serverId) { mutableStateMapOf<String, ChannelUnread>() }
+    LaunchedEffect(serverId, retryTick) {
+        // When a frame overlapped the request the answer is a floor, so ask
+        // again a moment later (see [UnreadLedger]), backing off, until an
+        // answer lands with nothing in flight. Bounded, so a channel that never
+        // goes quiet costs a few reads, not a loop; the next resume, reconnect
+        // or frame carries on from there.
+        for (pass in 0..UNREAD_SETTLE_PASSES) {
+            if (pass > 0) delay(UNREAD_SETTLE_DELAY_MS shl (pass - 1))
+            val ticket = unreadLedger.begin()
+            var reconciled: UnreadLedger.Reconciled? = null
+            var answered = false
+            try {
+                for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+                    val snapshot = try {
+                        session.api.serverUnread(serverId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (snapshot != null) {
+                        answered = true
+                        reconciled = unreadLedger.snapshot(ticket, snapshot)
+                        reconciled?.let { fresh ->
+                            unread.keys.retainAll(fresh.counts.keys)
+                            unread.putAll(fresh.counts)
+                        }
+                        break
+                    }
+                    if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
+                }
+            } finally {
+                // Gave up, or cancelled mid-request (a resume restarting this
+                // effect): stop buffering for this ticket. A no-op when a newer
+                // request has already begun, which keeps its buffer.
+                if (!answered) unreadLedger.abandon(ticket)
+            }
+            if (!answered) return@LaunchedEffect
+            if (reconciled?.unsettled != true) return@LaunchedEffect
+        }
+    }
+    LaunchedEffect(serverId) {
+        session.realtime.frames.collect { frame ->
+            if (frame["type"]?.jsonPrimitive?.contentOrNull != "channel-activity") return@collect
+            if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+            val channelId = frame["channelId"]?.jsonPrimitive?.contentOrNull ?: return@collect
+            val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false
+            unread[channelId] = unreadLedger.activity(channelId, mention)
+        }
+    }
+
+    // Silenced channels: what the session started with, then a fresh read so
+    // a mute set on the web a minute ago shows here without a relaunch.
+    var muted by remember(serverId) {
+        mutableStateOf(mutedChannelIds(me?.preferences?.notifications?.channels))
+    }
+    LaunchedEffect(serverId) {
+        runCatching { session.api.mutedChannels() }.onSuccess { muted = it }
+    }
+
+    // Folded categories, remembered per server on this device.
+    val context = LocalContext.current
+    val foldedStore = remember(context) { FoldedCategoriesStore(context.applicationContext) }
+    val foldedFlow = remember(serverId) { foldedStore.folded(serverId) }
+    val folded by foldedFlow.collectAsStateWithLifecycle(initialValue = emptySet())
+
+    // The Baú preview. `/home/latest` when the API has it; a 404 means an
+    // older API or the flag off for this server, and the screen falls back to
+    // `/home/unread` and the plain row, going straight there for the rest of
+    // this visit. Fetched on every resume (opening the Baú marks it read, and
+    // coming back is what shrinks the card), on a reconnect, and on the
+    // `community-home-update` nudge. One refresh at a time ([bauRefresh]), so
+    // an older answer never lands after a newer one. A failure keeps what is
+    // drawn.
+    var bauLatest by remember(serverId) { mutableStateOf<BauLatest?>(null) }
+    var bauLegacyUnread by remember(serverId) { mutableIntStateOf(0) }
+    var bauAnswered by remember(serverId) { mutableStateOf(false) }
+    var bauLatestUnsupported by remember(serverId) { mutableStateOf(false) }
+    val bauRefresh = remember(serverId) { Mutex() }
+    suspend fun refreshBau() = bauRefresh.withLock {
+        try {
+            val latest = if (bauLatestUnsupported) null else session.api.bauLatest(serverId)
+            if (latest == null) {
+                bauLatestUnsupported = true
+                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrElse { bauLegacyUnread }
+            }
+            bauLatest = latest
+            bauAnswered = true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep what is on screen; a first failure draws today's row.
+            if (!bauAnswered) {
+                bauLegacyUnread = runCatching { session.api.bauUnread(serverId) }.getOrElse { bauLegacyUnread }
+                bauAnswered = true
             }
         }
-        onPauseOrDispose { }
+    }
+    LaunchedEffect(serverId, showBau, retryTick) {
+        if (showBau) refreshBau()
     }
     LaunchedEffect(serverId, showBau) {
         if (!showBau) return@LaunchedEffect
-        session.realtime.frames.collect { frame ->
-            when (frame["type"]?.jsonPrimitive?.contentOrNull) {
-                "community-home-update" -> {
-                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
-                    bauUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+        session.realtime.frames
+            .filter { frame ->
+                frame["type"]?.jsonPrimitive?.contentOrNull == "community-home-update" &&
+                    frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
+            }
+            .collectLatest { refreshBau() }
+    }
+    val canPostToBau = BauComposeGate.canPost(communityHome, permissions.takeIf { permissionsConfirmed })
+    val bauState = if (!bauAnswered) {
+        BauPreviewState.Loading
+    } else {
+        bauPreviewState(bauLatest, bauLegacyUnread, canPostToBau)
+    }
+
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val collapseAtPx = with(density) { (ServerBannerHeight - CompactBarHeight).toPx() }
+    val collapsed by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > collapseAtPx
+        }
+    }
+
+    val list = channels
+    // Derived from the channel list only, so a roster or unread change does
+    // not regroup and sort every channel again.
+    val textTitle = stringResource(R.string.channels_section_text)
+    val voiceTitle = stringResource(R.string.channels_section_voice)
+    val sections = remember(list, textTitle, voiceTitle) {
+        list?.let { sectionsOf(it, textTitle, voiceTitle) }.orEmpty()
+    }
+    // Every `watch_party` channel this server has, folded into ONE block: a
+    // live or pending party sits above everything, and the "Criar watch
+    // party" row sits at the end of the list, where creating one belongs.
+    val watchPartyBlock = remember(list, parties, liveChannels, permissions, liveHlsEnabled) {
+        watchPartyListBlock(
+            list.orEmpty().filter { it.type == "watch_party" }.map { channel ->
+                watchPartyListEntry(
+                    channelId = channel.id,
+                    channelName = channel.name,
+                    party = parties[channel.id],
+                    watching = liveChannels[channel.id]?.watching,
+                    canHost = liveHlsEnabled &&
+                        hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
+                )
+            },
+        )
+    }
+    val activity = remember(list, rooms, liveChannels) {
+        val ids = list.orEmpty().filter { it.isVoice }.map { it.id }
+        serverActivity(
+            voiceChannelIds = ids,
+            rooms = rooms,
+            liveChannelIds = list.orEmpty().map { it.id }.filter { liveChannels[it]?.live == true },
+        )
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = Spacing.xl),
+        ) {
+            item(key = "banner") {
+                ServerBanner(
+                    serverId = serverId,
+                    serverName = serverName,
+                    bannerUrl = server?.bannerUrl,
+                    activity = activity,
+                    scrolledPx = {
+                        if (listState.firstVisibleItemIndex == 0) {
+                            listState.firstVisibleItemScrollOffset.toFloat()
+                        } else {
+                            0f
+                        }
+                    },
+                )
+            }
+            when {
+                list == null -> item(key = "loading") {
+                    Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
                 }
+
+                list.isEmpty() && !showBau -> item(key = "empty") {
+                    EmptyState(stringResource(R.string.channels_empty), icon = PqpIcons.TextChannel)
+                }
+
+                else -> channelListItems(
+                    list = list,
+                    sections = sections,
+                    watchPartyBlock = watchPartyBlock,
+                    showBau = showBau,
+                    bauState = bauState,
+                    serverId = serverId,
+                    liveChannels = liveChannels,
+                    unread = unread,
+                    muted = muted,
+                    folded = folded,
+                    rooms = rooms,
+                    callChannelId = voiceState.channelId.takeIf { voiceState.isActive },
+                    callParticipants = voiceState.participants,
+                    speakingPeers = speakingPeers,
+                    myUserId = me?.id,
+                    onOpenChannel = onOpenChannel,
+                    onOpenBau = onOpenBau,
+                    onToggleCategory = { categoryId ->
+                        scope.launch { foldedStore.setFolded(serverId, categoryId, categoryId !in folded) }
+                    },
+                )
+            }
+        }
+        CompactServerBar(
+            serverName = serverName,
+            activity = activity,
+            collapsed = collapsed,
+            onBack = onBack,
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
+    }
+}
+
+/**
+ * Everything below the banner. A function over [LazyListScope] rather than a
+ * composable, so each row, each person under a room and each folded section
+ * is its own lazy item and animates in and out on its own.
+ */
+private fun LazyListScope.channelListItems(
+    list: List<Channel>,
+    sections: List<ChannelSection>,
+    watchPartyBlock: WatchPartyListBlock,
+    showBau: Boolean,
+    bauState: BauPreviewState,
+    serverId: String,
+    liveChannels: Map<String, gg.pqp.app.watch.ChannelLive>,
+    unread: Map<String, ChannelUnread>,
+    muted: Set<String>,
+    folded: Set<String>,
+    rooms: Map<String, List<VoiceParticipant>>,
+    callChannelId: String?,
+    callParticipants: List<VoiceParticipant>,
+    speakingPeers: Set<String>,
+    myUserId: String?,
+    onOpenChannel: (Channel) -> Unit,
+    onOpenBau: () -> Unit,
+    onToggleCategory: (String) -> Unit,
+) {
+    val openById: (String) -> Unit = { id -> list.firstOrNull { it.id == id }?.let(onOpenChannel) }
+
+    if (watchPartyBlock !is WatchPartyListBlock.None && watchPartyBlock !is WatchPartyListBlock.Host) {
+        item(key = "watchParty") {
+            Box(Modifier.listMotion(this).padding(top = Spacing.xs)) {
+                WatchPartyListBlockView(block = watchPartyBlock, onOpen = openById, onHost = openById)
+            }
+        }
+    }
+    if (showBau) {
+        item(key = "bau") {
+            Box(Modifier.listMotion(this).padding(top = Spacing.xs)) {
+                BauPreview(state = bauState, serverId = serverId, onOpen = onOpenBau)
             }
         }
     }
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            Column {
-                TopAppBar(
-                    // The bar carries the server, not just its name. A phone
-                    // has no room for the web app's column of server icons, so
-                    // this squircle is the only thing on the screen that says
-                    // which place these channels belong to, and it is the same
-                    // derived colour the servers list gave it.
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Avatar(
-                                name = serverName,
-                                url = null,
-                                size = Sizes.avatarSmall,
-                                // Nine rather than fourteen: the same corner to
-                                // size ratio the 44dp squircle has, so the two
-                                // read as one shape at two sizes.
-                                cornerRadius = 9.dp,
-                                seed = serverId,
-                            )
-                            Spacer(Modifier.width(Spacing.md))
-                            Text(
-                                text = serverName,
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = PqpIcons.Back,
-                                contentDescription = stringResource(R.string.chat_back),
-                                modifier = Modifier.size(Sizes.iconAction),
-                            )
-                        }
-                    },
-                    colors = pqpTopBarColors(),
-                    scrollBehavior = scrollBehavior,
-                )
-                // The rule is what makes the bar the frame and the list the
-                // page. Without it the two dark surfaces meet with nothing
-                // between them and the eye reads one tall field.
-                ChromeDivider()
-            }
-        },
-    ) { padding ->
-        val list = channels
-        when {
-            list == null -> Box(
-                Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center,
-            ) { CircularProgressIndicator() }
-
-            list.isEmpty() && !showBau -> Box(Modifier.padding(padding)) {
-                EmptyState(stringResource(R.string.channels_empty), icon = PqpIcons.TextChannel)
-            }
-
-            else -> {
-                val sections = remember(list) { sectionsOf(list) }
-                // Every `watch_party` channel this server has, folded into
-                // ONE block above everything else -- the only place a watch
-                // party appears in this list now. `sectionsOf` already drops
-                // these from the ordinary rows below, matching the web
-                // sidebar's own `listed` filter (`channel-list.tsx`).
-                val watchPartyBlock = remember(list, parties, liveChannels, permissions, liveHlsEnabled) {
-                    watchPartyListBlock(
-                        list.filter { it.type == "watch_party" }.map { channel ->
-                            watchPartyListEntry(
-                                channelId = channel.id,
-                                channelName = channel.name,
-                                party = parties[channel.id],
-                                watching = liveChannels[channel.id]?.watching,
-                                canHost = liveHlsEnabled &&
-                                    hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
-                            )
-                        },
+    sections.forEachIndexed { index, section ->
+        val categoryId = section.categoryId
+        val continued = index > 0 && sections[index - 1].group == section.group
+        val isFolded = categoryId != null && categoryId in folded
+        item(key = "header-${section.key}") {
+            Box(Modifier.listMotion(this)) {
+                when {
+                    // One category arrives as two sections, text then voice,
+                    // for the `position` reason in `sectionsOf`. Its heading is
+                    // drawn once; the second half keeps only nothing, so the
+                    // voice rooms sit right under the text channels.
+                    continued -> Unit
+                    categoryId == null || section.title.isBlank() -> SectionGap()
+                    else -> CategoryHeader(
+                        title = section.title,
+                        folded = isFolded,
+                        summary = foldedSummary(channelsInCategory(sections, categoryId), unread, muted),
+                        onToggle = { onToggleCategory(categoryId) },
                     )
                 }
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentPadding = PaddingValues(bottom = Spacing.xl),
-                ) {
-                    if (watchPartyBlock != WatchPartyListBlock.None) {
-                        item(key = "watchParty") {
-                            Spacer(Modifier.height(Spacing.sm))
-                            WatchPartyListBlockView(
-                                block = watchPartyBlock,
-                                onOpen = { channelId ->
-                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
-                                },
-                                onHost = { channelId ->
-                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
-                                },
-                            )
-                        }
-                    }
-                    // Above TEXT, where the web sidebar puts it. It is not a
-                    // channel and is not drawn as one: it carries its own hint
-                    // so nobody opens it expecting to type.
-                    if (showBau) {
-                        item(key = "bau") {
-                            Spacer(Modifier.height(Spacing.sm))
-                            BauRow(unread = bauUnread, onClick = onOpenBau)
-                        }
-                    }
-                    sections.forEachIndexed { index, section ->
-                        item(key = "header-${section.key}") {
-                            SectionHeader(
-                                title = section.title,
-                                // One category arrives as two sections, text
-                                // then voice, for the `position` reason above.
-                                // Drawing its name over both of them puts
-                                // GERAL directly under GERAL, which reads as
-                                // two categories that happen to share a name.
-                                // The heading is drawn once and the second
-                                // group keeps only its gap, which is what the
-                                // web sidebar looks like and is also the truth:
-                                // it is one category with channels of two
-                                // kinds. Compared on the category id rather
-                                // than the name, so two different categories
-                                // called "geral" still get a heading each.
-                                continued = index > 0 &&
-                                    sections[index - 1].group == section.group,
-                            )
-                        }
-                        items(section.channels.size, key = { section.channels[it].id }) { index ->
-                            val channel = section.channels[index]
-                            ChannelRow(
-                                channel = channel,
-                                inCall = voiceState.channelId == channel.id,
-                                live = liveChannels[channel.id]?.live == true,
-                                // A voice channel has a transcript too. Opening
-                                // it must not ask for the microphone or join
-                                // media; the chat header owns that explicit
-                                // action after the person can see the room.
-                                onClick = { onOpenChannel(channel) },
-                            )
-                        }
-                    }
-                }
+            }
+        }
+        if (isFolded) return@forEachIndexed
+        // One lazy interval per section, not one per channel: a busy server
+        // recomposes on every unread frame and roster change, and only the
+        // rows on screen should pay for it. Each item is the row plus the
+        // people in it, worked out when the item is drawn.
+        items(section.channels, key = { it.id }, contentType = { "channel" }) { channel ->
+            val inCall = channel.id == callChannelId
+            ChannelEntry(
+                channel = channel,
+                badge = rowBadge(unread[channel.id], channel.id in muted),
+                live = liveChannels[channel.id]?.live == true,
+                people = when {
+                    !channel.isVoice -> emptyList()
+                    inCall -> rooms[channel.id] ?: callParticipants
+                    else -> rooms[channel.id].orEmpty()
+                },
+                inCall = inCall,
+                speakingPeers = speakingPeers,
+                myUserId = myUserId,
+                onOpenChannel = onOpenChannel,
+                modifier = Modifier.listMotion(this),
+            )
+        }
+    }
+
+    if (watchPartyBlock is WatchPartyListBlock.Host) {
+        item(key = "watchParty-host") {
+            Box(Modifier.listMotion(this).padding(top = Spacing.sm)) {
+                WatchPartyListBlockView(block = watchPartyBlock, onOpen = openById, onHost = openById)
             }
         }
     }
 }
 
 /**
- * The Baú's row. Same pill as a channel, so it sits in the list, but with a
- * second line: the one thing a person needs to know before tapping is that
- * this is not a place to type.
- *
- * The badge is lime, the brand signal. It used to be the quiet grey one, on
- * the reasoning that a new post is not a mention, and that made the feature
- * the product leads with the least eventful row in the list. Lime still never
- * means "someone is talking to you" here (the Baú cannot mention anybody); it
- * means "the staff put something new in the chest".
+ * One channel's row, then the people in it when it is a voice room. People
+ * joining and leaving grow and shrink the entry on a spring
+ * (`animateContentSize`), which the system animator scale turns off.
  */
 @Composable
-private fun BauRow(unread: Int, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.railInset)
-            .heightIn(min = Sizes.channelRow)
-            .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
-            .testTag("channels.bau"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier.size(Sizes.iconInline),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = PqpIcons.Bau,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(Sizes.iconInline),
-            )
-        }
-        Spacer(Modifier.width(Spacing.sm + 2.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.bau_title),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(R.string.bau_row_hint),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (unread > 0) {
-            Spacer(Modifier.width(Spacing.sm))
-            CountBadge(
-                count = unread,
-                loud = true,
-                modifier = Modifier.testTag("channels.bau.unread"),
-            )
-        }
-    }
-}
-
-private data class Section(val key: String, val title: String, val channels: List<Channel>) {
-    /**
-     * Which category this section belongs to, with the `-text` / `-voice` half
-     * dropped. Two sections in the same group are one category split by the
-     * ordering rule, and only the first of them draws a heading.
-     */
-    val group: String get() = key.substringBeforeLast('-')
-}
-
-/**
- * Categories first as containers, then whatever sits at the top level.
- *
- * A category is a channel row with `type == "category"`, not a separate object,
- * and its children point at it through `parentId`.
- *
- * A `watch_party` channel is never in here. `Channel.isVoice` answers true
- * for it too, but it no longer gets an ordinary row: `WatchPartyListBlock`
- * above the categories is the only place it appears now, live, pending or a
- * host button, and NOTHING at all otherwise -- matching the web sidebar's
- * own `listed` filter in `channel-list.tsx`.
- */
-private fun sectionsOf(all: List<Channel>): List<Section> {
-    val categories = all.filter { it.isCategory }.sortedBy { it.position }
-    val byParent = all.filterNot { it.isCategory }.groupBy { it.parentId }
-
-    val sections = mutableListOf<Section>()
-
-    fun add(key: String, title: String, channels: List<Channel>) {
-        if (channels.isNotEmpty()) sections += Section(key, title, channels.sortedBy { it.position })
-    }
-
-    val topLevel = byParent[null].orEmpty()
-    add("top-text", "", topLevel.filter { it.isText })
-    add("top-voice", "", topLevel.filter { it.isVoice && it.type != "watch_party" })
-
-    categories.forEach { category ->
-        val children = byParent[category.id].orEmpty()
-        add("cat-${category.id}-text", category.name, children.filter { it.isText })
-        add("cat-${category.id}-voice", category.name, children.filter { it.isVoice && it.type != "watch_party" })
-    }
-
-    return sections
-}
-
-/**
- * A named category is a section rule; an unnamed group is only a breath.
- *
- * The blank-title case is the top-level text and voice groups, which exist
- * because of the `position` trap above rather than because a person put a
- * heading there. Giving them an invented heading would be inventing copy, so
- * they keep the gap that separates them and say nothing. A continued category
- * is the same case for a different reason and gets the same treatment.
- */
-@Composable
-private fun SectionHeader(title: String, continued: Boolean) {
-    if (title.isBlank() || continued) {
-        Spacer(Modifier.height(Spacing.sm))
-        return
-    }
-    SectionLabel(title)
-}
-
-@Composable
-private fun ChannelRow(
+private fun ChannelEntry(
     channel: Channel,
-    inCall: Boolean,
+    badge: gg.pqp.app.ui.screens.channels.RowBadge,
     live: Boolean,
-    onClick: () -> Unit,
+    people: List<VoiceParticipant>,
+    inCall: Boolean,
+    speakingPeers: Set<String>,
+    myUserId: String?,
+    onOpenChannel: (Channel) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val interactions = remember { MutableInteractionSource() }
-    val pressed by interactions.collectIsPressedAsState()
-
-    // Selected and pressed are the same fill on purpose, so pressing a row is a
-    // preview of where the finger is about to land rather than a separate
-    // effect happening on the way there.
-    val filled = inCall || pressed
-    val surface by animateColorAsState(
-        targetValue = if (filled) {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        } else {
-            Color.Transparent
-        },
-        animationSpec = if (filled) snap() else tween(Motion.QUICK_MILLIS),
-        label = "channel-row-press",
-    )
-
-    // The one lime object this screen is allowed, and it means exactly what the
-    // colour always means here: this is the call you are in right now. No bold,
-    // no dot, no badge; a second marker would only say the same thing again.
-    val content = if (inCall) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    val glyph = if (inCall) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Inset from the screen edge and rounded, which is simultaneously
-            // the most Discord-shaped thing in the app and exactly what
-            // `NavigationDrawerItem` draws. The name lands 4dp to the right of
-            // the section rule above it, which is the pill's own inset showing
-            // and is what stops the two from looking accidentally misaligned.
-            .padding(horizontal = Spacing.railInset)
-            .heightIn(min = Sizes.channelRow)
-            .clip(MaterialTheme.shapes.small)
-            .background(surface)
-            .clickable(
-                interactionSource = interactions,
-                // No ripple: the pill above already is the press.
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
+    val summary = remember(people, myUserId) { occupantSummary(people, myUserId) }
+    Column(
+        modifier.animateContentSize(
+            spring(dampingRatio = 0.85f, stiffness = 380f, visibilityThreshold = IntSize.VisibilityThreshold),
+        ),
     ) {
-        // A fixed box rather than a bare icon, so the hash, the speaker and the
-        // padlock are three different widths that all start their name at the
-        // same x. A ragged left edge down twenty channel names is the kind of
-        // thing nobody names and everybody sees.
-        Box(
-            modifier = Modifier.size(Sizes.iconInline),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = when {
-                    channel.isPrivate -> PqpIcons.PrivateChannel
-                    // A watch party is not an ordinary voice room, and the
-                    // channel list is one of the places a person can tell:
-                    // same speaker glyph as Voice was exactly the complaint
-                    // ("we still show watch parties as regular voice
-                    // channels"), one of the four the web and iOS both fixed
-                    // it in.
-                    channel.type == "watch_party" -> PqpIcons.WatchParty
-                    channel.isVoice -> PqpIcons.VoiceChannel
-                    else -> PqpIcons.TextChannel
-                },
-                contentDescription = null,
-                tint = glyph,
-                modifier = Modifier.size(Sizes.iconInline),
+        ChannelRow(
+            channel = channel,
+            badge = badge,
+            inCall = inCall,
+            live = live,
+            occupants = summary.total,
+            // Opening a voice channel shows its transcript; it does not ask
+            // for the microphone. The chat header owns the explicit join.
+            onClick = { onOpenChannel(channel) },
+        )
+        summary.listed.forEach { person ->
+            key(person.userId) {
+                VoiceOccupantRow(
+                    participant = person,
+                    isSelf = person.userId == myUserId,
+                    // Only in this device's own call; see [VoiceController.speakingPeers].
+                    speaking = inCall && person.peerId in speakingPeers,
+                    onClick = { onOpenChannel(channel) },
+                )
+            }
+        }
+        if (summary.overflowCount > 0) {
+            VoiceOverflowRow(
+                faces = summary.overflowFaces,
+                count = summary.overflowCount,
+                onClick = { onOpenChannel(channel) },
             )
         }
-        Spacer(Modifier.width(Spacing.sm + 2.dp))
-        Text(
-            text = channel.name,
-            style = MaterialTheme.typography.bodyLarge,
-            color = content,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        // The one thing that tells somebody scrolling a channel list that
-        // there is a show on right now. Red because that is what a live badge
-        // is everywhere, and it is not competing with the lime: the lime means
-        // "the call you are in", this means "something is being broadcast".
-        // No pulse: a list of rows is not the place for a moving object, and
-        // the web's pulse is on a much bigger badge.
-        if (live) {
-            Spacer(Modifier.width(Spacing.sm))
-            Text(
-                text = stringResource(R.string.watch_live),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onError,
-                modifier = Modifier
-                    .clip(MaterialTheme.shapes.extraSmall)
-                    .background(MaterialTheme.colorScheme.error)
-                    .padding(horizontal = Spacing.xs, vertical = 1.dp)
-                    .testTag("channels.live"),
-            )
+        if (people.isNotEmpty()) {
+            Spacer(Modifier.height(Spacing.xs))
         }
     }
 }

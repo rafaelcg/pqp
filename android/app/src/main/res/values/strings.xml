@@ -553,11 +553,9 @@
     <string name="watch_party_host_mic_prompt_dismiss">Stay muted</string>
 
     <!-- Watch party in the channel list. Mirrors client/src/components/watch-party/live-party-block.tsx. -->
-    <string name="watch_party_list_label">Watch party</string>
-    <string name="watch_party_list_hosted_by">with %1$s</string>
     <string name="watch_party_list_pending_draft">Being set up. Tap to continue.</string>
     <string name="watch_party_list_pending_scheduled">Scheduled. Tap to open.</string>
-    <string name="watch_party_list_host">Host a watch party</string>
+    <string name="watch_party_list_host">Start a watch party</string>
 
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Step %1$d of %2$d</string>
@@ -705,4 +703,53 @@
     <string name="voice_note_unheard">Not heard yet</string>
     <string name="voice_note_heard">Heard</string>
     <string name="voice_note_heard_at">Heard at %1$s</string>
+
+    <!-- Channel list: live rows, voice occupants, Baú preview -->
+    <string name="channels_section_text">Text</string>
+    <string name="channels_section_voice">Voice</string>
+    <string name="channels_muted">Muted</string>
+    <string name="channels_category_fold">Collapse %1$s</string>
+    <string name="channels_category_unfold">Expand %1$s</string>
+    <plurals name="channels_folded_count">
+        <item quantity="one">%1$d channel</item>
+        <item quantity="other">%1$d channels</item>
+    </plurals>
+    <plurals name="channels_mentions">
+        <item quantity="one">%1$d mention</item>
+        <item quantity="other">%1$d mentions</item>
+    </plurals>
+    <string name="channels_unread">Unread messages</string>
+    <plurals name="channels_activity_in_call">
+        <item quantity="one">%1$d in a call</item>
+        <item quantity="other">%1$d in a call</item>
+    </plurals>
+    <plurals name="channels_activity_live">
+        <item quantity="one">%1$d live</item>
+        <item quantity="other">%1$d live</item>
+    </plurals>
+    <string name="voice_occupant_you">%1$s (you)</string>
+    <plurals name="voice_occupants_more">
+        <item quantity="one">+%1$d person</item>
+        <item quantity="other">+%1$d people</item>
+    </plurals>
+    <string name="voice_occupant_muted">Muted</string>
+    <string name="voice_occupant_deafened">Deafened</string>
+    <string name="voice_occupant_sharing">Sharing their screen</string>
+    <string name="watch_party_watch">Watch</string>
+    <string name="watch_party_streaming">%1$s streaming</string>
+    <string name="bau_preview_new">NEW</string>
+    <string name="bau_preview_open">Open</string>
+    <plurals name="bau_preview_more_named">
+        <item quantity="one">+%1$d new post: %2$s</item>
+        <item quantity="other">+%1$d new posts: %2$s</item>
+    </plurals>
+    <plurals name="bau_preview_more">
+        <item quantity="one">+%1$d new post</item>
+        <item quantity="other">+%1$d new posts</item>
+    </plurals>
+    <string name="bau_preview_latest">Latest: \"%1$s\"</string>
+    <string name="bau_preview_empty_staff_title">Your Baú is empty</string>
+    <string name="bau_preview_empty_staff_body">Post the first clip, screenshot or announcement. Here it does not get lost in the chat.</string>
+    <string name="bau_preview_post">Post to the Baú</string>
+    <string name="bau_preview_empty_member">Empty for now. When the staff posts, it shows up here.</string>
 </resources>

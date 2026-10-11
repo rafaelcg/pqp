@@ -139,6 +139,12 @@ class LiveKitEngine(
     private val onScreenShareEnded: () -> Unit = {},
     /** The share's game sound started going out (true) or stopped for good (false). */
     private val onScreenAudioChanged: (Boolean) -> Unit = {},
+    /**
+     * The media server's list of who is talking, as pqp peer ids (the
+     * participant identity is the peer id; see [LiveKitPeerIndex]). Drives
+     * the speaking ring in this device's own call and nothing else.
+     */
+    private val onActiveSpeakers: (Set<String>) -> Unit = {},
 ) : VoiceTransport {
 
     /**
@@ -762,6 +768,12 @@ class LiveKitEngine(
                 // so this is the only way a track that appears mid-call is
                 // ever heard or seen.
                 is RoomEvent.TrackPublished -> subscribeIfWanted(event.publication)
+
+                // Who is talking. LiveKit computes it from the audio levels it
+                // already forwards, so this costs the phone nothing extra.
+                is RoomEvent.ActiveSpeakersChanged -> onActiveSpeakers(
+                    event.speakers.mapNotNull { it.identity?.value }.toSet(),
+                )
 
                 // A camera the far end muted without unpublishing. Every pqp
                 // client unpublishes instead, so this is the server-side mute
