@@ -410,6 +410,27 @@ describeDb("chamar a atenção across two instances on the Postgres bus", () => 
     b.status.unregisterStatusSocket(bobStatus.socket);
   }, 30_000);
 
+  it("a nudge that passes the rules but cannot be stored gives its cooldown back", async () => {
+    const { one: alice, channelId } = await friendsInDm("Gil", "Hana");
+    // Out of the conversation's members while still in its pair: the rules
+    // pass (they read `dm_pairs`), the send's own access check refuses.
+    await a.db.getPool().query(
+      `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+      [channelId, alice.id],
+    );
+    a.users.invalidateChannelAccessForChannel(channelId);
+    expect(refusal(await nudge(a, alice, channelId))).toMatchObject({ reason: "unavailable" });
+    expect(await countNudges(channelId)).toBe(0);
+    await a.db.getPool().query(
+      `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+      [channelId, alice.id],
+    );
+    a.users.invalidateChannelAccessForChannel(channelId);
+    // Straight away, no reset: nothing was spent.
+    expect(refusal(await nudge(a, alice, channelId))).toBeUndefined();
+    expect(await countNudges(channelId)).toBe(1);
+  }, 30_000);
+
   it("the sender's own switch off: self-off", async () => {
     const { one: alice, channelId } = await friendsInDm("Rui", "Sol");
     await a.preferences.mergePreferences(alice.id, { allowNudges: false });

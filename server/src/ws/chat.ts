@@ -78,6 +78,7 @@ import {
   decideNudge,
   recordNudgeRefused,
   recordNudgeSent,
+  refundNudgeBudget,
 } from "../services/nudge.js";
 import {
   getChannel,
@@ -2173,17 +2174,28 @@ async function handleNudge(
     return;
   }
 
-  const posted = await postChannelMessage({
-    author: conn.user,
-    channelId: frame.channelId,
-    body: NUDGE_BODY,
-    nonce: frame.nonce,
-    senderSocket: conn.socket,
-    systemKind: "nudge",
-  });
+  let posted: PostChannelMessageResult;
+  try {
+    posted = await postChannelMessage({
+      author: conn.user,
+      channelId: frame.channelId,
+      body: NUDGE_BODY,
+      nonce: frame.nonce,
+      senderSocket: conn.socket,
+      systemKind: "nudge",
+    });
+  } catch (error) {
+    // Nothing may have been stored: give the cooldown back before the
+    // socket router logs it, so a retry is not told to wait for a nudge
+    // that never arrived.
+    await refundNudgeBudget(conn.user.id, frame.channelId);
+    throw error;
+  }
   if (!posted.ok) {
     // No access, a block that landed between the two reads, the database:
     // all of them are the one neutral token, for the same reason as above.
+    // Nothing was stored, so nothing was spent either.
+    await refundNudgeBudget(conn.user.id, frame.channelId);
     sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
     return;
   }

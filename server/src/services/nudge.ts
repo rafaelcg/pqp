@@ -9,6 +9,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import {
+  refundSharedRateLimit,
   sharedRateLimit,
   sharedRateLimitRetryAfterMs,
   type SharedBucketOptions,
@@ -173,6 +174,26 @@ async function takeBudget(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Hand back what `takeBudget` spent, for a nudge that passed every rule and
+ * then failed to be stored or sent (no access after all, a block that landed
+ * in between, the database). Without this the sender would be told "wait"
+ * for a nudge nobody received. In-memory buckets take a negative cost (the
+ * next refill clamps them to capacity); the shared rows are topped up by one.
+ * Never throws.
+ */
+export async function refundNudgeBudget(senderId: string, channelId: string): Promise<void> {
+  const conversationKey = `${senderId}:${channelId}`;
+  conversationLimiter.take(conversationKey, -1);
+  senderLimiter.take(senderId, -1);
+  try {
+    await refundSharedRateLimit(CONVERSATION_BUCKET, conversationKey);
+    await refundSharedRateLimit(SENDER_BUCKET, senderId);
+  } catch (error) {
+    console.error("[nudge] budget refund failed:", error);
+  }
 }
 
 /**

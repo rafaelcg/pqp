@@ -186,6 +186,24 @@ export async function sharedRateLimitRetryAfterMs(
 }
 
 /**
+ * Give one token back to `subject`, never past `capacity`. For a spend that
+ * turned out not to buy anything (the action failed after the budget was
+ * taken). No row means nothing was spent here: nothing to do. Throws on a
+ * database error; the caller decides whether that matters.
+ */
+export async function refundSharedRateLimit(
+  options: SharedBucketOptions,
+  subject: string,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE rate_limit_buckets
+        SET tokens = LEAST($3::float8, tokens + 1)
+      WHERE bucket = $1 AND subject = $2`,
+    [options.bucket, subject, options.capacity],
+  );
+}
+
+/**
  * Rows whose bucket has refilled carry no information; drop them so the table
  * is bounded by "subjects active in the last few minutes" rather than by
  * "subjects ever". Runs with the other cold jobs.
