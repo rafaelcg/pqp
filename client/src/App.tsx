@@ -9278,7 +9278,10 @@ function MainAppContent({
 
   phoneFollowRef.current = phoneShellAllowed
     ? (tab: PhoneTab) => {
+        // Whatever was opened is the screen now: the list drawer and the
+        // servers screen step back, the way a row tap closes them.
         setPhoneServersOpen(false);
+        setMobileNavOpen(false);
         setPhoneTab((current) => {
           if (current !== tab) {
             storePhoneTab(tab);
