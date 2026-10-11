@@ -361,9 +361,18 @@ describeDb("forum guards", () => {
            FROM sides s CROSS JOIN generate_series(1, 20) g`,
         [serverId, forumId, alice.id],
       );
+      // Fifty of those replies mention bob, who never opened the forum.
+      await getPool().query(
+        `INSERT INTO message_mentions (message_id, user_id)
+         SELECT m.id, $2 FROM messages m
+           JOIN forum_posts fp ON fp.channel_id = m.channel_id
+          WHERE fp.forum_id = $1
+          LIMIT 50`,
+        [forumId, bob.id],
+      );
       const after = await listUnread(serverId, bob.id);
       expect(after.length).toBe(before.length);
-      expect(unreadOf(after, forumId)).toEqual({ channelId: forumId, count: 99, mentions: 0 });
+      expect(unreadOf(after, forumId)).toEqual({ channelId: forumId, count: 99, mentions: 50 });
 
       if (process.env.FORUM_EXPLAIN) {
         // The PR's EXPLAIN: `FORUM_EXPLAIN=/tmp/plan.txt npx vitest run forum-guards`.
