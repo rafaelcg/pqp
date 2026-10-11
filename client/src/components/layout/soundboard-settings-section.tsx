@@ -1,3 +1,4 @@
+import { SOUNDBOARD_MAX_SOUNDS } from "@pqp/shared";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,7 +42,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const countId = useId();
   const [sounds, setSounds] = useState<SoundboardSoundDto[] | null>(null);
-  const [maxSounds, setMaxSounds] = useState(24);
+  const [maxSounds, setMaxSounds] = useState(SOUNDBOARD_MAX_SOUNDS);
   const [slotsUsed, setSlotsUsed] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -158,7 +159,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
 
   // The server refuses at stored sounds plus uploads in flight. The counter
   // shows the clips people can see; uploads in flight are said on their own
-  // line, so a full board never reads as "24 of 24" over a shorter list.
+  // line, so a full board never reads as "6 of 6" over a shorter list.
   const stored = sounds?.length ?? 0;
   const used = slotsUsed ?? stored;
   const pending = Math.max(0, used - stored);

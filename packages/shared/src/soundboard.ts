@@ -20,8 +20,12 @@ export const SOUNDBOARD_MAX_BYTES = 512 * 1024;
 /** 5.2 seconds, same line Discord draws. */
 export const SOUNDBOARD_MAX_DURATION_MS = 5200;
 
-/** Custom clips per server. No boost ladder. */
-export const SOUNDBOARD_MAX_SOUNDS = 24;
+/**
+ * Custom clips per server, on top of the six built-ins. No boost ladder.
+ * Six keeps the board one glance wide (twelve tiles in all); more is a
+ * library, and a library is what people scroll past instead of playing.
+ */
+export const SOUNDBOARD_MAX_SOUNDS = 6;
 
 /**
  * Each person's play budget: a burst of five, then one every two seconds.

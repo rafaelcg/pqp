@@ -35,8 +35,10 @@ and the speaker mark are Material Design Icons by Pictogrammers, Apache 2.0.
 Cricket is by Delapouite, and the drum kit and trombone are by Caro Asercion, from [game-icons.net](https://game-icons.net),
 CC BY 3.0.
 
-Custom clips live in the same bucket as attachments, capped at 24 per
-server, 512 KB, and 5.2 seconds, mp3 or ogg. A new upload is refused when
+Custom clips live in the same bucket as attachments, capped at 6 per
+server (`SOUNDBOARD_MAX_SOUNDS`), 512 KB, and 5.2 seconds, mp3 or ogg. Six
+on top of the six built-ins keeps the board one glance wide; a server that
+had more before the cap keeps them, and cannot add until it is under six. A new upload is refused when
 the board is already full, counting uploads that were signed and not
 claimed yet. An unclaimed file is deleted when that signature expires,
 and only when no saved clip still points at it.
@@ -243,8 +245,8 @@ In the panel the arrow keys move between clips, Home and End jump to the
 ends, and Tab moves on to the mute, the volume and Add. The arrows step by
 the number of columns the grid draws, which is one number for both. A custom
 clip's full name shows in a tooltip on hover and focus, since a long name is
-cut to two lines on the tile. At 24 of 24 the Add button stays focusable and
-its tooltip says the board is full. The count reads "21 of 24 sounds"; the
+cut to two lines on the tile. At 6 of 6 the Add button stays focusable and
+its tooltip says the board is full. The count reads "4 of 6 sounds"; the
 noun agrees with the maximum, so it is plural-aware on that number. The
 footer wraps, so the volume slider keeps at least seven rem. When a lock
 arrives (deafened, a moderator mute) while focus is in the panel, the panel

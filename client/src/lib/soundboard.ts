@@ -2,6 +2,7 @@ import {
   soundboardBuiltin,
   SOUNDBOARD_BUILTINS,
   SOUNDBOARD_MAX_DURATION_MS,
+  SOUNDBOARD_MAX_SOUNDS,
   SOUNDBOARD_PLAY_BURST,
   SOUNDBOARD_PLAY_REFILL_MS,
   type SoundboardSound,
@@ -590,7 +591,7 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
 }
 
 /** Most decoded custom clips kept at once: one full board. Built-ins stay. */
-const CUSTOM_BUFFER_MAX = 24;
+const CUSTOM_BUFFER_MAX = SOUNDBOARD_MAX_SOUNDS;
 
 function evictCustomBuffers(): void {
   const custom = [...buffers.keys()].filter((id) => customUrls.has(id));

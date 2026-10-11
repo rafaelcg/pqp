@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 /**
  * The soundboard's upload ledger, on a real Postgres. The S3 calls are faked;
  * what is pinned is who owns a file: a claim and the sweep must never both
- * act on the same object, and the cap of 24 must count pending uploads from
+ * act on the same object, and the cap must count pending uploads from
  * every API machine because the ledger is a table, not a Map.
  */
 
@@ -49,6 +49,7 @@ vi.mock("@pqp/shared", async (importOriginal) => ({
 }));
 
 const { getPool, initDb, closePool } = await import("../db.js");
+const { SOUNDBOARD_MAX_SOUNDS } = await import("@pqp/shared");
 const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
 const {
@@ -183,8 +184,8 @@ describeDb("soundboard upload ledger", () => {
     expect(s3.objects.has(claimed)).toBe(true);
   });
 
-  it("counts pending uploads in the 24 cap from the table", async () => {
-    for (let i = 0; i < 24; i += 1) {
+  it("counts pending uploads in the cap from the table", async () => {
+    for (let i = 0; i < SOUNDBOARD_MAX_SOUNDS; i += 1) {
       await upload();
     }
     await expect(
@@ -196,8 +197,8 @@ describeDb("soundboard upload ledger", () => {
     ).rejects.toMatchObject({ code: "slots" });
   });
 
-  it("does not let two simultaneous requests pass a count of 23", async () => {
-    for (let i = 0; i < 23; i += 1) {
+  it("does not let two simultaneous requests pass a count one short of the cap", async () => {
+    for (let i = 0; i < SOUNDBOARD_MAX_SOUNDS - 1; i += 1) {
       await upload();
     }
     const results = await Promise.allSettled([upload(), upload()]);

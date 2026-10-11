@@ -21,7 +21,7 @@ import {
 } from "../lib/s3.js";
 
 // A clip is at most 512 KB, so a few minutes is plenty to send it. The
-// ticket counts toward the 24 slots until it is claimed or swept, so a long
+// ticket counts toward the server's slots until it is claimed or swept, so a long
 // signature is a long-held slot after an abandoned upload.
 const UPLOAD_URL_TTL_SECONDS = 3 * 60;
 const READ_URL_TTL_SECONDS = 60 * 60;
@@ -356,7 +356,7 @@ export async function createSoundboardUpload(input: {
     UPLOAD_URL_TTL_SECONDS,
   );
   // One statement under the server row lock, so two requests cannot both pass
-  // a count of 23, and the count is the whole cluster's: stored sounds plus
+  // a count one short of the cap, and the count is the whole cluster's: stored sounds plus
   // every ticket still in the table (one stays claimable until swept).
   const client = await getPool().connect();
   try {
@@ -402,7 +402,7 @@ export async function createSoundboardUpload(input: {
  *
  * The GET happens before the transaction. Nothing between BEGIN and COMMIT
  * touches the network. The server row is locked so two claims cannot both
- * pass a count of 23.
+ * pass a count one short of the cap.
  */
 export async function claimSoundboardSound(input: {
   serverId: string;
