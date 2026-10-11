@@ -696,6 +696,11 @@ export async function playSoundboardClip(
 let previewNode: AudioBufferSourceNode | null = null;
 let previewSeq = 0;
 
+/** Stop whatever preview is playing (closing the add dialog, leaving settings). */
+export function stopSoundboardPreview(): void {
+  stopPreview();
+}
+
 function stopPreview(): void {
   previewSeq += 1;
   if (previewNode) {
