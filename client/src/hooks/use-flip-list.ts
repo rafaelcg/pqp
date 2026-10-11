@@ -39,10 +39,18 @@ export function useFlipList(
     }
     // In the container's own scroll coordinates, so scrolling between two
     // passes is not mistaken for every row having moved.
+    // Every read first, every write after: one layout pass, no thrash.
     const origin = root.getBoundingClientRect().top - root.scrollTop;
+    const viewportHeight = window.innerHeight;
     const now = new Map<string, number>();
+    const visible = new Set<HTMLElement>();
     for (const row of rows) {
-      now.set(row.dataset.flipKey!, row.getBoundingClientRect().top - origin);
+      const rect = row.getBoundingClientRect();
+      now.set(row.dataset.flipKey!, rect.top - origin);
+      // Off screen either side: nobody can see it move.
+      if (rect.bottom >= 0 && rect.top <= viewportHeight) {
+        visible.add(row);
+      }
     }
     const before = previous.current;
     previous.current = now;
@@ -52,18 +60,13 @@ export function useFlipList(
     const style = getComputedStyle(root);
     const duration = parseMs(style.getPropertyValue("--duration-base"), 200);
     const easing = style.getPropertyValue("--ease-emphasized").trim() || "ease-out";
-    for (const row of rows) {
-      const key = row.dataset.flipKey!;
-      const was = before.get(key);
-      const is = now.get(key)!;
+    for (const row of visible) {
       if (typeof row.animate !== "function") {
         continue;
       }
-      // Off screen either side: nobody can see it move.
-      const rect = row.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > window.innerHeight) {
-        continue;
-      }
+      const key = row.dataset.flipKey!;
+      const was = before.get(key);
+      const is = now.get(key)!;
       if (was === undefined) {
         row.animate(
           [
