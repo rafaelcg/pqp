@@ -72,7 +72,22 @@ struct ServerHeader: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Fades and shrinks a little as it slides under the bar, so the large
+    /// name never sits behind the back button while the compact copy fades in.
+    /// `visualEffect` reads the geometry without re-running the list's body on
+    /// every scrolled point.
     private var titleBlock: some View {
+        let inset = topInset
+        return titleContent.visualEffect { content, proxy in
+            let bottom = proxy.frame(in: .named(ServerHeader.coordinateSpace)).maxY
+            let progress = min(1, max(0, (bottom - inset) / 56))
+            return content
+                .opacity(progress)
+                .scaleEffect(0.94 + 0.06 * progress, anchor: .bottomLeading)
+        }
+    }
+
+    private var titleContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: name)
                 .font(Typography.display(26))
