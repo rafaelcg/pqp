@@ -102,8 +102,14 @@ export async function conversationTypingAudience(
   }
   if (row.kind === "server") {
     // A channel's kind never changes, so no generation check is needed here.
+    // Bounded by evicting the OLDEST entry (a Set keeps insertion order), not
+    // by clearing: past the bound, a clear would put a query back on every
+    // typing frame of every busy channel at once.
     if (serverChannelMemo.size >= SERVER_CHANNEL_MEMO_MAX) {
-      serverChannelMemo.clear();
+      const oldest = serverChannelMemo.values().next().value;
+      if (oldest !== undefined) {
+        serverChannelMemo.delete(oldest);
+      }
     }
     serverChannelMemo.add(channelId);
     return null;
@@ -114,12 +120,16 @@ export async function conversationTypingAudience(
     return row.recipients;
   }
   // Entries are only replaced when asked again, so a long uptime would keep
-  // every conversation anybody ever typed in. A bounded reset costs one query
-  // per active typist afterwards, which is the same as a TTL expiring.
-  if (typingAudience.size >= SERVER_CHANNEL_MEMO_MAX && !typingAudience.has(channelId)) {
-    typingAudience.clear();
-  }
+  // every conversation anybody ever typed in. Past the bound the conversation
+  // touched longest ago goes (re-inserting below moves this one to the end).
   const byTypist = typingAudience.get(channelId) ?? new Map();
+  typingAudience.delete(channelId);
+  if (typingAudience.size >= SERVER_CHANNEL_MEMO_MAX) {
+    const oldest = typingAudience.keys().next().value;
+    if (oldest !== undefined) {
+      typingAudience.delete(oldest);
+    }
+  }
   byTypist.set(typistId, {
     recipients: row.recipients,
     expiresAt: now + TYPING_AUDIENCE_TTL_MS,
