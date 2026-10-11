@@ -92,6 +92,17 @@ describe("sendNudge", () => {
     expect(getNudgeChannelState(CHANNEL).pending).toBe(false);
   });
 
+  it("a send that throws lets the button go at once", () => {
+    const send = vi.fn(() => {
+      throw new Error("closed");
+    });
+    expect(sendNudge(CHANNEL, { send, connected: true, now: NOW })).toBe("offline");
+    expect(getNudgeChannelState(CHANNEL)).toMatchObject({
+      pending: false,
+      notice: { reason: "unavailable" },
+    });
+  });
+
   it("never queues a nudge on a dead socket: it would land stale", () => {
     const send = vi.fn();
     expect(sendNudge(CHANNEL, { send, connected: false, now: NOW })).toBe("offline");
@@ -135,6 +146,21 @@ describe("handleNudgeRefused", () => {
     });
   });
 
+  it("an answer to an older request never settles the one in flight", () => {
+    const sent: Array<{ nonce: string }> = [];
+    sendNudge(CHANNEL, { send: (frame) => sent.push(frame), connected: true, now: NOW });
+    handleNudgeRefused(
+      { channelId: CHANNEL, reason: "busy", nonce: "an-old-request" },
+      NOW,
+    );
+    expect(getNudgeChannelState(CHANNEL)).toMatchObject({ pending: true, notice: null });
+    handleNudgeRefused({ channelId: CHANNEL, reason: "busy", nonce: sent[0]!.nonce }, NOW);
+    expect(getNudgeChannelState(CHANNEL)).toMatchObject({
+      pending: false,
+      notice: { reason: "busy" },
+    });
+  });
+
   it("a cooldown with no wait in it falls back to the rule's ten seconds", () => {
     handleNudgeRefused({ channelId: CHANNEL, reason: "cooldown" }, NOW);
     expect(getNudgeChannelState(CHANNEL).cooldownUntil).toBe(NOW + NUDGE_COOLDOWN_MS);
@@ -148,16 +174,20 @@ describe("nudgeEffects", () => {
     expect(nudgeEffects(nudgeFrom(LU), open)).toEqual({ landed: false, shake: true, sound: true });
   });
 
-  it("a conversation not on screen plays but never shakes", () => {
+  it("a conversation not open is left to the activity path: no second cue here", () => {
     expect(nudgeEffects(nudgeFrom(LU), { ...open, openChannelId: null })).toEqual({
+      landed: false,
+      shake: false,
+      sound: false,
+    });
+  });
+
+  it("the open one in a hidden tab plays (the server sends it no activity) but does not shake", () => {
+    expect(nudgeEffects(nudgeFrom(LU), { ...open, visible: false })).toEqual({
       landed: false,
       shake: false,
       sound: true,
     });
-  });
-
-  it("a hidden tab does not shake (nobody would see it)", () => {
-    expect(nudgeEffects(nudgeFrom(LU), { ...open, visible: false }).shake).toBe(false);
   });
 
   it("history never shakes or plays", () => {

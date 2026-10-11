@@ -9353,10 +9353,13 @@ function MainAppContent({
   );
   useChannelNotifications({ channels: notificationChannels, unread });
   // Chamar a atenção: whether the button exists (`nudge`, same refresh pass),
-  // and the open conversation's pane shaking when one arrives.
+  // asked for the signed-in session once the age gate has passed (before it
+  // every `/api` route answers 403), and the open conversation's pane shaking
+  // when one arrives.
+  const funConfigUserId = ageGate ? null : (user?.id ?? null);
   useEffect(
-    () => (newcomerInviteUserId ? startFunConfig() : undefined),
-    [newcomerInviteUserId],
+    () => (funConfigUserId ? startFunConfig() : undefined),
+    [funConfigUserId],
   );
   const nudgeShake = useNudgeShake(
     selection.kind === "dm" ? selectedChannelId : null,

@@ -312,7 +312,16 @@ export function sendNudge(channelId: string, options: NudgeSendOptions): NudgeSe
   const nonce = createSendNonce();
   pendingNonces.set(channelId, nonce);
   update(channelId, { pending: true, notice: null });
-  options.send({ type: "nudge", channelId, nonce });
+  try {
+    options.send({ type: "nudge", channelId, nonce });
+  } catch {
+    // The socket went away between the check and the send. Nothing is on the
+    // wire, so let the button go at once and say so.
+    pendingNonces.delete(channelId);
+    update(channelId, { pending: false });
+    setNotice(channelId, "unavailable", now);
+    return "offline";
+  }
   later(`pending:${channelId}`, NUDGE_PENDING_TIMEOUT_MS, () => {
     if (pendingNonces.get(channelId) === nonce) {
       pendingNonces.delete(channelId);
@@ -331,9 +340,13 @@ export interface NudgeRefusedFrame {
 
 /** The server said no. */
 export function handleNudgeRefused(frame: NudgeRefusedFrame, now: number = Date.now()): void {
-  if (!frame.nonce || pendingNonces.get(frame.channelId) === frame.nonce) {
-    pendingNonces.delete(frame.channelId);
+  const inFlight = pendingNonces.get(frame.channelId);
+  // An answer to an older request (one that timed out before this arrived)
+  // must not settle, or speak over, the request that is in flight now.
+  if (frame.nonce && inFlight && inFlight !== frame.nonce) {
+    return;
   }
+  pendingNonces.delete(frame.channelId);
   const cooldownUntil =
     frame.reason === "cooldown"
       ? now + (frame.retryAfterMs && frame.retryAfterMs > 0 ? frame.retryAfterMs : NUDGE_COOLDOWN_MS)
@@ -383,9 +396,11 @@ const NONE: NudgeEffects = { landed: false, shake: false, sound: false };
  *    shakes, no sound;
  *  - somebody else's, but stale (a replay, a slow socket): the line only;
  *  - a muted conversation: the line only (D10);
- *  - otherwise the cue plays, and the pane shakes if it is the conversation on
- *    screen in a visible tab. A conversation not on screen gets its toast from
- *    the `channel-activity` path, which never reaches here.
+ *  - otherwise, in the conversation that is open: the cue plays, and the pane
+ *    shakes if the tab is visible. Any other conversation is left to the
+ *    `channel-activity` path (toast, banner, cue), so the cue never plays
+ *    twice; the server only sends that frame for a conversation that is not
+ *    open, which is why the open one, hidden tab included, is played here.
  */
 export function nudgeEffects(message: NudgeMessageLike, context: NudgeArrivalContext): NudgeEffects {
   if (message.systemKind !== "nudge") {
@@ -399,8 +414,8 @@ export function nudgeEffects(message: NudgeMessageLike, context: NudgeArrivalCon
   if (!isFreshNudge(message, context.viewerId, now) || context.muted) {
     return NONE;
   }
-  const onScreen = context.openChannelId === message.channelId && context.visible;
-  return { landed: false, shake: onScreen, sound: true };
+  const open = context.openChannelId === message.channelId;
+  return { landed: false, shake: open && context.visible, sound: open };
 }
 
 /** Apply the bookkeeping half of `nudgeEffects` for my own landed nudge. */
