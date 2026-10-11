@@ -630,10 +630,9 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     // Conversations have no server: a per-server override would never be
     // read. Checked on every nudge frame, so off is a real kill switch (the
-    // server refuses the frame whatever a stale client thinks), and served
-    // as `nudge` on `GET /api/fun/config`. No `clientVia` until a client reads
-    // it: the contract test rightly fails a field nobody reads.
+    // server refuses the frame whatever a stale client thinks).
     perServer: false,
+    clientVia: "GET /api/fun/config (nudge)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 
