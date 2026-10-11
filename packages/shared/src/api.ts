@@ -93,13 +93,14 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
  *
- * `.catch("signal")`: an id this build does not know (a look added later and
- * picked on a newer client) reads as the default look instead of failing the
- * whole preferences object. The patch route parses with this schema, so one
- * unknown look must not throw away the rest of somebody's settings. Web tabs
- * that predate `retro` never parse it at all: they adopt the stored string,
- * find no stylesheet for it and draw the default look (`signal` is `:root`),
- * and the boot script ignores ids it does not list.
+ * An id outside this list is still refused (the patch answers 400 and nothing
+ * is stored; `e2e/theme-preferences.spec.ts` pins it). No `.catch` to the
+ * default: on the write path that would silently overwrite somebody's stored
+ * look with `signal`. Web tabs that predate `retro` never zod-parse the
+ * preferences they read: they adopt the stored string, find no stylesheet for
+ * it and draw the default look (`signal` is `:root`), and the boot script
+ * ignores ids it does not list. So accepting `retro` here is all an older tab
+ * needs to survive one.
  */
 export const APPEARANCE_PREFERENCES = [
   "signal",
@@ -108,13 +109,10 @@ export const APPEARANCE_PREFERENCES = [
   "night",
   "retro",
 ] as const;
-export const appearancePreferenceSchema = z
-  .preprocess(
-    (value) =>
-      value === "guild" || value === "accord" ? "harmony" : value,
-    z.enum(APPEARANCE_PREFERENCES),
-  )
-  .catch("signal");
+export const appearancePreferenceSchema = z.preprocess(
+  (value) => (value === "guild" || value === "accord" ? "harmony" : value),
+  z.enum(APPEARANCE_PREFERENCES),
+);
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
 /**

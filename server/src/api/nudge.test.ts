@@ -155,12 +155,13 @@ describeDb("chamar a atenção over HTTP", () => {
       sounds: { nudge: false, friendOnline: true },
     });
 
-    // A look this build has never heard of does not throw the patch away.
-    const later = await call("PATCH", "/api/me/preferences", {
-      appearance: "y2k",
-      allowNudges: true,
-    });
-    expect(later.status).toBe(200);
-    expect(later.json.preferences).toMatchObject({ appearance: "signal", allowNudges: true });
+    // A look this build has never heard of is refused and nothing changes.
+    const later = await call("PATCH", "/api/me/preferences", { appearance: "y2k" });
+    expect(later.status).toBe(400);
+    const after = await getPool().query<{ settings: { appearance?: string } }>(
+      `SELECT settings FROM user_preferences WHERE user_id = $1`,
+      [alice.id],
+    );
+    expect(after.rows[0]!.settings.appearance).toBe("retro");
   });
 });

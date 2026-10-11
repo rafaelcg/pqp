@@ -256,7 +256,7 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });
 
-  it("accepts the five appearance skins and reads an unknown one as the default", () => {
+  it("accepts the five appearance skins and rejects anything else", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
       true,
     );
@@ -278,19 +278,13 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.parse({ appearance: "retro" })).toEqual({
       appearance: "retro",
     });
-    // An id this build does not know never fails the whole object: the rest of
-    // the patch still lands and the look reads as the default.
     expect(
-      userPreferencesSchema.parse({ appearance: "discord", theme: "dark" }),
-    ).toEqual({ appearance: "signal", theme: "dark" });
-    expect(userPreferencesSchema.parse({ appearance: "onyx" })).toEqual({
-      appearance: "signal",
-    });
-    expect(userPreferencesSchema.parse({ appearance: 7 })).toEqual({
-      appearance: "signal",
-    });
-    // Absent stays absent: the catch must not invent a look for a patch that
-    // did not mention one, or every save would reset it.
+      userPreferencesSchema.safeParse({ appearance: "discord" }).success,
+    ).toBe(false);
+    expect(
+      userPreferencesSchema.safeParse({ appearance: "onyx" }).success,
+    ).toBe(false);
+    // Absent stays absent: a patch that does not mention a look keeps it.
     expect(userPreferencesSchema.parse({ theme: "dark" })).toEqual({ theme: "dark" });
   });
 
