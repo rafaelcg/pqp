@@ -1092,7 +1092,7 @@
   "voice.audio.muteShare": "Mutar a transmissão de {name}",
   "voice.audio.soundboard": "Soundboard",
   "voice.audio.soundboardFor": "Sons do soundboard de {name}",
-  "voice.audio.soundboardMarkMuted": "Sons do soundboard de {name} mutados",
+  "voice.audio.soundboardMarkMuted": "Sons do soundboard de {name} silenciados",
   "voice.audio.moreFaces": "Mais {count} na chamada",
   "voice.audio.peopleInCall": "Quem está na chamada",
   "voice.audio.unmuteShare": "Desmutar a transmissão de {name}",

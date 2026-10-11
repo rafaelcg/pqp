@@ -27,7 +27,7 @@ const ana = {
   deafened: false,
 } as unknown as VoiceParticipant;
 
-function mount() {
+function mount(soundboard = true) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -41,7 +41,7 @@ function mount() {
             isSpeaking={false}
             canDrag={false}
             items={[]}
-            audio={{ voice: { volume: 1, onSetVolume: vi.fn() } }}
+            audio={{ voice: { volume: 1, onSetVolume: vi.fn() }, soundboard }}
             onDragStart={() => {}}
             onDragEnd={() => {}}
           />
@@ -73,6 +73,18 @@ describe("VoiceOccupantRow soundboard", () => {
     const mark = row().querySelector("[data-soundboard-muted-mark]")!;
     expect(mark.getAttribute("role")).toBe("img");
     expect(row().getAttribute("aria-label")).toContain("soundboard sounds are muted");
+  });
+
+  it("offers the soundboard switch only while this server's board is on", () => {
+    mount(false);
+    act(() => row().click());
+    expect(menu()).not.toBeNull();
+    expect(menu()!.querySelector('[data-testid="peer-audio-soundboard"]')).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    mount(true);
+    act(() => row().click());
+    expect(menu()!.querySelector('[data-testid="peer-audio-soundboard"]')).not.toBeNull();
   });
 
   it("returns the focus to the row when Escape closes its menu", () => {
