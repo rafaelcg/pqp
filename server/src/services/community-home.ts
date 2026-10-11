@@ -30,6 +30,7 @@ import type { PoolClient } from "pg";
 import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
 import {
+  copyObject,
   deleteObject,
   getObjectPrefix,
   headObject,
@@ -56,6 +57,8 @@ import {
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
 import { toPublicUserSummary } from "./users.js";
+import { checkCommunityHomeUpload } from "./community-home-scan.js";
+import { isContentScanConfigured, type ScanStatus } from "./content-scan.js";
 
 /** The allowlisted content types a Baú image may be stored under. */
 const IMAGE_CONTENT_TYPES: ReadonlySet<string> = new Set(
@@ -1931,6 +1934,81 @@ export async function mintCommunityHomeMediaUpload(input: {
   };
 }
 
+/**
+ * A key under `pinned/` is one this process copied to and never signed a PUT
+ * for. Mint never produces one.
+ */
+function isPinnedCommunityHomeKey(serverId: string, key: string): boolean {
+  return key.startsWith(`${homeMediaPrefix(serverId)}pinned/`);
+}
+
+/**
+ * Move an upload's bytes to a key nobody can write to, and point the row at it.
+ *
+ * The presigned PUT the uploader got at mint stays valid for 15 minutes and an
+ * S3 PUT is an unconditional overwrite, so without this an image could pass
+ * the scan and then be replaced, under the same key, by something else of the
+ * same length, which every post would then serve. A server-side copy (no bytes
+ * through this process) to a fresh key closes that: the scan, the HEAD and the
+ * sniff all run on the copy, and the copy is what the row, and so every post,
+ * points at. The `presignPut` comment in `lib/s3.ts` names this fix.
+ *
+ * Only for images and only while a scanner is configured, because that is the
+ * one case where the bytes are judged; with nothing judging them a swap
+ * changes nothing a check said.
+ *
+ * The original is deleted best-effort. A PUT through the still-valid old URL
+ * can recreate it, as a stray object no row names (bounded by the signed
+ * Content-Length and the URL's TTL); nothing serves it.
+ */
+async function pinCommunityHomeUpload(
+  uploadId: string,
+  serverId: string,
+  sourceKey: string,
+): Promise<string> {
+  const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
+  const pinnedKey = `${homeMediaPrefix(serverId)}pinned/${randomUUID()}${extension}`;
+  try {
+    await copyObject(sourceKey, pinnedKey);
+  } catch (error) {
+    console.error(
+      `[community-home] could not pin ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+    // A copy can land and still answer with an error (a timeout on the
+    // response). Nothing names that key, so drop it rather than leak it.
+    void deleteObject(pinnedKey).catch(() => {});
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
+  let moved = false;
+  try {
+    // Any verdict the row carried was about the old key's bytes. Start over.
+    const result = await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET storage_key = $3, scan_status = 'unscanned', scan_provider = NULL,
+              scan_score = NULL, scan_labels = NULL, scanned_at = NULL
+        WHERE id = $1 AND storage_key = $2`,
+      [uploadId, sourceKey, pinnedKey],
+    );
+    moved = (result.rowCount ?? 0) > 0;
+  } finally {
+    if (!moved) {
+      // The copy is named by nothing; drop it rather than leak it.
+      void deleteObject(pinnedKey).catch(() => {});
+    }
+  }
+  if (!moved) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
+  void deleteObject(sourceKey).catch((error: unknown) => {
+    console.error(
+      `[community-home] could not delete pinned-from ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+  });
+  return pinnedKey;
+}
+
 export async function claimCommunityHomeMediaUpload(input: {
   serverId: string;
   uploaderId: string;
@@ -1958,9 +2036,11 @@ export async function claimCommunityHomeMediaUpload(input: {
     kind: "image" | "video" | "file";
     uploader_id: string;
     server_id: string;
+    scan_status: ScanStatus;
+    quarantined_at: Date | null;
   }>(
     `SELECT id, storage_key, filename, content_type, byte_size, kind,
-            uploader_id, server_id
+            uploader_id, server_id, scan_status, quarantined_at
        FROM community_home_media_uploads
       WHERE id = $1`,
     [input.uploadId],
@@ -1973,8 +2053,30 @@ export async function claimCommunityHomeMediaUpload(input: {
   ) {
     throw new CommunityHomeError("not_found", "Media upload not found");
   }
+  // The scanner refused it. Same answer as any other failed verification, and
+  // no second look: a quarantined row is evidence, not a retry.
+  if (upload.quarantined_at) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
   if (!isCommunityHomeKey(input.serverId, upload.storage_key)) {
     throw new CommunityHomeError("invalid", "Invalid storage key");
+  }
+  // An image the scanner is about to judge is first moved to a key nobody
+  // holds a PUT URL for, so the bytes it judges are the bytes every post will
+  // serve. See `pinCommunityHomeUpload`.
+  let storageKey = upload.storage_key;
+  let scanStatus = upload.scan_status;
+  if (
+    upload.kind === "image" &&
+    isContentScanConfigured() &&
+    !isPinnedCommunityHomeKey(input.serverId, storageKey)
+  ) {
+    storageKey = await pinCommunityHomeUpload(
+      upload.id,
+      input.serverId,
+      storageKey,
+    );
+    scanStatus = "unscanned";
   }
   // An image's first bytes are read alongside the HEAD rather than after it,
   // so the byte check costs no extra round trip on the claim. The read settles
@@ -1983,7 +2085,7 @@ export async function claimCommunityHomeMediaUpload(input: {
   const prefixRead =
     upload.kind === "image"
       ? getObjectPrefix(
-          upload.storage_key,
+          storageKey,
           COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
         ).then(
           (bytes) => ({ ok: true as const, bytes }),
@@ -1992,10 +2094,10 @@ export async function claimCommunityHomeMediaUpload(input: {
       : null;
   let head;
   try {
-    head = await headObject(upload.storage_key);
+    head = await headObject(storageKey);
   } catch (error) {
     console.error(
-      `[community-home] HEAD failed for ${upload.storage_key}:`,
+      `[community-home] HEAD failed for ${storageKey}:`,
       error instanceof Error ? error.message : error,
     );
     throw new CommunityHomeError("not_verified", "Upload could not be verified");
@@ -2025,7 +2127,7 @@ export async function claimCommunityHomeMediaUpload(input: {
     const read = await prefixRead;
     if (!read.ok) {
       console.error(
-        `[community-home] GET prefix failed for ${upload.storage_key}:`,
+        `[community-home] GET prefix failed for ${storageKey}:`,
         read.error instanceof Error ? read.error.message : read.error,
       );
       throw new CommunityHomeError(
@@ -2045,6 +2147,25 @@ export async function claimCommunityHomeMediaUpload(input: {
       );
     }
     contentType = sniffed;
+  }
+  // The image scan, last and on its own: only bytes that passed the HEAD and
+  // the sniff are worth a provider call, and the sniffed type is the one to
+  // scan as. Refused (or unjudgeable, under the default fail-closed mode) and
+  // the row is never verified, so no post can carry it. The reasons this is
+  // the place are on `checkCommunityHomeUpload`.
+  const allowed = await checkCommunityHomeUpload({
+    id: upload.id,
+    serverId: upload.server_id,
+    uploaderId: upload.uploader_id,
+    storageKey,
+    contentType,
+    scanStatus,
+    bytesPinned:
+      upload.kind !== "image" ||
+      isPinnedCommunityHomeKey(input.serverId, storageKey),
+  });
+  if (!allowed) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
   }
   await pool.query(
     `UPDATE community_home_media_uploads
@@ -2115,6 +2236,12 @@ async function flushDueScheduledPosts(serverId: string): Promise<void> {
   }
 }
 
+/**
+ * Delete uploads nothing claimed. A row the scanner quarantined is unclaimed
+ * and unverified too, and is the one this must not take: it is the evidence a
+ * moderator is being sent to look at. `sweepQuarantinedCommunityHomeMedia`
+ * owns those rows instead.
+ */
 export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
   if (!isStorageConfigured()) {
     return 0;
@@ -2123,6 +2250,7 @@ export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
     `SELECT id, storage_key FROM community_home_media_uploads
       WHERE claimed_post_id IS NULL
         AND verified_at IS NULL
+        AND quarantined_at IS NULL
         AND created_at < NOW() - $1::interval
       ORDER BY created_at ASC
       LIMIT $2`,

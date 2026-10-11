@@ -655,6 +655,69 @@ export async function createAutomatedReport(input: {
   return (inserted.rowCount ?? 0) > 0;
 }
 
+/**
+ * A report nobody filed, about an upload that belongs to no channel: Baú media.
+ *
+ * Same four rules as `createAutomatedReport` (no reporter, no flood cap, the
+ * subject is the person, one open ticket per uploader per place), with one
+ * routing difference that is the reason this is a separate function: it always
+ * lands in the INSTANCE queue (`context_kind = 'none'`, NULL `server_id`).
+ *
+ * Only staff with Manage Server can upload to a Baú, so the uploader is, by
+ * construction, somebody who reads that server's own queue. Filing the scanner's
+ * finding there would hand the accusation to the accused, which is the rule
+ * community reports already follow (`resolveServerSubject`). `placeLabel`
+ * names where it happened ("Baú · <server name>") so the instance moderator
+ * is not left guessing, and is also the dedupe key: one open ticket per
+ * uploader per Baú, so a finding in a second server's Baú, or a DM attachment
+ * finding (context `dm`/`group`, no label), is never folded into this one.
+ */
+export async function createAutomatedInstanceReport(input: {
+  reportedUserId: string;
+  placeLabel: string;
+  reason: ReportReason;
+  details: string;
+}): Promise<boolean> {
+  const user = await getPool().query<{
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+  }>(
+    `SELECT display_name, username, discriminator FROM users WHERE id = $1`,
+    [input.reportedUserId],
+  );
+  const row = user.rows[0];
+  if (!row) {
+    return false;
+  }
+
+  const inserted = await getPool().query(
+    `INSERT INTO reports (
+       reporter_id, subject_type, context_kind, reported_user_id,
+       server_id, channel_id, subject_label, channel_label, reason, details
+     )
+     SELECT NULL, 'user', 'none', $1, NULL, NULL, $2, $3, $4, $5
+     WHERE NOT EXISTS (
+       SELECT 1 FROM reports
+       WHERE status = 'open'
+         AND reporter_id IS NULL
+         AND subject_type = 'user'
+         AND reported_user_id = $1
+         AND server_id IS NULL
+         AND context_kind = 'none'
+         AND channel_label = $3
+     )`,
+    [
+      input.reportedUserId,
+      labelFor(row),
+      input.placeLabel,
+      input.reason,
+      input.details,
+    ],
+  );
+  return (inserted.rowCount ?? 0) > 0;
+}
+
 export async function getReport(id: string): Promise<Report | null> {
   const result = await getPool().query<ReportRow>(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} WHERE r.id = $1::bigint`,
@@ -791,7 +854,11 @@ function toAllReport(row: AllReportRow): AllReport {
  *    `escalateScanResult` writes into `details`. `NULLIF(..., '')::uuid`
  *    resolves to NULL rather than raising when the pattern does not match
  *    (a human-filed report, or a legacy row from before that phrasing),
- *    which is what keeps the cast from failing the whole query.
+ *    which is what keeps the cast from failing the whole query. A Baú upload
+ *    has no attachment row; `escalateCommunityHomeScan` writes "Baú upload
+ *    <uuid>" instead, and the second arm of the same LATERAL reads it back
+ *    from `community_home_media_uploads` ("still attached" there means a post
+ *    holds it).
  */
 export async function listAllReports(
   options: ListReportsOptions,
@@ -803,19 +870,29 @@ export async function listAllReports(
             srv.name AS server_name,
             ma.scan_status, ma.scan_score, ma.scan_labels,
             ma.scan_provider, ma.content_type AS scan_content_type,
-            (ma.message_id IS NOT NULL) AS scan_still_attached
+            ma.attached AS scan_still_attached
      FROM reports r
      ${REPORT_JOINS}
      LEFT JOIN servers srv ON srv.id = r.server_id
      LEFT JOIN LATERAL (
        SELECT scan_status, scan_score, scan_labels, scan_provider,
-              content_type, message_id
+              content_type, (message_id IS NOT NULL) AS attached
        FROM message_attachments
        WHERE r.reporter_id IS NULL
          AND id = NULLIF(
                substring(r.details FROM 'attachment ([0-9a-f-]{36})'),
                ''
              )::uuid
+       UNION ALL
+       SELECT scan_status, scan_score, scan_labels, scan_provider,
+              content_type, (claimed_post_id IS NOT NULL) AS attached
+       FROM community_home_media_uploads
+       WHERE r.reporter_id IS NULL
+         AND id = NULLIF(
+               substring(r.details FROM 'Baú upload ([0-9a-f-]{36})'),
+               ''
+             )::uuid
+       LIMIT 1
      ) ma ON TRUE
      ${tail}`,
     params,

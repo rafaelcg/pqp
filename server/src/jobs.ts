@@ -31,6 +31,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -145,6 +146,13 @@ export async function sweepAttachments(): Promise<void> {
 }
 
 async function sweepCommunityHomeMedia(): Promise<void> {
+  // Quarantine expiry first and on its own: a failure in one sweep must not
+  // starve the other. Never touches an illegal-content row at any age.
+  try {
+    await sweepQuarantinedCommunityHomeMedia();
+  } catch (error) {
+    console.error("[content-safety] Baú quarantine sweep failed:", error);
+  }
   try {
     await sweepOrphanedCommunityHomeMedia();
   } catch (error) {
