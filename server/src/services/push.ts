@@ -742,16 +742,29 @@ export function pushRefusal(
  * The same most-specific-wins resolution the client's
  * `resolveNotificationLevel` performs, over the same stored object — kept in
  * lockstep so the phone and the desktop cannot disagree about a mute.
+ *
+ * `parentChannelId` is the channel a thread or forum post sits under. Nobody
+ * sets a level on a thread (there is no surface for it), so without this step
+ * muting `#geral` or a forum muted nothing inside its threads and posts: a
+ * mention there skipped straight to the server's level. Thread, then parent,
+ * then server.
  */
 export function resolvePushLevel(
   settings: UserPreferences | null,
   serverId: string | null,
   channelId: string,
+  parentChannelId: string | null = null,
 ): "all" | "mentions" | "none" {
   const notifications = settings?.notifications;
   const channelLevel = notifications?.channels?.[channelId];
   if (channelLevel) {
     return channelLevel;
+  }
+  if (parentChannelId) {
+    const parentLevel = notifications?.channels?.[parentChannelId];
+    if (parentLevel) {
+      return parentLevel;
+    }
   }
   if (serverId) {
     const serverLevel = notifications?.servers?.[serverId];
@@ -999,12 +1012,24 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
   }
 
   // DND and levels, read at send time — the client that usually applies them
-  // is not running, which is the only reason we are here.
-  const preferenceRows = await getPool().query<PreferenceRow>(
-    `SELECT user_id, settings FROM user_preferences
-     WHERE user_id = ANY($1::uuid[])`,
-    [offline],
-  );
+  // is not running, which is the only reason we are here. Beside them, for a
+  // server channel, the parent of a thread or forum post, so a muted channel
+  // or forum mutes what is said inside its threads (`resolvePushLevel`).
+  const [preferenceRows, parentChannelId] = await Promise.all([
+    getPool().query<PreferenceRow>(
+      `SELECT user_id, settings FROM user_preferences
+       WHERE user_id = ANY($1::uuid[])`,
+      [offline],
+    ),
+    audience.kind === "server"
+      ? getPool()
+          .query<{ parent_id: string | null }>(
+            `SELECT parent_id FROM channels WHERE id = $1 AND type = 'thread'`,
+            [event.channelId],
+          )
+          .then((result) => result.rows[0]?.parent_id ?? null)
+      : Promise.resolve(null),
+  ]);
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
@@ -1015,7 +1040,12 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       mention: mentioned.has(userId) || userId === replied,
       channelKind: audience.kind,
       manualStatus: settings?.status,
-      level: resolvePushLevel(settings, audience.serverId, event.channelId),
+      level: resolvePushLevel(
+        settings,
+        audience.serverId,
+        event.channelId,
+        parentChannelId,
+      ),
     });
     if (refusal) {
       notePushSkipped("message", refusal, userId, skipContext);

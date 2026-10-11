@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  FORUM_UNREAD_CAP,
   formatUserTag,
   USER_SEARCH_PAGE_SIZE,
   type DmPrivacy,
@@ -1475,6 +1476,26 @@ export async function liftBan(
  * disagree with the badge that appeared at the time, about the same message.
  * The message is still delivered and still readable behind the client's
  * curtain — a block takes away the notification, not the content.
+ *
+ * --- forums --- (packages/shared/src/forums.ts, "UNREAD"). A forum post gets
+ * NO row here, and a forum's row is computed differently from a channel's:
+ *
+ * - `count` is the number of published posts by others created after the
+ *   viewer's cursor on the FORUM (capped at `FORUM_UNREAD_CAP`). A reply in a
+ *   post the viewer never opened does not light the forum. That is the rule
+ *   that keeps a busy forum readable, and it is also what keeps this query
+ *   cheap: counted per post, a viewer who never opened 2,000 posts would make
+ *   every server open count every message in all of them, from `-infinity`.
+ * - `mentions` is the viewer's `message_mentions` rows inside the forum's
+ *   posts, after that post's own cursor, or after the forum's when the post
+ *   was never opened. Driven by the viewer's mentions
+ *   (`idx_message_mentions_user`), not by the posts, so it costs the same at
+ *   ten posts and at ten thousand. `@everyone` inside a post is not counted
+ *   there (it is a flag on the message, not a row per member, and finding it
+ *   means scanning the posts); the post itself still lights the forum.
+ *
+ * Chat threads keep their own rows: the web client derives which threads are
+ * unread from these keys.
  */
 export async function listUnread(serverId: string, userId: string) {
   const result = await getPool().query<{
@@ -1499,9 +1520,58 @@ export async function listUnread(serverId: string, userId: string) {
      LEFT JOIN message_mentions mm
        ON mm.message_id = m.id AND mm.user_id = $2
      WHERE c.server_id = $1
+       AND c.type <> 'forum'
+       -- Not a forum post. Written against the parent rather than as a probe
+       -- of forum_posts so it filters the channel scan itself (one hashed
+       -- list of this server's forums) before the per-row visibility check:
+       -- as an anti-join the planner ran it after, and paid channel_viewable
+       -- once per post. A post never moves between forums and a chat thread
+       -- never has a forum parent, so the two agree.
+       AND NOT (
+         c.type = 'thread'
+         AND c.parent_id IS NOT NULL
+         AND c.parent_id IN (
+           SELECT f.id FROM channels f WHERE f.server_id = $1 AND f.type = 'forum'
+         )
+       )
        AND ${channelVisibleSql("$2")}
-     GROUP BY c.id`,
-    [serverId, userId],
+     GROUP BY c.id
+
+     UNION ALL
+
+     SELECT c.id AS channel_id,
+            (SELECT COUNT(*) FROM (
+               SELECT 1
+                 FROM forum_posts fp
+                WHERE fp.forum_id = c.id
+                  AND fp.published_at IS NOT NULL
+                  AND fp.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+                  AND fp.author_id IS DISTINCT FROM $2
+                  AND ${notBlockedSql("$2", "fp.author_id")}
+                LIMIT $3
+             ) fresh)::text AS count,
+            (SELECT COUNT(*)
+               FROM message_mentions mm
+               JOIN messages m ON m.id = mm.message_id
+               JOIN forum_posts fp ON fp.channel_id = m.channel_id
+               LEFT JOIN channel_reads pr
+                 ON pr.channel_id = fp.channel_id AND pr.user_id = $2
+              WHERE mm.user_id = $2
+                AND fp.forum_id = c.id
+                AND fp.published_at IS NOT NULL
+                AND m.author_id <> $2
+                AND m.created_at > COALESCE(
+                      pr.last_read_at, cr.last_read_at, TIMESTAMPTZ '-infinity')
+                AND ${notBlockedSql("$2", "m.author_id")}
+            )::text AS mentions
+     FROM channels c
+     JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
+     LEFT JOIN channel_reads cr
+       ON cr.channel_id = c.id AND cr.user_id = $2
+     WHERE c.server_id = $1
+       AND c.type = 'forum'
+       AND ${channelVisibleSql("$2")}`,
+    [serverId, userId, FORUM_UNREAD_CAP],
   );
 
   return result.rows.map((row) => ({

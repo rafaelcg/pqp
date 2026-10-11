@@ -92,8 +92,17 @@ const DELETE_CONCURRENCY = 8;
  * longer exists. Read them afterwards and nothing in Postgres names the bytes
  * ever again.
  */
-async function channelAttachmentKeys(channelId: string): Promise<string[]> {
-  if (!isStorageConfigured()) {
+/**
+ * The storage keys of every attachment in these channels, in ONE query
+ * however many channels there are. `deleteChannel` passes the channel plus
+ * all its threads at once: a forum is a channel with up to thousands of posts
+ * under it, and one query per post (what this used to be, through
+ * `Promise.all`) fired that many queries at the pool in the same instant.
+ */
+async function channelAttachmentKeys(
+  channelIds: readonly string[],
+): Promise<string[]> {
+  if (!isStorageConfigured() || channelIds.length === 0) {
     return [];
   }
   // `ATTACHMENT_OBJECT_KEYS`, not `storage_key`: a voice note's AAC copy is a
@@ -102,11 +111,21 @@ async function channelAttachmentKeys(channelId: string): Promise<string[]> {
     `SELECT ${ATTACHMENT_OBJECT_KEYS}
      FROM message_attachments a
      ${ATTACHMENT_VOICE_JOIN}
-     WHERE a.channel_id = $1
+     WHERE a.channel_id = ANY($1::uuid[])
      LIMIT ${MAX_DELETED_OBJECTS}`,
-    [channelId],
+    [channelIds],
   );
   return result.rows.map((row) => row.storage_key);
+}
+
+/**
+ * The types that share one top-level sibling group (one numbering of
+ * `position`). The sidebar lists forums among the text channels, so a forum
+ * and a text channel are numbered together; numbered apart, a new forum and
+ * the first text channel would both sit at position 0 of one visible list.
+ */
+export function positionGroupTypes(type: string): string[] {
+  return type === "text" || type === "forum" ? ["text", "forum"] : [type];
 }
 
 /** Same read as `channelAttachmentKeys`, reached through the server's channels. */
@@ -412,8 +431,8 @@ export async function createChannel(
   // types together, matching how the sidebar nests them under one heading.
   const positionResult = await getPool().query<{ max: number | null }>(
     `SELECT MAX(position) as max FROM channels
-     WHERE server_id = $1 AND parent_id IS NULL AND type = $2`,
-    [serverId, type],
+     WHERE server_id = $1 AND parent_id IS NULL AND type = ANY($2::text[])`,
+    [serverId, positionGroupTypes(type)],
   );
   const position = (positionResult.rows[0]?.max ?? -1) + 1;
 
@@ -530,9 +549,9 @@ export async function moveChannel(
     const destination = await client.query<{ id: string }>(
       `SELECT id FROM channels
        WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
-         AND ($3 IS NOT NULL OR type = $4)
+         AND ($3 IS NOT NULL OR type = ANY($4::text[]))
        ORDER BY position ASC`,
-      [serverId, channelId, parentId, row.type],
+      [serverId, channelId, parentId, positionGroupTypes(row.type)],
     );
     const destIds = destination.rows.map((r) => r.id);
     const clampedIndex = Math.max(0, Math.min(index, destIds.length));
@@ -553,9 +572,9 @@ export async function moveChannel(
       const vacated = await client.query<{ id: string }>(
         `SELECT id FROM channels
          WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
-           AND ($3 IS NOT NULL OR type = $4)
+           AND ($3 IS NOT NULL OR type = ANY($4::text[]))
          ORDER BY position ASC`,
-        [serverId, channelId, oldParentId, row.type],
+        [serverId, channelId, oldParentId, positionGroupTypes(row.type)],
       );
       for (let i = 0; i < vacated.rows.length; i++) {
         await client.query(`UPDATE channels SET position = $1 WHERE id = $2`, [
@@ -642,25 +661,22 @@ export async function updateChannel(
 }
 
 export async function deleteChannel(channelId: string): Promise<boolean> {
-  const keys = await channelAttachmentKeys(channelId);
-
   // --- threads ---
-  // A text channel's threads die with it, explicitly. `parent_id` is ON DELETE
-  // SET NULL (categories need that), so without this the threads would survive
-  // as orphans: invisible to everyone (the visibility predicate fails closed on
-  // a null parent) but still holding messages and attachment rows forever.
-  // Their attachment keys are read here, before anything is deleted, for the
-  // same reason `channelAttachmentKeys` runs first for the channel itself: the
-  // cascade destroys the only rows that name the objects.
+  // A text channel's threads die with it, explicitly, and so do a forum's
+  // posts (a post is a thread). `parent_id` is ON DELETE SET NULL (categories
+  // need that), so without this the threads would survive as orphans:
+  // invisible to everyone (the visibility predicate fails closed on a null
+  // parent) but still holding messages and attachment rows forever. The
+  // attachment keys of the channel and every thread are read here, in one
+  // query, before anything is deleted: the cascade destroys the only rows
+  // that name the objects.
   const threadIds = (
     await getPool().query<{ id: string }>(
       `SELECT id FROM channels WHERE parent_id = $1 AND type = 'thread'`,
       [channelId],
     )
   ).rows.map((row) => row.id);
-  const threadKeys = (
-    await Promise.all(threadIds.map((id) => channelAttachmentKeys(id)))
-  ).flat();
+  const keys = await channelAttachmentKeys([channelId, ...threadIds]);
 
   const client = await getPool().connect();
   try {
@@ -705,11 +721,14 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
     const deleted = (result.rowCount ?? 0) > 0;
 
     if (deleted && serverId && orphaned.rows.length > 0) {
+      // Keyed by sibling group, not by bare type: a forum leaving a category
+      // joins the text channels' numbering (`positionGroupTypes`).
       const newcomersByType = new Map<string, string[]>();
       for (const row of orphaned.rows) {
-        const list = newcomersByType.get(row.type) ?? [];
+        const group = positionGroupTypes(row.type)[0]!;
+        const list = newcomersByType.get(group) ?? [];
         list.push(row.id);
-        newcomersByType.set(row.type, list);
+        newcomersByType.set(group, list);
       }
       // One pass per type: the newcomers append, in the order they held
       // inside the category, after whatever top-level channels of that same
@@ -719,10 +738,10 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
       for (const [type, newcomers] of newcomersByType) {
         const existing = await client.query<{ id: string }>(
           `SELECT id FROM channels
-           WHERE server_id = $1 AND parent_id IS NULL AND type = $2
+           WHERE server_id = $1 AND parent_id IS NULL AND type = ANY($2::text[])
              AND id <> ALL($3::uuid[])
            ORDER BY position ASC`,
-          [serverId, type, newcomers],
+          [serverId, positionGroupTypes(type), newcomers],
         );
         const ordered = [...existing.rows.map((r) => r.id), ...newcomers];
         for (let i = 0; i < ordered.length; i++) {
@@ -754,7 +773,7 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
       for (const threadId of threadIds) {
         invalidateChannelAudience(threadId);
       }
-      deleteObjectsInBackground([...keys, ...threadKeys]);
+      deleteObjectsInBackground(keys);
     }
     return deleted;
   } catch (error) {

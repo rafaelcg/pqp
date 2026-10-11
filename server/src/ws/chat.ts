@@ -87,6 +87,7 @@ import {
   type AutomodHitEffects,
 } from "../services/automod.js";
 import { listServerChannelIds } from "../services/servers.js";
+import { forumPostLockState } from "../services/forum-guards.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import {
@@ -2075,6 +2076,13 @@ async function postChannelMessageAttempt(
   }
 
   const channel = await getChannel(input.channelId);
+  // --- forums --- a forum never holds a message of its own: what is said in
+  // it is said in a post, and a message stored on the forum row is one no
+  // surface ever shows. Refused as `no-access`, the answer an older client
+  // already has copy for, before any permission is computed.
+  if (channel?.kind === "server" && channel.type === "forum") {
+    return { ok: false, reason: "no-access" };
+  }
   let canMentionEveryone = false;
   let memberPerms = 0n;
   if (channel?.kind === "server" && channel.server_id) {
@@ -2087,6 +2095,20 @@ async function postChannelMessageAttempt(
       return { ok: false, reason: "cannot-send" };
     }
     canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
+  }
+  // --- forums --- a post staff locked takes no more replies, except from
+  // staff: MANAGE_MESSAGES or MANAGE_CHANNELS, resolved on the post (which
+  // `applyChannelOverwrites` reads as the forum), the same pair that walks
+  // through slow mode below. Staff skip the read entirely; for everyone else
+  // it is one primary-key probe, and a chat thread answers "not a post".
+  if (
+    channel?.kind === "server" &&
+    channel.type === "thread" &&
+    !hasPermission(memberPerms, Permission.MANAGE_MESSAGES) &&
+    !hasPermission(memberPerms, Permission.MANAGE_CHANNELS) &&
+    (await forumPostLockState(input.channelId))?.locked
+  ) {
+    return { ok: false, reason: "locked" };
   }
   if (input.author.is_character && channel?.kind !== "server") {
     return { ok: false, reason: "cannot-send" };
@@ -2142,6 +2164,9 @@ async function postChannelMessageAttempt(
     const automodInput = {
       serverId: channel.server_id,
       channelId: input.channelId,
+      // A rule that exempts a channel exempts its threads and forum posts.
+      parentChannelId:
+        channel.type === "thread" ? (channel.parent_id ?? null) : null,
       authorId: input.author.id,
       memberPerms,
       body: input.body,
