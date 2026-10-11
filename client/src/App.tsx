@@ -3133,13 +3133,22 @@ function MainAppContent({
   // accepts. Opens or reuses the 1:1; a refusal (privacy, a block) comes back
   // in the server's own words on the app's error line.
   const stableOnMessagePerson = useStableCallback((userId: string) => {
+    // The account that asked. A sign-out or account switch while the request
+    // is in flight must not drop this conversation into the next account.
+    const askedBy = userIdRef.current;
     void (async () => {
       try {
         const { conversation } = await createConversation([userId]);
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
         setConversations((prev) => upsertConversation(prev, conversation));
         setWhatsNewOpen(false);
-        void selectConversation(conversation.channelId);
+        await selectConversation(conversation.channelId);
       } catch (error) {
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
         setAppError(
           error instanceof ApiError || error instanceof Error
             ? error.message

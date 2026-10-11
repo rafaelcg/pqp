@@ -5,8 +5,8 @@ import {
   type UserStatus,
 } from "@pqp/shared";
 import { Check, X } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useFriends } from "@/components/friends/use-friends";
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FriendsContext } from "@/components/friends/use-friends";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
@@ -16,6 +16,8 @@ import { ApiError, createConversation } from "@/lib/api";
 import { foldForSearch } from "@/lib/conversation-list";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+const NO_FRIENDS: readonly (PublicUser & { status: UserStatus })[] = [];
 
 /** How many people from recent 1:1s, beyond friends, are offered without typing. */
 const RECENT_PEOPLE = 5;
@@ -95,7 +97,19 @@ export function NewConversationDialog({
   onCreated,
 }: NewConversationDialogProps) {
   const { t } = useTranslation();
-  const friends = useFriends();
+  // The store directly, retaining the presence poll only while the dialog is
+  // open: this dialog is always mounted, and `useFriends()` would keep the
+  // 15 s poll running for the whole session behind a closed dialog.
+  const store = useContext(FriendsContext);
+  const retainLive = store?.retainLive;
+  useEffect(() => (open && retainLive ? retainLive() : undefined), [open, retainLive]);
+  const friendList = store?.data.friends ?? NO_FRIENDS;
+  /**
+   * Bumped on every close: a create still in flight when the dialog was
+   * dismissed (or dismissed and opened again) must not navigate, close the
+   * reopened dialog, or clear its busy state.
+   */
+  const session = useRef(0);
   const [picked, setPicked] = useState<PublicUser[]>([]);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -103,6 +117,7 @@ export function NewConversationDialog({
 
   useEffect(() => {
     if (!open) {
+      session.current += 1;
       setPicked([]);
       setQuery("");
       setError(null);
@@ -114,7 +129,7 @@ export function NewConversationDialog({
     () => new Set(currentUserId ? [currentUserId] : []),
     [currentUserId],
   );
-  const sections = pickerSections(friends.data.friends, conversations, {
+  const sections = pickerSections(friendList, conversations, {
     query,
     excludeIds,
   });
@@ -127,18 +142,27 @@ export function NewConversationDialog({
     if (people.length === 0 || busy) {
       return;
     }
+    const mine = session.current;
     setBusy(true);
     setError(null);
     try {
       const { conversation } = await createConversation(people.map((person) => person.id));
+      if (session.current !== mine) {
+        return;
+      }
       onCreated(conversation);
       onClose();
     } catch (err) {
+      if (session.current !== mine) {
+        return;
+      }
       setError(
         err instanceof ApiError || err instanceof Error ? err.message : t("dm.dialog.failed"),
       );
     } finally {
-      setBusy(false);
+      if (session.current === mine) {
+        setBusy(false);
+      }
     }
   }
 
