@@ -1319,6 +1319,7 @@ Flathub yet**. Submitting is publishing, and needs Rafael.
 | `flatpak/gg.pqp.pqp.desktop` | The launcher, with `MimeType=x-scheme-handler/pqp` for `pqp://` links |
 | `flatpak/pqp.sh` | Runs Electron through `zypak-wrapper`, with a shared `TMPDIR` |
 | `flatpak/bump.mjs` | Points the manifest at a release and adds it to the metainfo |
+| `flatpak/build-bundle.sh` | Builds the manifest and exports `pqp-<version>-x86_64.flatpak` |
 | `client/public/images/flathub/*.png` | The store screenshots, served at `pqp.gg/images/flathub/` |
 
 **App id `gg.pqp.pqp`.** Flathub derives the domain to verify from the id, so
@@ -1405,8 +1406,15 @@ Per release, two copies of the manifest move:
   `LICENSE`, adds a `<release>` (`node flatpak/bump.mjs <version> <deb-sha256>
   <license-sha256> <date>`), lints with `flatpak-builder-lint` and opens a PR.
   It needs "Allow GitHub Actions to create and approve pull requests"; without
-  it the branch is pushed and the job summary links it. `workflow_dispatch`
-  with a tag reruns it.
+  it the branch is pushed, the job summary links the compare page and the run
+  stays green. Its `bundle` job then builds that bumped manifest
+  (`flatpak/build-bundle.sh`) and attaches `pqp-<version>-x86_64.flatpak` to
+  the release, with Flathub as the bundle's runtime repo so `flatpak install`
+  on the file pulls the runtime. A bundle does not update itself.
+  `workflow_dispatch` with a tag reruns both (`gh workflow run
+  flatpak-manifest.yml -f tag=v0.2.5`); for a tag older than main's manifest
+  it attaches the bundle and opens no PR. A PR touching `flatpak/` builds the
+  bundle as a run artifact.
 - **On Flathub:** the manifest's `x-checker-data` lets Flathub's external data
   checker open the same bump (URL, sha256 and a metainfo release) on
   `flathub/gg.pqp.pqp` within two hours of the release going public. Merge it

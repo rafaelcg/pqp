@@ -80,7 +80,8 @@ export type AssetId =
   | "windows"
   | "windows-portable"
   | "linux-appimage"
-  | "linux-deb";
+  | "linux-deb"
+  | "linux-flatpak";
 
 /**
  * How each artifact's filename looks, with the version left open.
@@ -107,6 +108,11 @@ const ASSET_PATTERNS: Record<AssetId, RegExp> = {
   "windows-portable": /^pqp-.+-x64-portable\.exe$/,
   "linux-appimage": /^pqp-.+-x86_64\.AppImage$/i,
   "linux-deb": /^pqp-.+-amd64\.deb$/,
+  // Not built by electron-builder: `.github/workflows/flatpak-manifest.yml`
+  // attaches it after the release is published, so for a few minutes after a
+  // release (or for a release whose bundle job failed) it is missing and the
+  // link falls back to the releases page like any other miss.
+  "linux-flatpak": /^pqp-.+-x86_64\.flatpak$/,
 };
 
 export type AssetUrls = Partial<Record<AssetId, string>>;
