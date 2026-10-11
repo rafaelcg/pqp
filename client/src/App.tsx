@@ -9247,6 +9247,10 @@ function MainAppContent({
   // boot to finish its own first navigation (the first server's landing
   // channel opens on the first ready socket), or that would land on top.
   const phoneLandedRef = useRef(false);
+  // Set further down, once the party facts are known: a live party's own
+  // phone layout outranks the tabs, so the landing must not open a list on
+  // top of the film.
+  const partyPhoneLayoutRef = useRef(false);
   const phoneOpenedPathRef = useRef(
     typeof window === "undefined" ? "" : window.location.pathname,
   );
@@ -9260,6 +9264,9 @@ function MainAppContent({
       return;
     }
     const timer = window.setTimeout(() => {
+      if (partyPhoneLayoutRef.current) {
+        return;
+      }
       phoneLandedRef.current = true;
       // The path the page was OPENED on, not where the app has routed since.
       const opened = phoneOpenedPathRef.current;
@@ -9615,6 +9622,7 @@ function MainAppContent({
   };
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
   const phoneShell = phoneShellAllowed && !partyPhoneLayout;
+  partyPhoneLayoutRef.current = partyPhoneLayout;
   // The bar is the way between the three lists. Inside a conversation or a
   // channel the screen is the conversation's, the way every phone chat app
   // does it; the header's back arrow returns to the list and the bar.
