@@ -2674,6 +2674,28 @@ router.get("/api/dms", async ({ user }) =>
 );
 
 /**
+ * Conversas: which presentation of conversations the clients draw. Two
+ * runtime flags (global, off by default, docs/FEATURE_FLAGS.md), read per
+ * request so a flip reaches open tabs on their next config refresh:
+ *
+ * - `home` (`conversations_home`): the labelled rail door, WhatsApp-style
+ *   rows, Nova conversa with friends listed, Ctrl/Cmd+K "ir pra".
+ * - `phoneTabs` (`conversations_home_phone_tabs`): on a phone, the bottom bar
+ *   Conversas / Servidores / Tu. Only meaningful with `home` on, and the
+ *   answer says so rather than leaving every client to remember it.
+ *
+ * Web, iOS and Android read this same route. Anything but an explicit `true`
+ * is off, so a client talking to an older API (404) keeps today's layout.
+ */
+router.get("/api/dms/config", async () => {
+  const home = isEnabled("conversations_home");
+  return {
+    home,
+    phoneTabs: home && isEnabled("conversations_home_phone_tabs"),
+  };
+});
+
+/**
  * Open a conversation. 201 when one was created, 200 when an existing 1:1 was
  * handed back — the idempotency `dm_pairs` exists to provide.
  *

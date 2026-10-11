@@ -124,6 +124,10 @@ import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.j
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import {
+  conversationMetrics,
+  type ConversationMetrics,
+} from "./conversation-metrics.js";
 import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
 
 /**
@@ -948,6 +952,13 @@ export interface AdminMetrics {
    * above says; the dashboard does not draw that as a result.
    */
   voiceNotes: VoiceNoteMetrics;
+  /**
+   * Conversas: who is talking to people in DMs and groups, and whether new
+   * accounts start to. Field by field in `services/conversation-metrics.ts`.
+   * Null when its read failed, which the dashboard draws as "could not ask"
+   * rather than as zero.
+   */
+  conversations: ConversationMetrics | null;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1217,6 +1228,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     callRatings,
     connections,
     voiceNotes,
+    conversations,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1319,6 +1331,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => callRatingSummary(7),
     () => connectionAdoption(),
     () => voiceNoteMetrics(),
+    () => conversationMetrics().catch((error: unknown) => {
+      console.error("[metrics] conversation metrics failed:", error);
+      return null;
+    }),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1785,6 +1801,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     // dashboard to pick one: it is the users total in this same payload.
     connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
     voiceNotes,
+    conversations,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),
