@@ -55,6 +55,10 @@ import {
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
+import {
+  conversationTypingAudience,
+  forgetConversationTypingAudience,
+} from "../services/conversation-typing.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
   findTimeoutForChannel,
@@ -1634,6 +1638,9 @@ function evictChannelViewersLocally(
   // revocation crosses machines with no second topic to keep in step.
   // See `voice/hls-revocation.ts`.
   revokeHlsAccess(channelId, scope);
+  // Somebody left or closed this conversation: whoever types next is told
+  // the current participants, not the ones cached a few seconds ago.
+  forgetConversationTypingAudience(channelId);
   const matches = scopePredicate(scope);
   for (const conn of connections.values()) {
     if (!matches(conn.user.id)) {
@@ -1684,6 +1691,31 @@ function evictUserFromChannelsLocally(
     if (conn.channelId && channelIds.has(conn.channelId)) {
       leaveChannel(conn);
     }
+  }
+}
+
+/**
+ * A conversation's typing frame, for the participants' LISTS: every socket of
+ * every recipient this process holds, except the ones already viewing the
+ * channel (they got it from `channelPresence`). Addressed by account because a
+ * list is not a channel view. At most nine recipients (`DM_MAX_RECIPIENTS`),
+ * so this is a handful of map lookups per frame. Droppable like the viewers'
+ * copy.
+ */
+function deliverTypingToLists(
+  channelId: string,
+  encoded: Buffer,
+  recipients: readonly string[],
+): void {
+  const viewers = channelPresence.get(channelId);
+  for (const userId of recipients) {
+    forEachSocketOfUser(userId, (socket) => {
+      const conn = connections.get(socket);
+      if (conn && viewers?.has(conn)) {
+        return;
+      }
+      sendEncodedDroppable(socket, encoded);
+    });
   }
 }
 
@@ -2505,6 +2537,19 @@ export async function handleChatMessage(
         sendEncodedDroppable(other.socket, encoded);
       }
     }
+    // Conversas: a conversation's participants see "digitando…" in their
+    // LIST too, not only with the conversation open. Same frame, so every
+    // client that already filters by its open channel (web, iOS, Android) is
+    // unchanged; the list reads the frames for the channels it is not showing.
+    // Null for a server channel (memoised, so no query there). A failed read
+    // costs the list its indicator, never the open channel's.
+    const recipients = await conversationTypingAudience(
+      payload.channelId,
+      conn.user.id,
+    ).catch(() => null);
+    if (recipients && recipients.length > 0) {
+      deliverTypingToLists(payload.channelId, encoded, recipients);
+    }
     if (isBusEnabled()) {
       // The hottest thing on the bus by a wide margin — one frame per user per
       // second at the limiter's sustained rate. Bounded by `typingLimiter`
@@ -2513,6 +2558,8 @@ export async function handleChatMessage(
         channelId: payload.channelId,
         userId: conn.user.id,
         displayName: conn.user.display_name,
+        // Additive: an older instance ignores it and delivers to viewers only.
+        ...(recipients && recipients.length > 0 ? { recipients } : {}),
       });
     }
     return;
@@ -2857,6 +2904,10 @@ subscribeToCluster(TYPING_TOPIC, (data) => {
   // same whichever instance the tabs landed on.
   for (const conn of channelPresence.get(channelId) ?? []) {
     sendEncodedDroppable(conn.socket, encoded);
+  }
+  const recipients = asStringArray(frame?.recipients);
+  if (recipients && recipients.length > 0) {
+    deliverTypingToLists(channelId, encoded, recipients);
   }
 });
 
