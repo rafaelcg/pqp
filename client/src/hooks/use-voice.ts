@@ -4579,6 +4579,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         await teardownSfu();
         return true;
       }
+      // Every await below can outlive this attempt: a leave or a rebuild
+      // tears the session down underneath it. Checked after each one, so a
+      // publish that rejects BECAUSE the session went away is never mistaken
+      // for an optional step that failed, and nothing past it (the media
+      // frames, `usingSfu`) is committed for a call that is already over.
+      const stale = () => attempt !== sfuAttempt || state.peerId !== peerId;
       // No publish for a listener: the token carries no grant for one and
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
@@ -4589,6 +4595,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         // Mute the publication after publish, but the track was already
         // disabled above so the first packet is not live.
         await applyPublicationMute();
+        if (stale()) {
+          return true;
+        }
         preservedSelfVoice = null;
       }
       // Before anything is published, so a camera or a share carried across a
@@ -4599,15 +4608,22 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Quality is a preference, not the call: a tuning call that throws costs
       // the defaults, never the session.
       try {
-        await sfu.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
-        await sfu.setScreenPriority?.(getSharePriority());
-        await sfu.setScreenQuality(videoQuality);
+        await connected.setCameraMaxBitrate(
+          cameraBitrateFor(currentCameraQuality()),
+        );
+        await connected.setScreenPriority?.(getSharePriority());
+        await connected.setScreenQuality(videoQuality);
         // The viewer's half: the largest layer this device wants, remembered
         // per device. Applied before anything is subscribed so the first frame
         // of a share arriving at a phone is already the phone-sized layer.
-        await sfu.setReceiveQuality(getReceiveQuality());
+        await connected.setReceiveQuality(getReceiveQuality());
       } catch (err) {
-        console.warn("[pqp] SFU quality settings rejected; keeping defaults", err);
+        if (!stale()) {
+          console.warn("[pqp] SFU quality settings rejected; keeping defaults", err);
+        }
+      }
+      if (stale()) {
+        return true;
       }
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
@@ -4623,9 +4639,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (screenCaptureStream) {
         try {
           syncWatchPartyPublishCeiling();
-          await sfu.publishScreen(screenCaptureStream);
+          await connected.publishScreen(screenCaptureStream);
+          if (stale()) {
+            return true;
+          }
           announceSharing();
         } catch (err) {
+          if (stale()) {
+            return true;
+          }
           console.warn("[pqp] share could not be republished on the SFU; stopping it", err);
           state.error = screenShareErrorMessage(err);
           await stopScreenShareInternal().catch(() => {});
@@ -4634,16 +4656,25 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Same story for the camera in a conversation call.
       if (cameraCaptureStream) {
         try {
-          await sfu.publishCamera(cameraCaptureStream);
+          await connected.publishCamera(cameraCaptureStream);
+          if (stale()) {
+            return true;
+          }
           transport.sendVoice({
             type: "set-camera",
             streamId: cameraCaptureStream.id,
           });
         } catch (err) {
+          if (stale()) {
+            return true;
+          }
           console.warn("[pqp] camera could not be republished on the SFU; turning it off", err);
           state.error = translateMessage("voice.error.cameraFailed");
           await stopCameraInternal().catch(() => {});
         }
+      }
+      if (stale()) {
+        return true;
       }
       state.usingSfu = true;
       // Now that the (rebuilt) session is up and any carried-over share is

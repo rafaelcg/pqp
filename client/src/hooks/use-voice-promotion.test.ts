@@ -113,6 +113,9 @@ let sfuFails = false;
 /** Fail this many connects, then succeed: a transient failure. */
 let sfuFailuresLeft = 0;
 let cameraPublishFails = false;
+/** While true, `publishCamera` parks until the test rejects it. */
+let holdCameraPublish = false;
+let rejectCameraPublish: ((error: Error) => void) | null = null;
 /** The SFU session's peer callback, so a test can say who it carries. */
 let sfuPeersChanged: ((peers: RemotePeer[]) => void) | null = null;
 /**
@@ -153,6 +156,11 @@ vi.mock("@/lib/livekit-session", () => ({
       publishCamera: async (stream: MediaStream) => {
         if (cameraPublishFails) {
           throw new Error("camera refused");
+        }
+        if (holdCameraPublish) {
+          await new Promise<void>((_resolve, reject) => {
+            rejectCameraPublish = reject;
+          });
         }
         sfuCameraPublishes.push(stream);
       },
@@ -329,6 +337,8 @@ beforeEach(() => {
   sfuFails = false;
   sfuFailuresLeft = 0;
   cameraPublishFails = false;
+  holdCameraPublish = false;
+  rejectCameraPublish = null;
   sfuPeersChanged = null;
   holdSfuConnect = false;
   releaseSfuConnect = null;
@@ -646,6 +656,34 @@ describe("a promotion nobody hears", () => {
     expect(sent.map((m) => m.type)).not.toContain("leave-voice-room");
     expect(sent.filter((m) => m.type === "set-camera").at(-1)?.streamId).toBe(
       null,
+    );
+  });
+
+  it("a publish that fails because the person left commits nothing", async () => {
+    // Leaving tears the session down under a camera republish still in
+    // flight, which then rejects. That rejection is the session going away,
+    // not an optional step failing: no camera frame, no `usingSfu`, no error.
+    const { voice, sent } = await connectedMesh();
+    await voice.toggleCamera();
+    holdCameraPublish = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    await settle();
+    expect(rejectCameraPublish).not.toBeNull();
+    voice.leave();
+    const sentAtLeave = sent.length;
+
+    rejectCameraPublish?.(new Error("session closed"));
+    await settle();
+    await settle();
+
+    const state = voice.getState();
+    expect(state.status).toBe("idle");
+    expect(state.usingSfu).toBe(false);
+    expect(state.error).toBeNull();
+    expect(sent.slice(sentAtLeave).map((m) => m.type)).not.toContain(
+      "set-camera",
     );
   });
 
