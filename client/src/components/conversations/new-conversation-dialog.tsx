@@ -109,7 +109,7 @@ export function NewConversationDialog({
   const store = useContext(FriendsContext);
   const retainLive = store?.retainLive;
   useEffect(() => (open && retainLive ? retainLive() : undefined), [open, retainLive]);
-  const friendList = store?.data.friends ?? NO_FRIENDS;
+  const friendList = store?.data?.friends ?? NO_FRIENDS;
   /**
    * Bumped on every close: a create still in flight when the dialog was
    * dismissed (or dismissed and opened again) must not navigate, close the
@@ -143,6 +143,12 @@ export function NewConversationDialog({
   const full = picked.length >= DM_MAX_RECIPIENTS;
   const nobody =
     sections.online.length + sections.friends.length + sections.recent.length === 0;
+
+  /** Dismissed: anything still in flight belongs to a session that is over. */
+  function close() {
+    session.current += 1;
+    onClose();
+  }
 
   async function openWith(people: readonly PublicUser[]) {
     if (people.length === 0 || busy) {
@@ -209,13 +215,13 @@ export function NewConversationDialog({
       title={t("conversations.new")}
       description={t("conversations.new.description", { max: DM_MAX_RECIPIENTS })}
       size="sm"
-      onClose={onClose}
+      onClose={close}
       footer={
         <div className="flex w-full items-center gap-3">
           <p className="mr-auto hidden text-xs text-text-tertiary sm:block">
             {t("conversations.new.hint")}
           </p>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={close} disabled={busy}>
             {t("common.cancel")}
           </Button>
           <Button
