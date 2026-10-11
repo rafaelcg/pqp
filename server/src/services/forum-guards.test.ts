@@ -503,10 +503,11 @@ describeDb("forum guards", () => {
   // -------------------------------------------------------------- webhooks
 
   describe("webhooks", () => {
-    it("are refused on a category and a voice room, and allowed on text and forum", async () => {
+    it("are refused on a category, a voice room and a thread, and allowed on text and forum", async () => {
       const category = await createChannel(serverId, "Geral", "category");
       const voice = await createChannel(serverId, "Lobby", "voice");
-      for (const id of [category.id, voice.id]) {
+      const { postId } = await insertPost(forumId, alice, { locked: true });
+      for (const id of [category.id, voice.id, postId]) {
         const response = await call(alice, "POST", `/api/channels/${id}/webhooks`, { name: "RSS" });
         expect(response.status).toBe(400);
       }

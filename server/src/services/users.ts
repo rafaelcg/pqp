@@ -1503,7 +1503,22 @@ export async function listUnread(serverId: string, userId: string) {
     count: string;
     mentions: string;
   }>(
-    `SELECT c.id AS channel_id,
+    `-- The viewer's mentions inside forum posts, read FIRST and on their own
+     -- (MATERIALIZED), so the forum roll-up below is driven by the viewer's
+     -- mention rows (idx_message_mentions_user) and never by the posts. Left
+     -- to the planner, the grouped join was happy to start from a forum's
+     -- posts and walk every message in them instead.
+     WITH my_post_mentions AS MATERIALIZED (
+       SELECT fp.forum_id, fp.channel_id AS post_id, m.created_at
+         FROM message_mentions mm
+         JOIN messages m ON m.id = mm.message_id
+         JOIN forum_posts fp ON fp.channel_id = m.channel_id
+        WHERE mm.user_id = $2
+          AND m.author_id <> $2
+          AND fp.published_at IS NOT NULL
+          AND ${notBlockedSql("$2", "m.author_id")}
+     )
+     SELECT c.id AS channel_id,
             COUNT(m.id)::text AS count,
             COUNT(DISTINCT CASE
               WHEN mm.user_id IS NOT NULL OR m.mention_everyone THEN m.id
@@ -1550,24 +1565,24 @@ export async function listUnread(serverId: string, userId: string) {
                   AND ${notBlockedSql("$2", "fp.author_id")}
                 LIMIT $3
              ) fresh)::text AS count,
-            (SELECT COUNT(*)
-               FROM message_mentions mm
-               JOIN messages m ON m.id = mm.message_id
-               JOIN forum_posts fp ON fp.channel_id = m.channel_id
-               LEFT JOIN channel_reads pr
-                 ON pr.channel_id = fp.channel_id AND pr.user_id = $2
-              WHERE mm.user_id = $2
-                AND fp.forum_id = c.id
-                AND fp.published_at IS NOT NULL
-                AND m.author_id <> $2
-                AND m.created_at > COALESCE(
-                      pr.last_read_at, cr.last_read_at, TIMESTAMPTZ '-infinity')
-                AND ${notBlockedSql("$2", "m.author_id")}
-            )::text AS mentions
+            COALESCE(fm.mentions, 0)::text AS mentions
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
      LEFT JOIN channel_reads cr
        ON cr.channel_id = c.id AND cr.user_id = $2
+     -- Every forum's mentions in one pass over the viewer's mention rows,
+     -- grouped by forum, rather than once per forum row.
+     LEFT JOIN (
+       SELECT mine.forum_id, COUNT(*) AS mentions
+         FROM my_post_mentions mine
+         LEFT JOIN channel_reads pr
+           ON pr.channel_id = mine.post_id AND pr.user_id = $2
+         LEFT JOIN channel_reads fr
+           ON fr.channel_id = mine.forum_id AND fr.user_id = $2
+        WHERE mine.created_at > COALESCE(
+                pr.last_read_at, fr.last_read_at, TIMESTAMPTZ '-infinity')
+        GROUP BY mine.forum_id
+     ) fm ON fm.forum_id = c.id
      WHERE c.server_id = $1
        AND c.type = 'forum'
        AND ${channelVisibleSql("$2")}`,
