@@ -1504,6 +1504,7 @@ export function ForumPane({
           canSend={canPost}
           layout={postFull ? "full" : "side"}
           forcedFull={!canSplit}
+          isPhone={isPhone}
           maximized={maximized}
           onToggleMaximize={toggleMaximize}
           removed={removedOpenId === openPost.id}

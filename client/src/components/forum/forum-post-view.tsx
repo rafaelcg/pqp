@@ -32,7 +32,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComposerSlashContext } from "@/components/chat/message-composer";
 import type {
   MessageAuthorInfo,
@@ -55,6 +55,7 @@ import {
 } from "@/lib/forum-api";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { backfillForLanding } from "@/lib/forum-landing";
 import { forgetCursorRead, readCursorOnce } from "@/lib/forum-visit";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import { cn } from "@/lib/utils";
@@ -88,6 +89,11 @@ export interface ForumPostViewProps {
   layout: "side" | "full";
   /** The full-area layout because the window is narrow, not by choice. */
   forcedFull: boolean;
+  /**
+   * A phone: the title and status scroll with the transcript, and the top bar
+   * takes the title over once they have scrolled off (UX §2.4 #22).
+   */
+  isPhone?: boolean;
   maximized: boolean;
   onToggleMaximize: () => void;
   /** Deleted while open: the pane says so instead of closing on the reader. */
@@ -295,6 +301,7 @@ export function ForumPostView({
   canSend,
   layout,
   forcedFull,
+  isPhone = false,
   maximized,
   onToggleMaximize,
   removed,
@@ -342,15 +349,24 @@ export function ForumPostView({
       leaveTimers.delete(postId);
     }
     void Promise.all([fetchMessages(postId), readCursorOnce(postId, markReadRef.current)])
-      .then(([page, previous]) => {
+      .then(async ([page, previous]) => {
         if (cancelled) {
           return;
         }
         controller.setMessages(page.messages, page.hasMore);
+        // The newest page ends on the newest reply, which is the one place a
+        // post must not open on: page back to the question (first visit) or
+        // to the first reply this reader has not seen (a revisit).
+        await backfillForLanding(controller, previous, {
+          cancelled: () => cancelled,
+        });
+        if (cancelled) {
+          return;
+        }
+        const loaded = controller.getMessages();
         setFirstVisit(previous === null);
         setUnreadSince(
-          previous &&
-            findFirstUnreadMessageId(page.messages, previous, viewerId)
+          previous && findFirstUnreadMessageId(loaded, previous, viewerId)
             ? previous
             : null,
         );
@@ -642,20 +658,25 @@ export function ForumPostView({
   }, [post.acceptedAnswerId]);
 
   const openingLoaded = !controller.hasMoreHistory() && !loading;
-  const decor = useMemo(
-    () => ({
-      authorId: post.authorId,
-      acceptedAnswerId: post.acceptedAnswerId,
-      afterOpening: answer ? (
-        <SolutionCard answer={answer} onJump={jumpToAnswer} />
-      ) : null,
-      onToggleAnswer: canEdit ? toggleAnswer : undefined,
-      landAtTop: firstVisit,
-    }),
-    [post.authorId, post.acceptedAnswerId, answer, jumpToAnswer, canEdit, toggleAnswer, firstVisit],
-  );
 
   // -------------------------------------------------------------- header
+  // Phone: once the title block scrolls under the bar, the bar shows the title.
+  const titleBlockRef = useRef<HTMLDivElement>(null);
+  const [titleInBar, setTitleInBar] = useState(false);
+  useEffect(() => {
+    const node = titleBlockRef.current;
+    if (!isPhone || !node || typeof IntersectionObserver === "undefined") {
+      setTitleInBar(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => setTitleInBar(entry ? !entry.isIntersecting : false),
+      // The bar is 48px tall; the title counts as gone once it is under it.
+      { rootMargin: "-48px 0px 0px 0px", threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isPhone, loading]);
   const people = detail?.participantCount ?? null;
   const replyLine = [
     t("forum.replies", { count: post.replyCount }),
@@ -664,20 +685,38 @@ export function ForumPostView({
     .filter(Boolean)
     .join(" · ");
 
-  const header = (
-    <header className="shrink-0 border-b border-border/60">
-      {/* Top bar: where this is, and the ways out. */}
+  const topBar = (
       <div className="flex h-12 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
           <PostIconButton label={t("forum.post.back")} onClick={onClose}>
             <ArrowLeft className="h-4 w-4" aria-hidden />
           </PostIconButton>
         )}
-        <p className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-xs text-text-tertiary">
-          <MessagesSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="truncate font-semibold text-text-secondary">{forumName}</span>
-          <span className="truncate sm:hidden">· {replyLine}</span>
-        </p>
+        <div className="relative min-w-0 flex-1 self-stretch">
+          <p
+            className={cn(
+              "absolute inset-0 flex items-center gap-1.5 px-1 text-xs text-text-tertiary transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
+              titleInBar && "pointer-events-none -translate-y-1 opacity-0",
+            )}
+            aria-hidden={titleInBar || undefined}
+          >
+            <MessagesSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="truncate font-semibold text-text-secondary">{forumName}</span>
+            <span className="truncate sm:hidden">· {replyLine}</span>
+          </p>
+          {isPhone && (
+            <p
+              className={cn(
+                "absolute inset-0 flex items-center truncate px-1 font-display text-[15px] font-bold text-text transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
+                titleInBar ? "opacity-100" : "pointer-events-none translate-y-1 opacity-0",
+              )}
+              aria-hidden={!titleInBar || undefined}
+              data-forum-bar-title=""
+            >
+              <span className="truncate">{post.title}</span>
+            </p>
+          )}
+        </div>
         <span className="max-sm:hidden">
           <PostIconButton label={t("forum.post.copyLink")} onClick={() => void copyLink()}>
             <Link2 className="h-4 w-4" aria-hidden />
@@ -704,6 +743,7 @@ export function ForumPostView({
           </PostIconButton>
         )}
         <span className="sm:hidden">
+          {/* Phones open on the menu the mock draws beside the bell. */}
           <Menu items={menuItems} align="end">
             <button
               type="button"
@@ -715,8 +755,13 @@ export function ForumPostView({
           </Menu>
         </span>
       </div>
+  );
 
-      <div className="px-4 pb-3 sm:px-4">
+  const titleBlock = (
+      <div
+        ref={titleBlockRef}
+        className={cn("px-4 pb-3 sm:px-4", isPhone && "border-b border-border/60 pb-4")}
+      >
         {editingTitle ? (
           <input
             autoFocus
@@ -832,8 +877,25 @@ export function ForumPostView({
           </span>
         </div>
       </div>
+  );
+
+  // Desktop: the header holds the title and stays put. Phone: only the bar
+  // stays; the title block scrolls with the transcript as its first row.
+  const header = (
+    <header className="shrink-0 border-b border-border/60">
+      {topBar}
+      {!isPhone && titleBlock}
     </header>
   );
+
+  const decor = {
+    authorId: post.authorId,
+    acceptedAnswerId: post.acceptedAnswerId,
+    afterOpening: answer ? <SolutionCard answer={answer} onJump={jumpToAnswer} /> : null,
+    onToggleAnswer: canEdit ? toggleAnswer : undefined,
+    landAtTop: firstVisit,
+    listHeader: isPhone ? titleBlock : null,
+  };
 
   if (removed) {
     return (

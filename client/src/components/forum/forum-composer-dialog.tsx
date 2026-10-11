@@ -527,9 +527,14 @@ export function ForumComposerDialog({
         type="button"
         onClick={() => void publish()}
         disabled={busy || heldSeconds > 0}
+        // A phone draws Publicar in the sheet's title band instead.
+        data-publish-placement="footer"
         aria-disabled={blocked || undefined}
         aria-describedby={showErrors && titleMissing ? titleErrorId : undefined}
-        className={cn("gap-2 tabular-nums", blocked && !busy && "opacity-60")}
+        className={cn(
+          "gap-2 tabular-nums max-sm:hidden",
+          blocked && !busy && "opacity-60",
+        )}
       >
         {busy ? (
           t("forum.composer.publishing")
@@ -551,6 +556,33 @@ export function ForumComposerDialog({
     </div>
   );
 
+  // Phone: Publicar in the title band, top right, where the mock puts it and
+  // where the keyboard never covers it.
+  const headerPublish = (
+    <Button
+      type="button"
+      size="sm"
+      onClick={() => void publish()}
+      disabled={busy || heldSeconds > 0}
+      data-publish-placement="header"
+      className={cn(
+        "h-11 gap-1.5 px-4 tabular-nums sm:hidden",
+        blocked && !busy && "opacity-60",
+      )}
+    >
+      {busy ? (
+        t("forum.composer.publishing")
+      ) : heldSeconds > 0 ? (
+        <>
+          <Clock className="h-4 w-4" aria-hidden />
+          {`${heldSeconds}s`}
+        </>
+      ) : (
+        t("forum.composer.publish")
+      )}
+    </Button>
+  );
+
   return (
     <Dialog
       open={open}
@@ -559,6 +591,7 @@ export function ForumComposerDialog({
       size="lg"
       onClose={close}
       footer={footer}
+      headerAction={headerPublish}
     >
       <div
         className="flex flex-col gap-5 px-5 py-4"
