@@ -101,11 +101,33 @@ export const soundboardEmojiSchema = z
   .trim()
   .refine(isSoundboardEmoji, "Pick one emoji");
 
+/**
+ * Zero-width spaces, word joiners, the byte-order mark and every bidi
+ * override or isolate. They make a name blank or render it as other text.
+ * The emoji joiner (U+200D) and variation selectors are allowed.
+ */
+const HIDDEN_NAME_CHARS = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+
+/**
+ * A clip name, counted the way Postgres's `char_length` counts it (code
+ * points, not UTF-16 units), so the database check never sees a name this
+ * passed. "🎺" is one character here and there; "🎺🎺" is two.
+ */
+export function soundboardNameProblem(name: string): "length" | "hidden" | null {
+  const length = [...name].length;
+  if (length < SOUNDBOARD_NAME_MIN || length > SOUNDBOARD_NAME_MAX) {
+    return "length";
+  }
+  if (HIDDEN_NAME_CHARS.test(name) || !/[\p{L}\p{N}\p{S}\p{P}]/u.test(name)) {
+    return "hidden";
+  }
+  return null;
+}
+
 export const soundboardNameSchema = z
   .string()
   .trim()
-  .min(SOUNDBOARD_NAME_MIN)
-  .max(SOUNDBOARD_NAME_MAX);
+  .refine((name) => soundboardNameProblem(name) === null, "Invalid name");
 
 export const soundboardVolumeSchema = z.number().min(0).max(1);
 

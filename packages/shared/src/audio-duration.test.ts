@@ -149,3 +149,89 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(b, a.length);
   return out;
 }
+
+describe("audioDurationMs refuses files that lie about their length", () => {
+  function frameAt(rateIndex: number, rate: number): Uint8Array {
+    const frame = new Uint8Array(Math.floor((144 * 128000) / rate));
+    frame[0] = 0xff;
+    frame[1] = 0xfb;
+    frame[2] = 0x90 | (rateIndex << 2);
+    return frame;
+  }
+
+  function chain(...parts: Uint8Array[]): Uint8Array {
+    const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  }
+
+  function repeat(frame: Uint8Array, count: number): Uint8Array {
+    return chain(...Array.from({ length: count }, () => frame));
+  }
+
+  it("times every frame at its own rate when the rate changes mid-file", () => {
+    // ~0.5 s at 44.1 kHz, then ~10 s at 32 kHz. The old walk stopped at the
+    // change and stored half a second.
+    const bytes = chain(repeat(frameAt(0, 44100), 19), repeat(frameAt(2, 32000), 278));
+    const ms = audioDurationMs(bytes, "audio/mpeg")!;
+    expect(ms).toBeGreaterThan(10_000);
+    expect(soundboardClipRejection(bytes.length, ms, 10 * 1024 * 1024, 5200)).toBe("too_long");
+  });
+
+  it("refuses a WAV labelled mp3", () => {
+    const wav = new Uint8Array(4096);
+    wav.set([0x52, 0x49, 0x46, 0x46], 0); // "RIFF"
+    wav.set([0x57, 0x41, 0x56, 0x45], 8); // "WAVE"
+    // A stray sync-looking word in the samples must not count as a frame.
+    wav.set([0xff, 0xfb, 0x90, 0x00], 3000);
+    expect(audioDurationMs(wav, "audio/mpeg")).toBeNull();
+  });
+
+  it("refuses bytes with sync words that do not chain", () => {
+    const junk = new Uint8Array(8192);
+    for (let i = 0; i < junk.length; i += 997) {
+      junk.set([0xff, 0xfb, 0x90, 0x00], i);
+    }
+    expect(audioDurationMs(junk, "audio/mpeg")).toBeNull();
+  });
+
+  it("refuses a second file glued after the frames", () => {
+    const bytes = chain(mp3Seconds(1), new Uint8Array(4096).fill(0x41));
+    expect(audioDurationMs(bytes, "audio/mpeg")).toBeNull();
+  });
+
+  it("accepts zero padding and an ID3v1 tag after the frames", () => {
+    const tag = new Uint8Array(128);
+    tag.set([0x54, 0x41, 0x47], 0); // "TAG"
+    for (const tail of [new Uint8Array(50_000), tag]) {
+      const ms = audioDurationMs(chain(mp3Seconds(1), tail), "audio/mpeg")!;
+      expect(ms).toBeGreaterThan(900);
+      expect(ms).toBeLessThan(1100);
+    }
+  });
+
+  it("does not count the Xing frame and drops the LAME tag's delay and padding", () => {
+    const xing = frameAt(0, 44100);
+    const at = 4 + 32; // MPEG-1 stereo side info
+    xing.set([0x49, 0x6e, 0x66, 0x6f], at); // "Info"
+    // Delay 576, padding 1000: 12 bits each at 141 bytes in.
+    const delay = 576;
+    const padding = 1000;
+    xing[at + 141] = delay >> 4;
+    xing[at + 142] = ((delay & 0x0f) << 4) | (padding >> 8);
+    xing[at + 143] = padding & 0xff;
+    const audioFrames = 100;
+    const bytes = chain(xing, repeat(frameAt(0, 44100), audioFrames));
+    const expected = Math.round(((audioFrames * 1152 - delay - padding) * 1000) / 44100);
+    expect(audioDurationMs(bytes, "audio/mpeg")).toBe(expected);
+  });
+
+  it("lets a clip measured a hair over the cap through, and no further", () => {
+    expect(soundboardClipRejection(1000, SOUNDBOARD_MAX_DURATION_MS + 1, SOUNDBOARD_MAX_BYTES, SOUNDBOARD_MAX_DURATION_MS)).toBeNull();
+    expect(soundboardClipRejection(1000, SOUNDBOARD_MAX_DURATION_MS + 200, SOUNDBOARD_MAX_BYTES, SOUNDBOARD_MAX_DURATION_MS)).toBe("too_long");
+  });
+});

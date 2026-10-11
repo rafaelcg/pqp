@@ -3477,6 +3477,7 @@ import {
 } from "@pqp/shared";
 import {
   claimSoundboardSound,
+  countSoundboardSlotsUsed,
   createSoundboardUpload,
   deleteSoundboardSound,
   listSoundboardSounds,
@@ -3516,10 +3517,11 @@ function requireSoundboardEnabled(serverId: string): void {
 
 router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
   await requireServerMember(serverId, user.id);
-  return {
-    sounds: await listSoundboardSounds(serverId),
-    maxSounds: SOUNDBOARD_MAX_SOUNDS,
-  };
+  const [sounds, slotsUsed] = await Promise.all([
+    listSoundboardSounds(serverId),
+    countSoundboardSlotsUsed(serverId),
+  ]);
+  return { sounds, maxSounds: SOUNDBOARD_MAX_SOUNDS, slotsUsed };
 });
 
 router.post(
@@ -3598,7 +3600,15 @@ router.delete(
     if (!isUuid(soundId!)) {
       throw new NotFound("Sound not found");
     }
-    const removed = await deleteSoundboardSound(serverId, soundId);
+    let removed: boolean;
+    try {
+      removed = await deleteSoundboardSound(serverId, soundId);
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
     if (!removed) {
       throw new NotFound("Sound not found");
     }

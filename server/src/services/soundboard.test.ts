@@ -53,10 +53,14 @@ const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
 const {
   claimSoundboardSound,
+  countSoundboardSlotsUsed,
   createSoundboardUpload,
   deleteSoundboardSound,
   sweepPendingUploads,
 } = await import("./soundboard.js");
+const { createMemoryHub, createMemoryTransport, setBusTransport } = await import(
+  "../lib/bus.js"
+);
 
 describeDb("soundboard upload ledger", () => {
   let userId: string;
@@ -207,10 +211,48 @@ describeDb("soundboard upload ledger", () => {
     const key = await upload();
     const sound = await claim(key);
     s3.unconfigured = true;
-    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toThrow(
-      "storage_unavailable",
-    );
+    // A SoundboardError the route turns into 503 `storage`, not a 500.
+    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
+      code: "storage",
+    });
     s3.unconfigured = false;
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
+  });
+
+  it("reports stored sounds plus uploads in flight as the slots used", async () => {
+    const before = await countSoundboardSlotsUsed(serverId);
+    const key = await upload();
+    expect(await countSoundboardSlotsUsed(serverId)).toBe(before + 1);
+    await claim(key, "slot");
+    expect(await countSoundboardSlotsUsed(serverId)).toBe(before + 1);
+  });
+
+  it("answers 503 storage, not a 500, when the object delete fails", async () => {
+    const sound = await claim(await upload(), "fails");
+    s3.failDeletes = true;
+    await expect(deleteSoundboardSound(serverId, sound.id)).rejects.toMatchObject({
+      code: "storage",
+    });
+    s3.failDeletes = false;
+    expect(await deleteSoundboardSound(serverId, sound.id)).toBe(true);
+  });
+
+  it("tells the other API machines to forget a deleted clip", async () => {
+    const hub = createMemoryHub();
+    const seen: unknown[] = [];
+    // Stands in for the other machine: every frame this one publishes.
+    hub.listeners.add((frame) => {
+      if (frame.topic === "soundboard.forget") {
+        seen.push(frame.data);
+      }
+    });
+    setBusTransport(createMemoryTransport(hub));
+    try {
+      const sound = await claim(await upload(), "gone");
+      await deleteSoundboardSound(serverId, sound.id);
+      await vi.waitFor(() => expect(seen).toContainEqual({ soundId: sound.id }));
+    } finally {
+      setBusTransport(null);
+    }
   });
 });

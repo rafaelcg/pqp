@@ -10,6 +10,7 @@ import {
   type SoundboardSound,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { publishToCluster, subscribeToCluster } from "../lib/bus.js";
 import {
   deleteObject,
   getObjectPrefix,
@@ -19,7 +20,10 @@ import {
   presignPut,
 } from "../lib/s3.js";
 
-const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+// A clip is at most 512 KB, so a few minutes is plenty to send it. The
+// ticket counts toward the 24 slots until it is claimed or swept, so a long
+// signature is a long-held slot after an abandoned upload.
+const UPLOAD_URL_TTL_SECONDS = 3 * 60;
 const READ_URL_TTL_SECONDS = 60 * 60;
 
 const EXTENSION: Record<SoundboardContentType, string> = {
@@ -99,6 +103,22 @@ function toSound(row: SoundRow): SoundboardSound {
   };
 }
 
+/**
+ * Slots taken: stored sounds plus uploads still in flight. The same count
+ * the mint refuses on, so the settings counter and the Add button never
+ * disagree with the server.
+ */
+export async function countSoundboardSlotsUsed(serverId: string): Promise<number> {
+  const result = await getPool().query<{ n: string }>(
+    `SELECT (
+       (SELECT COUNT(*) FROM soundboard_sounds WHERE server_id = $1) +
+       (SELECT COUNT(*) FROM soundboard_pending_uploads WHERE server_id = $1)
+     )::text AS n`,
+    [serverId],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
 export async function listSoundboardSounds(
   serverId: string,
 ): Promise<SoundboardSound[]> {
@@ -133,9 +153,24 @@ function rememberPlayable(serverId: string, sound: PlayableSound): void {
   playableCache.set(sound.id, { serverId, sound, at: Date.now() });
 }
 
+const FORGET_TOPIC = "soundboard.forget";
+
+/**
+ * Drop a sound from the playable cache here and on every other instance, so
+ * a deleted or edited clip is not admitted for up to a TTL by the sibling
+ * that cached it.
+ */
 function forgetPlayable(soundId: string): void {
   playableCache.delete(soundId);
+  publishToCluster(FORGET_TOPIC, { soundId });
 }
+
+subscribeToCluster(FORGET_TOPIC, (data) => {
+  const soundId = (data as { soundId?: unknown } | null)?.soundId;
+  if (typeof soundId === "string") {
+    playableCache.delete(soundId);
+  }
+});
 
 /**
  * What a play is allowed to sound like. Built-ins never touch the database.
@@ -447,7 +482,8 @@ export async function claimSoundboardSound(input: {
         input.key,
         contentType,
         head.contentLength,
-        durationMs,
+        // Within the measuring tolerance of the cap counts as at the cap.
+        Math.min(durationMs!, SOUNDBOARD_MAX_DURATION_MS),
         volume,
         input.userId,
       ],
@@ -532,9 +568,13 @@ export async function deleteSoundboardSound(
   // With no storage configured the file cannot be removed, so keep the row
   // rather than forget a key whose object may still exist.
   if (!isStorageConfigured()) {
-    throw new Error("storage_unavailable");
+    throw new SoundboardError("storage");
   }
-  await deleteObject(key);
+  try {
+    await deleteObject(key);
+  } catch {
+    throw new SoundboardError("storage");
+  }
   await getPool().query(
     `DELETE FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
     [soundId, serverId],

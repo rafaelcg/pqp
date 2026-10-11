@@ -23,6 +23,9 @@ const MPEG2_L3_BITRATES = [
 const MPEG2_RATES = [22050, 24000, 16000];
 const MPEG25_RATES = [11025, 12000, 8000];
 
+/** How far over the cap a measured clip may be and still count as at it. */
+export const DURATION_TOLERANCE_MS = 60;
+
 export function audioDurationMs(
   bytes: Uint8Array,
   contentType: string,
@@ -55,37 +58,145 @@ export function soundboardClipRejection(
   if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 40) {
     return "unreadable";
   }
-  if (durationMs > maxDurationMs) {
+  // A clip exported at exactly the cap measures a few milliseconds over it
+  // (rounding, an encoder's last partial frame). The client cuts playback
+  // at the cap anyway, so the slot is never held longer than that.
+  if (durationMs > maxDurationMs + DURATION_TOLERANCE_MS) {
     return "too_long";
   }
   return null;
 }
 
+/**
+ * A real mp3 is a chain: each frame header sits exactly where the previous
+ * frame ends. Walking the chain (rather than scanning for anything that
+ * looks like a sync word) is what refuses a WAV or random bytes labelled
+ * mp3, and summing each frame at its own sample rate is what times a file
+ * that switches rate mid-stream. Both were ways to store a long clip as a
+ * short one, which is the number the room caps trust.
+ */
 function mp3DurationMs(bytes: Uint8Array): number | null {
-  let offset = skipId3(bytes);
-  let samples = 0;
-  let rate = 0;
+  const start = firstMp3Frame(bytes, skipId3(bytes));
+  if (start < 0) {
+    return null;
+  }
+  let offset = start;
+  let seconds = 0;
   let frames = 0;
-  while (offset + 4 < bytes.length && frames < 20_000) {
+  let gapless = 0;
+  while (offset + 4 <= bytes.length) {
     const header = readMp3Header(bytes, offset);
     if (!header) {
-      offset += 1;
-      continue;
-    }
-    if (rate === 0) {
-      rate = header.sampleRate;
-    }
-    if (header.sampleRate !== rate) {
       break;
     }
-    samples += header.samplesPerFrame;
+    if (frames === 0) {
+      const info = readXingInfo(bytes, offset, header);
+      if (info) {
+        // The Xing / Info frame is metadata, not audio. Its LAME tag says
+        // how many samples of priming and padding the encoder added.
+        gapless = info.gaplessSamples / header.sampleRate;
+        offset += header.frameBytes;
+        frames += 1;
+        continue;
+      }
+    }
+    seconds += header.samplesPerFrame / header.sampleRate;
     frames += 1;
     offset += header.frameBytes;
   }
-  if (frames === 0 || rate === 0) {
+  if (!trailerIsTag(bytes, offset)) {
     return null;
   }
-  return Math.round((samples * 1000) / rate);
+  const audio = seconds - gapless;
+  if (audio <= 0) {
+    return null;
+  }
+  return Math.round(audio * 1000);
+}
+
+/** Where the frame chain starts: a header followed by two more in step. */
+function firstMp3Frame(bytes: Uint8Array, from: number): number {
+  // Encoders put the first frame right after the ID3 tag; allow a little
+  // slack for padding, never a scan through the whole file.
+  const limit = Math.min(bytes.length, from + 2048);
+  for (let offset = from; offset + 4 <= limit; offset += 1) {
+    const first = readMp3Header(bytes, offset);
+    if (!first) {
+      continue;
+    }
+    const second = readMp3Header(bytes, offset + first.frameBytes);
+    if (!second) {
+      // A one-frame file is its own whole chain.
+      if (offset + first.frameBytes === bytes.length) {
+        return offset;
+      }
+      continue;
+    }
+    const third = readMp3Header(bytes, offset + first.frameBytes + second.frameBytes);
+    if (third || offset + first.frameBytes + second.frameBytes === bytes.length) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+/**
+ * What may follow the last frame: nothing, an ID3v1 tag ("TAG", 128
+ * bytes), an APE or Lyrics3 tag, zero padding, or a truncated last frame.
+ * Anything else is a second file glued on, and is refused.
+ */
+function trailerIsTag(bytes: Uint8Array, offset: number): boolean {
+  const rest = bytes.length - offset;
+  if (rest <= 0) {
+    return true;
+  }
+  const tail = bytes.subarray(offset);
+  if (startsWithAscii(tail, "TAG") || startsWithAscii(tail, "APETAGEX") || startsWithAscii(tail, "LYRICS")) {
+    return rest <= 64 * 1024;
+  }
+  // Zero padding cannot hide audio; some tools pad a file out to a size.
+  if (tail.every((byte) => byte === 0)) {
+    return true;
+  }
+  // A cut-off last frame from a tool that stopped mid-write.
+  return rest < 1441;
+}
+
+function startsWithAscii(bytes: Uint8Array, text: string): boolean {
+  if (bytes.length < text.length) {
+    return false;
+  }
+  for (let i = 0; i < text.length; i += 1) {
+    if (bytes[i] !== text.charCodeAt(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** The Xing / Info frame, and the LAME tag's encoder delay plus padding. */
+function readXingInfo(
+  bytes: Uint8Array,
+  offset: number,
+  header: { frameBytes: number; mpeg1: boolean; mono: boolean },
+): { gaplessSamples: number } | null {
+  const sideInfo = header.mpeg1 ? (header.mono ? 17 : 32) : header.mono ? 9 : 17;
+  const tag = offset + 4 + sideInfo;
+  const frame = bytes.subarray(tag, offset + header.frameBytes);
+  if (!startsWithAscii(frame, "Xing") && !startsWithAscii(frame, "Info")) {
+    return null;
+  }
+  // Delay and padding are 12 bits each, 141 bytes into the Xing block, when
+  // a LAME-style encoder (LAME, Lavc / ffmpeg) wrote the extension.
+  const at = 141;
+  if (frame.length < at + 3) {
+    return { gaplessSamples: 0 };
+  }
+  const delay = (frame[at]! << 4) | (frame[at + 1]! >> 4);
+  const padding = ((frame[at + 1]! & 0x0f) << 8) | frame[at + 2]!;
+  // The decoder's own 529-sample delay moves samples from the end trim to
+  // the start trim; the total dropped is still delay + padding.
+  return { gaplessSamples: delay + padding };
 }
 
 function skipId3(bytes: Uint8Array): number {
@@ -104,7 +215,13 @@ function skipId3(bytes: Uint8Array): number {
 function readMp3Header(
   bytes: Uint8Array,
   offset: number,
-): { frameBytes: number; sampleRate: number; samplesPerFrame: number } | null {
+): {
+  frameBytes: number;
+  sampleRate: number;
+  samplesPerFrame: number;
+  mpeg1: boolean;
+  mono: boolean;
+} | null {
   if (bytes[offset] !== 0xff || (bytes[offset + 1]! & 0xe0) !== 0xe0) {
     return null;
   }
@@ -131,7 +248,8 @@ function readMp3Header(
   if (frameBytes < 4 || offset + frameBytes > bytes.length) {
     return null;
   }
-  return { frameBytes, sampleRate, samplesPerFrame };
+  const mono = ((bytes[offset + 3]! >> 6) & 0x03) === 0x03;
+  return { frameBytes, sampleRate, samplesPerFrame, mpeg1, mono };
 }
 
 function oggDurationMs(bytes: Uint8Array): number | null {
