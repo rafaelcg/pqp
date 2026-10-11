@@ -10,7 +10,7 @@ import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
-import { APPEARANCES, type AppearancePreference } from "@/lib/appearance";
+import { APPEARANCES, setRetroLook, type AppearancePreference } from "@/lib/appearance";
 import {
   COLOR_TOKEN_GROUPS,
   CONTROL_TOKENS,
@@ -154,12 +154,20 @@ function ThemeControls() {
             <Button
               key={preset}
               size="sm"
-              variant={appearance.appearance === preset ? "default" : "secondary"}
+              variant={appearance.look === preset ? "default" : "secondary"}
               onClick={() => appearance.setAppearance(preset)}
             >
               {t(presetKey(preset))}
             </Button>
           ))}
+          {/* The hidden look, so the sheet can score it like the others. */}
+          <Button
+            size="sm"
+            variant={appearance.look === "retro" ? "default" : "secondary"}
+            onClick={() => setRetroLook(true)}
+          >
+            {t("settings.appearance.preset.retro")}
+          </Button>
         </div>
       </div>
       <div>

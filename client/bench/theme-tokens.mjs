@@ -396,7 +396,7 @@ const lightBlock = readTokens(css, /:root\[data-theme="light"\][^{]*\{([\s\S]*?)
 if (Object.keys(lightBlock).length > 0) {
   themes.light = { ...themes.dark, ...lightBlock };
 }
-for (const appearance of ["harmony", "hearth", "night"]) {
+for (const appearance of ["harmony", "hearth", "night", "retro"]) {
   const darkSkin = readTokens(
     css,
     new RegExp(
@@ -457,7 +457,7 @@ function resolveAccentTokens(tokens, hue) {
   return resolved;
 }
 if (Object.keys(accentBlock).length > 0) {
-  const accentBases = ["dark", "light", "night-dark", "harmony-light"];
+  const accentBases = ["dark", "light", "night-dark", "harmony-light", "retro-light"];
   for (const hue of [0, 90, 125, 210, 255, 330]) {
     for (const name of accentBases) {
       const tokens = themes[name];

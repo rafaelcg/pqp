@@ -9,6 +9,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { customStatusRemaining } from "@/hooks/use-custom-status";
+import { useRetroLook } from "@/hooks/use-appearance";
+import { retroStatusKey } from "@/lib/retro-look";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
@@ -258,8 +260,11 @@ export function UserPanel({
   // everyone else and that is the point — but telling the person who chose it
   // that they are "Offline" would leave them unable to tell whether the setting
   // took, which is the failure a privacy control cannot afford.
+  const retro = useRetroLook();
   const ownLabel =
-    manualStatus === "invisible" ? t("status.invisible") : undefined;
+    manualStatus === "invisible"
+      ? t(retro ? retroStatusKey("invisible") : "status.invisible")
+      : undefined;
 
   // Counted against the normalised draft, so a run of spaces mid-sentence does
   // not tick it down twice. Negative is a real state and is drawn in red: the
@@ -456,7 +461,7 @@ export function UserPanel({
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-paper">
-                    {t(choice.labelKey)}
+                    {t(retro ? retroStatusKey(choice.pip === "offline" ? "invisible" : choice.pip) : choice.labelKey)}
                   </span>
                   {/* The hint is not decoration. "Invisible" without the
                       sentence about voice channels is a promise the app does

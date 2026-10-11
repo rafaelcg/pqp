@@ -854,7 +854,60 @@ export function playCue(cue: SoundCue): void {
     }
     return;
   }
+  const synth = synthOverrides.get(cue);
+  if (synth && playSynth(synth)) {
+    return;
+  }
   enqueueSample(cue);
+}
+
+/**
+ * A sound drawn in code rather than read from a file: given the context and
+ * the cue bus (which carries the output volume and device), it schedules its
+ * own nodes from `ctx.currentTime`.
+ */
+export type SynthCue = (ctx: AudioContext, destination: AudioNode) => void;
+
+const synthOverrides = new Map<SoundCue, SynthCue>();
+
+/**
+ * A look that brings its own sound for a cue (Modo 2005's "message"). Same
+ * gate as the sample it replaces: the global mute and that cue's own switch.
+ * `null` gives the cue back its sample.
+ */
+export function setSynthCueOverride(cue: SoundCue, synth: SynthCue | null): void {
+  if (synth) {
+    synthOverrides.set(cue, synth);
+  } else {
+    synthOverrides.delete(cue);
+  }
+}
+
+function playSynth(synth: SynthCue): boolean {
+  const ctx = ensureContext();
+  if (!ctx || !master) {
+    return false;
+  }
+  if (ctx.state === "suspended") {
+    void ctx.resume().catch(() => {});
+  }
+  try {
+    synth(ctx, master);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A synthesized sound that is not one of the cues (Modo 2005's sign-in
+ * chime). Respects the global mute only; the caller owns its own switch.
+ */
+export function playSynthSound(synth: SynthCue): void {
+  if (!state.enabled) {
+    return;
+  }
+  playSynth(synth);
 }
 
 export function playActivitySound(mentions: number): void {

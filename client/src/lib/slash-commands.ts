@@ -13,6 +13,7 @@ import {
 } from "@pqp/shared";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
+import { isRetroOffered, toggleRetroLook } from "@/lib/retro-look";
 
 export interface SlashCommandMeta {
   name: string;
@@ -59,6 +60,11 @@ interface SlashCommand {
   descriptionKey: MessageKey;
   usage: string;
   takesArgs: boolean;
+  /**
+   * Left out of the menu and `/help` while this returns true. The command
+   * still runs when typed in full: that is how an easter egg is found.
+   */
+  hidden?: () => boolean;
   execute: (ctx: SlashCommandContext) => Promise<SlashExecuteResult> | SlashExecuteResult;
 }
 
@@ -357,17 +363,41 @@ const commands: SlashCommand[] = [
       return ok();
     },
   },
+  {
+    // Modo 2005. Local only: it never sends a message, it flips the look.
+    name: "2005",
+    descriptionKey: "slash.2005.description",
+    usage: "/2005",
+    takesArgs: false,
+    hidden: () => !isRetroOffered(),
+    async execute() {
+      const result = await toggleRetroLook();
+      switch (result) {
+        case "unavailable":
+          return errKey("slash.unknownNamed", { name: "2005" });
+        case "off":
+          return ok({ message: translateMessage("retro.off"), tone: "info" });
+        case "on":
+          return ok({ message: translateMessage("retro.on"), tone: "info" });
+        default:
+          // The first find gets its own card instead of a line.
+          return ok();
+      }
+    },
+  },
 ];
 
 const byName = new Map(commands.map((c) => [c.name, c]));
 
 export function listSlashCommands(): SlashCommandMeta[] {
-  return commands.map(({ name, descriptionKey, usage, takesArgs }) => ({
-    name,
-    description: translateMessage(descriptionKey),
-    usage,
-    takesArgs,
-  }));
+  return commands
+    .filter((c) => !c.hidden?.())
+    .map(({ name, descriptionKey, usage, takesArgs }) => ({
+      name,
+      description: translateMessage(descriptionKey),
+      usage,
+      takesArgs,
+    }));
 }
 
 export function filterSlashCommands(query: string): SlashCommandMeta[] {

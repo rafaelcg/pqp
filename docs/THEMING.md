@@ -159,6 +159,27 @@ name or brand hex values. Hearth tints the rail; it does not paint a two-tone
 sidebar, because that needs an `--color-on-sidebar` token the message pane does
 not share.
 
+## Modo 2005 (hidden look)
+
+`data-appearance="retro"`: a mid-2000s chat-client skin. Light is Modo 2005,
+dark is Madrugada. Found by typing `/2005` in any composer (never sent) or the
+Konami code, after which it has a tile in Aparência with a "novo" tag; `/2005`
+again, or picking another look, turns it off.
+
+It sits ON TOP of the synced `appearance` instead of being a fifth enum value,
+because the server's schema does not accept `retro` yet: the account keeps the
+look underneath, and `pqp-appearance-retro` / `pqp-retro-found` are local to
+the browser (`Look` in `client/src/lib/appearance.ts`). The boot script reads
+the same keys. The operator's kill switch is `retro_look`, read from
+`GET /api/fun/config` (`{ retroLook }`, a 404 counts as on) only by a browser
+that found the look; off paints the look underneath and hides the tile.
+
+Tokens (including the `--retro-*` chrome tokens) live in `index.css` and the
+bench scores both halves. Structure is `client/src/components/retro/`, one
+lazy chunk with its own stylesheet, so nobody outside the look downloads it.
+The nudge's `.nudge-shake` shakes harder there, and `.nudge-shake-retro` is the
+explicit name for it.
+
 ## Stage 5 — accent hue
 
 A fourth axis. Preference is `default` or an integer 0–360. `default` keeps the
