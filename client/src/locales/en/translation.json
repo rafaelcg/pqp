@@ -4792,5 +4792,19 @@
   "switcher.emptyStart": "Type a name, a server or a #channel.",
   "switcher.hint.move": "to move",
   "switcher.hint.open": "to open",
-  "switcher.hint.close": "closes"
+  "switcher.hint.close": "closes",
+  "phoneTabs.label": "Sections",
+  "phoneTabs.conversas": "Chats",
+  "phoneTabs.servidores": "Servers",
+  "phoneTabs.tu": "You",
+  "phoneTabs.waitingSr_one": "{count} waiting",
+  "phoneTabs.waitingSr_other": "{count} waiting",
+  "phoneTabs.back": "Back",
+  "phoneTabs.live": "Live now",
+  "phoneTabs.createOrJoin": "Create or join a server",
+  "phoneTabs.createOrJoinBody": "With an invite or from the communities list",
+  "phoneTabs.editProfile": "Edit profile",
+  "phoneTabs.settings": "Settings",
+  "phoneTabs.whatsNew": "What's new",
+  "phoneTabs.help": "Help"
 }

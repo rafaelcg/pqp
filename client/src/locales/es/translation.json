@@ -4860,5 +4860,19 @@
   "switcher.emptyStart": "Escribe un nombre, un servidor o un #canal.",
   "switcher.hint.move": "para elegir",
   "switcher.hint.open": "para abrir",
-  "switcher.hint.close": "cierra"
+  "switcher.hint.close": "cierra",
+  "phoneTabs.label": "Secciones",
+  "phoneTabs.conversas": "Chats",
+  "phoneTabs.servidores": "Servidores",
+  "phoneTabs.tu": "Tú",
+  "phoneTabs.waitingSr_one": "{count} esperándote",
+  "phoneTabs.waitingSr_other": "{count} esperándote",
+  "phoneTabs.back": "Volver",
+  "phoneTabs.live": "En vivo ahora",
+  "phoneTabs.createOrJoin": "Crear o unirte a un servidor",
+  "phoneTabs.createOrJoinBody": "Con invitación o desde la lista de comunidades",
+  "phoneTabs.editProfile": "Editar perfil",
+  "phoneTabs.settings": "Configuración",
+  "phoneTabs.whatsNew": "Novedades",
+  "phoneTabs.help": "Ayuda"
 }

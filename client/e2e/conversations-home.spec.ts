@@ -396,3 +396,57 @@ test("Ctrl/Cmd+K jumps to a person from a server; message search moved to Ctrl/C
 
   await page.context().close();
 });
+
+test("phone at 390px: the bottom bar, Servidores first, the stack, and the remembered tab", async ({
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  await setGlobalFlag("conversations_home_phone_tabs", true);
+  try {
+    const { ana, dm } = await pair(Date.now().toString(36));
+    const page = await openAs(browser, ana, "/app", { width: 390, height: 844 });
+    const bar = page.locator("[data-phone-tab-bar]");
+    await expect(bar).toBeVisible({ timeout: 20_000 });
+    // An account with no stored choice starts where the app always started.
+    await expect(bar.getByRole("tab", { name: /Servers/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("[data-phone-screen=servidores]")).toBeVisible();
+    // No rail, and nothing wider than the phone.
+    await expect(page.locator("nav[data-rail-phone-hidden]")).toBeHidden();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    await bar.getByRole("tab", { name: /Chats/ }).click();
+    const list = page.locator("aside[data-conversations]");
+    await expect(list.locator(`[data-flip-key="${dm}"]`)).toBeVisible();
+    await expect(list.locator(`[data-flip-key="${dm}"]`)).toBeInViewport();
+
+    // A conversation is the whole screen; back returns to the list and the bar.
+    await list.locator(`[data-flip-key="${dm}"] button`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/app/dm/${dm}`));
+    await expect(bar).toBeHidden();
+    await expect(page.getByPlaceholder(/Message/)).toBeInViewport();
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(bar).toBeVisible();
+    await expect(list.locator(`[data-flip-key="${dm}"]`)).toBeInViewport();
+
+    // Tu holds the account.
+    await bar.getByRole("tab", { name: /You/ }).click();
+    await expect(page.locator("[data-phone-screen=tu]")).toBeVisible();
+    await expect(
+      page.locator("[data-phone-screen=tu]").getByRole("button", { name: "Edit profile" }),
+    ).toBeVisible();
+
+    // The last tab is remembered across a reload.
+    await bar.getByRole("tab", { name: /Chats/ }).click();
+    await page.goto("/app?lang=en");
+    await expect(bar.getByRole("tab", { name: /Chats/ })).toHaveAttribute("aria-selected", "true", {
+      timeout: 20_000,
+    });
+    await expect(list).toBeInViewport();
+    await page.context().close();
+  } finally {
+    await setGlobalFlag("conversations_home_phone_tabs", null);
+  }
+});

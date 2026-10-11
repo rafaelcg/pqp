@@ -7,6 +7,7 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
+  ChevronLeft,
   History,
   Lock,
   Menu,
@@ -461,8 +462,21 @@ import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import {
   startConversationsConfig,
-  useConversationsHome,
+  useConversationsConfig,
 } from "@/lib/conversations-config";
+import {
+  arrivedForPerson,
+  landingPhoneTab,
+  readStoredPhoneTab,
+  storePhoneTab,
+  usePhoneWidth,
+  type PhoneTab,
+} from "@/lib/phone-tabs";
+import { PhoneTabBar } from "@/components/conversations/phone-tab-bar";
+import {
+  PhoneServersScreen,
+  PhoneYouScreen,
+} from "@/components/conversations/phone-screens";
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
 import { QuickSwitcher } from "@/components/conversations/quick-switcher";
@@ -5755,8 +5769,16 @@ function MainAppContent({
   refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
+  /**
+   * Conversas on a phone: the bottom bar's tab follows a conversation opened
+   * by any door (a toast, a push, Ctrl+K, a profile card). Set by the phone
+   * shell below; null everywhere else.
+   */
+  const phoneFollowRef = useRef<((tab: PhoneTab) => void) | null>(null);
+
   const selectConversation = useCallback(
     async (channelId: string) => {
+      phoneFollowRef.current?.("conversas");
       setSelection(HOME_SELECTION);
       syncRoute(HOME_SELECTION, channelId);
       await openChannel(channelId);
@@ -8970,7 +8992,8 @@ function MainAppContent({
     () => (conversationsConfigUserId ? startConversationsConfig() : undefined),
     [conversationsConfigUserId],
   );
-  const conversationsHome = useConversationsHome();
+  const conversationsConfig = useConversationsConfig();
+  const conversationsHome = conversationsConfig.home;
   // Ctrl/Cmd+K is the "ir pra" switcher while Conversas is on (message search
   // moved to F, see `channel-list.tsx`). Off, K stays message search and this
   // listener does not exist.
@@ -9178,6 +9201,92 @@ function MainAppContent({
     const timer = window.setTimeout(() => setCelebrateArrivalFor(null), 3000);
     return () => window.clearTimeout(timer);
   }, [celebrateArrivalFor]);
+
+  // CONVERSAS ON A PHONE (`conversations_home_phone_tabs`): below `md` the
+  // rail goes and the bottom bar Conversas / Servidores / Tu comes in. A live
+  // party's own phone layout outranks it, as it outranks the rail today.
+  const phoneWidth = usePhoneWidth();
+  // Before the boot gates below (hooks must not move); a live party's phone
+  // layout is folded in once it is known (`phoneShell`).
+  const phoneShellAllowed = conversationsConfig.phoneTabs && phoneWidth;
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>(() =>
+    landingPhoneTab({
+      stored: readStoredPhoneTab(),
+      arrivedForPerson: arrivedForPerson(window.location),
+    }),
+  );
+  const [phoneServersOpen, setPhoneServersOpen] = useState(false);
+
+  /** A tab was tapped: remember it, and show that tab's root screen. */
+  const selectPhoneTab = useCallback(
+    (tab: PhoneTab) => {
+      storePhoneTab(tab);
+      setPhoneTab(tab);
+      setWhatsNewOpen(false);
+      setDirectoryOpen(false);
+      if (tab === "conversas") {
+        setPhoneServersOpen(false);
+        if (selection.kind !== "dm") {
+          selectHome();
+        }
+        setMobileNavOpen(true);
+      } else if (tab === "servidores") {
+        setPhoneServersOpen(true);
+        setMobileNavOpen(false);
+      } else {
+        setPhoneServersOpen(false);
+        setMobileNavOpen(false);
+      }
+    },
+    [selection.kind, selectHome],
+  );
+
+  // The first time the phone shell is on screen, open the landing tab on its
+  // root screen, unless the page was opened on a specific conversation or
+  // channel (a push, a shared link), which then stays open. Waits for the
+  // boot to finish its own first navigation (the first server's landing
+  // channel opens on the first ready socket), or that would land on top.
+  const phoneLandedRef = useRef(false);
+  const phoneOpenedPathRef = useRef(
+    typeof window === "undefined" ? "" : window.location.pathname,
+  );
+  useEffect(() => {
+    if (
+      !phoneShellAllowed ||
+      phoneLandedRef.current ||
+      !bootstrapReady ||
+      connection !== "online"
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      phoneLandedRef.current = true;
+      // The path the page was OPENED on, not where the app has routed since.
+      const opened = phoneOpenedPathRef.current;
+      const openedOnConversation = /^\/app\/dm\/[^/]+/.test(opened);
+      const openedOnChannel = /^\/app\/server\/[^/]+\/[^/]+/.test(opened);
+      if (openedOnConversation || openedOnChannel) {
+        setPhoneTab(openedOnConversation ? "conversas" : "servidores");
+        return;
+      }
+      selectPhoneTab(phoneTab);
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // Once, when the shell and the boot are both ready; later tabs are taps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneShellAllowed, bootstrapReady, connection]);
+
+  phoneFollowRef.current = phoneShellAllowed
+    ? (tab: PhoneTab) => {
+        setPhoneServersOpen(false);
+        setPhoneTab((current) => {
+          if (current !== tab) {
+            storePhoneTab(tab);
+          }
+          return tab;
+        });
+      }
+    : null;
 
   if (bootstrapError) {
     return (
@@ -9502,6 +9611,18 @@ function MainAppContent({
     dismissed: partyNewcomerStripClosed,
   };
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
+  const phoneShell = phoneShellAllowed && !partyPhoneLayout;
+  // The bar is the way between the three lists. Inside a conversation or a
+  // channel the screen is the conversation's, the way every phone chat app
+  // does it; the header's back arrow returns to the list and the bar.
+  const phoneBarVisible =
+    phoneShell &&
+    !directoryOpen &&
+    !whatsNewOpen &&
+    (phoneTab === "tu" ||
+      (phoneTab === "servidores" && (phoneServersOpen || mobileNavOpen)) ||
+      (phoneTab === "conversas" && mobileNavOpen));
+
   const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
   const hideDownloadHintForNewcomer =
     suppressAppInviteForNewcomer(partyNewcomerFacts);
@@ -9863,7 +9984,10 @@ function MainAppContent({
     voiceState.status !== "idle" &&
     voiceState.voiceChannelId !== null &&
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
-  const sidebarFooter = (compact = false) => (
+  const sidebarFooter = (
+    compact = false,
+    { userPanel = true }: { userPanel?: boolean } = {},
+  ) => (
     <>
       {/* Chrome only. The embed is mounted once, below, because this
           function has three call sites and two of them can be on screen at
@@ -9959,6 +10083,7 @@ function MainAppContent({
           <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
         </>
       )}
+      {userPanel && (
       <UserPanel
         compact={compact}
         hideDownloadHint={hideDownloadHintForNewcomer}
@@ -10002,6 +10127,7 @@ function MainAppContent({
           setSettingsOpen(true);
         }}
       />
+      )}
     </>
   );
 
@@ -10027,10 +10153,11 @@ function MainAppContent({
         <button
           type="button"
           className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
-          aria-label={t("chrome.openNav")}
+          aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
+          data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
-          <Menu className="h-5 w-5" />
+          {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
@@ -11257,7 +11384,11 @@ function MainAppContent({
     >
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
-    <div className="app-shell animate-fade-in relative flex h-full">
+    <div
+      className="app-shell animate-fade-in relative flex h-full"
+      data-phone-tabs={phoneShell ? "" : undefined}
+      data-phone-bar={phoneBarVisible ? "" : undefined}
+    >
       {/* Mounted at the root so remote audio keeps playing when you navigate
           away from the voice channel. */}
       <VoiceAudioSinks
@@ -11425,8 +11556,8 @@ function MainAppContent({
         streamAlertInfo={streamAlerts.byServer}
         onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
-        phoneHidden={partyPhoneLayout}
-        mobileNavOpen={mobileNavOpen}
+        phoneHidden={partyPhoneLayout || phoneShell}
+        mobileNavOpen={phoneShell ? false : mobileNavOpen}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
@@ -11497,6 +11628,69 @@ function MainAppContent({
         }
       />
 
+      {phoneShell && phoneTab === "servidores" && phoneServersOpen && (
+        <PhoneServersScreen
+          servers={servers}
+          serverUnread={serverUnread}
+          liveServerIds={watchParties.liveServerIds}
+          onSelectServer={(id) => {
+            setPhoneServersOpen(false);
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId: id });
+            void loadChannels(id);
+            setMobileNavOpen(true);
+          }}
+          onCreateServer={() => setShowCreateServer(true)}
+          onJoinServer={() => setInviteMode("join")}
+          onOpenCommunities={
+            communitiesEnabled
+              ? () => {
+                  setWhatsNewOpen(false);
+                  setDirectoryOpen(true);
+                }
+              : undefined
+          }
+        />
+      )}
+      {phoneShell && phoneTab === "tu" && (
+        <PhoneYouScreen
+          me={{
+            displayName: user?.displayName ?? "",
+            avatarUrl: user?.avatarUrl ?? null,
+            tag: user?.tag ?? null,
+            handle: user?.handle ?? null,
+          }}
+          whatsNewUnread={whatsNewUnread}
+          onOpenProfile={() => {
+            setSettingsSection("profile");
+            setSettingsOpen(true);
+          }}
+          onOpenSettings={() => {
+            setSettingsSection(null);
+            setSettingsOpen(true);
+          }}
+          onOpenWhatsNew={handleOpenWhatsNew}
+          onOpenHelp={() => {
+            setSettingsSection("help");
+            setSettingsOpen(true);
+          }}
+          footer={sidebarFooter()}
+        />
+      )}
+      {phoneBarVisible && (
+        <PhoneTabBar
+          tab={phoneTab}
+          onSelect={selectPhoneTab}
+          conversations={conversations}
+          unread={unread}
+          openConversationId={selection.kind === "dm" ? selectedChannelId : null}
+          serversWaiting={
+            servers.filter((server) => (serverUnread[server.id]?.mentions ?? 0) > 0).length
+          }
+          me={{ displayName: user?.displayName ?? "", avatarUrl: user?.avatarUrl ?? null }}
+        />
+      )}
+
       {/* THE ONE EMBED. Mounted here, outside every branch, because it must
           never unmount while somebody is listening: unmounting the iframe is
           what stops the sound. The footers below draw the radio and the
@@ -11514,6 +11708,7 @@ function MainAppContent({
       {selection.kind === "dm" ? (
         <DmList
           home={conversationsHome}
+          phoneShell={phoneShell}
           conversations={conversations}
           selectedChannelId={selectedChannelId}
           unread={unread}
@@ -11537,7 +11732,7 @@ function MainAppContent({
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
-          footer={sidebarFooter()}
+          footer={sidebarFooter(false, { userPanel: !phoneShell })}
         />
       ) : (
         <ChannelList
@@ -11654,7 +11849,7 @@ function MainAppContent({
           onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
-          footer={sidebarFooter(sidebarIconsOnly)}
+          footer={sidebarFooter(sidebarIconsOnly, { userPanel: !phoneShell })}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
@@ -12668,6 +12863,7 @@ function MainAppContent({
           }}
           onMessagePerson={stableOnMessagePerson}
           onSelectServer={(serverId) => {
+            phoneFollowRef.current?.("servidores");
             setWhatsNewOpen(false);
             setSelection({ kind: "server", serverId });
             void loadChannels(serverId);
