@@ -662,7 +662,11 @@ export const ChannelList = memo(function ChannelList({
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
             initialQuery={searchSeed}
           />
@@ -1498,7 +1502,11 @@ export const ChannelList = memo(function ChannelList({
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
             initialQuery={searchSeed}
           />
