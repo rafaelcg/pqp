@@ -396,6 +396,53 @@ describeDb("initDb on a real Postgres", () => {
     }
   });
 
+  it("skips the validation scan only when the constraint it replaces already proves it", async () => {
+    const client = await getPool().connect();
+    const validated = async () =>
+      (
+        await client.query<{ convalidated: boolean; def: string }>(
+          `SELECT convalidated, pg_get_constraintdef(oid) AS def FROM pg_constraint
+            WHERE conrelid = 'channels'::regclass AND conname = 'channels_type_check'`,
+        )
+      ).rows[0]!;
+    try {
+      // From a VALIDATED subset (what the watch party block leaves): every row
+      // already passes, so the forum list goes on NOT VALID, with no scan.
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM channels WHERE type NOT IN ('text', 'voice', 'category', 'thread', 'watch_party')`,
+      );
+      await client.query(PRE_FORUM_TYPE_CHECK.replace(" NOT VALID", ""));
+      expect((await validated()).convalidated).toBe(true);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: false });
+      expect((await validated()).def).toContain("'forum'");
+      await client.query("ROLLBACK");
+
+      // From an unvalidated constraint, nothing is proven: it validates.
+      await client.query("BEGIN");
+      await client.query(PRE_FORUM_TYPE_CHECK);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
+      // From a constraint that allows a type this list lacks (a rollback
+      // image meeting a newer schema): it validates, so rows of that type
+      // would keep the newer constraint in place.
+      await client.query("BEGIN");
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'gallery'));`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+  });
+
   it("a boot that hits lock timeouts on `channels` still ends with 'forum' in the type CHECK", async () => {
     // The whole file this time, from a database that predates forums, with a
     // reader holding `channels` through the first attempts. (Inside the file

@@ -5323,12 +5323,23 @@ CREATE TABLE IF NOT EXISTS stream_alert_channels (
 --    a deadlock fails the whole run, `initDb` rolls back and retries;
 --  - catches exactly one error, `check_violation`: rows of a type this list
 --    does not know, which only happens when a NEWER schema added one and this
---    image is a rollback. The newer constraint stays, as before.
+--    image is a rollback. The newer constraint stays, as before;
+--  - skips the validation scan (`NOT VALID`) when it can prove the scan would
+--    find nothing: the constraint it replaces was VALIDATED and allows no
+--    type outside this list, so every row already passes this one. That is
+--    the normal case (the watch party block above has just validated a
+--    subset), and it keeps a full pass over `channels` out of the ACCESS
+--    EXCLUSIVE window. New rows and updates are checked either way. Any
+--    other starting point (no constraint, an unvalidated one, one with a
+--    type this list lacks) validates, which is what makes a rollback image
+--    keep a newer constraint instead of replacing it.
 --
 -- `db-boot-schema.test.ts` runs this block under a held lock and asserts the
--- 55P03 reaches the caller, and that a contended boot ends with 'forum' in the
--- constraint.
+-- 55P03 reaches the caller, that a contended boot ends with 'forum' in the
+-- constraint, and which of the two ADDs each starting point takes.
 DO $$
+DECLARE
+  covered BOOLEAN;
 BEGIN
   IF NOT EXISTS (
     SELECT 1
@@ -5337,11 +5348,27 @@ BEGIN
        AND conname = 'channels_type_check'
        AND pg_get_constraintdef(oid) LIKE '%''forum''%'
   ) THEN
+    SELECT c.convalidated AND NOT EXISTS (
+             SELECT 1
+               FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
+              WHERE m.v[1] NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')
+           )
+      INTO covered
+      FROM pg_constraint c
+     WHERE c.conrelid = 'channels'::regclass
+       AND c.conname = 'channels_type_check';
     BEGIN
       ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
-      ALTER TABLE channels
-        ADD CONSTRAINT channels_type_check
-        CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'));
+      IF covered THEN
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'))
+          NOT VALID;
+      ELSE
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'));
+      END IF;
     EXCEPTION WHEN check_violation THEN
       RAISE WARNING 'channels_type_check left as it was: a row has a channel type this schema does not know (a rollback?)';
     END;
