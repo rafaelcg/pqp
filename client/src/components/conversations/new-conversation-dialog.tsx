@@ -18,6 +18,10 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const NO_FRIENDS: readonly (PublicUser & { status: UserStatus })[] = [];
+const NO_SECTIONS = { online: [], friends: [], recent: [] } as const satisfies Record<
+  "online" | "friends" | "recent",
+  readonly PickerPerson[]
+>;
 
 /** How many people from recent 1:1s, beyond friends, are offered without typing. */
 const RECENT_PEOPLE = 5;
@@ -135,10 +139,10 @@ export function NewConversationDialog({
     () => new Set(currentUserId ? [currentUserId] : []),
     [currentUserId],
   );
-  const sections = pickerSections(friendList, conversations, {
-    query,
-    excludeIds,
-  });
+  // Nothing to work out while the dialog is shut (it is always mounted).
+  const sections = open
+    ? pickerSections(friendList, conversations, { query, excludeIds })
+    : NO_SECTIONS;
   const pickedIds = new Set(picked.map((person) => person.id));
   const full = picked.length >= DM_MAX_RECIPIENTS;
   const nobody =
