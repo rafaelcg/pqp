@@ -668,7 +668,9 @@ export async function createAutomatedReport(input: {
  * finding there would hand the accusation to the accused, which is the rule
  * community reports already follow (`resolveServerSubject`). `placeLabel`
  * names where it happened ("Baú · <server name>") so the instance moderator
- * is not left guessing.
+ * is not left guessing, and is also the dedupe key: one open ticket per
+ * uploader per Baú, so a finding in a second server's Baú, or a DM attachment
+ * finding (context `dm`/`group`, no label), is never folded into this one.
  */
 export async function createAutomatedInstanceReport(input: {
   reportedUserId: string;
@@ -702,6 +704,8 @@ export async function createAutomatedInstanceReport(input: {
          AND subject_type = 'user'
          AND reported_user_id = $1
          AND server_id IS NULL
+         AND context_kind = 'none'
+         AND channel_label = $3
      )`,
     [
       input.reportedUserId,

@@ -142,9 +142,18 @@ the end of that claim (`checkCommunityHomeUpload` in
 upload has never been on any post, draft or cover, and a refusal is the same
 "Upload could not be verified" a failed HEAD already answers. Every Baú
 picture, a video's custom cover included, goes through that one claim, on web,
-iOS and Android alike. An upload is judged once: a re-claim of a row that
-passed, was flagged or was skipped does not call the provider again, while an
-`error` is scanned again on retry and a quarantined row is refused outright.
+iOS and Android alike.
+
+Before a Baú image is scanned, the claim copies it server-side (`CopyObject`,
+no bytes through the API) to a `community-home/<server>/pinned/` key that no
+presigned PUT was ever signed for, points the row there, and deletes the
+original. The scan, the HEAD and the sniff all run on that copy, and every post
+serves it, so the bytes judged are the bytes shown (residual risk 9 below, which
+chat attachments still carry). Only while a scanner is configured: with nothing
+judging the bytes, there is nothing for a swap to get past. An upload is judged
+once: a re-claim of a row that passed, was flagged or was skipped does not call
+the provider again, while an `error` is scanned again on retry and a
+quarantined row is refused outright.
 
 The cost is latency, bounded by `CONTENT_SCAN_TIMEOUT_MS` (default 6s) and paid
 only by messages carrying a freshly uploaded image (and, for Baú, by the claim
@@ -804,7 +813,11 @@ on. This is the honest list.
    stays valid for its 15-minute TTL and an S3 PUT is an unconditional
    overwrite, so a body of *identical length* can be swapped in after the scan
    and after the claim. This predates scanning (see the note on `presignPut` in
-   `lib/s3.ts`) and scanning does not close it.
+   `lib/s3.ts`) and scanning does not close it for chat attachments. **Baú
+   images are closed**: the claim pins them to a server-made key before the
+   scan (see "Where the scan runs"). A PUT through the old URL can still
+   recreate the original key as a stray object no row names and nothing
+   serves.
 10. **`CONTENT_SCAN_FAIL_MODE=open` disables the protection** during exactly the
     outage in which it matters. It is not the default; do not set it and forget.
 11. **Age assurance is a separate, unaddressed duty.** A self-declared "18 or

@@ -36,13 +36,16 @@ import { createAutomatedInstanceReport } from "./reports.js";
  * - A finding goes to the INSTANCE queue, never to the server's own. Only
  *   Manage Server can upload here, so the uploader is somebody who reads that
  *   server's queue. See `createAutomatedInstanceReport`.
- * - An upload is judged once. A re-claim of a row that already passed (or was
- *   flagged, or skipped as a non-image) does not call the provider again: a
- *   repeated claim would otherwise be a way to spend the scanner's quota, and
- *   re-scanning would not close the swap-after-scan gap anyway, since the
- *   post already points at the key and nothing re-claims after a swap
- *   (residual risk 9 in the safety doc). An `error` is not a verdict, so it
- *   is scanned again; a quarantined row is refused before this is reached.
+ * - The bytes judged are pinned. Before an image is scanned the claim copies
+ *   it to a key nobody holds a PUT URL for (`pinCommunityHomeUpload`), so it
+ *   cannot be swapped after the scan, which chat attachments still can
+ *   (residual risk 9 in the safety doc).
+ * - An upload is judged once. A verdict on an image is always a verdict on a
+ *   pinned key, so a re-claim of a row that already passed (or was flagged,
+ *   or skipped as a non-image) does not call the provider again: those bytes
+ *   cannot have changed, and a repeated claim would otherwise be a way to
+ *   spend the scanner's quota. An `error` is not a verdict, so it is scanned
+ *   again; a quarantined row is refused before this is reached.
  */
 
 /** Verdicts that already settled this upload; a re-claim does not re-scan. */
@@ -100,12 +103,40 @@ export async function checkCommunityHomeUpload(
     };
   }
 
-  await recordCommunityHomeScan(target.id, result).catch((error: unknown) => {
-    console.error(`[content-safety] could not record Baú upload ${target.id}:`, error);
-  });
+  await recordWithRetry(target, result);
   await escalateCommunityHomeScan(target, result);
 
   return scanAllowsAttachment(result);
+}
+
+/**
+ * `recordCommunityHomeScan`, tried three times. A rejection that is never
+ * written is a row without `quarantined_at`, which the orphan sweep deletes an
+ * hour later together with the evidence, so a transient database error is
+ * worth two more attempts. If all three fail the claim is still refused (the
+ * caller does not wait on this to decide) and the loud line below is the
+ * operator's only record; it names the key so the object can be kept by hand.
+ */
+async function recordWithRetry(
+  target: CommunityHomeScanTarget,
+  result: ScanResult,
+): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await recordCommunityHomeScan(target.id, result);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+  console.error(
+    `[content-safety] VERDICT NOT RECORDED for Baú upload ${target.id} ` +
+      `(${result.status}, key ${target.storageKey}). A rejected object here ` +
+      `is not quarantined and the orphan sweep will delete it.`,
+    lastError,
+  );
 }
 
 /**
@@ -216,19 +247,29 @@ export async function sweepQuarantinedCommunityHomeMedia(): Promise<number> {
   if (expired.rows.length === 0) {
     return 0;
   }
-  await Promise.all(
+  // Only rows whose object is really gone are dropped. A failed delete keeps
+  // its row, and with it the key, for the next sweep to try again.
+  const gone = await Promise.all(
     expired.rows.map((row) =>
-      deleteObject(row.storage_key).catch((error: unknown) => {
-        console.error(
-          `[content-safety] leaked quarantined Baú object ${row.storage_key}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }),
+      deleteObject(row.storage_key).then(
+        () => row.id,
+        (error: unknown) => {
+          console.error(
+            `[content-safety] could not delete quarantined Baú object ${row.storage_key}, will retry:`,
+            error instanceof Error ? error.message : error,
+          );
+          return null;
+        },
+      ),
     ),
   );
+  const ids = gone.filter((id): id is string => id !== null);
+  if (ids.length === 0) {
+    return 0;
+  }
   const deleted = await getPool().query(
     `DELETE FROM community_home_media_uploads WHERE id = ANY($1::uuid[])`,
-    [expired.rows.map((row) => row.id)],
+    [ids],
   );
   return deleted.rowCount ?? 0;
 }
