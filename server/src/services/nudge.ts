@@ -24,7 +24,8 @@ import { getPreferencesForUsers } from "./preferences.js";
  * CHAMAR A ATENÇÃO, THE SERVER'S RULES.
  *
  * Everything that decides whether a `nudge` frame becomes a message, in the
- * order the design fixed (cheapest first), so the socket handler in
+ * order the design fixed (cheapest first, except that the cooldown is spent
+ * last so a refused attempt never costs a token), so the socket handler in
  * `ws/chat.ts` only has to ask once and then write through the ordinary send
  * path. The rules themselves are in `packages/shared/src/nudge.ts`.
  *
@@ -253,38 +254,42 @@ export async function decideNudge(
   }
 
   // 3. The sender's own switch. Read with the peer's in one query; the peer's
-  //    answer is only consulted after the friendship check below, so an
-  //    opted-out stranger and a non-friend are the same `unavailable`.
+  //    answer is only consulted after the friendship check below (an opted-out
+  //    stranger and a non-friend are the same `unavailable`).
   const preferences = await getPreferencesForUsers([senderId, peerId]);
   if (!nudgesAllowed(preferences.get(senderId))) {
     return { ok: false, reason: "self-off" };
   }
 
-  // 4. Cooldowns: 10 s per conversation, a burst of five per sender.
-  const budget = await takeBudget(senderId, channelId);
-  if (!budget.ok) {
-    return { ok: false, reason: "cooldown", retryAfterMs: budget.retryAfterMs };
-  }
-
-  // 5. Friends, and no block either way.
+  // 4. Friends, and no block either way.
   if (!(await friendsWithoutBlock(senderId, peerId))) {
     return { ok: false, reason: "unavailable" };
   }
 
-  // 6. The other person's switch.
+  // 5. The other person's switch.
   if (!nudgesAllowed(preferences.get(peerId))) {
     return { ok: false, reason: "unavailable" };
   }
 
-  // 7. Não perturbe, as everybody else sees it (cluster-wide, and never
+  // 6. Não perturbe, as everybody else sees it (cluster-wide, and never
   //    revealing an invisible person: they resolve to offline).
   if (resolveStatus(peerId) === "dnd") {
     return { ok: false, reason: "busy" };
   }
 
-  // 8. Three in a row with no reply.
+  // 7. Three in a row with no reply.
   if (await isUnanswered(senderId, channelId)) {
     return { ok: false, reason: "unanswered" };
+  }
+
+  // 8. Cooldowns: 10 s per conversation, a burst of five per sender. LAST, so
+  //    only a nudge that would otherwise land spends a token: a refusal for
+  //    any reason above (or a database error on the way) leaves the sender
+  //    free to try again the moment the reason goes away (the friend leaves
+  //    Não perturbe, answers, unblocks).
+  const budget = await takeBudget(senderId, channelId);
+  if (!budget.ok) {
+    return { ok: false, reason: "cooldown", retryAfterMs: budget.retryAfterMs };
   }
 
   return { ok: true, peerId };

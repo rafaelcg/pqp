@@ -398,6 +398,15 @@ describeDb("chamar a atenção across two instances on the Postgres bus", () => 
     const rec = await nudge(a, alice, channelId);
     expect(refusal(rec)).toMatchObject({ reason: "busy" });
     expect(await countNudges(channelId)).toBe(0);
+
+    // Bob is back: the refusal spent no cooldown, so the next try lands at once.
+    await b.preferences.mergePreferences(bob.id, { status: "online" });
+    b.status.applyManualStatus(bob.id, "online");
+    await vi.waitFor(() => expect(a.status.resolveStatus(bob.id)).not.toBe("dnd"), {
+      timeout: 5_000,
+    });
+    expect(refusal(await nudge(a, alice, channelId))).toBeUndefined();
+    expect(await countNudges(channelId)).toBe(1);
     b.status.unregisterStatusSocket(bobStatus.socket);
   }, 30_000);
 
