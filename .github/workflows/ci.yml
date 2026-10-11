@@ -138,7 +138,7 @@ jobs:
       # and they run serially (one database). Parallel here overlaps the
       # cheap packages with the 4-minute server run instead of stacking them.
       - name: Start CPU sampler
-        run: nohup vmstat 5 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
+        run: nohup stdbuf -oL vmstat 5 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
 
       - name: Test
         run: pnpm run -r --parallel test
@@ -280,7 +280,7 @@ jobs:
   # the client via `vite dev` (see client/playwright.config.ts webServer), so
   # only @pqp/shared needs a build here.
   e2e:
-    name: e2e (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
+    name: e2e (${{ matrix.suite }} ${{ matrix.label }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -289,28 +289,30 @@ jobs:
         include:
           - suite: core
             projects: --project=chromium --project=mobile-pixel
-            shard: 1
-            shards: 3
+            total: 6
+            shards: "1 2"
+            label: 1+2/6
           - suite: core
             projects: --project=chromium --project=mobile-pixel
-            shard: 2
-            shards: 3
+            total: 6
+            shards: "3 4"
+            label: 3+4/6
           - suite: core
             projects: --project=chromium --project=mobile-pixel
-            shard: 3
-            shards: 3
+            total: 6
+            shards: "5 6"
+            label: 5+6/6
           - suite: media
             projects: --project=chromium-media
-            shard: 1
-            shards: 3
+            total: 3
+            shards: "1"
+            label: 1/3
+            extras: true
           - suite: media
             projects: --project=chromium-media
-            shard: 2
-            shards: 3
-          - suite: media
-            projects: --project=chromium-media
-            shard: 3
-            shards: 3
+            total: 3
+            shards: "2 3"
+            label: 2+3/3
 
     services:
       postgres:
@@ -375,23 +377,11 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @pqp/client exec playwright install-deps chromium
 
-      - name: Build client for E2E
-        working-directory: client
-        env:
-          VITE_DEV_AUTH_BYPASS: "true"
-          VITE_API_URL: http://localhost:3101
-          VITE_WS_URL: ws://localhost:3101/ws
-          VITE_PQP_BUILD_ID: dev
-        run: pnpm exec vite build
-
       - name: Start CPU sampler
-        run: nohup vmstat 5 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
+        run: nohup stdbuf -oL vmstat 5 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
 
-      - name: E2E (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
-        run: pnpm --filter @pqp/client e2e ${{ matrix.projects }} --shard=${{ matrix.shard }}/${{ matrix.shards }}
-        env:
-          E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
-          E2E_CLIENT_DIST: dist
+      - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
+        run: scripts/ci/e2e-lanes.sh "${{ matrix.projects }}" ${{ matrix.total }} ${{ matrix.shards }}
 
       - name: CPU summary
         if: always()
@@ -406,7 +396,7 @@ jobs:
       # needs it. Its own cache key: the Chromium cache above is immutable once
       # saved and cannot pick Firefox up.
       - name: Cache Playwright Firefox
-        if: matrix.suite == 'media' && matrix.shard == 1
+        if: matrix.extras
         id: playwright-firefox-cache
         uses: actions/cache@v4
         with:
@@ -414,15 +404,15 @@ jobs:
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright Firefox
-        if: matrix.suite == 'media' && matrix.shard == 1 && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
+        if: matrix.extras && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
 
       - name: Install Playwright Firefox system deps
-        if: matrix.suite == 'media' && matrix.shard == 1 && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
+        if: matrix.extras && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @pqp/client exec playwright install-deps firefox
 
       - name: E2E stale bundle (real service worker)
-        if: matrix.suite == 'media' && matrix.shard == 1
+        if: matrix.extras
         run: pnpm --filter @pqp/client e2e:stale-bundle
 
       # The presenter's camera held to the film, measured off the pictures
@@ -431,7 +421,7 @@ jobs:
       # Chrome, which the runner image ships (Playwright's Chromium has no
       # H.264), and ffmpeg to make the media. The quick run, about 3 minutes.
       - name: E2E camera sync (real Chrome, synthetic live HLS)
-        if: matrix.suite == 'media' && matrix.shard == 1
+        if: matrix.extras
         run: |
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
           pnpm --filter @pqp/client e2e:camera-sync
@@ -441,8 +431,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.
-          name: playwright-report-${{ matrix.suite }}-${{ matrix.shard }}
+          name: playwright-report-${{ matrix.suite }}-${{ matrix.total }}-${{ strategy.job-index }}
           path: |
             client/test-results
-            client/e2e-results.json
+            client/e2e-results*.json
           retention-days: 7

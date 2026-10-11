@@ -131,7 +131,7 @@ export default defineConfig({
   // Bound a red CI run: once 10 specs have failed the shard is broken enough
   // to read, and the remaining minutes buy nothing. 0 means no limit locally.
   maxFailures: process.env.CI ? 10 : 0,
-  reporter: process.env.CI ? [["list"], ["json", { outputFile: "e2e-results.json" }]] : "list",
+  reporter: process.env.CI ? [["list"], ["json", { outputFile: process.env.E2E_RESULTS_FILE || "e2e-results.json" }]] : "list",
   timeout: 30_000,
   expect: { timeout: 10_000 },
 
