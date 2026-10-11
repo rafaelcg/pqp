@@ -39,4 +39,11 @@ describe("list typing", () => {
     clearListTyping("c1", "u1");
     expect(listTypingSnapshot().has("c1")).toBe(false);
   });
+
+  it("a repeat frame from somebody already typing does not make a new snapshot", () => {
+    noteListTyping("c1", "u1", "Gabi");
+    const first = listTypingSnapshot();
+    noteListTyping("c1", "u1", "Gabi");
+    expect(listTypingSnapshot()).toBe(first);
+  });
 });

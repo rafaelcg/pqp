@@ -4823,7 +4823,10 @@ function MainAppContent({
           // this only records and falls through.
           if (
             message.type === "typing-broadcast" &&
-            message.userId !== userIdRef.current
+            message.userId !== userIdRef.current &&
+            conversationsRef.current.some(
+              (one) => one.channelId === message.channelId,
+            )
           ) {
             noteListTyping(message.channelId, message.userId, message.displayName);
           }
@@ -8926,10 +8929,12 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
     [newcomerInviteUserId],
   );
-  // Conversas (`conversations_home`), same refresh pass and the same gate.
+  // Conversas (`conversations_home`): every signed-in account past the age
+  // gate (every `/api` route is 403 before it), same refresh pass.
+  const conversationsConfigUserId = ageGate ? null : (user?.id ?? null);
   useEffect(
-    () => (newcomerInviteUserId ? startConversationsConfig() : undefined),
-    [newcomerInviteUserId],
+    () => (conversationsConfigUserId ? startConversationsConfig() : undefined),
+    [conversationsConfigUserId],
   );
   const conversationsHome = useConversationsHome();
   useChannelNotifications({ channels: notificationChannels, unread });

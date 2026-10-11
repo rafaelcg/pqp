@@ -38,6 +38,12 @@ describe("search", () => {
   it("finds a group by any member and a person by their tag", () => {
     expect(matchesConversationQuery(group, "kat")).toBe(true);
     expect(matchesConversationQuery(joao, "#1234")).toBe(true);
+    expect(
+      matchesConversationQuery(
+        dm("c9", [{ id: "u9", displayName: "Zé", avatarUrl: null, username: "zezinho" } as never]),
+        "zezin",
+      ),
+    ).toBe(true);
     expect(matchesConversationQuery(bia, "kat")).toBe(false);
     expect(matchesConversationQuery(bia, "   ")).toBe(true);
   });
