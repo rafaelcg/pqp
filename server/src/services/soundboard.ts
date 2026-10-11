@@ -138,6 +138,7 @@ function rememberPlayable(serverId: string, sound: PlayableSound): void {
 const PLAYABLE_FORGET_TOPIC = "soundboard.forget";
 
 function dropPlayable(soundId: string): void {
+  playableGeneration += 1;
   playableCache.delete(soundId);
   missCache.delete(soundId);
 }
@@ -213,6 +214,9 @@ export async function resolvePlayableSound(
   if (pending) {
     return pending;
   }
+  if (lookupsInFlight.size >= LOOKUPS_IN_FLIGHT_MAX) {
+    return null;
+  }
   const lookup = lookupPlayable(serverId, soundId).finally(() => {
     lookupsInFlight.delete(inFlightKey);
   });
@@ -221,11 +225,16 @@ export async function resolvePlayableSound(
 }
 
 const lookupsInFlight = new Map<string, Promise<PlayableSound | null>>();
+/** Distinct lookups out at once. Past it a play is dropped, not queued. */
+const LOOKUPS_IN_FLIGHT_MAX = 16;
+/** Bumped by every invalidation; a lookup that began before one is not cached. */
+let playableGeneration = 0;
 
 async function lookupPlayable(
   serverId: string,
   soundId: string,
 ): Promise<PlayableSound | null> {
+  const generation = playableGeneration;
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
             duration_ms, volume
@@ -234,9 +243,14 @@ async function lookupPlayable(
     [soundId, serverId],
   );
   const row = result.rows[0];
+  // An edit or delete landed while this was out: answer from what was read,
+  // but do not let it back into the caches.
+  const stale = generation !== playableGeneration;
   if (!row) {
     playableCache.delete(soundId);
-    rememberMiss(serverId, soundId);
+    if (!stale) {
+      rememberMiss(serverId, soundId);
+    }
     return null;
   }
   const sound: PlayableSound = {
@@ -245,7 +259,9 @@ async function lookupPlayable(
     durationMs: row.duration_ms,
     volume: Number(row.volume),
   };
-  rememberPlayable(serverId, sound);
+  if (!stale) {
+    rememberPlayable(serverId, sound);
+  }
   return sound;
 }
 

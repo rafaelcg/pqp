@@ -63,8 +63,9 @@ export function soundboardClipRejection(
 
 function mp3DurationMs(bytes: Uint8Array): number | null {
   let offset = skipId3(bytes);
-  let samples = 0;
-  let rate = 0;
+  // Milliseconds, summed frame by frame at each frame's own rate, so a file
+  // that changes sample rate part way cannot hide its length.
+  let totalMs = 0;
   let frames = 0;
   while (offset + 4 < bytes.length && frames < 20_000) {
     const header = readMp3Header(bytes, offset);
@@ -72,20 +73,14 @@ function mp3DurationMs(bytes: Uint8Array): number | null {
       offset += 1;
       continue;
     }
-    if (rate === 0) {
-      rate = header.sampleRate;
-    }
-    if (header.sampleRate !== rate) {
-      break;
-    }
-    samples += header.samplesPerFrame;
+    totalMs += (header.samplesPerFrame * 1000) / header.sampleRate;
     frames += 1;
     offset += header.frameBytes;
   }
-  if (frames === 0 || rate === 0) {
+  if (frames === 0) {
     return null;
   }
-  return Math.round((samples * 1000) / rate);
+  return Math.round(totalMs);
 }
 
 function skipId3(bytes: Uint8Array): number {

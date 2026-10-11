@@ -437,9 +437,14 @@ async function refreshCustomCatalog(
     return;
   }
   catalogRefreshAt.set(serverId, now);
+  const token = (catalogTokens.get(serverId) ?? 0) + 1;
+  catalogTokens.set(serverId, token);
   const task = fetchSoundboard(serverId)
     .then((page) => {
-      rememberCustom(serverId, page.sounds);
+      // A newer catalog (a load, or a live add/remove) owns the list.
+      if (catalogTokens.get(serverId) === token) {
+        rememberCustom(serverId, page.sounds);
+      }
     })
     .catch(() => undefined)
     .finally(() => {
