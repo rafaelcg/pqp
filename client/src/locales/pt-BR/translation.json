@@ -4744,5 +4744,6 @@
   "conversations.rail.waitingSr_one": "{count} conversa te esperando",
   "conversations.rail.waitingSr_other": "{count} conversas te esperando",
   "conversations.rail.more_one": "Mais {count} conversa te esperando",
-  "conversations.rail.more_other": "Mais {count} conversas te esperando"
+  "conversations.rail.more_other": "Mais {count} conversas te esperando",
+  "conversations.rail.label": "Conversas"
 }

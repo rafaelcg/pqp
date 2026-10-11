@@ -4812,5 +4812,6 @@
   "conversations.rail.waitingSr_one": "{count} conversación esperándote",
   "conversations.rail.waitingSr_other": "{count} conversaciones esperándote",
   "conversations.rail.more_one": "{count} conversación más esperándote",
-  "conversations.rail.more_other": "{count} conversaciones más esperándote"
+  "conversations.rail.more_other": "{count} conversaciones más esperándote",
+  "conversations.rail.label": "Chats"
 }

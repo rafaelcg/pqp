@@ -328,7 +328,7 @@ export function ServerRail({
             homeSelected ? "text-text" : "text-text-secondary",
           )}
         >
-          {t("conversations.title")}
+          {t("conversations.rail.label")}
         </span>
       )}
       </span>
