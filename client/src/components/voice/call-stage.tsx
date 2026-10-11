@@ -208,6 +208,7 @@ import { useVideoFit, type VideoFitControls } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import {
+  AnchoredPanel,
   PeerAudioMenu,
   PeerAudioMenuButton,
   usePeerAudioMenu,
@@ -229,7 +230,11 @@ import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
 import { Menu } from "@/components/ui/menu";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
-import { SoundboardFloat } from "@/components/voice/soundboard-float";
+import {
+  SoundboardFloat,
+  SoundboardMutedMark,
+} from "@/components/voice/soundboard-float";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { shouldSuppressHints } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
@@ -297,25 +302,41 @@ export interface StagePerson {
    */
   shareVolume?: number;
   onSetShareVolume?: (volume: number) => void;
+  /**
+   * Set when this person's soundboard clips can be muted from their audio
+   * menu: somebody else, in a server call whose board is on. Their clips
+   * arrive over the voice socket, so it does not depend on their voice track,
+   * which may have failed or not started.
+   */
+  soundboardUserId?: string;
   onRetry?: () => void;
   quality?: VoiceLinkQuality | null;
 }
 
 /**
- * A person's two sliders, or nothing when the caller wired neither. Kept as a
- * function so every surface that draws a face asks the same question.
+ * What a person's audio menu carries: their two sliders, and the soundboard
+ * mute. Nothing when the caller wired none of them. A failed connection has no
+ * sound to turn down, but their soundboard clips still arrive over the socket,
+ * so that row survives. Kept as a function so every surface that draws a face
+ * asks the same question.
  */
 export function personAudioTracks(person: StagePerson): {
   voice?: PeerAudioTrack;
   share?: PeerAudioTrack;
+  soundboardUserId?: string;
 } | undefined {
-  const voice = person.onSetVolume
-    ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
+  const voice =
+    person.onSetVolume && !person.failed
+      ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
+      : undefined;
+  const share =
+    person.onSetShareVolume && !person.failed
+      ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
+      : undefined;
+  const soundboardUserId = person.isSelf ? undefined : person.soundboardUserId;
+  return voice || share || soundboardUserId
+    ? { voice, share, soundboardUserId }
     : undefined;
-  const share = person.onSetShareVolume
-    ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
-    : undefined;
-  return voice || share ? { voice, share } : undefined;
 }
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
@@ -1096,6 +1117,9 @@ function ActiveCall({
     currentUser?.id ?? null,
   );
 
+  // The soundboard mute is offered only where a board exists: a server call
+  // with the flag on (the call bar's button reads the same answer).
+  const soundboardOn = useVoiceConfig(serverId).soundboard === true;
   const speaking = new Set(voiceState.speakingPeerIds);
   const serverMuted = new Set(voiceState.serverMutedPeerIds);
   const selfServerMuted = voiceState.self?.serverMuted === true;
@@ -1122,6 +1146,8 @@ function ActiveCall({
     return {
       key: peer.peerId,
       userId: peer.userId,
+      soundboardUserId:
+        soundboardOn && serverId && peer.userId ? peer.userId : undefined,
       name: peer.displayName ?? t("voice.share.someone"),
       avatarUrl: peer.avatarUrl ?? null,
       stream: peer.cameraStream,
@@ -1235,7 +1261,11 @@ function ActiveCall({
             onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
           }
         : undefined;
-    return voice || share ? { voice, share } : undefined;
+    const soundboardUserId =
+      soundboardOn && serverId && tile.userId ? tile.userId : undefined;
+    return voice || share || soundboardUserId
+      ? { voice, share, soundboardUserId }
+      : undefined;
   }
   const receivedShareHasAudio = useReceivedShareAudio(
     focusedIsLocal ? null : screenStream,
@@ -1698,6 +1728,11 @@ function ActiveCall({
               return {
                 key: person.peerId,
                 userId: person.userId,
+                // Never for ourselves, and not in a DM or with the board off.
+                soundboardUserId:
+                  !isSelf && soundboardOn && serverId
+                    ? person.userId
+                    : undefined,
                 displayName: person.displayName,
                 avatarUrl: person.avatarUrl,
                 speaking: isSelf
@@ -1714,6 +1749,9 @@ function ActiveCall({
           : allPeople.map((person) => ({
               key: person.key,
               userId: person.userId,
+              soundboardUserId: person.isSelf
+                ? undefined
+                : person.soundboardUserId,
               displayName: person.name,
               avatarUrl: person.avatarUrl,
               speaking: person.speaking,
@@ -2244,6 +2282,8 @@ function ActiveCall({
           <ListenerStrip
             people={listeners.map((person) => ({
               key: person.key,
+              userId: person.userId,
+              soundboardUserId: personAudioTracks(person)?.soundboardUserId,
               name: person.name,
               avatarUrl: person.avatarUrl,
               speaking: person.speaking,
@@ -3793,12 +3833,18 @@ function TileOverlay({
    * slider parked on the picture, because that slider was revealed by hover,
    * and on a phone hover is no control at all.
    */
-  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
+  audio?: {
+    voice?: PeerAudioTrack;
+    share?: PeerAudioTrack;
+    soundboardUserId?: string;
+  };
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
   useReportTileMenu(menu.open);
-  const hasAudio = Boolean(audio?.voice || audio?.share);
+  const hasAudio = Boolean(
+    audio?.voice || audio?.share || audio?.soundboardUserId,
+  );
   if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
     return null;
   }
@@ -3877,6 +3923,7 @@ function TileOverlay({
             open={menu.open}
             voice={audio?.voice}
             share={audio?.share}
+            soundboardUserId={audio?.soundboardUserId}
             side="bottom"
             align="start"
           />
@@ -3965,7 +4012,7 @@ function PrimaryTile({
         onPin={onPin}
         pinned={pinned}
         name={person.name}
-        audio={person.failed ? undefined : personAudioTracks(person)}
+        audio={personAudioTracks(person)}
         fit={person.stream ? fit : undefined}
       />
       <SoundboardFloat userId={person.userId} />
@@ -4067,7 +4114,7 @@ export function CameraTile({
         onPin={onPin}
         pinned={pinned}
         name={person.name}
-        audio={person.failed ? undefined : personAudioTracks(person)}
+        audio={personAudioTracks(person)}
         fit={person.stream ? fit : undefined}
       />
       <SoundboardFloat userId={person.userId} />
@@ -4186,7 +4233,7 @@ function RoomFace({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLLIElement>();
-  const audio = person.failed ? undefined : personAudioTracks(person);
+  const audio = personAudioTracks(person);
   const actionable = Boolean(audio || (person.failed && person.onRetry));
   return (
     <li
@@ -4234,7 +4281,7 @@ function RoomFace({
         open={menu.open}
         voice={audio?.voice}
         share={audio?.share}
-        soundboardUserId={audio?.voice ? person.userId : undefined}
+        soundboardUserId={audio?.soundboardUserId}
         failed={person.failed}
         onRetry={person.onRetry}
         side="bottom"
@@ -4358,6 +4405,12 @@ function TileBadge({
 export interface OccupantFace {
   key: string;
   userId?: string;
+  /**
+   * Set where this person's soundboard clips can be muted: somebody else, in a
+   * server call with the board on. Independent of their voice, which may have
+   * failed or not started: the clips travel on the socket.
+   */
+  soundboardUserId?: string;
   displayName: string;
   avatarUrl: string | null;
   speaking?: boolean;
@@ -4369,38 +4422,171 @@ export interface OccupantFace {
   onRetry?: () => void;
 }
 
-/** Small overlapped avatar row for the banner states. */
-export function OccupantFaces({ faces }: { faces: OccupantFace[] }) {
-  const interactive = faces.some(
-    (person) => person.onSetVolume || person.onRetry,
+/** How many faces the collapsed bar draws before the rest go behind "+N". */
+const BANNER_FACES = 3;
+
+function faceActionable(person: OccupantFace): boolean {
+  return Boolean(
+    person.onSetVolume ||
+      person.onSetShareVolume ||
+      person.soundboardUserId ||
+      (person.failed && person.onRetry),
   );
+}
+
+/**
+ * Small overlapped avatar row for the banner states. Three faces fit; past
+ * that the count opens a list of the rest, so a fourth person in the call is
+ * as reachable as the first.
+ */
+export function OccupantFaces({ faces }: { faces: OccupantFace[] }) {
+  const interactive = faces.some(faceActionable);
+  const rest = faces.slice(BANNER_FACES);
   return (
     <span
       className="flex shrink-0 -space-x-2"
       aria-hidden={interactive ? undefined : true}
     >
-      {faces.slice(0, 3).map((person) => (
+      {faces.slice(0, BANNER_FACES).map((person) => (
         <BannerFace key={person.key} person={person} />
       ))}
+      {rest.length > 0 && <BannerOverflow faces={rest} />}
     </span>
   );
 }
 
+const BANNER_CHIP_CLASS =
+  "relative inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-ink-3 px-1.5 text-[10px] font-semibold tabular-nums text-paper-muted ring-1 ring-ink-4";
+
 /**
- * One of the three faces on the collapsed bar, and the way to that person's
- * sound while the stage is folded away. Pressed, not hovered: the collapsed
- * bar is what a phone sees for most of a call.
+ * The "+N" after the three faces. Pressed, it lists everybody the bar had no
+ * room for; picking a name opens that person's audio menu in the same place.
+ * Both panels are portalled out of the bar: its dock hides its overflow.
+ */
+function BannerOverflow({ faces }: { faces: OccupantFace[] }) {
+  const { t } = useTranslation();
+  const menu = usePeerAudioMenu<HTMLSpanElement>();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  const picked = faces.find((face) => face.key === pickedKey) ?? null;
+  useEffect(() => {
+    if (!menu.open) {
+      setPickedKey(null);
+    }
+  }, [menu.open]);
+
+  if (!faces.some(faceActionable)) {
+    return (
+      <span aria-hidden="true" className={BANNER_CHIP_CLASS}>
+        +{faces.length}
+      </span>
+    );
+  }
+  return (
+    <span ref={menu.rootRef} className="relative inline-flex">
+      <button
+        ref={triggerRef}
+        type="button"
+        data-testid="call-bar-more"
+        aria-haspopup="dialog"
+        aria-expanded={menu.open}
+        aria-label={t("voice.audio.moreFaces", { count: faces.length })}
+        className={cn(
+          BANNER_CHIP_CLASS,
+          "hover:bg-ink-4 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal",
+        )}
+        onClick={menu.toggle}
+      >
+        +{faces.length}
+      </button>
+      {menu.open && !picked && (
+        <AnchoredPanel
+          label={t("voice.audio.peopleInCall")}
+          testId="call-bar-people"
+          anchorRef={triggerRef}
+          panelRef={menu.panelRef}
+          onClose={menu.close}
+          side="top"
+        >
+          <ul className="flex flex-col gap-0.5">
+            {faces.map((face) => (
+              <li key={face.key}>
+                <button
+                  type="button"
+                  disabled={!faceActionable(face)}
+                  aria-haspopup="dialog"
+                  aria-label={t("voice.audio.title", { name: face.displayName })}
+                  data-testid="call-bar-person"
+                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-paper hover:bg-ink-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal disabled:cursor-default disabled:text-paper-muted disabled:hover:bg-transparent"
+                  onClick={() => setPickedKey(face.key)}
+                >
+                  <VoiceAvatar
+                    name={face.displayName}
+                    avatarUrl={face.avatarUrl}
+                    size="sm"
+                    isSpeaking={face.speaking}
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {face.displayName}
+                  </span>
+                  {face.soundboardUserId && (
+                    <SoundboardMutedMark
+                      userId={face.soundboardUserId}
+                      name={face.displayName}
+                    />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </AnchoredPanel>
+      )}
+      {picked && (
+        <PeerAudioMenu
+          name={picked.displayName}
+          open={menu.open}
+          {...faceMenuProps(picked)}
+          side="top"
+          anchorRef={triggerRef}
+          panelRef={menu.panelRef}
+          onClose={menu.close}
+        />
+      )}
+    </span>
+  );
+}
+
+/** The rows of a face's audio menu: the same answer for the bar and its "+N". */
+function faceMenuProps(person: OccupantFace) {
+  return {
+    voice: person.onSetVolume
+      ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
+      : undefined,
+    share: person.onSetShareVolume
+      ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
+      : undefined,
+    soundboardUserId: person.soundboardUserId,
+    failed: person.failed,
+    onRetry: person.onRetry,
+  };
+}
+
+/**
+ * One of the faces on the collapsed bar, and the way to that person's sound
+ * while the stage is folded away. Pressed, not hovered: the collapsed bar is
+ * what a phone sees for most of a call.
+ *
+ * The menu is portalled and anchored to the face. Left inside the bar it was
+ * clipped to a sliver by the dock's hidden overflow on a desktop, and on a
+ * phone it opened downward, under the message box. It opens upward and flips
+ * when there is no room.
  */
 function BannerFace({ person }: { person: OccupantFace }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLSpanElement>();
-  const voice = person.onSetVolume
-    ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
-    : undefined;
-  const share = person.onSetShareVolume
-    ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
-    : undefined;
-  const actionable = Boolean(voice || share || (person.failed && person.onRetry));
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuProps = faceMenuProps(person);
+  const actionable = faceActionable(person);
   const avatar = (
     <VoiceAvatar
       name={person.displayName}
@@ -4411,9 +4597,10 @@ function BannerFace({ person }: { person: OccupantFace }) {
   );
   return (
     <span ref={menu.rootRef} className="relative inline-flex">
-      <SoundboardFloat userId={person.userId} />
+      <SoundboardFloat userId={person.userId} size="sm" />
       {actionable ? (
         <button
+          ref={triggerRef}
           type="button"
           aria-haspopup="dialog"
           aria-expanded={menu.open}
@@ -4429,13 +4616,11 @@ function BannerFace({ person }: { person: OccupantFace }) {
       <PeerAudioMenu
         name={person.displayName}
         open={menu.open}
-        voice={voice}
-        share={share}
-        soundboardUserId={voice ? person.userId : undefined}
-        failed={person.failed}
-        onRetry={person.onRetry}
-        side="bottom"
-        align="start"
+        {...menuProps}
+        side="top"
+        anchorRef={triggerRef}
+        panelRef={menu.panelRef}
+        onClose={menu.close}
       />
     </span>
   );
@@ -4490,7 +4675,11 @@ export function ScreenTileFrame({
    * not the film" are the same question about the same person, and the person
    * asking has to be able to find them together.
    */
-  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
+  audio?: {
+    voice?: PeerAudioTrack;
+    share?: PeerAudioTrack;
+    soundboardUserId?: string;
+  };
   /**
    * The "not watching this one" state, and the way out of it.
    *
@@ -4514,7 +4703,9 @@ export function ScreenTileFrame({
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
-  const hasAudio = Boolean(audio?.voice || audio?.share);
+  const hasAudio = Boolean(
+    audio?.voice || audio?.share || audio?.soundboardUserId,
+  );
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
     : tile.isSelf
@@ -4716,6 +4907,7 @@ export function ScreenTileFrame({
               open={menu.open}
               voice={audio?.voice}
               share={audio?.share}
+              soundboardUserId={audio?.soundboardUserId}
               side="bottom"
               align="start"
             />
