@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
-import { fetchSoundboard, type SoundboardSoundDto } from "@/lib/api";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -21,9 +20,11 @@ import {
 } from "@/lib/soundboard-icons";
 import {
   prefetchSoundboard,
+  refreshSoundboardCatalog,
   requestSoundboardPlay,
   setSoundboardCatalogServer,
   useSoundboardActiveIds,
+  useSoundboardCatalog,
   useSoundboardListenerVolume,
   useSoundboardMuted,
   useSoundboardRefused,
@@ -56,7 +57,9 @@ export function SoundboardControl({
   const canManage = canManageSeat && canUse;
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [sounds, setSounds] = useState<SoundboardSoundDto[]>([]);
+  const catalog = useSoundboardCatalog(serverId);
+  const sounds = catalog?.sounds ?? [];
+  const boardFull = catalog !== null && catalog.slotsUsed >= catalog.maxSounds;
   const activeIds = useSoundboardActiveIds();
   const [volume, setVolume] = useSoundboardListenerVolume();
   const [muted, setMuted] = useSoundboardMuted();
@@ -72,31 +75,25 @@ export function SoundboardControl({
   }, [serverId]);
 
   useEffect(() => {
-    setSounds([]);
-  }, [serverId]);
-
-  useEffect(() => {
     // Someone who cannot use the board downloads and decodes nothing.
     if (!serverId || !canUse) {
       return;
     }
-    let cancelled = false;
-    void prefetchSoundboard(serverId).then(() => {
-      if (cancelled) {
-        return;
-      }
-      void fetchSoundboard(serverId)
-        .then((page) => {
-          if (!cancelled) {
-            setSounds(page.sounds);
-          }
-        })
-        .catch(() => undefined);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [serverId, canUse, adding]);
+    void prefetchSoundboard(serverId);
+  }, [serverId, canUse]);
+
+  // Somebody else may have added, renamed or deleted a clip since the call
+  // started. Ask again on open, and now and then while the panel is up.
+  useEffect(() => {
+    if (!open || !serverId) {
+      return;
+    }
+    void refreshSoundboardCatalog(serverId);
+    const timer = window.setInterval(() => {
+      void refreshSoundboardCatalog(serverId);
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [open, serverId]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -227,9 +224,29 @@ export function SoundboardControl({
             }}
             className="elevation-3 z-[100] flex w-[17.5rem] origin-bottom-right flex-col overflow-hidden rounded-[var(--radius-card)] p-2.5 animate-pop-in"
           >
-            <p className="px-0.5 pb-2 text-xs font-medium text-text">
-              {t("soundboard.title")}
-            </p>
+            {/* The notice takes the title's line, so nothing below it moves. */}
+            <div className="relative flex h-5 items-center px-0.5 mb-1.5">
+              <p
+                aria-hidden={refused ? true : undefined}
+                className={cn("text-xs font-medium text-text", refused && "invisible")}
+              >
+                {t("soundboard.title")}
+              </p>
+              <p
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  "absolute inset-x-0.5 truncate text-xs font-medium text-warning",
+                  !refused && "sr-only",
+                )}
+              >
+                {refused === "removed"
+                  ? t("soundboard.removed")
+                  : refused === "refused"
+                    ? t("soundboard.refused")
+                    : ""}
+              </p>
+            </div>
             <div className="grid min-h-0 grid-cols-3 gap-1.5 overflow-y-auto">
               {SOUNDBOARD_BUILTINS.map((sound) => (
                 <SoundTile
@@ -244,29 +261,20 @@ export function SoundboardControl({
                 <SoundTile
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
+                  monogram={monogramOf(sound.name)}
                   name={sound.name}
                   playing={activeIds.has(sound.id)}
                   onPlay={() => requestSoundboardPlay(sound.id)}
                 />
               ))}
             </div>
-            <p
-              role="status"
-              aria-live="polite"
-              className={cn(
-                "px-0.5 text-xs text-text-secondary",
-                refused ? "pt-2" : "sr-only",
-              )}
-            >
-              {refused ? t("soundboard.refused") : ""}
-            </p>
             <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
               <button
                 type="button"
                 aria-pressed={muted}
                 aria-label={t("soundboard.mute")}
                 className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none",
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none",
                   muted
                     ? "bg-danger-soft text-danger hover:bg-danger-soft-hover"
                     : "text-text-tertiary hover:bg-border-strong hover:text-text",
@@ -288,6 +296,7 @@ export function SoundboardControl({
                 step={0.05}
                 value={muted ? 0 : volume}
                 aria-label={t("soundboard.volume")}
+                aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
                 className="min-w-0 flex-1"
                 onValueChange={(next) => {
                   if (muted) {
@@ -301,7 +310,8 @@ export function SoundboardControl({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="shrink-0 px-2"
+                  className="h-8 shrink-0 px-2"
+                  disabled={boardFull}
                   onClick={() => {
                     setOpen(false);
                     setAdding(true);
@@ -344,14 +354,11 @@ export function SoundboardControl({
       <SoundboardAddDialog
         open={adding}
         serverId={serverId}
+        returnFocusRef={triggerRef}
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
-          void prefetchSoundboard(serverId).then(() =>
-            fetchSoundboard(serverId)
-              .then((page) => setSounds(page.sounds))
-              .catch(() => undefined),
-          );
+          void refreshSoundboardCatalog(serverId);
         }}
       />
     </>
@@ -360,11 +367,14 @@ export function SoundboardControl({
 
 function SoundTile({
   icon: Icon,
+  monogram = null,
   name,
   playing,
   onPlay,
 }: {
   icon: SoundboardIcon;
+  /** A custom clip's letter, drawn instead of the generic mark. */
+  monogram?: string | null;
   name: string;
   /** Somebody's clip of this sound is sounding. Shown, not a toggle state. */
   playing: boolean;
@@ -385,6 +395,12 @@ function SoundTile({
           ? "bg-accent-soft text-on-accent-soft shadow-[inset_0_0_0_1px_var(--color-accent)]"
           : "bg-surface-3 text-text hover:bg-border-strong",
       )}
+      onKeyDown={(event) => {
+        // Holding Enter repeats the click about thirty times a second.
+        if (event.repeat && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+        }
+      }}
       onClick={() => {
         setBurst((n) => n + 1);
         onPlay();
@@ -392,12 +408,21 @@ function SoundTile({
     >
       <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:-translate-y-px group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
         <span key={burst} className={cn("flex", playing && "animate-sound-pulse")}>
-          <Icon className="h-6 w-6" />
+          {monogram ? (
+            <span
+              aria-hidden="true"
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-border-strong text-xs font-semibold"
+            >
+              {monogram}
+            </span>
+          ) : (
+            <Icon className="h-6 w-6" />
+          )}
         </span>
       </span>
       <span
         className={cn(
-          "w-full text-balance text-center text-[10px] leading-tight transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+          "line-clamp-2 w-full text-balance text-center text-[10px] leading-tight [overflow-wrap:anywhere] transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
           playing
             ? "text-on-accent-soft"
             : "text-text-secondary group-hover:text-text",
@@ -412,4 +437,13 @@ function SoundTile({
 function builtinNameKey(id: SoundboardBuiltinId): MessageKey {
   const slug = id.slice("builtin:".length);
   return `soundboard.sound.${slug}` as MessageKey;
+}
+
+/**
+ * A custom clip's tile mark: its first letter or digit, so twenty-four
+ * custom clips do not share one icon. Null falls back to the generic mark.
+ */
+function monogramOf(name: string): string | null {
+  const match = /[\p{L}\p{N}]/u.exec(name);
+  return match ? match[0].toLocaleUpperCase() : null;
 }

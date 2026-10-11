@@ -37,6 +37,7 @@ export function SoundboardOccupantMark({ userId }: { userId: string }) {
 
 /** Who just played a clip, sitting on their face for a couple of seconds. */
 export function SoundboardFloat({ userId }: { userId?: string }) {
+  const { t } = useTranslation();
   const mark = useSoundboardMark(userId);
   if (!mark) {
     return null;
@@ -45,9 +46,15 @@ export function SoundboardFloat({ userId }: { userId?: string }) {
   return (
     <span
       role="status"
-      aria-label={mark.displayName}
       className="pointer-events-none absolute left-1/2 top-1 z-20 h-8 w-8 -translate-x-1/2"
     >
+      {/* The icon says nothing to a screen reader: name the person and the sound. */}
+      <span className="sr-only">
+        {t("soundboard.float.played", {
+          name: mark.displayName,
+          sound: soundboardSoundLabel(mark.soundId, t),
+        })}
+      </span>
       <span
         key={mark.until}
         className="flex h-full w-full items-center justify-center rounded-full elevation-3 animate-badge-pop"

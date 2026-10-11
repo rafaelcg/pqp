@@ -15,18 +15,20 @@ recording does not contain the clip. People in the call hear it. A VOD
 does not.
 
 Built-in clips ship with the client (`client/public/sounds/soundboard/`).
-They are recorded reactions, trimmed under 5.2 seconds. CC0 and the
+They are recorded reactions, trimmed under 5.2 seconds, encoded as 128 kbps
+mp3 (about 320 KB for all six) because every browser decodes mp3. A call
+join downloads them once. CC0 and the
 public-domain sting do not require credit. The list is here so the
 license stays with the files.
 
 | File | Source |
 |---|---|
-| `palmas.wav` | Breviceps, Freesound 462362, CC0. About 30 people clapping. |
-| `risada.wav` | Joseph Sardin, BigSoundBank 490, CC0. The first laugh. |
-| `buzina.wav` | guitarguy1985, Freesound 68999, CC0. The horn hit. |
-| `grilo.wav` | Joseph Sardin, BigSoundBank 1020, CC0. Two seconds of a field cricket. |
-| `ba-dum-tss.wav` | Bart Nagel, public domain. Wikimedia Commons `Sting.ogg`. |
-| `trombone.wav` | kirbydx, Freesound 175409, CC0. Trailing silence removed. |
+| `palmas.mp3` | Breviceps, Freesound 462362, CC0. About 30 people clapping. |
+| `risada.mp3` | Joseph Sardin, BigSoundBank 490, CC0. The first laugh. |
+| `buzina.mp3` | guitarguy1985, Freesound 68999, CC0. The horn hit. |
+| `grilo.mp3` | Joseph Sardin, BigSoundBank 1020, CC0. Two seconds of a field cricket. |
+| `ba-dum-tss.mp3` | Bart Nagel, public domain. Wikimedia Commons `Sting.ogg`. |
+| `trombone.mp3` | kirbydx, Freesound 175409, CC0. Trailing silence removed. |
 
 The pictures on the tiles are separate from the clips. Clap, laugh, airhorn,
 and the speaker mark are Material Design Icons by Pictogrammers, Apache 2.0.
@@ -69,10 +71,19 @@ only stops you hearing it.
 
 A clip needs an open microphone. Whoever may not speak may not play one.
 That covers a channel that denies Speak, a watch party floor closed to
-hosts only, and audience mode. The button is hidden for those seats and
-the server refuses their plays.
+hosts only, audience mode, and a moderator mute. The button is hidden for
+those seats and the server refuses their plays.
 
-`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. It is on for manager
+A click is only shown as played when the room echoes it back. The server
+refuses in silence (the room's twelve, your own three, a mute), so a click
+with no echo in three seconds tells the person it did not play, or that
+the clip was removed when the refreshed list no longer has it. The client
+also sends at most a short burst: holding a key does not repeat plays.
+
+`MANAGE_SOUNDBOARD` adds, renames, and deletes clips. In server settings,
+the pencil on a row renames it (Enter saves, Escape cancels). Delete asks
+for confirmation first. The count and the Add button follow the number the
+server refuses at: stored clips plus uploads in flight. It is on for manager
 and owner, off for `@everyone`. A server can hand it to a role. Audio is
 not scanned.
 

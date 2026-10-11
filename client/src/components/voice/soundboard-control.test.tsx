@@ -16,10 +16,31 @@ vi.mock("@/hooks/use-voice-config", () => ({
   useVoiceConfig: () => ({ soundboard: true }),
 }));
 
+const board = vi.hoisted(() => ({
+  sounds: [] as Array<Record<string, unknown>>,
+  fetches: 0,
+}));
+
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
-  fetchSoundboard: async () => ({ sounds: [], maxSounds: 24 }),
+  fetchSoundboard: async () => {
+    board.fetches += 1;
+    return { sounds: board.sounds, maxSounds: 24, slotsUsed: board.sounds.length };
+  },
 }));
+
+function customSound(id: string, name: string) {
+  return {
+    id,
+    name,
+    emoji: "✨",
+    contentType: "audio/mpeg",
+    byteSize: 1000,
+    durationMs: 1000,
+    volume: 1,
+    url: `http://storage.test/${id}.mp3`,
+  };
+}
 
 vi.mock("@/lib/sounds", () => ({
   sharedAudioContext: () => null,
@@ -104,6 +125,8 @@ beforeEach(() => {
     },
   );
   sent.length = 0;
+  board.sounds = [];
+  board.fetches = 0;
   resetSoundboardPendingForTests();
   unregister = registerSoundboardSender((soundId) => {
     sent.push(soundId);
@@ -195,7 +218,7 @@ describe("a click the room never echoed", () => {
     expect(status.textContent).toBe("");
 
     act(() => {
-      vi.advanceTimersByTime(1600);
+      vi.advanceTimersByTime(3100);
     });
     expect(status.textContent).not.toBe("");
   });
@@ -207,8 +230,83 @@ describe("a click the room never echoed", () => {
     act(() => tiles()[0]!.click());
     act(() => noteOwnSoundboardEcho(sent[0]!));
     act(() => {
-      vi.advanceTimersByTime(1600);
+      vi.advanceTimersByTime(3100);
     });
     expect(status.textContent).toBe("");
+  });
+});
+
+describe("holding a key or mashing the board", () => {
+  it("ignores key repeat on a tile", () => {
+    mount();
+    open();
+    const tile = tiles()[0]!;
+    const repeat = new KeyboardEvent("keydown", { key: "Enter", repeat: true, bubbles: true, cancelable: true });
+    act(() => {
+      tile.dispatchEvent(repeat);
+    });
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+
+  it("sends at most a short burst and says the rest did not play", () => {
+    mount();
+    open();
+    const status = panel()!.querySelector("[role='status']")!;
+    for (let i = 0; i < 10; i += 1) {
+      act(() => tiles()[0]!.click());
+    }
+    expect(sent.length).toBeLessThanOrEqual(4);
+    expect(status.textContent).not.toBe("");
+  });
+
+  it("keeps the panel's layout when the notice shows: it takes the title's line", () => {
+    mount();
+    open();
+    act(() => {
+      for (let i = 0; i < 6; i += 1) {
+        tiles()[0]!.click();
+      }
+    });
+    const status = panel()!.querySelector("[role='status']")!;
+    expect(status.className).toContain("absolute");
+    expect(status.className).toContain("truncate");
+  });
+});
+
+describe("the clip list follows the server", () => {
+  it("shows a clip somebody else added when the panel opens", async () => {
+    mount();
+    open();
+    expect(tiles()).toHaveLength(6);
+    press("Escape");
+    board.sounds = [customSound("11111111-1111-4111-8111-111111111111", "Buzinão")];
+    act(() => {
+      vi.advanceTimersByTime(2_100);
+    });
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(tiles()).toHaveLength(7);
+    expect(tiles()[6]!.getAttribute("aria-label")).toBe("Buzinão");
+  });
+
+  it("says a clip was removed when its click is refused and the list no longer has it", async () => {
+    const id = "22222222-2222-4222-8222-222222222222";
+    board.sounds = [customSound(id, "Velho")];
+    mount();
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(tiles()).toHaveLength(7);
+    board.sounds = [];
+    act(() => tiles()[6]!.click());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_100);
+    });
+    const status = panel()!.querySelector("[role='status']")!;
+    expect(status.textContent).toMatch(/removed|removido|eliminado/i);
+    expect(tiles()).toHaveLength(6);
   });
 });

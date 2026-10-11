@@ -18,9 +18,11 @@ const MARK_MS = 2200;
 /**
  * How long a click waits for the room's echo before it counts as refused.
  * The server answers a refusal with silence (a full room, your own cap, a
- * moderator mute), so the echo is the only proof a clip went out.
+ * moderator mute), so the echo is the only proof a clip went out. Long
+ * enough that a slow phone connection is not told a clip that went out did
+ * not play.
  */
-const ECHO_WAIT_MS = 1500;
+const ECHO_WAIT_MS = 3000;
 /** How long "that one did not play" stays on the panel. */
 const REFUSED_SHOW_MS = 3000;
 
@@ -63,6 +65,57 @@ export function registerSoundboardSender(
 const pendingById = new Map<string, number[]>();
 let pendingSeq = 0;
 let refusedUntil = 0;
+let refusedKind: "refused" | "removed" = "refused";
+
+/**
+ * A local throttle in front of the socket. Holding Enter on a tile repeats
+ * about thirty times a second, which spends the socket's whole frame budget
+ * and gets it closed. The server's per-person cap would refuse all of those
+ * plays anyway, so they are never sent.
+ */
+const SEND_BURST = 4;
+const SEND_REFILL_MS = 700;
+let sendTokens = SEND_BURST;
+let sendRefilledAt = 0;
+
+function takeSendToken(now: number): boolean {
+  if (sendRefilledAt === 0) {
+    sendRefilledAt = now;
+  }
+  const earned = Math.floor((now - sendRefilledAt) / SEND_REFILL_MS);
+  if (earned > 0) {
+    sendTokens = Math.min(SEND_BURST, sendTokens + earned);
+    sendRefilledAt += earned * SEND_REFILL_MS;
+  }
+  if (sendTokens <= 0) {
+    return false;
+  }
+  sendTokens -= 1;
+  return true;
+}
+
+function flagRefused(kind: "refused" | "removed"): void {
+  refusedKind = kind;
+  refusedUntil = Date.now() + REFUSED_SHOW_MS;
+  notify();
+  globalThis.setTimeout(notify, REFUSED_SHOW_MS);
+}
+
+/**
+ * A click that was never echoed. A custom clip may have been deleted by
+ * somebody else: pull the catalog, and if it is gone say so instead of
+ * "try again", which would never help.
+ */
+async function explainRefusal(soundId: string): Promise<void> {
+  if (!soundboardBuiltin(soundId) && catalogServerId) {
+    await refreshCustomCatalog(catalogServerId, true);
+    if (!customNames.has(soundId)) {
+      flagRefused("removed");
+      return;
+    }
+  }
+  flagRefused("refused");
+}
 
 /**
  * Send a play. The tile lights when the room's echo comes back
@@ -71,6 +124,10 @@ let refusedUntil = 0;
  */
 export function requestSoundboardPlay(soundId: string): void {
   if (!sender) {
+    return;
+  }
+  if (!takeSendToken(Date.now())) {
+    flagRefused("refused");
     return;
   }
   sender(soundId);
@@ -88,9 +145,7 @@ export function requestSoundboardPlay(soundId: string): void {
     if (current.length === 0) {
       pendingById.delete(soundId);
     }
-    refusedUntil = Date.now() + REFUSED_SHOW_MS;
-    notify();
-    globalThis.setTimeout(notify, REFUSED_SHOW_MS);
+    void explainRefusal(soundId);
   }, ECHO_WAIT_MS);
 }
 
@@ -109,17 +164,22 @@ export function noteOwnSoundboardEcho(soundId: string): void {
   }
 }
 
-/** True for a few seconds after one of this person's clicks went unanswered. */
-export function useSoundboardRefused(): boolean {
+/**
+ * For a few seconds after one of this person's clicks went unanswered: why.
+ * Null the rest of the time.
+ */
+export function useSoundboardRefused(): "refused" | "removed" | null {
   const [, bump] = useState(0);
   useEffect(() => subscribe(() => bump((n) => n + 1)), []);
-  return refusedUntil > Date.now();
+  return refusedUntil > Date.now() ? refusedKind : null;
 }
 
 /** Test seam. */
 export function resetSoundboardPendingForTests(): void {
   pendingById.clear();
   refusedUntil = 0;
+  sendTokens = SEND_BURST;
+  sendRefilledAt = 0;
 }
 
 function notify(): void {
@@ -231,6 +291,11 @@ export function setSoundboardCatalogServer(serverId: string | null): void {
     }, CUSTOM_CLEAR_GRACE_MS);
     return;
   }
+  for (const id of [...catalogs.keys()]) {
+    if (id !== serverId) {
+      catalogs.delete(id);
+    }
+  }
   for (const [id, row] of customUrls) {
     if (row.serverId === serverId) {
       continue;
@@ -253,6 +318,48 @@ export function noteSoundboardCatalog(
 function clipIdentity(url: string): string {
   const query = url.indexOf("?");
   return query === -1 ? url : url.slice(0, query);
+}
+
+/** The last list each server answered, for the panel. Notified on change. */
+const catalogs = new Map<
+  string,
+  { sounds: readonly SoundboardSound[]; maxSounds: number; slotsUsed: number }
+>();
+
+export interface SoundboardCatalog {
+  sounds: readonly SoundboardSound[];
+  maxSounds: number;
+  slotsUsed: number;
+}
+
+/**
+ * The panel's view of a server's custom clips. Every fetch updates it, so a
+ * clip somebody else added, renamed or deleted shows up as soon as anything
+ * on this machine asks again (opening the panel, a play of an unknown clip,
+ * a click that was never echoed).
+ */
+export function useSoundboardCatalog(serverId: string | null): SoundboardCatalog | null {
+  const [, bump] = useState(0);
+  useEffect(() => subscribe(() => bump((n) => n + 1)), []);
+  return serverId ? (catalogs.get(serverId) ?? null) : null;
+}
+
+/** Ask the server for the list again, at most once per couple of seconds. */
+export function refreshSoundboardCatalog(serverId: string): Promise<void> {
+  return refreshCustomCatalog(serverId, false, 2_000);
+}
+
+function rememberCatalog(
+  serverId: string,
+  page: { sounds: readonly SoundboardSound[]; maxSounds: number; slotsUsed?: number },
+): void {
+  catalogs.set(serverId, {
+    sounds: page.sounds,
+    maxSounds: page.maxSounds,
+    slotsUsed: page.slotsUsed ?? page.sounds.length,
+  });
+  rememberCustom(serverId, page.sounds);
+  notify();
 }
 
 function rememberCustom(
@@ -308,7 +415,7 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
   try {
     const page = await fetchSoundboard(serverId);
     if (catalogTokens.get(serverId) === token) {
-      rememberCustom(serverId, page.sounds);
+      rememberCatalog(serverId, page);
     }
   } catch {
     // The board still plays the built-in pack.
@@ -443,6 +550,24 @@ function startSoundboardClip(buffer: AudioBuffer, soundVolume: number): AudioBuf
   return source;
 }
 
+/** Clips sounding in the call, so leaving it can cut them. Previews are separate. */
+const roomSources = new Set<AudioBufferSourceNode>();
+
+/**
+ * Stop every clip from the call. Leaving or switching rooms used to let a
+ * clip from the old room play on for seconds after the hangup.
+ */
+export function stopSoundboardClips(): void {
+  for (const source of roomSources) {
+    try {
+      source.stop();
+    } catch {
+      // Already finished.
+    }
+  }
+  roomSources.clear();
+}
+
 const catalogRefresh = new Map<string, Promise<void>>();
 const catalogRefreshAt = new Map<string, number>();
 
@@ -450,6 +575,7 @@ const catalogRefreshAt = new Map<string, number>();
 async function refreshCustomCatalog(
   serverId: string,
   force: boolean,
+  minGapMs = 4_000,
 ): Promise<void> {
   const pending = catalogRefresh.get(serverId);
   if (pending) {
@@ -458,13 +584,13 @@ async function refreshCustomCatalog(
     return;
   }
   const now = Date.now();
-  if (!force && now - (catalogRefreshAt.get(serverId) ?? 0) < 4_000) {
+  if (!force && now - (catalogRefreshAt.get(serverId) ?? 0) < minGapMs) {
     return;
   }
   catalogRefreshAt.set(serverId, now);
   const task = fetchSoundboard(serverId)
     .then((page) => {
-      rememberCustom(serverId, page.sounds);
+      rememberCatalog(serverId, page);
     })
     .catch(() => undefined)
     .finally(() => {
@@ -498,25 +624,39 @@ export async function playSoundboardClip(
   if (!buffer || !mayHear()) {
     return;
   }
-  startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
+  const source = startSoundboardClip(buffer, customUrls.get(soundId)?.volume ?? 1);
+  if (source) {
+    roomSources.add(source);
+    source.addEventListener?.("ended", () => roomSources.delete(source));
+  }
 }
 
 let previewNode: AudioBufferSourceNode | null = null;
+let previewSeq = 0;
+
+function stopPreview(): void {
+  previewSeq += 1;
+  if (previewNode) {
+    try {
+      previewNode.stop();
+    } catch {
+      // Already finished.
+    }
+    previewNode = null;
+  }
+}
 
 /** Local preview. Does not tell the room. A new preview stops the last one. */
 export function previewSoundboardClip(soundId: string): void {
+  stopPreview();
+  // Only the newest click may start: four quick clicks used to load
+  // together and then all play at once.
+  const seq = previewSeq;
   void (async () => {
     unlockSounds();
     const buffer = await bufferFor(soundId);
-    if (!buffer) {
+    if (!buffer || seq !== previewSeq) {
       return;
-    }
-    if (previewNode) {
-      try {
-        previewNode.stop();
-      } catch {
-        // Already finished.
-      }
     }
     previewNode = startSoundboardClip(
       buffer,
@@ -577,4 +717,15 @@ function clearSound(soundId: string, until: number): void {
   if (activeUntilById.get(soundId) === until) {
     activeUntilById.delete(soundId);
   }
+}
+
+/**
+ * Preview a file that is not on the board yet (the add dialog). Same rules
+ * as a stored clip's preview: through the board's bus, so the board's mute
+ * and volume apply, and a new preview stops the last one.
+ */
+export function previewSoundboardBuffer(buffer: AudioBuffer, volume = 1): void {
+  unlockSounds();
+  stopPreview();
+  previewNode = startSoundboardClip(buffer, volume);
 }

@@ -1,15 +1,16 @@
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { Play } from "lucide-react";
-import { soundboardEmojiSchema, soundboardNameSchema } from "@pqp/shared";
+import { soundboardEmojiSchema, SOUNDBOARD_NAME_MAX } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ApiError } from "@/lib/api";
-import { useTranslation } from "@/lib/i18n";
-import { decodeAudioBuffer, playAudioBuffer, unlockSounds } from "@/lib/sounds";
-import { soundboardListenerVolume } from "@/lib/soundboard";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { decodeAudioBuffer, unlockSounds } from "@/lib/sounds";
+import { previewSoundboardBuffer } from "@/lib/soundboard";
 import {
   inspectSoundboardFile,
+  soundboardErrorKey,
+  soundboardNameErrorKey,
   uploadSoundboardFile,
   type SoundboardFileError,
 } from "@/lib/soundboard-upload";
@@ -22,28 +23,61 @@ export function SoundboardAddDialog({
   serverId,
   onClose,
   onAdded,
+  returnFocusRef,
 }: {
   open: boolean;
   serverId: string;
   onClose: () => void;
   onAdded: () => void;
+  /**
+   * The control that opened the dialog. It gets focus back when the dialog
+   * closes, even if the opener re-rendered or moved meanwhile (the dialog's
+   * own restore only knows the element focused at open time).
+   */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const savingRef = useRef(false);
+  const previewSeq = useRef(0);
+  const wasOpen = useRef(false);
+  const formId = useId();
+  const nameErrorId = useId();
+  const fileErrorId = useId();
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [contentType, setContentType] = useState<"audio/mpeg" | "audio/ogg" | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // The Dialog restores focus to whatever held it at open time. Hand it to the
+  // named opener after that has run (a parent's effect runs after the child's
+  // cleanup), so Escape never leaves focus on <body>.
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      return;
+    }
+    if (wasOpen.current) {
+      wasOpen.current = false;
+      returnFocusRef?.current?.focus();
+    }
+  }, [open, returnFocusRef]);
 
   function reset(): void {
     setName("");
     setFile(null);
     setContentType(null);
-    setError(null);
+    setFileError(null);
+    setNameError(null);
+    setFormError(null);
     setSaving(false);
+    savingRef.current = false;
     if (fileRef.current) {
       fileRef.current.value = "";
     }
@@ -57,13 +91,14 @@ export function SoundboardAddDialog({
   async function onFile(next: File | null): Promise<void> {
     setFile(null);
     setContentType(null);
-    setError(null);
+    setFileError(null);
+    setFormError(null);
     if (!next) {
       return;
     }
     const inspected = await inspectSoundboardFile(next);
     if (typeof inspected === "string") {
-      setError(t(errorKey(inspected)));
+      setFileError(t(fileErrorKey(inspected)));
       return;
     }
     setFile(next);
@@ -71,35 +106,41 @@ export function SoundboardAddDialog({
   }
 
   async function save(): Promise<void> {
-    if (!file || !contentType) {
-      setError(t("soundboard.error.file"));
+    if (savingRef.current) {
       return;
     }
-    const parsedName = soundboardNameSchema.safeParse(name);
-    const parsedEmoji = soundboardEmojiSchema.safeParse(CUSTOM_SOUND_EMOJI);
-    if (!parsedName.success) {
-      setError(t("soundboard.error.name"));
+    const nameKey = soundboardNameErrorKey(name);
+    const emoji = soundboardEmojiSchema.safeParse(CUSTOM_SOUND_EMOJI);
+    setNameError(nameKey ? t(nameKey) : null);
+    // A chosen file that was refused keeps its own reason.
+    setFileError((prev) => (file && contentType ? null : (prev ?? t("soundboard.error.file"))));
+    setFormError(null);
+    if (nameKey || !file || !contentType || !emoji.success) {
+      if (nameKey) {
+        nameRef.current?.focus();
+      }
       return;
     }
-    if (!parsedEmoji.success) {
-      setError(t("soundboard.error.name"));
-      return;
-    }
+    savingRef.current = true;
     setSaving(true);
-    setError(null);
     try {
       await uploadSoundboardFile({
         serverId,
         file,
         contentType,
-        name: parsedName.data,
-        emoji: parsedEmoji.data,
+        name: name.trim(),
+        emoji: emoji.data,
       });
       onAdded();
       close();
     } catch (err) {
-      const code = err instanceof ApiError ? err.message : "storage";
-      setError(t(errorKey(code)));
+      const key = soundboardErrorKey(err);
+      if (key === "soundboard.error.nameRejected") {
+        setNameError(t(key));
+      } else {
+        setFormError(t(key));
+      }
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -113,24 +154,35 @@ export function SoundboardAddDialog({
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={close} disabled={saving}>
+          <Button type="button" variant="secondary" onClick={close} disabled={saving}>
             {t("soundboard.add.cancel")}
           </Button>
-          <Button onClick={() => void save()} disabled={saving || !file}>
+          <Button type="submit" form={formId} disabled={saving}>
             {saving ? t("soundboard.add.saving") : t("soundboard.add.save")}
           </Button>
         </>
       }
     >
-      <div className="space-y-4 px-5 py-4">
+      <form
+        id={formId}
+        noValidate
+        className="space-y-4 px-5 py-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
         <div className="space-y-1">
           <p className="text-xs text-text-secondary">{t("soundboard.add.file")}</p>
           <div className="flex items-center gap-2">
+            {/* Not a Tab stop: the button beside it is the way in. */}
             <input
               ref={fileRef}
               type="file"
+              tabIndex={-1}
               accept="audio/mpeg,audio/ogg,.mp3,.ogg"
               className="sr-only"
+              aria-hidden="true"
               onChange={(event) => {
                 void onFile(event.target.files?.[0] ?? null);
               }}
@@ -139,6 +191,7 @@ export function SoundboardAddDialog({
               type="button"
               variant="secondary"
               className="min-w-0 flex-1 justify-start"
+              aria-describedby={fileError ? fileErrorId : undefined}
               onClick={() => fileRef.current?.click()}
             >
               <span className="truncate">
@@ -151,67 +204,81 @@ export function SoundboardAddDialog({
               size="icon"
               disabled={!file || saving}
               aria-label={t("soundboard.preview")}
-              onClick={() => void previewFile(file)}
+              onClick={() => void previewFile(file, previewSeq)}
             >
               <Play className="h-4 w-4" />
             </Button>
           </div>
+          {fileError && (
+            <p id={fileErrorId} role="alert" className="text-sm text-danger">
+              {fileError}
+            </p>
+          )}
         </div>
-        <label className="block space-y-1">
-          <span className="text-xs text-text-secondary">{t("soundboard.add.name")}</span>
+        <div className="space-y-1">
+          <label htmlFor={`${formId}-name`} className="block text-xs text-text-secondary">
+            {t("soundboard.add.name")}
+          </label>
           <Input
+            id={`${formId}-name`}
+            ref={nameRef}
             value={name}
-            maxLength={24}
-            aria-label={t("soundboard.add.name")}
-            onChange={(event) => setName(event.target.value)}
+            // Code points, not UTF-16 units: the check below is the real limit.
+            maxLength={SOUNDBOARD_NAME_MAX * 2}
+            autoComplete="off"
+            aria-invalid={nameError ? true : undefined}
+            aria-describedby={nameError ? nameErrorId : undefined}
+            onChange={(event) => {
+              setName(event.target.value);
+              setNameError(null);
+              setFormError(null);
+            }}
           />
-        </label>
-        {error && (
+          {nameError && (
+            <p id={nameErrorId} role="alert" className="text-sm text-danger">
+              {nameError}
+            </p>
+          )}
+        </div>
+        {formError && (
           <p role="alert" className="text-sm text-danger">
-            {error}
+            {formError}
           </p>
         )}
-      </div>
+      </form>
     </Dialog>
   );
 }
 
-async function previewFile(file: File | null): Promise<void> {
+/**
+ * Plays through the board's bus, so its mute and volume apply and a new
+ * preview stops the last. Only the newest click may start: a decode that
+ * finishes after a later click is dropped.
+ */
+async function previewFile(
+  file: File | null,
+  seq: { current: number },
+): Promise<void> {
   if (!file) {
     return;
   }
+  const mine = (seq.current += 1);
   unlockSounds();
   const buffer = await decodeAudioBuffer(await file.arrayBuffer());
-  if (buffer) {
-    playAudioBuffer(buffer, soundboardListenerVolume());
+  if (buffer && mine === seq.current) {
+    previewSoundboardBuffer(buffer);
   }
 }
 
-function errorKey(
-  code: string,
-):
-  | "soundboard.error.type"
-  | "soundboard.error.tooBig"
-  | "soundboard.error.tooLong"
-  | "soundboard.error.unreadable"
-  | "soundboard.error.slots"
-  | "soundboard.error.storage"
-  | "soundboard.error.file"
-  | "soundboard.error.name" {
-  switch (code as SoundboardFileError | string) {
-    case "type":
-      return "soundboard.error.type";
+function fileErrorKey(code: SoundboardFileError): MessageKey {
+  switch (code) {
     case "too_big":
       return "soundboard.error.tooBig";
     case "too_long":
       return "soundboard.error.tooLong";
     case "unreadable":
       return "soundboard.error.unreadable";
-    case "slots":
-      return "soundboard.error.slots";
-    case "storage":
-      return "soundboard.error.storage";
     default:
-      return "soundboard.error.storage";
+      return "soundboard.error.type";
   }
 }

@@ -25,6 +25,7 @@ import {
   playSoundboardClip,
   registerSoundboardSender,
   showSoundboardMark,
+  stopSoundboardClips,
 } from "@/lib/soundboard";
 import {
   audibleScreenPeerIds,
@@ -2258,8 +2259,18 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  // The room the soundboard's clips belong to. Leaving it, or moving to
+  // another, cuts whatever is still sounding from it.
+  let soundboardRoom: string | null = null;
+
   function emit() {
     pushAudioDelivery();
+    if (state.voiceChannelId !== soundboardRoom) {
+      if (soundboardRoom !== null) {
+        stopSoundboardClips();
+      }
+      soundboardRoom = state.voiceChannelId;
+    }
     // THE PIN FOLLOWS THE SHARE, NOT ONLY THE FRAME. A share that goes up
     // after the stream frame (a reloaded presenter, a re-share on the same
     // page) or an SFU that comes up after it changes what `refreshHlsSource`
@@ -3420,7 +3431,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         !state.voiceChannelId ||
         state.status === "idle" ||
         !state.canUseSoundboard ||
-        !state.canSpeak
+        !state.canSpeak ||
+        state.self?.serverMuted === true
       ) {
         return;
       }

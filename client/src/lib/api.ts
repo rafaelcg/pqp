@@ -2292,7 +2292,12 @@ export interface SoundboardSoundDto {
 }
 
 export const fetchSoundboard = (serverId: string) =>
-  apiFetch<{ sounds: SoundboardSoundDto[]; maxSounds: number }>(
+  apiFetch<{
+    sounds: SoundboardSoundDto[];
+    maxSounds: number;
+    /** Stored sounds plus uploads in flight: what the mint counts. Older API: absent. */
+    slotsUsed?: number;
+  }>(
     `/api/servers/${serverId}/soundboard`,
   );
 

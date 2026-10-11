@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import {
   deleteSoundboardSound,
@@ -15,17 +17,32 @@ import {
   previewSoundboardClip,
   prefetchSoundboard,
 } from "@/lib/soundboard";
+import { soundboardErrorKey, soundboardNameErrorKey } from "@/lib/soundboard-upload";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
+
+/** A volume slider is dragged or nudged; save once it has rested this long. */
+const VOLUME_SAVE_DELAY_MS = 400;
 
 export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
+  const countId = useId();
   const [sounds, setSounds] = useState<SoundboardSoundDto[] | null>(null);
   const [maxSounds, setMaxSounds] = useState(24);
+  const [slotsUsed, setSlotsUsed] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const pencilRefs = useRef(new Map<string, HTMLButtonElement>());
+  const previewRefs = useRef(new Map<string, HTMLButtonElement>());
+  // Where focus goes once the list has re-rendered: back on a pencil after a
+  // rename, or on a neighbour after a delete took the focused row away.
+  const pencilToFocus = useRef<string | null>(null);
+  const focusAfterDelete = useRef<number | null>(null);
 
   function reload(): Promise<void> {
     const seq = (reloadSeq.current += 1);
@@ -38,6 +55,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         noteSoundboardCatalog(serverId, page.sounds);
         setSounds(page.sounds);
         setMaxSounds(page.maxSounds);
+        setSlotsUsed(page.slotsUsed ?? null);
         setError(null);
         void prefetchSoundboard(serverId);
       })
@@ -48,19 +66,76 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
     void reload();
   }, [serverId, t]);
 
+  useEffect(() => {
+    if (editingId === null && pencilToFocus.current) {
+      pencilRefs.current.get(pencilToFocus.current)?.focus();
+      pencilToFocus.current = null;
+    }
+  }, [editingId]);
+
+  useEffect(() => {
+    const index = focusAfterDelete.current;
+    if (index === null || !sounds) {
+      return;
+    }
+    focusAfterDelete.current = null;
+    const next = sounds[Math.min(index, sounds.length - 1)];
+    (next ? previewRefs.current.get(next.id) : addRef.current)?.focus();
+  }, [sounds]);
+
+  const cancelEdit = useCallback((id: string) => {
+    pencilToFocus.current = id;
+    setEditingId(null);
+  }, []);
+
+  async function rename(sound: SoundboardSoundDto, name: string): Promise<void> {
+    const saved = await updateSoundboardSound(serverId, sound.id, { name });
+    const savedName = saved?.sound?.name ?? name;
+    setSounds((current) =>
+      current
+        ? current.map((entry) =>
+            entry.id === sound.id ? { ...entry, name: savedName } : entry,
+          )
+        : current,
+    );
+    cancelEdit(sound.id);
+    void reload();
+  }
+
+  function remove(sound: SoundboardSoundDto): void {
+    const index = sounds?.findIndex((entry) => entry.id === sound.id) ?? 0;
+    void deleteSoundboardSound(serverId, sound.id)
+      .then(() => {
+        focusAfterDelete.current = Math.max(index, 0);
+        return reload();
+      })
+      .catch(() => setError(t("soundboard.settings.saveFailed")));
+  }
+
+  // The server refuses at stored sounds plus uploads in flight, so count the same.
+  const used = slotsUsed ?? sounds?.length ?? 0;
+  const full = used >= maxSounds;
+  const confirmSound = sounds?.find((sound) => sound.id === confirmId) ?? null;
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-text-tertiary">
-          {t("soundboard.settings.count", {
-            count: sounds?.length ?? 0,
-            max: maxSounds,
-          })}
+        <p id={countId} className="text-xs text-text-tertiary">
+          {t("soundboard.settings.count", { count: used, max: maxSounds })}
         </p>
+        {/* aria-disabled, not disabled: after the 24th upload the dialog hands
+            focus back here, and a disabled button cannot take it. */}
         <Button
+          ref={addRef}
           size="sm"
-          onClick={() => setAdding(true)}
-          disabled={(sounds?.length ?? 0) >= maxSounds}
+          aria-disabled={full || undefined}
+          aria-describedby={countId}
+          className={full ? "opacity-40" : undefined}
+          onClick={() => {
+            if (!full) {
+              setAdding(true);
+            }
+          }}
         >
           {t("soundboard.add.tile")}
         </Button>
@@ -76,60 +151,232 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
       <ul className="space-y-2">
         {sounds?.map((sound) => {
           const Icon = soundboardIcon(sound.id);
+          const editing = editingId === sound.id;
           return (
-          <li
-            key={sound.id}
-            className="flex items-center gap-3 rounded-[var(--radius-control)] bg-surface-2 px-3 py-2"
-          >
-            <button
-              type="button"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-surface-3 hover:bg-border"
-              aria-label={t("soundboard.preview")}
-              onClick={() => previewSoundboardClip(sound.id)}
+            <li
+              key={sound.id}
+              className="flex items-center gap-3 rounded-[var(--radius-control)] bg-surface-2 px-3 py-2"
             >
-              <Icon className="h-5 w-5" />
-            </button>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-text">{sound.name}</p>
-              <ClipVolume
-                volume={sound.volume}
-                label={t("soundboard.settings.clipVolume", { name: sound.name })}
-                onCommit={(volume) => {
-                  // One save at a time, in the order they were made, so a
-                  // slow earlier request cannot land after a later one.
-                  saveQueue.current = saveQueue.current
-                    .then(() => updateSoundboardSound(serverId, sound.id, { volume }))
-                    .then(() => reload())
-                    .catch(() => setError(t("soundboard.settings.saveFailed")));
+              <button
+                type="button"
+                ref={(node) => {
+                  if (node) {
+                    previewRefs.current.set(sound.id, node);
+                  } else {
+                    previewRefs.current.delete(sound.id);
+                  }
                 }}
-              />
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t("soundboard.settings.delete", { name: sound.name })}
-              onClick={() => {
-                void deleteSoundboardSound(serverId, sound.id)
-                  .then(() => reload())
-                  .catch(() => setError(t("soundboard.settings.saveFailed")));
-              }}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </li>
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-surface-3 hover:bg-border"
+                aria-label={t("soundboard.settings.preview", { name: sound.name })}
+                onClick={() => previewSoundboardClip(sound.id)}
+              >
+                <Icon className="h-5 w-5" />
+              </button>
+              <div className="min-w-0 flex-1">
+                {editing ? (
+                  <RenameForm
+                    name={sound.name}
+                    onSave={(name) => rename(sound, name)}
+                    onCancel={() => cancelEdit(sound.id)}
+                  />
+                ) : (
+                  <p className="truncate text-sm text-text">{sound.name}</p>
+                )}
+                <ClipVolume
+                  volume={sound.volume}
+                  label={t("soundboard.settings.clipVolume", { name: sound.name })}
+                  onCommit={(volume) => {
+                    // One save at a time, in the order they were made, so a
+                    // slow earlier request cannot land after a later one.
+                    saveQueue.current = saveQueue.current
+                      .then(() => updateSoundboardSound(serverId, sound.id, { volume }))
+                      .then(() => reload())
+                      .catch(() => setError(t("soundboard.settings.saveFailed")));
+                  }}
+                />
+              </div>
+              {!editing && (
+                <Button
+                  ref={(node) => {
+                    if (node) {
+                      pencilRefs.current.set(sound.id, node);
+                    } else {
+                      pencilRefs.current.delete(sound.id);
+                    }
+                  }}
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("soundboard.settings.rename", { name: sound.name })}
+                  onClick={() => setEditingId(sound.id)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("soundboard.settings.delete", { name: sound.name })}
+                onClick={() => setConfirmId(sound.id)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </li>
           );
         })}
       </ul>
+      <ConfirmDialog
+        open={confirmSound !== null}
+        title={t("soundboard.settings.deleteTitle", { name: confirmSound?.name ?? "" })}
+        description={t("soundboard.settings.deleteBody")}
+        confirmLabel={t("soundboard.settings.deleteConfirm")}
+        onConfirm={() => {
+          if (confirmSound) {
+            remove(confirmSound);
+          }
+        }}
+        onClose={() => setConfirmId(null)}
+      />
       <SoundboardAddDialog
         open={adding}
         serverId={serverId}
+        returnFocusRef={addRef}
         onClose={() => setAdding(false)}
         onAdded={() => {
           setAdding(false);
-          reload();
+          void reload();
         }}
       />
     </section>
+  );
+}
+
+/**
+ * The name field of one row while it is being renamed. Enter saves, Escape
+ * cancels. Escape is taken at the window, ahead of the settings dialog's own
+ * listener, or it would close all of settings instead of this one field.
+ */
+function RenameForm({
+  name,
+  onSave,
+  onCancel,
+}: {
+  name: string;
+  onSave: (name: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(name);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if (
+        event.key === "Escape" &&
+        event.target instanceof Node &&
+        formRef.current?.contains(event.target)
+      ) {
+        event.stopPropagation();
+        event.preventDefault();
+        cancelRef.current();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
+  async function submit(): Promise<void> {
+    if (busyRef.current) {
+      return;
+    }
+    const problem = soundboardNameErrorKey(draft);
+    if (problem) {
+      setError(t(problem));
+      inputRef.current?.focus();
+      return;
+    }
+    if (draft.trim() === name) {
+      onCancel();
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await onSave(draft.trim());
+    } catch (err) {
+      const key = soundboardErrorKey(err);
+      setError(
+        key === "soundboard.error.nameRejected" || key === "soundboard.error.disabled"
+          ? t(key)
+          : t("soundboard.settings.saveFailed"),
+      );
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      ref={formRef}
+      noValidate
+      className="space-y-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <div className="flex items-center gap-1">
+        <Input
+          ref={inputRef}
+          value={draft}
+          maxLength={48}
+          autoComplete="off"
+          className="h-8 min-w-0 flex-1"
+          aria-label={t("soundboard.settings.renameField", { name })}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setError(null);
+          }}
+        />
+        <Button
+          type="submit"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          disabled={busy}
+          aria-label={t("soundboard.settings.renameSave")}
+        >
+          <Check className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          disabled={busy}
+          aria-label={t("soundboard.settings.renameCancel")}
+          onClick={onCancel}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -143,9 +390,36 @@ function ClipVolume({
   onCommit: (volume: number) => void;
 }) {
   const [value, setValue] = useState(volume);
+  const timer = useRef<number | null>(null);
+  const latest = useRef(volume);
+  const saved = useRef(volume);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+
+  // A reload brings the stored value back. Not while a change is waiting to
+  // be saved: it would snap the thumb under the person's hand.
   useEffect(() => {
-    setValue(volume);
+    saved.current = volume;
+    if (timer.current === null) {
+      setValue(volume);
+      latest.current = volume;
+    }
   }, [volume]);
+
+  function flush(): void {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (latest.current !== saved.current) {
+      saved.current = latest.current;
+      commitRef.current(latest.current);
+    }
+  }
+
+  // Leaving the section with a change pending still saves it.
+  useEffect(() => flush, []);
+
   return (
     <Slider
       variant="volume"
@@ -154,8 +428,15 @@ function ClipVolume({
       step={0.05}
       value={value}
       aria-label={label}
-      onValueChange={setValue}
-      onValueCommit={onCommit}
+      aria-valuetext={`${Math.round(value * 100)}%`}
+      onValueChange={(next) => {
+        setValue(next);
+        latest.current = next;
+        if (timer.current !== null) {
+          window.clearTimeout(timer.current);
+        }
+        timer.current = window.setTimeout(flush, VOLUME_SAVE_DELAY_MS);
+      }}
     />
   );
 }
