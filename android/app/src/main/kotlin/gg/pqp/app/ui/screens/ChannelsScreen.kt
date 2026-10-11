@@ -105,8 +105,11 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 private const val CHANNELS_REFETCH_TRIES = 8
 
-/** How long the unread list waits before its one settling re-read. */
+/** How long the unread list waits before its first settling re-read; doubles after. */
 private const val UNREAD_SETTLE_DELAY_MS = 1_500L
+
+/** Settling re-reads after an overlapped answer: 1.5 s, 3 s, 6 s, 12 s. */
+private const val UNREAD_SETTLE_PASSES = 4
 
 /**
  * Tickets for every fetch of the channel list on this screen: the first load
@@ -322,10 +325,13 @@ fun ChannelsScreen(
     // A state map, so a frame changes one entry in place.
     val unread = remember(serverId) { mutableStateMapOf<String, ChannelUnread>() }
     LaunchedEffect(serverId, retryTick) {
-        // One settling pass at most: when a frame overlapped the request the
-        // answer is a floor, so ask once more a moment later (see [UnreadLedger]).
-        for (pass in 0..1) {
-            if (pass > 0) delay(UNREAD_SETTLE_DELAY_MS)
+        // When a frame overlapped the request the answer is a floor, so ask
+        // again a moment later (see [UnreadLedger]), backing off, until an
+        // answer lands with nothing in flight. Bounded, so a channel that never
+        // goes quiet costs a few reads, not a loop; the next resume, reconnect
+        // or frame carries on from there.
+        for (pass in 0..UNREAD_SETTLE_PASSES) {
+            if (pass > 0) delay(UNREAD_SETTLE_DELAY_MS shl (pass - 1))
             val ticket = unreadLedger.begin()
             var reconciled: UnreadLedger.Reconciled? = null
             var answered = false
