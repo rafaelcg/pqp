@@ -4439,6 +4439,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     dismissedMicFallbackKey = null;
     unregisterSoundboard?.();
     unregisterSoundboard = null;
+    // A clip already playing is independent of the call; it ends with it.
+    stopSoundboardClips();
     state = {
       status: "idle",
       peerId: null,
