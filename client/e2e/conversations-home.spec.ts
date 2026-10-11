@@ -450,3 +450,40 @@ test("phone at 390px: the bottom bar, Servidores first, the stack, and the remem
     await setGlobalFlag("conversations_home_phone_tabs", null);
   }
 });
+
+test("an empty list leads somewhere: people from your rooms, one tap to say hi", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const stamp = Date.now().toString(36);
+  const gil = `conv-empty-gil-${stamp}`;
+  const hel = `conv-empty-hel-${stamp}`;
+  await person(gil, "Gil");
+  await person(hel, "Helena");
+  const { server } = (await (
+    await fetch(`${API}/api/servers`, {
+      method: "POST",
+      headers: headers(gil),
+      body: JSON.stringify({ name: `Turma ${stamp}` }),
+    })
+  ).json()) as { server: { id: string } };
+  const { invite } = (await (
+    await fetch(`${API}/api/servers/${server.id}/invites`, {
+      method: "POST",
+      headers: headers(gil),
+      body: JSON.stringify({}),
+    })
+  ).json()) as { invite: { code: string } };
+  await fetch(`${API}/api/invites/${invite.code}/join`, { method: "POST", headers: headers(hel) });
+
+  const page = await openAs(browser, gil, "/app/dm");
+  const hero = page.locator("[data-conversations-empty-hero]");
+  await expect(hero).toBeVisible({ timeout: 20_000 });
+  await expect(hero.getByRole("heading", { name: "Your conversations live here" })).toBeVisible();
+  const suggestion = hero.locator("[data-conversations-suggestion]").filter({ hasText: "Helena" });
+  await expect(suggestion).toBeVisible();
+  await suggestion.getByRole("button", { name: "Say hi" }).click();
+  await expect(page).toHaveURL(/\/app\/dm\/[0-9a-f-]{36}/);
+  await expect(page.getByPlaceholder(/Message/)).toBeVisible();
+  await page.context().close();
+});

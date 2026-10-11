@@ -4806,5 +4806,11 @@
   "phoneTabs.editProfile": "Editar perfil",
   "phoneTabs.settings": "Configurações",
   "phoneTabs.whatsNew": "Novidades",
-  "phoneTabs.help": "Ajuda"
+  "phoneTabs.help": "Ajuda",
+  "conversations.emptyHero.title": "Tuas conversas moram aqui",
+  "conversations.emptyHero.body": "Manda um oi pra alguém e a conversa fica nessa lista, sempre a um clique.",
+  "conversations.emptyHero.invite": "Chamar alguém pro pqp",
+  "conversations.emptyHero.copied": "Link copiado",
+  "conversations.emptyHero.suggestions": "Gente dos teus servidores",
+  "conversations.emptyHero.sayHi": "Dizer oi"
 }

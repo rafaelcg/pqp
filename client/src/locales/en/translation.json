@@ -4806,5 +4806,11 @@
   "phoneTabs.editProfile": "Edit profile",
   "phoneTabs.settings": "Settings",
   "phoneTabs.whatsNew": "What's new",
-  "phoneTabs.help": "Help"
+  "phoneTabs.help": "Help",
+  "conversations.emptyHero.title": "Your conversations live here",
+  "conversations.emptyHero.body": "Say hi to someone and the conversation stays in this list, always one click away.",
+  "conversations.emptyHero.invite": "Bring someone to pqp",
+  "conversations.emptyHero.copied": "Link copied",
+  "conversations.emptyHero.suggestions": "People from your servers",
+  "conversations.emptyHero.sayHi": "Say hi"
 }

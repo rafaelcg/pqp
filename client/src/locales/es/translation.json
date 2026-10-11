@@ -4874,5 +4874,11 @@
   "phoneTabs.editProfile": "Editar perfil",
   "phoneTabs.settings": "Configuración",
   "phoneTabs.whatsNew": "Novedades",
-  "phoneTabs.help": "Ayuda"
+  "phoneTabs.help": "Ayuda",
+  "conversations.emptyHero.title": "Tus conversaciones viven aquí",
+  "conversations.emptyHero.body": "Salúdale a alguien y la conversación se queda en esta lista, siempre a un clic.",
+  "conversations.emptyHero.invite": "Invitar a alguien a pqp",
+  "conversations.emptyHero.copied": "Enlace copiado",
+  "conversations.emptyHero.suggestions": "Gente de tus servidores",
+  "conversations.emptyHero.sayHi": "Saludar"
 }
