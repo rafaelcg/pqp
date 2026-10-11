@@ -10,6 +10,7 @@ import {
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool, type DbServer } from "../db.js";
+import { forumChannelsEnabled } from "../lib/forum-config.js";
 import {
   FetchTooLargeError,
   safeFetch,
@@ -134,7 +135,15 @@ export async function fetchMappedDiscordTemplate(
   }
 
   try {
-    return { code, plan: mapGuildTemplate(payload) };
+    // Global answer on purpose: an import makes a NEW server, so no per-server
+    // override can exist yet. While forums are on for a few servers only, an
+    // import keeps flattening a forum to a text channel.
+    return {
+      code,
+      plan: mapGuildTemplate(payload, {
+        forumChannels: forumChannelsEnabled(null),
+      }),
+    };
   } catch (error) {
     if (error instanceof DiscordImportParseError) {
       throw new DiscordTemplateUnavailableError();
@@ -207,6 +216,45 @@ async function insertChannelRows(
     params,
   );
   return result.rows;
+}
+
+/**
+ * A forum's tags, in the transaction that creates the forum. The mapper has
+ * already cut them to what `forum_tags` accepts (20, names of 20, unique by
+ * lower-case name), so this is one INSERT and no conflict handling. A plan
+ * has forums only when the mapper was told forums are on.
+ */
+async function insertForumTags(
+  client: PoolClient,
+  plan: DiscordImportPlan,
+  idByTemplate: Map<number, string>,
+): Promise<void> {
+  const params: unknown[] = [];
+  const rows: string[] = [];
+  for (const channel of plan.channels) {
+    if (channel.type !== "forum" || !channel.tags) {
+      continue;
+    }
+    const forumId = idByTemplate.get(channel.templateId);
+    if (!forumId) {
+      continue;
+    }
+    channel.tags.forEach((tag, position) => {
+      const base = params.length;
+      params.push(forumId, tag.name, tag.emoji, tag.moderated, position);
+      rows.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`,
+      );
+    });
+  }
+  if (rows.length === 0) {
+    return;
+  }
+  await client.query(
+    `INSERT INTO forum_tags (forum_id, name, emoji, moderated, position)
+     VALUES ${rows.join(", ")}`,
+    params,
+  );
 }
 
 type DiscordImportResponse = {
@@ -392,6 +440,7 @@ export async function createServerFromImport(
     );
     channelRows = inserted.rows;
     const { idByTemplate } = inserted;
+    await insertForumTags(client, plan, idByTemplate);
     for (const overwrite of plan.overwrites) {
       const channelId = idByTemplate.get(overwrite.channelTemplateId);
       const roleId = roleIdByTemplate.get(overwrite.roleTemplateId);
