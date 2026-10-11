@@ -396,7 +396,9 @@ export async function createSoundboardUpload(input: {
 }
 
 /**
- * Read the object, time it, and insert the row.
+ * Read the object, time it, and insert the row. `created` is true only for
+ * the call that inserted the row, so only that call is audited; a repeat or
+ * a parallel claim of the same key answers with the row and `created: false`.
  *
  * The GET happens before the transaction. Nothing between BEGIN and COMMIT
  * touches the network. The server row is locked so two claims cannot both
@@ -409,7 +411,7 @@ export async function claimSoundboardSound(input: {
   name: string;
   emoji: string;
   volume?: number;
-}): Promise<SoundboardSound> {
+}): Promise<{ sound: SoundboardSound; created: boolean }> {
   if (!isStorageConfigured()) {
     throw new SoundboardError("storage");
   }
@@ -473,7 +475,7 @@ export async function claimSoundboardSound(input: {
       if (!row) {
         throw new SoundboardError("missing");
       }
-      return toSound(row);
+      return { sound: toSound(row), created: false };
     }
     const count = await client.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n FROM soundboard_sounds WHERE server_id = $1`,
@@ -506,14 +508,15 @@ export async function claimSoundboardSound(input: {
       ],
     );
     await client.query("COMMIT");
-    return toSound(inserted.rows[0]!);
+    return { sound: toSound(inserted.rows[0]!), created: true };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     if (error instanceof SoundboardError) {
       throw error;
     }
     if (isUniqueViolation(error)) {
-      // Another claim of the same key committed first. Answer with its row.
+      // Another claim of the same key committed first. Answer with its row;
+      // that claim is the one that created it.
       const existing = await getPool().query<SoundRow>(
         `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
                 duration_ms, volume
@@ -523,7 +526,7 @@ export async function claimSoundboardSound(input: {
       );
       const row = existing.rows[0];
       if (row) {
-        return toSound(row);
+        return { sound: toSound(row), created: false };
       }
       throw new SoundboardError("missing");
     }
@@ -537,66 +540,161 @@ export async function claimSoundboardSound(input: {
   }
 }
 
+/** What a clip looked like before an edit, for the audit row. */
+export interface SoundboardBefore {
+  name: string;
+  emoji: string;
+  volume: number;
+}
+
+/**
+ * Edit a clip. The row is locked and read first, so the audit row can say
+ * what it was before, and an edit that changes nothing writes nothing:
+ * `changed` is false and the caller skips the audit row.
+ */
 export async function updateSoundboardSound(input: {
   serverId: string;
   soundId: string;
   name?: string;
   emoji?: string;
   volume?: number;
-}): Promise<SoundboardSound | null> {
-  const result = await getPool().query<SoundRow>(
-    `UPDATE soundboard_sounds
-        SET name = COALESCE($3, name),
-            emoji = COALESCE($4, emoji),
-            volume = COALESCE($5, volume)
-      WHERE id = $1 AND server_id = $2
-      RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
-                duration_ms, volume`,
-    [
-      input.soundId,
-      input.serverId,
-      input.name ?? null,
-      input.emoji ?? null,
-      input.volume ?? null,
-    ],
-  );
-  const row = result.rows[0];
-  forgetPlayable(input.soundId);
-  return row ? toSound(row) : null;
+}): Promise<{
+  sound: SoundboardSound;
+  before: SoundboardBefore;
+  changed: boolean;
+} | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<SoundRow>(
+      `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+              duration_ms, volume
+         FROM soundboard_sounds
+        WHERE id = $1 AND server_id = $2
+          FOR UPDATE`,
+      [input.soundId, input.serverId],
+    );
+    const old = current.rows[0];
+    if (!old) {
+      await client.query("ROLLBACK");
+      forgetPlayable(input.soundId);
+      return null;
+    }
+    const before: SoundboardBefore = {
+      name: old.name,
+      emoji: old.emoji,
+      volume: Number(old.volume),
+    };
+    // The column is REAL: compare at that precision or 0.05 never equals itself.
+    const changed =
+      (input.name !== undefined && input.name !== old.name) ||
+      (input.emoji !== undefined && input.emoji !== old.emoji) ||
+      (input.volume !== undefined &&
+        Math.fround(input.volume) !== Math.fround(Number(old.volume)));
+    if (!changed) {
+      await client.query("ROLLBACK");
+      return { sound: toSound(old), before, changed: false };
+    }
+    const result = await client.query<SoundRow>(
+      `UPDATE soundboard_sounds
+          SET name = COALESCE($3, name),
+              emoji = COALESCE($4, emoji),
+              volume = COALESCE($5, volume)
+        WHERE id = $1 AND server_id = $2
+        RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
+                  duration_ms, volume`,
+      [
+        input.soundId,
+        input.serverId,
+        input.name ?? null,
+        input.emoji ?? null,
+        input.volume ?? null,
+      ],
+    );
+    await client.query("COMMIT");
+    forgetPlayable(input.soundId);
+    return { sound: toSound(result.rows[0]!), before, changed: true };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-/** Deletes the clip. Its name for the audit row, or null when there was none. */
+/**
+ * Deletes the clip. Its name for the audit row, or null when there was none
+ * (already deleted, or deleted by a parallel request).
+ *
+ * The row goes first and `DELETE ... RETURNING` picks the winner: exactly one
+ * of any number of parallel callers gets the row back, so exactly one gets
+ * the name (and writes the audit row) and the rest see null. The object is
+ * deleted after that, and if storage fails the row is put back, so the
+ * delete can still be retried and no file is left with its key forgotten.
+ * The one gap is a process dying between the two steps, which leaves an
+ * unreferenced object in the bucket; before this ordering that case left the
+ * row, which the caller could retry. Not worth a schema column to close.
+ * With no storage configured the file cannot be removed, so the row is kept
+ * without touching it.
+ */
 export async function deleteSoundboardSound(
   serverId: string,
   soundId: string,
 ): Promise<string | null> {
-  const found = await getPool().query<{ storage_key: string; name: string }>(
-    `SELECT storage_key, name
-       FROM soundboard_sounds
-      WHERE id = $1 AND server_id = $2`,
+  if (!isStorageConfigured()) {
+    const exists = await getPool().query(
+      `SELECT 1 FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
+      [soundId, serverId],
+    );
+    if ((exists.rowCount ?? 0) === 0) {
+      return null;
+    }
+    throw new SoundboardError("storage");
+  }
+  const removed = await getPool().query<
+    SoundRow & { created_by: string | null; created_at: Date }
+  >(
+    `DELETE FROM soundboard_sounds
+      WHERE id = $1 AND server_id = $2
+      RETURNING id, server_id, name, emoji, storage_key, content_type, bytes,
+                duration_ms, volume, created_by, created_at`,
     [soundId, serverId],
   );
-  const key = found.rows[0]?.storage_key;
-  if (!key) {
+  const row = removed.rows[0];
+  if (!row) {
     return null;
   }
-  // Object first: a storage error leaves the row in place, so the delete can
-  // be retried and no file is orphaned with its key forgotten. A missing
-  // object still counts as gone (`deleteObject` treats 404 as success).
-  // With no storage configured the file cannot be removed, so keep the row
-  // rather than forget a key whose object may still exist.
-  if (!isStorageConfigured()) {
-    throw new SoundboardError("storage");
-  }
   try {
-    await deleteObject(key);
+    // A missing object still counts as gone (`deleteObject` treats 404 as
+    // success).
+    await deleteObject(row.storage_key);
   } catch {
+    await getPool()
+      .query(
+        `INSERT INTO soundboard_sounds (
+           id, server_id, name, emoji, storage_key, content_type, bytes,
+           duration_ms, volume, created_by, created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT DO NOTHING`,
+        [
+          row.id,
+          row.server_id,
+          row.name,
+          row.emoji,
+          row.storage_key,
+          row.content_type,
+          row.bytes,
+          row.duration_ms,
+          row.volume,
+          row.created_by,
+          row.created_at,
+        ],
+      )
+      .catch(() => undefined);
+    forgetPlayable(soundId);
     throw new SoundboardError("storage");
   }
-  await getPool().query(
-    `DELETE FROM soundboard_sounds WHERE id = $1 AND server_id = $2`,
-    [soundId, serverId],
-  );
   forgetPlayable(soundId);
-  return found.rows[0]!.name;
+  return row.name;
 }
