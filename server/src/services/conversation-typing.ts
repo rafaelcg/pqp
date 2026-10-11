@@ -77,6 +77,15 @@ export function peekConversationTypingAudience(
  */
 const inFlight = new Map<string, Promise<readonly string[] | null>>();
 
+/**
+ * Is a lookup for this typist and conversation already running? A frame that
+ * arrives meanwhile leaves the list copy to the frame that started it, so a
+ * slow database never turns one burst into several list deliveries at once.
+ */
+export function typingAudienceLookupInFlight(channelId: string, typistId: string): boolean {
+  return inFlight.has(`${channelId}:${typistId}`);
+}
+
 export function conversationTypingAudience(
   channelId: string,
   typistId: string,

@@ -59,6 +59,7 @@ import {
   conversationTypingAudience,
   forgetConversationTypingAudience,
   peekConversationTypingAudience,
+  typingAudienceLookupInFlight,
 } from "../services/conversation-typing.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
@@ -2568,7 +2569,10 @@ export async function handleChatMessage(
         ...(known && known.length > 0 ? { recipients: known } : {}),
       });
     }
-    if (known === undefined) {
+    if (
+      known === undefined &&
+      !typingAudienceLookupInFlight(payload.channelId, conn.user.id)
+    ) {
       void conversationTypingAudience(payload.channelId, conn.user.id)
         .then((recipients) => {
           if (!recipients || recipients.length === 0) {
