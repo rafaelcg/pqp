@@ -77,7 +77,14 @@ const {
   deleteChannel,
   moveChannel,
 } = await import("./servers.js");
-const { postChannelMessage } = await import("../ws/chat.js");
+const chat = await import("../ws/chat.js");
+const { postChannelMessage } = chat;
+// Forum PR 1 bumps a post off the send path and exports this to wait for it.
+// Read off the namespace so this file runs with or without PR 1 underneath;
+// once PR 1 is on main it is always there.
+const settleForumBumps =
+  (chat as { settleForumBumps?: () => Promise<void> }).settleForumBumps ??
+  (async () => {});
 const { sweepMessageRetention } = await import("./retention.js");
 const { searchMessages } = await import("./search.js");
 const { assignRole, createRole, upsertChannelOverwrite } = await import("./roles.js");
@@ -217,6 +224,9 @@ describeDb("forum guards", () => {
   });
 
   beforeEach(async () => {
+    // A reply in a post bumps it off the send path (forum PR 1); a bump still
+    // in flight from the previous test deadlocks the TRUNCATE below.
+    await settleForumBumps();
     resetApiRateLimits();
     stubs.storage = false;
     stubs.deletedKeys = [];
