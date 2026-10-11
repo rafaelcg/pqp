@@ -123,6 +123,12 @@
   </provides>
 
   <releases>
+
+    <release version="0.2.5" date="2026-10-11">
+
+      <url type="details">https://github.com/rafaelcg/pqp/releases/tag/v0.2.5</url>
+
+    </release>
     <release version="0.2.4" date="2026-10-05">
       <url type="details">https://github.com/rafaelcg/pqp/releases/tag/v0.2.4</url>
       <description>
