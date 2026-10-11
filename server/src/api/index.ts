@@ -8196,6 +8196,7 @@ import {
   invalidateForumList,
   isReplyInPost,
   listForumPosts,
+  listForumTagRefs,
   listForumTags,
   readForumPostViewers,
   replaceForumTags,
@@ -8373,7 +8374,7 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
 
   if (body.tagIds !== undefined) {
     const [forumTags, previous, settings] = await Promise.all([
-      listForumTags(post.forum_id),
+      listForumTagRefs(post.forum_id),
       getForumPostTagIds(post.channel_id),
       getForumSettings(post.forum_id),
     ]);
@@ -8422,7 +8423,8 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       patch.resolvedAt = null;
       changes.push({ key: "resolved", old: true, new: false });
     }
-    if (post.resolved_message_id !== null) {
+    // `acceptedAnswerId: null` in the same request already recorded this.
+    if (post.resolved_message_id !== null && patch.acceptedAnswerId === undefined) {
       patch.acceptedAnswerId = null;
       changes.push({
         key: "acceptedAnswerId",
@@ -8446,6 +8448,16 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
   const changed = Object.keys(patch).length > 0;
   if (changed) {
     await applyForumPostPatch(post, patch);
+  }
+
+  // The live row goes out before the audit writes, so a failed audit insert
+  // cannot leave every open list showing the old state of a committed change.
+  const summary = await getForumPostSummary(post.channel_id);
+  if (!summary) {
+    throw new NotFound("Post not found");
+  }
+  if (changed) {
+    announceForumPostUpdate(summary);
   }
 
   const audit = (
@@ -8475,14 +8487,6 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
   // An author editing their own post is not a moderator action.
   if (changes.length > 0 && !isAuthor) {
     await audit("forum.post_edit", changes);
-  }
-
-  const summary = await getForumPostSummary(post.channel_id);
-  if (!summary) {
-    throw new NotFound("Post not found");
-  }
-  if (changed) {
-    announceForumPostUpdate(summary);
   }
   return { post: summary };
 });

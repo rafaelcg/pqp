@@ -89,11 +89,13 @@ async function startApi(name: string): Promise<Api> {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // Not returned, so nothing else will ever stop it.
+  child.kill("SIGKILL");
   throw new Error(`${name} never became healthy:\n${log.join("")}`);
 }
 
 async function stopApi(api: Api | undefined): Promise<void> {
-  if (!api || api.child.exitCode !== null) {
+  if (!api || api.child.exitCode !== null || api.child.signalCode !== null) {
     return;
   }
   const exited = new Promise<void>((resolve) => api.child.once("exit", () => resolve()));
@@ -149,15 +151,20 @@ async function openSocket(api: Api, token: string, channelId: string) {
       // not JSON: not ours
     }
   });
-  socket.send(JSON.stringify({ type: "auth", token }));
-  await waitFor(() => frames.some((frame) => frame.type === "ready"), 10_000, "ready");
-  socket.send(JSON.stringify({ type: "join-channel", channelId }));
-  // The presence baseline is the server's answer to the join.
-  await waitFor(
-    () => frames.some((frame) => String(frame.type).startsWith("presence")),
-    10_000,
-    "the join",
-  );
+  try {
+    socket.send(JSON.stringify({ type: "auth", token }));
+    await waitFor(() => frames.some((frame) => frame.type === "ready"), 10_000, "ready");
+    socket.send(JSON.stringify({ type: "join-channel", channelId }));
+    // The presence baseline is the server's answer to the join.
+    await waitFor(
+      () => frames.some((frame) => String(frame.type).startsWith("presence")),
+      10_000,
+      "the join",
+    );
+  } catch (error) {
+    socket.close();
+    throw error;
+  }
   return { socket, frames };
 }
 

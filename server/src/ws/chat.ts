@@ -1930,23 +1930,58 @@ export function announceForumPostRemoved(forumId: string, postId: string): void 
 }
 
 /**
- * The bump, after a message landed in a thread channel. Never fails the send:
- * the message is already stored and fanned out, and a list that is one reply
- * behind until the next one is the cost of a database hiccup here.
+ * Posts with a bump in flight on this process, and the newest message time
+ * that arrived while it ran. A burst of replies to one post costs one refresh
+ * in flight plus one trailing refresh, not one summary read per reply.
  */
-async function bumpForumPost(postId: string, at: Date): Promise<void> {
-  try {
-    const forumId = await bumpForumPostActivity(postId, at);
-    if (!forumId) {
-      return;
-    }
-    const summary = await getForumPostSummary(postId);
-    if (summary) {
-      announceForumPostUpdate(summary);
-    }
-  } catch (error) {
-    console.error("[forums] bump failed:", error);
+const forumBumps = new Map<string, { latest: Date | null; done?: Promise<void> }>();
+
+/** Test seam: wait for every bump in flight on this process to land. */
+export async function settleForumBumps(): Promise<void> {
+  while (forumBumps.size > 0) {
+    await Promise.all([...forumBumps.values()].map((state) => state.done));
   }
+}
+
+/**
+ * The bump, after a message landed in a thread channel. Fire and forget: the
+ * send never waits on the post's summary (its reply count and thumbnail are
+ * reads over the post), and never fails because of it. The message is already
+ * stored and fanned out; a list one reply behind until the next bump is the
+ * cost of a database hiccup here.
+ */
+function bumpForumPost(postId: string, at: Date): void {
+  const running = forumBumps.get(postId);
+  if (running) {
+    if (!running.latest || at > running.latest) {
+      running.latest = at;
+    }
+    return;
+  }
+  const state: { latest: Date | null; done?: Promise<void> } = { latest: null };
+  forumBumps.set(postId, state);
+  state.done = (async () => {
+    let next: Date | null = at;
+    try {
+      while (next) {
+        const forumId = await bumpForumPostActivity(postId, next);
+        if (!forumId) {
+          // A chat thread, or a shell: nothing listed moved.
+          return;
+        }
+        const summary = await getForumPostSummary(postId);
+        if (summary) {
+          announceForumPostUpdate(summary);
+        }
+        next = state.latest;
+        state.latest = null;
+      }
+    } catch (error) {
+      console.error("[forums] bump failed:", error);
+    } finally {
+      forumBumps.delete(postId);
+    }
+  })();
 }
 
 /**
@@ -2434,7 +2469,7 @@ async function postChannelMessageAttempt(
   } else if (threadInfo) {
     // --- forums --- a thread with no origin message is a forum post (or a
     // shell still waiting for this very message, which the bump skips).
-    await bumpForumPost(input.channelId, dbMessage.created_at);
+    bumpForumPost(input.channelId, dbMessage.created_at);
   }
 
   if (url && !cacheFresh) {

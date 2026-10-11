@@ -790,6 +790,17 @@ export async function listForumTags(
   return result.rows.map(mapTag);
 }
 
+/** What a tag check needs: id and whether it is staff-only. No post counts. */
+export type ForumTagRef = Pick<ForumTag, "id" | "moderated">;
+
+export async function listForumTagRefs(forumId: string): Promise<ForumTagRef[]> {
+  const result = await getPool().query<ForumTagRef>(
+    `SELECT id, moderated FROM forum_tags WHERE forum_id = $1`,
+    [forumId],
+  );
+  return result.rows;
+}
+
 /**
  * Check a requested tag list against the forum's tags. Unknown ids are 400;
  * a staff-only tag being ADDED or REMOVED by somebody who is not staff is
@@ -798,7 +809,7 @@ export async function listForumTags(
  * without being refused for it.
  */
 export function checkTagChange(
-  forumTags: readonly ForumTag[],
+  forumTags: readonly ForumTagRef[],
   requested: readonly string[],
   previous: readonly string[],
   isStaff: boolean,
@@ -907,26 +918,35 @@ export async function getForumSettings(forumId: string): Promise<ForumSettings> 
     : { ...FORUM_SETTINGS_DEFAULTS };
 }
 
+/**
+ * Write only the fields the patch names, in one statement, so two editors
+ * changing different settings at once cannot overwrite each other with the
+ * value they each read. `before` is for the audit row only.
+ */
 export async function updateForumSettings(
   forumId: string,
   patch: UpdateForumSettingsRequest,
 ): Promise<{ before: ForumSettings; after: ForumSettings }> {
   const before = await getForumSettings(forumId);
-  const after: ForumSettings = {
-    requireTag: patch.requireTag ?? before.requireTag,
-    defaultSort: patch.defaultSort ?? before.defaultSort,
-  };
-  await getPool().query(
+  const result = await getPool().query<{ require_tag: boolean; default_sort: ForumSort }>(
     `INSERT INTO forum_settings (forum_id, require_tag, default_sort, updated_at)
-     VALUES ($1, $2, $3, NOW())
+     VALUES ($1, COALESCE($2::boolean, $4::boolean), COALESCE($3::text, $5::text), NOW())
      ON CONFLICT (forum_id) DO UPDATE
-       SET require_tag = EXCLUDED.require_tag,
-           default_sort = EXCLUDED.default_sort,
-           updated_at = NOW()`,
-    [forumId, after.requireTag, after.defaultSort],
+       SET require_tag = COALESCE($2::boolean, forum_settings.require_tag),
+           default_sort = COALESCE($3::text, forum_settings.default_sort),
+           updated_at = NOW()
+     RETURNING require_tag, default_sort`,
+    [
+      forumId,
+      patch.requireTag ?? null,
+      patch.defaultSort ?? null,
+      FORUM_SETTINGS_DEFAULTS.requireTag,
+      FORUM_SETTINGS_DEFAULTS.defaultSort,
+    ],
   );
+  const row = result.rows[0]!;
   invalidateForumList(forumId);
-  return { before, after };
+  return { before, after: { requireTag: row.require_tag, defaultSort: row.default_sort } };
 }
 
 // -------------------------------------------------------------- follows
@@ -1090,17 +1110,19 @@ export async function publishForumPost(
 }
 
 /**
- * A rejected opening message: give the staged files back to the forum (so the
- * composer's retry can still claim them, and `deleteChannel` does not delete
- * their objects with the shell), then delete the shell.
+ * Undo a shell: give the files back to the forum, unclaimed, so the
+ * composer's retry can claim them again and `deleteChannel` does not delete
+ * their objects with the shell. That includes files the opening message had
+ * already claimed (it landed, then publishing failed): a shell holds nothing
+ * but the author's own opening message, so every file on it is theirs.
  */
 export async function discardForumPostShell(
   postId: string,
   forumId: string,
 ): Promise<void> {
   await getPool().query(
-    `UPDATE message_attachments SET channel_id = $2
-      WHERE channel_id = $1 AND message_id IS NULL`,
+    `UPDATE message_attachments SET channel_id = $2, message_id = NULL
+      WHERE channel_id = $1`,
     [postId, forumId],
   );
   await deleteChannel(postId);

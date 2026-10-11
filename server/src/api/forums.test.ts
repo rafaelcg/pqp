@@ -51,7 +51,9 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser, markChannelRead } = await import("../services/users.js");
 const { createServer: createPqpServer } = await import("../services/servers.js");
-const { resetChatRateLimits, postChannelMessage } = await import("../ws/chat.js");
+const { resetChatRateLimits, postChannelMessage, settleForumBumps } = await import(
+  "../ws/chat.js"
+);
 const { resetReadCacheForTests } = await import("../lib/read-cache.js");
 const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { createAutomodRule, invalidateAutomodCache } = await import(
@@ -87,6 +89,8 @@ async function call<T = Record<string, unknown>>(
   path: string,
   body?: unknown,
 ): Promise<Reply<T>> {
+  // A reply's bump runs off the send path; let it land before reading.
+  await settleForumBumps();
   stubs.actor = as;
   const response = await fetch(`${baseUrl}${path}`, {
     method,
@@ -110,7 +114,9 @@ async function post(
   title: string,
   extra: Record<string, unknown> = {},
   forum = forumId,
-): Promise<Reply<{ post: ForumPostSummary; error?: string; reason?: string }>> {
+): Promise<
+  Reply<{ post: ForumPostSummary; viewer: { following: boolean }; error?: string; reason?: string }>
+> {
   nonceCounter += 1;
   return call(as, "POST", `/api/channels/${forum}/posts`, {
     title,
@@ -263,7 +269,7 @@ describeDb("forum posts", () => {
     expect(row.rows[0]?.message_id).not.toBeNull();
 
     // The author follows their own post.
-    expect((created.body as { viewer: { following: boolean } }).viewer.following).toBe(
+    expect(created.body.viewer.following).toBe(
       true,
     );
     // The post is a thread under the forum with no origin message.
@@ -484,8 +490,8 @@ describeDb("forum posts", () => {
     // a millisecond cursor would skip rows on.
     await getPool().query(
       `UPDATE forum_posts
-          SET last_activity_at = '2026-10-01T12:00:00.123456Z',
-              created_at = '2026-10-01T12:00:00.123456Z'
+          SET last_activity_at = date_trunc('second', NOW() - INTERVAL '1 day') + INTERVAL '123456 microseconds',
+              created_at = date_trunc('second', NOW() - INTERVAL '1 day') + INTERVAL '123456 microseconds'
         WHERE channel_id = ANY($1::uuid[])`,
       [ids.slice(1, 5)],
     );

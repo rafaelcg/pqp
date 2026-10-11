@@ -13,6 +13,7 @@ import type { DbUser } from "../db.js";
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import {
   announceForumPost,
+  announceForumPostUpdate,
   applyAutomodEffects,
   postChannelMessage,
   takeMessageBudget,
@@ -25,7 +26,7 @@ import {
   ForumError,
   getForumPostSummary,
   getForumSettings,
-  listForumTags,
+  listForumTagRefs,
   publishForumPost,
   readForumPostViewers,
 } from "./forums.js";
@@ -101,7 +102,7 @@ export async function createForumPost(
 
   const tagIds = request.tagIds ?? [];
   const [forumTags, settings] = await Promise.all([
-    listForumTags(forum.id),
+    listForumTagRefs(forum.id),
     getForumSettings(forum.id),
   ]);
   checkTagChange(forumTags, tagIds, [], isStaff);
@@ -158,6 +159,9 @@ export async function createForumPost(
     if (!post) {
       throw new ForumError(409, "Post is being created");
     }
+    // The first attempt may have published and then failed before (or while)
+    // announcing. The upsert is idempotent, so a retry repairs the live row.
+    announceForumPostUpdate(post);
     const [viewer] = await readForumPostViewers([post.id], author.id);
     return { post, viewer: viewer!, created: false };
   }
@@ -228,7 +232,12 @@ export async function createForumPost(
     // Published a moment ago and gone already: a moderator deleted it.
     throw new ForumError(404, "Post not found");
   }
-  await announceForumPost(post, author.id);
+  // The post exists from here on: a failed fan-out is logged, never answered
+  // as a failed create (the client would retry, and the nonce would hand back
+  // this post and re-announce it anyway).
+  await announceForumPost(post, author.id).catch((error: unknown) => {
+    console.error("[forums] announce failed:", error);
+  });
   const [viewer] = await readForumPostViewers([postId], author.id);
   return { post, viewer: viewer!, created: true };
 }

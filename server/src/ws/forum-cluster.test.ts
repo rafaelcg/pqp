@@ -168,11 +168,16 @@ function summary(overrides: Partial<ForumPostSummary> = {}): ForumPostSummary {
   });
 }
 
-const bumped = vi.hoisted(() => ({ calls: [] as string[] }));
+const bumped = vi.hoisted(() => ({
+  calls: [] as string[],
+  /** While set, a bump waits on it: a reply burst lands during one bump. */
+  gate: null as Promise<void> | null,
+}));
 
 vi.mock("../services/forums.js", () => ({
   bumpForumPostActivity: async (postId: string) => {
     bumped.calls.push(postId);
+    await bumped.gate;
     return postId === POST_ID ? FORUM_ID : null;
   },
   getForumPostSummary: async () => summary({ replyCount: 13 }),
@@ -260,6 +265,7 @@ beforeEach(() => {
   hub = createMemoryHub();
   onTheWire = [];
   bumped.calls.length = 0;
+  bumped.gate = null;
   hub.listeners.add((frame) => onTheWire.push(frame));
 });
 
@@ -322,8 +328,8 @@ describe("forum frames across two instances", () => {
       { type: "message-create", channelId: POST_ID, body: "resposta" },
     );
 
-    expect(bumped.calls).toEqual([POST_ID]);
     await vi.waitFor(() => {
+      expect(bumped.calls).toEqual([POST_ID]);
       const rows = framesOfType<{ post: ForumPostSummary }>(
         viewer.received,
         "forum-post-upsert",
@@ -331,6 +337,32 @@ describe("forum frames across two instances", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.post.replyCount).toBe(13);
     });
+  });
+
+  it("a burst of replies costs one bump in flight and one trailing bump, off the send path", async () => {
+    const a = await bootInstance();
+    const viewer = await connect(a, "reader", { channel: FORUM_ID });
+    const replier = await connect(a, "author", { thread: POST_ID });
+    let open!: () => void;
+    bumped.gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+
+    // Every send returns while the first bump is still held at the gate: the
+    // send path does not wait on the post's summary.
+    for (let i = 0; i < 5; i += 1) {
+      await a.chat.handleChatMessage(
+        { socket: replier.socket, user: asUser("author") },
+        { type: "message-create", channelId: POST_ID, body: `resposta ${i}` },
+      );
+    }
+    expect(bumped.calls).toEqual([POST_ID]);
+    expect(framesOfType(replier.received, "message-broadcast")).toHaveLength(5);
+
+    open();
+    await a.chat.settleForumBumps();
+    expect(bumped.calls).toEqual([POST_ID, POST_ID]);
+    expect(framesOfType(viewer.received, "forum-post-upsert")).toHaveLength(2);
   });
 
   it("a message in a plain channel does not bump anything", async () => {
