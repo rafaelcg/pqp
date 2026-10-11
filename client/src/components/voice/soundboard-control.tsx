@@ -714,6 +714,7 @@ export function SoundboardControl({
           setAdding(false);
           void refreshSoundboardCatalog(serverId);
         }}
+        onAddedAfterClose={() => void refreshSoundboardCatalog(serverId)}
       />
     </>
   );
