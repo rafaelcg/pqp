@@ -40,12 +40,37 @@ claimed yet. An unclaimed file is deleted when that signature expires,
 and only when no saved clip still points at it.
 Play clicks are not stored.
 
+## Turning it on
+
+The runtime flag `soundboard` gates everything (env `SOUNDBOARD`, default
+off, per server). Off, the call has no button, the settings tab is hidden,
+uploads and edits answer 403 `soundboard_disabled`, and the server drops
+every play. Listing and deleting clips still work, so a moderator can take
+a clip down after the flag goes off. The play gate reads the flag on every
+click, so turning it off silences a call that is already running.
+
+Turn it on for one server first:
+
+1. Open controles → interruptores on the dashboard.
+2. Add a server override for `soundboard` with the server's id.
+3. Check it in a call with two accounts.
+4. Turn it on globally once it holds.
+
+The client reads it as `soundboard` on `GET /api/voice/config?serverId=`.
+It asks again on focus and on a slow timer, so the button follows a flip
+without a rejoin.
+
 ## Who can do what
 
 `USE_SOUNDBOARD` is on for `@everyone`. A channel overwrite can turn the
 board off in one room without taking Speak. You have to be seated. A
 moderator mute blocks it. Muting yourself does not. Deafening yourself
 only stops you hearing it.
+
+A clip needs an open microphone. Whoever may not speak may not play one.
+That covers a channel that denies Speak, a watch party floor closed to
+hosts only, and audience mode. The button is hidden for those seats and
+the server refuses their plays.
 
 `MANAGE_SOUNDBOARD` adds, renames, and deletes clips. It is on for manager
 and owner, off for `@everyone`. A server can hand it to a role. Audio is

@@ -11,6 +11,7 @@ import { SOUNDBOARD_BUILTINS, type SoundboardBuiltinId } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { fetchSoundboard, type SoundboardSoundDto } from "@/lib/api";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -35,18 +36,24 @@ const PANEL_HEIGHT = 304;
 
 export function SoundboardControl({
   serverId,
-  canUse,
-  canManage,
+  canUse: canUseSeat,
+  canManage: canManageSeat,
   size,
   iconSize,
 }: {
   serverId: string | null;
+  /** The seat's grant: `USE_SOUNDBOARD` and an open mic. */
   canUse: boolean;
   canManage: boolean;
   size: string;
   iconSize: string;
 }) {
   const { t } = useTranslation();
+  // The seat's grant is the bit. The `soundboard` flag is read live here,
+  // as the server's play gate reads it on every click.
+  const voiceConfig = useVoiceConfig(serverId);
+  const canUse = canUseSeat && voiceConfig.soundboard === true;
+  const canManage = canManageSeat && canUse;
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [sounds, setSounds] = useState<SoundboardSoundDto[]>([]);

@@ -3520,7 +3520,10 @@ export function CallControls({
       )}
       <SoundboardControl
         serverId={serverId}
-        canUse={voiceState.canUseSoundboard}
+        // A clip is speech by other means: a locked mic (a closed watch
+        // party floor, audience mode) locks the board too. The server
+        // refuses the play either way.
+        canUse={voiceState.canUseSoundboard && voiceState.canSpeak}
         canManage={voiceState.canManageSoundboard}
         size={size}
         iconSize={iconSize}

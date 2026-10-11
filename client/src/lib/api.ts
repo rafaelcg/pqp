@@ -770,6 +770,11 @@ export interface VoiceConfig {
    * (`lib/audio-health.ts`). Global, so it is read without a server.
    */
   audioSelfHeal?: boolean;
+  /**
+   * `soundboard`: this server's calls offer the soundboard and its settings
+   * tab. Per server, default off. The play gate on the server reads it too.
+   */
+  soundboard?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>

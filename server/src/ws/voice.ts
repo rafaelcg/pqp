@@ -7896,6 +7896,9 @@ export async function handleVoiceMessage(
         permissions: resolved.permissions,
       });
       canManageMusic = hasPermission(resolved.permissions, Permission.MANAGE_MUSIC);
+      // The bits only. The `soundboard` flag is read live instead: by the
+      // play gate on every click and by the client from
+      // `GET /api/voice/config`, so a flip either way needs no rejoin.
       canUseSoundboard = hasPermission(
         resolved.permissions,
         Permission.USE_SOUNDBOARD,
@@ -9365,9 +9368,10 @@ export async function handleVoiceMessage(
   // itself is not in this frame. Each client plays a file it cached. A
   // miss is silence, which is the right amount of effort for a joke.
   //
-  // Self-mute does not block it. A moderator mute does. Deafening is the
-  // listener's own client. DMs have no library, so `soundboardServerId`
-  // null never gets past the gate.
+  // Self-mute does not block it. A locked microphone does (no SPEAK, a
+  // closed watch party floor, audience mode), and so does a moderator mute.
+  // Deafening is the listener's own client. DMs have no library, so
+  // `soundboardServerId` null never gets past the gate.
   if (payload.type === "soundboard-play") {
     if (!existingPeerId) {
       return;
@@ -9376,7 +9380,9 @@ export async function handleVoiceMessage(
     if (
       !peer ||
       !soundboardPlayAllowed({
+        enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
         canUseSoundboard: peer.canUseSoundboard,
+        canSpeak: peer.canSpeak,
         serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
         channelMatches: peer.voiceChannelId === payload.channelId,
       }) ||
@@ -9401,7 +9407,9 @@ export async function handleVoiceMessage(
     if (
       current !== peer ||
       !soundboardPlayAllowed({
+        enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
         canUseSoundboard: peer.canUseSoundboard,
+        canSpeak: peer.canSpeak,
         serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
         channelMatches: peer.voiceChannelId === payload.channelId,
       })

@@ -8,33 +8,31 @@ import {
 } from "./soundboard.js";
 
 describe("soundboard play gate", () => {
-  it("needs the bit, a matching room, and no moderator mute", () => {
+  it("needs the flag, the bit, an open mic, a matching room, and no moderator mute", () => {
+    const open = {
+      enabled: true,
+      canUseSoundboard: true,
+      canSpeak: true,
+      serverMuted: false,
+      channelMatches: true,
+    };
+    expect(soundboardPlayAllowed(open)).toBe(true);
+    expect(soundboardPlayAllowed({ ...open, enabled: false })).toBe(false);
+    expect(soundboardPlayAllowed({ ...open, canUseSoundboard: false })).toBe(false);
+    expect(soundboardPlayAllowed({ ...open, serverMuted: true })).toBe(false);
+    expect(soundboardPlayAllowed({ ...open, channelMatches: false })).toBe(false);
+  });
+
+  it("refuses an audience seat whose mic is locked, whatever the bit says", () => {
+    // A closed watch party floor denies SPEAK to @everyone and leaves
+    // USE_SOUNDBOARD alone; audience mode takes canSpeak and nothing else.
     expect(
       soundboardPlayAllowed({
+        enabled: true,
         canUseSoundboard: true,
+        canSpeak: false,
         serverMuted: false,
         channelMatches: true,
-      }),
-    ).toBe(true);
-    expect(
-      soundboardPlayAllowed({
-        canUseSoundboard: false,
-        serverMuted: false,
-        channelMatches: true,
-      }),
-    ).toBe(false);
-    expect(
-      soundboardPlayAllowed({
-        canUseSoundboard: true,
-        serverMuted: true,
-        channelMatches: true,
-      }),
-    ).toBe(false);
-    expect(
-      soundboardPlayAllowed({
-        canUseSoundboard: true,
-        serverMuted: false,
-        channelMatches: false,
       }),
     ).toBe(false);
   });

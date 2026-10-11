@@ -3418,7 +3418,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (
         !state.voiceChannelId ||
         state.status === "idle" ||
-        !state.canUseSoundboard
+        !state.canUseSoundboard ||
+        !state.canSpeak
       ) {
         return;
       }

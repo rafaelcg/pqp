@@ -3503,6 +3503,17 @@ function soundboardHttpError(error: SoundboardError): HttpError {
   }
 }
 
+/**
+ * Adding or editing a clip needs the `soundboard` flag on for the server.
+ * Listing and deleting do not: a moderator can still take a clip down on a
+ * server where the flag went off.
+ */
+function requireSoundboardEnabled(serverId: string): void {
+  if (!isEnabled("soundboard", { serverId })) {
+    throw new HttpError(403, "soundboard_disabled");
+  }
+}
+
 router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
   await requireServerMember(serverId, user.id);
   return {
@@ -3515,6 +3526,7 @@ router.post(
   "/api/servers/:serverId/soundboard/uploads",
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
     const body = createSoundboardUploadSchema.parse(await readJsonBody(req));
     try {
       return await createSoundboardUpload({
@@ -3535,6 +3547,7 @@ router.post(
   "/api/servers/:serverId/soundboard",
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
     const body = claimSoundboardSoundSchema.parse(await readJsonBody(req));
     try {
       const sound = await claimSoundboardSound({
@@ -3559,6 +3572,7 @@ router.patch(
   "/api/servers/:serverId/soundboard/:soundId",
   async ({ req, user }, { serverId, soundId }) => {
     await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
     if (!isUuid(soundId!)) {
       throw new NotFound("Sound not found");
     }

@@ -13,8 +13,14 @@ export const SOUNDBOARD_USER_CONCURRENCY = 3;
  * Who may start a clip, and how many may be sounding.
  *
  * The seat check (are you in this room) stays in `voice.ts`, which already
- * holds the peer. This module is the rest: the bit, a moderator mute, and
- * the overlap cap. A refused play is silence. Nothing is stored.
+ * holds the peer. This module is the rest: the runtime flag, the bit, the
+ * microphone, a moderator mute, and the overlap cap. A refused play is
+ * silence. Nothing is stored.
+ *
+ * A clip is speech by other means, so whoever may not speak may not play
+ * one. That is what closes a watch party's floor ("só hosts falam" denies
+ * SPEAK to @everyone) and audience mode (`applyAudienceMode` takes `canSpeak`
+ * away) without either of them knowing the soundboard exists.
  *
  * The caps are per process, but a play the other machine admitted is noted
  * here too (`noteRemoteSoundboardPlay`, from the cluster frame), so each
@@ -24,8 +30,12 @@ export const SOUNDBOARD_USER_CONCURRENCY = 3;
  */
 
 export interface SoundboardPlayGate {
+  /** The `soundboard` runtime flag for the call's server, read now. */
+  enabled: boolean;
   /** Resolved `USE_SOUNDBOARD`. False in a DM. */
   canUseSoundboard: boolean;
+  /** The seat's `canSpeak`, after audience mode. Self-mute is not this. */
+  canSpeak: boolean;
   /** Moderator mute. Self-mute does not belong here. */
   serverMuted: boolean;
   /** The frame's channel is the seat's channel. */
@@ -33,7 +43,13 @@ export interface SoundboardPlayGate {
 }
 
 export function soundboardPlayAllowed(gate: SoundboardPlayGate): boolean {
-  return gate.canUseSoundboard && !gate.serverMuted && gate.channelMatches;
+  return (
+    gate.enabled &&
+    gate.canUseSoundboard &&
+    gate.canSpeak &&
+    !gate.serverMuted &&
+    gate.channelMatches
+  );
 }
 
 interface ActivePlay {

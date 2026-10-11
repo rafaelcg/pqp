@@ -12007,7 +12007,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
-        canManageSoundboard={canManageSoundboard}
+        canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||

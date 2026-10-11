@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 
 /**
  * A soundboard play is a room event. The person who is not in the room
  * hears nothing, a missing USE_SOUNDBOARD hears nothing, and the people
- * who are seated get one frame.
+ * who are seated get one frame. All of it behind the `soundboard` runtime
+ * flag, read from `SOUNDBOARD` here because the flag snapshot never starts in
+ * a unit test.
  */
 
 const bits = vi.hoisted(() => ({ byUser: new Map<string, bigint>() }));
@@ -132,7 +134,12 @@ describe("soundboard fan-out", () => {
     resetVoiceRoomTransports();
     resetSoundboardPlays();
     bits.byUser.clear();
+    process.env.SOUNDBOARD = "true";
     vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    delete process.env.SOUNDBOARD;
   });
 
   it("plays a built-in clip for everyone seated in the room", async () => {
@@ -167,6 +174,55 @@ describe("soundboard fan-out", () => {
     const other = await join(recorder(), "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
     await handleVoiceMessage(
       { socket: rec.socket, user: asUser(quiet) },
+      { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
+    );
+    expect(plays(rec)).toHaveLength(0);
+    expect(plays(other)).toHaveLength(0);
+  });
+
+  it("with the flag off, a play is dropped", async () => {
+    delete process.env.SOUNDBOARD;
+    const id = "11111111-1111-4111-8111-111111111111";
+    const rec = await join(recorder(), id);
+    const other = await join(recorder(), "22222222-2222-4222-8222-222222222222");
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(id) },
+      { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
+    );
+    expect(plays(rec)).toHaveLength(0);
+    expect(plays(other)).toHaveLength(0);
+  });
+
+  it("plays once the flag goes on mid-call, with no rejoin", async () => {
+    delete process.env.SOUNDBOARD;
+    const id = "66666666-6666-4666-8666-666666666666";
+    const rec = await join(recorder(), id);
+    process.env.SOUNDBOARD = "true";
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(id) },
+      { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
+    );
+    expect(plays(rec)).toHaveLength(1);
+  });
+
+  it("drops a play once the flag goes off mid-call", async () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+    const rec = await join(recorder(), id);
+    delete process.env.SOUNDBOARD;
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(id) },
+      { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
+    );
+    expect(plays(rec)).toHaveLength(0);
+  });
+
+  it("drops a play from a seat that may not speak (a closed watch party floor)", async () => {
+    const listener = "44444444-4444-4444-8444-444444444444";
+    bits.byUser.set(listener, Permission.CONNECT | Permission.USE_SOUNDBOARD);
+    const rec = await join(recorder(), listener);
+    const other = await join(recorder(), "55555555-5555-4555-8555-555555555555");
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(listener) },
       { type: "soundboard-play", channelId: STAGE, soundId: "builtin:palmas" },
     );
     expect(plays(rec)).toHaveLength(0);
