@@ -894,7 +894,16 @@ test("a camera in a server voice channel reaches the other member", async ({
     );
     expect(camera.maxBitrate, "360p: channel camera ceiling").toBe(400_000);
     expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(screenLow);
-    expect(camera.width, "360p: channel camera capture shrank").toBe(640);
+    // Polled, not read off `camera`: the same race `expectCapturePixels`
+    // documents for the DM call. `senderFor` waited for the CEILING above;
+    // the capture size is a separate `applyConstraints` and lands later on a
+    // busy runner (CI, 2026-10-11: "Expected: 640, Received: 1280").
+    await expect
+      .poll(async () => (await senderFor(page, "camera")).width, {
+        timeout: 20_000,
+        message: "360p: channel camera capture shrank",
+      })
+      .toBe(640);
 
     // Still a picture at the other end after the change: the whole promise of
     // re-shaping the live track rather than re-capturing it.
