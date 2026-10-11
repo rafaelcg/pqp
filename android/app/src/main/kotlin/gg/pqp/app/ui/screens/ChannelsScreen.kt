@@ -105,6 +105,9 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 private const val CHANNELS_REFETCH_TRIES = 8
 
+/** How long the unread list waits before its one settling re-read. */
+private const val UNREAD_SETTLE_DELAY_MS = 1_500L
+
 /**
  * Tickets for every fetch of the channel list on this screen: the first load
  * and each `channels-update` refetch. A later fetch reads a later state of the
@@ -319,25 +322,38 @@ fun ChannelsScreen(
     // A state map, so a frame changes one entry in place.
     val unread = remember(serverId) { mutableStateMapOf<String, ChannelUnread>() }
     LaunchedEffect(serverId, retryTick) {
-        val ticket = unreadLedger.begin()
-        for (attempt in 1..CHANNELS_REFETCH_TRIES) {
-            val snapshot = try {
-                session.api.serverUnread(serverId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
-            }
-            if (snapshot != null) {
-                unreadLedger.snapshot(ticket, snapshot)?.let { fresh ->
-                    unread.keys.retainAll(fresh.keys)
-                    unread.putAll(fresh)
+        // One settling pass at most: when a frame overlapped the request the
+        // answer is a floor, so ask once more a moment later (see [UnreadLedger]).
+        for (pass in 0..1) {
+            if (pass > 0) delay(UNREAD_SETTLE_DELAY_MS)
+            val ticket = unreadLedger.begin()
+            var reconciled: UnreadLedger.Reconciled? = null
+            var answered = false
+            for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+                val snapshot = try {
+                    session.api.serverUnread(serverId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
                 }
+                if (snapshot != null) {
+                    answered = true
+                    reconciled = unreadLedger.snapshot(ticket, snapshot)
+                    reconciled?.let { fresh ->
+                        unread.keys.retainAll(fresh.counts.keys)
+                        unread.putAll(fresh.counts)
+                    }
+                    break
+                }
+                if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
+            }
+            if (!answered) {
+                unreadLedger.abandon(ticket)
                 return@LaunchedEffect
             }
-            if (attempt < CHANNELS_REFETCH_TRIES) delay(RealtimeClient.backoffMillis(attempt))
+            if (reconciled?.unsettled != true) return@LaunchedEffect
         }
-        unreadLedger.abandon(ticket)
     }
     LaunchedEffect(serverId) {
         session.realtime.frames.collect { frame ->

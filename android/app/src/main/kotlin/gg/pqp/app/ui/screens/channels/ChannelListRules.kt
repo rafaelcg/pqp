@@ -43,9 +43,19 @@ fun bumped(existing: ChannelUnread?, channelId: String, mention: Boolean): Chann
  * committed. Replaying it on top could count it twice, and dropping it could
  * lose it, so the count a frame brought the channel to during the request is
  * a floor: per channel the answer is the larger of what the server said and
- * that count. The one way that over-reports is a channel read on another
- * device during the same request, and the next refresh settles it.
- * Frames are only buffered while a request is pending, a snapshot from a
+ * that count.
+ *
+ * The floor cannot tell whether a stale answer already includes the frame
+ * (a channel at 2, a frame to 3, an answer of 5 that predates it: the truth is
+ * 6, the floor says 5). Nothing on the wire can, so [Reconciled.unsettled]
+ * says when a frame overlapped the request, and the screen asks once more a
+ * moment later with nothing in flight; that answer is exact. The other way it
+ * over-reports, a channel read on another device during the request, settles
+ * the same way.
+ *
+ * Frames are only buffered while a request is pending, and a newer request
+ * that starts while an older one is out keeps what was buffered, because the
+ * frames it holds may be missing from the newer answer too. A snapshot from a
  * request older than the newest is dropped, and [activity] changes one entry
  * in place rather than copying the map. Confined to one thread (the screen's
  * effects run on the main dispatcher).
@@ -56,9 +66,13 @@ class UnreadLedger {
     private val inFlight = HashMap<String, ChannelUnread>()
     private val counts = HashMap<String, ChannelUnread>()
 
+    /** What a snapshot settled to, and whether a frame overlapped it. */
+    data class Reconciled(val counts: Map<String, ChannelUnread>, val unsettled: Boolean)
+
     /** A request is about to start; returns its ticket. */
     fun begin(): Int {
-        inFlight.clear()
+        // Overlapping an older request: its buffered frames still count.
+        if (!pending) inFlight.clear()
         pending = true
         return ++generation
     }
@@ -81,8 +95,9 @@ class UnreadLedger {
     }
 
     /** The request holding [ticket] answered. Null when a newer one has started since. */
-    fun snapshot(ticket: Int, snapshot: Map<String, ChannelUnread>): Map<String, ChannelUnread>? {
+    fun snapshot(ticket: Int, snapshot: Map<String, ChannelUnread>): Reconciled? {
         if (ticket != generation) return null
+        val unsettled = inFlight.isNotEmpty()
         counts.clear()
         counts.putAll(snapshot)
         inFlight.forEach { (channelId, seen) ->
@@ -95,7 +110,7 @@ class UnreadLedger {
         }
         inFlight.clear()
         pending = false
-        return HashMap(counts)
+        return Reconciled(HashMap(counts), unsettled)
     }
 }
 
@@ -113,12 +128,15 @@ enum class RowEmphasis {
 
 data class RowBadge(
     val emphasis: RowEmphasis,
-    /** Mentions still show on a muted channel: somebody asked for this person by name. */
+    /**
+     * Zero on a muted channel, like the web sidebar (`mentions = muted ? 0`)
+     * and iOS: muting is the person saying "not this one".
+     */
     val mentions: Int,
 )
 
 fun rowBadge(unread: ChannelUnread?, muted: Boolean): RowBadge {
-    val mentions = unread?.mentions?.coerceAtLeast(0) ?: 0
+    val mentions = if (muted) 0 else unread?.mentions?.coerceAtLeast(0) ?: 0
     val emphasis = when {
         muted -> RowEmphasis.Muted
         (unread?.count ?: 0) > 0 -> RowEmphasis.Unread

@@ -40,11 +40,11 @@ class ChannelListRulesTest {
         var ticket = ledger.begin()
         ledger.activity("a", mention = true)
         // The answer predates the frame: the frame survives.
-        assertEquals(ChannelUnread("a", 1, 1), ledger.snapshot(ticket, emptyMap())?.get("a"))
+        assertEquals(ChannelUnread("a", 1, 1), ledger.snapshot(ticket, emptyMap())?.counts?.get("a"))
         ticket = ledger.begin()
         ledger.activity("a", mention = false)
         // The answer already includes the frame: it is not counted again.
-        assertEquals(ChannelUnread("a", 2, 1), ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 2, 1)))?.get("a"))
+        assertEquals(ChannelUnread("a", 2, 1), ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 2, 1)))?.counts?.get("a"))
     }
 
     @Test
@@ -53,7 +53,7 @@ class ChannelListRulesTest {
         ledger.snapshot(ledger.begin(), mapOf("a" to ChannelUnread("a", 5, 0)))
         val ticket = ledger.begin()
         assertEquals(6, ledger.activity("a", mention = false).count)
-        assertEquals(6, ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 5, 0)))?.get("a")?.count)
+        assertEquals(6, ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 5, 0)))?.counts?.get("a")?.count)
     }
 
     @Test
@@ -64,7 +64,7 @@ class ChannelListRulesTest {
         assertEquals(ChannelUnread("a", 1, 0), ledger.activity("a", mention = false))
         val next = ledger.begin()
         // Read elsewhere meanwhile: the server's zero wins, nothing stale is replayed.
-        assertEquals(0, ledger.snapshot(next, mapOf("a" to ChannelUnread("a", 0, 0)))?.get("a")?.count)
+        assertEquals(0, ledger.snapshot(next, mapOf("a" to ChannelUnread("a", 0, 0)))?.counts?.get("a")?.count)
     }
 
     @Test
@@ -73,17 +73,49 @@ class ChannelListRulesTest {
         val old = ledger.begin()
         val fresh = ledger.begin()
         assertEquals(null, ledger.snapshot(old, mapOf("a" to ChannelUnread("a", 9, 0))))
-        assertEquals(1, ledger.snapshot(fresh, mapOf("a" to ChannelUnread("a", 1, 0)))?.get("a")?.count)
+        assertEquals(1, ledger.snapshot(fresh, mapOf("a" to ChannelUnread("a", 1, 0)))?.counts?.get("a")?.count)
     }
 
     @Test
-    fun `unread is bold, muted never is, and a mention survives the mute`() {
+    fun `a frame during the request asks for one settling re-read`() {
+        val ledger = UnreadLedger()
+        ledger.snapshot(ledger.begin(), mapOf("a" to ChannelUnread("a", 2, 0)))
+        val ticket = ledger.begin()
+        ledger.activity("a", mention = false)
+        // A stale 5 that may or may not include the frame: a floor, not the truth.
+        val first = ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 5, 0)))
+        assertEquals(5, first?.counts?.get("a")?.count)
+        assertEquals(true, first?.unsettled)
+        // The settling read has nothing in flight, so its answer is taken as is.
+        val settle = ledger.begin()
+        val second = ledger.snapshot(settle, mapOf("a" to ChannelUnread("a", 6, 0)))
+        assertEquals(6, second?.counts?.get("a")?.count)
+        assertEquals(false, second?.unsettled)
+    }
+
+    @Test
+    fun `a newer request keeps the frames an older one buffered`() {
+        val ledger = UnreadLedger()
+        ledger.snapshot(ledger.begin(), mapOf("a" to ChannelUnread("a", 5, 0)))
+        val older = ledger.begin()
+        ledger.activity("a", mention = true)
+        val newer = ledger.begin()
+        assertEquals(null, ledger.snapshot(older, mapOf("a" to ChannelUnread("a", 5, 0))))
+        // The newer answer is just as stale: the frame from the older window survives.
+        val answer = ledger.snapshot(newer, mapOf("a" to ChannelUnread("a", 5, 0)))
+        assertEquals(ChannelUnread("a", 6, 1), answer?.counts?.get("a"))
+        assertEquals(true, answer?.unsettled)
+    }
+
+    @Test
+    fun `unread is bold, muted never is, and a mute hides mentions too`() {
         assertEquals(RowEmphasis.Quiet, rowBadge(null, muted = false).emphasis)
         assertEquals(RowEmphasis.Quiet, rowBadge(ChannelUnread("a", 0, 0), muted = false).emphasis)
         assertEquals(RowEmphasis.Unread, rowBadge(ChannelUnread("a", 4, 0), muted = false).emphasis)
+        assertEquals(3, rowBadge(ChannelUnread("a", 4, 3), muted = false).mentions)
         val muted = rowBadge(ChannelUnread("a", 9, 2), muted = true)
         assertEquals(RowEmphasis.Muted, muted.emphasis)
-        assertEquals(2, muted.mentions)
+        assertEquals(0, muted.mentions)
     }
 
     @Test
