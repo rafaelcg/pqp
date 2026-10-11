@@ -1,5 +1,6 @@
 import type { BlockedUser } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { forgetAllConversationTypingAudiences } from "./conversation-typing.js";
 import { toPublicUserSummary } from "./users.js";
 
 /**
@@ -77,17 +78,28 @@ export async function blockUser(
      ON CONFLICT (user_id, blocked_user_id) DO NOTHING`,
     [userId, blockedUserId],
   );
-  return (result.rowCount ?? 0) > 0;
+  const added = (result.rowCount ?? 0) > 0;
+  // "Digitando…" in a group's list is filtered against blocks and cached for
+  // a few seconds (`conversation-typing.ts`); a new block must not wait that
+  // out, here or on the other machines (the bus carries the drop). A repeat
+  // block changed nothing and flushes nothing.
+  if (added) {
+    forgetAllConversationTypingAudiences({ everywhere: true });
+  }
+  return added;
 }
 
 export async function unblockUser(
   userId: string,
   blockedUserId: string,
 ): Promise<void> {
-  await getPool().query(
+  const removed = await getPool().query(
     `DELETE FROM user_blocks WHERE user_id = $1 AND blocked_user_id = $2`,
     [userId, blockedUserId],
   );
+  if ((removed.rowCount ?? 0) > 0) {
+    forgetAllConversationTypingAudiences({ everywhere: true });
+  }
 }
 
 /**
