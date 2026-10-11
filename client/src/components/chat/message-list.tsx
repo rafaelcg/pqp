@@ -375,11 +375,17 @@ export interface ForumPostDecor {
   /** Present when this reader may pick the answer (the author, or staff). */
   onToggleAnswer?: (messageId: string) => void;
   /**
-   * A first visit lands on the question, not on the newest reply. Only once
-   * the opening message is loaded (a short post); a long one lands at the
-   * tail like any channel, with history above it.
+   * A first visit lands at the top of the loaded window, on the question,
+   * not on the newest reply. The post view pages history back to the opening
+   * message before it hands the window over (`lib/forum-landing.ts`).
    */
   landAtTop?: boolean;
+  /**
+   * Drawn at the very top of the scrolling transcript, above the first
+   * message: on a phone the post's title and status scroll with it, and the
+   * header takes the title over once this has scrolled off.
+   */
+  listHeader?: ReactNode;
 }
 
 interface Row {
@@ -1494,7 +1500,7 @@ export const MessageList = memo(function MessageList({
     // presente" over a transcript that has nowhere to go.
     const overflows =
       scrollRef.current.scrollHeight > scrollRef.current.clientHeight + 4;
-    if (forumLandAtTop && !hasMore && overflows) {
+    if (forumLandAtTop && overflows) {
       // Unpinned NOW, through the ref too: the follow-the-tail effects read
       // the ref in this same commit, and a late image would pull the reader
       // to the bottom past the question they came to read.
@@ -1779,6 +1785,7 @@ export const MessageList = memo(function MessageList({
         aria-live="off"
         className="flex-1 overflow-y-auto [overflow-anchor:none] py-4"
       >
+        {forumPost?.listHeader}
         {hasMore && (
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
