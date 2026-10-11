@@ -1,12 +1,16 @@
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { Play } from "lucide-react";
-import { soundboardEmojiSchema, SOUNDBOARD_NAME_MAX } from "@pqp/shared";
+import {
+  soundboardEmojiSchema,
+  SOUNDBOARD_MAX_SOUNDS,
+  SOUNDBOARD_NAME_MAX,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { decodeAudioBuffer, unlockSounds } from "@/lib/sounds";
-import { previewSoundboardBuffer } from "@/lib/soundboard";
+import { previewSoundboardBuffer, stopSoundboardPreview } from "@/lib/soundboard";
 import {
   inspectSoundboardFile,
   soundboardErrorKey,
@@ -21,14 +25,24 @@ const CUSTOM_SOUND_EMOJI = "✨";
 export function SoundboardAddDialog({
   open,
   serverId,
+  maxSounds = SOUNDBOARD_MAX_SOUNDS,
   onClose,
   onAdded,
+  onAddedAfterClose,
   returnFocusRef,
 }: {
   open: boolean;
   serverId: string;
+  /** The server's cap, as the API reports it (for the "board is full" error). */
+  maxSounds?: number;
   onClose: () => void;
   onAdded: () => void;
+  /**
+   * The person closed the dialog while a save was in flight and the clip was
+   * added anyway. Refresh the list; do not treat it as this dialog's result,
+   * which could close a later one.
+   */
+  onAddedAfterClose?: () => void;
   /**
    * The control that opened the dialog. It gets focus back when the dialog
    * closes, even if the opener re-rendered or moved meanwhile (the dialog's
@@ -41,6 +55,11 @@ export function SoundboardAddDialog({
   const nameRef = useRef<HTMLInputElement>(null);
   const savingRef = useRef(false);
   const previewSeq = useRef(0);
+  // One number per opening of the dialog. A save remembers the one it began
+  // under and may act only while it is still current: closing moves it on, so
+  // a slow upload finishing later cannot close or fill the NEXT dialog.
+  const sessionRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const wasOpen = useRef(false);
   const formId = useId();
   const nameErrorId = useId();
@@ -69,6 +88,23 @@ export function SoundboardAddDialog({
     }
   }, [open, returnFocusRef]);
 
+  /** The dialog is going away: drop what is in flight and what is playing. */
+  function endSession(): void {
+    sessionRef.current += 1;
+    previewSeq.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    stopSoundboardPreview();
+  }
+
+  // Closed by the parent or unmounted: the same cleanup as the close button.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    return endSession;
+  }, [open]);
+
   function reset(): void {
     setName("");
     setFile(null);
@@ -84,6 +120,7 @@ export function SoundboardAddDialog({
   }
 
   function close(): void {
+    endSession();
     reset();
     onClose();
   }
@@ -123,6 +160,9 @@ export function SoundboardAddDialog({
     }
     savingRef.current = true;
     setSaving(true);
+    const session = sessionRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       await uploadSoundboardFile({
         serverId,
@@ -130,15 +170,23 @@ export function SoundboardAddDialog({
         contentType,
         name: name.trim(),
         emoji: emoji.data,
+        signal: controller.signal,
       });
+      if (session !== sessionRef.current) {
+        onAddedAfterClose?.();
+        return;
+      }
       onAdded();
       close();
     } catch (err) {
+      if (session !== sessionRef.current) {
+        return;
+      }
       const key = soundboardErrorKey(err);
       if (key === "soundboard.error.nameRejected") {
         setNameError(t(key));
       } else {
-        setFormError(t(key));
+        setFormError(t(key, { max: maxSounds }));
       }
       savingRef.current = false;
       setSaving(false);

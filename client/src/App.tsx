@@ -11454,6 +11454,7 @@ function MainAppContent({
           canManage={canManageChannels}
           canManageRoles={canManageRoles}
           canManageMessages={canManageMessages}
+          canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
