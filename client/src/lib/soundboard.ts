@@ -15,6 +15,14 @@ import {
 const VOLUME_KEY = "pqp:soundboard-volume";
 const MUTE_KEY = "pqp:soundboard-muted";
 const MARK_MS = 2200;
+/**
+ * How long a click waits for the room's echo before it counts as refused.
+ * The server answers a refusal with silence (a full room, your own cap, a
+ * moderator mute), so the echo is the only proof a clip went out.
+ */
+const ECHO_WAIT_MS = 1500;
+/** How long "that one did not play" stays on the panel. */
+const REFUSED_SHOW_MS = 3000;
 
 const buffers = new Map<string, AudioBuffer>();
 const loading = new Map<string, Promise<AudioBuffer | null>>();
@@ -51,8 +59,67 @@ export function registerSoundboardSender(
   };
 }
 
+/** Clicks still waiting for their echo, per sound. */
+const pendingById = new Map<string, number[]>();
+let pendingSeq = 0;
+let refusedUntil = 0;
+
+/**
+ * Send a play. The tile lights when the room's echo comes back
+ * (`noteOwnSoundboardEcho`), not on the click, so a refused click never looks
+ * like it played. No echo in `ECHO_WAIT_MS` flags it as refused.
+ */
 export function requestSoundboardPlay(soundId: string): void {
-  sender?.(soundId);
+  if (!sender) {
+    return;
+  }
+  sender(soundId);
+  const token = ++pendingSeq;
+  const list = pendingById.get(soundId) ?? [];
+  list.push(token);
+  pendingById.set(soundId, list);
+  globalThis.setTimeout(() => {
+    const current = pendingById.get(soundId);
+    const index = current?.indexOf(token) ?? -1;
+    if (!current || index < 0) {
+      return;
+    }
+    current.splice(index, 1);
+    if (current.length === 0) {
+      pendingById.delete(soundId);
+    }
+    refusedUntil = Date.now() + REFUSED_SHOW_MS;
+    notify();
+    globalThis.setTimeout(notify, REFUSED_SHOW_MS);
+  }, ECHO_WAIT_MS);
+}
+
+/** The room echoed one of this person's own plays: it went out. */
+export function noteOwnSoundboardEcho(soundId: string): void {
+  const list = pendingById.get(soundId);
+  if (list) {
+    list.shift();
+    if (list.length === 0) {
+      pendingById.delete(soundId);
+    }
+  }
+  if (refusedUntil !== 0) {
+    refusedUntil = 0;
+    notify();
+  }
+}
+
+/** True for a few seconds after one of this person's clicks went unanswered. */
+export function useSoundboardRefused(): boolean {
+  const [, bump] = useState(0);
+  useEffect(() => subscribe(() => bump((n) => n + 1)), []);
+  return refusedUntil > Date.now();
+}
+
+/** Test seam. */
+export function resetSoundboardPendingForTests(): void {
+  pendingById.clear();
+  refusedUntil = 0;
 }
 
 function notify(): void {
@@ -510,15 +577,4 @@ function clearSound(soundId: string, until: number): void {
   if (activeUntilById.get(soundId) === until) {
     activeUntilById.delete(soundId);
   }
-}
-
-/** Light up the tile the moment you click, without waiting for the room echo. */
-export function pulseSoundboardActive(soundId: string): void {
-  const until = Date.now() + MARK_MS;
-  lightSound(soundId, until);
-  notify();
-  window.setTimeout(() => {
-    clearSound(soundId, until);
-    notify();
-  }, MARK_MS);
 }

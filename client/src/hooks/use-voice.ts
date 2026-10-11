@@ -21,6 +21,7 @@ import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
+  noteOwnSoundboardEcho,
   playSoundboardClip,
   registerSoundboardSender,
   showSoundboardMark,
@@ -5989,6 +5990,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         break;
       case "soundboard-play":
+        if (message.userId === state.self?.userId) {
+          noteOwnSoundboardEcho(message.soundId);
+        }
         if (
           state.status === "idle" ||
           message.channelId !== state.voiceChannelId

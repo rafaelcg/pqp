@@ -21,12 +21,12 @@ import {
 } from "@/lib/soundboard-icons";
 import {
   prefetchSoundboard,
-  pulseSoundboardActive,
   requestSoundboardPlay,
   setSoundboardCatalogServer,
   useSoundboardActiveIds,
   useSoundboardListenerVolume,
   useSoundboardMuted,
+  useSoundboardRefused,
 } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
@@ -60,6 +60,7 @@ export function SoundboardControl({
   const activeIds = useSoundboardActiveIds();
   const [volume, setVolume] = useSoundboardListenerVolume();
   const [muted, setMuted] = useSoundboardMuted();
+  const refused = useSoundboardRefused();
   const portalHost = useFullscreenPortalHost();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -127,9 +128,14 @@ export function SoundboardControl({
     place();
     const frame = window.requestAnimationFrame(place);
     window.addEventListener("resize", place);
+    // Follow the trigger when something around it scrolls. Closing on any
+    // scroll shut the panel under a keyboard user whose focus scrolled the
+    // member list into view.
+    document.addEventListener("scroll", place, true);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
     };
   }, [open, sounds.length, canManage]);
 
@@ -146,38 +152,63 @@ export function SoundboardControl({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // Back to the trigger whenever focus was in the panel, so a keyboard
+        // user is never dropped on <body>.
+        const fromPanel = panelRef.current?.contains(document.activeElement);
         setOpen(false);
-      }
-    }
-    let scrollArmed = false;
-    const armScroll = window.setTimeout(() => {
-      scrollArmed = true;
-    }, 80);
-    function handleScroll(event: Event) {
-      if (!scrollArmed) {
+        if (fromPanel) {
+          triggerRef.current?.focus();
+        }
         return;
       }
-      if (panelRef.current?.contains(event.target as Node)) {
+      if (event.key !== "Tab" || !panelRef.current?.contains(document.activeElement)) {
         return;
       }
-      setOpen(false);
+      // The panel is portaled to the end of <body>, so the page's own Tab
+      // order would never reach it or come back from it. Keep Tab inside
+      // while it is open; Escape is the way out.
+      const focusable = [
+        ...panelRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [role="slider"], input:not([disabled])',
+        ),
+      ];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener("mousedown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("scroll", handleScroll, true);
     return () => {
-      window.clearTimeout(armScroll);
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("scroll", handleScroll, true);
     };
   }, [open]);
+
+  // Move focus into the panel once it is placed, onto the first sound.
+  useEffect(() => {
+    if (!open || !placement) {
+      return;
+    }
+    if (panelRef.current?.contains(document.activeElement)) {
+      return;
+    }
+    panelRef.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+  }, [open, placement]);
 
   if (!serverId || !canUse) {
     return null;
   }
 
-  const label = open ? t("soundboard.close") : t("soundboard.open");
+  const label = t("soundboard.title");
   const panel =
     open && typeof document !== "undefined"
       ? createPortal(
@@ -205,11 +236,8 @@ export function SoundboardControl({
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
                   name={t(builtinNameKey(sound.id))}
-                  pressed={activeIds.has(sound.id)}
-                  onPlay={() => {
-                    pulseSoundboardActive(sound.id);
-                    requestSoundboardPlay(sound.id);
-                  }}
+                  playing={activeIds.has(sound.id)}
+                  onPlay={() => requestSoundboardPlay(sound.id)}
                 />
               ))}
               {sounds.map((sound) => (
@@ -217,19 +245,26 @@ export function SoundboardControl({
                   key={sound.id}
                   icon={soundboardIcon(sound.id)}
                   name={sound.name}
-                  pressed={activeIds.has(sound.id)}
-                  onPlay={() => {
-                    pulseSoundboardActive(sound.id);
-                    requestSoundboardPlay(sound.id);
-                  }}
+                  playing={activeIds.has(sound.id)}
+                  onPlay={() => requestSoundboardPlay(sound.id)}
                 />
               ))}
             </div>
+            <p
+              role="status"
+              aria-live="polite"
+              className={cn(
+                "px-0.5 text-xs text-text-secondary",
+                refused ? "pt-2" : "sr-only",
+              )}
+            >
+              {refused ? t("soundboard.refused") : ""}
+            </p>
             <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
               <button
                 type="button"
                 aria-pressed={muted}
-                aria-label={muted ? t("soundboard.unmute") : t("soundboard.mute")}
+                aria-label={t("soundboard.mute")}
                 className={cn(
                   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-90 motion-reduce:transition-none motion-reduce:transform-none",
                   muted
@@ -288,7 +323,6 @@ export function SoundboardControl({
         <button
           ref={triggerRef}
           type="button"
-          aria-pressed={open}
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? "soundboard-panel" : undefined}
@@ -327,12 +361,13 @@ export function SoundboardControl({
 function SoundTile({
   icon: Icon,
   name,
-  pressed,
+  playing,
   onPlay,
 }: {
   icon: SoundboardIcon;
   name: string;
-  pressed: boolean;
+  /** Somebody's clip of this sound is sounding. Shown, not a toggle state. */
+  playing: boolean;
   onPlay: () => void;
 }) {
   const [burst, setBurst] = useState(0);
@@ -340,13 +375,13 @@ function SoundTile({
     <button
       type="button"
       aria-label={name}
-      aria-pressed={pressed}
+      data-playing={playing ? "" : undefined}
       className={cn(
         "group flex h-[4.25rem] w-full flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] px-1 py-1.5",
         "transition-[background-color,color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.94]",
         "motion-reduce:transition-none motion-reduce:transform-none",
-        pressed
+        playing
           ? "bg-accent-soft text-on-accent-soft shadow-[inset_0_0_0_1px_var(--color-accent)]"
           : "bg-surface-3 text-text hover:bg-border-strong",
       )}
@@ -356,14 +391,14 @@ function SoundTile({
       }}
     >
       <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:-translate-y-px group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
-        <span key={burst} className={cn("flex", pressed && "animate-sound-pulse")}>
+        <span key={burst} className={cn("flex", playing && "animate-sound-pulse")}>
           <Icon className="h-6 w-6" />
         </span>
       </span>
       <span
         className={cn(
           "w-full text-balance text-center text-[10px] leading-tight transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
-          pressed
+          playing
             ? "text-on-accent-soft"
             : "text-text-secondary group-hover:text-text",
         )}
