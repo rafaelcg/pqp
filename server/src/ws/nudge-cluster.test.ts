@@ -431,6 +431,19 @@ describeDb("chamar a atenção across two instances on the Postgres bus", () => 
     expect(await countNudges(channelId)).toBe(1);
   }, 30_000);
 
+  it("a replay is only answered to somebody who can still see the conversation", async () => {
+    const { one: alice, channelId } = await friendsInDm("Lara", "Mauro");
+    expect(refusal(await nudge(a, alice, channelId, { nonce: "keep" }))).toBeUndefined();
+    await a.db.getPool().query(
+      `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+      [channelId, alice.id],
+    );
+    a.users.invalidateChannelAccessForChannel(channelId);
+    const replay = await nudge(a, alice, channelId, { nonce: "keep" });
+    expect(refusal(replay)).toMatchObject({ reason: "unavailable" });
+    expect(ofType(replay, "message-broadcast")).toHaveLength(0);
+  }, 30_000);
+
   it("refused frames are still attempts: a burst of them is cut off before any read", async () => {
     const { one: alice, two: bob, channelId } = await friendsInDm("Ivy", "Jao");
     await a.preferences.mergePreferences(bob.id, { allowNudges: false });

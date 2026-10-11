@@ -2157,11 +2157,27 @@ async function handleNudge(
     sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
     return;
   }
+  try {
+    await nudgeOnce(conn, frame);
+  } catch (error) {
+    // A read that failed (the database) still gets an answer, so the button
+    // lets go at once instead of after its own timeout. If the throw came
+    // after the row committed, the sender already has the echo, and the web
+    // client ignores a refusal for a nudge it is no longer waiting on.
+    console.error("[chat] nudge failed:", error);
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+  }
+}
 
+async function nudgeOnce(conn: ChatConnection, frame: NudgeFrame): Promise<void> {
   // A replay of a nudge that already landed is answered with the stored
   // message, before the rules: the cooldown it would now hit was spent by the
-  // original.
+  // original. Only to somebody who can still see the conversation.
   if (frame.nonce) {
+    if (!(await canAccessChannel(frame.channelId, conn.user.id))) {
+      sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+      return;
+    }
     const existing = await findMessageByNonce(
       frame.channelId,
       conn.user.id,
