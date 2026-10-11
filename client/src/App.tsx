@@ -459,6 +459,11 @@ import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import {
+  startConversationsConfig,
+  useConversationsHome,
+} from "@/lib/conversations-config";
+import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
+import {
   dismissNewcomerInvite,
   isNewcomerInviteDismissed,
   isRecentNewcomer,
@@ -4717,6 +4722,10 @@ function MainAppContent({
               activity.kind ?? "server",
             );
             if (activity.kind && activity.kind !== "server") {
+              // Their line landed, so the list stops saying they are typing.
+              if (activity.authorId) {
+                clearListTyping(activity.channelId, activity.authorId);
+              }
               // This device's clock: the frame carries no message time. Kept
               // so the next broadcast is not ordered against it.
               const now = new Date().toISOString();
@@ -4806,6 +4815,17 @@ function MainAppContent({
               };
             });
             return;
+          }
+
+          // Conversas: "digitando…" on a conversation's row. The server sends
+          // a conversation's typing to every participant, open or not; the
+          // chat controllers below keep owning the open channel's line, so
+          // this only records and falls through.
+          if (
+            message.type === "typing-broadcast" &&
+            message.userId !== userIdRef.current
+          ) {
+            noteListTyping(message.channelId, message.userId, message.displayName);
           }
 
           // Somebody heard a voice note: the listener's own other sockets (so
@@ -8906,6 +8926,12 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
     [newcomerInviteUserId],
   );
+  // Conversas (`conversations_home`), same refresh pass and the same gate.
+  useEffect(
+    () => (newcomerInviteUserId ? startConversationsConfig() : undefined),
+    [newcomerInviteUserId],
+  );
+  const conversationsHome = useConversationsHome();
   useChannelNotifications({ channels: notificationChannels, unread });
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
@@ -11407,6 +11433,7 @@ function MainAppContent({
       >
       {selection.kind === "dm" ? (
         <DmList
+          home={conversationsHome}
           conversations={conversations}
           selectedChannelId={selectedChannelId}
           unread={unread}
