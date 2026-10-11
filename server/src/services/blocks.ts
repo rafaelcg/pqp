@@ -78,22 +78,28 @@ export async function blockUser(
      ON CONFLICT (user_id, blocked_user_id) DO NOTHING`,
     [userId, blockedUserId],
   );
+  const added = (result.rowCount ?? 0) > 0;
   // "Digitando…" in a group's list is filtered against blocks and cached for
   // a few seconds (`conversation-typing.ts`); a new block must not wait that
-  // out, here or on the other machines (the bus carries the drop).
-  forgetAllConversationTypingAudiences({ everywhere: true });
-  return (result.rowCount ?? 0) > 0;
+  // out, here or on the other machines (the bus carries the drop). A repeat
+  // block changed nothing and flushes nothing.
+  if (added) {
+    forgetAllConversationTypingAudiences({ everywhere: true });
+  }
+  return added;
 }
 
 export async function unblockUser(
   userId: string,
   blockedUserId: string,
 ): Promise<void> {
-  await getPool().query(
+  const removed = await getPool().query(
     `DELETE FROM user_blocks WHERE user_id = $1 AND blocked_user_id = $2`,
     [userId, blockedUserId],
   );
-  forgetAllConversationTypingAudiences({ everywhere: true });
+  if ((removed.rowCount ?? 0) > 0) {
+    forgetAllConversationTypingAudiences({ everywhere: true });
+  }
 }
 
 /**
