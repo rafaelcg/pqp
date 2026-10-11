@@ -42,6 +42,15 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   const [maxWidth, setMaxWidth] = useState(() =>
     channelSidebarMaxWidth(viewportWidth()),
   );
+  // A caller that switches slot while mounted reads the new slot's stored
+  // width, rather than showing (and then saving under the new key) the old
+  // one's. Today every caller keeps one slot for its lifetime; this keeps it
+  // that way if one ever does not.
+  const [loadedKey, setLoadedKey] = useState(key);
+  if (loadedKey !== key) {
+    setLoadedKey(key);
+    setWidth(loadChannelSidebarWidth(viewportWidth(), { key, defaultWidth }));
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") {

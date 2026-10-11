@@ -98,8 +98,15 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await setGlobalFlag("conversations_home", null);
-  await setGlobalFlag("conversations_home_phone_tabs", null);
+  // Both, even if the first fails, so no other spec inherits a flag.
+  const results = await Promise.allSettled([
+    setGlobalFlag("conversations_home", null),
+    setGlobalFlag("conversations_home_phone_tabs", null),
+  ]);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    throw (failed as PromiseRejectedResult).reason;
+  }
 });
 
 test("the Conversas list: unread row, the Não lidas chip, typing, and search", async ({
