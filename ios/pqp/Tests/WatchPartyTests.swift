@@ -774,6 +774,23 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertFalse(ChannelFixture.make(type: "forum").isWatchParty)
     }
 
+    /// A forum child of a category must not become a dead "#" row: the list
+    /// keeps only the types this build can open.
+    func testAForumChildIsHidden() {
+        let category = ChannelFixture.make(type: "category", id: "cat")
+        let kids = [
+            ChannelFixture.make(type: "text", id: "t", parentId: "cat"),
+            ChannelFixture.make(type: "voice", id: "v", parentId: "cat"),
+            ChannelFixture.make(type: "forum", id: "f", parentId: "cat"),
+            ChannelFixture.make(type: "something-new", id: "n", parentId: "cat"),
+        ]
+        let shown = ChannelListView.children(of: category, in: kids + [category])
+        XCTAssertEqual(Set(shown.map(\.id)), ["t", "v"])
+        XCTAssertFalse(ChannelFixture.make(type: "forum").opensAsChat)
+        XCTAssertTrue(ChannelFixture.make(type: "text").opensAsChat)
+        XCTAssertTrue(ChannelFixture.make(type: "voice").opensAsChat)
+    }
+
     /**
      THE GLYPH HAS TO EXIST.
 
@@ -1041,11 +1058,12 @@ final class WatchPartyTests: XCTestCase {
 }
 
 private enum ChannelFixture {
-    static func make(type: String) -> Channel {
+    static func make(type: String, id: String = "c1", parentId: String? = nil) -> Channel {
+        let parent = parentId.map { "\"\($0)\"" } ?? "null"
         let json = """
-        {"id":"c1","serverId":"s1","kind":"server","name":"sessao-de-sabado",
+        {"id":"\(id)","serverId":"s1","kind":"server","name":"sessao-de-sabado",
          "type":"\(type)","position":0,"isPrivate":false,"topic":null,
-         "imageUrl":null,"parentId":null}
+         "imageUrl":null,"parentId":\(parent)}
         """
         // Force-tried: a fixture that cannot decode is a broken test.
         return try! Coding.decoder.decode(Channel.self, from: Data(json.utf8))

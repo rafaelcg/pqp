@@ -167,8 +167,14 @@ struct ChannelListView: View {
     private var looseVoice: [Channel] { listed.filter { $0.isVoice && $0.parentId == nil } }
 
     private func children(of category: Channel) -> [Channel] {
+        Self.children(of: category, in: listed)
+    }
+
+    /// Only types this build can open: a type it does not know (a forum) is
+    /// hidden, not drawn as a row that goes nowhere.
+    static func children(of category: Channel, in listed: [Channel]) -> [Channel] {
         listed
-            .filter { $0.parentId == category.id && !$0.isCategory }
+            .filter { $0.parentId == category.id && $0.opensAsChat }
             .sorted { $0.position < $1.position }
     }
 
