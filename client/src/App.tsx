@@ -12247,6 +12247,9 @@ function MainAppContent({
       <NewDmDialog
         home={conversationsHome}
         conversations={conversations}
+        onCreatedInBackground={(conversation) =>
+          setConversations((prev) => upsertConversation(prev, conversation))
+        }
         open={newDmOpen}
         currentUserId={user?.id ?? null}
         onClose={() => setNewDmOpen(false)}

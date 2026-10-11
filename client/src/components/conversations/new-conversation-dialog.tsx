@@ -80,6 +80,11 @@ interface NewConversationDialogProps {
   conversations: readonly DmSummary[];
   onClose: () => void;
   onCreated: (conversation: DmSummary) => void;
+  /**
+   * The conversation exists, but the dialog was dismissed while it was being
+   * made: keep it in the list, do not navigate.
+   */
+  onCreatedInBackground?: (conversation: DmSummary) => void;
 }
 
 /**
@@ -95,6 +100,7 @@ export function NewConversationDialog({
   conversations,
   onClose,
   onCreated,
+  onCreatedInBackground,
 }: NewConversationDialogProps) {
   const { t } = useTranslation();
   // The store directly, retaining the presence poll only while the dialog is
@@ -148,6 +154,7 @@ export function NewConversationDialog({
     try {
       const { conversation } = await createConversation(people.map((person) => person.id));
       if (session.current !== mine) {
+        onCreatedInBackground?.(conversation);
         return;
       }
       onCreated(conversation);
