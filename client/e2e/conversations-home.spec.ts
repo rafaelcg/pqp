@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { E2E_ADMIN_TOKEN } from "../playwright.config";
 
 /**
  * CONVERSAS, end to end, with two real accounts (`pqp:dev-user-suffix`).
@@ -10,7 +11,6 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
-const ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
 const headers = (suffix: string) => ({
   "Content-Type": "application/json",
   Authorization: `Bearer dev-local-token:${suffix}`,
@@ -19,7 +19,7 @@ const headers = (suffix: string) => ({
 async function setGlobalFlag(key: string, enabled: boolean | null): Promise<void> {
   const res = await fetch(`${API}/api/admin/flags`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
     body: JSON.stringify({ key, enabled }),
   });
   expect(res.status).toBe(200);

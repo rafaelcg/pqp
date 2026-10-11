@@ -63,8 +63,16 @@ export function noteListTyping(
   now: number = Date.now(),
 ): void {
   const people = typing.get(channelId) ?? new Map<string, Typist>();
+  const known = people.get(userId);
   people.set(userId, { name, expiresAt: now + LIST_TYPING_TTL_MS });
   typing.set(channelId, people);
+  // Somebody still typing sends a frame every couple of seconds. That only
+  // pushes their expiry out, which the list does not draw: no new snapshot,
+  // no re-render. The sweep timer already armed fires early, finds them
+  // fresh, and re-arms for the new expiry.
+  if (known && known.name === name && known.expiresAt > now) {
+    return;
+  }
   rebuild(now);
 }
 

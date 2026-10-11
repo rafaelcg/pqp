@@ -35,6 +35,7 @@ export function matchesConversationQuery(
   return conversation.participants.some(
     (person) =>
       foldForSearch(person.displayName).includes(needle) ||
+      (person.username ? foldForSearch(person.username).includes(needle) : false) ||
       (person.tag ? foldForSearch(person.tag).includes(needle) : false),
   );
 }

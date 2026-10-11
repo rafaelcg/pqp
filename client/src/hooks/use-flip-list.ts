@@ -15,6 +15,9 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
  * `prefers-reduced-motion: reduce`, nor on the first render, nor when the
  * container is not on screen.
  */
+/** Past this many rows the list just re-orders, without measuring anything. */
+export const FLIP_MAX_ROWS = 120;
+
 export function useFlipList(
   container: RefObject<HTMLElement | null>,
   /** Anything that changes when the order or the set of rows changes. */
@@ -28,6 +31,12 @@ export function useFlipList(
       return;
     }
     const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-flip-key]"));
+    // A very long list is not animated at all: measuring hundreds of rows on
+    // every reorder costs more than the glide is worth.
+    if (rows.length > FLIP_MAX_ROWS) {
+      previous.current = null;
+      return;
+    }
     // In the container's own scroll coordinates, so scrolling between two
     // passes is not mistaken for every row having moved.
     const origin = root.getBoundingClientRect().top - root.scrollTop;
@@ -48,6 +57,11 @@ export function useFlipList(
       const was = before.get(key);
       const is = now.get(key)!;
       if (typeof row.animate !== "function") {
+        continue;
+      }
+      // Off screen either side: nobody can see it move.
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) {
         continue;
       }
       if (was === undefined) {
