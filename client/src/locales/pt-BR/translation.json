@@ -2999,8 +2999,6 @@
   "chat.reject.automod": "O AutoMod bloqueou essa mensagem.",
   "chat.reject.databaseUnavailable": "Serviço temporariamente indisponível. Tente de novo em instantes.",
   "chat.reject.locked": "Esse post tá fechado. Só a staff responde aqui.",
-  "forum.placeholder.title": "Fórum chegando",
-  "forum.placeholder.body": "Esse canal é um fórum. A lista de posts ainda não abre por aqui, falta pouco.",
   "channel.type.forum": "Fórum",
   "channel.type.forum.description": "Posts com título e tags, fáceis de achar depois.",
   "forum.create.guidelinesPlaceholder": "Regras do fórum (opcional)",

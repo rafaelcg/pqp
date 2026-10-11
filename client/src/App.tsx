@@ -1610,6 +1610,7 @@ function MainAppContent({
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
+  const [wantsForumHint] = useState(() => featureHintEligible("forum"));
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
@@ -10014,6 +10015,8 @@ function MainAppContent({
       wantsChannelPinHint &&
       selection.kind === "server" &&
       Boolean(selectedServerId),
+    // The pane gates it further (posts on screen, may post, not paused).
+    forum: wantsForumHint && selectedChannel?.type === "forum",
   });
   const voiceChannel =
     voiceState.voiceChannelId

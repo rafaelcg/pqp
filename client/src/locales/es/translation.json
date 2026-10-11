@@ -3044,8 +3044,6 @@
   "chat.reject.automod": "AutoMod bloqueó este mensaje.",
   "chat.reject.databaseUnavailable": "El servicio no está disponible por el momento. Intenta de nuevo en un rato.",
   "chat.reject.locked": "Este post está cerrado. Solo el staff responde aquí.",
-  "forum.placeholder.title": "Foro en camino",
-  "forum.placeholder.body": "Este canal es un foro. La lista de posts todavía no se abre aquí, falta poco.",
   "channel.type.forum": "Foro",
   "channel.type.forum.description": "Posts con título y etiquetas, fáciles de encontrar después.",
   "forum.create.guidelinesPlaceholder": "Reglas del foro (opcional)",
