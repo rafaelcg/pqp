@@ -80,8 +80,8 @@ export async function blockUser(
   );
   // "Digitando…" in a group's list is filtered against blocks and cached for
   // a few seconds (`conversation-typing.ts`); a new block must not wait that
-  // out on this machine. Other machines catch up within the cache window.
-  forgetAllConversationTypingAudiences();
+  // out, here or on the other machines (the bus carries the drop).
+  forgetAllConversationTypingAudiences({ everywhere: true });
   return (result.rowCount ?? 0) > 0;
 }
 
@@ -93,7 +93,7 @@ export async function unblockUser(
     `DELETE FROM user_blocks WHERE user_id = $1 AND blocked_user_id = $2`,
     [userId, blockedUserId],
   );
-  forgetAllConversationTypingAudiences();
+  forgetAllConversationTypingAudiences({ everywhere: true });
 }
 
 /**
