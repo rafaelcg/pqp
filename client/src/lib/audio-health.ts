@@ -14,7 +14,7 @@ import type {
  * thirty days to 2026-10-10 were one of two sentences: "nao consigo ouvir
  * nada" and "o microfone não estava funcionando". Every one of those calls
  * looked fine from the inside: the published track `live`, the mute button
- * off, the peer connection `connected`. `mic-health.ts` (#1019) catches the
+ * off, the peer connection `connected`. `mic-health.ts` (PR 1019) catches the
  * two failures a browser announces with an event (the capture ending, the
  * AudioContext suspending). This file catches the ones nobody announces, by
  * comparing two witnesses that should agree and do not:
