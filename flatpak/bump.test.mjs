@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addRelease, bumpManifest, debUrl, licenseUrl } from "./bump.mjs";
+import { addRelease, bumpManifest, debUrl, licenseUrl, pinnedVersion } from "./bump.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const manifest = readFileSync(path.join(here, "gg.pqp.pqp.yml"), "utf8");
@@ -62,5 +62,16 @@ describe("addRelease", () => {
 
   it("refuses a bad date", () => {
     assert.throws(() => addRelease(metainfo, { version: "0.3.0", date: "20 Oct" }));
+  });
+});
+
+describe("pinnedVersion", () => {
+  it("reads the release the .deb source points at", () => {
+    const out = bumpManifest(manifest, { version: "0.3.0", debSha256: DEB, licenseSha256: LIC });
+    assert.equal(pinnedVersion(out), "0.3.0");
+  });
+
+  it("refuses a manifest with no .deb source", () => {
+    assert.throws(() => pinnedVersion("id: x\n"));
   });
 });

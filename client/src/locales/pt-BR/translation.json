@@ -276,6 +276,8 @@
   "download.linux.deb": ".deb",
   "download.linux.appImage.full": "Baixar pra Linux (AppImage)",
   "download.linux.deb.full": "Baixar pra Linux (.deb)",
+  "download.linux.flatpak": "Flatpak",
+  "download.linux.flatpak.full": "Baixar pra Linux (Flatpak)",
   "download.linux.unsigned": "Os builds de Linux também não são assinados.",
   "download.unsigned.help": "Por quê",
   "download.other": "Baixar pro desktop",

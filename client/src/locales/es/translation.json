@@ -276,6 +276,8 @@
   "download.linux.deb": ".deb",
   "download.linux.appImage.full": "Descargar para Linux (AppImage)",
   "download.linux.deb.full": "Descargar para Linux (.deb)",
+  "download.linux.flatpak": "Flatpak",
+  "download.linux.flatpak.full": "Descargar para Linux (Flatpak)",
   "download.linux.unsigned": "Las versiones de Linux tampoco están firmadas.",
   "download.unsigned.help": "Por qué",
   "download.other": "Descargas para escritorio",

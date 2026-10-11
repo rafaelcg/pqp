@@ -220,6 +220,13 @@ export function HeroDownload({
             label={t("download.linux.deb")}
             ariaLabel={t("download.linux.deb.full")}
           />
+          <Separator tone={tone} />
+          <DownloadLink
+            tone={tone}
+            href={href("linux-flatpak")}
+            label={t("download.linux.flatpak")}
+            ariaLabel={t("download.linux.flatpak.full")}
+          />
         </span>
         <Note tone={tone}>
           {t("download.linux.unsigned")}{" "}

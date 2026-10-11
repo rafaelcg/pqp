@@ -3,6 +3,7 @@
  * Point the Flatpak manifest at a desktop release and add it to the metainfo.
  *
  *   node flatpak/bump.mjs <version> <deb-sha256> <license-sha256> [YYYY-MM-DD]
+ *   node flatpak/bump.mjs --pinned     # prints the version the manifest is on
  *
  * Rewrites, in place:
  * - flatpak/gg.pqp.pqp.yml: the .deb URL and sha256, the LICENSE URL (pinned
@@ -70,6 +71,17 @@ export function bumpManifest(manifest, { version, debSha256, licenseSha256 }) {
   return out;
 }
 
+/** The release the manifest's .deb source is pinned to, e.g. "0.2.5". */
+export function pinnedVersion(manifest) {
+  const match = manifest.match(
+    /\n\s*url: https:\/\/github\.com\/rafaelcg\/pqp\/releases\/download\/v([^/\s]+)\/pqp-[^\s]+-amd64\.deb\n/,
+  );
+  if (!match || !VERSION.test(match[1])) {
+    throw new Error("manifest has no pinned .deb source");
+  }
+  return match[1];
+}
+
 function escapeXml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -106,14 +118,18 @@ export function addRelease(metainfo, { version, date, summary = null }) {
 }
 
 function main(argv) {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const manifestPath = path.join(dir, "gg.pqp.pqp.yml");
+  const metainfoPath = path.join(dir, "gg.pqp.pqp.metainfo.xml");
+  if (argv[0] === "--pinned") {
+    console.log(pinnedVersion(readFileSync(manifestPath, "utf8")));
+    return;
+  }
   const [version, debSha256, licenseSha256, date = new Date().toISOString().slice(0, 10)] = argv;
   if (!version || !debSha256 || !licenseSha256) {
     console.error("usage: node flatpak/bump.mjs <version> <deb-sha256> <license-sha256> [YYYY-MM-DD]");
     process.exit(2);
   }
-  const dir = path.dirname(fileURLToPath(import.meta.url));
-  const manifestPath = path.join(dir, "gg.pqp.pqp.yml");
-  const metainfoPath = path.join(dir, "gg.pqp.pqp.metainfo.xml");
   // Both edits are computed before either file is written, so a failure
   // leaves the pair as it was rather than half bumped.
   const manifest = bumpManifest(readFileSync(manifestPath, "utf8"), { version, debSha256, licenseSha256 });
