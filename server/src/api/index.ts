@@ -142,6 +142,7 @@ import {
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
+  WEBHOOK_FORUM_THREAD_NAME_CODE,
   liveHlsTelemetryBatchSchema,
   liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
@@ -257,6 +258,11 @@ import {
   forumChannelsEnabled,
   forumConfigForServer,
 } from "../lib/forum-config.js";
+import {
+  FORUM_POST_USE_POST_ROUTES,
+  isForumPost,
+  WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
+} from "../services/forum-guards.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -1374,6 +1380,20 @@ async function requireServerChannel(channelId: string) {
     throw new NotFound("Channel not found");
   }
   return { ...channel, server_id: channel.server_id };
+}
+
+/**
+ * --- forums --- The generic channel routes rename and delete chat threads,
+ * and must not do either to a forum post: the post routes
+ * (`/api/forum-posts/:postId`) run AutoMod on a new title, write the forum
+ * audit rows and send `forum-post-removed`, and these would skip all three.
+ * Asked after the permission check, so a caller without MANAGE_CHANNELS
+ * learns nothing about what the id is. A chat thread passes (one PK probe).
+ */
+async function refuseForumPost(channel: { id: string; type: string }) {
+  if (channel.type === "thread" && (await isForumPost(channel.id))) {
+    throw new HttpError(400, FORUM_POST_USE_POST_ROUTES);
+  }
 }
 
 const router = createRouter();
@@ -5692,6 +5712,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  await refuseForumPost(channel);
   const body = updateChannelSchema.parse(await readJsonBody(req));
   const privacyChanged =
     body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
@@ -5787,6 +5808,7 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  await refuseForumPost(channel);
   // Read before the delete: afterwards there is no row to ask who could see
   // it. A failure here fails the request with nothing deleted, so no nudge
   // is owed.
@@ -7435,6 +7457,14 @@ router.post(
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
     await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+    // A webhook writes messages, so it needs a channel that shows them in a
+    // feed: a category never holds one, and a voice room's chat is the
+    // conversation beside a call, not a place for a bot's feed. A forum is
+    // allowed: its executes are refused with Discord's forum error until
+    // forum PR 4 turns them into posts.
+    if (channel.type === "category" || isVoiceRoomChannelType(channel.type)) {
+      throw new HttpError(400, "Webhooks can only post to a text channel or a forum");
+    }
     const body = createWebhookSchema.parse(await readJsonBody(req));
     const webhook = await createWebhook(
       channelId!,
@@ -7827,6 +7857,11 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   // server and therefore no moderators, so `server_id` being null is not a
   // missing lookup — it is the answer, and the check must stop there rather
   // than fall through to one.
+  //
+  // Resolved for the message's channel, not server-wide: a per-channel deny
+  // refuses the delete, and a cargo given MANAGE_MESSAGES only on one channel
+  // (or one forum, whose posts resolve to it) can moderate there. The same
+  // scope the socket delete and the bulk purge already use.
   if (
     existing.author_id !== user.id &&
     !(
@@ -7835,6 +7870,7 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
         existing.server_id,
         user.id,
         Permission.MANAGE_MESSAGES,
+        existing.channel_id,
       ))
     )
   ) {
@@ -11058,6 +11094,25 @@ async function handleWebhookExecute(
     body = executeWebhookSchema.parse(await readJsonBody(req));
   } catch {
     sendError(res, 400, "Invalid webhook payload", req);
+    return;
+  }
+
+  // --- forums --- (forum PR 2; forum PR 4 replaces this block with the
+  // post path.) A forum never holds a message of its own, so the INSERT
+  // below would write one that no surface ever shows. Answer with Discord's
+  // own error instead, so a tool that already handles Discord forums
+  // recognises it: `error` is our shape, `message` and `code` are Discord's.
+  if ((await getChannel(webhook.channel_id))?.type === "forum") {
+    sendJson(
+      res,
+      400,
+      {
+        error: WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
+        message: WEBHOOK_FORUM_THREAD_NAME_MESSAGE,
+        code: WEBHOOK_FORUM_THREAD_NAME_CODE,
+      },
+      req,
+    );
     return;
   }
 
