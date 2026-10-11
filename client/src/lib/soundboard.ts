@@ -222,6 +222,10 @@ function rememberCustom(
   for (const sound of sounds) {
     customNames.set(sound.id, sound.name);
     if (!sound.url) {
+      // Listed but not playable right now: forget any older copy of it.
+      customUrls.delete(sound.id);
+      buffers.delete(sound.id);
+      loading.delete(sound.id);
       continue;
     }
     const previous = customUrls.get(sound.id);

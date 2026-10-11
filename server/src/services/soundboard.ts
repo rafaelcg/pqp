@@ -207,6 +207,25 @@ export async function resolvePlayableSound(
   if (missed && missed.serverId === serverId && missed.until > Date.now()) {
     return null;
   }
+  // Plays that arrive while the first lookup is out share its answer.
+  const inFlightKey = `${serverId}:${soundId}`;
+  const pending = lookupsInFlight.get(inFlightKey);
+  if (pending) {
+    return pending;
+  }
+  const lookup = lookupPlayable(serverId, soundId).finally(() => {
+    lookupsInFlight.delete(inFlightKey);
+  });
+  lookupsInFlight.set(inFlightKey, lookup);
+  return lookup;
+}
+
+const lookupsInFlight = new Map<string, Promise<PlayableSound | null>>();
+
+async function lookupPlayable(
+  serverId: string,
+  soundId: string,
+): Promise<PlayableSound | null> {
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
             duration_ms, volume

@@ -26,13 +26,15 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);
+  const currentServer = useRef(serverId);
+  currentServer.current = serverId;
 
   function reload(): Promise<void> {
     const seq = (reloadSeq.current += 1);
     return fetchSoundboard(serverId)
       .then((page) => {
-        // Only the newest request may write the list.
-        if (seq !== reloadSeq.current) {
+        // Only the newest request, for the server on screen, may write the list.
+        if (seq !== reloadSeq.current || currentServer.current !== serverId) {
           return;
         }
         noteSoundboardCatalog(serverId, page.sounds);
