@@ -14,15 +14,46 @@ import { getPool } from "../db.js";
  */
 
 /**
+ * Thread ids known NOT to be forum posts. Whether a thread is a post never
+ * changes: the forum service writes the `forum_posts` row in the transaction
+ * that creates the thread, and a chat thread never gains one. So a chat
+ * thread is probed once per process and then answered from here, and the send
+ * path pays nothing per message in an ordinary thread. A post is still read
+ * every time, because its lock state does change. Bounded: past the cap the
+ * oldest entries go, which only costs them one more probe.
+ */
+const NOT_A_POST_MAX = 20_000;
+const notAPost = new Set<string>();
+
+function rememberNotAPost(channelId: string): void {
+  if (notAPost.size >= NOT_A_POST_MAX) {
+    const oldest = notAPost.values().next().value;
+    if (oldest !== undefined) {
+      notAPost.delete(oldest);
+    }
+  }
+  notAPost.add(channelId);
+}
+
+/** Tests only: forget every remembered chat thread. */
+export function resetForumGuardCacheForTests(): void {
+  notAPost.clear();
+}
+
+/**
  * Whether a post is closed to replies. `null` when the channel is not a forum
  * post at all (a chat thread, which has no `forum_posts` row), so a caller
  * can tell "open post" from "not a post" without a second query.
  *
- * One primary-key probe, only ever asked for a `thread` channel.
+ * One primary-key probe, only ever asked for a `thread` channel, and none at
+ * all for a chat thread this process has already seen.
  */
 export async function forumPostLockState(
   channelId: string,
 ): Promise<{ locked: boolean } | null> {
+  if (notAPost.has(channelId)) {
+    return null;
+  }
   const result = await getPool().query<{ locked: boolean }>(
     `SELECT locked_at IS NOT NULL AS locked
        FROM forum_posts
@@ -30,7 +61,11 @@ export async function forumPostLockState(
     [channelId],
   );
   const row = result.rows[0];
-  return row ? { locked: row.locked } : null;
+  if (!row) {
+    rememberNotAPost(channelId);
+    return null;
+  }
+  return { locked: row.locked };
 }
 
 /** Whether a channel is a forum post (a shell counts: it is still a post). */

@@ -911,6 +911,50 @@ export interface ChannelPushEvent {
 }
 
 /**
+ * The parent of a thread or forum post, for `resolvePushLevel`'s parent step,
+ * so a muted channel or forum mutes what is said inside its threads.
+ *
+ * Read only when it can change an answer: a server channel, and at least one
+ * recipient with a per-channel level stored at all. Nobody with a channel
+ * level means the parent step is a no-op, which is the common batch, and it
+ * then costs no query. A failed read falls back to no parent (the levels as
+ * they were before this step existed) and never drops the batch.
+ */
+async function pushParentChannelId(
+  kind: ChannelAudienceView["kind"],
+  channelId: string,
+  settings: Iterable<UserPreferences>,
+): Promise<string | null> {
+  if (kind !== "server") {
+    return null;
+  }
+  let anyChannelLevel = false;
+  for (const entry of settings) {
+    const channels = entry.notifications?.channels;
+    if (channels && Object.keys(channels).length > 0) {
+      anyChannelLevel = true;
+      break;
+    }
+  }
+  if (!anyChannelLevel) {
+    return null;
+  }
+  try {
+    const result = await getPool().query<{ parent_id: string | null }>(
+      `SELECT parent_id FROM channels WHERE id = $1 AND type = 'thread'`,
+      [channelId],
+    );
+    return result.rows[0]?.parent_id ?? null;
+  } catch (error) {
+    console.error(
+      `[push] parent lookup failed for channel ${channelId}, using no parent:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+/**
  * Fire-and-forget wrapper: the message fan-out must never wait on, or die
  * with, a push vendor. Same rule as `resolveEmbedInBackground` — an unhandled
  * rejection here would take the whole process down (CLAUDE.md pitfall #9).
@@ -1012,26 +1056,19 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
   }
 
   // DND and levels, read at send time — the client that usually applies them
-  // is not running, which is the only reason we are here. Beside them, for a
-  // server channel, the parent of a thread or forum post, so a muted channel
-  // or forum mutes what is said inside its threads (`resolvePushLevel`).
-  const [preferenceRows, parentChannelId] = await Promise.all([
-    getPool().query<PreferenceRow>(
-      `SELECT user_id, settings FROM user_preferences
-       WHERE user_id = ANY($1::uuid[])`,
-      [offline],
-    ),
-    audience.kind === "server"
-      ? getPool()
-          .query<{ parent_id: string | null }>(
-            `SELECT parent_id FROM channels WHERE id = $1 AND type = 'thread'`,
-            [event.channelId],
-          )
-          .then((result) => result.rows[0]?.parent_id ?? null)
-      : Promise.resolve(null),
-  ]);
+  // is not running, which is the only reason we are here.
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences
+     WHERE user_id = ANY($1::uuid[])`,
+    [offline],
+  );
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  const parentChannelId = await pushParentChannelId(
+    audience.kind,
+    event.channelId,
+    preferences.values(),
   );
 
   const recipients = offline.filter((userId) => {

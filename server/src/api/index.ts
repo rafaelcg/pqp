@@ -7457,12 +7457,15 @@ router.post(
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
     await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
-    // A webhook writes messages, so it needs a channel that shows them in a
-    // feed: a category never holds one, and a voice room's chat is the
-    // conversation beside a call, not a place for a bot's feed. A forum is
-    // allowed: its executes are refused with Discord's forum error until
-    // forum PR 4 turns them into posts.
-    if (channel.type === "category" || isVoiceRoomChannelType(channel.type)) {
+    // A webhook writes messages, so it needs a channel that shows them as a
+    // feed: a text channel, or a forum (whose executes are refused with
+    // Discord's forum error until forum PR 4 turns them into posts). Not a
+    // category (never holds a message), not a voice room (its chat is the
+    // conversation beside a call), and not a thread: a webhook on a forum
+    // post would write past the post's lock, which is the send path's rule.
+    // Discord's way to reply into a post is `?thread_id=` on the forum's
+    // webhook (forum PR 4).
+    if (channel.type !== "text" && channel.type !== "forum") {
       throw new HttpError(400, "Webhooks can only post to a text channel or a forum");
     }
     const body = createWebhookSchema.parse(await readJsonBody(req));
