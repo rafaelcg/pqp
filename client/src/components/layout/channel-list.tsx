@@ -75,6 +75,7 @@ import {
 } from "@/components/layout/channel-icon";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import {
   isVoiceRowJoinable,
   resolveVoiceRowClick,
@@ -579,6 +580,9 @@ export const ChannelList = memo(function ChannelList({
   };
 
   const hasServer = !!server;
+  // The soundboard switch in a person's audio menu exists only where a board
+  // does: this server's runtime flag, the same answer the call bar reads.
+  const soundboardOn = useVoiceConfig(server?.id).soundboard === true;
   useEffect(() => {
     if (!hasServer) {
       return;
@@ -809,6 +813,7 @@ export const ChannelList = memo(function ChannelList({
           onSetPeerVolume(person.userId, volume),
       },
       share,
+      soundboard: soundboardOn,
     };
   }
 

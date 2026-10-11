@@ -82,7 +82,16 @@ export function VoiceOccupantRow({
    * with them. Absent for ourselves, and for anyone we are not listening to
    * (a channel we have not joined), where a volume knob would govern nothing.
    */
-  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
+  audio?: {
+    voice?: PeerAudioTrack;
+    share?: PeerAudioTrack;
+    /**
+     * Whether this server's soundboard is on. The person's menu offers the
+     * soundboard switch only then; their clips travel on the voice socket, so
+     * a voice track that failed does not change it.
+     */
+    soundboard?: boolean;
+  };
   onDragStart: (person: VoiceParticipant, channelId: string) => void;
   onDragEnd: () => void;
 }) {
@@ -255,7 +264,7 @@ export function VoiceOccupantRow({
         open={menu.open}
         voice={audio?.voice}
         share={audio?.share}
-        soundboardUserId={audio?.voice ? person.userId : undefined}
+        soundboardUserId={audio?.soundboard ? person.userId : undefined}
         side="bottom"
         // Portalled beside the row, so Escape and Tab hand the focus back to
         // the row that opened it, and the sidebar's own scrolling cannot clip it.
