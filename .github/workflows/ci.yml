@@ -268,11 +268,12 @@ jobs:
   # The Playwright suite runs one worker per database (shared server state,
   # computed-colour assertions), so it is split by `--shard` and the shards run
   # side by side, each in a LANE: its own API port, client bundle and database
-  # (scripts/ci/e2e-lanes.sh). Two lanes share a runner: one lane left a
-  # hosted runner mostly idle, two use ~80% of it, and every runner not
-  # started saves ~1.5 min of setup and one of the account's 20 job slots
-  # (which is what PRs queued behind). Three lanes would oversubscribe it, and
-  # the media specs are the ones that flake when starved of CPU.
+  # (scripts/ci/e2e-lanes.sh). Two lanes share a runner: measured on the
+  # 4-core hosted runner, two lanes finish ~1.6x faster than the same two
+  # shards one after the other, at ~77% CPU, and every runner not started
+  # saves ~1.5 min of setup and one of the account's 20 job slots (which is
+  # what PRs queued behind). Three lanes would oversubscribe it, and the media
+  # specs are the ones that flake when starved of CPU.
   #
   # The client is a `vite build` served by `vite preview`, not `vite dev`: on a
   # hosted runner the dev server cost ~40% of every test, serving the app as
@@ -386,8 +387,8 @@ jobs:
       # shard. Not as a lane beside it: measured, that saved nothing (the suite
       # waits on its own builds, not on CPU) and stretched its timings, which
       # are the ones that flake. Firefox runs only the stale-bundle install
-      # specs, so only this job needs it. Its own cache key: the Chromium cache above
-      # is immutable once saved and cannot pick Firefox up.
+      # specs, so only this job needs it. Its own cache key: the Chromium
+      # cache above is immutable once saved and cannot pick Firefox up.
       - name: Cache Playwright Firefox
         if: matrix.extras
         id: playwright-firefox-cache
