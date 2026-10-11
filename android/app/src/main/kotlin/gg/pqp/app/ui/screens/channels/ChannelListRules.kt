@@ -41,8 +41,10 @@ fun bumped(existing: ChannelUnread?, channelId: String, mention: Boolean): Chann
  * A `channel-activity` frame that lands while the request is out may or may
  * not be in its answer, depending on which side of the query the message was
  * committed. Replaying it on top could count it twice, and dropping it could
- * lose it, so the frames seen during the request are a floor: per channel the
- * answer is the larger of what the server said and what arrived meanwhile.
+ * lose it, so the count a frame brought the channel to during the request is
+ * a floor: per channel the answer is the larger of what the server said and
+ * that count. The one way that over-reports is a channel read on another
+ * device during the same request, and the next refresh settles it.
  * Frames are only buffered while a request is pending, a snapshot from a
  * request older than the newest is dropped, and [activity] changes one entry
  * in place rather than copying the map. Confined to one thread (the screen's
@@ -72,7 +74,9 @@ class UnreadLedger {
     fun activity(channelId: String, mention: Boolean): ChannelUnread {
         val next = bumped(counts[channelId], channelId, mention)
         counts[channelId] = next
-        if (pending) inFlight[channelId] = bumped(inFlight[channelId], channelId, mention)
+        // The absolute count this frame brought the channel to, not the frame alone:
+        // a snapshot older than the frame must not roll the badge back.
+        if (pending) inFlight[channelId] = next
         return next
     }
 

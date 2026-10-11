@@ -48,6 +48,15 @@ class ChannelListRulesTest {
     }
 
     @Test
+    fun `an answer from before the frame does not roll a busy channel back`() {
+        val ledger = UnreadLedger()
+        ledger.snapshot(ledger.begin(), mapOf("a" to ChannelUnread("a", 5, 0)))
+        val ticket = ledger.begin()
+        assertEquals(6, ledger.activity("a", mention = false).count)
+        assertEquals(6, ledger.snapshot(ticket, mapOf("a" to ChannelUnread("a", 5, 0)))?.get("a")?.count)
+    }
+
+    @Test
     fun `frames are not buffered once no request is pending`() {
         val ledger = UnreadLedger()
         val ticket = ledger.begin()
