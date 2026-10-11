@@ -512,6 +512,34 @@ describeDb("Baú media image scan", () => {
     ]);
   });
 
+  it("refuses even a flagged image when its verdict cannot be written", async () => {
+    configureScanner(scores({ sexual: 0.02, "violence/graphic": 0.95 }));
+    const uploadId = await mint();
+    // A real Postgres refusing the verdict write, every time.
+    await getPool().query(`
+      CREATE OR REPLACE FUNCTION refuse_scan_write() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.scan_status IS DISTINCT FROM OLD.scan_status THEN
+          RAISE EXCEPTION 'verdict write refused';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER refuse_scan_write BEFORE UPDATE ON community_home_media_uploads
+        FOR EACH ROW EXECUTE FUNCTION refuse_scan_write();
+    `);
+    try {
+      expect((await claim(uploadId)).status).toBe(400);
+      const row = await uploadRow(uploadId);
+      expect(row.scan_status).toBe("unscanned");
+      expect(row.verified_at).toBeNull();
+    } finally {
+      await getPool().query(`
+        DROP TRIGGER IF EXISTS refuse_scan_write ON community_home_media_uploads;
+        DROP FUNCTION IF EXISTS refuse_scan_write();
+      `);
+    }
+  });
+
   it("keeps a quarantined row whose object could not be deleted", async () => {
     const uploadId = await mint();
     await getPool().query(

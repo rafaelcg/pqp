@@ -1975,6 +1975,9 @@ async function pinCommunityHomeUpload(
       `[community-home] could not pin ${sourceKey}:`,
       error instanceof Error ? error.message : error,
     );
+    // A copy can land and still answer with an error (a timeout on the
+    // response). Nothing names that key, so drop it rather than leak it.
+    void deleteObject(pinnedKey).catch(() => {});
     throw new CommunityHomeError("not_verified", "Upload could not be verified");
   }
   let moved = false;
@@ -2157,6 +2160,9 @@ export async function claimCommunityHomeMediaUpload(input: {
     storageKey,
     contentType,
     scanStatus,
+    bytesPinned:
+      upload.kind !== "image" ||
+      isPinnedCommunityHomeKey(input.serverId, storageKey),
   });
   if (!allowed) {
     throw new CommunityHomeError("not_verified", "Upload could not be verified");

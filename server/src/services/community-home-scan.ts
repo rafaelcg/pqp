@@ -60,20 +60,27 @@ export interface CommunityHomeScanTarget {
   contentType: string;
   /** The row's verdict so far. */
   scanStatus: ScanStatus;
+  /**
+   * The bytes under `storageKey` cannot change: an image on a `pinned/` key
+   * (`pinCommunityHomeUpload`), or a non-image the scanner never judges. Only
+   * then may an earlier verdict stand in for a new scan.
+   */
+  bytesPinned: boolean;
 }
 
 /**
  * Scan one Baú upload and act on the verdict. Returns whether the upload may
  * be marked verified (and so go onto a post).
  *
- * Never throws: the verdict is recorded and escalated best-effort, and only
- * `scanAllowsAttachment` decides, so a moderation-queue hiccup cannot fail a
- * claim and a broken scanner cannot pass one (under the default fail mode).
+ * Never throws. `scanAllowsAttachment` decides, so a broken scanner cannot
+ * pass an image (under the default fail mode), and a verdict that could not be
+ * written refuses the claim too: an upload never goes onto a post without its
+ * verdict on the row. A moderation-queue hiccup alone does not fail a claim.
  */
 export async function checkCommunityHomeUpload(
   target: CommunityHomeScanTarget,
 ): Promise<boolean> {
-  if (SETTLED.has(target.scanStatus)) {
+  if (target.bytesPinned && SETTLED.has(target.scanStatus)) {
     return true;
   }
   if (!isContentScanConfigured()) {
@@ -103,29 +110,29 @@ export async function checkCommunityHomeUpload(
     };
   }
 
-  await recordWithRetry(target, result);
+  const recorded = await recordWithRetry(target, result);
   await escalateCommunityHomeScan(target, result);
 
-  return scanAllowsAttachment(result);
+  return recorded && scanAllowsAttachment(result);
 }
 
 /**
  * `recordCommunityHomeScan`, tried three times. A rejection that is never
  * written is a row without `quarantined_at`, which the orphan sweep deletes an
  * hour later together with the evidence, so a transient database error is
- * worth two more attempts. If all three fail the claim is still refused (the
- * caller does not wait on this to decide) and the loud line below is the
+ * worth two more attempts. Returns false when all three fail, which refuses
+ * the claim whatever the verdict was, and the loud line below is then the
  * operator's only record; it names the key so the object can be kept by hand.
  */
 async function recordWithRetry(
   target: CommunityHomeScanTarget,
   result: ScanResult,
-): Promise<void> {
+): Promise<boolean> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       await recordCommunityHomeScan(target.id, result);
-      return;
+      return true;
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
@@ -134,9 +141,11 @@ async function recordWithRetry(
   console.error(
     `[content-safety] VERDICT NOT RECORDED for Baú upload ${target.id} ` +
       `(${result.status}, key ${target.storageKey}). A rejected object here ` +
-      `is not quarantined and the orphan sweep will delete it.`,
+      `is not quarantined and the orphan sweep will delete it. The claim ` +
+      `was refused.`,
     lastError,
   );
+  return false;
 }
 
 /**
