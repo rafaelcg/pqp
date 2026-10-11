@@ -67,17 +67,20 @@ interface DmListProps {
   home?: boolean;
   /** Pinned ids in pin order, for the Conversas list's Fixadas section. */
   pinnedIds?: readonly string[];
+  /** Conversas on a phone: the list is the Conversas tab (see `ConversationHomeList`). */
+  phoneShell?: boolean;
 }
 
 /**
  * The conversation sidebar. With `home` on it is the Conversas list; off, the
  * classic one below. One entry point so the shell passes one set of props.
  */
-export function DmList({ home = false, pinnedIds, ...props }: DmListProps) {
+export function DmList({ home = false, pinnedIds, phoneShell = false, ...props }: DmListProps) {
   if (home) {
     return (
       <ConversationHomeList
         {...props}
+        phoneShell={phoneShell}
         pinnedIds={pinnedIds ?? [...(props.pinnedChannelIds ?? [])]}
       />
     );
@@ -118,7 +121,7 @@ function ClassicDmList({
   footer,
   mobileOpen = false,
   onMobileClose,
-}: Omit<DmListProps, "home" | "pinnedIds">) {
+}: Omit<DmListProps, "home" | "pinnedIds" | "phoneShell">) {
   const { t } = useTranslation();
   const {
     width: sidebarWidth,

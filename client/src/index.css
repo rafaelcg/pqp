@@ -2273,6 +2273,29 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   }
 }
 
+/*
+ * CONVERSAS ON A PHONE (`conversations_home_phone_tabs`, `data-phone-tabs` on
+ * the app shell). The rail is gone, so the two list drawers (conversations and
+ * channels) open full width from the left edge instead of beside a 72px rail,
+ * and stop above the bottom bar while it is up. The member list is not a
+ * drawer of this kind and keeps its own placement. Corner cards (onboarding,
+ * campaigns) rise above the bar so neither covers the other.
+ */
+@media (max-width: 47.999rem) {
+  [data-phone-tabs] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    left: 0;
+    width: 100%;
+  }
+
+  [data-phone-tabs][data-phone-bar] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+
+  [data-phone-tabs][data-phone-bar] [data-corner-card].fixed {
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
+  }
+}
+
 .safe-pb {
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
 }

@@ -67,6 +67,11 @@ export interface ConversationHomeListProps {
    * beside the rail. Set by the bottom-bar layout only.
    */
   fullScreen?: boolean;
+  /**
+   * The phone shell's Conversas tab: the drawer is the tab's whole screen, so
+   * there is nothing to close it to and no X.
+   */
+  phoneShell?: boolean;
 }
 
 /**
@@ -109,6 +114,7 @@ export function ConversationHomeList({
   mobileOpen = false,
   onMobileClose,
   fullScreen = false,
+  phoneShell = false,
 }: ConversationHomeListProps) {
   const { t } = useTranslation();
   const {
@@ -272,6 +278,7 @@ export function ConversationHomeList({
               </button>
             </Tooltip>
           )}
+          {!phoneShell && (
           <Tooltip label={t("conversations.new")}>
             <button
               type="button"
@@ -282,7 +289,8 @@ export function ConversationHomeList({
               <SquarePen className="h-[18px] w-[18px]" aria-hidden="true" />
             </button>
           </Tooltip>
-          {onMobileClose && !fullScreen && (
+          )}
+          {onMobileClose && !fullScreen && !phoneShell && (
             <button
               type="button"
               className={cn(iconButton, "md:hidden")}
@@ -340,7 +348,15 @@ export function ConversationHomeList({
         </div>
       )}
 
-      <div ref={rowsRef} data-conversations-rows="" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={rowsRef}
+        data-conversations-rows=""
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto px-2 pt-1",
+          phoneShell ? "pb-20" : "pb-2",
+        )}
+      >
         {isLoading ? (
           <ChannelListSkeleton />
         ) : conversations.length === 0 ? (
@@ -387,6 +403,20 @@ export function ConversationHomeList({
             )}
           </>
         )}
+      </div>
+      {/* On the phone tab, Nova conversa is a thumb-sized button over the
+          list, where WhatsApp taught everybody to look for it. */}
+      {phoneShell && (
+        <button
+          type="button"
+          data-conversations-new=""
+          onClick={onStartConversation}
+          className="absolute bottom-4 right-4 z-10 flex h-12 animate-pop-in items-center gap-2 rounded-[var(--radius-card)] bg-accent px-4 text-sm font-semibold text-on-accent shadow-[var(--shadow-2)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+        >
+          <SquarePen className="h-[18px] w-[18px]" aria-hidden="true" />
+          {t("conversations.new")}
+        </button>
+      )}
       </div>
 
       {footer}
