@@ -51,6 +51,7 @@ fi
 # A fresh per-user installation: no flathub remote, no runtime.
 fresh="$work/fresh-install"
 rm -rf "$fresh"
+trap 'rm -rf "$fresh"' EXIT
 export FLATPAK_USER_DIR="$fresh"
 flatpak install --user --noninteractive -y --bundle "$out"
 flatpak info --user "$APP_ID"

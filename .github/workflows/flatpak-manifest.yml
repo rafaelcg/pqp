@@ -5,15 +5,20 @@ name: Flatpak manifest
 # electron.yml made, published by hand):
 #
 # - `bump` downloads its Linux .deb, pins the sha256, adds the release to the
-#   metainfo, lints, and opens a PR to main;
-# - `bundle` builds THAT bumped manifest (handed over as an artifact, so it is
-#   this release and not whatever main has) into
-#   `pqp-<version>-x86_64.flatpak` and uploads it to the release. The bundle
-#   names Flathub as its runtime repo, so `flatpak install` on it pulls the
-#   runtime from there.
+#   metainfo, lints, and hands the bumped flatpak/ over as an artifact;
+# - `pr` pushes that bump to a branch and opens a PR to main;
+# - `bundle` builds THAT bumped manifest (this release, not whatever main has)
+#   into `pqp-<version>-x86_64.flatpak`, installs it into an empty Flatpak
+#   installation as a smoke test, and keeps it as an artifact. It has no
+#   write access and no token;
+# - `release` attaches the bundle to the release.
+#
+# `pr` and `bundle` are independent: a failed PR does not cost the release its
+# bundle. The bundle names Flathub as its runtime repo, so `flatpak install` on
+# it pulls the runtime from there.
 #
 # On a pull request that touches flatpak/, only `bundle` runs, against the
-# manifest as it is on the branch, and keeps the .flatpak as a run artifact.
+# manifest as it is on the branch.
 #
 # This is the canonical copy. Once the app is on Flathub, Flathub's own
 # external data checker opens the same bump on flathub/gg.pqp.pqp from the
@@ -24,8 +29,8 @@ name: Flatpak manifest
 # requests" (Settings > Actions > General). Without it the branch is still
 # pushed and the job summary links the compare page; the run stays green.
 #
-# Backfill an older release (its bundle only; no PR is opened for a version
-# older than main's manifest):
+# Backfill an older release (no PR is opened for a version older than main's
+# manifest):
 #   gh workflow run flatpak-manifest.yml -f tag=v0.2.5
 on:
   release:
@@ -57,11 +62,10 @@ jobs:
        startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
-      pull-requests: write
     outputs:
       version: ${{ steps.pin.outputs.version }}
+      main_version: ${{ steps.pin.outputs.main_version }}
+      deb_sha: ${{ steps.pin.outputs.deb_sha }}
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -76,6 +80,8 @@ jobs:
 
       - name: Pin the release's .deb and LICENSE
         id: pin
+        env:
+          PUBLISHED_AT: ${{ github.event.release.published_at }}
         run: |
           set -euo pipefail
           case "$TAG" in v[0-9]*) ;; *) echo "::error::not a desktop tag: $TAG"; exit 1 ;; esac
@@ -90,7 +96,7 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/LICENSE" \
             -o "$RUNNER_TEMP/flatpak/LICENSE"
           license_sha=$(sha256sum "$RUNNER_TEMP/flatpak/LICENSE" | cut -d' ' -f1)
-          published="${{ github.event.release.published_at }}"
+          published="$PUBLISHED_AT"
           if [ -z "$published" ]; then
             published=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt -q .publishedAt)
           fi
@@ -106,18 +112,37 @@ jobs:
           docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
             appstream gg.pqp.pqp.metainfo.xml
 
-      # The bumped manifest, for `bundle` to build exactly this release.
+      # The bumped manifest, for `pr` to commit and `bundle` to build.
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak-manifest
           path: flatpak/
           retention-days: 7
 
+  pr:
+    needs: bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      VERSION: ${{ needs.bump.outputs.version }}
+      MAIN_VERSION: ${{ needs.bump.outputs.main_version }}
+      DEB_SHA: ${{ needs.bump.outputs.deb_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-manifest
+          path: flatpak/
+
       - name: Open the PR
-        env:
-          VERSION: ${{ steps.pin.outputs.version }}
-          MAIN_VERSION: ${{ steps.pin.outputs.main_version }}
-          DEB_SHA: ${{ steps.pin.outputs.deb_sha }}
         run: |
           set -euo pipefail
           if git diff --quiet -- flatpak/; then
@@ -159,18 +184,16 @@ jobs:
 
   bundle:
     needs: bump
-    # After a successful bump, or on its own for a pull request.
+    # After a successful bump, or on its own for a pull request. Read-only on
+    # purpose: on a pull request this runs the branch's build script.
     if: >-
       always() &&
       (needs.bump.result == 'success' ||
        (github.event_name == 'pull_request' && needs.bump.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    outputs:
+      name: ${{ steps.build.outputs.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -219,20 +242,54 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build.outputs.name }}
+          name: flatpak-bundle
           path: ${{ steps.build.outputs.file }}
           retention-days: 7
           # Already compressed; zipping it again only costs time.
           compression-level: 0
 
+  release:
+    needs: bundle
+    if: github.event_name != 'pull_request' && needs.bundle.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      NAME: ${{ needs.bundle.outputs.name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: ${{ runner.temp }}/bundle
+
       - name: Attach to the release
-        if: github.event_name != 'pull_request'
-        env:
-          FILE: ${{ steps.build.outputs.file }}
-          NAME: ${{ steps.build.outputs.name }}
         run: |
           set -euo pipefail
-          gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
+          file="$RUNNER_TEMP/bundle/$NAME"
+          test -f "$file"
+          api="repos/${GITHUB_REPOSITORY}/releases"
+          asset_id() {
+            gh api "${api}/tags/${TAG}" --jq ".assets[] | select(.name == \"$1\") | .id"
+          }
+          existing=$(asset_id "$NAME")
+          if [ -z "$existing" ]; then
+            gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+          else
+            # A rerun. `--clobber` would delete the published bundle before
+            # the upload, and a failed upload would leave the release without
+            # one. Upload beside it, then swap the names.
+            staged="$RUNNER_TEMP/staged/${NAME}.new"
+            mkdir -p "$(dirname "$staged")"
+            cp "$file" "$staged"
+            # --clobber here only replaces a .new left by an earlier failed run.
+            gh release upload "$TAG" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
+            staged_id=$(asset_id "${NAME}.new")
+            gh api -X DELETE "${api}/assets/${existing}"
+            gh api -X PATCH "${api}/assets/${staged_id}" -f name="$NAME" > /dev/null
+          fi
           {
             echo "### Flatpak bundle"
             echo

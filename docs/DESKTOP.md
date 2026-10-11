@@ -1407,9 +1407,10 @@ Per release, two copies of the manifest move:
   <license-sha256> <date>`), lints with `flatpak-builder-lint` and opens a PR.
   It needs "Allow GitHub Actions to create and approve pull requests"; without
   it the branch is pushed, the job summary links the compare page and the run
-  stays green. Its `bundle` job then builds that bumped manifest
-  (`flatpak/build-bundle.sh`) and attaches `pqp-<version>-x86_64.flatpak` to
-  the release, with Flathub as the bundle's runtime repo so `flatpak install`
+  stays green. Independently of the PR, its `bundle` job builds that bumped
+  manifest (`flatpak/build-bundle.sh`, read-only, smoke-installed into an empty
+  Flatpak installation) and `release` attaches `pqp-<version>-x86_64.flatpak`
+  to the release, with Flathub as the bundle's runtime repo so `flatpak install`
   on the file pulls the runtime. A bundle does not update itself.
   `workflow_dispatch` with a tag reruns both (`gh workflow run
   flatpak-manifest.yml -f tag=v0.2.5`); for a tag older than main's manifest
