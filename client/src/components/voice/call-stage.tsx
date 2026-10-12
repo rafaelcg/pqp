@@ -323,6 +323,15 @@ export function personAudioTracks(person: StagePerson): {
  * own control row above it (about 3rem), or the preview would sit on the
  * sound, ⋯ and fullscreen of the share it floats over.
  */
+/**
+ * The small dark pill each piece of text on the stage's top overlay and bar
+ * sits in. The overlay has no scrim across the width, so this is what keeps the
+ * text readable over a white document as well as a dark film. The colour
+ * roles inside it come from `.on-media-scope`.
+ */
+const STAGE_OVERLAY_PILL =
+  "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 rounded-full bg-black/70 px-2 py-0.5";
+
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
@@ -2251,6 +2260,18 @@ function ActiveCall({
     return composerDock;
   }
 
+  // RingView already says Connecting/Calling at centre stage. A video-call
+  // ring puts our own camera on the stage instead, so the overlay still has to
+  // carry that line. The composer's strip under the stage already says who is
+  // in the call, Calling or Connecting, and who declined.
+  const overlayStatus =
+    (ringing && stage.tiles.length === 0) || dockComposer
+      ? null
+      : (statusLine ??
+        (roomInSidebar
+          ? null
+          : t("call.panel.inCall", { count: remotes.length + 1 })));
+
   return (
     <WakePressContext.Provider value={isWakePress}>
     <TileMenuHoldContext.Provider value={reportTileMenu}>
@@ -2835,7 +2856,7 @@ function ActiveCall({
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
           STAGE_LAYER.chrome,
-          "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 on-media-scope bg-gradient-to-b from-black/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
+          "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 on-media-scope pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           "mt-[var(--stage-banners,0px)]",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
@@ -2859,33 +2880,37 @@ function ActiveCall({
         }
         onBlurCapture={onBarBlur}
       >
-        <div className="min-w-0">
+        {/* NO FULL-WIDTH SCRIM. A gradient across the whole top made a dark
+            band over every share and washed out on a bright one anyway. Each
+            piece of text carries its own small dark pill instead, so it reads
+            over any picture and the rest of the picture is left alone. */}
+        <div className="flex min-w-0 flex-col items-start gap-1">
           {titleOnStage && (
-            <p className="truncate text-sm font-semibold text-paper">
-              {title}
+            <p
+              className={cn(
+                STAGE_OVERLAY_PILL,
+                "max-w-full text-sm font-semibold text-paper",
+              )}
+            >
+              <span className="truncate">{title}</span>
             </p>
           )}
-          <p className="truncate text-xs text-paper-muted" role="status">
-            {/* RingView already says Connecting/Calling at centre stage.
-                A video-call ring puts our own camera on the stage instead, so
-                the overlay still has to carry that line. */}
-            {/* The composer's strip under the stage already says who is in
-                the call, Calling or Connecting, and who declined. */}
-            {(ringing && stage.tiles.length === 0) || dockComposer
-              ? null
-              : (statusLine ??
-                (roomInSidebar
-                  ? null
-                  : t("call.panel.inCall", { count: remotes.length + 1 })))}
+          <p
+            className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-xs text-paper-muted"
+            role="status"
+          >
+            {overlayStatus && (
+              <span className={STAGE_OVERLAY_PILL}>{overlayStatus}</span>
+            )}
             {!voiceState.canSpeak && (
-              <span className="ml-2 text-warning">
+              <span className={cn(STAGE_OVERLAY_PILL, "text-warning")}>
                 {voiceState.speakReason === "audience"
                   ? t("voice.audience.badge")
                   : t("voice.bar.listenOnly")}
               </span>
             )}
             {!dockComposer && declinedNames.map((name) => (
-              <span key={name} className="ml-2 text-warning">
+              <span key={name} className={cn(STAGE_OVERLAY_PILL, "text-warning")}>
                 {t("call.panel.declined", { name })}
               </span>
             ))}
@@ -2894,23 +2919,46 @@ function ActiveCall({
                 sentence as buttons. Duplicate status on a fading overlay is
                 what the presenter-UI plan set out to remove. */}
             {presenterName && screenStream && !watchPartyChrome && (
-              <span className="ml-2 text-signal">
-                {focusedIsLocal
-                  ? t("voice.share.youPresenting")
-                  : t("voice.share.peerPresenting", { name: presenterName })}
-                {/* Said to whoever is looking at the tile, about the tile they
-                    are looking at. For our own share we know what we captured;
-                    for somebody else's we know what arrived on this machine,
-                    which is the same question the person asking "why can't I
-                    hear it" is trying to answer. */}
+              <>
+                <span className={cn(STAGE_OVERLAY_PILL, "text-signal")}>
+                  {focusedIsLocal
+                    ? t("voice.share.youPresenting")
+                    : t("voice.share.peerPresenting", { name: presenterName })}
+                  {/* Said to whoever is looking at the tile, about the tile they
+                      are looking at. For our own share we know what we captured;
+                      for somebody else's we know what arrived on this machine,
+                      which is the same question the person asking "why can't I
+                      hear it" is trying to answer. */}
+                  {!focusedIsLocal && !focusedShareHasAudio && (
+                    <span className="inline-flex items-center gap-1 text-paper-muted">
+                      <span>({t("voice.share.noAudioShort")})</span>
+                      {/* A one-line "not a bug" for whoever is watching, so
+                          "sem som" reads as a platform fact rather than
+                          something broken on their end. Kept to an icon
+                          because the overlay is already crowded, and the
+                          Tooltip's own contract is hover/keyboard focus, not a
+                          tap: see `components/ui/tooltip.tsx`. */}
+                      <Tooltip label={t("voice.share.noAudioTooltip")}>
+                        <button
+                          type="button"
+                          aria-label={t("voice.share.noAudioTooltip")}
+                          className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
+                        >
+                          <Info className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                      </Tooltip>
+                    </span>
+                  )}
+                </span>
                 {/* OUR OWN share: a small indicator with the state in words
                     ("Sound shared: on" / "No sound"), so a silent share is
                     known by the person sharing it before anybody tells them.
                     It also says, for the screen reader, that the machine's
                     output is what is going out (the call itself is kept out
-                    of that tap, `restrictOwnAudio`). */}
+                    of that tap, `restrictOwnAudio`). It brings its own pill,
+                    dark here whatever the theme. */}
                 {focusedIsLocal && (
-                  <ShareSoundIndicator on={focusedShareHasAudio} />
+                  <ShareSoundIndicator on={focusedShareHasAudio} className="ml-0 bg-black/70" />
                 )}
                 {focusedIsLocal &&
                   focusedShareHasAudio &&
@@ -2919,26 +2967,6 @@ function ActiveCall({
                       {t("voice.share.systemAudioLive")}
                     </span>
                   )}
-                {!focusedIsLocal && !focusedShareHasAudio && (
-                  <span className="ml-1 inline-flex items-center gap-1 text-paper-muted">
-                    <span>({t("voice.share.noAudioShort")})</span>
-                    {/* A one-line "not a bug" for whoever is watching, so
-                        "sem som" reads as a platform fact rather than
-                        something broken on their end. Kept to an icon
-                        because the overlay is already crowded, and the
-                        Tooltip's own contract is hover/keyboard focus, not a
-                        tap: see `components/ui/tooltip.tsx`. */}
-                    <Tooltip label={t("voice.share.noAudioTooltip")}>
-                      <button
-                        type="button"
-                        aria-label={t("voice.share.noAudioTooltip")}
-                        className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
-                      >
-                        <Info className="h-3 w-3" aria-hidden="true" />
-                      </button>
-                    </Tooltip>
-                  </span>
-                )}
                 {/* The honest half of the cursor preference. They asked for
                     the pointer to be left out, they picked a screen or a
                     window, and no browser can leave it out of one of those.
@@ -2946,7 +2974,7 @@ function ActiveCall({
                     genuinely has no pointer named: a tab, which the shell's
                     picker does not have, hence the desktop wording. */}
                 {focusedIsLocal && voiceState.isShareCursorVisible && (
-                  <span className="ml-1 block text-warning">
+                  <span className={cn(STAGE_OVERLAY_PILL, "text-warning")}>
                     {t("voice.share.cursorLive", desktopContext())}
                   </span>
                 )}
@@ -2958,11 +2986,11 @@ function ActiveCall({
                     `useShareUplinkStrain` for the streak that keeps it off a
                     share that is merely ramping up. */}
                 {focusedIsLocal && uplinkStrained && (
-                  <span className="ml-1 block text-warning">
+                  <span className={cn(STAGE_OVERLAY_PILL, "text-warning")}>
                     {t("voice.share.uplinkStrained")}
                   </span>
                 )}
-              </span>
+              </>
             )}
           </p>
         </div>
@@ -3027,7 +3055,7 @@ function ActiveCall({
           // the notices, which take their own clicks.
           watchPartyChrome
             ? "pointer-events-none [&>*]:pointer-events-auto"
-            : "bg-gradient-to-t from-black/80 to-transparent",
+            : "",
           // `@container`: the controls fold on the STAGE's width, which on a
           // phone is the screen minus the server rail and on a tablet or a
           // narrow desktop pane is less than the window says. See the pill
@@ -3074,7 +3102,7 @@ function ActiveCall({
             data-testid="call-bar-duration"
             // The time alone from 32rem of bar, where it still clears the
             // pill; the words beside it from 48rem.
-            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-on-media-muted @min-[32rem]:flex"
+            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 rounded-full bg-black/70 px-2 py-0.5 text-xs text-on-media-muted @min-[32rem]:flex"
           >
             <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />
             <span className="hidden @min-[48rem]:inline">

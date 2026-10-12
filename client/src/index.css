@@ -598,12 +598,12 @@
 }
 
 /*
- * Text drawn on the call stage's dark scrims (the top overlay over a share or
- * a camera). The picture is dark whatever the theme, so the text roles take the
- * on-media colours, and in a light theme the accent and the warning step back
- * to their dark-theme values, which are the ones that read on black. Put it on
- * the element that carries the `bg-black/NN` gradient, not on the controls
- * that keep their own themed background.
+ * Text drawn on the call stage's dark pills (the top overlay's labels over a
+ * share or a camera). The pill is black whatever the theme, so the text roles
+ * take the on-media colours, and in a light theme the accent and the warning
+ * step back to their dark-theme values, which are the ones that read on black.
+ * Put it on the overlay that holds the pills, not on the controls that keep
+ * their own themed background.
  */
 .on-media-scope {
   --color-paper: var(--color-on-media);

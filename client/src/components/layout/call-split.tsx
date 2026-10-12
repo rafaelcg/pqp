@@ -868,7 +868,7 @@ export function CallSplit({
             type="button"
             data-testid="call-split-restore"
             data-call-split-restore="chat"
-            className="absolute right-2 top-2 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             onClick={() => setCollapsed("none")}
           >
             <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
