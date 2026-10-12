@@ -467,7 +467,7 @@ fun ChatScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer { translationX = shake.value * density },
+            .graphicsLayer { translationX = shake.value * this.density },
         topBar = {
             Column {
                 TopAppBar(

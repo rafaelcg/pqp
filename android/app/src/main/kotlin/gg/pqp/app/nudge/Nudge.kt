@@ -189,10 +189,12 @@ object NudgePreference {
         session.applyAllowNudges(allow)
         scope.launch {
             val saved = mine.set(allow) { value ->
-                // Bound to the account that tapped. A write that waited its
-                // turn across a sign-out and a sign-in must not change the
-                // next account's preference: it does nothing, and says so.
-                if (userId(session) != userId) return@set false
+                // Bound to the account AND the session generation that tapped.
+                // A write that waited its turn across a sign-out and a sign-in
+                // does nothing, and says so, even when the same account came
+                // back: its writer is no longer the current one, and a newer
+                // write of that account may already have landed.
+                if (userId(session) != userId || writer !== mine) return@set false
                 session.api.setAllowNudges(value)
                 true
             }
