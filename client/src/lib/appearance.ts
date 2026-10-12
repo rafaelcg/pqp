@@ -8,7 +8,7 @@
  */
 
 import type { AppearancePreference } from "@pqp/shared";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { isPreferencePending, queuePreferenceSync } from "@/lib/preferences";
 
 export type { AppearancePreference };
 
@@ -268,6 +268,11 @@ export function setAppearancePreference(appearance: AppearancePreference): void 
 export function adoptAppearancePreference(
   appearance: AppearancePreference | undefined,
 ): void {
+  // A look this tab chose and the account has not answered for yet is newer
+  // than any read of the account; adopting that read would undo it.
+  if (isPreferencePending("appearance")) {
+    return;
+  }
   if (appearance === undefined) {
     // An account that never chose a look: nothing to adopt, but a Modo 2005
     // turned on here before the look synced still has to reach it.

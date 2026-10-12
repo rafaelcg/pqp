@@ -31,7 +31,7 @@ import {
 import { ApiError, apiFetch } from "@/lib/api";
 import { onConfigRefresh } from "@/lib/config-refresh";
 import type { MessageKey } from "@/lib/i18n";
-import { queuePreferenceSync } from "@/lib/preferences";
+import { isPreferencePending, queuePreferenceSync } from "@/lib/preferences";
 
 export const RETRO_FOUND_KEY = "pqp-retro-found";
 
@@ -58,6 +58,10 @@ function markFound(): void {
 
 /** `/api/me` answered: take the account's find, or hand ours to it. */
 export function adoptRetroFound(account: string | null | undefined): void {
+  // A find this tab is still sending is newer than the read.
+  if (isPreferencePending("easterEggs")) {
+    return;
+  }
   const merged = mergeFoundAt(read(RETRO_FOUND_KEY), account);
   if (merged.foundAt !== null && merged.foundAt !== read(RETRO_FOUND_KEY)) {
     write(RETRO_FOUND_KEY, merged.foundAt);

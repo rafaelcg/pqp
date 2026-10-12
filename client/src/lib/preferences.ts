@@ -148,6 +148,9 @@ function settle(
       continue;
     }
     failed = failed.filter((other) => other !== key);
+    // Answered: no longer in flight (an older request's late answer is
+    // already skipped above, and a newer one has replaced this entry).
+    latestRequest.delete(key);
     if (ok) {
       unsent.delete(key);
     } else {
@@ -164,6 +167,15 @@ function settle(
     }
   }
   setFailedKeys(failed);
+}
+
+/**
+ * Whether this tab has a write for `key` the account has not answered yet:
+ * queued, in flight, or kept for a retry. A read of the account that arrives
+ * meanwhile predates it, so a store adopting that read must keep its own value.
+ */
+export function isPreferencePending(key: keyof UserPreferences): boolean {
+  return key in pending || latestRequest.has(key) || unsent.has(key);
 }
 
 /** Keys the account has not accepted yet. A new array only when it changes. */

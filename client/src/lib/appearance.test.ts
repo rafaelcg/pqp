@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
+  isPreferencePending: vi.fn(() => false),
 }));
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { queuePreferenceSync } from "./preferences";
+import { isPreferencePending, queuePreferenceSync } from "./preferences";
 import {
   APPEARANCE_STORAGE_KEY,
   RETRO_KILLED_STORAGE_KEY,
@@ -189,6 +190,15 @@ describe("Modo 2005 over the preference", () => {
     adoptAppearancePreference("hearth");
     expect(getLook()).toBe("hearth");
     expect(queuePreferenceSync).not.toHaveBeenCalled();
+  });
+
+  it("a read that arrives while this tab's write is unanswered does not undo it", () => {
+    setRetroLook(true);
+    vi.mocked(isPreferencePending).mockReturnValueOnce(true);
+
+    adoptAppearancePreference("signal");
+
+    expect(getLook()).toBe("retro");
   });
 
   it("an account with no look at all still receives an unsynced Modo 2005", () => {
