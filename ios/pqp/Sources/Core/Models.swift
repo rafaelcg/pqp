@@ -515,6 +515,9 @@ struct DmLastMessage: Codable, Hashable, Sendable {
     /// Optional on the wire: a server older than voice notes omits both.
     var isVoice: Bool? = nil
     var voiceDurationMs: Int? = nil
+    /// `"nudge"` when the newest message is a nudge: the row says what happened
+    /// instead of the stored `📳` body. Absent from a server older than nudges.
+    var systemKind: String? = nil
 }
 
 struct DmSummary: Codable, Identifiable, Hashable, Sendable {

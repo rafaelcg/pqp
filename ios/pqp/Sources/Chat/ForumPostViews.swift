@@ -62,7 +62,22 @@ struct ForumPostHeader: View {
 /// before twenty replies (UX §2.4 #25).
 struct ForumSolutionCard: View {
     let answer: ForumAcceptedAnswer
+    /// The signed-in account, so "marked by you" reads as it does on the web.
+    var viewerId: String? = nil
     var onJump: () -> Void
+
+    /// "marcada por {name}", or nobody when the server does not know who.
+    var markedBy: String? {
+        ForumSolutionCard.markedByLine(answer, viewerId: viewerId)
+    }
+
+    static func markedByLine(_ answer: ForumAcceptedAnswer, viewerId: String?) -> String? {
+        if let id = answer.markedById, id == viewerId { return String(localized: "marked by you") }
+        if let name = answer.markedByName, !name.isEmpty {
+            return String(localized: "marked by \(name)")
+        }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -72,6 +87,13 @@ struct ForumSolutionCard: View {
                 Text("SOLUTION")
                     .font(.system(size: 11, weight: .bold))
                     .tracking(0.8)
+                if let markedBy {
+                    Text(verbatim: "· \(markedBy)")
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .opacity(0.8)
+                        .accessibilityIdentifier("forum.solution.markedBy")
+                }
             }
             .foregroundStyle(Palette.success)
 

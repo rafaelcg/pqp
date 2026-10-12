@@ -376,7 +376,14 @@ final class ChannelLayoutTests: XCTestCase {
             inFlight -= 1
         }
         async let first = gate.run(body)
-        await Task.yield()
+        // Let the first read actually start. A single yield is not enough on
+        // a loaded runner, and then the burst below becomes the leader.
+        var spins = 0
+        while reads == 0 && spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertEqual(reads, 1)
         for _ in 0..<5 {
             let ran = await gate.run(body)
             XCTAssertFalse(ran)
