@@ -90,6 +90,7 @@ import {
 } from "@/components/layout/channel-icon";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
+import { useVoiceConfig } from "@/hooks/use-voice-config";
 import {
   isVoiceRowJoinable,
   resolveVoiceRowClick,
@@ -249,6 +250,19 @@ function sortByPosition(list: Channel[]): Channel[] {
   return [...list].sort((a, b) => a.position - b.position);
 }
 
+/**
+ * Whether the server header menu offers the settings entry. Each cargo that
+ * has a pane in server settings to land on must be here, or its holder has no
+ * way in (a Manage Soundboard cargo has the Soundboard tab and nothing else).
+ */
+export function showsServerSettingsEntry(access: {
+  canManage: boolean;
+  canManageMessages: boolean;
+  canManageSoundboard: boolean;
+}): boolean {
+  return access.canManage || access.canManageMessages || access.canManageSoundboard;
+}
+
 interface ChannelListProps {
   server: Server | null;
   /**
@@ -278,6 +292,12 @@ interface ChannelListProps {
    * renames and deletes channels, and neither implies the other.
    */
   canManageMessages?: boolean;
+  /**
+   * MANAGE_SOUNDBOARD with the soundboard on for this server. Opens the
+   * server's settings from the header menu for a cargo that holds nothing else
+   * settings can show, since the Soundboard tab is theirs.
+   */
+  canManageSoundboard?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   /**
@@ -524,6 +544,7 @@ export const ChannelList = memo(function ChannelList({
   canManage,
   canManageRoles = false,
   canManageMessages = false,
+  canManageSoundboard = false,
   isLoading = false,
   voiceOccupancy = {},
   channelLive = {},
@@ -760,6 +781,9 @@ export const ChannelList = memo(function ChannelList({
   };
 
   const hasServer = !!server;
+  // The soundboard switch in a person's audio menu exists only where a board
+  // does: this server's runtime flag, the same answer the call bar reads.
+  const soundboardOn = useVoiceConfig(server?.id).soundboard === true;
   useEffect(() => {
     if (!hasServer) {
       return;
@@ -1317,6 +1341,7 @@ export const ChannelList = memo(function ChannelList({
           onSetPeerVolume(person.userId, volume),
       },
       share,
+      soundboard: soundboardOn,
     };
   }
 
@@ -2155,7 +2180,11 @@ export const ChannelList = memo(function ChannelList({
               },
             ]
           : []),
-        ...(canManage || canManageMessages
+        ...(showsServerSettingsEntry({
+          canManage,
+          canManageMessages,
+          canManageSoundboard,
+        })
           ? [
               { id: "sep", label: "", separator: true },
               {

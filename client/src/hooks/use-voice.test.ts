@@ -82,6 +82,23 @@ vi.mock("@/lib/sounds", () => ({
   whenCueSettled: () => whenCueSettledMock(),
 }));
 
+// The soundboard's audio needs a real AudioContext. What this suite pins is
+// that the controller calls into it at the right moments.
+const silenceSoundboardClipsMock = vi.hoisted(() => vi.fn());
+const playSoundboardClipMock = vi.hoisted(() => vi.fn(async () => {}));
+const noteOwnSoundboardEchoMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/soundboard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/soundboard")>();
+  return {
+    ...actual,
+    silenceSoundboardClips: () => silenceSoundboardClipsMock(),
+    noteOwnSoundboardEcho: (soundId: string) =>
+      noteOwnSoundboardEchoMock(soundId),
+    playSoundboardClip: (...args: unknown[]) =>
+      (playSoundboardClipMock as (...a: unknown[]) => Promise<void>)(...args),
+  };
+});
+
 const beaconVoiceLeaveMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice-leave-beacon", () => ({
   beaconVoiceLeave: (...args: unknown[]) => beaconVoiceLeaveMock(...args),
@@ -4593,6 +4610,97 @@ describe("telling the SFU what this listener wants to hear", () => {
     voice.toggleDeafen();
     await settle();
     expect(sfuAudioPlans.at(-1)?.deafened).toBe(false);
+  });
+
+  it("cuts the soundboard clips already sounding when the listener deafens", async () => {
+    const voice = await connectedSfu();
+    silenceSoundboardClipsMock.mockClear();
+
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(1);
+
+    // Undeafening cuts nothing, and a second deafen cuts again.
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(1);
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands a played clip to the speaker with the player's id, for the per-person mute", async () => {
+    const voice = await connectedSfu();
+    playSoundboardClipMock.mockClear();
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: CHANNEL,
+      userId: "user-2",
+      displayName: "Rafa",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(playSoundboardClipMock).toHaveBeenCalledWith(
+      "builtin:buzina",
+      expect.any(Function),
+      "user-2",
+    );
+  });
+
+  it("counts this person's own echo only when it comes from the room they sit in", async () => {
+    const voice = await connectedSfu();
+    noteOwnSoundboardEchoMock.mockClear();
+    const self = voice.getState().self!.userId;
+    // A late echo from a room this seat already left spends nothing here.
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: "00000000-0000-4000-8000-0000000000ff",
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).not.toHaveBeenCalled();
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: CHANNEL,
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).toHaveBeenCalledWith("builtin:buzina");
+  });
+
+  it("takes a moderator mute from the moderation frame even when no roster delta arrives", async () => {
+    // A seat of ours still held for its resume window can put this client's
+    // view of the room out of step, so the server's delta is refused. The
+    // mic and the soundboard lock must follow the moderator anyway.
+    const voice = await connectedSfu();
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator muted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "unmuted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator unmuted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    // Another room's frame changes nothing here.
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: "00000000-0000-4000-8000-0000000000ff",
+      message: "x",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
   });
 
   it("names the peer whose voice was turned all the way down", async () => {

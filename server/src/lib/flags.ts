@@ -437,6 +437,22 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
   },
+  soundboard: {
+    description:
+      "Soundboard nas calls: quem pode falar toca clipes curtos (até 5,2 s) que todo mundo na sala ouve, e a staff sobe os sons do servidor nas configurações (desligado: o botão e a aba somem e o servidor recusa o clipe).",
+    env: "SOUNDBOARD",
+    parseEnv: exactTrue,
+    // Off: the migration grants USE_SOUNDBOARD to @everyone on every server,
+    // communities included, so the bit alone would turn it on everywhere at
+    // once. One server first (its override), then everybody.
+    codeDefault: false,
+    // Every reader knows the server: the play gate and the seat's grant read
+    // the call's server, the upload routes have it in the path, and the client
+    // asks `GET /api/voice/config?serverId=`. Off also refuses plays in a call
+    // already running, so it is the kill switch.
+    perServer: true,
+    clientVia: "GET /api/voice/config?serverId= (soundboard)",
+  },
   voice_audio_self_heal: {
     description:
       "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",

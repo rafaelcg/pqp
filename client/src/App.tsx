@@ -181,6 +181,7 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { setSoundboardCatalogServer } from "@/lib/soundboard";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -2962,6 +2963,33 @@ function MainAppContent({
   const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // The soundboard's catalog follows the call, not the panel: custom clips
+  // other people play must keep sounding while this person reads a text
+  // channel and the call stage (with the panel) is not mounted. The ref is
+  // set before the join resolves, so it is read only when the seat actually
+  // moves: a hop still in flight (or one that failed) must not point the
+  // catalog at a server this person is not in. A DM call has no library.
+  const soundboardSeatChannelId = voiceState.voiceChannelId ?? null;
+  const soundboardSeatServerRef = useRef<{
+    channelId: string | null;
+    serverId: string | null;
+  }>({ channelId: null, serverId: null });
+  useEffect(() => {
+    if (soundboardSeatServerRef.current.channelId !== soundboardSeatChannelId) {
+      soundboardSeatServerRef.current = {
+        channelId: soundboardSeatChannelId,
+        serverId: voiceServerIdRef.current,
+      };
+    }
+    const dm =
+      soundboardSeatChannelId !== null &&
+      conversations.some((one) => one.channelId === soundboardSeatChannelId);
+    setSoundboardCatalogServer(
+      soundboardSeatChannelId && !dm
+        ? soundboardSeatServerRef.current.serverId
+        : null,
+    );
+  }, [soundboardSeatChannelId, conversations]);
   // Windows desktop share sound: look up the call's per-server flag (and the
   // shell's self-test, when the flag is on) as soon as they are in the call,
   // so "share screen" never waits on the API. The ref is set before the join
@@ -10421,6 +10449,7 @@ function MainAppContent({
     (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
       perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageSoundboard = perms.can(Permission.MANAGE_SOUNDBOARD);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
@@ -10795,6 +10824,7 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
+          hideLeave={callDockOnScreen}
           compact={compact}
           hideActions={callDockOnScreen}
         />
@@ -11805,6 +11835,7 @@ function MainAppContent({
               </div>
             )}
             channelId={selectedChannel.id}
+            serverId={selectedServer?.id ?? null}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
             serverIconUrl={selectedServer?.iconUrl ?? null}
@@ -12652,6 +12683,7 @@ function MainAppContent({
           canManage={canManageChannels}
           canManageRoles={canManageRoles}
           canManageMessages={canManageMessages}
+          canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
@@ -13386,6 +13418,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
+        canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||
