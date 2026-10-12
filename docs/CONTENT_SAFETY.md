@@ -32,9 +32,12 @@ the row and is not a pass.
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
+| Custom server emoji (`server-emoji.ts`) | **no** | | |
 
-The last two rows are open gaps, not decisions. The community featured image
-in particular is shown on the public `pqp.gg/c/<slug>` page.
+The last three rows are open gaps, not decisions. The community featured image
+in particular is shown on the public `pqp.gg/c/<slug>` page. A custom emoji is
+shown inside every message that uses it, and its image route `/api/emoji/:id`
+answers without a session.
 
 ---
 
