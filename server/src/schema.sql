@@ -5714,6 +5714,11 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS request_id UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_stories_author_request
   ON stories (author_id, request_id) WHERE request_id IS NOT NULL;
 
+-- The media sweep's lease: a delete claimed and not finished (a process
+-- that died mid-delete) is taken again after it lapses. `media_deleted_at` is
+-- written only once every object is gone.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_delete_claimed_at TIMESTAMPTZ;
+
 -- The posting budget (`STORY_POSTS_PER_DAY`), counted per author.
 CREATE INDEX IF NOT EXISTS idx_stories_author_created
   ON stories (author_id, created_at DESC);
@@ -5757,6 +5762,73 @@ CREATE INDEX IF NOT EXISTS idx_story_views_viewer
 -- The author's viewers sheet, newest first, keyset on (viewed_at, viewer_id).
 CREATE INDEX IF NOT EXISTS idx_story_views_recent
   ON story_views (story_id, viewed_at DESC, viewer_id DESC);
+
+-- The author's own counts, kept by a trigger so a read never recounts a
+-- story's whole audience. A view row also leaves when its VIEWER's account is
+-- deleted (`viewer_id` cascades), so a delete counts down too; when the story
+-- itself is being deleted the UPDATE finds no row, which is fine.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS reaction_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS reply_count INTEGER NOT NULL DEFAULT 0;
+
+CREATE OR REPLACE FUNCTION pqp_sync_story_view_counts() RETURNS TRIGGER AS $$
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    UPDATE stories
+       SET view_count = view_count + 1,
+           reaction_count = reaction_count + (NEW.reaction IS NOT NULL)::int,
+           reply_count = reply_count + (NEW.replied_at IS NOT NULL)::int
+     WHERE id = NEW.story_id;
+  ELSIF (TG_OP = 'DELETE') THEN
+    UPDATE stories
+       SET view_count = GREATEST(view_count - 1, 0),
+           reaction_count = GREATEST(reaction_count - (OLD.reaction IS NOT NULL)::int, 0),
+           reply_count = GREATEST(reply_count - (OLD.replied_at IS NOT NULL)::int, 0)
+     WHERE id = OLD.story_id;
+  ELSIF (TG_OP = 'UPDATE') THEN
+    IF (OLD.reaction IS NULL) <> (NEW.reaction IS NULL)
+       OR (OLD.replied_at IS NULL) <> (NEW.replied_at IS NULL) THEN
+      UPDATE stories
+         SET reaction_count = GREATEST(reaction_count
+               + (NEW.reaction IS NOT NULL)::int - (OLD.reaction IS NOT NULL)::int, 0),
+             reply_count = GREATEST(reply_count
+               + (NEW.replied_at IS NOT NULL)::int - (OLD.replied_at IS NOT NULL)::int, 0)
+       WHERE id = NEW.story_id;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_story_view_counts ON story_views;
+CREATE TRIGGER trg_story_view_counts
+  AFTER INSERT OR UPDATE OR DELETE ON story_views
+  FOR EACH ROW EXECUTE FUNCTION pqp_sync_story_view_counts();
+
+-- Seed the counters for any views written before the trigger existed. Once.
+-- No live write can interleave: this file runs as one transaction, and the
+-- `ALTER TABLE stories` above holds ACCESS EXCLUSIVE on `stories` (which every
+-- view write's trigger updates) until it commits. The rows are few: stories
+-- are deleted a week after expiry, so `story_views` holds about eight days.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'story_view_counts_backfill_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE stories s
+     SET view_count = c.views, reaction_count = c.reactions, reply_count = c.replies
+    FROM (
+      SELECT story_id, COUNT(*)::int AS views, COUNT(reaction)::int AS reactions,
+             COUNT(replied_at)::int AS replies
+        FROM story_views GROUP BY story_id
+    ) c
+   WHERE c.story_id = s.id;
+
+  INSERT INTO data_migrations (name) VALUES ('story_view_counts_backfill_2026_10');
+END $$;
 
 -- "Silenciar stories do Caio": hides an author from the muter's strips. The
 -- author is never told, and their view list is unaffected.

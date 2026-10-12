@@ -97,6 +97,8 @@ fun HomeScreen(
     onOpenProfile: () -> Unit,
     /** Conversas phone tabs: Friends is a screen opened from the header. */
     onOpenFriends: () -> Unit = {},
+    /** A story's call sticker, from the friends strip. */
+    onJoinStoryCall: (serverId: String, channelId: String, channelName: String) -> Unit = { _, _, _ -> },
 ) {
     val social = remember { SocialRepository.of(session) }
     val context = LocalContext.current
@@ -132,6 +134,7 @@ fun HomeScreen(
             onNewConversation = { startingConversation = true },
             onOpenFriends = onOpenFriends,
             onAddFriend = { addingFriend = true },
+            onJoinStoryCall = onJoinStoryCall,
         )
     } else {
         ClassicHome(
@@ -143,6 +146,7 @@ fun HomeScreen(
             onOpenProfile = onOpenProfile,
             onNewConversation = { startingConversation = true },
             onAddFriend = { addingFriend = true },
+            onJoinStoryCall = onJoinStoryCall,
         )
     }
 
@@ -184,6 +188,7 @@ private fun ClassicHome(
     onOpenProfile: () -> Unit,
     onNewConversation: () -> Unit,
     onAddFriend: () -> Unit,
+    onJoinStoryCall: (String, String, String) -> Unit,
 ) {
     var tab by rememberSaveable { mutableStateOf(HomeTab.Servers) }
 
@@ -293,12 +298,15 @@ private fun ClassicHome(
                             onNewConversation = onNewConversation,
                             onOpenFriends = { tab = HomeTab.Friends },
                             onAddFriend = onAddFriend,
+                            onJoinStoryCall = onJoinStoryCall,
                         )
                     } else {
                         ConversationsScreen(
                             social = social,
                             onOpen = onOpen,
                             onNewConversation = onNewConversation,
+                            session = session,
+                            onJoinStoryCall = onJoinStoryCall,
                         )
                     }
 
@@ -329,6 +337,7 @@ private fun PhoneTabsHome(
     onNewConversation: () -> Unit,
     onOpenFriends: () -> Unit,
     onAddFriend: () -> Unit,
+    onJoinStoryCall: (String, String, String) -> Unit,
 ) {
     // Read once per entry into the shell: the last tab used, Servidores for
     // somebody who never chose. Back from another tab returns here, the way
@@ -444,6 +453,7 @@ private fun PhoneTabsHome(
                         onNewConversation = onNewConversation,
                         onOpenFriends = onOpenFriends,
                         onAddFriend = onAddFriend,
+                        onJoinStoryCall = onJoinStoryCall,
                     )
                     PhoneTab.Servidores -> ServersScreen(
                         session = session,

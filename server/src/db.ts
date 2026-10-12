@@ -1637,6 +1637,8 @@ export interface DbMessage {
   chance?: unknown;
   /** `messages.system_kind`: `nudge`, or null for an ordinary message. */
   system_kind?: string | null;
+  /** The story a DM reply quotes (`messages.story_id`). */
+  story_id?: string | null;
 }
 
 export interface DbInvite {

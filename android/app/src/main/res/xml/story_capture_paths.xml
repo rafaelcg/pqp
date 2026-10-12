@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Where the system camera may write a story photo or clip: the app's cache, nothing else. -->
+<paths>
+    <cache-path name="stories" path="stories/" />
+</paths>

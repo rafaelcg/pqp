@@ -1209,6 +1209,16 @@ private fun MessageRow(
                 Spacer(Modifier.height(2.dp))
             }
 
+            // A reply to a story: the quote, with the picture only while the
+            // story lives and a hatched plate after.
+            message.storyId?.let { storyId ->
+                gg.pqp.app.stories.ui.StoryQuote(
+                    api = api,
+                    storyId = storyId,
+                    mine = selfId != null && message.authorId == selfId,
+                )
+            }
+
             message.replyTo?.let { reply ->
                 Row(
                     modifier = Modifier

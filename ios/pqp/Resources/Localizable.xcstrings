@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ ago" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "há %@"
+          }
+        }
+      }
+    },
     "%@ and %@ are typing" : {
       "localizations" : {
         "pt-BR" : {
@@ -91,12 +101,32 @@
         }
       }
     },
+    "%@ only gets messages from friends" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ só recebe mensagem de amigos"
+          }
+        }
+      }
+    },
     "%@ streaming" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ transmitindo"
+          }
+        }
+      }
+    },
+    "%@ turned replies off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ desligou as respostas"
           }
         }
       }
@@ -117,6 +147,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ foi removido da comunidade."
+          }
+        }
+      }
+    },
+    "%@ · empty" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · vazia"
+          }
+        }
+      }
+    },
+    "%@ · replied" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · respondeu"
           }
         }
       }
@@ -311,6 +361,16 @@
         }
       }
     },
+    "%lld members" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld membros"
+          }
+        }
+      }
+    },
     "%lld mentions" : {
       "localizations" : {
         "en" : {
@@ -437,6 +497,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld posts com novidade"
+          }
+        }
+      }
+    },
+    "%lld reactions · gone in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld reações · some em %@"
           }
         }
       }
@@ -801,6 +871,16 @@
         }
       }
     },
+    "A minor in sexual content" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menor de idade em conteúdo sexual"
+          }
+        }
+      }
+    },
     "A moderator muted you. You can talk again when they unmute you." : {
       "localizations" : {
         "pt-BR" : {
@@ -811,12 +891,42 @@
         }
       }
     },
+    "A photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma foto"
+          }
+        }
+      }
+    },
+    "A photo, or a video up to 30 s" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma foto, ou um vídeo de até 30 s"
+          }
+        }
+      }
+    },
     "Activity" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Atividade"
+          }
+        }
+      }
+    },
+    "Add a caption" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve uma legenda"
           }
         }
       }
@@ -847,6 +957,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tudo lido por aqui."
+          }
+        }
+      }
+    },
+    "Allow replies" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar responderem"
           }
         }
       }
@@ -1161,6 +1281,16 @@
         }
       }
     },
+    "Background" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fundo"
+          }
+        }
+      }
+    },
     "Ban" : {
       "localizations" : {
         "pt-BR" : {
@@ -1401,12 +1531,32 @@
         }
       }
     },
+    "Call people in" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chama pra call"
+          }
+        }
+      }
+    },
     "Calling…" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chamando…"
+          }
+        }
+      }
+    },
+    "Camera" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Câmera"
           }
         }
       }
@@ -2031,6 +2181,16 @@
         }
       }
     },
+    "Couldn't load where you can post." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar onde tu pode postar."
+          }
+        }
+      }
+    },
     "Couldn't nudge right now." : {
       "localizations" : {
         "pt-BR" : {
@@ -2351,6 +2511,16 @@
         }
       }
     },
+    "Delete this story? It disappears for everyone now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar esse story? Some pra todo mundo agora."
+          }
+        }
+      }
+    },
     "Delete your account" : {
       "localizations" : {
         "pt-BR" : {
@@ -2427,6 +2597,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Conta os detalhes"
+          }
+        }
+      }
+    },
+    "Didn't upload. Try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não subiu. Tentar de novo"
           }
         }
       }
@@ -2581,6 +2761,16 @@
         }
       }
     },
+    "Ember" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brasa"
+          }
+        }
+      }
+    },
     "Emoji" : {
       "localizations" : {
         "pt-BR" : {
@@ -2697,6 +2887,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Arquivo"
+          }
+        }
+      }
+    },
+    "File too big. Up to 25 MB." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo grande demais. Até 25 MB."
           }
         }
       }
@@ -2869,6 +3069,16 @@
         }
       }
     },
+    "Gallery" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Galeria"
+          }
+        }
+      }
+    },
     "GIF" : {
       "localizations" : {
         "pt-BR" : {
@@ -2945,6 +3155,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ir pra resposta"
+          }
+        }
+      }
+    },
+    "Goes straight to the pqp team, not the server staff" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vai direto pra equipe do pqp, não pra staff do servidor"
+          }
+        }
+      }
+    },
+    "gone in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "some em %@"
+          }
+        }
+      }
+    },
+    "Gone in 24 h. Each server's staff can remove it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some em 24 h. A staff de cada servidor pode tirar."
+          }
+        }
+      }
+    },
+    "Grape" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uva"
           }
         }
       }
@@ -3129,6 +3379,16 @@
         }
       }
     },
+    "In a call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na call"
+          }
+        }
+      }
+    },
     "in the Baú" : {
       "localizations" : {
         "pt-BR" : {
@@ -3139,12 +3399,32 @@
         }
       }
     },
+    "In the call now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na call agora"
+          }
+        }
+      }
+    },
     "Incoming call" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chamada recebida"
+          }
+        }
+      }
+    },
+    "Ink" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tinta"
           }
         }
       }
@@ -3255,6 +3535,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Entrar em um com convite"
+          }
+        }
+      }
+    },
+    "Join the call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar na call"
           }
         }
       }
@@ -3415,6 +3705,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Curtir"
+          }
+        }
+      }
+    },
+    "Lime" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lima"
           }
         }
       }
@@ -3719,6 +4019,16 @@
         }
       }
     },
+    "Mute %@'s stories" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Silenciar stories de %@"
+          }
+        }
+      }
+    },
     "Mute microphone when joining voice" : {
       "localizations" : {
         "pt-BR" : {
@@ -3889,6 +4199,16 @@
         }
       }
     },
+    "New story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Novo story"
+          }
+        }
+      }
+    },
     "Newest" : {
       "localizations" : {
         "pt-BR" : {
@@ -3905,6 +4225,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Avançar"
+          }
+        }
+      }
+    },
+    "Night" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noite"
           }
         }
       }
@@ -4129,6 +4459,16 @@
         }
       }
     },
+    "No voice room you can post to." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma sala de voz onde tu pode postar."
+          }
+        }
+      }
+    },
     "No webhooks yet. Anything that can POST JSON can post here." : {
       "localizations" : {
         "pt-BR" : {
@@ -4175,6 +4515,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguém postou aqui ainda"
+          }
+        }
+      }
+    },
+    "Nobody has posted yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém postou ainda"
+          }
+        }
+      }
+    },
+    "Nobody has seen it yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém viu ainda"
           }
         }
       }
@@ -4809,6 +5169,16 @@
         }
       }
     },
+    "Post story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postar story"
+          }
+        }
+      }
+    },
     "Post the first clip, screenshot or announcement. Here it does not get lost in the chat." : {
       "localizations" : {
         "pt-BR" : {
@@ -4855,6 +5225,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Preparando…"
+          }
+        }
+      }
+    },
+    "Processing the video…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Processando o vídeo…"
           }
         }
       }
@@ -4959,12 +5339,32 @@
         }
       }
     },
+    "Reacted %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reagiu %@"
+          }
+        }
+      }
+    },
     "Reason (optional)" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Motivo (opcional)"
+          }
+        }
+      }
+    },
+    "Reason: %@. It stays up for your Friends until it expires." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motivo: %@. Ele continua pros teus Amigos até expirar."
           }
         }
       }
@@ -5069,6 +5469,26 @@
         }
       }
     },
+    "Remove from %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar do %@"
+          }
+        }
+      }
+    },
+    "Remove from %@? Gone from there right away, and logged for staff." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar do %@? Some daqui na hora. Fica no registro da staff."
+          }
+        }
+      }
+    },
     "Remove from the community" : {
       "localizations" : {
         "pt-BR" : {
@@ -5129,12 +5549,52 @@
         }
       }
     },
+    "Replied to a story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respondeu a um story"
+          }
+        }
+      }
+    },
+    "Replied to your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respondeu ao teu story"
+          }
+        }
+      }
+    },
+    "Replies land in your Conversations" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resposta chega nas tuas Conversas"
+          }
+        }
+      }
+    },
     "Reply" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Responder"
+          }
+        }
+      }
+    },
+    "Reply to %@…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Responder pra %@…"
           }
         }
       }
@@ -5189,12 +5649,32 @@
         }
       }
     },
+    "Report a story by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denunciar um story de %@"
+          }
+        }
+      }
+    },
     "Report sent" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Denúncia enviada"
+          }
+        }
+      }
+    },
+    "Report story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denunciar story"
           }
         }
       }
@@ -5269,6 +5749,36 @@
         }
       }
     },
+    "Sand" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Areia"
+          }
+        }
+      }
+    },
+    "Save to Baú (%@)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvar no Baú (%@)"
+          }
+        }
+      }
+    },
+    "Saved as a Baú draft" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvo como rascunho no Baú"
+          }
+        }
+      }
+    },
     "Say hi" : {
       "localizations" : {
         "pt-BR" : {
@@ -5285,6 +5795,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Manda um oi pra alguém e a conversa fica nessa lista, sempre a um toque."
+          }
+        }
+      }
+    },
+    "Say something" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fala alguma coisa"
           }
         }
       }
@@ -5309,6 +5829,16 @@
         }
       }
     },
+    "Seen by %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visto por %lld"
+          }
+        }
+      }
+    },
     "Sent a file" : {
       "localizations" : {
         "pt-BR" : {
@@ -5329,6 +5859,16 @@
         }
       }
     },
+    "Sent ✓" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandado ✓"
+          }
+        }
+      }
+    },
     "Server default" : {
       "localizations" : {
         "pt-BR" : {
@@ -5345,6 +5885,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Servidores"
+          }
+        }
+      }
+    },
+    "Show what's up: a clip, your setup, when you're getting on. Gone in 24 h." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra o que tá rolando: um clipe, teu setup, que horas tu entra. Some em 24 h."
           }
         }
       }
@@ -5919,6 +6469,26 @@
         }
       }
     },
+    "Staff only allow stories for some roles" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A staff só libera story pra quem tem cargo"
+          }
+        }
+      }
+    },
+    "Staff removed your story from %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A staff tirou teu story do %@"
+          }
+        }
+      }
+    },
     "Start a conversation" : {
       "localizations" : {
         "pt-BR" : {
@@ -6005,6 +6575,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Parar de compartilhar a tela"
+          }
+        }
+      }
+    },
+    "Story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story"
+          }
+        }
+      }
+    },
+    "Story by %@, new" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story de %@, novo"
+          }
+        }
+      }
+    },
+    "Story by %@, seen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story de %@, visto"
+          }
+        }
+      }
+    },
+    "Story expired" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story expirou"
           }
         }
       }
@@ -6119,6 +6729,16 @@
         }
       }
     },
+    "That format won't work. Use JPG, PNG, WebP or MP4." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse formato não rola. Manda JPG, PNG, WebP ou MP4."
+          }
+        }
+      }
+    },
     "That handle cannot be used." : {
       "localizations" : {
         "pt-BR" : {
@@ -6155,6 +6775,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chegou no fim. 1 post."
+          }
+        }
+      }
+    },
+    "The call ended" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A call acabou"
           }
         }
       }
@@ -6235,6 +6865,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A mensagem original foi apagada"
+          }
+        }
+      }
+    },
+    "The room is full" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sala lotou"
           }
         }
       }
@@ -6525,6 +7165,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse vídeo não toca aqui."
+          }
+        }
+      }
+    },
+    "This video is %lld s. The limit is 30 s." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse vídeo tem %lld s. O limite é 30 s."
           }
         }
       }
@@ -7169,6 +7819,16 @@
         }
       }
     },
+    "While someone reviews it, the story won't disappear, even after 24 h. Only moderators see it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enquanto alguém olha, o story não some, mesmo depois de 24 h. Só a moderação vê."
+          }
+        }
+      }
+    },
     "Who can message you" : {
       "localizations" : {
         "pt-BR" : {
@@ -7185,6 +7845,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quem pode ver isso"
+          }
+        }
+      }
+    },
+    "Who saw it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem viu"
+          }
+        }
+      }
+    },
+    "Who sees it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem vê"
+          }
+        }
+      }
+    },
+    "Who's coming to the call?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem cola na call?"
+          }
+        }
+      }
+    },
+    "Whoever taps joins right away. The card shows who's in there live." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem tocar entra direto. O card mostra quem tá lá dentro na hora."
           }
         }
       }
@@ -7295,6 +7995,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você pode trocar de novo a partir de %@."
+          }
+        }
+      }
+    },
+    "You can pick more than one. It starts with where you were." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pode marcar mais de um. Começa marcado onde tu tava."
           }
         }
       }
@@ -7449,6 +8159,16 @@
         }
       }
     },
+    "You're timed out here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu tá de castigo aqui"
+          }
+        }
+      }
+    },
     "You, profile and settings" : {
       "localizations" : {
         "pt-BR" : {
@@ -7465,6 +8185,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "tu: %@"
+          }
+        }
+      }
+    },
+    "Your account is too new to post here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua conta é nova demais pra postar aqui"
           }
         }
       }
@@ -7635,6 +8365,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seu login. Você não vai conseguir entrar de novo."
+          }
+        }
+      }
+    },
+    "Your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story"
+          }
+        }
+      }
+    },
+    "Your story, post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story, postar"
           }
         }
       }

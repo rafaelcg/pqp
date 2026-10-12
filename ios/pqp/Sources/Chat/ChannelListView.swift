@@ -40,7 +40,12 @@ struct ChannelListView: View {
         self.initialForum = initialForum
         _current = State(initialValue: server)
         _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
+        _stories = State(initialValue: StoryStripModel(scope: .server(id: server.id, name: server.name)))
     }
+
+    /// This server's stories: the strip at the top of the list, and the
+    /// composer the menu opens. Draws nothing with the flag off.
+    @State private var stories: StoryStripModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Sections folded on this device: `text`, `voice` or a category id.
@@ -313,6 +318,10 @@ struct ChannelListView: View {
     /// are not channels.
     @ViewBuilder
     private var topCards: some View {
+        // Above the watch party and the Baú: stories are what people are up
+        // to right now, and the strip scrolls away with the list.
+        StoryStripView(model: stories, server: current)
+            .padding(.bottom, stories.showsStrip || !stories.notices.isEmpty ? 10 : 0)
         // ABOVE EVERYTHING, where the web's `LivePartyBlock` sits: a party is
         // an event, and on the evening it matters it is the reason the app is
         // open. `resolveServerWatchPartyListState` decides between a live
@@ -475,6 +484,11 @@ struct ChannelListView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if stories.strip.enabled && stories.strip.canPost {
+                        Button { stories.composing = true } label: {
+                            Label("New story", systemImage: "plus.circle")
+                        }
+                    }
                     Button { showingMembers = true } label: {
                         Label("Members", systemImage: "person.2")
                     }
@@ -725,7 +739,9 @@ struct ChannelListView: View {
             }
             await load()
         }
+        .task { await stories.start(session: session) }
         .onDisappear {
+            stories.stop()
             session.eventHandlers.removeValue(forKey: handlerKey)
             availabilityRetryTask?.cancel()
             unmatchedWatchPartyReconcileTask?.cancel()

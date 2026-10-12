@@ -113,6 +113,8 @@ fun ConversasScreen(
     onNewConversation: () -> Unit,
     onOpenFriends: () -> Unit,
     onAddFriend: () -> Unit,
+    /** A story's call sticker, from the friends strip. */
+    onJoinStoryCall: (serverId: String, channelId: String, channelName: String) -> Unit = { _, _, _ -> },
 ) {
     val conversations by social.conversations.collectAsStateWithLifecycle()
     val loading by social.loadingConversations.collectAsStateWithLifecycle()
@@ -236,12 +238,28 @@ fun ConversasScreen(
         },
         snackbarHost = { SnackbarHost(snackbars) },
     ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+        // Friends' stories: under the title, above search, and above the
+        // empty-list welcome too ("Teu story" is how a first story starts).
+        // Outside the lazy list on purpose: a list keeps its place by the first
+        // visible key, so a strip arriving a beat after the rows would be
+        // inserted above the viewport and never seen.
+        gg.pqp.app.stories.ui.StoriesSection(
+            session = session,
+            serverId = null,
+            contextLabel = stringResource(R.string.stories_viewer_friends),
+            onJoinCall = onJoinStoryCall,
+        )
         PullToRefreshBox(
             isRefreshing = loading,
             onRefresh = social::refreshConversations,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+                .weight(1f)
+                .fillMaxWidth(),
         ) {
             if (conversations.isEmpty()) {
                 if (!loading && !loaded) {
@@ -324,6 +342,7 @@ fun ConversasScreen(
                     }
                 }
             }
+        }
         }
     }
 

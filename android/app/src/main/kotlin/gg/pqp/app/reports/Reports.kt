@@ -84,6 +84,14 @@ sealed interface ReportTarget {
      * complaint about a room is not something its owner should judge.
      */
     data class Community(val serverId: String, val name: String) : ReportTarget
+
+    /**
+     * A story. [serverId] is the server it was seen through, which routes the
+     * report to that server's queue; null (seen through Amigos) goes to the
+     * instance queue. `minor_sexual` always goes to the instance, whatever this
+     * says. A reported story is held past its 24 h until somebody resolves it.
+     */
+    data class Story(val storyId: String, val authorName: String, val serverId: String? = null) : ReportTarget
 }
 
 /**
@@ -100,6 +108,7 @@ data class CreateReportBody(
     val subjectType: String,
     val reason: String,
     val messageId: String? = null,
+    val storyId: String? = null,
     val userId: String? = null,
     val serverId: String? = null,
     val details: String? = null,
@@ -143,6 +152,14 @@ object ReportDraft {
                 subjectType = "user",
                 reason = reason.wire,
                 userId = target.userId,
+                serverId = target.serverId,
+                details = details(rawDetails),
+            )
+
+            is ReportTarget.Story -> CreateReportBody(
+                subjectType = "story",
+                reason = reason.wire,
+                storyId = target.storyId,
                 serverId = target.serverId,
                 details = details(rawDetails),
             )
