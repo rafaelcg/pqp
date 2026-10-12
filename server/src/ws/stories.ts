@@ -58,9 +58,25 @@ function windowMs(target: Scope): number {
  * Tell the audience. Never throws and never waits on the network: a lost
  * nudge costs a live update, never data, because the strip is in Postgres.
  */
+/** Windows past their length with nothing pending carry no state: drop them. */
+function pruneWindows(now: number): void {
+  for (const [key, window] of windows) {
+    if (!window.timer && now - window.sentAt >= OWN_WINDOW_MS) {
+      windows.delete(key);
+    }
+  }
+}
+
+let callsSincePrune = 0;
+
 export function notifyStoriesUpdate(target: Scope, removedStoryIds: string[] = []): void {
   const key = keyOf(target);
   const now = Date.now();
+  callsSincePrune += 1;
+  if (callsSincePrune >= 100) {
+    callsSincePrune = 0;
+    pruneWindows(now);
+  }
   const existing = windows.get(key);
   if (!existing || now - existing.sentAt >= windowMs(target)) {
     if (existing?.timer) clearTimeout(existing.timer);

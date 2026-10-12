@@ -83,7 +83,8 @@ async function readDb(): Promise<StoriesMetrics["db"]> {
   const pool = getPool();
   const result = await pool.query<Record<string, string | null>>(
     `WITH recent AS (
-       SELECT s.* FROM stories s WHERE s.published_at > now() - interval '24 hours'
+       SELECT s.id, s.author_id, s.kind, s.sticker FROM stories s
+        WHERE s.published_at > now() - interval '24 hours'
      ),
      week AS (
        SELECT author_id, COUNT(*) AS n FROM stories
@@ -91,8 +92,9 @@ async function readDb(): Promise<StoriesMetrics["db"]> {
         GROUP BY author_id
      ),
      per_story AS (
-       SELECT r.id, (SELECT COUNT(*) FROM story_views v WHERE v.story_id = r.id) AS viewers
-         FROM recent r
+       SELECT r.id, COUNT(v.viewer_id) AS viewers
+         FROM recent r LEFT JOIN story_views v ON v.story_id = r.id
+        GROUP BY r.id
      ),
      replies AS (
        SELECT m.id, m.channel_id, m.author_id, m.created_at FROM messages m

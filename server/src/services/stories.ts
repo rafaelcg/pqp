@@ -41,6 +41,8 @@ import type { PoolClient } from "pg";
 import { getPool, type DbUser } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
 import {
+  copyObject,
+  deleteObject,
   getObjectPrefix,
   headObject,
   isStorageConfigured,
@@ -677,6 +679,7 @@ interface CallRoom {
   name: string;
   viewerCanSee: boolean;
   viewerCanJoin: boolean;
+  rosterKnown: boolean;
   seated: string[];
   transport: "mesh" | "livekit";
 }
@@ -720,11 +723,15 @@ async function resolveCalls(
       const viewerCanJoin = viewerCanSee && hasPermission(perms, Permission.CONNECT);
       let seated: string[] = [];
       let transport: "mesh" | "livekit" = "livekit";
+      // A roster that could not be read is UNKNOWN, not empty: the sticker is
+      // left out of this read (`call: null`) rather than shown as ended.
+      let rosterKnown = viewerCanJoin && voice !== null;
       if (viewerCanJoin && voice) {
         try {
           seated = [...new Set((await voice.musicRoomSeats(channel.id)).seatedUserIds)];
           transport = voice.getRoomTransport(channel.id);
         } catch (error) {
+          rosterKnown = false;
           console.error(
             "[stories] call roster read failed:",
             error instanceof Error ? error.message : error,
@@ -739,6 +746,7 @@ async function resolveCalls(
           name: channel.name,
           viewerCanSee,
           viewerCanJoin,
+          rosterKnown,
           seated,
           transport,
         },
@@ -786,6 +794,9 @@ async function resolveCalls(
         state: "ended",
         joinable: false,
       });
+      continue;
+    }
+    if (!room.rosterKnown) {
       continue;
     }
     const live = room.seated.includes(row.author_id);
@@ -1536,6 +1547,50 @@ async function escalateStoryScan(
   });
 }
 
+/**
+ * Move an upload's bytes to a key nobody can write to, and point the row at it.
+ *
+ * The presigned PUT the author got at create stays valid for 15 minutes and an
+ * S3 PUT is an unconditional overwrite, so without this a photo could pass the
+ * scan and then be replaced, under the same key, by something else of the same
+ * length, which every viewer would then be served. A server-side copy (no
+ * bytes through this process) to a fresh key closes that: the sniff, the scan
+ * and the video job all read the copy, and the copy is what the row, and so
+ * every read, points at. The same fix the Baú claim has (`pinCommunityHomeUpload`).
+ * The original is deleted best effort; a PUT through the old URL can recreate
+ * it as a stray object no row names, bounded by the signed length and the TTL.
+ */
+async function pinStoryUpload(storyId: string, sourceKey: string): Promise<string> {
+  const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
+  const pinnedKey = `${sourceKey.slice(0, sourceKey.lastIndexOf("/") + 1)}pinned-${randomUUID()}${extension}`;
+  try {
+    await copyObject(sourceKey, pinnedKey);
+  } catch (error) {
+    console.error(
+      `[stories] could not pin ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+    void deleteObject(pinnedKey).catch(() => undefined);
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  const moved = await getPool().query(
+    `UPDATE stories SET media_storage_key = $3
+      WHERE id = $1 AND media_storage_key = $2 AND status = 'pending'`,
+    [storyId, sourceKey, pinnedKey],
+  );
+  if ((moved.rowCount ?? 0) === 0) {
+    void deleteObject(pinnedKey).catch(() => undefined);
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  void deleteObject(sourceKey).catch((error: unknown) => {
+    console.error(
+      `[stories] could not delete pinned-from ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+  });
+  return pinnedKey;
+}
+
 export interface PublishedStory {
   story: Story;
   /** True when the story went live in this call (and the audience is to be told). */
@@ -1573,10 +1628,6 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
     throw new StoryError("storage_off", "Media uploads are not configured");
   }
 
-  const prefixRead = getObjectPrefix(key, STORY_SNIFF_BYTES).then(
-    (bytes) => ({ ok: true as const, bytes }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
   let head;
   try {
     head = await headObject(key);
@@ -1587,12 +1638,19 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
     );
     throw new StoryError("not_verified", "Upload could not be verified");
   }
-  const read = await prefixRead;
   if (!head || head.contentLength <= 0) {
     throw new StoryError("not_verified", "Upload missing");
   }
   if (head.contentLength > STORY_MAX_BYTES || head.contentLength !== row.media_byte_size) {
     throw new StoryError("not_verified", "Upload size does not match");
+  }
+  // Everything from here on judges the PINNED copy, which no URL can write.
+  const pinned = await pinStoryUpload(storyId, key);
+  let read: { ok: true; bytes: Uint8Array | null } | { ok: false };
+  try {
+    read = { ok: true, bytes: await getObjectPrefix(pinned, STORY_SNIFF_BYTES) };
+  } catch {
+    read = { ok: false };
   }
   if (!read.ok || !read.bytes) {
     throw new StoryError("not_verified", "Upload could not be verified");
@@ -1617,7 +1675,7 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
   if (isImage) {
     const scan = isContentScanConfigured()
       ? await scanImage({
-          imageUrl: presignGet(key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
+          imageUrl: presignGet(pinned, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
           contentType: sniffed,
         })
       : null;
@@ -1903,18 +1961,20 @@ export async function removeStoryFromServer(input: {
  */
 export async function retireAuthorStories(authorId: string): Promise<void> {
   const held = STORY_HELD_FOR_ACCOUNT_SQL;
+  // One statement, so it either happens whole or not at all; a failure leaves
+  // the account stamped, and the pending-deletion sweep runs this again.
   await getPool().query(
-    `DELETE FROM stories s
-      WHERE s.author_id = $1 AND s.kind = 'text' AND NOT ${held}`,
-    [authorId],
-  );
-  await getPool().query(
-    `UPDATE stories s
+    `WITH dropped AS (
+       DELETE FROM stories s
+        WHERE s.author_id = $1 AND s.kind = 'text' AND NOT ${held}
+        RETURNING s.id
+     )
+     UPDATE stories s
         SET status = 'deleted', deleted_at = COALESCE(deleted_at, now()),
             processing_claimed_at = NULL,
             caption = CASE WHEN ${held} THEN caption ELSE NULL END,
             sticker = CASE WHEN ${held} THEN sticker ELSE NULL END
-      WHERE s.author_id = $1`,
+      WHERE s.author_id = $1 AND s.id NOT IN (SELECT id FROM dropped)`,
     [authorId],
   );
 }

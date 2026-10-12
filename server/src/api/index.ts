@@ -5255,7 +5255,13 @@ router.post("/api/stories/:storyId/publish", async ({ user }, { storyId }) => {
   try {
     const published = await publishStory(user, storyId!);
     if (published.wentLive) {
-      notifyStoryAudiences(user.id, await storyAudienceTargets(storyId!));
+      // Best effort after the publish committed: a failed lookup costs a live
+      // nudge (clients refetch on focus), never the answer.
+      await storyAudienceTargets(storyId!)
+        .then((targets) => notifyStoryAudiences(user.id, targets))
+        .catch((error: unknown) => {
+          console.error("[stories] publish nudge failed:", error);
+        });
     }
     return { story: published.story };
   } catch (error) {
@@ -11127,9 +11133,9 @@ router.post(
         `story ${full.storyId}, moderator ${user.id}`,
     );
     notifyStoryAudiences(removed.authorId, removed.targets, [full.storyId]);
-    for (const serverId of removed.targets.serverIds) {
-      try {
-        await logAudit({
+    await Promise.all(
+      removed.targets.serverIds.map((serverId) =>
+        logAudit({
           serverId,
           actorId: user.id,
           action: "story.remove",
@@ -11140,14 +11146,14 @@ router.post(
             { key: "story", old: full.storyId, new: null },
             { key: "report", old: null, new: reportId },
           ],
-        });
-      } catch (error) {
-        console.error(
-          `[moderation] audit write failed after removing story ${full.storyId}:`,
-          error,
-        );
-      }
-    }
+        }).catch((error: unknown) => {
+          console.error(
+            `[moderation] audit write failed after removing story ${full.storyId}:`,
+            error,
+          );
+        }),
+      ),
+    );
     return { ok: true };
   },
 );

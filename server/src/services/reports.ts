@@ -848,29 +848,40 @@ export async function createAutomatedStoryReport(input: {
     return false;
   }
   const serverId = input.reason === "minor_sexual" ? null : input.serverId;
-  const inserted = await getPool().query(
-    `INSERT INTO reports (
-       reporter_id, subject_type, context_kind, reported_user_id, server_id,
-       subject_label, reason, details, reported_story_id
-     )
-     SELECT NULL, 'story', $1, $2, $3, $4, $5, $6, $7
-     WHERE NOT EXISTS (
-       SELECT 1 FROM reports
-       WHERE status = 'open'
-         AND reporter_id IS NULL
-         AND subject_type = 'story'
-         AND reported_story_id = $7
-     )`,
-    [
-      serverId ? "server" : "none",
-      input.reportedUserId,
-      serverId,
-      labelFor(row),
-      input.reason,
-      input.details,
-      input.storyId,
-    ],
-  );
+  // Two processes judging the same story at once (a retried publish, two
+  // video workers) can both pass the NOT EXISTS; the unique
+  // `idx_reports_open_story_automated` keeps it to one, and the loser is a
+  // duplicate, not an error.
+  const inserted = await getPool()
+    .query(
+      `INSERT INTO reports (
+         reporter_id, subject_type, context_kind, reported_user_id, server_id,
+         subject_label, reason, details, reported_story_id
+       )
+       SELECT NULL, 'story', $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM reports
+         WHERE status = 'open'
+           AND reporter_id IS NULL
+           AND subject_type = 'story'
+           AND reported_story_id = $7
+       )`,
+      [
+        serverId ? "server" : "none",
+        input.reportedUserId,
+        serverId,
+        labelFor(row),
+        input.reason,
+        input.details,
+        input.storyId,
+      ],
+    )
+    .catch((error: unknown) => {
+      if ((error as { code?: string } | null)?.code === "23505") {
+        return { rowCount: 0 };
+      }
+      throw error;
+    });
   return (inserted.rowCount ?? 0) > 0;
 }
 

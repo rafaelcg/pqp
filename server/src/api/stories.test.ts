@@ -279,6 +279,24 @@ describeDb("stories", () => {
     return { story, key, upload: created.body.upload };
   }
 
+  /**
+   * After a publish: the bytes now live under a PINNED key (the upload URL can
+   * no longer touch them) and the original was deleted. Returns the pinned key
+   * and forgets that bookkeeping, so a test sees only what happens next.
+   */
+  async function settlePublish(id: string): Promise<string> {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const key = (
+      await getPool().query<{ media_storage_key: string }>(
+        `SELECT media_storage_key FROM stories WHERE id = $1`,
+        [id],
+      )
+    ).rows[0]!.media_storage_key;
+    storage.deleted.length = 0;
+    storage.copies.length = 0;
+    return key;
+  }
+
   async function strip(user: DbUser, id = serverId): Promise<StoryStrip> {
     as(user);
     const response = await call("GET", `/api/servers/${id}/stories`);
@@ -585,6 +603,26 @@ describeDb("stories", () => {
       expect(seen!.caption).toBe("meu setup");
     });
 
+    it("publishes a pinned copy the upload URL cannot overwrite", async () => {
+      const { story, key } = await mintImage();
+      as(alice);
+      expect((await call("POST", `/api/stories/${story.id}/publish`)).status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const pinned = (
+        await getPool().query<{ media_storage_key: string }>(
+          `SELECT media_storage_key FROM stories WHERE id = $1`,
+          [story.id],
+        )
+      ).rows[0]!.media_storage_key;
+      expect(pinned).not.toBe(key);
+      expect(pinned.startsWith(`stories/${alice.id}/${story.id}/pinned-`)).toBe(true);
+      expect(storage.copies).toEqual([{ from: key, to: pinned }]);
+      expect(storage.deleted).toEqual([key]);
+      // Whatever lands on the old key later is served to nobody.
+      const [seen] = await read(bob, [story.id]);
+      expect(seen!.media!.url).toContain(pinned);
+    });
+
     it("refuses a publish whose object is missing or is not what it said", async () => {
       const { story, key } = await mintImage();
       storage.objects.delete(key);
@@ -621,6 +659,7 @@ describeDb("stories", () => {
         const { story } = await mintImage();
         as(alice);
         const response = await call("POST", `/api/stories/${story.id}/publish`);
+        await settlePublish(story.id);
         expect(response.status).toBe(422);
         // No reason leaks to the author.
         expect(JSON.stringify(response.body)).not.toMatch(/gore|scan/i);
@@ -658,6 +697,7 @@ describeDb("stories", () => {
         const { story } = await mintImage();
         as(alice);
         expect((await call("POST", `/api/stories/${story.id}/publish`)).status).toBe(422);
+        await settlePublish(story.id);
         expect(error).toHaveBeenCalledWith(expect.stringContaining("ILLEGAL-CONTENT MATCH"));
         error.mockRestore();
         const row = (
@@ -969,9 +1009,10 @@ describeDb("stories", () => {
     });
 
     it("a report routes to the server, minor_sexual and friends to the instance, and holds the bytes", async () => {
-      const { story, key } = await mintImage();
+      const { story } = await mintImage();
       as(alice);
       await call("POST", `/api/stories/${story.id}/publish`);
+      const pinned = await settlePublish(story.id);
       as(bob);
       const filed = await call("POST", "/api/reports", {
         subjectType: "story",
@@ -1022,7 +1063,7 @@ describeDb("stories", () => {
       expect(storage.deleted).toEqual([]);
       await getPool().query(`UPDATE reports SET resolved_at = now() - interval '31 days'`);
       await sweepStories();
-      expect(storage.deleted).toEqual([key]);
+      expect(storage.deleted).toEqual([pinned]);
     });
 
     it("a server manager's remove-story takes only their server's slice", async () => {
@@ -1086,9 +1127,10 @@ describeDb("stories", () => {
     });
 
     it("expires, deletes media and poster once, and the row a week later", async () => {
-      const { story, key } = await mintImage();
+      const { story } = await mintImage();
       as(alice);
       await call("POST", `/api/stories/${story.id}/publish`);
+      const pinned = await settlePublish(story.id);
       await getPool().query(`UPDATE stories SET poster_storage_key = $2 WHERE id = $1`, [
         story.id,
         `stories/${alice.id}/${story.id}/poster.jpg`,
@@ -1097,7 +1139,7 @@ describeDb("stories", () => {
       // Two processes sweeping at once delete each object exactly once.
       await Promise.all([sweepStories(), sweepStories()]);
       expect(storage.deleted.sort()).toEqual(
-        [key, `stories/${alice.id}/${story.id}/poster.jpg`].sort(),
+        [pinned, `stories/${alice.id}/${story.id}/poster.jpg`].sort(),
       );
       const row = (
         await getPool().query(
@@ -1113,19 +1155,21 @@ describeDb("stories", () => {
     });
 
     it("keeps running with the flag off", async () => {
-      const { story, key } = await mintImage();
+      const { story } = await mintImage();
       as(alice);
       await call("POST", `/api/stories/${story.id}/publish`);
+      const pinned = await settlePublish(story.id);
       await storiesOn(serverId, false);
       await getPool().query(`UPDATE stories SET expires_at = now() - interval '1 minute'`);
       await sweepStories();
-      expect(storage.deleted).toEqual([key]);
+      expect(storage.deleted).toEqual([pinned]);
     });
 
     it("takes a media delete again when the process that claimed it died", async () => {
-      const { story, key } = await mintImage();
+      const { story } = await mintImage();
       as(alice);
       await call("POST", `/api/stories/${story.id}/publish`);
+      const pinned = await settlePublish(story.id);
       // Claimed by a process that is still at it: left alone, and the row is
       // not dropped while its bytes may still exist.
       await getPool().query(
@@ -1139,7 +1183,7 @@ describeDb("stories", () => {
         `UPDATE stories SET media_delete_claimed_at = now() - interval '11 minutes'`,
       );
       expect(await sweepStories()).toMatchObject({ mediaDeleted: 1, rowsDeleted: 1 });
-      expect(storage.deleted).toEqual([key]);
+      expect(storage.deleted).toEqual([pinned]);
     });
 
     it("deletes an orphan (minted, never published) after an hour, with its object", async () => {
@@ -1155,13 +1199,14 @@ describeDb("stories", () => {
     });
 
     it("an author delete takes it down now and the bytes on the next tick", async () => {
-      const { story, key } = await mintImage();
+      const { story } = await mintImage();
       as(alice);
       await call("POST", `/api/stories/${story.id}/publish`);
+      const pinned = await settlePublish(story.id);
       expect((await call("DELETE", `/api/stories/${story.id}`)).status).toBe(204);
       expect(await read(bob, [story.id])).toEqual([]);
       await sweepStories();
-      expect(storage.deleted).toEqual([key]);
+      expect(storage.deleted).toEqual([pinned]);
       as(bob);
       expect((await call("DELETE", `/api/stories/${story.id}`)).status).toBe(404);
     });
@@ -1172,13 +1217,14 @@ describeDb("stories", () => {
   it("Salvar no Baú copies the media into a draft, for the author with MANAGE_SERVER", async () => {
     await storiesOn();
     await setGlobalFlag("community_home", true, { kind: "dashboard" });
-    const { story, key } = await mintImage();
+    const { story } = await mintImage();
     as(alice);
     await call("POST", `/api/stories/${story.id}/publish`);
+    const pinned = await settlePublish(story.id);
     expect((await read(alice, [story.id]))[0]!.viewer.canSaveToBau).toEqual([serverId]);
     const saved = await call("POST", `/api/stories/${story.id}/save-to-bau`, { serverId });
     expect(saved.status).toBe(201);
-    expect(storage.copies).toEqual([{ from: key, to: expect.stringMatching(`^community-home/${serverId}/`) }]);
+    expect(storage.copies).toEqual([{ from: pinned, to: expect.stringMatching(`^community-home/${serverId}/`) }]);
     const post = (
       await getPool().query(`SELECT status, body, media_storage_key FROM community_home_posts WHERE id = $1`, [
         saved.body.postId,
@@ -1188,7 +1234,7 @@ describeDb("stories", () => {
     // The story's own object still goes on schedule; the copy stays.
     await getPool().query(`UPDATE stories SET expires_at = now() - interval '1 minute'`);
     await sweepStories();
-    expect(storage.deleted).toEqual([key]);
+    expect(storage.deleted).toEqual([pinned]);
     // Bob is not the author.
     as(bob);
     expect((await call("POST", `/api/stories/${story.id}/save-to-bau`, { serverId })).status).toBe(403);
@@ -1218,7 +1264,8 @@ describeDb("stories", () => {
         ).rows[0]!.media_storage_key;
         storage.objects.set(key, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
         await call("POST", `/api/stories/${id}/publish`);
-        return { id, key };
+        const pinned = await settlePublish(id);
+        return { id, key: pinned };
       })();
       const reported = (await postText("denunciado")).body.story.id as string;
       as(alice);

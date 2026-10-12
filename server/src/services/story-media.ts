@@ -116,6 +116,7 @@ export async function sweepStories(): Promise<StorySweepResult> {
     // (a delete of something already gone is a success).
     const claimed = await pool.query<{
       id: string;
+      kind: string;
       media_storage_key: string;
       poster_storage_key: string | null;
       /** The lease token as text: a JS Date would drop Postgres's microseconds. */
@@ -133,7 +134,7 @@ export async function sweepStories(): Promise<StorySweepResult> {
            LIMIT ${SWEEP_BATCH}
            FOR UPDATE SKIP LOCKED
         )
-        RETURNING s.id, s.media_storage_key, s.poster_storage_key,
+        RETURNING s.id, s.kind, s.media_storage_key, s.poster_storage_key,
                   s.media_delete_claimed_at::text AS claim`,
     );
     for (const row of claimed.rows) {
@@ -141,6 +142,15 @@ export async function sweepStories(): Promise<StorySweepResult> {
         await deleteObject(row.media_storage_key);
         if (row.poster_storage_key) {
           await deleteObject(row.poster_storage_key);
+        }
+        if (row.kind === "video") {
+          // The video job's sampled frames live only long enough to be
+          // scanned and are deleted right after; a delete that failed then
+          // is retried here, so none outlives its story.
+          const prefix = row.media_storage_key.slice(0, row.media_storage_key.lastIndexOf("/") + 1);
+          for (const frame of [1, 2, 3]) {
+            await deleteObject(`${prefix}frame-${frame}.jpg`);
+          }
         }
         await pool.query(
           `UPDATE stories SET media_deleted_at = now()
@@ -425,22 +435,40 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
     // the row for a process that can (the worker).
     return { storyId: null, outcome: "idle" };
   }
-  const claimed = await claimVideo();
+  // The scratch directory before the claim: a full or read-only tmp must not
+  // spend one of a video's attempts.
+  let dir: string | null = null;
+  if (canProbe) {
+    try {
+      dir = await mkdtemp(join(tmpdir(), "pqp-story-"));
+    } catch (error) {
+      console.error(
+        "[stories] no scratch directory for the video job:",
+        error instanceof Error ? error.message : error,
+      );
+      return { storyId: null, outcome: "idle" };
+    }
+  }
+  const claimed = await claimVideo().catch(async (error: unknown) => {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  });
   if (!claimed) {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     return { storyId: null, outcome: "idle" };
   }
   if (claimed.processing_attempts > VIDEO_MAX_ATTEMPTS) {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     await refuseStory(claimed.id, { until: "none" }, "processing failed too many times");
     bumpStoryStat("videoFailures");
     return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
   }
-  if (!canProbe) {
+  if (!canProbe || !dir) {
     // No scanner and no ffmpeg anywhere: live as it is, recorded unscanned.
     const wentLive = await goLive(claimed.id, claimed.claim);
     return { storyId: claimed.id, authorId: claimed.author_id, outcome: "live", wentLive };
   }
 
-  const dir = await mkdtemp(join(tmpdir(), "pqp-story-"));
   try {
     const videoPath = join(dir, "in.mp4");
     const downloaded = await downloadObjectToFile(

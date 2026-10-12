@@ -243,10 +243,17 @@ async function processStoryVideosJob(): Promise<void> {
         break;
       }
       if (tick.storyId && tick.authorId) {
+        const authorId = tick.authorId;
         if (tick.wentLive) {
-          notifyStoryAudiences(tick.authorId, await storyAudienceTargets(tick.storyId));
+          // Best effort: the story is live either way, and a missed nudge is
+          // a strip that refreshes on the next focus.
+          await storyAudienceTargets(tick.storyId)
+            .then((targets) => notifyStoryAudiences(authorId, targets))
+            .catch((error: unknown) => {
+              console.error("[stories] live nudge failed:", error);
+            });
         } else {
-          notifyStoriesUpdate({ scope: "own", userId: tick.authorId });
+          notifyStoriesUpdate({ scope: "own", userId: authorId });
         }
       }
     }
