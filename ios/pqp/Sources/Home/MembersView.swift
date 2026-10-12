@@ -329,6 +329,31 @@ struct MembersView: View {
 
 /// The status dot, everywhere one appears. One view so "which colour is idle"
 /// has exactly one answer.
+/// The words for a presence token. VoiceOver reads a status dot through this,
+/// not the wire value ("dnd" would be read letter by letter), and the profile
+/// sheet shows the same sentence.
+enum PresenceLabel: Equatable {
+    case online, idle, doNotDisturb, offline
+
+    init(_ status: String?) {
+        switch status {
+        case "online": self = .online
+        case "idle": self = .idle
+        case "dnd": self = .doNotDisturb
+        default: self = .offline
+        }
+    }
+
+    var key: LocalizedStringKey {
+        switch self {
+        case .online: "Online"
+        case .idle: "Idle"
+        case .doNotDisturb: "Do not disturb"
+        case .offline: "Offline"
+        }
+    }
+}
+
 struct StatusDot: View {
     let status: String?
     var size: CGFloat = 9

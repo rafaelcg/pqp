@@ -18,6 +18,8 @@ import {
   type ChannelFanoutFrame,
   type ChatServerMessage,
   type ForumPostSummary,
+  type ForumSettings,
+  type ForumTag,
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
@@ -1908,6 +1910,21 @@ async function notifyChannelActivity(
 // `broadcastToChannel`, so it crosses to the sibling instance on the channel
 // relay like any channel frame (both types are in `CHAT_SERVER_MESSAGE_TYPES`,
 // which is what lets the receiving side accept them).
+
+/**
+ * Staff saved the forum's tags or settings: the new copy to everyone viewing
+ * the forum, so an open composer follows "Exigir pelo menos uma tag" live.
+ */
+export function announceForumConfig(
+  forumId: string,
+  update: { tags?: ForumTag[]; settings?: ForumSettings },
+): void {
+  broadcastToChannel(forumId, {
+    type: "forum-config-update",
+    forumId,
+    ...update,
+  });
+}
 
 /** A post appeared or changed: retitled, retagged, pinned, bumped, resolved. */
 export function announceForumPostUpdate(post: ForumPostSummary): void {
