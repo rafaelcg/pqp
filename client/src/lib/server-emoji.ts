@@ -63,7 +63,7 @@ export function loadServerEmoji(serverId: string, force = false): Promise<void> 
   const writesAtStart = entry.writes;
   entry.inflight = fetchServerEmoji(serverId)
     .then((list) => {
-      if (entry.writes !== writesAtStart && entry.list) {
+      if (entry.writes !== writesAtStart) {
         return;
       }
       entry.list = list;
@@ -103,6 +103,9 @@ export function updateServerEmojiList(
   const entry = entryFor(serverId);
   entry.writes += 1;
   if (!entry.list) {
+    // Nothing cached to change. Read again once any read in flight, which
+    // started before this write and is dropped, has finished.
+    void (entry.inflight ?? Promise.resolve()).then(() => loadServerEmoji(serverId, true));
     return;
   }
   entry.list = {

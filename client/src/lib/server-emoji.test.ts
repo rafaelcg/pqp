@@ -156,6 +156,42 @@ describe("the emoji cache", () => {
     expect(getCachedServerEmoji(server)?.emoji).toEqual([]);
   });
 
+  it("reads again after a write that found no list cached", async () => {
+    const server = `${SERVER}-d`;
+    const answers: Array<(response: Response) => void> = [];
+    let asked: () => void = () => {};
+    let fetchStarted = new Promise<void>((resolve) => (asked = resolve));
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          answers.push(resolve);
+          asked();
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const ok = (entries: ServerEmoji[]) =>
+      new Response(JSON.stringify(listOf(entries)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    const first = loadServerEmoji(server);
+    await fetchStarted;
+    fetchStarted = new Promise<void>((resolve) => (asked = resolve));
+    updateServerEmojiList(server, (current) => [...current, emoji("pog", POG)]);
+    // The read that started before the write answers without the new emoji.
+    answers[0]!(ok([]));
+    await first;
+    expect(getCachedServerEmoji(server)).toBeNull();
+
+    await fetchStarted;
+    answers[1]!(ok([emoji("pog", POG)]));
+    await vi.waitFor(() =>
+      expect(getCachedServerEmoji(server)?.emoji.map((e) => e.name)).toEqual(["pog"]),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("says when the first read failed", async () => {
     const server = `${SERVER}-c`;
     const fetchMock = vi.fn(
