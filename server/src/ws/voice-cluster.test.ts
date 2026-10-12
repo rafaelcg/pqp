@@ -148,6 +148,7 @@ type SocketsModule = typeof import("./sockets.js");
 type RegistryModule = typeof import("../voice/registry.js");
 type DbModule = typeof import("../db.js");
 type AdminModule = typeof import("../voice/admin.js");
+type UserStatsModule = typeof import("../services/user-stats.js");
 
 interface Instance {
   bus: BusModule;
@@ -157,6 +158,8 @@ interface Instance {
   db: DbModule;
   /** The (mocked) SFU half, per graph: which instance ran it is the point. */
   admin: AdminModule;
+  /** The Retrospectiva's counters, per graph: where a track is counted. */
+  stats: UserStatsModule;
 }
 
 interface Frame {
@@ -182,10 +185,11 @@ async function bootInstance(connected = true): Promise<Instance> {
   const sockets = (await import("./sockets.js")) as SocketsModule;
   const registry = (await import("../voice/registry.js")) as RegistryModule;
   const admin = (await import("../voice/admin.js")) as AdminModule;
+  const stats = (await import("../services/user-stats.js")) as UserStatsModule;
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
-  const instance = { bus, voice, sockets, registry, db, admin };
+  const instance = { bus, voice, sockets, registry, db, admin, stats };
   booted.push(instance);
   return instance;
 }
@@ -1098,6 +1102,10 @@ describeDb("voice across two instances", () => {
           (f) => (f.state as { rev: number } | null)?.rev === 3,
         ),
       ).toBe(false);
+      // And nobody is credited with its track: the Retrospectiva counts a
+      // track the room kept, on the machine that kept it.
+      expect(a.stats.userStats.metrics().musicNoted).toBe(2);
+      expect(b.stats.userStats.metrics().musicNoted).toBe(0);
     });
   });
 

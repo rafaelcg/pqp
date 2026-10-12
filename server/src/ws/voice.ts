@@ -9222,14 +9222,6 @@ export async function handleVoiceMessage(
       });
       return;
     }
-    if (write.kind === "accepted") {
-      // Counted here and only here: the `adopt*` paths take a queue another
-      // machine already accepted, and counting there would count it twice.
-      userStats.noteMusicQueued(
-        user.id,
-        newlyQueuedTracks(heldMusic, write.state, user.id),
-      );
-    }
     if (
       write.kind === "accepted" &&
       (write.state?.current?.videoId ?? null) !== before
@@ -9288,6 +9280,14 @@ export async function handleVoiceMessage(
         return;
       }
     }
+    // Counted here and only here, once the write is the room's queue: a
+    // write the row refused (above) kept no track, and the `adopt*` paths
+    // take a queue another machine already counted. A failed persist leaves
+    // the local decision standing, so it counts.
+    userStats.noteMusicQueued(
+      user.id,
+      newlyQueuedTracks(heldMusic, write.state, user.id),
+    );
     broadcastToRoom(peer.voiceChannelId, {
       type: "music",
       channelId: peer.voiceChannelId,
