@@ -186,11 +186,11 @@ export function ChannelSettingsDialog({
   const canSeeOverview = canManageChannels;
   const canSeeTags = canManageChannels && isForum;
   const canSeePermissions = canManageRoles || canManageChannels;
-  // A forum takes webhooks too: an RSS or a release feed posting one post per
-  // item is half of what a forum is for (forum PR 4 teaches the execute path
-  // to make posts; until then the section lists and creates them as usual).
-  const canSeeWebhooks =
-    canManageChannels && (channel?.type === "text" || isForum);
+  // Text channels only, for now. A feed posting one post per item is half of
+  // what a forum is for, but until forum PR 4 teaches the execute path to
+  // make posts, a webhook on a forum would write chat messages nobody can see
+  // (and light an unread pip nobody can clear). PR 4 widens this to `forum`.
+  const canSeeWebhooks = canManageChannels && channel?.type === "text";
 
   const visible = useMemo(() => {
     const ids: ChannelSettingsSectionId[] = [];
