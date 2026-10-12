@@ -1254,6 +1254,13 @@ export const updateChannelSchema = z.object({
 export const moveChannelSchema = z.object({
   parentId: z.string().uuid().nullable(),
   index: z.number().int().min(0),
+  /**
+   * A drop ON a row: take that row's slot (after it when the moved channel
+   * was above it in the same group, before it otherwise). Exact where an
+   * index cannot be: the client does not see private siblings, the server
+   * does. `index` stays for an older server and an older client.
+   */
+  targetId: z.string().uuid().optional(),
 });
 
 /**

@@ -680,6 +680,69 @@ describeDb("mixed channel list", () => {
       ]);
     });
 
+    it("a category the manager cannot see keeps its place and its channels, and is refused as a target", async () => {
+      const { serverId, test } = await migrated();
+      const staff = await createIn(owner, serverId, "Staff", "category");
+      const segredos = await createIn(owner, serverId, "segredos", "text", { parentId: staff.id });
+      // @everyone cannot be denied VIEW on a public row (that is what
+      // "private" is for), but a cargo can: hide Staff from the Gerente role.
+      const roles = await call<{ roles: Array<{ id: string; name: string }> }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/roles`,
+      );
+      const gerente = roles.body.roles.find((role) => role.name === "Gerente")!;
+      const hide = await call(owner, "PUT", `/api/channels/${staff.id}/overwrites`, {
+        targetType: "role",
+        targetId: gerente.id,
+        allow: "0",
+        deny: String(1n << 6n),
+      });
+      expect(hide.status).toBe(200);
+      const ownerBefore = await mixedView(owner, serverId);
+      expect(ownerBefore.categories.map(([name]) => name)).toEqual([
+        "Canais",
+        "Jogos",
+        "Cinema",
+        "Staff",
+      ]);
+
+      // The manager's client cannot see Staff; segredos (visible itself)
+      // draws as loose there, and goes back in the loose group.
+      const managerChannels = await channelsOf(manager, serverId);
+      expect(managerChannels.map((c) => c.name)).not.toContain("Staff");
+      expect(managerChannels.map((c) => c.name)).toContain("segredos");
+      const body = await payloadAfter(manager, serverId, (layout) => {
+        const moved = moveInLayout(layout, test.id, { parentId: null, index: 0 });
+        const cinema = layout.categories.find((entry) => entry.category.name === "Cinema")!;
+        return moved && moveInLayout(moved, cinema.category.id, { parentId: null, index: 0 });
+      });
+      expect(body.groups[0]!.channelIds).toContain(segredos.id);
+      expect((await put(manager, serverId, body)).status).toBe(200);
+      const after = await mixedView(owner, serverId);
+      // Staff stays right after its old neighbour, Cinema, the same rule a
+      // hidden channel follows.
+      expect(after.categories.map(([name]) => name)).toEqual(["Cinema", "Staff", "Canais", "Jogos"]);
+      expect(after.categories.find(([name]) => name === "Staff")).toEqual(["Staff", ["segredos"]]);
+      expect(after.loose).toEqual(["test"]);
+
+      // Naming it, as an order or as a destination, is the unknown answer.
+      const config = await configOf(manager, serverId);
+      const named = { ...body, baseVersion: config.version };
+      expect(
+        (await put(manager, serverId, { ...named, categoryIds: [...named.categoryIds, staff.id] }))
+          .body.error,
+      ).toBe("Unknown category");
+      expect(
+        (
+          await put(manager, serverId, {
+            ...named,
+            groups: [...named.groups, { parentId: staff.id, channelIds: [] }],
+          })
+        ).status,
+      ).toBe(400);
+    });
+
     it("refuses a channel the manager cannot see with the same answer as an unknown id", async () => {
       const { serverId } = await migrated();
       const staff = await createIn(owner, serverId, "staff", "text", { isPrivate: true });
@@ -860,6 +923,42 @@ describeDb("mixed channel list", () => {
       // Drag b (index 0) onto a (index 2): b after a.
       await call(owner, "PATCH", `/api/channels/${b.id}/move`, { parentId: null, index: 2 });
       expect(oldClientOrder(await channelsOf(owner, serverId)).text).toEqual(["general", "a", "b"]);
+    });
+
+    it("a drop on a row with targetId takes its slot, counting private siblings the client never saw", async () => {
+      const { serverId } = await makeServer();
+      const a = await createIn(owner, serverId, "a", "text");
+      await createIn(owner, serverId, "oculto", "text", { isPrivate: true });
+      const b = await createIn(owner, serverId, "b", "text");
+      const c = await createIn(owner, serverId, "c", "text");
+      // general, a, oculto, b, c. The manager sees general, a, b, c and drops
+      // c on b: c must land right before b, after the hidden channel.
+      const moved = await call(manager, "PATCH", `/api/channels/${c.id}/move`, {
+        parentId: null,
+        index: 2,
+        targetId: b.id,
+      });
+      expect(moved.status).toBe(200);
+      expect(oldClientOrder(await channelsOf(owner, serverId)).text).toEqual([
+        "general",
+        "a",
+        "oculto",
+        "c",
+        "b",
+      ]);
+      // Downward: a dropped on b lands after it.
+      await call(manager, "PATCH", `/api/channels/${a.id}/move`, {
+        parentId: null,
+        index: 3,
+        targetId: b.id,
+      });
+      expect(oldClientOrder(await channelsOf(owner, serverId)).text).toEqual([
+        "general",
+        "oculto",
+        "c",
+        "b",
+        "a",
+      ]);
     });
 
     it("iOS 1.0.21 'Top level' (index 0) out of Canais lands loose on a migrated server", async () => {

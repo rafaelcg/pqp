@@ -1457,10 +1457,13 @@ export const moveChannel = (
   channelId: string,
   parentId: string | null,
   index: number,
+  /** A drop on this row: the server takes its slot (it sees private siblings). */
+  targetId?: string,
 ) =>
   patch<{ channels: Channel[] }>(`/api/channels/${channelId}/move`, {
     parentId,
     index,
+    ...(targetId ? { targetId } : {}),
   });
 
 /**

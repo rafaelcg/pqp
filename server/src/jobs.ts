@@ -100,13 +100,16 @@ async function migrateChannelLayoutsJob(): Promise<void> {
   channelLayoutRunning = true;
   try {
     const changed = await runChannelLayoutMigrations();
+    // One server's nudge never stops the next one's. A nudge that is lost
+    // anyway is caught up by the clients themselves: they re-read the layout
+    // version on focus and refetch the list when it moved.
     for (const serverId of changed) {
-      const channelIds = await listSidebarChannelIds(serverId);
-      await notifyChannelsUpdate(serverId, { channelIds, carriesChildren: true }).catch(
-        (error: unknown) => {
-          console.error("[channel-layout] nudge failed:", error);
-        },
-      );
+      try {
+        const channelIds = await listSidebarChannelIds(serverId);
+        await notifyChannelsUpdate(serverId, { channelIds, carriesChildren: true });
+      } catch (error) {
+        console.error(`[channel-layout] nudge failed for server ${serverId}:`, error);
+      }
     }
   } catch (error) {
     countChannelLayout("jobFailures");

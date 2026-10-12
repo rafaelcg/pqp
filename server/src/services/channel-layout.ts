@@ -430,17 +430,68 @@ export type ApplyResult =
   | { status: "stale"; version: number };
 
 /**
+ * One parent's new order: the ids sent for it, with every row that was NOT
+ * sent (or is protected) put back right after its nearest previous sibling
+ * from the old order that is still in this parent, or first if there is none.
+ * One pass over the old order and one over the result: a group of 500 costs
+ * 500 steps, not 500 squared.
+ */
+function mergeKeepingUnsent(
+  oldOrder: readonly string[],
+  sentHere: readonly string[],
+  stays: (id: string) => boolean,
+  isSent: (id: string) => boolean,
+): string[] {
+  const after = new Map<string | null, string[]>();
+  let lastStaying: string | null = null;
+  for (const id of oldOrder) {
+    if (!isSent(id)) {
+      const list = after.get(lastStaying) ?? [];
+      list.push(id);
+      after.set(lastStaying, list);
+      lastStaying = id;
+    } else if (stays(id)) {
+      lastStaying = id;
+    }
+  }
+  const result: string[] = [];
+  const emit = (id: string) => {
+    result.push(id);
+    for (const next of after.get(id) ?? []) {
+      emit(next);
+    }
+  };
+  for (const id of after.get(null) ?? []) {
+    emit(id);
+  }
+  for (const id of sentHere) {
+    emit(id);
+  }
+  return result;
+}
+
+/**
  * The full-order PUT. One transaction: the server row is locked by version,
- * every id is checked, and channels the actor did not send (private ones they
- * cannot see, watch party rooms the web never lists) are re-anchored right
- * after their nearest previous sibling from the old order that is still in
- * the same parent, or first if there is none. So a manager without VIEW on
- * #staff reorders around it and #staff stays exactly where it was.
+ * every id is checked, and what the actor cannot see keeps its place:
+ *
+ * - a channel the actor did not send (a private one they cannot see, a watch
+ *   party room the web never lists) is re-anchored after its nearest previous
+ *   sibling from the old order that is still in the same parent;
+ * - a category the actor cannot see (an overwrite can hide one) is neither
+ *   accepted in `categoryIds` nor as a destination, and keeps its place among
+ *   the categories the same way;
+ * - a channel inside such a category stays in it, even if the client (which
+ *   cannot see its category) sent it as loose.
+ *
+ * So a manager without VIEW on #staff reorders around it and #staff stays
+ * exactly where it was. `beforeCommit` runs inside the transaction when
+ * something moved (the audit row lands with the order or not at all).
  */
 export async function applyChannelLayout(
   serverId: string,
   actorId: string,
   input: ChannelLayoutInput,
+  options: { beforeCommit?: (client: PoolClient, moved: number) => Promise<void> } = {},
 ): Promise<ApplyResult> {
   // Before BEGIN: nothing between BEGIN and COMMIT waits on another query's
   // pool connection. Visibility is per viewer (privacy plus overwrites).
@@ -465,7 +516,10 @@ export async function applyChannelLayout(
 
     const rows = await readSidebarRows(client, serverId);
     const byId = new Map(rows.map((row) => [row.id, row]));
-    const categoryRows = rows.filter((row) => row.type === "category");
+    const categoryRows = rows.filter((row) => row.type === "category").sort(positionOrder);
+    const hiddenCategories = new Set(
+      categoryRows.filter((row) => !visible.has(row.id)).map((row) => row.id),
+    );
 
     // --- validate ---------------------------------------------------------
     const categoryIds = input.categoryIds;
@@ -473,16 +527,18 @@ export async function applyChannelLayout(
       throw new ChannelLayoutError("categoryIds lists a category twice");
     }
     for (const id of categoryIds) {
-      if (byId.get(id)?.type !== "category") {
-        throw new ChannelLayoutError("categoryIds names something that is not a category here");
+      // A hidden category gets the same answer as a missing one.
+      if (byId.get(id)?.type !== "category" || hiddenCategories.has(id)) {
+        throw new ChannelLayoutError("Unknown category");
       }
     }
-    if (categoryIds.length !== categoryRows.length) {
-      throw new ChannelLayoutError("categoryIds must list every category of the server");
+    if (categoryIds.length !== categoryRows.length - hiddenCategories.size) {
+      throw new ChannelLayoutError("categoryIds must list every category you can see");
     }
     const categorySet = new Set(categoryIds);
     const parents = new Set<string | null>();
     const sent = new Map<string, string | null>();
+    const seen = new Set<string>();
     for (const group of input.groups) {
       if (group.parentId !== null && !categorySet.has(group.parentId)) {
         throw new ChannelLayoutError("A group's parentId is not one of categoryIds");
@@ -501,58 +557,55 @@ export async function applyChannelLayout(
         if (row.type === "category") {
           throw new ChannelLayoutError("A category cannot sit inside a group");
         }
-        if (sent.has(id)) {
+        if (seen.has(id)) {
           throw new ChannelLayoutError("A channel appears twice");
+        }
+        seen.add(id);
+        // Inside a category the actor cannot see: protected, stays put.
+        if (row.parent_id && hiddenCategories.has(row.parent_id)) {
+          continue;
         }
         sent.set(id, group.parentId);
       }
     }
 
     // --- build the new order ---------------------------------------------
-    const groups = new Map<string | null, string[]>();
-    groups.set(null, []);
-    for (const id of categoryIds) {
-      groups.set(id, []);
-    }
-    for (const group of input.groups) {
-      groups.set(group.parentId, [...group.channelIds]);
-    }
-    const oldGroups = new Map<string | null, SidebarRow[]>();
-    for (const row of rows) {
+    const isSent = (id: string) => sent.has(id);
+    const categoryOrder = mergeKeepingUnsent(
+      categoryRows.map((row) => row.id),
+      categoryIds,
+      () => true,
+      (id) => categorySet.has(id),
+    );
+    const oldGroups = new Map<string | null, string[]>();
+    const knownCategories = new Set(categoryRows.map((row) => row.id));
+    for (const row of [...rows].sort(positionOrder)) {
       if (row.type === "category") {
         continue;
       }
-      const parent = row.parent_id && categorySet.has(row.parent_id) ? row.parent_id : null;
+      const parent = row.parent_id && knownCategories.has(row.parent_id) ? row.parent_id : null;
       const list = oldGroups.get(parent) ?? [];
-      list.push(row);
+      list.push(row.id);
       oldGroups.set(parent, list);
     }
-    for (const [parent, list] of oldGroups) {
-      list.sort(positionOrder);
-      const target = groups.get(parent)!;
-      list.forEach((row, index) => {
-        if (sent.has(row.id)) {
-          return;
-        }
-        // Nearest previous sibling still in this parent: an unsent one (it
-        // was placed already, in old order) or a sent one that stayed.
-        let anchor: string | null = null;
-        for (let back = index - 1; back >= 0; back -= 1) {
-          const candidate = list[back]!;
-          if (!sent.has(candidate.id) || sent.get(candidate.id) === parent) {
-            anchor = candidate.id;
-            break;
-          }
-        }
-        const at = anchor === null ? 0 : target.indexOf(anchor) + 1;
-        target.splice(at, 0, row.id);
-      });
+    const sentByParent = new Map<string | null, string[]>();
+    for (const group of input.groups) {
+      sentByParent.set(
+        group.parentId,
+        group.channelIds.filter((id) => sent.get(id) === group.parentId),
+      );
     }
 
     const places: Array<{ id: string; parentId: string | null; position: number }> = [];
-    categoryIds.forEach((id, index) => places.push({ id, parentId: null, position: index }));
-    for (const [parent, ids] of groups) {
-      ids.forEach((id, index) => places.push({ id, parentId: parent, position: index }));
+    categoryOrder.forEach((id, index) => places.push({ id, parentId: null, position: index }));
+    for (const parent of [null, ...categoryOrder]) {
+      const order = mergeKeepingUnsent(
+        oldGroups.get(parent) ?? [],
+        sentByParent.get(parent) ?? [],
+        (id) => sent.get(id) === parent,
+        isSent,
+      );
+      order.forEach((id, index) => places.push({ id, parentId: parent, position: index }));
     }
     const moved = places.filter((place) => {
       const row = byId.get(place.id)!;
@@ -560,6 +613,9 @@ export async function applyChannelLayout(
     });
     await writePlaces(client, serverId, moved);
     const next = await bumpChannelLayoutVersion(client, serverId);
+    if (moved.length > 0) {
+      await options.beforeCommit?.(client, moved.length);
+    }
     await client.query("COMMIT");
     invalidateServerChannelList(serverId);
     countChannelLayout("reorders");
@@ -693,9 +749,12 @@ export async function recordChannelLayoutNoop(db: Db, serverId: string): Promise
 export interface ChannelLayoutReport extends ChannelLayoutMetrics {
   /** The flag's global answer here (per-server overrides are on `flags`). */
   enabled: boolean;
-  /** Servers with a live migration row, a recorded no-op among them. */
-  migratedServers: number;
-  revertedServers: number;
+  /**
+   * Servers with a live migration row, a recorded no-op among them. Null when
+   * the table could not be read: unknown, never a fabricated zero.
+   */
+  migratedServers: number | null;
+  revertedServers: number | null;
 }
 
 export async function channelLayoutReport(): Promise<ChannelLayoutReport> {
@@ -709,8 +768,8 @@ export async function channelLayoutReport(): Promise<ChannelLayoutReport> {
   const row = result?.rows[0];
   return {
     enabled: isEnabled(MIXED_CHANNEL_LIST_FLAG),
-    migratedServers: Number(row?.live ?? 0),
-    revertedServers: Number(row?.reverted ?? 0),
+    migratedServers: row ? Number(row.live) : null,
+    revertedServers: row ? Number(row.reverted) : null,
     ...channelLayoutMetrics(),
   };
 }

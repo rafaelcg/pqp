@@ -2627,11 +2627,10 @@ async function operatorChannelLayout(req: IncomingMessage) {
             allowReverted: true,
           })
         : await revertChannelLayout(body.serverId);
-    if (result.status === "migrated" || result.status === "noop" || result.status === "reverted") {
-      pingChannels(body.serverId, {
-        channelIds: await listSidebarChannelIds(body.serverId),
-        carriesChildren: true,
-      });
+    // Every outcome but a dry run nudges, `already` included: a retry of a
+    // migrate whose first nudge was lost is how the operator sends it again.
+    if (result.status !== "dry-run" && result.status !== "not-migrated") {
+      nudgeWholeList(body.serverId);
     }
     return result;
   } catch (error) {
@@ -6223,35 +6222,47 @@ router.put(
     }
     let result: Awaited<ReturnType<typeof applyChannelLayout>>;
     try {
-      result = await applyChannelLayout(serverId!, user.id, body);
+      result = await applyChannelLayout(serverId!, user.id, body, {
+        // Inside the transaction: the audit row lands with the order or not
+        // at all, and nothing after COMMIT can make a saved order look failed.
+        beforeCommit: (client, moved) =>
+          logAudit(
+            {
+              serverId: serverId!,
+              actorId: user.id,
+              action: "channel.reorder",
+              targetType: "server",
+              targetId: serverId!,
+              changes: [{ key: "moved", old: null, new: moved }],
+            },
+            client,
+          ),
+      });
     } catch (error) {
       if (error instanceof ChannelLayoutError) {
         throw new HttpError(400, error.message);
       }
       throw error;
     }
-    const channels = (await listChannels(serverId!, user.id)).map(mapChannel);
     if (result.status === "stale") {
       throw new HttpErrorWithDetail(409, CHANNEL_LAYOUT_STALE, {
-        channels,
+        channels: (await listChannels(serverId!, user.id)).map(mapChannel),
         version: result.version,
       });
     }
     if (result.moved > 0) {
-      // Before the audit write, for the same reason as on create. Every
-      // sidebar row is named (a server may have no category at all), so each
-      // member who can see any of it refetches, and nobody else hears.
-      pingChannels(serverId!, {
-        channelIds: await listSidebarChannelIds(serverId!),
-      });
-      await logAudit({
-        serverId: serverId!,
-        actorId: user.id,
-        action: "channel.reorder",
-        targetType: "server",
-        targetId: serverId!,
-        changes: [{ key: "moved", old: null, new: result.moved }],
-      });
+      // Every sidebar row is named (a server may have no category at all),
+      // so each member who can see any of it refetches, and nobody else
+      // hears. Fire and forget: the order is committed whatever this does.
+      nudgeWholeList(serverId!);
+    }
+    // Committed. A list that cannot be read back now is `null`, and the
+    // client keeps the order it drew; the nudge above refreshes it.
+    let channels: ReturnType<typeof mapChannel>[] | null = null;
+    try {
+      channels = (await listChannels(serverId!, user.id)).map(mapChannel);
+    } catch (error) {
+      console.error("[api] channel-layout read-back failed:", error);
     }
     return { channels, version: result.version };
   },
@@ -6491,7 +6502,13 @@ router.patch(
     const body = moveChannelSchema.parse(await readJsonBody(req));
 
     try {
-      await moveChannel(channel.server_id, channelId!, body.parentId, body.index);
+      await moveChannel(
+        channel.server_id,
+        channelId!,
+        body.parentId,
+        body.index,
+        body.targetId,
+      );
     } catch (error) {
       if (error instanceof InvalidChannelMoveError) {
         throw new HttpError(400, error.message);
@@ -9716,6 +9733,19 @@ async function evictViewersOutsideAudience(channelId: string): Promise<void> {
   for (const threadId of await listThreadChannelIds(channelId)) {
     evictChannelViewers(threadId, { exceptUserIds: allowed });
   }
+}
+
+/**
+ * `channels-update` for a server's whole sidebar, after a write that may have
+ * moved any of it (a reorder, a migration, a revert). Fire and forget, and
+ * never throws: the write already committed.
+ */
+function nudgeWholeList(serverId: string): void {
+  void listSidebarChannelIds(serverId)
+    .then((channelIds) => pingChannels(serverId, { channelIds, carriesChildren: true }))
+    .catch((error) => {
+      console.error("[api] channel list nudge failed:", error);
+    });
 }
 
 function pingPermissions(serverId: string): void {

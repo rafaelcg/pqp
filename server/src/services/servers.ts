@@ -559,6 +559,10 @@ export async function createChannel(
 
 export class InvalidChannelMoveError extends Error {}
 
+function oldParentIdOf(row: { parent_id: string | null }): string | null {
+  return row.parent_id ?? null;
+}
+
 /**
  * Move a channel to a 0-based position among the siblings sharing
  * `parentId`, renumbering both the destination group and — if the channel is
@@ -578,6 +582,8 @@ export async function moveChannel(
   channelId: string,
   parentId: string | null,
   index: number,
+  /** A drop on this row: take its slot (see `moveChannelSchema.targetId`). */
+  targetId?: string,
 ): Promise<void> {
   const client = await getPool().connect();
   try {
@@ -588,8 +594,12 @@ export async function moveChannel(
     // channel row wait on each other until Postgres aborts one (40P01).
     await bumpChannelLayoutVersion(client, serverId);
 
-    const target = await client.query<{ type: string; parent_id: string | null }>(
-      `SELECT type, parent_id FROM channels WHERE id = $1 AND server_id = $2 FOR UPDATE`,
+    const target = await client.query<{
+      type: string;
+      parent_id: string | null;
+      position: number;
+    }>(
+      `SELECT type, parent_id, position FROM channels WHERE id = $1 AND server_id = $2 FOR UPDATE`,
       [channelId, serverId],
     );
     const row = target.rows[0];
@@ -638,8 +648,8 @@ export async function moveChannel(
     //
     // Top-level (parentId null) is two groups: the categories, and every
     // loose channel in one mixed sequence.
-    const destination = await client.query<{ id: string; type: string }>(
-      `SELECT id, type FROM channels
+    const destination = await client.query<{ id: string; type: string; position: number }>(
+      `SELECT id, type, position FROM channels
        WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
          AND type = ANY($4::text[])
        ORDER BY position ASC, id ASC`,
@@ -647,7 +657,17 @@ export async function moveChannel(
     );
     const destIds = destination.rows.map((r) => r.id);
     let clampedIndex = Math.max(0, Math.min(index, destIds.length));
-    if (parentId === null && row.type !== "category") {
+    const targetAt = targetId ? destIds.indexOf(targetId) : -1;
+    if (targetAt !== -1) {
+      // A drop on a row takes its slot: after it when the moved channel sat
+      // above it in this same group (the old "remove, then splice at its
+      // index"), before it otherwise. Read on the server's full list, which
+      // has the private siblings the client never saw.
+      const above =
+        oldParentIdOf(row) === parentId &&
+        row.position < destination.rows[targetAt]!.position;
+      clampedIndex = targetAt + (above ? 1 : 0);
+    } else if (parentId === null && row.type !== "category") {
       // THE LEGACY-MOVE RULE. Every caller of this route counts the loose
       // area the old way, one list per type (the web before the redesign,
       // iOS 1.0.21's "Top level" at index 0): `index` is a slot among the
@@ -718,7 +738,18 @@ export async function updateChannel(
     voiceTransport?: VoiceRoomTransport | null;
   },
 ): Promise<ChannelRow | null> {
-  const result = await getPool().query<ChannelRow>(
+  // A category rename moves the layout version with it, in one transaction
+  // that takes the server row first (the lock order every list write keeps).
+  const categoryServer =
+    updates.name !== undefined
+      ? ((
+          await getPool().query<{ server_id: string | null }>(
+            `SELECT server_id FROM channels WHERE id = $1 AND type = 'category'`,
+            [channelId],
+          )
+        ).rows[0]?.server_id ?? null)
+      : null;
+  const runUpdate = (db: Pick<PoolClient, "query">) => db.query<ChannelRow>(
     `UPDATE channels SET
        name = COALESCE($2, name),
        is_private = COALESCE($3, is_private),
@@ -742,10 +773,24 @@ export async function updateChannel(
       updates.voiceTransport ?? null,
     ],
   );
-  const updated = result.rows[0] ?? null;
-  if (updated?.server_id && updated.type === "category" && updates.name !== undefined) {
-    await bumpChannelLayoutVersion(getPool(), updated.server_id);
+  let result: Awaited<ReturnType<typeof runUpdate>>;
+  if (categoryServer) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await bumpChannelLayoutVersion(client, categoryServer);
+      result = await runUpdate(client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    result = await runUpdate(getPool());
   }
+  const updated = result.rows[0] ?? null;
   if (updated && updates.isPrivate !== undefined && updated.server_id) {
     await applyPrivateChannelOverwrites(
       getPool(),

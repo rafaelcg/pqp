@@ -342,6 +342,8 @@ interface ChannelListProps {
     channelId: string,
     parentId: string | null,
     index: number,
+    /** A drop on this row: the server takes its slot exactly. */
+    targetId?: string,
   ) => void;
   /**
    * This person's pinned channel ids for the open server, in display order.
@@ -1095,7 +1097,7 @@ export const ChannelList = memo(function ChannelList({
       onMoveChannel(dragged.id, target.id, kids.length);
       return;
     }
-    onMoveChannel(dragged.id, target.parentId, legacyDropIndex(target));
+    onMoveChannel(dragged.id, target.parentId, legacyDropIndex(target), target.id);
   }
 
   /**
