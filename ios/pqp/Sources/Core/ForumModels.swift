@@ -319,6 +319,11 @@ struct ForumAcceptedAnswer: Codable, Hashable, Sendable {
     let authorName: String?
     let excerpt: String?
     let createdAt: Date?
+    /// Who marked it: "Solução · marcada por {name}". Absent on an older API,
+    /// and null when the marker is not known (marked before the server kept it,
+    /// or by an account deleted since): the card then names nobody.
+    var markedById: String? = nil
+    var markedByName: String? = nil
 }
 
 /// `GET /api/forum-posts/:postId`: the post view's header and the deep link.
@@ -386,6 +391,9 @@ struct ForumPostRejection: Decodable, Equatable, Sendable {
     let reason: String?
     let retryAfterMs: Int?
     let automodMessage: String?
+    /// `automod` only: which half AutoMod refused, `title` or `body`. Absent
+    /// on every other reason and on an older API.
+    var field: String? = nil
 }
 
 /// Where a link or a push asks to land inside a server: a forum, and maybe
