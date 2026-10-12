@@ -755,10 +755,19 @@ private fun EditTagsSheet(
                 )
             }
             Spacer(Modifier.height(Spacing.md))
+            // A staff-only tag already on the post stays visible to its
+            // author, who cannot take it off; the server refuses that too.
+            val pickable = tags.filter { isStaff || !it.moderated || it.id in selected }
+            if (pickable.isEmpty()) {
+                Text(
+                    stringResource(R.string.forum_edit_tags_none),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("forum.editTags.none"),
+                )
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                // A staff-only tag already on the post stays visible to its
-                // author, who cannot take it off; the server refuses that too.
-                tags.filter { isStaff || !it.moderated || it.id in selected }.forEach { tag ->
+                pickable.forEach { tag ->
                     val on = tag.id in picked
                     ForumFilterChip(
                         label = tag.name,
@@ -782,7 +791,11 @@ private fun EditTagsSheet(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.forum_edit_cancel)) }
                 Spacer(Modifier.width(Spacing.sm))
-                Button(onClick = { onSave(picked) }, modifier = Modifier.testTag("forum.editTags.save")) {
+                Button(
+                    onClick = { onSave(picked) },
+                    enabled = pickable.isNotEmpty(),
+                    modifier = Modifier.testTag("forum.editTags.save"),
+                ) {
                     Text(stringResource(R.string.forum_edit_save))
                 }
             }
