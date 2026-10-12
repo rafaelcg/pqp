@@ -40,12 +40,18 @@ import { activityDay } from "./user-activity.js";
  * least two different people, bots and the house cast not counted. One person
  * alone is the idle-hangup case, and the ghost seats of pitfall 13 have the
  * same shape; neither is "time in a call". Somebody seated twice (two tabs)
- * counts once, and sharing in either seat counts as sharing.
+ * counts once, and sharing in either seat counts as sharing. A parked seat
+ * (two people muted and deafened, or simply away) still counts: the sampler
+ * does not judge what a seat is doing.
  *
- * Each row remembers the last minute it added (`voice_sampled_at`), and the
- * upsert only adds when the minute differs. Two samplers briefly running
- * during a worker rollout, or a statement retried after a timeout that had
- * in fact committed, add that minute once.
+ * Each row remembers the time of the last sample that added a minute
+ * (`voice_sampled_at`), and the upsert only adds when that time is at least
+ * `MIN_SAMPLE_GAP_SECONDS` older than this sample. One sampler always counts,
+ * however its timer's phase sits against the clock minute. A second sampler
+ * during a worker rollout, a statement retried after a timeout that had in
+ * fact committed, or a late sample older than the stored one adds nothing,
+ * and the stored time never moves backwards. A write that fails is kept and
+ * retried, oldest first, before the next tick's own write.
  *
  * TRACKS QUEUED
  * Noted where a music write is ACCEPTED (`ws/voice.ts`), never where a queue
@@ -67,6 +73,13 @@ export const USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS = 15 * 60_000;
  * taken yet.
  */
 const WATCH_PARTY_COPY_LOOKBACK_HOURS = HLS_VIEWER_ROW_RETENTION_HOURS;
+/**
+ * A one-minute timer never fires this close together, so one sampler always
+ * counts. A second sampler or a retried statement inside the gap adds nothing.
+ */
+const MIN_SAMPLE_GAP_SECONDS = 45;
+/** Failed sample writes kept for retry: about five minutes of a database blip. */
+const MAX_FAILED_SAMPLES = 5;
 const MIN_PEOPLE_IN_ROOM = 2;
 const MAX_PENDING_MUSIC = 50_000;
 const BLIND_WARNING_INTERVAL_MS = 60 * 60_000;
@@ -158,6 +171,12 @@ export interface UserStatsMetrics {
   /** Person-minutes added by the sampler since this process started. */
   seatMinutes: number;
   sampleFailures: number;
+  /** Failed sample writes that later landed on a retry. */
+  samplesRetried: number;
+  /** Failed sample writes given up on, past `MAX_FAILED_SAMPLES`. */
+  samplesDropped: number;
+  /** Failed sample writes waiting for the next tick. */
+  samplesPending: number;
   blindTicks: number;
   musicNoted: number;
   musicPending: number;
@@ -199,15 +218,23 @@ export function createUserStatsRecorder(
   /** Noted and not yet stored, keyed `day|userId`. */
   let pendingMusic = new Map<string, { userId: string; day: string; count: number }>();
   let flushing: Promise<number> | null = null;
+  /** Sample writes that failed, oldest first, retried before the next tick. */
+  let failedSamples: { at: Date; seats: LiveSeat[] }[] = [];
   let lastBlindWarningAt = 0;
-  let m: Omit<UserStatsMetrics, "enabled" | "musicPending"> = emptyMetrics();
+  let m: Omit<UserStatsMetrics, "enabled" | "musicPending" | "samplesPending"> =
+    emptyMetrics();
 
-  function emptyMetrics(): Omit<UserStatsMetrics, "enabled" | "musicPending"> {
+  function emptyMetrics(): Omit<
+    UserStatsMetrics,
+    "enabled" | "musicPending" | "samplesPending"
+  > {
     return {
       lastSource: null,
       samples: 0,
       seatMinutes: 0,
       sampleFailures: 0,
+      samplesRetried: 0,
+      samplesDropped: 0,
       blindTicks: 0,
       musicNoted: 0,
       musicFlushes: 0,
@@ -224,8 +251,13 @@ export function createUserStatsRecorder(
   ): Promise<{ source: UserStatsSource; written: number }> {
     if (!enabled()) {
       m.lastSource = "off";
+      failedSamples = [];
       return { source: "off", written: 0 };
     }
+    // Oldest first and before this tick's own write, so the stored sample
+    // time only moves forward and a retried minute is not refused by a newer
+    // one.
+    await retryFailedSamples();
     let read: Awaited<ReturnType<typeof readLiveSeats>>;
     try {
       read = await readSeats();
@@ -252,8 +284,17 @@ export function createUserStatsRecorder(
     if (read.seats.length === 0) {
       return { source: read.source, written: 0 };
     }
-    const bucket = new Date(Math.floor(at.getTime() / 60_000) * 60_000);
-    const day = activityDay(bucket.getTime());
+    const written = await writeSample(at, read.seats);
+    if (written === null) {
+      keepFailedSample({ at, seats: read.seats });
+      return { source: read.source, written: 0 };
+    }
+    return { source: read.source, written };
+  }
+
+  /** One sample's minute, or null when the write failed. */
+  async function writeSample(at: Date, seats: LiveSeat[]): Promise<number | null> {
+    const day = activityDay(at.getTime());
     try {
       // Joined to `users` first, so bots, webhooks and the house cast never
       // count and never make a room "two people", and an account deleted
@@ -283,24 +324,57 @@ export function createUserStatsRecorder(
            voice_seconds    = user_daily_stats.voice_seconds + EXCLUDED.voice_seconds,
            share_seconds    = user_daily_stats.share_seconds + EXCLUDED.share_seconds,
            voice_sampled_at = EXCLUDED.voice_sampled_at
-         WHERE user_daily_stats.voice_sampled_at IS DISTINCT FROM EXCLUDED.voice_sampled_at`,
+         WHERE user_daily_stats.voice_sampled_at IS NULL
+            OR user_daily_stats.voice_sampled_at
+                 <= EXCLUDED.voice_sampled_at - interval '${MIN_SAMPLE_GAP_SECONDS} seconds'`,
         [
-          read.seats.map((seat) => seat.userId),
-          read.seats.map((seat) => seat.voiceChannelId),
-          read.seats.map((seat) => seat.sharingScreen),
+          seats.map((seat) => seat.userId),
+          seats.map((seat) => seat.voiceChannelId),
+          seats.map((seat) => seat.sharingScreen),
           day,
-          bucket.toISOString(),
+          at.toISOString(),
         ],
       );
       const written = result.rowCount ?? 0;
       m.seatMinutes += written;
-      return { source: read.source, written };
+      return written;
     } catch (error) {
       m.sampleFailures += 1;
       logEvent("userStats.sampleFailed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { source: read.source, written: 0 };
+      return null;
+    }
+  }
+
+  function keepFailedSample(failed: { at: Date; seats: LiveSeat[] }): void {
+    failedSamples.push(failed);
+    while (failedSamples.length > MAX_FAILED_SAMPLES) {
+      failedSamples.shift();
+      m.samplesDropped += 1;
+    }
+  }
+
+  async function retryFailedSamples(): Promise<void> {
+    if (failedSamples.length === 0) {
+      return;
+    }
+    const queued = failedSamples;
+    failedSamples = [];
+    for (let i = 0; i < queued.length; i += 1) {
+      const written = await writeSample(queued[i].at, queued[i].seats);
+      if (written === null) {
+        // Still failing: keep this one and the rest, in order, ahead of
+        // anything kept meanwhile.
+        const rest = queued.slice(i);
+        const meanwhile = failedSamples;
+        failedSamples = [];
+        for (const failed of [...rest, ...meanwhile]) {
+          keepFailedSample(failed);
+        }
+        return;
+      }
+      m.samplesRetried += 1;
     }
   }
 
@@ -442,10 +516,12 @@ export function createUserStatsRecorder(
       ...m,
       enabled: enabled(),
       musicPending: [...pendingMusic.values()].reduce((sum, e) => sum + e.count, 0),
+      samplesPending: failedSamples.length,
     }),
     resetForTests() {
       pendingMusic = new Map();
       flushing = null;
+      failedSamples = [];
       lastBlindWarningAt = 0;
       m = emptyMetrics();
     },

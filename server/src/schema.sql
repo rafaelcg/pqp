@@ -5326,9 +5326,10 @@ CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
 -- else kept. Counts only. No room, no channel, no other person: who was in a
 -- call with whom is never recorded. `voice_seconds` and `share_seconds` come
 -- from a one-minute sampler over live seats in rooms of two or more people
--- (services/user-stats.ts); `voice_sampled_at` is the last minute bucket
--- added, so two samplers in the same minute, or a retried statement that had
--- in fact committed, add that minute once. `music_queued` counts tracks this
+-- (services/user-stats.ts); `voice_sampled_at` is the time of the last
+-- sample that added a minute, and a sample inside 45 seconds of it, or older
+-- than it, adds nothing: two samplers, a retried statement that had in fact
+-- committed, or a late sample add that minute once. `music_queued` counts tracks this
 -- person put in a call's queue. Starts the day it shipped: nothing before it
 -- can be rebuilt. Kept for as long as the account exists; the cascade removes
 -- it with an art. 18 deletion. Runtime flag `user_stats` stops new writes.

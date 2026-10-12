@@ -9,7 +9,9 @@ import type { MusicState, MusicTrack } from "@pqp/shared";
  *
  * What each case guards:
  *  1. **One minute counts once.** Two samplers in the same minute (a worker
- *     rollout) or a retried statement must not double a person's call time.
+ *     rollout), a retried statement or a late older sample must not double a
+ *     person's call time, and one sampler must not lose a minute to its own
+ *     timer's phase. A failed write is retried, not lost.
  *  2. **Only real calls count.** A seat held for resume, a room of one, and a
  *     bot add nothing.
  *  3. **A blind worker writes nothing** instead of zeros.
@@ -186,6 +188,68 @@ describeDb("user stats", () => {
 
     await first.sample(new Date("2026-10-10T23:01:05Z"));
     expect((await stats())[ana]).toEqual({ voice: 120, share: 120, music: 0 });
+  });
+
+  it("counts every tick of one sampler, and never moves the stored time back", async () => {
+    const ana = await person("ana");
+    const bia = await person("bia");
+    const room = randomUUID();
+    await seat(room, ana);
+    await seat(room, bia);
+
+    // A timer whose phase sits on the minute boundary: two ticks inside one
+    // clock minute are still two minutes of call.
+    const timer = recorder();
+    await timer.sample(new Date("2026-10-10T23:00:00.100Z"));
+    await timer.sample(new Date("2026-10-10T23:00:59.900Z"));
+    expect((await stats())[ana]?.voice).toBe(120);
+
+    // A late sample, older than the stored one, adds nothing...
+    await recorder().sample(new Date("2026-10-10T23:00:30Z"));
+    // ...and does not move the stored time back: had it gone back to :30,
+    // this second sampler's tick 20 s after the stored one would count.
+    await recorder().sample(new Date("2026-10-10T23:01:20Z"));
+    expect((await stats())[ana]?.voice).toBe(120);
+
+    await timer.sample(new Date("2026-10-10T23:01:59.950Z"));
+    expect((await stats())[ana]?.voice).toBe(180);
+  });
+
+  it("retries a failed write before the next tick, oldest first", async () => {
+    const ana = await person("ana");
+    const bia = await person("bia");
+    const room = randomUUID();
+    await seat(room, ana, { sharing: true });
+    await seat(room, bia);
+    let fail = true;
+    const r = createUserStatsRecorder({
+      enabled: () => true,
+      pool: () =>
+        ({
+          query: async (text: string, values?: unknown[]) => {
+            if (fail) {
+              throw new Error("breaker open");
+            }
+            return getPool().query(text, values);
+          },
+        }) as unknown as ReturnType<typeof getPool>,
+    });
+
+    // Seven failed minutes: the five newest are kept.
+    for (let minute = 0; minute < 7; minute += 1) {
+      await r.sample(new Date(Date.parse("2026-10-10T23:00:00Z") + minute * 60_000));
+    }
+    expect(await stats()).toEqual({});
+    expect(r.metrics()).toMatchObject({ samplesPending: 5, samplesDropped: 2 });
+
+    // The database is back: the five kept minutes land, then this one.
+    fail = false;
+    await r.sample(new Date("2026-10-10T23:07:00Z"));
+    expect(await stats()).toEqual({
+      [ana]: { voice: 360, share: 360, music: 0 },
+      [bia]: { voice: 360, share: 0, music: 0 },
+    });
+    expect(r.metrics()).toMatchObject({ samplesPending: 0, samplesRetried: 5 });
   });
 
   it("counts nothing for a held seat, a room of one, a bot or a second tab", async () => {
