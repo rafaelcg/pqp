@@ -31,6 +31,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -40,6 +41,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepForumPostShells } from "./services/forums.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -80,6 +82,15 @@ export const CHANNEL_SESSION_REMINDER_INTERVAL_MS = 60_000;
 /** Daily is plenty for a 90-day retention window; a failure here costs
  * nothing but disk, and resolves on the next run. */
 export const DAILY_MS = 24 * 60 * 60_000;
+/**
+ * Forum post shells: a create that crashed between the post row and its
+ * opening message. Invisible to everyone (every read filters on
+ * `published_at`), so this is hygiene, but a shell holds the composer's staged
+ * files on the post, and those go back to the forum here. Ten minutes old
+ * before it is touched (`FORUM_SHELL_TTL_MS`), so a tick every five minutes
+ * removes one within fifteen.
+ */
+export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Five minutes rather than daily, and unlike every other sweep in this file
@@ -145,6 +156,13 @@ export async function sweepAttachments(): Promise<void> {
 }
 
 async function sweepCommunityHomeMedia(): Promise<void> {
+  // Quarantine expiry first and on its own: a failure in one sweep must not
+  // starve the other. Never touches an illegal-content row at any age.
+  try {
+    await sweepQuarantinedCommunityHomeMedia();
+  } catch (error) {
+    console.error("[content-safety] Baú quarantine sweep failed:", error);
+  }
   try {
     await sweepOrphanedCommunityHomeMedia();
   } catch (error) {
@@ -238,6 +256,7 @@ export function startColdJobs(): ColdJobs {
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
+    every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the

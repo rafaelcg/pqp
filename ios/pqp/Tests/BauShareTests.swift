@@ -244,6 +244,35 @@ final class BauShareTests: XCTestCase {
         XCTAssertEqual(try poster("image", "javascript:alert(1)"), .none)
     }
 
+    func testAVideoCardWithACoverUsesTheCoverAndStillPlays() throws {
+        func card(_ extra: String) throws -> CommunityHomePostCard {
+            try decode(cardJSON("""
+            "mediaKind":"video","mediaUrl":"https://r2.example/v.mp4?sig=1",\(extra)
+            "visibility":"free","locked":false,"pinned":false,"likeCount":0,"commentCount":0
+            """))
+        }
+        let withCover = try card("\"posterUrl\":\"https://r2.example/c.jpg?sig=2\",")
+        XCTAssertEqual(withCover.poster, .coverImage(URL(string: "https://r2.example/c.jpg?sig=2")!))
+        // The play badge keys on the kind, not on which picture is behind it.
+        XCTAssertTrue(withCover.isPlayable)
+        XCTAssertEqual(withCover.mediaUrl, "https://r2.example/v.mp4?sig=1")
+
+        // No field (an older API), an explicit null, or an unreadable cover:
+        // exactly today's first frame.
+        let frame = CommunityHomePostCard.Poster.videoFrame(URL(string: "https://r2.example/v.mp4?sig=1")!)
+        XCTAssertEqual(try card("").poster, frame)
+        XCTAssertEqual(try card("\"posterUrl\":null,").poster, frame)
+        XCTAssertEqual(try card("\"posterUrl\":\"javascript:alert(1)\",").poster, frame)
+    }
+
+    func testACoverOnANonVideoCardIsIgnored() throws {
+        let card = try decode(cardJSON("""
+        "mediaKind":"image","mediaUrl":"https://x.example/a.jpg","posterUrl":"https://x.example/c.jpg",
+        "visibility":"free","locked":false,"pinned":false,"likeCount":0,"commentCount":0
+        """))
+        XCTAssertEqual(card.poster, .image(URL(string: "https://x.example/a.jpg")!))
+    }
+
     // MARK: - The cache
 
     private final class Clock: @unchecked Sendable {

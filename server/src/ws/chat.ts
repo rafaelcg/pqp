@@ -17,6 +17,7 @@ import {
   type ChanceRequest,
   type ChannelFanoutFrame,
   type ChatServerMessage,
+  type ForumPostSummary,
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
@@ -55,6 +56,12 @@ import {
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
+import {
+  conversationTypingAudience,
+  forgetConversationTypingAudience,
+  peekConversationTypingAudience,
+  typingAudienceLookupInFlight,
+} from "../services/conversation-typing.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
   findTimeoutForChannel,
@@ -83,6 +90,11 @@ import {
 import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
+// --- forums ---
+import {
+  bumpForumPostActivity,
+  getForumPostSummary,
+} from "../services/forums.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
@@ -1634,6 +1646,9 @@ function evictChannelViewersLocally(
   // revocation crosses machines with no second topic to keep in step.
   // See `voice/hls-revocation.ts`.
   revokeHlsAccess(channelId, scope);
+  // Somebody left or closed this conversation: whoever types next is told
+  // the current participants, not the ones cached a few seconds ago.
+  forgetConversationTypingAudience(channelId);
   const matches = scopePredicate(scope);
   for (const conn of connections.values()) {
     if (!matches(conn.user.id)) {
@@ -1684,6 +1699,31 @@ function evictUserFromChannelsLocally(
     if (conn.channelId && channelIds.has(conn.channelId)) {
       leaveChannel(conn);
     }
+  }
+}
+
+/**
+ * A conversation's typing frame, for the participants' LISTS: every socket of
+ * every recipient this process holds, except the ones already viewing the
+ * channel (they got it from `channelPresence`). Addressed by account because a
+ * list is not a channel view. At most nine recipients (`DM_MAX_RECIPIENTS`),
+ * so this is a handful of map lookups per frame. Droppable like the viewers'
+ * copy.
+ */
+function deliverTypingToLists(
+  channelId: string,
+  encoded: Buffer,
+  recipients: readonly string[],
+): void {
+  const viewers = channelPresence.get(channelId);
+  for (const userId of recipients) {
+    forEachSocketOfUser(userId, (socket) => {
+      const conn = connections.get(socket);
+      if (conn && viewers?.has(conn)) {
+        return;
+      }
+      sendEncodedDroppable(socket, encoded);
+    });
   }
 }
 
@@ -1837,6 +1877,115 @@ async function notifyChannelActivity(
         : null,
     });
   }
+}
+
+// --- forums ---
+//
+// The forum list's live rows. Every frame goes to the FORUM through
+// `broadcastToChannel`, so it crosses to the sibling instance on the channel
+// relay like any channel frame (both types are in `CHAT_SERVER_MESSAGE_TYPES`,
+// which is what lets the receiving side accept them).
+
+/** A post appeared or changed: retitled, retagged, pinned, bumped, resolved. */
+export function announceForumPostUpdate(post: ForumPostSummary): void {
+  broadcastToChannel(post.forumId, {
+    type: "forum-post-upsert",
+    forumId: post.forumId,
+    post,
+  });
+}
+
+/**
+ * A post was just published: its row for the forum's viewers, and the
+ * forum's unread dot for everyone else who can see it. The activity frame is
+ * the same content-free `channel-activity` a message sends (a server
+ * channel's frame never carries a preview), and it pings nobody: a new post
+ * records no mentions on the forum, and the opening message's own mentions
+ * already went out on the post's id.
+ */
+export async function announceForumPost(
+  post: ForumPostSummary,
+  authorId: string,
+): Promise<void> {
+  announceForumPostUpdate(post);
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: post.forumId,
+      authorId,
+      mentions: [],
+      repliedToUserId: null,
+      preview: null,
+    });
+  }
+  await notifyChannelActivity(post.forumId, authorId, [], null, {
+    webPush: false,
+  });
+}
+
+/** A post was deleted: the forum's list drops the row, an open panel closes. */
+export function announceForumPostRemoved(forumId: string, postId: string): void {
+  const frame = { type: "forum-post-removed" as const, forumId, postId };
+  broadcastToChannel(forumId, frame);
+  broadcastToChannel(postId, frame);
+}
+
+/**
+ * Posts with a bump in flight on this process, and the newest message time
+ * that arrived while it ran. A burst of replies to one post costs one refresh
+ * in flight plus one trailing refresh, not one summary read per reply.
+ */
+const forumBumps = new Map<string, { latest: Date | null; done?: Promise<void> }>();
+
+/** Test seam: wait for every bump in flight on this process to land. */
+export async function settleForumBumps(): Promise<void> {
+  while (forumBumps.size > 0) {
+    await Promise.all([...forumBumps.values()].map((state) => state.done));
+  }
+}
+
+/**
+ * The bump, after a message landed in a thread channel. Fire and forget: the
+ * send never waits on the post's summary (its reply count and thumbnail are
+ * reads over the post), and never fails because of it. The message is already
+ * stored and fanned out; a list one reply behind until the next bump is the
+ * cost of a database hiccup here.
+ */
+function bumpForumPost(postId: string, at: Date): void {
+  const running = forumBumps.get(postId);
+  if (running) {
+    if (!running.latest || at > running.latest) {
+      running.latest = at;
+    }
+    return;
+  }
+  const state: { latest: Date | null; done?: Promise<void> } = { latest: null };
+  forumBumps.set(postId, state);
+  state.done = (async () => {
+    let next: Date | null = at;
+    try {
+      while (next) {
+        // Each round on its own: a failed summary read must not drop a reply
+        // that arrived meanwhile, whose time is the next round's bump.
+        try {
+          const forumId = await bumpForumPostActivity(postId, next);
+          if (!forumId) {
+            // A chat thread, or a shell: nothing listed moved, nor will.
+            return;
+          }
+          const summary = await getForumPostSummary(postId);
+          if (summary) {
+            announceForumPostUpdate(summary);
+          }
+        } catch (error) {
+          console.error("[forums] bump failed:", error);
+        }
+        next = state.latest;
+        state.latest = null;
+      }
+    } finally {
+      forumBumps.delete(postId);
+    }
+  })();
 }
 
 /**
@@ -2321,6 +2470,10 @@ async function postChannelMessageAttempt(
       messageId: threadInfo.rootMessageId,
       thread: threadInfo,
     });
+  } else if (threadInfo) {
+    // --- forums --- a thread with no origin message is a forum post (or a
+    // shell still waiting for this very message, which the bump skips).
+    bumpForumPost(input.channelId, dbMessage.created_at);
   }
 
   if (url && !cacheFresh) {
@@ -2505,15 +2658,54 @@ export async function handleChatMessage(
         sendEncodedDroppable(other.socket, encoded);
       }
     }
+    // Conversas: a conversation's participants see "digitando…" in their
+    // LIST too, not only with the conversation open. Same frame, so every
+    // client that already filters by its open channel (web, iOS, Android) is
+    // unchanged; the list reads the frames for the channels it is not showing.
+    //
+    // The viewers' copy above and the bus publish below never wait on the
+    // database: on a cache hit the recipients ride along at once; on a miss
+    // the frame goes out without them and the list copy follows the lookup,
+    // as its own `listOnly` frame on the bus. Server channels are memoised as
+    // "no list", so they never query. A failed lookup costs the list its
+    // indicator, never the open channel's.
+    const typing = {
+      channelId: payload.channelId,
+      userId: conn.user.id,
+      displayName: conn.user.display_name,
+    };
+    const known = peekConversationTypingAudience(payload.channelId, conn.user.id);
+    if (known && known.length > 0) {
+      deliverTypingToLists(payload.channelId, encoded, known);
+    }
     if (isBusEnabled()) {
       // The hottest thing on the bus by a wide margin — one frame per user per
       // second at the limiter's sustained rate. Bounded by `typingLimiter`
       // above, which is why the limiter runs before this and not after.
       publishToCluster(TYPING_TOPIC, {
-        channelId: payload.channelId,
-        userId: conn.user.id,
-        displayName: conn.user.display_name,
+        ...typing,
+        // Additive: an older instance ignores it and delivers to viewers only.
+        ...(known && known.length > 0 ? { recipients: known } : {}),
       });
+    }
+    if (
+      known === undefined &&
+      !typingAudienceLookupInFlight(payload.channelId, conn.user.id)
+    ) {
+      void conversationTypingAudience(payload.channelId, conn.user.id)
+        .then((recipients) => {
+          if (!recipients || recipients.length === 0) {
+            return;
+          }
+          deliverTypingToLists(payload.channelId, encoded, recipients);
+          if (isBusEnabled()) {
+            // Lists only: the viewers everywhere already had the frame
+            // above. An older instance delivers it to its viewers again,
+            // which for an indicator that lives five seconds is harmless.
+            publishToCluster(TYPING_TOPIC, { ...typing, recipients, listOnly: true });
+          }
+        })
+        .catch(() => {});
     }
     return;
   }
@@ -2855,8 +3047,16 @@ subscribeToCluster(TYPING_TOPIC, (data) => {
   // A second tab of the same user held here does receive it — which is already
   // what happens with two tabs on one process today, so the behaviour is the
   // same whichever instance the tabs landed on.
-  for (const conn of channelPresence.get(channelId) ?? []) {
-    sendEncodedDroppable(conn.socket, encoded);
+  // A `listOnly` frame is the late list copy of a frame whose viewers'
+  // copy already went out (see the typing handler).
+  if (frame?.listOnly !== true) {
+    for (const conn of channelPresence.get(channelId) ?? []) {
+      sendEncodedDroppable(conn.socket, encoded);
+    }
+  }
+  const recipients = asStringArray(frame?.recipients);
+  if (recipients && recipients.length > 0) {
+    deliverTypingToLists(channelId, encoded, recipients);
   }
 });
 

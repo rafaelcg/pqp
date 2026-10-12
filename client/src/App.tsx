@@ -7,6 +7,7 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
+  ChevronLeft,
   History,
   Lock,
   Menu,
@@ -84,6 +85,7 @@ import {
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { ForumPlaceholderPane } from "@/components/layout/forum-placeholder-pane";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -326,6 +328,7 @@ import {
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   ApiError,
+  createConversation,
   blockUser,
   bulkDeleteMessages,
   createChannel,
@@ -458,6 +461,29 @@ import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import {
+  startConversationsConfig,
+  useConversationsConfig,
+} from "@/lib/conversations-config";
+import {
+  arrivedForPerson,
+  landingPhoneTab,
+  readStoredPhoneTab,
+  storePhoneTab,
+  usePhoneWidth,
+  type PhoneTab,
+} from "@/lib/phone-tabs";
+import { PhoneTabBar } from "@/components/conversations/phone-tab-bar";
+import {
+  PhoneServersScreen,
+  PhoneYouScreen,
+} from "@/components/conversations/phone-screens";
+import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
+import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
+import { QuickSwitcher } from "@/components/conversations/quick-switcher";
+import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
+import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
+import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
 import {
   dismissNewcomerInvite,
   isNewcomerInviteDismissed,
@@ -3122,6 +3148,37 @@ function MainAppContent({
   const stableOnMention = useStableCallback((username: string) =>
     setComposerInsert(`@${username}`),
   );
+  // Conversas: "Mensagem" on a member row and "Mandar um oi" after a friend
+  // accepts. Opens or reuses the 1:1; a refusal (privacy, a block) comes back
+  // in the server's own words on the app's error line.
+  const stableOnMessagePerson = useStableCallback((userId: string, door?: DmDoor) => {
+    if (door) {
+      trackDmStart(door);
+    }
+    // The account that asked. A sign-out or account switch while the request
+    // is in flight must not drop this conversation into the next account.
+    const askedBy = userIdRef.current;
+    void (async () => {
+      try {
+        const { conversation } = await createConversation([userId]);
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
+        setConversations((prev) => upsertConversation(prev, conversation));
+        setWhatsNewOpen(false);
+        await selectConversation(conversation.channelId);
+      } catch (error) {
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
+        setAppError(
+          error instanceof ApiError || error instanceof Error
+            ? error.message
+            : t("dm.dialog.failed"),
+        );
+      }
+    })();
+  });
   const stableOnBlockUser = useStableCallback((userId: string) =>
     void handleBlockUser(userId),
   );
@@ -3299,6 +3356,8 @@ function MainAppContent({
   }, [inCall, voiceState.isMuted, voiceState.isDeafened]);
 
   const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
+  // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
     unreadHoldRef.current.delete(channelId);
@@ -4717,6 +4776,10 @@ function MainAppContent({
               activity.kind ?? "server",
             );
             if (activity.kind && activity.kind !== "server") {
+              // Their line landed, so the list stops saying they are typing.
+              if (activity.authorId) {
+                clearListTyping(activity.channelId, activity.authorId);
+              }
               // This device's clock: the frame carries no message time. Kept
               // so the next broadcast is not ordered against it.
               const now = new Date().toISOString();
@@ -4806,6 +4869,20 @@ function MainAppContent({
               };
             });
             return;
+          }
+
+          // Conversas: "digitando…" on a conversation's row. The server sends
+          // a conversation's typing to every participant, open or not; the
+          // chat controllers below keep owning the open channel's line, so
+          // this only records and falls through.
+          if (
+            message.type === "typing-broadcast" &&
+            message.userId !== userIdRef.current &&
+            conversationsRef.current.some(
+              (one) => one.channelId === message.channelId,
+            )
+          ) {
+            noteListTyping(message.channelId, message.userId, message.displayName);
           }
 
           // Somebody heard a voice note: the listener's own other sockets (so
@@ -5140,6 +5217,17 @@ function MainAppContent({
                 ? withProfileUpdate(prev, message)
                 : prev,
             );
+            return;
+          }
+
+          // --- forums --- the forum list's live rows. Nothing draws a forum
+          // list yet (the pane lands with forum PR 3b, which dispatches these
+          // to it), so they stop here instead of falling through to the voice
+          // signaling handler, which is typed for voice frames only.
+          if (
+            message.type === "forum-post-upsert" ||
+            message.type === "forum-post-removed"
+          ) {
             return;
           }
 
@@ -5698,8 +5786,16 @@ function MainAppContent({
   refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
+  /**
+   * Conversas on a phone: the bottom bar's tab follows a conversation opened
+   * by any door (a toast, a push, Ctrl+K, a profile card). Set by the phone
+   * shell below; null everywhere else.
+   */
+  const phoneFollowRef = useRef<((tab: PhoneTab) => void) | null>(null);
+
   const selectConversation = useCallback(
     async (channelId: string) => {
+      phoneFollowRef.current?.("conversas");
       setSelection(HOME_SELECTION);
       syncRoute(HOME_SELECTION, channelId);
       await openChannel(channelId);
@@ -8906,6 +9002,47 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
     [newcomerInviteUserId],
   );
+  // Conversas (`conversations_home`): every signed-in account past the age
+  // gate (every `/api` route is 403 before it), same refresh pass.
+  const conversationsConfigUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (conversationsConfigUserId ? startConversationsConfig() : undefined),
+    [conversationsConfigUserId],
+  );
+  const conversationsConfig = useConversationsConfig();
+  const conversationsHome = conversationsConfig.home;
+  // Ctrl/Cmd+K is the "ir pra" switcher while Conversas is on (message search
+  // moved to F, see `channel-list.tsx`). Off, K stays message search and this
+  // listener does not exist.
+  useEffect(() => {
+    if (!conversationsHome) {
+      setSwitcherOpen(false);
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        setSwitcherOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [conversationsHome]);
+  // Conversas: the profile card's "Última conversa", read off the list.
+  const lastConversationWith = useCallback(
+    (userId: string) =>
+      conversations.find(
+        (one) =>
+          one.participants.length === 1 && one.participants[0]!.id === userId,
+      )?.lastMessageAt ?? null,
+    [conversations],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
@@ -9081,6 +9218,105 @@ function MainAppContent({
     const timer = window.setTimeout(() => setCelebrateArrivalFor(null), 3000);
     return () => window.clearTimeout(timer);
   }, [celebrateArrivalFor]);
+
+  // CONVERSAS ON A PHONE (`conversations_home_phone_tabs`): below `md` the
+  // rail goes and the bottom bar Conversas / Servidores / Tu comes in. A live
+  // party's own phone layout outranks it, as it outranks the rail today.
+  const phoneWidth = usePhoneWidth();
+  // Before the boot gates below (hooks must not move); a live party's phone
+  // layout is folded in once it is known (`phoneShell`).
+  const phoneShellAllowed = conversationsConfig.phoneTabs && phoneWidth;
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>(() =>
+    landingPhoneTab({
+      stored: readStoredPhoneTab(),
+      arrivedForPerson: arrivedForPerson(window.location),
+    }),
+  );
+  const [phoneServersOpen, setPhoneServersOpen] = useState(false);
+
+  /** A tab was tapped: remember it, and show that tab's root screen. */
+  const selectPhoneTab = useCallback(
+    (tab: PhoneTab) => {
+      storePhoneTab(tab);
+      setPhoneTab(tab);
+      setWhatsNewOpen(false);
+      setDirectoryOpen(false);
+      if (tab === "conversas") {
+        setPhoneServersOpen(false);
+        if (selection.kind !== "dm") {
+          selectHome();
+        }
+        setMobileNavOpen(true);
+      } else if (tab === "servidores") {
+        setPhoneServersOpen(true);
+        setMobileNavOpen(false);
+      } else {
+        setPhoneServersOpen(false);
+        setMobileNavOpen(false);
+      }
+    },
+    [selection.kind, selectHome],
+  );
+
+  // The first time the phone shell is on screen, open the landing tab on its
+  // root screen, unless the page was opened on a specific conversation or
+  // channel (a push, a shared link), which then stays open. Waits for the
+  // boot to finish its own first navigation (the first server's landing
+  // channel opens on the first ready socket), or that would land on top.
+  const phoneLandedRef = useRef(false);
+  // Set further down, once the party facts are known: a live party's own
+  // phone layout outranks the tabs, so the landing must not open a list on
+  // top of the film.
+  const partyPhoneLayoutRef = useRef(false);
+  // The same fact as state, so the landing runs again once a party ends.
+  const [phonePartyLayout, setPhonePartyLayout] = useState(false);
+  const phoneOpenedPathRef = useRef(
+    typeof window === "undefined" ? "" : window.location.pathname,
+  );
+  useEffect(() => {
+    if (
+      !phoneShellAllowed ||
+      phoneLandedRef.current ||
+      phonePartyLayout ||
+      !bootstrapReady ||
+      connection !== "online"
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (partyPhoneLayoutRef.current) {
+        return;
+      }
+      phoneLandedRef.current = true;
+      // The path the page was OPENED on, not where the app has routed since.
+      const opened = phoneOpenedPathRef.current;
+      const openedOnConversation = /^\/app\/dm\/[^/]+/.test(opened);
+      const openedOnChannel = /^\/app\/server\/[^/]+\/[^/]+/.test(opened);
+      if (openedOnConversation || openedOnChannel) {
+        setPhoneTab(openedOnConversation ? "conversas" : "servidores");
+        return;
+      }
+      selectPhoneTab(phoneTab);
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // Once, when the shell and the boot are both ready; later tabs are taps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneShellAllowed, bootstrapReady, connection, phonePartyLayout]);
+
+  phoneFollowRef.current = phoneShellAllowed
+    ? (tab: PhoneTab) => {
+        // Whatever was opened is the screen now: the list drawer and the
+        // servers screen step back, the way a row tap closes them.
+        setPhoneServersOpen(false);
+        setMobileNavOpen(false);
+        setPhoneTab((current) => {
+          if (current !== tab) {
+            storePhoneTab(tab);
+          }
+          return tab;
+        });
+      }
+    : null;
 
   if (bootstrapError) {
     return (
@@ -9405,6 +9641,23 @@ function MainAppContent({
     dismissed: partyNewcomerStripClosed,
   };
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
+  const phoneShell = phoneShellAllowed && !partyPhoneLayout;
+  partyPhoneLayoutRef.current = partyPhoneLayout;
+  if (phonePartyLayout !== partyPhoneLayout) {
+    // A render-time mirror of a derived fact, guarded so it settles at once.
+    setPhonePartyLayout(partyPhoneLayout);
+  }
+  // The bar is the way between the three lists. Inside a conversation or a
+  // channel the screen is the conversation's, the way every phone chat app
+  // does it; the header's back arrow returns to the list and the bar.
+  const phoneBarVisible =
+    phoneShell &&
+    !directoryOpen &&
+    !whatsNewOpen &&
+    (phoneTab === "tu" ||
+      (phoneTab === "servidores" && (phoneServersOpen || mobileNavOpen)) ||
+      (phoneTab === "conversas" && mobileNavOpen));
+
   const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
   const hideDownloadHintForNewcomer =
     suppressAppInviteForNewcomer(partyNewcomerFacts);
@@ -9766,7 +10019,10 @@ function MainAppContent({
     voiceState.status !== "idle" &&
     voiceState.voiceChannelId !== null &&
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
-  const sidebarFooter = (compact = false) => (
+  const sidebarFooter = (
+    compact = false,
+    { userPanel = true }: { userPanel?: boolean } = {},
+  ) => (
     <>
       {/* Chrome only. The embed is mounted once, below, because this
           function has three call sites and two of them can be on screen at
@@ -9862,6 +10118,7 @@ function MainAppContent({
           <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
         </>
       )}
+      {userPanel && (
       <UserPanel
         compact={compact}
         hideDownloadHint={hideDownloadHintForNewcomer}
@@ -9905,6 +10162,7 @@ function MainAppContent({
           setSettingsOpen(true);
         }}
       />
+      )}
     </>
   );
 
@@ -9930,10 +10188,11 @@ function MainAppContent({
         <button
           type="button"
           className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
-          aria-label={t("chrome.openNav")}
+          aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
+          data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
-          <Menu className="h-5 w-5" />
+          {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
@@ -11127,6 +11386,7 @@ function MainAppContent({
       moderation={cardModeration}
       watchParty={cardWatchParty}
       onOpenConversation={(conversation) => {
+        trackDmOpen("profile");
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
       }}
@@ -11143,6 +11403,7 @@ function MainAppContent({
       // insert effect picks this up on mount with the text already in it.
       onComposeDraft={(text) => setComposerInsert(text)}
       onMention={(username) => setComposerInsert(`@${username}`)}
+      lastConversationAt={conversationsHome ? lastConversationWith : undefined}
       roles={serverRoles}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
@@ -11159,7 +11420,11 @@ function MainAppContent({
     >
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
-    <div className="app-shell animate-fade-in relative flex h-full">
+    <div
+      className="app-shell animate-fade-in relative flex h-full"
+      data-phone-tabs={phoneShell ? "" : undefined}
+      data-phone-bar={phoneBarVisible ? "" : undefined}
+    >
       {/* Mounted at the root so remote audio keeps playing when you navigate
           away from the voice channel. */}
       <VoiceAudioSinks
@@ -11226,10 +11491,18 @@ function MainAppContent({
       <VoiceNoteMiniPlayer />
 
       {/* Also at the root: a DM finds you wherever you are in the app. */}
+      {conversationsHome && (
+        <FriendAcceptedToast
+          onSayHi={(person) => stableOnMessagePerson(person.id, "friend-accepted")}
+        />
+      )}
       <DmToasts
         conversations={conversations}
         selectedChannelId={selectedChannelId}
-        onOpen={(channelId) => void selectConversation(channelId)}
+        onOpen={(channelId) => {
+          trackDmOpen("toast");
+          void selectConversation(channelId);
+        }}
         onActiveChange={setDmToastActive}
       />
 
@@ -11324,8 +11597,8 @@ function MainAppContent({
         streamAlertInfo={streamAlerts.byServer}
         onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
-        phoneHidden={partyPhoneLayout}
-        mobileNavOpen={mobileNavOpen}
+        phoneHidden={partyPhoneLayout || phoneShell}
+        mobileNavOpen={phoneShell ? false : mobileNavOpen}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
@@ -11358,8 +11631,14 @@ function MainAppContent({
         onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
+        conversationsHome={conversationsHome}
+        conversations={conversations}
+        openConversationId={
+          selection.kind === "dm" && !whatsNewOpen ? selectedChannelId : null
+        }
         selectedPinnedId={selectedPinnedId}
         onSelectPinned={(channelId) => {
+          trackDmOpen(pinnedChannelIds.has(channelId) ? "rail-pinned" : "rail-unread");
           setWhatsNewOpen(false);
           void selectConversation(channelId);
           setMobileNavOpen(false);
@@ -11391,6 +11670,70 @@ function MainAppContent({
         }
       />
 
+      {phoneShell && phoneTab === "servidores" && phoneServersOpen && (
+        <PhoneServersScreen
+          servers={servers}
+          serverUnread={serverUnread}
+          liveServerIds={watchParties.liveServerIds}
+          onSelectServer={(id) => {
+            setPhoneServersOpen(false);
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId: id });
+            void loadChannels(id);
+            setMobileNavOpen(true);
+          }}
+          onCreateServer={() => setShowCreateServer(true)}
+          onJoinServer={() => setInviteMode("join")}
+          onOpenCommunities={
+            communitiesEnabled
+              ? () => {
+                  setWhatsNewOpen(false);
+                  setDirectoryOpen(true);
+                }
+              : undefined
+          }
+          footer={sidebarFooter(false, { userPanel: false })}
+        />
+      )}
+      {phoneShell && phoneTab === "tu" && (
+        <PhoneYouScreen
+          me={{
+            displayName: user?.displayName ?? "",
+            avatarUrl: user?.avatarUrl ?? null,
+            tag: user?.tag ?? null,
+            handle: user?.handle ?? null,
+          }}
+          whatsNewUnread={whatsNewUnread}
+          onOpenProfile={() => {
+            setSettingsSection("profile");
+            setSettingsOpen(true);
+          }}
+          onOpenSettings={() => {
+            setSettingsSection(null);
+            setSettingsOpen(true);
+          }}
+          onOpenWhatsNew={handleOpenWhatsNew}
+          onOpenHelp={() => {
+            setSettingsSection("help");
+            setSettingsOpen(true);
+          }}
+          footer={sidebarFooter()}
+        />
+      )}
+      {phoneBarVisible && (
+        <PhoneTabBar
+          tab={phoneTab}
+          onSelect={selectPhoneTab}
+          conversations={conversations}
+          unread={unread}
+          openConversationId={selection.kind === "dm" ? selectedChannelId : null}
+          serversWaiting={
+            servers.filter((server) => (serverUnread[server.id]?.mentions ?? 0) > 0).length
+          }
+          me={{ displayName: user?.displayName ?? "", avatarUrl: user?.avatarUrl ?? null }}
+        />
+      )}
+
       {/* THE ONE EMBED. Mounted here, outside every branch, because it must
           never unmount while somebody is listening: unmounting the iframe is
           what stops the sound. The footers below draw the radio and the
@@ -11407,6 +11750,8 @@ function MainAppContent({
       >
       {selection.kind === "dm" ? (
         <DmList
+          home={conversationsHome}
+          phoneShell={phoneShell}
           conversations={conversations}
           selectedChannelId={selectedChannelId}
           unread={unread}
@@ -11415,7 +11760,10 @@ function MainAppContent({
           viewerId={user?.id ?? null}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
-          onSelectConversation={(id) => void selectConversation(id)}
+          onSelectConversation={(id) => {
+            trackDmOpen("list");
+            void selectConversation(id);
+          }}
           onStartConversation={() => setNewDmOpen(true)}
           // Home-with-nothing-selected IS the Friends view, so "open friends"
           // is just deselecting the conversation.
@@ -11430,7 +11778,7 @@ function MainAppContent({
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
-          footer={sidebarFooter()}
+          footer={sidebarFooter(false, { userPanel: !phoneShell })}
         />
       ) : (
         <ChannelList
@@ -11547,7 +11895,7 @@ function MainAppContent({
           onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
-          footer={sidebarFooter(sidebarIconsOnly)}
+          footer={sidebarFooter(sidebarIconsOnly, { userPanel: !phoneShell })}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
@@ -11647,9 +11995,27 @@ function MainAppContent({
             only serves the server-side selections. */}
         {selection.kind === "dm" && !selectedChannel && !channelsLoading && (
           <FriendsView
+            hero={
+              conversationsHome && !conversationsLoading && conversations.length === 0
+                ? ({ openAdd }) => (
+                    <ConversationsEmpty
+                      viewerId={user?.id ?? null}
+                      servers={servers}
+                      inviteHref={
+                        user?.handle
+                          ? `${window.location.origin}/@${user.handle}`
+                          : window.location.origin
+                      }
+                      onAddFriend={openAdd}
+                      onSayHi={(userId) => stableOnMessagePerson(userId, "suggestion")}
+                    />
+                  )
+                : undefined
+            }
             currentUserId={user?.id ?? null}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
+              trackDmOpen("friends");
               setConversations((prev) => upsertConversation(prev, conversation));
               void selectConversation(conversation.channelId);
             }}
@@ -11810,6 +12176,15 @@ function MainAppContent({
 
         {selectedChannel?.type === "text" && chatPane}
 
+        {/* A forum holds posts, not messages, so it never mounts the chat.
+            Placeholder until the forum pane (PR 3b) takes this slot. */}
+        {selectedChannel?.type === "forum" && (
+          <ForumPlaceholderPane
+            channel={selectedChannel}
+            onOpenNav={() => setMobileNavOpen(true)}
+          />
+        )}
+
         {selectedChannel &&
           isVoiceRoomChannelType(selectedChannel.type) &&
           chatPane}
@@ -11946,6 +12321,11 @@ function MainAppContent({
           members={serverMembers}
           onMemberNickname={stableOnMemberNickname}
           onMention={stableOnMention}
+          onMessageMember={
+            conversationsHome
+              ? (userId) => stableOnMessagePerson(userId, "member-row")
+              : undefined
+          }
           onBlockUser={stableOnBlockUser}
           onUnblockUser={stableOnUnblockUser}
           onReportUser={stableOnReportUser}
@@ -12164,10 +12544,16 @@ function MainAppContent({
       />
 
       <NewDmDialog
+        home={conversationsHome}
+        conversations={conversations}
+        onCreatedInBackground={(conversation) =>
+          setConversations((prev) => upsertConversation(prev, conversation))
+        }
         open={newDmOpen}
         currentUserId={user?.id ?? null}
         onClose={() => setNewDmOpen(false)}
         onCreated={(conversation) => {
+          trackDmStart("new-conversation", conversation.kind === "group" ? "group" : "dm");
           setConversations((prev) => upsertConversation(prev, conversation));
           void selectConversation(conversation.channelId);
         }}
@@ -12527,7 +12913,51 @@ function MainAppContent({
       )}
 
       {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
+      {conversationsHome && (
+        <QuickSwitcher
+          open={switcherOpen}
+          onClose={() => setSwitcherOpen(false)}
+          sources={{
+            viewerId: user?.id ?? null,
+            friends: friends.data.friends,
+            conversations,
+            unread,
+            members: selection.kind === "server" ? serverMembers : [],
+            servers,
+            channels: selection.kind === "server" ? channels : [],
+            openServerName:
+              selection.kind === "server" ? (selectedServer?.name ?? null) : null,
+          }}
+          searchServerName={
+            selection.kind === "server" ? (selectedServer?.name ?? null) : null
+          }
+          onOpenConversation={(channelId) => {
+            trackDmOpen("switcher");
+            setWhatsNewOpen(false);
+            selectConversation(channelId).catch((error: unknown) =>
+              setAppError(
+                error instanceof Error ? error.message : t("dm.dialog.failed"),
+              ),
+            );
+          }}
+          onMessagePerson={(userId) => stableOnMessagePerson(userId, "switcher")}
+          onSelectServer={(serverId) => {
+            phoneFollowRef.current?.("servidores");
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId });
+            void loadChannels(serverId);
+          }}
+          onSelectChannel={stableOnSelectChannel}
+          onSearchMessages={(query) =>
+            window.dispatchEvent(
+              new CustomEvent(SEARCH_MESSAGES_EVENT, { detail: { query } }),
+            )
+          }
+        />
+      )}
+
       <ShortcutOverlay
+        conversationsHome={conversationsHome}
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}

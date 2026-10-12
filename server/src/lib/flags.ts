@@ -286,6 +286,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
   },
+  bau_custom_cover: {
+    description:
+      "Capa dos vídeos do Baú: quem posta escolhe um frame do vídeo ou sobe uma imagem (desligado: todo mundo vê o primeiro frame, as capas ficam guardadas).",
+    env: "BAU_CUSTOM_COVER",
+    parseEnv: onUnlessOff,
+    // On: it only changes the picture shown before play, and the off switch
+    // is here for a misfire seen live. Per server for the same reason as the
+    // phone cut: every reader hydrates posts of one server, and create /
+    // update are routes under `/servers/:id`.
+    codeDefault: true,
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (customCoverEnabled)",
+  },
   bau_post_push: {
     description:
       "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
@@ -590,6 +603,21 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
     clientVia: "GET /api/dms/config (phoneTabs)",
+  },
+  forum_channels: {
+    description:
+      "Canais fórum: posts com título, tags e respostas, em vez de um chat corrido (desligado: ninguém cria fórum nem post novo; o que já existe continua aberto pra ler e responder).",
+    env: "FORUM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody once the web and
+    // the phones handle forums. See docs/plans/FORUM_CHANNELS.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the forum routes from a channel, and the client asks
+    // `GET /api/forum/config?serverId=`. The Discord import is the exception
+    // (a new server has no override yet) and asks without one: global only.
+    perServer: true,
+    clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

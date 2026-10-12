@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const {
   buildTrayTemplate,
   trayTooltip,
+  closeAction,
   shouldHideToTray,
   trayLikelyAvailable,
   normalizeVoiceState,
@@ -176,6 +177,41 @@ describe("shouldHideToTray while signed in", () => {
       shouldHideToTray({ ...base, quitting: true, signedIn: true, platform: "win32" }),
       false,
     );
+  });
+});
+
+describe("closeAction", () => {
+  const base = { keepInTray: true, quitting: false };
+
+  it("hides during a call or signed in when a tray is there", () => {
+    assert.equal(closeAction({ ...base, inCall: true, platform: "linux", trayAvailable: true }), "hide");
+    assert.equal(
+      closeAction({ ...base, inCall: false, signedIn: true, platform: "linux", trayAvailable: true }),
+      "hide",
+    );
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: true, platform: "win32" }), "hide");
+  });
+
+  it("never hides with no tray: a call minimizes, anything else closes", () => {
+    assert.equal(
+      closeAction({ ...base, inCall: true, platform: "linux", trayAvailable: false }),
+      "minimize",
+    );
+    assert.equal(
+      closeAction({ ...base, inCall: false, signedIn: true, platform: "linux", trayAvailable: false }),
+      "close",
+    );
+    assert.equal(
+      closeAction({ ...base, inCall: true, platform: "win32", trayAvailable: false }),
+      "minimize",
+    );
+  });
+
+  it("closes while quitting, with the preference off, or with nothing to keep up", () => {
+    assert.equal(closeAction({ ...base, quitting: true, inCall: true, trayAvailable: true }), "close");
+    assert.equal(closeAction({ ...base, keepInTray: false, inCall: true, trayAvailable: true }), "close");
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: false, platform: "linux" }), "close");
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: true, platform: "darwin" }), "close");
   });
 });
 

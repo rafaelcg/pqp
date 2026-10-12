@@ -40,6 +40,13 @@ export const searchResultSchema = z.object({
   messageId: z.string().uuid(),
   channelId: z.string().uuid(),
   channelName: z.string(),
+  /**
+   * The channel `channelId` sits under when it is a thread or a forum post
+   * (the text channel or the forum), so a hit inside a post can open the
+   * forum with the post on top. Optional until the search route sends it
+   * (forum PR 2); a missing value reads as "not a thread".
+   */
+  parentChannelId: z.string().uuid().nullable().optional(),
   authorId: z.string().uuid(),
   authorName: z.string(),
   authorTag: z.string().nullable(),

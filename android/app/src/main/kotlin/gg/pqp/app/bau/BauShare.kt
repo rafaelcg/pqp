@@ -192,6 +192,11 @@ data class BauPostCard(
     /** `image` / `video` / `youtube` / `twitch` / `tiktok` / `instagram` / `file`, or null. */
     val mediaKind: String? = null,
     val mediaUrl: String? = null,
+    /**
+     * The author's cover for a `video`, or null (no cover, or an older API).
+     * `mediaUrl` stays the video file.
+     */
+    val posterUrl: String? = null,
     val visibility: String = "public",
     val locked: Boolean = false,
     val pinned: Boolean = false,
@@ -199,6 +204,11 @@ data class BauPostCard(
     val commentCount: Int = 0,
     val publishedAt: String? = null,
 ) {
+    /** A cover that can actually be fetched; anything else falls back to the frame. */
+    val hasReadableCover: Boolean
+        get() = posterUrl != null &&
+            (posterUrl.startsWith("https://") || posterUrl.startsWith("http://"))
+
     /** What fills the poster slot. See [BauCardPoster]. */
     val poster: BauCardPoster get() = BauCardPoster.of(this)
 
@@ -219,6 +229,9 @@ enum class BauCardPoster {
     /** A picture to load. */
     Image,
 
+    /** A stored video whose author chose a cover: that picture, with the play badge. */
+    Cover,
+
     /** A signed video file: its first frame, never played here. */
     VideoFrame,
 
@@ -230,6 +243,9 @@ enum class BauCardPoster {
 
     companion object {
         fun of(card: BauPostCard): BauCardPoster = when {
+            // The cover wins over the first frame, and it does not need the
+            // file URL: a video that cannot be read still reads as a video.
+            card.mediaKind == "video" && card.hasReadableCover -> Cover
             card.mediaKind == "video" && card.mediaUrl != null -> VideoFrame
             card.mediaUrl != null && (card.mediaKind == "image" || card.mediaKind == "youtube") -> Image
             card.mediaKind != null && card.mediaKind in BauPostCard.PLAYABLE -> Plate

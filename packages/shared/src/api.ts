@@ -17,12 +17,19 @@ import { pollSchema } from "./polls.js";
  * START_WATCH_PARTY may put a stream on it, everyone else joins as audience.
  * Clients that predate it should treat it as `voice` (see
  * `isVoiceRoomChannelType` in watch-party-channel.ts).
+ *
+ * `forum` holds posts instead of messages: each post is a thread channel
+ * under it (see `forums.ts`). Creating one is refused 403
+ * `forum_channels_off` unless the runtime flag `forum_channels` is on for the
+ * server. A forum never carries a message of its own; its topic is the
+ * forum's guidelines.
  */
 export const channelTypeSchema = z.enum([
   "text",
   "voice",
   "category",
   "watch_party",
+  "forum",
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 

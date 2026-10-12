@@ -189,6 +189,31 @@ describe("toPostCard", () => {
     );
     expect(yt.mediaKind).toBe("youtube");
     expect(yt.mediaUrl).toBe("https://i.ytimg.com/vi/x/hqdefault.jpg");
+    expect(yt.posterUrl).toBeNull();
+    expect(video.posterUrl).toBeNull();
+  });
+
+  it("carries the cover the author chose for a video, beside the video itself", () => {
+    const card = toPostCard(
+      {
+        ...base,
+        hasMedia: true,
+        media: {
+          kind: "video",
+          name: "a.mp4",
+          contentType: "video/mp4",
+          byteSize: 1,
+          url: "https://bucket/a.mp4?sig=1",
+          youtubeUrl: null,
+          twitchUrl: null,
+          posterUrl: "https://bucket/capa.jpg?sig=1",
+        },
+      },
+      "Mesa",
+    );
+    expect(card.mediaKind).toBe("video");
+    expect(card.mediaUrl).toBe("https://bucket/a.mp4?sig=1");
+    expect(card.posterUrl).toBe("https://bucket/capa.jpg?sig=1");
   });
 
   it("a locked post keeps the teaser and the public poster and nothing else", () => {
@@ -210,6 +235,7 @@ describe("toPostCard", () => {
     expect(card.locked).toBe(true);
     // Who wrote a locked post is withheld, as the feed withholds it.
     expect(card.author).toBeNull();
+    expect(card.posterUrl).toBeNull();
   });
 });
 

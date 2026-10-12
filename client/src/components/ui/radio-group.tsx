@@ -6,6 +6,12 @@ export interface RadioOption<T extends string | number> {
   label: string;
   description?: string;
   disabled?: boolean;
+  /**
+   * `chips` and `segmented` only: drawn after the label, for a count that
+   * belongs to the option ("Não lidas 3"). Decorative: say the same thing in
+   * the label's accessible name if it matters (`aria-label` is the label).
+   */
+  trailing?: ReactNode;
 }
 
 export interface RadioGroupProps<T extends string | number> {
@@ -292,6 +298,13 @@ export function RadioGroup<T extends string | number>({
                   ) : null}
                 </span>
               </>
+            ) : option.trailing ? (
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <span className={content ? undefined : "truncate"}>
+                  {option.label}
+                </span>
+                {option.trailing}
+              </span>
             ) : (
               <span className={content ? undefined : "truncate"}>
                 {option.label}

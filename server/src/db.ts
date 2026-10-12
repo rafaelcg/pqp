@@ -1557,7 +1557,11 @@ export interface DbChannel {
   id: string;
   server_id: string;
   name: string;
-  type: "text" | "voice" | "category" | "thread" | "watch_party";
+  /**
+   * `forum` holds posts (each a `thread` under it) and never a message of its
+   * own; see packages/shared/src/forums.ts.
+   */
+  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum";
   position: number;
   is_private: boolean;
   topic: string | null;

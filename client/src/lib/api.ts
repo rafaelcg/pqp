@@ -778,6 +778,20 @@ export const fetchVoiceConfig = (serverId: string) =>
 /** The global answer, for the switches that are not per server. */
 export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/config");
 
+/**
+ * `GET /api/forum/config?serverId=`: the runtime flag `forum_channels` for
+ * this server (`forumConfigForServer` on the server, `ForumConfig` in
+ * `@pqp/shared`). Optional like every config field: an older API answers 404
+ * or omits it, and absent is off. Off only stops CREATING forums and posts;
+ * the ones that exist stay readable.
+ */
+export interface ForumConfig {
+  enabled?: boolean;
+}
+
+export const fetchForumConfig = (serverId: string) =>
+  apiFetch<ForumConfig>(`/api/forum/config?serverId=${encodeURIComponent(serverId)}`);
+
 /** Turn audience mode on or off in the call running in this voice channel. */
 export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
   put<VoiceAudienceResponse>(`/api/channels/${channelId}/voice-audience`, { enabled });

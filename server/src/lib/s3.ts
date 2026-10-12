@@ -701,6 +701,56 @@ export async function downloadObjectToFile(
   return { bytes };
 }
 
+/**
+ * Server-side copy (`CopyObject`) of one key onto another in the same bucket.
+ * The bytes never pass through this process.
+ *
+ * This is the "server-side key rotation at claim time" the `presignPut`
+ * comment names: a key this process copies to has never had a presigned PUT
+ * signed for it, so nobody can overwrite it afterwards. The Baú claim uses it
+ * to pin the exact bytes the image scanner judges.
+ *
+ * Content-Type is carried over (the default metadata directive is COPY).
+ * S3 can answer a copy with HTTP 200 and an `<Error>` body when it fails late,
+ * so the body is read and checked too.
+ */
+export async function copyObject(
+  sourceKey: string,
+  destinationKey: string,
+): Promise<void> {
+  const config = requireConfig();
+  const copySource = `/${config.bucket}/${sourceKey
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`;
+  const url = signRequest({
+    method: "PUT",
+    key: destinationKey,
+    ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+    headers: { "x-amz-copy-source": copySource },
+    config,
+  }).url;
+
+  let response: Response;
+  let body: string;
+  try {
+    response = await fetch(url, {
+      method: "PUT",
+      headers: { "x-amz-copy-source": copySource },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    body = await response.text();
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+
+  if (!response.ok || body.includes("<Error>")) {
+    throw new StorageError(`Storage returned HTTP ${response.status} for COPY`);
+  }
+}
+
 /** Idempotent: an object that is already gone is a success, not an error. */
 export async function deleteObject(
   key: string,

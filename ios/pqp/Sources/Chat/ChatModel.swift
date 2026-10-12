@@ -173,7 +173,7 @@ final class ChatModel {
         } catch {
             // With a cached page already on screen this is a note, not a blank
             // screen — but it is still said out loud rather than swallowed.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         attachmentsEnabled = await attachments
         voiceNotesEnabled = (await voiceConfig)?.offersVoiceNotes ?? false
@@ -257,7 +257,7 @@ final class ChatModel {
             messages.insert(contentsOf: page.messages, at: 0)
             hasMore = page.hasMore
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -281,7 +281,7 @@ final class ChatModel {
             messages.append(pending)
             isNearBottom = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isSending = false
     }
@@ -387,7 +387,7 @@ final class ChatModel {
             messages.removeAll { $0.id == rowId }
             inFlightVoice[rowId] = nil
             keepAsFailed(held, epoch: epoch)
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -458,7 +458,7 @@ final class ChatModel {
                     attachmentIds.append(try await uploader.upload(item, channelId: channelId))
                 }
             } catch {
-                self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                if let shown = error.userFacingMessage { self.error = shown }
                 // Put the text back so the message is not silently lost.
                 draft = body
                 isSending = false
@@ -584,7 +584,7 @@ final class ChatModel {
                 messages[index] = updated
             }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isSending = false
     }
@@ -599,7 +599,7 @@ final class ChatModel {
         } catch {
             // Put it back rather than leaving a gap that looks like it worked.
             messages = previous
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -652,7 +652,7 @@ final class ChatModel {
         } catch {
             // Includes the per-channel pin limit, which the server answers with
             // a 409 and its own wording.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -675,7 +675,7 @@ final class ChatModel {
             // 400 here is the server refusing the *target*: a DM (already the
             // scoped side-conversation threads exist to create) or a message
             // inside a thread (they do not nest). Its wording says which.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
             return nil
         }
     }

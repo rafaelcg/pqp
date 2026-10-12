@@ -233,6 +233,49 @@ class BauShareTest {
     }
 
     @Test
+    fun `a video card with a cover uses the cover and keeps the play badge`() {
+        val file = "https://cdn/v.mp4"
+        val withCover = decode(
+            """{"card":{"postId":"$post","serverId":"$server","mediaKind":"video","mediaUrl":"$file",
+            "posterUrl":"https://cdn/c.jpg","visibility":"public","locked":false}}""",
+        )
+        assertEquals(BauCardPoster.Cover, withCover.poster)
+        assertTrue(withCover.showsPlayBadge)
+        assertEquals("the file stays the file", file, withCover.mediaUrl)
+
+        // No field (an older API), an explicit null, or an unreadable cover:
+        // exactly today's first frame.
+        val older = decode(
+            """{"card":{"postId":"$post","serverId":"$server","mediaKind":"video","mediaUrl":"$file"}}""",
+        )
+        assertNull(older.posterUrl)
+        assertEquals(BauCardPoster.VideoFrame, older.poster)
+        val explicitNull = decode(
+            """{"card":{"postId":"$post","serverId":"$server","mediaKind":"video","mediaUrl":"$file","posterUrl":null}}""",
+        )
+        assertEquals(BauCardPoster.VideoFrame, explicitNull.poster)
+        val unreadable = BauPostCard(
+            postId = post, serverId = server, mediaKind = "video", mediaUrl = file, posterUrl = "javascript:alert(1)",
+        )
+        assertEquals(BauCardPoster.VideoFrame, unreadable.poster)
+    }
+
+    @Test
+    fun `a cover on a locked or non-video card changes nothing`() {
+        val locked = BauPostCard(
+            postId = post, serverId = server, mediaKind = "video", mediaUrl = null,
+            posterUrl = null, locked = true,
+        )
+        assertEquals(BauCardPoster.Plate, locked.poster)
+        assertFalse(locked.showsPlayBadge)
+        val image = BauPostCard(
+            postId = post, serverId = server, mediaKind = "image", mediaUrl = "https://cdn/x.jpg",
+            posterUrl = "https://cdn/c.jpg",
+        )
+        assertEquals(BauCardPoster.Image, image.poster)
+    }
+
+    @Test
     fun `poster and play badge by media kind`() {
         fun card(kind: String?, url: String?, locked: Boolean = false) =
             BauPostCard(postId = post, serverId = server, mediaKind = kind, mediaUrl = url, locked = locked)

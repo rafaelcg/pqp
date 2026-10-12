@@ -174,6 +174,23 @@ export const AUDIT_ACTIONS = [
    * safety: read once when a room opens, never moves a running call.
    */
   "channel.sfu_region_update",
+  // --- forums (forums.ts) ---
+  //
+  // Staff acting on a post: pin or unpin, lock or unlock, delete, and editing
+  // the title, tags or resolved state of SOMEBODY ELSE's post (an author
+  // editing their own post is not a moderator action and writes nothing).
+  // Target is the post's channel; `changes` carries old and new. A deleted
+  // post's row keeps the title in `changes`, since the target is gone.
+  "forum.post_pin",
+  "forum.post_lock",
+  "forum.post_delete",
+  "forum.post_edit",
+  /** The forum's tag list replaced (PUT). Target is the forum. */
+  "forum.tags_update",
+  /** The forum's settings (`requireTag`, `defaultSort`). Target is the forum. */
+  "forum.settings_update",
+  /** A forum webhook's tag allowlist, default tags or dedupe window (P1b). */
+  "webhook.forum_settings",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

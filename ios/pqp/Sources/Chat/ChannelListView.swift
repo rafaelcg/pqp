@@ -296,7 +296,7 @@ struct ChannelListView: View {
         }
         .coordinateSpace(name: ServerHeader.coordinateSpace)
         .ignoresSafeArea(edges: .top)
-        .refreshable { await load() }
+        .pullToRefresh { await load() }
     }
 
     /// The live watch party, then the Baú: the two things on this list that
@@ -819,7 +819,7 @@ struct ChannelListView: View {
             )
             channels.append(channel)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -909,7 +909,7 @@ struct ChannelListView: View {
                 landOnHostStage(channel)
             }
         } catch {
-            watchPartyCreateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { watchPartyCreateError = shown }
             // AN UNCERTAIN OUTCOME IS NOT A REFUSAL (Farol finding). This
             // POST can commit on the server and still throw here on a lost
             // response, and the `watch-party-update` it broadcasts can itself
@@ -928,7 +928,7 @@ struct ChannelListView: View {
             try await session.api.moveChannel(id: channel.id, parentId: parentId, index: 0)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -948,7 +948,7 @@ struct ChannelListView: View {
             try await session.api.deleteChannel(id: channel.id)
             channels.removeAll { $0.id == channel.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -1055,7 +1055,7 @@ struct ChannelListView: View {
                 serverWatchParties = parties
             }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
 

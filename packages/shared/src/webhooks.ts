@@ -47,6 +47,16 @@ export const executeWebhookSchema = z
     username: z.string().min(1).max(80).optional(),
     avatar_url: z.string().url().optional(),
     embeds: z.array(webhookEmbedSchema).max(MAX_WEBHOOK_EMBEDS).optional(),
+    /**
+     * Discord's forum fields (`forums.ts`, P1b). The post title and the tags,
+     * by id or by name. Deliberately lenient: a payload that is valid today
+     * for a text channel must stay valid, so nothing is refused here. The
+     * forum path trims and clamps the title to `FORUM_TITLE_MAX` and uses the
+     * first `FORUM_MAX_TAGS_PER_POST` tags; every other channel ignores both,
+     * which is what happened to them before they were declared.
+     */
+    thread_name: z.string().nullish(),
+    applied_tags: z.array(z.union([z.string(), z.number()])).nullish(),
   })
   .refine(
     (body) => Boolean(body.content?.trim()) || (body.embeds?.length ?? 0) > 0,

@@ -85,7 +85,7 @@ struct CommunityHomeView: View {
                     .padding(.horizontal, Metrics.hPadding)
                     .padding(.vertical, 12)
                 }
-                .refreshable {
+                .pullToRefresh {
                     async let fresh: Void = loadChannels()
                     await load()
                     await fresh
@@ -167,7 +167,7 @@ struct CommunityHomeView: View {
             // on the way back, which is what clears the row's badge here.
             try? await session.api.markCommunityHomeRead(serverId: server.id)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
     }
@@ -415,7 +415,7 @@ private struct MediaView: View {
             // A stored video plays in place, like the web's `<video>`. It is
             // not wrapped in the open-out button: that button would swallow
             // the tap meant for the player's own controls.
-            BauInlineVideo(url: videoURL, name: media.name, postID: postID)
+            BauInlineVideo(url: videoURL, name: media.name, postID: postID, posterURL: media.posterURL)
         } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)

@@ -162,7 +162,7 @@ struct ReportSheet: View {
             }
             sent = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         submitting = false
     }

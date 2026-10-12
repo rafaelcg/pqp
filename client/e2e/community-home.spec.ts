@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { openApp } from "./fixtures";
 
@@ -398,4 +400,134 @@ test.describe("Baú", () => {
       timeout: 20_000,
     });
   });
+
+  test("owner: a video gets a cover picked from a frame, then an uploaded image, then the first frame again", async ({
+    page,
+  }) => {
+    // Uploads need a bucket. CI runs the API without one, so this runs where
+    // `S3_*` is exported (local MinIO; see playwright.config.ts) and skips
+    // elsewhere, like the banner half of `server-identity.spec.ts`.
+    test.skip(!(await mediaEnabled()), "no S3_* on the API under test");
+    const serverId = await seedCommunity(`Capa ${Date.now()}`);
+    await openAs(page, OWNER, serverId, { communityHome: "1" });
+    const feed = page.locator("[data-community-home-feed]");
+    await expect(feed).toBeVisible({ timeout: 20_000 });
+    await feed.locator("[data-home-guide-compose]").click();
+
+    await feed.locator("[data-home-compose-title]").fill("Vídeo com capa");
+    // WebM, not MP4: Playwright's Chromium has no H.264.
+    await feed.locator("[data-home-compose-file]").setInputFiles(BAU_VIDEO);
+    await expect(feed.locator("[data-home-compose-media-label]")).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // The cover starts on the automatic one: the first frame.
+    const cover = feed.locator("[data-home-compose-cover]");
+    await expect(cover).toBeVisible();
+    await expect(cover.locator("[data-home-compose-cover-auto]")).toBeVisible();
+    const useFrame = cover.locator("[data-home-compose-cover-use-frame]");
+    await expect(useFrame).toBeEnabled({ timeout: 20_000 });
+
+    // Scrub forward and use that frame.
+    await cover.getByRole("slider").focus();
+    for (let i = 0; i < 40; i += 1) {
+      await page.keyboard.press("ArrowRight");
+    }
+    await expect
+      .poll(() =>
+        cover
+          .locator("[data-home-compose-cover-video]")
+          .evaluate((el) => (el as HTMLVideoElement).currentTime),
+      )
+      .toBeGreaterThan(1);
+    await useFrame.click();
+    const chosen = cover.locator("[data-home-compose-cover-current] img");
+    await expect(chosen).toBeVisible({ timeout: 30_000 });
+    await expect(chosen).toHaveAttribute("src", /^blob:/);
+
+    // The preview card wears the cover.
+    await feed.locator("[data-home-compose-preview-toggle]").click();
+    const previewVideo = feed.locator("[data-home-compose-preview] video");
+    await expect(previewVideo).toHaveAttribute("data-home-video-poster", "custom");
+    await expect(previewVideo).toHaveAttribute("poster", /^blob:/);
+
+    // Publish: the feed card shows the stored cover before play.
+    await feed.locator("[data-home-compose-submit]").click();
+    await expect(feed.locator("[data-home-notice]")).toBeVisible({ timeout: 20_000 });
+    const card = feed.locator("[data-home-post]").first();
+    const cardVideo = card.locator("video");
+    await expect(cardVideo).toHaveAttribute("data-home-video-poster", "custom");
+    const firstCover = await cardVideo.getAttribute("poster");
+    expect(firstCover).toMatch(/^https?:\/\//);
+    // The stored cover is a real picture the browser can load.
+    const loaded = await page.evaluate(async (src) => {
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      return { w: img.naturalWidth, h: img.naturalHeight };
+    }, firstCover!);
+    expect(loaded.w).toBeGreaterThan(0);
+    expect(loaded.h).toBeGreaterThan(0);
+
+    // Edit: swap in an uploaded image as the cover.
+    await card.locator("[data-home-card-menu]").click();
+    await card.locator("[data-home-edit]").click();
+    const editCover = feed.locator("[data-home-compose-cover]");
+    await expect(editCover.locator("[data-home-compose-cover-current] img")).toHaveAttribute(
+      "src",
+      firstCover!,
+    );
+    await editCover.getByRole("radio", { name: "Image" }).click();
+    await editCover.locator("[data-home-compose-cover-file]").setInputFiles(BAU_IMAGE);
+    await expect(editCover.locator("[data-home-compose-cover-current] img")).toHaveAttribute(
+      "src",
+      /^blob:/,
+      { timeout: 30_000 },
+    );
+    await feed.locator("[data-home-compose-submit]").click();
+    await expect(card.locator("video")).toHaveAttribute("poster", /^https?:\/\//, {
+      timeout: 20_000,
+    });
+    const secondCover = await card.locator("video").getAttribute("poster");
+    expect(secondCover?.split("?")[0]).not.toBe(firstCover?.split("?")[0]);
+
+    // Edit again: back to the first frame.
+    await card.locator("[data-home-card-menu]").click();
+    await card.locator("[data-home-edit]").click();
+    await feed.locator("[data-home-compose-cover-reset]").click();
+    await expect(feed.locator("[data-home-compose-cover-auto]")).toBeVisible();
+    await feed.locator("[data-home-compose-submit]").click();
+    await expect(card.locator("video")).toHaveAttribute(
+      "data-home-video-poster",
+      "first-frame",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("video")).not.toHaveAttribute("poster", /.+/);
+  });
 });
+
+const BAU_FIXTURES = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src",
+  "assets",
+  "bau",
+);
+const BAU_VIDEO = path.join(BAU_FIXTURES, "bau-demo.en.webm");
+const BAU_IMAGE = path.join(BAU_FIXTURES, "bau-demo.en.jpg");
+
+/** Whether the API under test has a bucket (`mediaEnabled` on the Baú config). */
+async function mediaEnabled(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/api/community-home/config`, {
+      headers: headers(OWNER),
+    });
+    if (!res.ok) {
+      return false;
+    }
+    const body = (await res.json()) as { mediaEnabled?: boolean };
+    return body.mediaEnabled === true;
+  } catch {
+    return false;
+  }
+}

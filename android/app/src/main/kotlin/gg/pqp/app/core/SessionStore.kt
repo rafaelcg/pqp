@@ -133,7 +133,7 @@ class SessionStore(
         restoreJob = scope.launch {
             _phase.value = SessionPhase.Launching
             val me = withTimeoutOrNull(LAUNCH_DEADLINE_MS) {
-                runCatching { api.me() }.getOrElse { error ->
+                runSuspendCatching { api.me() }.getOrElse { error ->
                     when {
                         error is ApiException && error.isUnauthorized -> null
                         else -> {

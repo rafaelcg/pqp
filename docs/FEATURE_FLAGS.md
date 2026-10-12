@@ -170,6 +170,16 @@ on `GET /api/servers/:id/home/posts`. Off, a write that names a cut is refused
 and reads leave `media.mobile` null, so everyone plays the main video; stored
 cuts are kept. See `docs/COMMUNITY_HOME.md` §"A phone cut of a video".
 
+Born as a flag (no old reader): `BAU_CUSTOM_COVER` (`bau_custom_cover`,
+default **on**, **per server**, `false` / `0` / `off` turns it off), the cover
+of a Baú video: the author picks a frame of it or uploads an image, and the
+player shows that before play instead of the first frame. Served to the
+composer as `customCoverEnabled` on `GET /api/servers/:id/home/posts`. Off, a
+write that names a cover is refused, reads leave `media.posterUrl` (and the
+chat card's `posterUrl`) null so every player paints the first frame again,
+and the composer stops offering it; stored covers are kept and come back when
+it is on again. See `docs/COMMUNITY_HOME.md` §"A cover for a video".
+
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
 share from the Windows desktop app through WASAPI process loopback, Windows 10
@@ -524,3 +534,29 @@ phone tabs go on, turn `conversations_home_phone_tabs` off first; desktop stays.
 Turn them on from controles → interruptores, or `PUT /api/admin/flags
 { key: "conversations_home", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
+
+## `forum_channels` (per server)
+
+Forum channels: a channel type, `forum`, whose posts are thread channels with a
+title, tags, pin, lock and resolved state (`docs/plans/FORUM_CHANNELS.md`, the
+wire contract in `packages/shared/src/forums.ts`). Behind `FORUM_CHANNELS`
+(default off, **per server**, born as a flag). Served as `enabled` on
+`GET /api/forum/config?serverId=` (`server/src/lib/forum-config.ts`).
+
+Off gates **creating**, never reading: `POST /api/servers/:id/channels` with
+`type: "forum"` answers 403 `forum_channels_off`, and (from the forum server
+PR) so does creating a post. Forums and posts that exist stay readable and
+repliable, and staff actions on them keep working, so turning it off strands
+nobody's writing. Nothing is hidden or deleted.
+
+The Discord import is the one reader with no server in hand (it creates the
+server), so it asks the global value only: an import keeps flattening forums to
+text channels until the flag is on globally.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "forum_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Before it goes on anywhere real, the iOS
+build that hides unknown channel types must be out, or a forum inside a
+category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
+pins the route, the field and the create guard.

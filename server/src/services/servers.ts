@@ -399,7 +399,7 @@ export async function listChannels(
 export async function createChannel(
   serverId: string,
   name: string,
-  type: "text" | "voice" | "category" | "watch_party",
+  type: "text" | "voice" | "category" | "watch_party" | "forum",
   isPrivate = false,
   topic: string | null = null,
 ): Promise<ChannelRow> {

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   COMMUNITY_HOME_COMMENTS_LIMIT,
+  COMMUNITY_HOME_COVER_CONTENT_TYPES,
+  COMMUNITY_HOME_COVER_MAX_BYTES,
   COMMUNITY_HOME_FEED_LIMIT,
   COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
   COMMUNITY_HOME_MAX_BYTES,
@@ -30,6 +32,7 @@ import type { PoolClient } from "pg";
 import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
 import {
+  copyObject,
   deleteObject,
   getObjectPrefix,
   headObject,
@@ -56,6 +59,8 @@ import {
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
 import { toPublicUserSummary } from "./users.js";
+import { checkCommunityHomeUpload } from "./community-home-scan.js";
+import { isContentScanConfigured, type ScanStatus } from "./content-scan.js";
 
 /** The allowlisted content types a Baú image may be stored under. */
 const IMAGE_CONTENT_TYPES: ReadonlySet<string> = new Set(
@@ -120,6 +125,20 @@ export function isBauMobileRenditionOn(serverId: string): boolean {
   return isEnabled("bau_mobile_rendition", { serverId });
 }
 
+/**
+ * The cover of a Baú video (runtime flag `bau_custom_cover`, per server,
+ * default ON). Off means a write that names one is refused and a read leaves
+ * `media.posterUrl` out, so every player paints the first frame; the columns
+ * are kept, so turning it back on brings the covers back.
+ */
+export function isBauCustomCoverOn(serverId: string): boolean {
+  return isEnabled("bau_custom_cover", { serverId });
+}
+
+const COVER_CONTENT_TYPES: ReadonlySet<string> = new Set(
+  COMMUNITY_HOME_COVER_CONTENT_TYPES,
+);
+
 export function isCommunityHomeMediaConfigured(): boolean {
   return isStorageConfigured();
 }
@@ -164,6 +183,7 @@ interface PostRow {
   mobile_media_content_type: string | null;
   mobile_media_byte_size: string | null;
   mobile_media_storage_key: string | null;
+  poster_storage_key: string | null;
   scheduled_at: Date | null;
   schedule_timezone: string | null;
   pinned_at: Date | null;
@@ -214,7 +234,7 @@ function postSelectSql(viewerParam: string): string {
   p.status, p.comments_enabled, p.media_kind, p.media_name, p.media_content_type,
   p.media_byte_size, p.media_storage_key, p.media_youtube_url,
   p.mobile_media_name, p.mobile_media_content_type, p.mobile_media_byte_size,
-  p.mobile_media_storage_key,
+  p.mobile_media_storage_key, p.poster_storage_key,
   p.scheduled_at, p.schedule_timezone, p.pinned_at, p.published_at,
   p.created_at, p.updated_at,
   u.display_name, u.username, u.discriminator, u.avatar_url,
@@ -315,6 +335,7 @@ function buildMedia(
       youtubeUrl: null,
       twitchUrl: row.media_youtube_url,
       mobile: null,
+      posterUrl: null,
     };
   }
   if (isCommunityHomeEmbedKind(row.media_kind)) {
@@ -333,6 +354,7 @@ function buildMedia(
       youtubeUrl: row.media_youtube_url,
       twitchUrl: null,
       mobile: null,
+      posterUrl: null,
     };
   }
   let url: string | null = null;
@@ -360,7 +382,31 @@ function buildMedia(
     youtubeUrl: null,
     twitchUrl: null,
     mobile: buildMobileRendition(row),
+    posterUrl: buildPosterUrl(row),
   };
+}
+
+/**
+ * The cover, signed like the video. Only on a `video`, and only while the
+ * flag is on for the server: off (or no cover), null, and the player paints
+ * the first frame as it always did.
+ */
+function buildPosterUrl(row: PostRow): string | null {
+  if (
+    row.media_kind !== "video" ||
+    !row.poster_storage_key ||
+    !isBauCustomCoverOn(row.server_id) ||
+    !isStorageConfigured()
+  ) {
+    return null;
+  }
+  try {
+    return presignGet(row.poster_storage_key, {
+      ttlSeconds: READ_URL_TTL_SECONDS,
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1118,6 +1164,77 @@ async function forgetStoredMedia(keys: string[]): Promise<void> {
   );
 }
 
+/** The cover's columns. Both null, or both set together. */
+type PosterFields = {
+  poster_storage_key: string | null;
+  poster_content_type: string | null;
+};
+
+function emptyPoster(): PosterFields {
+  return { poster_storage_key: null, poster_content_type: null };
+}
+
+/**
+ * Put a claimed upload on the post as its video's cover. The upload went
+ * through the same mint / PUT / claim as any Baú image, so the type allowlist,
+ * the byte sniff and the HEAD are already behind it, and `claimUploadOntoPost`
+ * checks it is this author's, on this server, and verified. What is checked
+ * here is the shape: the flag is on, the main media is an uploaded video, the
+ * cover is a JPEG, PNG or WebP no bigger than a cover should be, and it is not
+ * one of the post's other files.
+ */
+async function claimPoster(
+  client: PoolClient,
+  serverId: string,
+  uploaderId: string,
+  uploadId: string,
+  postId: string,
+  main: MediaFields,
+  mobileKey: string | null,
+): Promise<PosterFields> {
+  if (!isBauCustomCoverOn(serverId)) {
+    throw new CommunityHomeError("invalid", "Video covers are off on this server");
+  }
+  if (main.media_kind !== "video" || !main.media_storage_key) {
+    throw new CommunityHomeError(
+      "invalid",
+      "A cover needs an uploaded video as the main media",
+    );
+  }
+  const claimed = await claimUploadOntoPost(
+    client,
+    serverId,
+    uploaderId,
+    uploadId,
+    postId,
+  );
+  if (
+    claimed.media_kind !== "image" ||
+    !COVER_CONTENT_TYPES.has(claimed.media_content_type ?? "")
+  ) {
+    throw new CommunityHomeError(
+      "invalid",
+      "The cover must be a JPEG, PNG or WebP image",
+    );
+  }
+  if ((claimed.media_byte_size ?? 0) > COMMUNITY_HOME_COVER_MAX_BYTES) {
+    throw new CommunityHomeError("over_limit", "Cover image too large");
+  }
+  if (
+    claimed.media_storage_key === main.media_storage_key ||
+    (mobileKey !== null && claimed.media_storage_key === mobileKey)
+  ) {
+    throw new CommunityHomeError(
+      "invalid",
+      "The cover must be a different file",
+    );
+  }
+  return {
+    poster_storage_key: claimed.media_storage_key,
+    poster_content_type: claimed.media_content_type,
+  };
+}
+
 function emptyMedia(): MediaFields {
   return {
     media_kind: null,
@@ -1169,6 +1286,8 @@ export type CreateHomePostInput = {
   mediaUploadId: string | null;
   /** The phone cut: a second claimed video upload. Needs `mediaUploadId` to be a video. */
   mobileMediaUploadId?: string | null;
+  /** The video's cover: a claimed JPEG, PNG or WebP upload. Needs `mediaUploadId` to be a video. */
+  posterUploadId?: string | null;
   youtubeUrl: string | null;
   status: CommunityHomePostStatus;
   scheduledAt: string | null;
@@ -1262,6 +1381,19 @@ export async function createCommunityHomePost(
       );
     }
 
+    let poster = emptyPoster();
+    if (input.posterUploadId) {
+      poster = await claimPoster(
+        client,
+        serverId,
+        authorId,
+        input.posterUploadId,
+        postId,
+        media,
+        mobile.mobile_media_storage_key,
+      );
+    }
+
     assertPublishable({
       title: input.title,
       body: input.body,
@@ -1286,6 +1418,8 @@ export async function createCommunityHomePost(
          mobile_media_content_type = $9,
          mobile_media_byte_size = $10,
          mobile_media_storage_key = $11,
+         poster_storage_key = $12,
+         poster_content_type = $13,
          updated_at = NOW()
        WHERE id = $1`,
       [
@@ -1300,6 +1434,8 @@ export async function createCommunityHomePost(
         mobile.mobile_media_content_type,
         mobile.mobile_media_byte_size,
         mobile.mobile_media_storage_key,
+        poster.poster_storage_key,
+        poster.poster_content_type,
       ],
     );
     await client.query("COMMIT");
@@ -1333,6 +1469,12 @@ export type UpdateHomePostInput = {
    * removes it.
    */
   mobileMediaUploadId?: string | null;
+  /**
+   * The video's cover. Undefined keeps it while the main video stays the same
+   * file (any other main media change drops it); an id replaces it; null goes
+   * back to the automatic one.
+   */
+  posterUploadId?: string | null;
 };
 
 export async function updateCommunityHomePost(
@@ -1371,12 +1513,15 @@ export async function updateCommunityHomePost(
       mobile_media_content_type: string | null;
       mobile_media_byte_size: string | null;
       mobile_media_storage_key: string | null;
+      poster_storage_key: string | null;
+      poster_content_type: string | null;
     }>(
       `SELECT id, visibility, status, title, body, teaser,
               media_kind, media_name, media_content_type, media_byte_size,
               media_storage_key, media_youtube_url,
               mobile_media_name, mobile_media_content_type,
-              mobile_media_byte_size, mobile_media_storage_key
+              mobile_media_byte_size, mobile_media_storage_key,
+              poster_storage_key, poster_content_type
          FROM community_home_posts
         WHERE id = $1 AND server_id = $2
         FOR UPDATE`,
@@ -1442,6 +1587,31 @@ export async function updateCommunityHomePost(
       mobile = emptyMobile();
     }
 
+    // The cover goes with its video the same way: a frame of last week's
+    // video on top of a new one would be a lie about what plays.
+    const previousPosterKey = row.poster_storage_key;
+    let poster: PosterFields = {
+      poster_storage_key: row.poster_storage_key,
+      poster_content_type: row.poster_content_type,
+    };
+    if (input.posterUploadId) {
+      poster = await claimPoster(
+        client,
+        serverId,
+        actorId,
+        input.posterUploadId,
+        postId,
+        media,
+        mobile.mobile_media_storage_key,
+      );
+    } else if (
+      input.posterUploadId === null ||
+      media.media_kind !== "video" ||
+      media.media_storage_key !== previousKey
+    ) {
+      poster = emptyPoster();
+    }
+
     const visibility = input.visibility ?? row.visibility;
     if (input.visibility !== undefined) {
       assertVisibilityAllowed(visibility);
@@ -1483,6 +1653,8 @@ export async function updateCommunityHomePost(
          mobile_media_content_type = $15,
          mobile_media_byte_size = $16,
          mobile_media_storage_key = $17,
+         poster_storage_key = $18,
+         poster_content_type = $19,
          updated_at = NOW()
        WHERE id = $1 AND server_id = $2`,
       [
@@ -1503,6 +1675,8 @@ export async function updateCommunityHomePost(
         mobile.mobile_media_content_type,
         mobile.mobile_media_byte_size,
         mobile.mobile_media_storage_key,
+        poster.poster_storage_key,
+        poster.poster_content_type,
       ],
     );
     // Files this edit stops pointing at go to the orphan sweep in the same
@@ -1512,6 +1686,9 @@ export async function updateCommunityHomePost(
       previousKey !== media.media_storage_key ? previousKey : null,
       previousMobileKey !== mobile.mobile_media_storage_key
         ? previousMobileKey
+        : null,
+      previousPosterKey !== poster.poster_storage_key
+        ? previousPosterKey
         : null,
     ]);
     const videoChanged = previousKey !== media.media_storage_key;
@@ -1689,7 +1866,8 @@ export async function deleteCommunityHomePost(
   if (!canManage) {
     throw new CommunityHomeError("forbidden", "Staff only");
   }
-  // Both stored files go with the post: the main media and its phone cut.
+  // Every stored file goes with the post: the main media, its phone cut and
+  // its cover.
   // Handed to the orphan sweep in the same transaction as the delete (see
   // `handOffStoredMedia`), then cleaned up right away without waiting.
   const client = await getPool().connect();
@@ -1699,10 +1877,11 @@ export async function deleteCommunityHomePost(
     const result = await client.query<{
       media_storage_key: string | null;
       mobile_media_storage_key: string | null;
+      poster_storage_key: string | null;
     }>(
       `DELETE FROM community_home_posts
         WHERE id = $1 AND server_id = $2
-        RETURNING media_storage_key, mobile_media_storage_key`,
+        RETURNING media_storage_key, mobile_media_storage_key, poster_storage_key`,
       [postId, serverId],
     );
     const deleted = result.rows[0];
@@ -1712,6 +1891,7 @@ export async function deleteCommunityHomePost(
     dropped = await handOffStoredMedia(client, [
       deleted.media_storage_key,
       deleted.mobile_media_storage_key,
+      deleted.poster_storage_key,
     ]);
     await client.query("COMMIT");
   } catch (error) {
@@ -1931,6 +2111,81 @@ export async function mintCommunityHomeMediaUpload(input: {
   };
 }
 
+/**
+ * A key under `pinned/` is one this process copied to and never signed a PUT
+ * for. Mint never produces one.
+ */
+function isPinnedCommunityHomeKey(serverId: string, key: string): boolean {
+  return key.startsWith(`${homeMediaPrefix(serverId)}pinned/`);
+}
+
+/**
+ * Move an upload's bytes to a key nobody can write to, and point the row at it.
+ *
+ * The presigned PUT the uploader got at mint stays valid for 15 minutes and an
+ * S3 PUT is an unconditional overwrite, so without this an image could pass
+ * the scan and then be replaced, under the same key, by something else of the
+ * same length, which every post would then serve. A server-side copy (no bytes
+ * through this process) to a fresh key closes that: the scan, the HEAD and the
+ * sniff all run on the copy, and the copy is what the row, and so every post,
+ * points at. The `presignPut` comment in `lib/s3.ts` names this fix.
+ *
+ * Only for images and only while a scanner is configured, because that is the
+ * one case where the bytes are judged; with nothing judging them a swap
+ * changes nothing a check said.
+ *
+ * The original is deleted best-effort. A PUT through the still-valid old URL
+ * can recreate it, as a stray object no row names (bounded by the signed
+ * Content-Length and the URL's TTL); nothing serves it.
+ */
+async function pinCommunityHomeUpload(
+  uploadId: string,
+  serverId: string,
+  sourceKey: string,
+): Promise<string> {
+  const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
+  const pinnedKey = `${homeMediaPrefix(serverId)}pinned/${randomUUID()}${extension}`;
+  try {
+    await copyObject(sourceKey, pinnedKey);
+  } catch (error) {
+    console.error(
+      `[community-home] could not pin ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+    // A copy can land and still answer with an error (a timeout on the
+    // response). Nothing names that key, so drop it rather than leak it.
+    void deleteObject(pinnedKey).catch(() => {});
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
+  let moved = false;
+  try {
+    // Any verdict the row carried was about the old key's bytes. Start over.
+    const result = await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET storage_key = $3, scan_status = 'unscanned', scan_provider = NULL,
+              scan_score = NULL, scan_labels = NULL, scanned_at = NULL
+        WHERE id = $1 AND storage_key = $2`,
+      [uploadId, sourceKey, pinnedKey],
+    );
+    moved = (result.rowCount ?? 0) > 0;
+  } finally {
+    if (!moved) {
+      // The copy is named by nothing; drop it rather than leak it.
+      void deleteObject(pinnedKey).catch(() => {});
+    }
+  }
+  if (!moved) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
+  void deleteObject(sourceKey).catch((error: unknown) => {
+    console.error(
+      `[community-home] could not delete pinned-from ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+  });
+  return pinnedKey;
+}
+
 export async function claimCommunityHomeMediaUpload(input: {
   serverId: string;
   uploaderId: string;
@@ -1958,9 +2213,11 @@ export async function claimCommunityHomeMediaUpload(input: {
     kind: "image" | "video" | "file";
     uploader_id: string;
     server_id: string;
+    scan_status: ScanStatus;
+    quarantined_at: Date | null;
   }>(
     `SELECT id, storage_key, filename, content_type, byte_size, kind,
-            uploader_id, server_id
+            uploader_id, server_id, scan_status, quarantined_at
        FROM community_home_media_uploads
       WHERE id = $1`,
     [input.uploadId],
@@ -1973,8 +2230,30 @@ export async function claimCommunityHomeMediaUpload(input: {
   ) {
     throw new CommunityHomeError("not_found", "Media upload not found");
   }
+  // The scanner refused it. Same answer as any other failed verification, and
+  // no second look: a quarantined row is evidence, not a retry.
+  if (upload.quarantined_at) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
+  }
   if (!isCommunityHomeKey(input.serverId, upload.storage_key)) {
     throw new CommunityHomeError("invalid", "Invalid storage key");
+  }
+  // An image the scanner is about to judge is first moved to a key nobody
+  // holds a PUT URL for, so the bytes it judges are the bytes every post will
+  // serve. See `pinCommunityHomeUpload`.
+  let storageKey = upload.storage_key;
+  let scanStatus = upload.scan_status;
+  if (
+    upload.kind === "image" &&
+    isContentScanConfigured() &&
+    !isPinnedCommunityHomeKey(input.serverId, storageKey)
+  ) {
+    storageKey = await pinCommunityHomeUpload(
+      upload.id,
+      input.serverId,
+      storageKey,
+    );
+    scanStatus = "unscanned";
   }
   // An image's first bytes are read alongside the HEAD rather than after it,
   // so the byte check costs no extra round trip on the claim. The read settles
@@ -1983,7 +2262,7 @@ export async function claimCommunityHomeMediaUpload(input: {
   const prefixRead =
     upload.kind === "image"
       ? getObjectPrefix(
-          upload.storage_key,
+          storageKey,
           COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
         ).then(
           (bytes) => ({ ok: true as const, bytes }),
@@ -1992,10 +2271,10 @@ export async function claimCommunityHomeMediaUpload(input: {
       : null;
   let head;
   try {
-    head = await headObject(upload.storage_key);
+    head = await headObject(storageKey);
   } catch (error) {
     console.error(
-      `[community-home] HEAD failed for ${upload.storage_key}:`,
+      `[community-home] HEAD failed for ${storageKey}:`,
       error instanceof Error ? error.message : error,
     );
     throw new CommunityHomeError("not_verified", "Upload could not be verified");
@@ -2025,7 +2304,7 @@ export async function claimCommunityHomeMediaUpload(input: {
     const read = await prefixRead;
     if (!read.ok) {
       console.error(
-        `[community-home] GET prefix failed for ${upload.storage_key}:`,
+        `[community-home] GET prefix failed for ${storageKey}:`,
         read.error instanceof Error ? read.error.message : read.error,
       );
       throw new CommunityHomeError(
@@ -2045,6 +2324,25 @@ export async function claimCommunityHomeMediaUpload(input: {
       );
     }
     contentType = sniffed;
+  }
+  // The image scan, last and on its own: only bytes that passed the HEAD and
+  // the sniff are worth a provider call, and the sniffed type is the one to
+  // scan as. Refused (or unjudgeable, under the default fail-closed mode) and
+  // the row is never verified, so no post can carry it. The reasons this is
+  // the place are on `checkCommunityHomeUpload`.
+  const allowed = await checkCommunityHomeUpload({
+    id: upload.id,
+    serverId: upload.server_id,
+    uploaderId: upload.uploader_id,
+    storageKey,
+    contentType,
+    scanStatus,
+    bytesPinned:
+      upload.kind !== "image" ||
+      isPinnedCommunityHomeKey(input.serverId, storageKey),
+  });
+  if (!allowed) {
+    throw new CommunityHomeError("not_verified", "Upload could not be verified");
   }
   await pool.query(
     `UPDATE community_home_media_uploads
@@ -2115,6 +2413,12 @@ async function flushDueScheduledPosts(serverId: string): Promise<void> {
   }
 }
 
+/**
+ * Delete uploads nothing claimed. A row the scanner quarantined is unclaimed
+ * and unverified too, and is the one this must not take: it is the evidence a
+ * moderator is being sent to look at. `sweepQuarantinedCommunityHomeMedia`
+ * owns those rows instead.
+ */
 export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
   if (!isStorageConfigured()) {
     return 0;
@@ -2123,6 +2427,7 @@ export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {
     `SELECT id, storage_key FROM community_home_media_uploads
       WHERE claimed_post_id IS NULL
         AND verified_at IS NULL
+        AND quarantined_at IS NULL
         AND created_at < NOW() - $1::interval
       ORDER BY created_at ASC
       LIMIT $2`,

@@ -259,6 +259,7 @@ function HomeVideo({
         <VideoPlayer
           key={chosen.url}
           url={chosen.url}
+          poster={media.posterUrl ?? null}
           captions={captions}
           // The subtitles were heard on the MAIN video. The phone cut is meant
           // to be the same video reframed, so it shows them too, but only
@@ -318,10 +319,16 @@ function cueText(cue: TextTrackCue): string {
  */
 function VideoPlayer({
   url,
+  poster = null,
   captions: captionsSource,
   captionsMustMatchDuration = false,
 }: {
   url: string;
+  /**
+   * The cover the author chose (`media.posterUrl`), shown until play. Null is
+   * the automatic cover: the video's own first frame.
+   */
+  poster?: string | null;
   captions: VideoCaptionsSource | null;
   /** Show the subtitles only while this file's length agrees with the transcribed one. */
   captionsMustMatchDuration?: boolean;
@@ -593,8 +600,11 @@ function VideoPlayer({
         className="relative h-full w-full object-contain"
         playsInline
         preload="metadata"
-        // `#t=0.001` makes iOS Safari paint the first frame before play.
-        src={`${url}#t=0.001`}
+        poster={poster ?? undefined}
+        // `#t=0.001` makes iOS Safari paint the first frame before play. Not
+        // with a cover: that start time is a seek, and a seek hides the poster.
+        src={poster ? url : `${url}#t=0.001`}
+        data-home-video-poster={poster ? "custom" : "first-frame"}
         onClick={toggle}
         onLoadedMetadata={onMetadata}
         onLoadedData={() => setFrameReady(true)}
