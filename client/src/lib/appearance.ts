@@ -19,25 +19,54 @@ export const APPEARANCES = ["signal", "harmony", "hearth", "night"] as const;
 
 /**
  * MODO 2005, the hidden fifth look. `data-appearance="retro"` like any other
- * skin, so the stylesheet, the bench and `/qa/ui` treat it as one, but it sits
- * ON TOP of the synced preference instead of replacing it.
+ * skin, so the stylesheet, the bench and `/qa/ui` treat it as one.
  *
- * Why an overlay and not a fifth enum member: the account's `appearance` is
- * validated by the server (`appearancePreferenceSchema` in `@pqp/shared`),
- * which does not know `retro` yet, and a PATCH it refuses would also lose
- * whatever else rode in the same write. So the synced value stays the look
- * underneath (Clássico, Harmonia...), which is also exactly what "turn it off
- * and get my old look back" needs, and `retro` is this browser's own choice.
- * When the shared enum learns `retro`, this can become a plain preference.
+ * ON THE ACCOUNT, `appearance: "retro"` is the whole truth: the look follows
+ * the person to every device. IN THIS MODULE it is an overlay on the look
+ * underneath (Clássico, Harmonia...), because "turn it off and get my old look
+ * back" needs that look, and the account does not keep it. So `state` is
+ * always the look underneath, `retroChosen` says whether Modo 2005 is painted
+ * over it, `pqp-appearance-retro` is the fast-path copy the boot script reads,
+ * and the server's answer wins whenever it arrives (`adoptAppearancePreference`).
+ *
+ * The one exception is a browser that turned the look on while it was still
+ * local-only (before this synced): its first answer from the server cannot
+ * know about it, so it is sent up once instead of being undone. After any
+ * write or read of the account's look, `pqp-appearance-retro-synced` marks
+ * the account as the source of truth.
  *
  * Kept in this module rather than in `retro-look.ts` because `applyAppearance`
  * is the one writer of the attribute, and two writers would fight over it.
  */
-export type Look = AppearancePreference | "retro";
+export type Look = AppearancePreference;
 
 export const RETRO_STORAGE_KEY = "pqp-appearance-retro";
 /** Set while the operator's `retro_look` kill switch is off. The boot script reads it. */
 export const RETRO_KILLED_STORAGE_KEY = "pqp-retro-killed";
+/** Set once this browser's Modo 2005 state has met the account's. */
+export const RETRO_SYNCED_STORAGE_KEY = "pqp-appearance-retro-synced";
+
+/**
+ * What to do with the account's look, given this browser's. Pure, so the merge
+ * rules are tested on their own:
+ *  - the account says retro: paint it (`retro: true`), keep the look underneath;
+ *  - the account names another look: that look, retro off; unless this browser
+ *    turned retro on before the look synced (`localRetro && !synced`), then
+ *    keep it and send it up (`push: true`).
+ */
+export function mergeAccountAppearance(input: {
+  account: AppearancePreference;
+  localRetro: boolean;
+  synced: boolean;
+}): { retro: boolean; base: AppearancePreference | null; push: boolean } {
+  if (input.account === "retro") {
+    return { retro: true, base: null, push: false };
+  }
+  if (input.localRetro && !input.synced) {
+    return { retro: true, base: input.account, push: true };
+  }
+  return { retro: false, base: input.account, push: false };
+}
 
 export function appearanceForcesDark(
   appearance: AppearancePreference,
@@ -102,7 +131,16 @@ function writeFlag(key: string, on: boolean): void {
   }
 }
 
-let retroChosen = readFlag(RETRO_STORAGE_KEY);
+/** An older tab adopted the account's `retro` as a plain look id. */
+function storedLookIsRetro(): boolean {
+  try {
+    return localStorage.getItem(APPEARANCE_STORAGE_KEY) === "retro";
+  } catch {
+    return false;
+  }
+}
+
+let retroChosen = readFlag(RETRO_STORAGE_KEY) || storedLookIsRetro();
 let retroAvailable = !readFlag(RETRO_KILLED_STORAGE_KEY);
 
 export function applyAppearance(appearance: AppearancePreference): void {
@@ -152,15 +190,31 @@ function commit(appearance: AppearancePreference): void {
   notify();
 }
 
-/** Turn Modo 2005 on or off in this browser. Never synced; see `Look`. */
-export function setRetroLook(on: boolean): void {
+function paintRetro(on: boolean): boolean {
   if (on === retroChosen) {
-    return;
+    return false;
   }
   retroChosen = on;
   writeFlag(RETRO_STORAGE_KEY, on);
   applyAppearance(state);
   notify();
+  return true;
+}
+
+/** The account's look, written now: `retro` or the look underneath. */
+function syncLook(): void {
+  writeFlag(RETRO_SYNCED_STORAGE_KEY, true);
+  queuePreferenceSync(
+    { appearance: retroChosen ? "retro" : state },
+    { immediate: true },
+  );
+}
+
+/** Turn Modo 2005 on or off, here and on the account. */
+export function setRetroLook(on: boolean): void {
+  if (paintRetro(on)) {
+    syncLook();
+  }
 }
 
 /**
@@ -183,13 +237,13 @@ export function isRetroLookAvailable(): boolean {
 
 /** A choice the user just made here: apply it, keep it, and send it on. */
 export function setAppearancePreference(appearance: AppearancePreference): void {
-  // Picking any look in Aparência is also one of the ways out of Modo 2005.
-  if (retroChosen) {
-    retroChosen = false;
-    writeFlag(RETRO_STORAGE_KEY, false);
-    applyAppearance(state);
-    notify();
+  if (appearance === "retro") {
+    setRetroLook(true);
+    return;
   }
+  // Picking any look in Aparência is also one of the ways out of Modo 2005.
+  paintRetro(false);
+  writeFlag(RETRO_SYNCED_STORAGE_KEY, true);
   storeAppearance(appearance);
   commit(appearance);
   // Night also pins brightness. One PATCH so the account learns both keys
@@ -208,16 +262,45 @@ export function setAppearancePreference(appearance: AppearancePreference): void 
  *
  * Deliberately does not sync back. Same rule as theme: the value came from the
  * server, so writing it again would let a stale tab overwrite a newer choice.
- * Modo 2005 stays on: the server only knows the look underneath it.
+ * The one write is the migration in `mergeAccountAppearance`: a Modo 2005
+ * turned on here before the look synced is sent up once rather than undone.
  */
-export function adoptAppearancePreference(appearance: AppearancePreference): void {
-  storeAppearance(appearance);
-  commit(appearance);
+export function adoptAppearancePreference(
+  appearance: AppearancePreference | undefined,
+): void {
+  if (appearance === undefined) {
+    // An account that never chose a look: nothing to adopt, but a Modo 2005
+    // turned on here before the look synced still has to reach it.
+    if (retroChosen && !readFlag(RETRO_SYNCED_STORAGE_KEY)) {
+      syncLook();
+    }
+    return;
+  }
+  const merged = mergeAccountAppearance({
+    account: appearance,
+    localRetro: retroChosen,
+    synced: readFlag(RETRO_SYNCED_STORAGE_KEY),
+  });
+  if (merged.base) {
+    storeAppearance(merged.base);
+    commit(merged.base);
+  } else if (storedLookIsRetro()) {
+    // An older tab wrote the account's id as a look; the look underneath is
+    // unknown here, so it is the default.
+    storeAppearance(DEFAULT_APPEARANCE);
+    commit(DEFAULT_APPEARANCE);
+  }
+  paintRetro(merged.retro);
+  if (merged.push) {
+    syncLook();
+  } else {
+    writeFlag(RETRO_SYNCED_STORAGE_KEY, true);
+  }
 }
 
 /** Tests only: re-read the Modo 2005 keys after a test rewrote storage. */
 export function reloadRetroLookForTests(): void {
-  retroChosen = readFlag(RETRO_STORAGE_KEY);
+  retroChosen = readFlag(RETRO_STORAGE_KEY) || storedLookIsRetro();
   retroAvailable = !readFlag(RETRO_KILLED_STORAGE_KEY);
 }
 

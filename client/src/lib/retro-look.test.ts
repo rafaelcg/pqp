@@ -15,6 +15,8 @@ import { getLook, reloadRetroLookForTests, setRetroLook, setRetroLookAvailable }
 import { queuePreferenceSync } from "./preferences";
 import {
   RETRO_FOUND_KEY,
+  adoptRetroFound,
+  mergeFoundAt,
   getRetroState,
   isRetroNew,
   isRetroOffered,
@@ -99,8 +101,49 @@ describe("discovery", () => {
     expect(getRetroState().foundCardPending).toBe(false);
 
     expect(ctx.sendMessage).not.toHaveBeenCalled();
-    // A local look: nothing is written to the account.
+    // The account learns the find once, and the look each time it moves.
+    const writes = vi.mocked(queuePreferenceSync).mock.calls.map(([patch]) => patch);
+    expect(writes.filter((patch) => "easterEggs" in patch)).toEqual([
+      { easterEggs: { retro: store.get(RETRO_FOUND_KEY) } },
+    ]);
+    expect(writes.filter((patch) => "appearance" in patch).map((p) => p.appearance)).toEqual([
+      "retro",
+      "signal",
+      "retro",
+    ]);
+  });
+
+  it("the account's find wins, and a find made here first is handed to it", () => {
+    expect(mergeFoundAt(null, "2026-10-01T00:00:00.000Z")).toEqual({
+      foundAt: "2026-10-01T00:00:00.000Z",
+      push: false,
+    });
+    expect(mergeFoundAt("2026-10-02T00:00:00.000Z", "2026-10-01T00:00:00.000Z")).toEqual({
+      foundAt: "2026-10-01T00:00:00.000Z",
+      push: false,
+    });
+    expect(mergeFoundAt("2026-10-02T00:00:00.000Z", undefined)).toEqual({
+      foundAt: "2026-10-02T00:00:00.000Z",
+      push: true,
+    });
+    expect(mergeFoundAt(null, undefined)).toEqual({ foundAt: null, push: false });
+  });
+
+  it("a find on another device puts the tile here", () => {
+    expect(isRetroOffered()).toBe(false);
+    adoptRetroFound("2026-10-01T00:00:00.000Z");
+    expect(store.get(RETRO_FOUND_KEY)).toBe("2026-10-01T00:00:00.000Z");
+    expect(isRetroOffered()).toBe(true);
     expect(queuePreferenceSync).not.toHaveBeenCalled();
+  });
+
+  it("a find made here before it synced is sent up", () => {
+    store.set(RETRO_FOUND_KEY, "2026-10-02T00:00:00.000Z");
+    adoptRetroFound(undefined);
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { easterEggs: { retro: "2026-10-02T00:00:00.000Z" } },
+      { immediate: true },
+    );
   });
 
   it("the kill switch refuses it and the command answers like an unknown one", async () => {

@@ -615,7 +615,7 @@ import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
-import { startRetroLookFlag } from "@/lib/retro-look";
+import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
 import {
   RetroContacts,
   RetroLayer,
@@ -4705,9 +4705,10 @@ function MainAppContent({
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
         bindPreferenceSyncAccount(me.id);
-        if (me.preferences?.appearance) {
-          adoptAppearancePreference(me.preferences.appearance);
-        }
+        // Always called: with no stored look it still hands a Modo 2005
+        // found before the look synced up to the account (`appearance.ts`).
+        adoptAppearancePreference(me.preferences?.appearance);
+        adoptRetroFound(me.preferences?.easterEggs?.retro);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
           getAppearance(),
