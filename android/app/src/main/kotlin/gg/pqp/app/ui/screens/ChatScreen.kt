@@ -118,6 +118,7 @@ import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.chat.MentionAutocomplete
 import gg.pqp.app.ui.chat.MentionCandidate
 import gg.pqp.app.ui.chat.MessageBody
+import gg.pqp.app.ui.chat.WebhookEmbedCard
 import gg.pqp.app.ui.chat.BauCardState
 import gg.pqp.app.ui.chat.BauPostCardSkeleton
 import gg.pqp.app.ui.chat.BauPostCardView
@@ -1181,6 +1182,20 @@ private fun MessageRow(
                                 .testTag("message.badge"),
                         )
                     }
+                    if (message.isWebhook) {
+                        // Says the name is a feed's, not a person's: the web
+                        // and iOS tag every webhook row the same way.
+                        Spacer(Modifier.width(Spacing.xs + 2.dp))
+                        Text(
+                            text = stringResource(R.string.chat_webhook_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.extraSmall)
+                                .padding(horizontal = 4.dp)
+                                .testTag("message.webhook"),
+                        )
+                    }
                     if (message.pinnedAt != null) {
                         Spacer(Modifier.width(Spacing.sm))
                         Icon(
@@ -1316,6 +1331,12 @@ private fun MessageRow(
                         isMine = selfId != null && message.authorId == selfId,
                     ),
                 )
+            }
+
+            // What a webhook sent beside its text: an RSS item's card under a
+            // feed post (forum QA P20).
+            message.webhookEmbeds.forEach { embed ->
+                WebhookEmbedCard(embed)
             }
 
             ReactionRow(message.reactions, onToggleReaction)

@@ -385,7 +385,7 @@ private fun PostHeader(state: ForumPostUiState, canEdit: Boolean, onResolve: () 
             modifier = Modifier.testTag("forum.post.title"),
         )
         val tags = post.tagIds.mapNotNull(state.tagsById::get)
-        if (post.resolved || post.locked || post.pinned || tags.isNotEmpty()) {
+        if (post.resolved || post.locked || post.pinned || post.authorIsWebhook || tags.isNotEmpty()) {
             Spacer(Modifier.height(Spacing.sm))
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -394,6 +394,9 @@ private fun PostHeader(state: ForumPostUiState, canEdit: Boolean, onResolve: () 
                 if (post.resolved) ResolvedBadge()
                 if (post.locked) ForumBadge(BadgeKind.Locked)
                 if (post.pinned) ForumBadge(BadgeKind.Pinned)
+                // A feed's post says so up here as it does on the card, the
+                // web and iOS (forum QA P20).
+                if (post.authorIsWebhook) ForumBadge(BadgeKind.Feed)
                 tags.forEach { ForumTagChip(it) }
             }
         }

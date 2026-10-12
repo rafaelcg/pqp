@@ -90,6 +90,7 @@
     <string name="chat_pin">Fixar</string>
     <string name="chat_unpin">Desafixar</string>
     <string name="chat_pinned">Fixada</string>
+    <string name="chat_webhook_badge">WEBHOOK</string>
     <string name="chat_pins">Mensagens fixadas</string>
     <string name="chat_pins_empty">Nada fixado aqui ainda.</string>
     <string name="chat_gif">GIF</string>

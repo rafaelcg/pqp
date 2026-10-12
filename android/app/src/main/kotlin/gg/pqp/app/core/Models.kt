@@ -352,6 +352,12 @@ data class Message(
     val pinnedAt: String? = null,
     val isWebhook: Boolean = false,
     /**
+     * The embeds a webhook sent with the message (`messageSchema.webhookEmbeds`,
+     * Discord's shape): an RSS item's card under a feed post. Empty for
+     * everything a person writes.
+     */
+    val webhookEmbeds: List<WebhookEmbed> = emptyList(),
+    /**
      * On the wire but absent from `messageSchema` in `@pqp/shared`: the server
      * adds it in `mapMessage` so a blocked author's row still travels and
      * paging stays correct. Decoded defensively for the same reason iOS does.
@@ -371,6 +377,29 @@ data class Message(
      */
     val storyId: String? = null,
 )
+
+/** `webhookEmbedSchema` in `packages/shared/src/webhooks.ts`. Every field optional, as on Discord. */
+@Serializable
+data class WebhookEmbed(
+    val title: String? = null,
+    val description: String? = null,
+    val url: String? = null,
+    /** A packed 24-bit RGB integer. */
+    val color: Int? = null,
+    val fields: List<WebhookEmbedField> = emptyList(),
+    val footer: WebhookEmbedFooter? = null,
+    val timestamp: String? = null,
+)
+
+@Serializable
+data class WebhookEmbedField(
+    val name: String = "",
+    val value: String = "",
+    val inline: Boolean = false,
+)
+
+@Serializable
+data class WebhookEmbedFooter(val text: String = "")
 
 @Serializable
 data class ChanceRollGroup(
