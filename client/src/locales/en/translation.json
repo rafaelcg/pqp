@@ -2913,6 +2913,8 @@
   "chrome.leaveServer": "Leave this server?",
   "chrome.leaveFailed": "Failed to leave server",
   "chrome.serverUnavailable": "That community is gone, or you are not in it.",
+  "chrome.channelUnavailable": "That channel no longer exists or is private.",
+  "chrome.conversationUnavailable": "That conversation is not available.",
   "chrome.serverRemoved.kicked": "You were removed from {server}. A new invite can bring you back.",
   "chrome.serverRemoved.banned": "You were banned from {server}.",
   "chrome.serverRemoved.deleted": "The community {server} was deleted. It is gone for everyone.",

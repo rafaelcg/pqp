@@ -7983,7 +7983,7 @@ function MainAppContent({
           return;
         }
         if (targetChannelId && !requested && !routedThread) {
-          setAppError("That channel no longer exists or is private.");
+          setAppError(translateMessage("chrome.channelUnavailable"));
         }
         // After opening the parent, the post or thread goes on top only if
         // the reader is still there: a click while it loaded wins.
@@ -8106,7 +8106,7 @@ function MainAppContent({
       if (!list.some((one) => one.channelId === channelId)) {
         setSelectedChannelId(null);
         selectedChannelIdRef.current = null;
-        setAppError("That conversation is not available.");
+        setAppError(translateMessage("chrome.conversationUnavailable"));
         return;
       }
       await selectConversation(channelId);
