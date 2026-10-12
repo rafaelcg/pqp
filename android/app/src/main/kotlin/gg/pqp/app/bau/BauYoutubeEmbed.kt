@@ -112,3 +112,33 @@ object BauYoutubeEmbed {
         else -> null
     }
 }
+
+/**
+ * Whether a player's report may still claim the floor. The bridge posts its
+ * reports to the main thread, so one can arrive after the card was disposed,
+ * or after another video displaced this one and the pause is still on its
+ * way. Neither may take the floor from whoever holds it now.
+ */
+class BauEmbedGate {
+    var alive: Boolean = true
+        private set
+    private var yielding = false
+
+    /** The card and its WebView are gone: every later report is ignored. */
+    fun dispose() {
+        alive = false
+    }
+
+    /** Another video took the floor and a pause was sent. */
+    fun yielded() {
+        yielding = true
+    }
+
+    /** The player said it stopped: a later "playing" is the person's own tap. */
+    fun stopped() {
+        yielding = false
+    }
+
+    /** A "playing" report: claim the floor, or (false) pause again. */
+    fun mayClaim(): Boolean = alive && !yielding
+}

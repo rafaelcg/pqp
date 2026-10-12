@@ -76,4 +76,24 @@ class BauYoutubeEmbedTest {
         }
         assertNull(BauYoutubeEmbed.event(42))
     }
+
+    @Test
+    fun `a displaced player may not claim again until it has stopped`() {
+        val gate = BauEmbedGate()
+        assertTrue(gate.mayClaim())
+        gate.yielded()
+        assertFalse("a playing report in flight re-pauses", gate.mayClaim())
+        gate.stopped()
+        assertTrue("the person's own next tap claims", gate.mayClaim())
+    }
+
+    @Test
+    fun `a disposed player never claims`() {
+        val gate = BauEmbedGate()
+        gate.dispose()
+        assertFalse(gate.alive)
+        assertFalse(gate.mayClaim())
+        gate.stopped()
+        assertFalse(gate.mayClaim())
+    }
 }

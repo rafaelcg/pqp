@@ -55,6 +55,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.compose.LifecycleStartEffect
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
+import gg.pqp.app.bau.BauEmbedGate
 import gg.pqp.app.bau.BauYoutubeEmbed
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
@@ -180,6 +181,7 @@ private fun BauYoutubePlayer(videoId: String, onFailed: () -> Unit) {
     val onFailedNow by rememberUpdatedState(onFailed)
     // One per card, so two cards of the same video never stand in for each other.
     val key = remember(videoId) { "youtube:$videoId:${UUID.randomUUID()}" }
+    val gate = remember(videoId) { BauEmbedGate() }
 
     var fullscreenView by remember { mutableStateOf<View?>(null) }
     var fullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
@@ -208,15 +210,30 @@ private fun BauYoutubePlayer(videoId: String, onFailed: () -> Unit) {
                 BauYoutubeBridge(
                     post = { view.post(it) },
                     onState = { state ->
-                        when (BauYoutubeEmbed.event(state)) {
-                            BauYoutubeEmbed.Event.PLAYING -> BauPlayback.claimEmbed(key) { pause() }
-                            BauYoutubeEmbed.Event.STOPPED -> stopped()
-                            BauYoutubeEmbed.Event.BUFFERING, null -> Unit
+                        if (gate.alive) {
+                            when (BauYoutubeEmbed.event(state)) {
+                                BauYoutubeEmbed.Event.PLAYING ->
+                                    if (gate.mayClaim()) {
+                                        BauPlayback.claimEmbed(key) {
+                                            gate.yielded()
+                                            pause()
+                                        }
+                                    } else {
+                                        pause()
+                                    }
+                                BauYoutubeEmbed.Event.STOPPED -> {
+                                    gate.stopped()
+                                    stopped()
+                                }
+                                BauYoutubeEmbed.Event.BUFFERING, null -> Unit
+                            }
                         }
                     },
                     onError = {
-                        stopped()
-                        onFailedNow()
+                        if (gate.alive) {
+                            stopped()
+                            onFailedNow()
+                        }
                     },
                 ),
                 BauYoutubeEmbed.BRIDGE,
@@ -266,6 +283,7 @@ private fun BauYoutubePlayer(videoId: String, onFailed: () -> Unit) {
 
     DisposableEffect(webView) {
         onDispose {
+            gate.dispose()
             runCatching { fullscreenCallback?.onCustomViewHidden() }
             BauPlayback.releaseEmbed(key)
         }
