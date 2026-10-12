@@ -134,9 +134,10 @@ data class ForumPostSummary(
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
     /**
-     * The opening message's first video when it has no image. Read so the
-     * contract stays whole; the card does not draw a video frame yet and keeps
-     * using `thumbnailUrl`, which is only ever an image.
+     * The opening message's first video, signed, when it has no image. The card
+     * draws its first frame under a play badge, like the web card. Separate
+     * from `thumbnailUrl` on purpose: that one is only ever an image, so an
+     * image loader is never handed a video. Null from an older API.
      */
     val thumbnailVideoUrl: String? = null,
     /** In the forum's tag order. */
