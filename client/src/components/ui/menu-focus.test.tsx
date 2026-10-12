@@ -79,7 +79,13 @@ describe("Menu focus after a row is chosen", () => {
     });
     await openWithKeyboard(trigger);
     await chooseFirstRow();
-    await vi.waitFor(() => expect(document.activeElement).toBe(dialogButton));
+    // Focus reaching the dialog is not enough: the bug was the menu taking it
+    // back afterwards. Wait for the menu to be gone and its timers to run.
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(document.activeElement).toBe(dialogButton);
   });
 
   it("returns focus to the trigger when the row took none", async () => {
