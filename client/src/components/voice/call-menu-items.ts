@@ -187,6 +187,8 @@ export function stageMoreItems(
   input: {
     watchParty?: {
       disabledReason: "sharing" | "cap" | null;
+      /** The room's share limit, said on the row when it is at the cap. */
+      limit?: number | null;
       onStart: () => void;
     };
     cursor?: {
@@ -210,7 +212,13 @@ export function stageMoreItems(
       icon: MonitorPlay,
       disabled: reason !== null,
       detail:
-        reason === "sharing" ? t("voice.control.alreadySharing") : undefined,
+        reason === "sharing"
+          ? t("voice.control.alreadySharing")
+          : reason === "cap"
+            ? t("voice.control.shareLimit", {
+                limit: input.watchParty.limit ?? 0,
+              })
+            : undefined,
       onSelect: input.watchParty.onStart,
     });
   }

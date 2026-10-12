@@ -61,6 +61,15 @@ describe("the stage bar's Mais", () => {
     expect(cursor?.detail).toBe("voice.control.cursorNextShare");
   });
 
+  it("says why watch party is off when the room is at its share limit", () => {
+    const watch = stageMoreItems(t, {
+      ...base,
+      watchParty: { disabledReason: "cap", limit: 2, onStart: () => {} },
+    }).find((item) => item.id === "watch-party");
+    expect(watch?.disabled).toBe(true);
+    expect(watch?.detail).toBe("voice.control.shareLimit");
+  });
+
   it("names the sounds rule and ticks it while it is on", () => {
     const on = stageMoreItems(t, base).find((item) => item.id === "join-leave-sounds");
     expect(on?.label).toBe("voice.control.disableJoinLeaveSounds");
