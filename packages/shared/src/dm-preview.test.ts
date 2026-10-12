@@ -18,6 +18,17 @@ describe("stripMarkdownForPreview", () => {
     );
   });
 
+  it("strips underscore markers but keeps underscores inside words and URLs", () => {
+    expect(stripMarkdownForPreview("isso é _importante_ e __muito__")).toBe(
+      "isso é importante e muito",
+    );
+    expect(
+      stripMarkdownForPreview(
+        "https://jogo.example.com/p?utm_source=rss&utm_medium=feed e meu_arquivo_novo.txt",
+      ),
+    ).toBe("https://jogo.example.com/p?utm_source=rss&utm_medium=feed e meu_arquivo_novo.txt");
+  });
+
   it("keeps a link's label and drops the URL", () => {
     expect(
       stripMarkdownForPreview("olha [esse mapa](https://example.com/x)"),

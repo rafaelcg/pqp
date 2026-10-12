@@ -19,6 +19,7 @@ import {
   type ListForumPostsQuery,
   type PutForumTagsRequest,
   type UpdateForumSettingsRequest,
+  stripMarkdownForPreview,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
@@ -198,11 +199,17 @@ const SUMMARY_SQL = `
      AND p.published_at IS NOT NULL`;
 
 /** First `max` characters, whitespace flattened; null when nothing is left. */
+/**
+ * The card's preview and the answer's excerpt are one line of plain text:
+ * markdown is stripped the same way the DM list and the arrival toast strip
+ * it (`stripMarkdownForPreview`), so a feed post's `**title**` and a link's
+ * `[label](url)` read as words, not syntax.
+ */
 function flatten(body: string | null, max: number): string | null {
   if (body === null) {
     return null;
   }
-  const flat = body.replace(/\s+/g, " ").trim();
+  const flat = stripMarkdownForPreview(body);
   if (flat.length === 0) {
     return null;
   }
