@@ -356,4 +356,32 @@ final class ChannelLayoutTests: XCTestCase {
         memory.save(.legacy, serverId: "s1")
         XCTAssertEqual(memory.load(serverId: "s1"), .legacy)
     }
+
+    // MARK: - One refresh at a time
+
+    /// A burst of frames while a read is in flight is ONE follow-up read, and
+    /// two reads never overlap.
+    @MainActor
+    func testARefreshBurstCollapsesIntoOneFollowUpAndNeverOverlaps() async {
+        let gate = ChannelRefreshGate()
+        var reads = 0
+        var inFlight = 0
+        var maxInFlight = 0
+        let body: @MainActor () async -> Void = {
+            reads += 1
+            inFlight += 1
+            maxInFlight = max(maxInFlight, inFlight)
+            await Task.yield()
+            await Task.yield()
+            inFlight -= 1
+        }
+        async let first: Void = gate.run(body)
+        await Task.yield()
+        for _ in 0..<5 { await gate.run(body) }
+        await first
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(maxInFlight, 1)
+        await gate.run(body)
+        XCTAssertEqual(reads, 3)
+    }
 }

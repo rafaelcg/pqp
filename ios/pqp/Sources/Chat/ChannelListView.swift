@@ -139,6 +139,8 @@ struct ChannelListView: View {
     /// saw (`ChannelLayoutMemory`), re-read on load, on every
     /// `channels-update` and when the app comes back to the foreground.
     @State private var layoutConfig: ChannelLayoutConfig
+    /// Keeps the quiet refreshes of the list from overlapping.
+    @State private var refreshGate = ChannelRefreshGate()
     /// Organizar canais is open.
     @State private var organizing = false
     /// A refused or stale move, said once in an alert.
@@ -1217,6 +1219,11 @@ struct ChannelListView: View {
     /// error state: the list on screen is still the last thing the server
     /// said, which is a better answer than a failure.
     private func refreshChannelList() async {
+        // One at a time; a burst of frames collapses into one follow-up read.
+        await refreshGate.run { await readChannelList() }
+    }
+
+    private func readChannelList() async {
         async let fresh: [Channel]? = try? session.api.channels(serverId: server.id)
         async let answer = fetchLayoutAnswer()
         let layout = await answer
@@ -1252,16 +1259,36 @@ struct ChannelListView: View {
                 adoptLayout(ChannelLayoutConfig(mixed: true, version: version))
                 return .stale(mixedLayout(of: fresh), version: version)
             case .off:
-                channels = before
+                rollbackOrder(before)
                 adoptLayout(.legacy)
                 return .off
             case .invalid(let message):
-                withAnimation(.channelList(reduceMotion: reduceMotion)) { channels = before }
+                rollbackOrder(before)
                 return .failed(message)
             }
         } catch {
-            withAnimation(.channelList(reduceMotion: reduceMotion)) { channels = before }
+            await reconcileAfterUnknownSave(before)
             return .failed(error.userFacingMessage ?? String(localized: "Couldn't move it. Try again."))
+        }
+    }
+
+    /// Puts back only the order that was staged, on top of whatever list is
+    /// drawn now: a channel a refresh or a create added meanwhile stays.
+    private func rollbackOrder(_ before: [Channel]) {
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            channels = ChannelLayoutRules.apply(mixedLayout(of: before), to: channels)
+        }
+    }
+
+    /// The PUT neither said yes nor no (the connection dropped): the server
+    /// may have kept the order. Read the truth instead of guessing, and take
+    /// the staged order back only when that read fails too.
+    private func reconcileAfterUnknownSave(_ before: [Channel]) async {
+        if let fresh = try? await session.api.channels(serverId: server.id) {
+            withAnimation(.channelList(reduceMotion: reduceMotion)) { channels = fresh }
+            adopt(await fetchLayoutAnswer())
+        } else {
+            rollbackOrder(before)
         }
     }
 

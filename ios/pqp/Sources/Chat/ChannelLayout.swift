@@ -464,3 +464,29 @@ struct ChannelLayoutMemory {
         }
     }
 }
+
+// MARK: - One channel refresh at a time
+
+/// Serialises the quiet re-reads of the channel list (a `channels-update`, a
+/// return to the foreground). While one runs, any number of further requests
+/// collapse into ONE follow-up that starts when it ends, so a burst of N
+/// frames costs at most two reads, and a slow older answer can never land on
+/// top of a newer one: two reads never overlap.
+@MainActor
+final class ChannelRefreshGate {
+    private var running = false
+    private var again = false
+
+    func run(_ body: @MainActor () async -> Void) async {
+        if running {
+            again = true
+            return
+        }
+        running = true
+        defer { running = false }
+        repeat {
+            again = false
+            await body()
+        } while again
+    }
+}
