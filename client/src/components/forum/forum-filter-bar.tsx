@@ -50,7 +50,7 @@ export function FilterChip({
       aria-label={pressed && removeLabel ? removeLabel : undefined}
       onClick={onClick}
       className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:h-9 max-sm:px-3",
+        "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:h-9 max-sm:px-3 max-sm:hit-44",
         pressed
           ? "border-transparent bg-accent-soft text-on-accent-soft"
           : "border-border text-text-secondary hover:bg-surface-2 hover:text-text",
@@ -126,7 +126,7 @@ export function ForumFilterBar({
         <button
           type="button"
           aria-label={`${t("forum.sort.label")}: ${sortLabel}`}
-          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs font-medium text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3 max-sm:hit-44"
         >
           <ArrowDownUp className="h-3.5 w-3.5" aria-hidden />
           {inlineTags === 0 ? (

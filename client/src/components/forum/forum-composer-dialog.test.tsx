@@ -53,7 +53,7 @@ vi.mock("@/lib/attachments", async (importOriginal) => {
   };
 });
 
-import { ForumComposerDialog } from "./forum-composer-dialog";
+import { ForumComposerDialog, highlightTitleParts } from "./forum-composer-dialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -194,5 +194,44 @@ describe("forum composer body draft", () => {
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(readDraft(FORUM_ID)).toBe("");
+  });
+});
+
+describe("forum composer validation focus", () => {
+  it("moves focus to the body when Publicar is pressed with a title and no body", async () => {
+    await mount(0);
+    await act(async () => setTitle("Microfone some"));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-publish-placement="footer"]')!.click(),
+    );
+
+    const body = document.querySelector("[data-forum-composer-body] textarea");
+    expect(body).not.toBeNull();
+    expect(document.activeElement).toBe(body);
+  });
+});
+
+describe("highlightTitleParts", () => {
+  it("underlines the word, not the punctuation around it", () => {
+    expect(highlightTitleParts("Steam Deck: o app abre", "steam deck")).toEqual([
+      { text: "Steam", hit: true },
+      { text: " ", hit: false },
+      { text: "Deck", hit: true },
+      { text: ": o app abre", hit: false },
+    ]);
+  });
+
+  it("matches across accents and keeps brackets plain", () => {
+    expect(highlightTitleParts("Tela azul (WHEA) no CS2", "tela whea")).toEqual([
+      { text: "Tela", hit: true },
+      { text: " azul (", hit: false },
+      { text: "WHEA", hit: true },
+      { text: ") no CS2", hit: false },
+    ]);
+    expect(highlightTitleParts("Notebook não liga", "nao").map((part) => part.hit)).toEqual([
+      false,
+      true,
+      false,
+    ]);
   });
 });

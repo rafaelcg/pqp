@@ -40,6 +40,11 @@ export interface StoryViewerSelf {
 interface StoryStripProps {
   audience: StoryAudienceKey;
   me: StoryViewerSelf;
+  /**
+   * Keep the "Teu story" bubble when nothing is live. For the Conversas
+   * strip of somebody who has friends (design §3.4); nothing for nobody.
+   */
+  ownSlot?: boolean;
 }
 
 /** Session memory for a dismissed first-run row, where hints do not persist. */
@@ -49,7 +54,7 @@ function firstRunKey(meId: string, audience: StoryAudienceKey): string {
   return `pqp:stories-first-run:${meId}:${ringAudienceKey(audience)}`;
 }
 
-export function StoryStrip({ audience, me }: StoryStripProps) {
+export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { t } = useTranslation();
   const stripAudience = useMemo(
     () =>
@@ -73,7 +78,7 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
     ui.posting && ui.posting.audienceKeys.includes(audienceKey) ? ui.posting : null;
 
   const view = strip
-    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed })
+    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed, ownSlot })
     : ({ kind: "hidden" } as const);
 
   const myNotices =

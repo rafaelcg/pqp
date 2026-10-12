@@ -80,13 +80,14 @@ fun StoryViewersSheet(
                 style = MaterialTheme.typography.titleLarge,
             )
             val reactions = loaded?.reactionCount ?: story.own?.reactionCount ?: 0
+            val left = StoriesRules.left(story.expiresAt, now) ?: ""
             Text(
-                androidx.compose.ui.res.pluralStringResource(
-                    R.plurals.stories_viewers_meta,
-                    reactions,
-                    reactions,
-                    StoriesRules.left(story.expiresAt, now) ?: "",
-                ),
+                // pt CLDR files 0 under "one" ("0 reação"), so zero is its own line.
+                if (reactions == 0) {
+                    androidx.compose.ui.res.stringResource(R.string.stories_viewers_meta_none, left)
+                } else {
+                    androidx.compose.ui.res.pluralStringResource(R.plurals.stories_viewers_meta, reactions, reactions, left)
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -1067,7 +1067,16 @@ export function ForumPane({
             ),
         ],
       });
+      const added = next.length - tags.length;
       setTags(next);
+      // The suggestion row goes away with the tags it offered, so say what
+      // happened and where they live now (forum QA P1).
+      notify(
+        t("forum.empty.starterDone", { count: Math.max(added, 1) }),
+        onOpenSettings
+          ? { label: t("forum.empty.starterEdit"), onClick: () => onOpenSettings("tags") }
+          : undefined,
+      );
     } catch {
       notify(t("forum.saveFailed"));
     } finally {
@@ -1167,7 +1176,11 @@ export function ForumPane({
         </Tooltip>
       )}
       {compactList && newPostButton}
-      {headerActions}
+      {/* The shell's header tiles are 32px; on a phone the forum's header has
+          room for a full finger target (forum QA P17). */}
+      <span className="flex shrink-0 items-center gap-1 max-sm:gap-0 max-sm:[&_button]:h-11 max-sm:[&_button]:w-11">
+        {headerActions}
+      </span>
     </header>
   );
 
@@ -1255,7 +1268,7 @@ export function ForumPane({
             searchRef.current?.focus();
           }}
           aria-label={t("forum.search.clear")}
-          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text"
+          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text max-sm:hit-44"
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
@@ -1361,8 +1374,10 @@ export function ForumPane({
               type="button"
               disabled={starterBusy}
               onClick={() => void applyStarterTags()}
-              className="rounded-[var(--radius-control)] px-1.5 py-1 font-semibold text-accent hover:underline disabled:opacity-50"
+              aria-busy={starterBusy || undefined}
+              className="inline-flex items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-1 font-semibold text-accent hover:underline disabled:opacity-50 max-sm:hit-44"
             >
+              {starterBusy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
               {t("forum.empty.starterUse")}
             </button>
           </div>
@@ -1406,7 +1421,13 @@ export function ForumPane({
               body={t("forum.searchEmpty.body")}
             >
               {canCompose && (
-                <Button onClick={() => openComposer(filters.q)} className="gap-1.5">
+                // Secondary: Novo post in the toolbar stays the one primary
+                // button on the screen (forum QA P6, DESIGN.md).
+                <Button
+                  variant="secondary"
+                  onClick={() => openComposer(filters.q)}
+                  className="gap-1.5"
+                >
                   <Plus className="h-4 w-4" aria-hidden />
                   {t("forum.searchEmpty.post", { query: filters.q })}
                 </Button>
@@ -1499,22 +1520,6 @@ export function ForumPane({
       )}
     >
       {header}
-      {/* "N posts com novidade": the list never reorders under the reader. */}
-      {list.queued.length > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 top-16 z-20 flex justify-center">
-          <button
-            type="button"
-            onClick={flushQueue}
-            className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full bg-accent px-3.5 text-xs font-semibold text-on-accent shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
-            data-forum-live-pill=""
-          >
-            <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-            {t("forum.live", { count: list.queued.length })}
-            <span aria-hidden className="opacity-70">·</span>
-            {t("forum.live.refresh")}
-          </button>
-        </div>
-      )}
       <div
         ref={scrollRef}
         onScroll={onListScroll}
@@ -1562,6 +1567,25 @@ export function ForumPane({
                 }
               />
             </>
+          )}
+          {/* "N posts com novidade": the list never reorders under the
+              reader. Sticky over the cards, never over the toolbar: pinned to
+              the pane's top it sat on the search field, worst beside an open
+              post (forum QA P10). Zero height, so it never pushes the list. */}
+          {list.queued.length > 0 && (
+            <div className="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 justify-center">
+              <button
+                type="button"
+                onClick={flushQueue}
+                className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-accent px-3.5 text-xs font-semibold text-on-accent shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:hit-44"
+                data-forum-live-pill=""
+              >
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+                {t("forum.live", { count: list.queued.length })}
+                <span aria-hidden className="opacity-70">·</span>
+                {t("forum.live.refresh")}
+              </button>
+            </div>
           )}
           <div className="min-w-0">{listBody}</div>
         </div>
