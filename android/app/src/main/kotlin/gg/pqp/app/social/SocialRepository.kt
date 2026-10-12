@@ -82,6 +82,21 @@ class SocialRepository(
     private val _friendNudge = MutableStateFlow<String?>(null)
     val friendNudge: StateFlow<String?> = _friendNudge.asStateFlow()
 
+    /**
+     * Conversas: channelId to the names typing there right now, for the list
+     * row's "digitando...". Fed by `typing-broadcast`, which the server sends
+     * to every participant of a conversation (S2), not only to whoever has it
+     * open. The viewer's own frames never land here.
+     */
+    private val listTyping = ListTyping()
+    private val _typing = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val typing: StateFlow<Map<String, List<String>>> = _typing.asStateFlow()
+    private var typingSweep: Job? = null
+
+    /** The signed-in account's id: drops our own typing, prefixes "tu:". */
+    private val _selfId = MutableStateFlow<String?>(null)
+    val selfId: StateFlow<String?> = _selfId.asStateFlow()
+
     init {
         scope.launch { listen() }
         scope.launch { followSession() }
@@ -280,7 +295,41 @@ class SocialRepository(
                 "friend-activity" -> onFriendActivity(frame)
                 "channel-activity" -> onChannelActivity(frame)
                 "profile-update" -> onProfileUpdate(frame)
+                "typing-broadcast" -> onTyping(frame)
             }
+        }
+    }
+
+    /**
+     * Somebody is typing. Only conversations in the list are kept: a server
+     * channel's typing reaches this socket too while that channel is open, and
+     * it belongs to the chat screen, not to a row that does not exist.
+     */
+    private fun onTyping(frame: JsonObject) {
+        val channelId = frame.string("channelId") ?: return
+        val userId = frame.string("userId") ?: return
+        val name = frame.string("displayName") ?: return
+        if (userId == _selfId.value) return
+        if (_conversations.value.none { it.channelId == channelId }) return
+        if (listTyping.note(channelId, userId, name, SystemClock.elapsedRealtime())) {
+            publishTyping()
+        } else {
+            scheduleTypingSweep()
+        }
+    }
+
+    private fun publishTyping() {
+        _typing.value = listTyping.snapshot(SystemClock.elapsedRealtime())
+        scheduleTypingSweep()
+    }
+
+    /** One timer for the soonest expiry; it redraws, then re-arms for the next. */
+    private fun scheduleTypingSweep() {
+        typingSweep?.cancel()
+        val next = listTyping.nextExpiry() ?: return
+        typingSweep = scope.launch {
+            kotlinx.coroutines.delay((next - SystemClock.elapsedRealtime()).coerceAtLeast(50))
+            publishTyping()
         }
     }
 
@@ -311,6 +360,10 @@ class SocialRepository(
         if (kind != "dm" && kind != "group" && !serverIsNull) return
 
         val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false
+        val authorId = frame.string("authorId")
+        // Whoever wrote it has stopped typing, whatever their last frame said.
+        if (authorId != null && listTyping.clear(channelId, authorId)) publishTyping()
+
         val known = _conversations.value.firstOrNull { it.channelId == channelId }
         if (known == null) {
             // The reopened-conversation case, and the one worth being careful
@@ -319,7 +372,23 @@ class SocialRepository(
             return
         }
 
+        // The preview rides the frame (absent when the reader turned in-app
+        // previews off, and from a server that predates it). Patched in place
+        // so the row reads like it will after a reload, with no second read.
+        val preview = frame.string("preview")
+        val lastMessage = if (preview != null && authorId != null) {
+            LastMessagePreview(
+                authorId = authorId,
+                authorName = frame.string("authorName").orEmpty(),
+                preview = preview,
+                isAttachment = preview.isBlank(),
+            )
+        } else {
+            known.lastMessage
+        }
+
         val bumped = known.copy(
+            lastMessage = lastMessage,
             lastMessageAt = bumpedTimestamp(
                 Instant.now(),
                 _conversations.value.mapNotNull { it.lastMessageAt }.maxOrNull(),
@@ -381,6 +450,7 @@ class SocialRepository(
         var wasReady = false
         session.phase.collect { phase ->
             val ready = phase is SessionPhase.Ready
+            _selfId.value = (phase as? SessionPhase.Ready)?.me?.id
             if (ready && !wasReady) {
                 refreshFriends()
                 refreshConversations()
@@ -390,6 +460,9 @@ class SocialRepository(
                 _conversations.value = emptyList()
                 _friendNudge.value = null
                 _error.value = null
+                typingSweep?.cancel()
+                listTyping.clearAll()
+                _typing.value = emptyMap()
                 readSettledAt.clear()
                 readInFlight.clear()
             }

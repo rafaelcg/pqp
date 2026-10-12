@@ -91,6 +91,7 @@ import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
 import gg.pqp.app.watch.ui.WatchPartyHostControls
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
@@ -146,6 +147,9 @@ import kotlinx.serialization.Serializable
 )
 
 @Serializable object YouRoute
+
+/** Conversas phone tabs: Friends is opened from the Conversas header, not a tab. */
+@Serializable object FriendsRoute
 
 @Composable
 fun PqpApp(
@@ -426,6 +430,7 @@ private fun SignedInNav(
                         },
                         onOpenConversation = { route -> nav.navigate(route) },
                         onOpenProfile = { nav.navigate(YouRoute) },
+                        onOpenFriends = { nav.navigate(FriendsRoute) },
                     )
                 }
                 conversationDestination(
@@ -488,6 +493,10 @@ private fun SignedInNav(
                 }
                 composable<ChatRoute> { entry ->
                     val route = entry.toRoute<ChatRoute>()
+                    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+                    val conversasConfig by gg.pqp.app.social.ConversasHome.of(appContext)
+                        .config.collectAsStateWithLifecycle()
+                    val messageScope = androidx.compose.runtime.rememberCoroutineScope()
 
                     // The channel list now shows unread per channel, so
                     // opening one has to move the read cursor, the way a
@@ -601,6 +610,31 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        onMessageAuthor = if (conversasConfig.home && route.serverId != null) {
+                            { authorId ->
+                                messageScope.launch {
+                                    val social = SocialRepository.of(session)
+                                    social.openConversation(listOf(authorId))
+                                        .onSuccess {
+                                            nav.navigate(ConversationRoute(it.channelId, it.titleOr("")))
+                                        }
+                                        .onFailure {
+                                            // The server's own sentence (a privacy
+                                            // setting or a block read the same).
+                                            social.clearError()
+                                            val text = (it as? gg.pqp.app.core.ApiException)?.serverMessage
+                                                ?: it.message.orEmpty()
+                                            if (text.isNotBlank()) {
+                                                android.widget.Toast
+                                                    .makeText(appContext, text, android.widget.Toast.LENGTH_LONG)
+                                                    .show()
+                                            }
+                                        }
+                                }
+                            }
+                        } else {
+                            null
+                        },
                         // The watch party, above the transcript, for anybody
                         // who may see the channel. A `watch_party` channel
                         // gets the full stage — a card even while nothing is
@@ -710,7 +744,19 @@ private fun SignedInNav(
                     )
                 }
                 composable<YouRoute> {
-                    YouScreen(session = session, onBack = nav::popBackStack)
+                    YouScreen(session = session, onBack = { nav.popBackStack() })
+                }
+                composable<FriendsRoute> {
+                    val social = SocialRepository.of(session)
+                    val emptyTitle = stringResource(R.string.dms_empty_conversation)
+                    gg.pqp.app.social.ui.FriendsScreen(
+                        social = social,
+                        api = session.api,
+                        onOpenConversation = { conversation ->
+                            nav.navigate(ConversationRoute(conversation.channelId, conversation.titleOr(emptyTitle)))
+                        },
+                        onBack = { nav.popBackStack() },
+                    )
                 }
             }
             }

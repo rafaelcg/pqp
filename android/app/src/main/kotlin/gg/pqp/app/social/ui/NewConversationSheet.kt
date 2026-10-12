@@ -66,6 +66,15 @@ fun NewConversationSheet(
     social: SocialRepository,
     onDismiss: () -> Unit,
     onOpened: (DmSummary) -> Unit,
+    /**
+     * Conversas (`home` on): people before any typing, split Online agora /
+     * Amigos with presence, and a name with nothing ticked opens the
+     * conversation in one tap. Ticking boxes builds a group, as before. Off,
+     * the sheet is exactly what it was.
+     */
+    conversas: Boolean = false,
+    /** Conversas only: the "Adicionar amigo" row at the top. */
+    onAddFriend: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val search = rememberPeopleSearch()
@@ -76,6 +85,36 @@ fun NewConversationSheet(
     val selected = remember { mutableStateListOf<PublicUser>() }
     var opening by remember { mutableStateOf(false) }
     var limitHit by remember { mutableStateOf(false) }
+
+    val openWith: (List<PublicUser>) -> Unit = { people ->
+        opening = true
+        social.clearError()
+        scope.launch {
+            val result = social.openConversation(people.map { it.id })
+            opening = false
+            result.getOrNull()?.let {
+                onOpened(it)
+                onDismiss()
+            }
+        }
+    }
+
+    if (conversas) {
+        ConversasPicker(
+            social = social,
+            search = search,
+            friends = friends,
+            refusal = refusal,
+            selected = selected,
+            opening = opening,
+            limitHit = limitHit,
+            onLimitHit = { limitHit = it },
+            onOpen = openWith,
+            onAddFriend = onAddFriend,
+            onDismiss = onDismiss,
+        )
+        return
+    }
 
     PeopleSearchEffect(search, social)
 

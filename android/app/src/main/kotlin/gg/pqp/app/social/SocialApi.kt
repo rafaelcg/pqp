@@ -87,6 +87,9 @@ suspend fun ApiClient.lookupUser(tag: String): PublicUser =
 
 // --- conversations ---------------------------------------------------------
 
+/** The Conversas switches. Read through [ConversasHome], which owns the fallbacks. */
+suspend fun ApiClient.dmsConfig(): DmsConfig = getJson("/api/dms/config")
+
 suspend fun ApiClient.conversations(): List<DmSummary> =
     getJson<DmListResponse>("/api/dms").conversations
 

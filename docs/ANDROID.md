@@ -2238,6 +2238,30 @@ path is server-side and untried from this client), attachments in a DM, and
 anything about how the list behaves at a few hundred conversations. There are
 still no instrumented tests. Blocking is wired but was not exercised end to end.
 
+### Conversas (the DM redesign, behind `GET /api/dms/config`)
+
+Two runtime flags, read on launch and on every resume (throttled to five
+minutes), with the last answer kept in SharedPreferences (`pqp.conversas`) so a
+cold start draws the right shell straight away. A 404 or both flags off is the
+home above, unchanged.
+
+- **`home`**: the Messages tab becomes the Conversas list
+  (`social/ui/ConversasScreen.kt`). Rows have presence for friends, the
+  server's preview with "tu:" or a group author's first name in front, the time
+  in lime while unread, a red count (99+, the server caps at 100), and
+  "digitando..." from `typing-broadcast` (own frames dropped, five second life,
+  cleared by that person's next `channel-activity`). Search and Tudo / Não
+  lidas / Grupos run over the list in memory. Nova conversa lists Online agora
+  and Amigos, and a name with nothing ticked opens directly. A message in a
+  server channel offers "Mandar mensagem pra {nome}", the Android door for the
+  web's member-row "Mensagem" (there is no member list here).
+- **`phoneTabs`**: the bar becomes Conversas / Servidores / Tu, Friends moves
+  to the Conversas header, and the app opens on the last tab used
+  (Servidores for somebody who never chose). Back from another tab returns to
+  that landing tab.
+
+The rules are pure and tested in `ConversasTest` (`social/ConversationList.kt`).
+
 ## Attachments
 
 Sending a file is built and verified end to end. Receiving already worked: the
