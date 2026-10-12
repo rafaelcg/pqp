@@ -3063,11 +3063,16 @@ export function CallControls({
         flushSync(() => {
           setShareHint(t("voice.control.watchPartyHint"));
         });
-        void Promise.resolve(
-          onStartScreenShare({ preferBrowserTab: true }),
-        ).finally(() => {
-          setShareHint(null);
-        });
+        void (async () => {
+          try {
+            await onStartScreenShare({ preferBrowserTab: true });
+          } catch {
+            // The share path tells the person what went wrong; all this
+            // item owes is not leaving its hint up.
+          } finally {
+            setShareHint(null);
+          }
+        })();
       },
     });
   }
