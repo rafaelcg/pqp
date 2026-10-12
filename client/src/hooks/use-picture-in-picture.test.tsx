@@ -3,6 +3,7 @@ import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  useAutoPictureInPicture,
   usePictureInPicture,
   usePictureInPictureKey,
 } from "./use-picture-in-picture";
@@ -173,5 +174,43 @@ describe("usePictureInPictureKey", () => {
     pipElement = a;
     act(() => root!.render(<Keyed videos={new Map([["a", a]])} />));
     expect(seen).toBe("a");
+  });
+});
+
+describe("useAutoPictureInPicture", () => {
+  const setActionHandler = vi.fn();
+  let video: HTMLVideoElement;
+
+  function Auto() {
+    useAutoPictureInPicture(video);
+    return null;
+  }
+
+  beforeEach(() => {
+    setActionHandler.mockClear();
+    video = document.createElement("video");
+    Object.defineProperty(navigator, "mediaSession", {
+      configurable: true,
+      value: { setActionHandler },
+    });
+  });
+
+  afterEach(() => {
+    delete (window as { pqpDesktop?: unknown }).pqpDesktop;
+    delete (navigator as { mediaSession?: unknown }).mediaSession;
+  });
+
+  it("registers the auto-open handler in a desktop browser", () => {
+    act(() => root!.render(<Auto />));
+    expect(setActionHandler).toHaveBeenCalledWith(
+      "enterpictureinpicture",
+      expect.any(Function),
+    );
+  });
+
+  it("does not register it in the desktop app", () => {
+    (window as { pqpDesktop?: unknown }).pqpDesktop = { isElectron: true };
+    act(() => root!.render(<Auto />));
+    expect(setActionHandler).not.toHaveBeenCalled();
   });
 });

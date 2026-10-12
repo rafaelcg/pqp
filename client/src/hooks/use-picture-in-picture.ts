@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
+import { isDesktopApp } from "@/lib/desktop";
 import { readPlatformSignals } from "@/lib/downloads";
 import {
   afterPictureInPictureRequest,
@@ -99,6 +100,8 @@ export function useAutoPictureInPicture(video: HTMLVideoElement | null): void {
     if (
       !video ||
       typeof navigator === "undefined" ||
+      // Nothing opens by itself in the desktop app. Its buttons still work.
+      isDesktopApp() ||
       !pictureInPictureOnThisDevice(readPlatformSignals())
     ) {
       return;
