@@ -1399,7 +1399,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM (
            SELECT server_id, COUNT(*) AS n
              FROM channels
-            WHERE kind = 'server'
+            -- Sidebar channels only: a thread is a channel row too, and a
+            -- forum holds one per post, so counting them would make this
+            -- card jump the day a forum fills up.
+            WHERE kind = 'server' AND type <> 'thread'
             GROUP BY server_id
          ) t`,
     ),
