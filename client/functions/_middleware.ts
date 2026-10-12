@@ -113,8 +113,9 @@ async function resolveApiOrigin(context: PagesContext): Promise<string | null> {
   if (fromEnv) {
     return fromEnv.replace(/\/+$/, "");
   }
-  const apiUrl = (await readEdgeConfig(context))?.apiUrl?.trim();
-  return apiUrl ? apiUrl.replace(/\/+$/, "") : null;
+  const apiUrl = (await readEdgeConfig(context))?.apiUrl;
+  const trimmed = typeof apiUrl === "string" ? apiUrl.trim() : "";
+  return trimmed ? trimmed.replace(/\/+$/, "") : null;
 }
 
 /** How long one isolate trusts what it read for the marketing chrome. */
@@ -131,57 +132,59 @@ const COMMUNITIES_WAIT_MS = 1_000;
 const COMMUNITIES_FRESH_MS = 5 * 60_000;
 const COMMUNITIES_CACHE_KEY = "https://pqp-edge.internal/communities-config";
 
-let edgeConfigMemo: { at: number; value: Promise<Partial<EdgeConfig> | null> } | null =
-  null;
+// Only settled answers are remembered across requests. A request never waits
+// on another request's unsettled work without a timer of its own: on Workers,
+// work a cancelled request started may never settle.
+let edgeConfigMemo: { at: number; value: Partial<EdgeConfig> } | null = null;
 
 /** `/edge-config.json` (`src/lib/edge-config.ts`), or null when it cannot be read. */
-function readEdgeConfig(context: PagesContext): Promise<Partial<EdgeConfig> | null> {
-  const now = Date.now();
-  if (edgeConfigMemo && now - edgeConfigMemo.at < CHROME_MEMO_MS) {
+async function readEdgeConfig(context: PagesContext): Promise<Partial<EdgeConfig> | null> {
+  if (edgeConfigMemo && Date.now() - edgeConfigMemo.at < CHROME_MEMO_MS) {
     return edgeConfigMemo.value;
   }
   const assets = context.env.ASSETS;
-  const value = (async () => {
-    if (!assets) {
+  if (!assets) {
+    return null;
+  }
+  try {
+    const url = new URL("/edge-config.json", context.request.url);
+    const response = await assets.fetch(new Request(url.toString()));
+    if (!response.ok) {
       return null;
     }
-    try {
-      const url = new URL("/edge-config.json", context.request.url);
-      const response = await assets.fetch(new Request(url.toString()));
-      if (!response.ok) {
-        return null;
-      }
-      return (await response.json()) as Partial<EdgeConfig>;
-    } catch {
+    const value = (await response.json()) as Partial<EdgeConfig> | null;
+    if (!value || typeof value !== "object") {
       return null;
     }
-  })();
-  const memo = { at: now, value };
-  edgeConfigMemo = memo;
-  // A failed read is not remembered: profile unfurls read the same file.
-  void value.then((config) => {
-    if (config === null && edgeConfigMemo === memo) {
-      edgeConfigMemo = null;
-    }
-  });
-  return value;
+    // A failed read is not remembered: profile unfurls read the same file.
+    edgeConfigMemo = { at: Date.now(), value };
+    return value;
+  } catch {
+    return null;
+  }
 }
 
-let communitiesMemo: { at: number; value: Promise<boolean> } | null = null;
+let communitiesMemo: { at: number; enabled: boolean } | null = null;
+/**
+ * The API request this isolate has on the way, shared until it settles. It is
+ * trusted no longer than the request's own timeout, so one that never settles
+ * cannot stop the next.
+ */
+let communitiesInFlight: { at: number; request: Promise<boolean | null> } | null = null;
 
 function coloCache(): Cache | null {
   return (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
 }
 
-/** The API's answer, stored in the colo cache. Null when it did not answer. */
+/** The API's answer, stored in the colo cache. Null when it did not answer. Never rejects. */
 async function fetchCommunities(context: PagesContext): Promise<boolean | null> {
-  const apiOrigin = await resolveApiOrigin(context);
-  if (!apiOrigin) {
-    return null;
-  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
+    const apiOrigin = await resolveApiOrigin(context);
+    if (!apiOrigin) {
+      return null;
+    }
     const response = await fetch(`${apiOrigin}/api/public/communities/config`, {
       signal: controller.signal,
       headers: { accept: "application/json" },
@@ -206,46 +209,63 @@ async function fetchCommunities(context: PagesContext): Promise<boolean | null> 
   }
 }
 
-/** The API's `COMMUNITIES_ENABLED`, from the public config the landing reads. False when unknown. */
-function communitiesEnabled(context: PagesContext): Promise<boolean> {
-  const now = Date.now();
-  if (communitiesMemo && now - communitiesMemo.at < CHROME_MEMO_MS) {
-    return communitiesMemo.value;
+/**
+ * Asks the API, or joins the request this isolate already has on the way, so
+ * a slow API gets one request per isolate and not one per page. The request
+ * outlives the page that started it (`waitUntil`).
+ */
+function refreshCommunities(context: PagesContext): Promise<boolean | null> {
+  if (communitiesInFlight && Date.now() - communitiesInFlight.at < API_TIMEOUT_MS) {
+    return communitiesInFlight.request;
   }
-  const memo = { at: now } as { at: number; value: Promise<boolean> };
-  memo.value = (async () => {
-    const cached = await coloCache()
-      ?.match(COMMUNITIES_CACHE_KEY)
-      .catch(() => undefined);
-    if (cached) {
-      try {
-        const { enabled, at } = (await cached.json()) as { enabled?: unknown; at?: number };
-        if (typeof at !== "number" || Date.now() - at > COMMUNITIES_FRESH_MS) {
-          context.waitUntil?.(fetchCommunities(context));
-        }
-        return enabled === true;
-      } catch {
-        // An unreadable entry is a miss.
+  const request = fetchCommunities(context);
+  const inFlight = { at: Date.now(), request };
+  communitiesInFlight = inFlight;
+  context.waitUntil?.(request);
+  void request.then((enabled) => {
+    if (communitiesInFlight === inFlight) {
+      communitiesInFlight = null;
+    }
+    // No answer reads as off for a minute, so a down API is not asked on
+    // every page; an answer already remembered is kept instead.
+    communitiesMemo =
+      enabled === null
+        ? (communitiesMemo ?? { at: Date.now(), enabled: false })
+        : { at: Date.now(), enabled };
+  });
+  return request;
+}
+
+/** The API's `COMMUNITIES_ENABLED`, from the public config the landing reads. False when unknown. */
+async function communitiesEnabled(context: PagesContext): Promise<boolean> {
+  if (communitiesMemo && Date.now() - communitiesMemo.at < CHROME_MEMO_MS) {
+    return communitiesMemo.enabled;
+  }
+  const cached = await coloCache()
+    ?.match(COMMUNITIES_CACHE_KEY)
+    .catch(() => undefined);
+  if (cached) {
+    try {
+      const { enabled, at } = (await cached.json()) as { enabled?: unknown; at?: number };
+      if (typeof at !== "number" || Date.now() - at > COMMUNITIES_FRESH_MS) {
+        void refreshCommunities(context);
       }
+      communitiesMemo = { at: Date.now(), enabled: enabled === true };
+      return enabled === true;
+    } catch {
+      // An unreadable entry is a miss.
     }
-    const request = fetchCommunities(context);
-    context.waitUntil?.(request);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const answer = await Promise.race([
-      request,
-      new Promise<"waited">((resolve) => {
-        timer = setTimeout(() => resolve("waited"), COMMUNITIES_WAIT_MS);
-      }),
-    ]);
-    clearTimeout(timer);
-    if (answer === "waited" && communitiesMemo === memo) {
-      // Still on its way to the colo cache; the next reader looks there.
-      communitiesMemo = null;
-    }
-    return answer === true;
-  })();
-  communitiesMemo = memo;
-  return memo.value;
+  }
+  // Each page stops waiting on its own timer; the request keeps going.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const answer = await Promise.race([
+    refreshCommunities(context),
+    new Promise<"waited">((resolve) => {
+      timer = setTimeout(() => resolve("waited"), COMMUNITIES_WAIT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  return answer === true;
 }
 
 /** What the live nav and footer would show, as far as the edge can tell. */

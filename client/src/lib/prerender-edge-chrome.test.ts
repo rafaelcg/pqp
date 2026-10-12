@@ -104,6 +104,29 @@ describe("the marketing chrome at the edge", () => {
     expect(body).toContain('href="/apoie"');
   });
 
+  it("asks a slow API once per isolate, while each page stops waiting on its own", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onRequest = await freshMiddleware();
+    const config = { apiUrl: "https://api.test", supportPage: false, playStore: false };
+    const pending: Promise<unknown>[] = [];
+    const slow = { ...ctx(config), waitUntil: (p: Promise<unknown>) => pending.push(p) };
+    for (let i = 0; i < 2; i += 1) {
+      const started = Date.now();
+      expect(await (await onRequest(slow)).text()).not.toContain('href="/#communities"');
+      expect(Date.now() - started).toBeLessThan(1_500);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await Promise.all(pending);
+    await onRequest(slow);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("answers from the colo cache and refreshes a stale entry in the background", async () => {
     const store = new Map<string, string>();
     vi.stubGlobal("caches", {
