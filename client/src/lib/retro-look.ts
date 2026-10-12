@@ -320,9 +320,12 @@ async function switchWithTransition(update: () => void): Promise<void> {
       () =>
         new Promise<void>((resolve) => {
           update();
-          // Two frames: React commits the new structure (the contact list,
-          // the window) before the "after" picture is taken.
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          // React commits the new structure (the contact list, the window)
+          // before the "after" picture is taken. Tasks, not frames: while
+          // this callback is pending the browser suppresses rendering, so a
+          // requestAnimationFrame here never fires and the page sat frozen
+          // until Chrome gave up on the transition four seconds later.
+          setTimeout(() => setTimeout(resolve, 0), 0);
         }),
     );
     await transition.finished.catch(() => {});
