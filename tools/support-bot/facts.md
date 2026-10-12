@@ -81,8 +81,13 @@ possível deste sistema.
 - Som de uma **guia**: Chrome ou Edge, marca a caixinha "Também compartilhar
   áudio da guia". A call em outra guia não vai.
 - Som do **computador** (jogo, Pocket Bard, o que estiver tocando no Windows):
-  só no **Windows 11**, no Chrome ou no app. No Windows 10 a gente não manda,
-  porque a call iria junto.
+  no **app de desktop** vai no Windows 10 e no Windows 11, a partir da versão
+  0.2.0. No **Chrome** só no Windows 11. No Chrome do Windows 10 não vai,
+  porque a call iria junto. Nesse caso, usa o app.
+- No app, compartilhar uma **janela** manda só o som daquele programa.
+  Compartilhar a **tela inteira** manda tudo que está tocando, menos a call.
+- Se o app não consegue capturar o som naquele Windows, a caixinha de som não
+  aparece e a tela vai sem som.
 - Compartilhar a tela inteira ou uma janela no macOS sai mudo (exceto guia
   no Chrome).
 - Safari e Firefox saem mudos sempre.
@@ -96,7 +101,8 @@ possível deste sistema.
 - Tem app de desktop pra Windows, Mac e Linux. O link pra baixar é pqp.gg/download.
 - No Windows o SmartScreen avisa na primeira vez porque o build ainda não é assinado. Mac é assinado e notarizado.
 - Compartilhar tela funciona no app. Som do computador no app, sem a call,
-  precisa do Windows 11.
+  funciona no Windows 10 e no 11 a partir da versão 0.2.0 (ver som do
+  compartilhamento de tela).
 - O app carrega o mesmo site do navegador, então a interface fica sempre atualizada.
 - O app também se atualiza sozinho: baixa a versão nova em segundo plano e
   pergunta se pode reiniciar. Se tu deixar pra depois, ela entra na próxima vez
@@ -204,6 +210,8 @@ mesmo deploy. Localmente, `--facts <caminho>` lê outro arquivo sem build.
 | São Paulo, Miami, Londres | `livekitRegions` em `https://api.pqp.gg/ready` e `voice-mia` / `voice-lhr` em `https://api.pqp.gg/status.json`; `docs/plans/SFU_REGIONS.md`; watch party em casa: `server/src/voice/regions.ts` |
 | dois irmãos, independente | `https://pqp.gg/contact` |
 | desktop se atualiza sozinho | `electron/lib/updater.js` (em todo release desde 0.1.0) |
+| som do computador no app, Windows 10 e 11, a partir da 0.2.0 | `client/src/lib/native-share-audio.ts` (flag `desktop_share_audio_native`, por servidor, ligada em produção segundo o André em 12/10); `nativeShareAudio` em `electron/preload.js`; o autoteste em `electron/lib/win-share-audio-host.js` (falhou, a caixinha some); notas do release v0.2.0. O Windows 10 22H2 nunca foi testado num PC de verdade: `docs/plans/DESKTOP_SHARE_AUDIO_PER_APP.md`. Se a flag for desligada, volte a frase do Windows 10 |
+| Chrome do Windows 10 sem som do computador | `docs/DESKTOP.md` §"Sharing your computer's sound" (essa seção ainda diz que o app no Windows 10 manda só vídeo, o que ficou velho com a 0.2.0) |
 | Windows sem assinatura, Mac notarizado | `codeSigning.status` e `downloadPage.mac.signed`; `docs/DESKTOP.md` §4 |
 | Android | `https://pqp.gg/android` (`androidPage.*`); `gameAudioSupported`, `android/app/src/main/kotlin/gg/pqp/app/voice/GameAudioCapture.kt`; `docs/ANDROID.md` |
 | som do celular no Android ainda não confirmado | `docs/ANDROID.md`, item 3 da lista de esforço: "The sound half is unverified on a device." Confirmado com o André em 12/10. Quando alguém ouvir num aparelho de verdade, troque a frase e o teste em `test/facts.test.js` |

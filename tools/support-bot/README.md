@@ -167,7 +167,7 @@ Outside the pnpm workspace, like `tools/ambient` and for the same reason.
 
 ```bash
 cd tools/support-bot
-npm test          # 261 tests, no network, no key, no database
+npm test          # 262 tests, no network, no key, no database
                   # CI runs the same glob (`.github/workflows/ci.yml`)
 ```
 

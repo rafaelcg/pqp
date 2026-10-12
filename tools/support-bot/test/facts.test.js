@@ -147,6 +147,15 @@ describe("the real facts.md", () => {
     assert.doesNotMatch(facts.text, /a tela compartilhada leva o som do celular/);
   });
 
+  test("says the desktop app carries computer sound on Windows 10 from 0.2.0", () => {
+    // Native process loopback (client/src/lib/native-share-audio.ts) shipped in
+    // desktop v0.2.0 and works on Windows 10; only Chrome on Windows 10 still
+    // cannot keep the call out of the share.
+    assert.match(facts.text, /app de desktop\*\* vai no Windows 10 e no Windows 11, a partir da versão\s+0\.2\.0/);
+    assert.match(facts.text, /No Chrome do Windows 10 não vai/);
+    assert.doesNotMatch(facts.text, /No Windows 10 a gente não manda/);
+  });
+
   test("does not assert end-to-end encryption anywhere", () => {
     assert.equal(assertsE2E(facts.text), false);
   });
