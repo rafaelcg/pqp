@@ -187,7 +187,12 @@ struct ForumComposerView: View {
     private var forumId: String { home.forum.id }
     private var drafts: ForumDraftStore { ForumDraftStore(accountId: session.currentUser?.id ?? "anon") }
     private var trimmedTitle: String { draft.title.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var needsTag: Bool { home.settings.requireTag && draft.tagIds.isEmpty }
+    /// Only while there is a tag this person could pick. A rule nobody can meet
+    /// (no tags yet, only staff-only ones for a member) must not hold Publicar,
+    /// and the server, which applies the same rule, would not refuse the post.
+    private var needsTag: Bool {
+        home.settings.requireTag && !home.composerTags.isEmpty && draft.tagIds.isEmpty
+    }
     private var hasBody: Bool {
         !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
