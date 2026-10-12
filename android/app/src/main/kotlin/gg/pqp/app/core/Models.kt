@@ -352,6 +352,12 @@ data class Message(
      * renders as its plaintext body. See `gg.pqp.app.nudge.Nudge`.
      */
     val systemKind: String? = null,
+    /**
+     * The story a DM reply quotes (`messageSchema.storyId`). The quote card
+     * reads `GET /api/stories/:id/card`, which never hands out media after the
+     * story expires.
+     */
+    val storyId: String? = null,
 )
 
 @Serializable

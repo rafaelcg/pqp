@@ -313,6 +313,13 @@ private fun SignedInNav(
         },
     )
 
+    // A story's "Entrar na call": join the room through the same microphone
+    // gate as every other join, and open its channel so the call has a place.
+    val joinStoryCall: (String, String, String) -> Unit = { serverId, channelId, channelName ->
+        withMicrophone { voice.join(channelId, channelName) }
+        nav.navigate(ChatRoute(channelId, channelName, serverId = serverId, isVoiceChannel = true))
+    }
+
     // The server's answer to a join or a screen share, and a moderator's
     // notice, shown from here rather than from any one screen. A join starts
     // from a chat screen, a share from the call bar, and the person may have
@@ -488,6 +495,7 @@ private fun SignedInNav(
                         onOpenConversation = { route -> nav.navigate(route) },
                         onOpenProfile = { nav.navigate(YouRoute) },
                         onOpenFriends = { nav.navigate(FriendsRoute) },
+                        onJoinStoryCall = joinStoryCall,
                     )
                 }
                 conversationDestination(
@@ -512,6 +520,7 @@ private fun SignedInNav(
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
                         },
+                        onJoinStoryCall = joinStoryCall,
                     )
                 }
                 composable<BauRoute> { entry ->

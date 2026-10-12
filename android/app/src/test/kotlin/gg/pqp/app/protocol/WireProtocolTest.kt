@@ -315,9 +315,6 @@ class WireProtocolTest {
         // send in the lost server is already refused by the API, so nothing
         // leaks; the live drop and its one-line reason are a follow-up.
         "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
-        // Stories: "refetch this strip", content-free. The phone draws no
-        // story strip yet; the Android stories PR handles it.
-        "stories-update" to "no story strip on the phone yet",
     )
 
     /**

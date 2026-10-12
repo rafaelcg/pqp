@@ -79,6 +79,13 @@ object Permission {
      * `STREAM`.
      */
     const val START_WATCH_PARTY: Long = 1L shl 23
+
+    /**
+     * Post a story to this server. On for @everyone by default; staff can take
+     * it away per role. The strip's `canPost` already answers it, this is for
+     * the composer's audience rows and tests.
+     */
+    const val POST_STORIES: Long = 1L shl 25
 }
 
 /**

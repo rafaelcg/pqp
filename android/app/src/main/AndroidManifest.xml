@@ -182,5 +182,20 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_notification" />
+
+        <!--
+            Stories: the system camera writes a photo or a clip into the app's
+            cache through this, so the app asks for no camera or storage
+            permission. Not exported; the camera gets a one-off grant.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.stories"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/story_capture_paths" />
+        </provider>
     </application>
 </manifest>

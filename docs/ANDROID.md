@@ -2262,6 +2262,41 @@ home above, unchanged.
 
 The rules are pure and tested in `ConversasTest` (`social/ConversationList.kt`).
 
+## Stories
+
+`stories/` and `stories/ui/`, against `packages/shared/src/stories.ts`. The
+design is the stories study (strip, viewer, composer); this is what the phone
+does with it.
+
+- **Where.** A server strip below the channel list's banner (the server's
+  `stories` flag, through `GET /api/servers/:id/stories`), and a friends strip
+  above the Messages list (`stories_friends`, `GET /api/stories/friends`). Off
+  draws nothing; nothing is deleted.
+- **Live.** `StoriesStore` holds every strip on screen for the process.
+  `stories-update` is content-free: it re-reads the strip it names, drops any
+  `removedStoryIds`, and `own` bumps the viewers sheet. Expiry sends no frame;
+  a timer drops a ring when its last story runs out. Views are batched after
+  1 s on screen.
+- **Viewer.** A full-screen dialog over whatever opened it: tap to step, hold
+  to pause, swipe across for the next person (a deck: the outgoing card
+  recedes), swipe down to close. Clocks are linear (photo 5 s, text 5 s plus
+  50 ms a character, call sticker 8 s, video its own length). Replies become a
+  DM quoting the story; reactions stay on the story. The menu has mute, report
+  (`subjectType: "story"`, `minor_sexual` included), delete for the author and
+  "Tirar do {servidor}" for each server the viewer moderates.
+- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". The system camera and the
+  photo picker, so no storage permission; the camera permission is asked for
+  first because the app declares it (Android refuses `IMAGE_CAPTURE` from an
+  app that declares CAMERA without holding it, and that crash was found in QA).
+  A photo is re-encoded (1440 px long side, EXIF gone). A video is measured,
+  not transcoded: MP4, at most 30 s and 25 MB, refused with the reason before
+  any upload.
+- **Motion.** All Compose, so it follows the animator duration scale; at zero
+  the deck transform and the drag shrink are skipped and the gestures keep
+  working.
+
+Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
+
 ## Attachments
 
 Sending a file is built and verified end to end. Receiving already worked: the
