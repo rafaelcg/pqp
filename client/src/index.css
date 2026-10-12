@@ -3079,6 +3079,12 @@ html[data-immersive-stage] [data-immersive-hide] {
   --story-tray: oklch(0.19 0.014 250 / 0.985);
   --story-sticker: oklch(0.17 0.03 132 / 0.95);
   --story-sticker-edge: oklch(0.88 0.19 125 / 0.34);
+  /* The accent as it reads on the story's own dark surface, in both themes:
+     the light theme's accent is a dark green made for paper, and on this
+     surface it all but disappears. */
+  --story-accent: oklch(0.88 0.19 125);
+  --story-accent-soft: oklch(0.9 0.16 125);
+  --story-on-accent: oklch(0.16 0.012 250);
   --story-shadow: 0 18px 40px oklch(0 0 0 / 0.55);
   --story-hatch: repeating-linear-gradient(
     135deg,
