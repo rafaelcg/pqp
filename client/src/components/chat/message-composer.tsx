@@ -59,6 +59,7 @@ import {
   useVoiceNoteComposer,
 } from "@/components/chat/voice-note-composer";
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -73,6 +74,12 @@ import {
   type AutocompleteOption,
 } from "@/components/chat/autocomplete-menu";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
+import { CustomEmojiImage } from "@/components/chat/custom-emoji";
+import {
+  expandCustomEmoji,
+  filterCustomEmoji,
+  useServerEmoji,
+} from "@/lib/server-emoji";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
@@ -190,8 +197,9 @@ interface MessageComposerProps {
   /** Where uploads are minted. Null disables the paperclip along with the send. */
   channelId?: string | null;
   /**
-   * The server the channel belongs to, null in a conversation. Only read for
-   * the `voice_notes` flag, which is answered per server.
+   * The server the channel belongs to, null in a conversation. Read for the
+   * `voice_notes` flag, which is answered per server, and for which custom
+   * emoji the picker and `:` autocomplete offer.
    */
   voiceNotesServerId?: string | null;
   /**
@@ -573,9 +581,27 @@ export function MessageComposer({
         : findEmojiQuery(body, caret),
     [body, caret, menuDismissed, mentionQuery, slashOpen],
   );
-  const emojiMatches = useMemo(
-    () => (emojiQuery ? filterEmojiShortcodes(emojiQuery.query) : []),
-    [emojiQuery],
+  const serverEmoji = useServerEmoji(voiceNotesServerId)?.emoji ?? null;
+  const emojiMatches = useMemo(() => {
+    if (!emojiQuery) {
+      return [];
+    }
+    // The server's own emoji first: they are what someone typing `:po` in
+    // this server is most likely after, and the built-in list is short.
+    const custom = filterCustomEmoji(emojiQuery.query, serverEmoji).map((emoji) => ({
+      name: emoji.name,
+      emoji: `:${emoji.name}:`,
+      custom: emoji,
+    }));
+    const builtIn = filterEmojiShortcodes(emojiQuery.query).map((entry) => ({
+      ...entry,
+      custom: null,
+    }));
+    return [...custom, ...builtIn].slice(0, 8);
+  }, [emojiQuery, serverEmoji]);
+  const expandBody = useCallback(
+    (text: string) => expandEmojiShortcodes(expandCustomEmoji(text, serverEmoji)),
+    [serverEmoji],
   );
 
   const isUploading = pending.some((item) => item.status === "uploading");
@@ -599,7 +625,7 @@ export function MessageComposer({
     }
     const trimmed = body.trim();
     host.onChange({
-      body: trimmed ? expandEmojiShortcodes(trimmed) : "",
+      body: trimmed ? expandBody(trimmed) : "",
       attachments: pending
         .filter((item) => item.status === "ready" && item.attachmentId)
         .map((item) => ({
@@ -613,7 +639,7 @@ export function MessageComposer({
         })),
       uploading: pending.some((item) => item.status === "uploading"),
     });
-  }, [body, pending]);
+  }, [body, pending, expandBody]);
   const isAttachmentsEnabled = Boolean(attachmentLimits?.enabled && channelId);
 
   const menuKind: "slash" | "mention" | "emoji" | null = slashOpen
@@ -697,8 +723,8 @@ export function MessageComposer({
     }
     if (menuKind === "emoji") {
       return emojiMatches.map((entry) => ({
-        id: entry.name,
-        primary: entry.emoji,
+        id: entry.custom ? `custom:${entry.custom.id}` : entry.name,
+        primary: entry.custom ? <CustomEmojiImage emoji={entry.custom} /> : entry.emoji,
         secondary: `:${entry.name}:`,
       }));
     }
@@ -1201,7 +1227,7 @@ export function MessageComposer({
     try {
       const result = await executeSlashCommand(value, {
         sendMessage: (messageBody) => {
-          onSend(expandEmojiShortcodes(messageBody).trim());
+          onSend(expandBody(messageBody).trim());
         },
         openGifPicker: (query) => {
           setGifQuery(query);
@@ -1279,7 +1305,7 @@ export function MessageComposer({
       (item) => item.status === "ready" && item.attachmentId,
     );
     onSend(
-      trimmed ? expandEmojiShortcodes(trimmed) : "",
+      trimmed ? expandBody(trimmed) : "",
       ready.map((item) => ({
         attachmentId: item.attachmentId!,
         filename: item.filename,
@@ -1584,6 +1610,7 @@ export function MessageComposer({
         <EmojiPickerPanel
           onSelect={insertEmoji}
           onClose={() => setIsPickerOpen(false)}
+          customEmoji={serverEmoji}
         />
       )}
       {isGifPickerOpen && !menuKind && (

@@ -5,18 +5,38 @@ import Picker from "@emoji-mart/react";
 import { useTheme } from "@/hooks/use-theme";
 import { useTranslation } from "@/lib/i18n";
 import { emojiPickerLocale } from "@/lib/emoji-picker-locale";
+import { serverEmojiImageUrl } from "@/lib/server-emoji";
+import type { ServerEmoji } from "@pqp/shared";
+import { useMemo } from "react";
 
 interface EmojiPickerPanelProps {
   onSelect: (emoji: string) => void;
+  customEmoji?: readonly ServerEmoji[] | null;
 }
 
 interface EmojiMartSelection {
-  native: string;
+  id: string;
+  native?: string;
 }
 
-export function EmojiPickerPanel({ onSelect }: EmojiPickerPanelProps) {
+const CUSTOM_CATEGORY_ID = "server";
+/** Prefixed so a custom `fire` can never collide with emoji-mart's own `fire`. */
+const CUSTOM_ID_PREFIX = "pqp-custom-";
+
+export function EmojiPickerPanel({ onSelect, customEmoji }: EmojiPickerPanelProps) {
   const { resolved } = useTheme();
-  const { locale } = useTranslation();
+  const { locale, t } = useTranslation();
+  const custom = useMemo(() => {
+    const emojis = (customEmoji ?? []).flatMap((emoji) => {
+      const src = serverEmojiImageUrl(emoji);
+      return src
+        ? [{ id: `${CUSTOM_ID_PREFIX}${emoji.id}`, name: `:${emoji.name}:`, keywords: [emoji.name], skins: [{ src }] }]
+        : [];
+    });
+    return emojis.length > 0
+      ? [{ id: CUSTOM_CATEGORY_ID, name: t("emojiPicker.serverCategory"), emojis }]
+      : [];
+  }, [customEmoji, t]);
   // The picker's own chrome ("Search", "Frequently used", the category
   // names) follows the app's language. emoji-mart ships those strings; they
   // are passed in rather than fetched, because its default for a locale is a
@@ -40,8 +60,18 @@ export function EmojiPickerPanel({ onSelect }: EmojiPickerPanelProps) {
       // landing in its search field on mount, rather than reaching into
       // its shadow DOM from outside.
       autoFocus
+      custom={custom}
       onEmojiSelect={(emoji: EmojiMartSelection) => {
-        onSelect(emoji.native);
+        if (emoji.native) {
+          onSelect(emoji.native);
+          return;
+        }
+        const picked = customEmoji?.find(
+          (entry) => `${CUSTOM_ID_PREFIX}${entry.id}` === emoji.id,
+        );
+        if (picked) {
+          onSelect(`:${picked.name}:`);
+        }
       }}
     />
   );

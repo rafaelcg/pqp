@@ -71,6 +71,11 @@ import {
   useBauCard,
 } from "@/lib/community-home/share-card";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
+import {
+  CustomEmojiProvider,
+  useCustomEmojiScope,
+} from "@/components/chat/custom-emoji";
+import { collapseCustomEmojiTokens, expandCustomEmoji } from "@/lib/server-emoji";
 import { ThreadChip } from "@/components/chat/thread-chip";
 import {
   ContextMenu,
@@ -1826,6 +1831,7 @@ export const MessageList = memo(function MessageList({
   }
 
   return (
+    <CustomEmojiProvider serverId={serverId}>
     <VoiceNoteNamesContext.Provider value={voiceNoteNames}>
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -2333,6 +2339,7 @@ export const MessageList = memo(function MessageList({
       )}
     </div>
     </VoiceNoteNamesContext.Provider>
+    </CustomEmojiProvider>
   );
 });
 
@@ -4458,7 +4465,9 @@ function EditComposer({
   onSubmit: (body: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [value, setValue] = useState(initialValue);
+  const { list: customEmoji } = useCustomEmojiScope();
+  const [editableInitial] = useState(() => collapseCustomEmojiTokens(initialValue));
+  const [value, setValue] = useState(editableInitial);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -4490,13 +4499,13 @@ function EditComposer({
     }
     // An already-empty body cleared again is not a change, so this still keeps
     // the empty case from sending a PATCH that would do nothing.
-    if (trimmed === initialValue) {
+    if (trimmed === editableInitial) {
       onCancel();
       return;
     }
     setBusy(true);
     try {
-      await onSubmit(trimmed);
+      await onSubmit(expandCustomEmoji(trimmed, customEmoji));
     } finally {
       setBusy(false);
     }
