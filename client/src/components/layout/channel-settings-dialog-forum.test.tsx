@@ -179,6 +179,35 @@ describe("ChannelSettingsDialog on a forum", () => {
     expect(document.body.textContent).not.toContain("unsaved change");
   });
 
+  it("keeps an edit typed while the save was out", async () => {
+    let finish: (value: { tags: ForumTag[] }) => void = () => {};
+    api.putForumTags.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await mount(forum);
+    const nameInputs = () =>
+      [...document.querySelectorAll<HTMLInputElement>("[data-forum-tag-row] input")];
+    const type = async (input: HTMLInputElement, value: string) => {
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+        setter.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    await type(nameInputs()[0]!, "Bugs");
+    const save = [...document.querySelectorAll("button")].find((one) => one.textContent === "Save")!;
+    await act(async () => save.click());
+    // Still out: the person renames the second tag.
+    await type(nameInputs()[1]!, "Dúvidas");
+    await act(async () => {
+      finish({ tags: [{ ...tags[0]!, name: "Bugs" }, tags[1]!] });
+    });
+    expect(nameInputs().map((input) => input.value)).toEqual(["Bugs", "Dúvidas"]);
+    expect(document.body.textContent).toContain("1 unsaved change");
+  });
+
   it("says the tags could not load and offers a retry, without breaking the sheet", async () => {
     api.fetchForumTags.mockRejectedValueOnce(Object.assign(new Error("Not found"), { status: 404 }));
     await mount(forum);

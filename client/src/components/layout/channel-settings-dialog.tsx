@@ -433,15 +433,23 @@ export function ChannelSettingsDialog({
     // Each write is folded into the sheet as soon as it lands, so a switch
     // that fails after the list saved leaves only the switch unsaved, and
     // "Salvar" again sends only the switch.
+    //
+    // An edit made while a write is out is the person's newest word: the
+    // saved state replaces the draft only if the draft is still the one that
+    // was sent, otherwise the edit stays and counts against the new baseline.
     let baseline = forum.baseline;
+    let sent = tagDraft;
     const wantsRequireTag = tagDraft.requireTag;
     try {
       if (tagsChanged(baseline, tagDraft)) {
         const { tags } = await putForumTags(current.id, toPutBody(tagDraft));
         baseline = draftFromServer(tags, baseline.requireTag);
         const saved = baseline;
+        const next = { ...saved, requireTag: wantsRequireTag };
+        const expected = sent;
         setForum((previous) => ({ ...previous, status: "ready", baseline: saved }));
-        setTagDraft({ ...saved, requireTag: wantsRequireTag });
+        setTagDraft((draftNow) => (draftNow === expected ? next : draftNow));
+        sent = next;
       }
       if (wantsRequireTag !== baseline.requireTag) {
         const { settings } = await updateForumSettings(current.id, {
@@ -449,8 +457,9 @@ export function ChannelSettingsDialog({
         });
         baseline = { ...baseline, requireTag: settings.requireTag };
         const saved = baseline;
+        const expected = sent;
         setForum({ status: "ready", settings, baseline: saved });
-        setTagDraft(saved);
+        setTagDraft((draftNow) => (draftNow === expected ? saved : draftNow));
       }
       setConfirmLeave(false);
     } catch {
@@ -487,6 +496,7 @@ export function ChannelSettingsDialog({
       forum.settings.defaultSort,
     );
     let channel = current;
+    let sent = draft;
     try {
       if (channelChanged) {
         ({ channel } = await updateChannel(current.id, {
@@ -507,15 +517,21 @@ export function ChannelSettingsDialog({
             : {}),
         }));
         onChannelUpdated(channel);
-        // The sort the person picked stays in the draft until it is saved too.
-        setDraft(draftFromChannel(channel, draft.defaultSort));
+        // The sort the person picked stays in the draft until it is saved
+        // too, and an edit typed while this was out is never overwritten.
+        const next = draftFromChannel(channel, draft.defaultSort);
+        const expected = sent;
+        setDraft((draftNow) => (draftNow === expected ? next : draftNow));
+        sent = next;
       }
       if (sortChanged) {
         const { settings } = await updateForumSettings(current.id, {
           defaultSort: draft.defaultSort,
         });
         setForum((previous) => ({ ...previous, settings }));
-        setDraft(draftFromChannel(channel, settings.defaultSort));
+        const next = draftFromChannel(channel, settings.defaultSort);
+        const expected = sent;
+        setDraft((draftNow) => (draftNow === expected ? next : draftNow));
       }
       setConfirmLeave(false);
     } catch (err) {
