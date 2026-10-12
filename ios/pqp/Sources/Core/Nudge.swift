@@ -96,6 +96,37 @@ struct FunConfig: Codable, Hashable, Sendable {
     }
 }
 
+/// The two reads the nudge button needs, kept for a minute so walking
+/// through DMs does not download the friend list once per conversation. A
+/// minute late on a new friendship costs a button that appears on the next
+/// open; the server checks friendship on every nudge anyway.
+actor NudgeLookups {
+    static let shared = NudgeLookups()
+    static let ttl: TimeInterval = 60
+
+    private var config: (value: FunConfig, at: Date)?
+    private var friendIds: (value: Set<String>, at: Date)?
+
+    func funConfig(api: APIClient, now: Date = Date()) async -> FunConfig {
+        if let config, now.timeIntervalSince(config.at) < Self.ttl { return config.value }
+        let fresh = await api.funConfig()
+        config = (fresh, now)
+        return fresh
+    }
+
+    func isFriend(_ userId: String, api: APIClient, now: Date = Date()) async -> Bool {
+        if let friendIds, now.timeIntervalSince(friendIds.at) < Self.ttl {
+            return friendIds.value.contains(userId)
+        }
+        guard let response = try? await api.friends() else {
+            return friendIds?.value.contains(userId) ?? false
+        }
+        let ids = Set(response.friends.map(\.id))
+        friendIds = (ids, now)
+        return ids.contains(userId)
+    }
+}
+
 extension Message {
     /// A chamar a atenção, written by the server rather than typed.
     var isNudge: Bool { systemKind == "nudge" }

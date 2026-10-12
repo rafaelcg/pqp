@@ -42,6 +42,10 @@ final class ChatModel {
     /// Who the button would nudge, for the refusal copy.
     var nudgeTargetName = ""
     @ObservationIgnored private var nudgeNoticeTask: Task<Void, Never>?
+    /// The nonce of the nudge this screen is waiting on. A refusal for any
+    /// other (a late one, or one another of this account's devices sent) is
+    /// not about this button.
+    @ObservationIgnored private(set) var pendingNudgeNonce: String?
     @ObservationIgnored private var nudgeCooldownTask: Task<Void, Never>?
 
     var nudgeResting: Bool {
@@ -722,8 +726,23 @@ final class ChatModel {
     /// either way, so a double tap is one nudge.
     func sendNudge() async {
         guard let session, let channelId, !nudgeResting else { return }
+        let nonce = UUID().uuidString
+        pendingNudgeNonce = nonce
         restNudge(for: NudgeRules.cooldown)
-        await session.realtime.sendNudge(channelId: channelId, nonce: UUID().uuidString)
+        let sent = await session.realtime.sendNudge(channelId: channelId, nonce: nonce)
+        if !sent {
+            // No socket: nothing will answer, so the button must not sit out
+            // a cooldown for a nudge that never left.
+            pendingNudgeNonce = nil
+            nudgeCooldownTask?.cancel()
+            nudgeCooldownUntil = nil
+            showNudgeNotice(NudgeRules.refusalCopy("unavailable", name: nudgeTargetName))
+        }
+    }
+
+    /// Test seam: what `sendNudge` records before the frame goes out.
+    func expectNudgeAnswer(nonce: String) {
+        pendingNudgeNonce = nonce
     }
 
     private func restNudge(for seconds: TimeInterval) {
@@ -869,6 +888,11 @@ final class ChatModel {
 
         case .nudgeRefused(let refusal):
             guard refusal.channelId == channelId else { return }
+            // A refusal that names a nudge this screen did not just send is
+            // not about this button. One without a nonce is applied: the
+            // contract makes the echo optional.
+            if let nonce = refusal.nonce, nonce != pendingNudgeNonce { return }
+            pendingNudgeNonce = nil
             showNudgeNotice(NudgeRules.refusalCopy(refusal.reason, name: nudgeTargetName))
             if refusal.reason == "cooldown", let wait = refusal.retryAfterMs, wait > 0 {
                 restNudge(for: TimeInterval(wait) / 1000)

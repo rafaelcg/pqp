@@ -622,9 +622,13 @@ actor RealtimeClient {
 
     // MARK: - Sending
 
-    private func send(raw: [String: Any]) async {
+    /// True when the frame left this device. Most callers ignore it; a
+    /// caller that holds UI state for an answer (the nudge's cooldown) needs
+    /// to know when no answer can come.
+    @discardableResult
+    private func send(raw: [String: Any]) async -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: raw),
-              let text = String(data: data, encoding: .utf8) else { return }
+              let text = String(data: data, encoding: .utf8) else { return false }
         // `.running` is checked because sending on a task the OS tore down
         // while the app slept crashes inside CFNetwork itself (a null deref in
         // -[__NSURLSessionWebSocketTask _onqueue_sendMessage:], seen from
@@ -639,15 +643,17 @@ actor RealtimeClient {
         // honest response.
         guard let socket = task, socket.state == .running else {
             await scheduleReconnect()
-            return
+            return false
         }
         do {
             try await socket.send(.string(text))
+            return true
         } catch {
             // Only if this is still the live socket: a reconnect that already
             // happened has made this failure history.
-            guard task === socket else { return }
+            guard task === socket else { return false }
             await scheduleReconnect()
+            return false
         }
     }
 
@@ -849,7 +855,9 @@ actor RealtimeClient {
 
     /// Chamar a atenção: `{type: "nudge", channelId, nonce}`. No body; the
     /// server writes the message, or answers `nudge-refused`.
-    func sendNudge(channelId: String, nonce: String) async {
+    /// False when the frame never left (no socket): then no broadcast and
+    /// no refusal will ever answer it.
+    func sendNudge(channelId: String, nonce: String) async -> Bool {
         await send(raw: ["type": "nudge", "channelId": channelId, "nonce": nonce])
     }
 

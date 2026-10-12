@@ -125,6 +125,19 @@ final class NudgeTests: XCTestCase {
         XCTAssertTrue(model.nudgeResting)
     }
 
+    /// A late refusal, or one meant for another of this account's devices,
+    /// does not touch the button.
+    func testARefusalForAnotherNudgeIsIgnored() {
+        let model = ChatModel()
+        model.stage(channelId: "c", messages: [])
+        model.expectNudgeAnswer(nonce: "mine")
+        model.apply(.nudgeRefused(NudgeRefusal(channelId: "c", nonce: "someone-else", reason: "busy", retryAfterMs: nil)))
+        XCTAssertNil(model.nudgeNotice)
+        model.apply(.nudgeRefused(NudgeRefusal(channelId: "c", nonce: "mine", reason: "busy", retryAfterMs: nil)))
+        XCTAssertNotNil(model.nudgeNotice)
+        XCTAssertNil(model.pendingNudgeNonce)
+    }
+
     func testARefusalForAnotherConversationIsIgnored() {
         let model = ChatModel()
         model.stage(channelId: "c", messages: [])

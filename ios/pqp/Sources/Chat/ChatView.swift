@@ -337,11 +337,9 @@ struct ChatView: View {
         .task(id: conversation?.channelId) {
             guard let conversation, conversation.kind == "dm" else { return }
             model.nudgeTargetName = conversation.title
-            funConfig = await session.api.funConfig()
+            funConfig = await NudgeLookups.shared.funConfig(api: session.api)
             guard funConfig.nudge, let other = conversation.participants.first else { return }
-            if let friends = try? await session.api.friends() {
-                otherIsFriend = friends.friends.contains { $0.id == other.id }
-            }
+            otherIsFriend = await NudgeLookups.shared.isFriend(other.id, api: session.api)
         }
         // The system chevron would float over the film, exempt from the
         // autohide every other control follows; the overlay draws its own
