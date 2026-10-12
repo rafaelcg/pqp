@@ -375,10 +375,14 @@ final class ChannelLayoutTests: XCTestCase {
             await Task.yield()
             inFlight -= 1
         }
-        async let first: Void = gate.run(body)
+        async let first = gate.run(body)
         await Task.yield()
-        for _ in 0..<5 { await gate.run(body) }
-        await first
+        for _ in 0..<5 {
+            let ran = await gate.run(body)
+            XCTAssertFalse(ran)
+        }
+        let firstRan = await first
+        XCTAssertTrue(firstRan)
         XCTAssertEqual(reads, 2)
         XCTAssertEqual(maxInFlight, 1)
         await gate.run(body)

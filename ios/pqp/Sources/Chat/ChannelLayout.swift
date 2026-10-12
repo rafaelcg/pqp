@@ -477,10 +477,13 @@ final class ChannelRefreshGate {
     private var running = false
     private var again = false
 
-    func run(_ body: @MainActor () async -> Void) async {
+    /// True when this call ran [body] itself; false when a read was already in
+    /// flight and the call only queued the follow-up.
+    @discardableResult
+    func run(_ body: @MainActor () async -> Void) async -> Bool {
         if running {
             again = true
-            return
+            return false
         }
         running = true
         defer { running = false }
@@ -488,5 +491,6 @@ final class ChannelRefreshGate {
             again = false
             await body()
         } while again
+        return true
     }
 }

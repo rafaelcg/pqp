@@ -1220,10 +1220,11 @@ struct ChannelListView: View {
     /// said, which is a better answer than a failure.
     private func refreshChannelList() async {
         // One at a time; a burst of frames collapses into one follow-up read.
-        await refreshGate.run { await readChannelList() }
+        await refreshGate.run { _ = await readChannelList() }
     }
 
-    private func readChannelList() async {
+    /// True when the list itself was read.
+    private func readChannelList() async -> Bool {
         async let fresh: [Channel]? = try? session.api.channels(serverId: server.id)
         async let answer = fetchLayoutAnswer()
         let layout = await answer
@@ -1236,6 +1237,7 @@ struct ChannelListView: View {
             let visible = Set(channels.map(\.id))
             unread = unread.filter { visible.contains($0.key) }
         }
+        return channels != nil
     }
 
     /// Sends a whole order (Organizar canais, or one quick move from a row's
@@ -1284,12 +1286,12 @@ struct ChannelListView: View {
     /// may have kept the order. Read the truth instead of guessing, and take
     /// the staged order back only when that read fails too.
     private func reconcileAfterUnknownSave(_ before: [Channel]) async {
-        if let fresh = try? await session.api.channels(serverId: server.id) {
-            withAnimation(.channelList(reduceMotion: reduceMotion)) { channels = fresh }
-            adopt(await fetchLayoutAnswer())
-        } else {
-            rollbackOrder(before)
-        }
+        // Through the same gate as every other refresh, so an older read in
+        // flight cannot land on top of this one. When the gate was busy, its
+        // follow-up read is the answer and nothing is rolled back here.
+        var read = false
+        let ran = await refreshGate.run { read = await readChannelList() }
+        if ran && !read { rollbackOrder(before) }
     }
 
     /// "Move to…" from a row's menu in the mixed list: the end of that
