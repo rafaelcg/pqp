@@ -545,6 +545,7 @@ export function CreateServerDialog({
             <ServerReadyPanel
               invite={done.invite}
               inviteRef={done.fromImport ? "discord" : inviteRef}
+              showPastes={!done.fromImport}
               retrying={busy}
               onRetry={() => void retryInvite()}
               onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
