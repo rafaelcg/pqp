@@ -737,11 +737,25 @@ export function MusicPlayer({
     } catch {
       // player not ready to read
     }
+    // While the room is paused or empty, the level check keeps this
+    // speaker quiet between commands.
+    const guardSilence = () => {
+      const guard = setInterval(() => {
+        silencePlayer(player, musicRef.current);
+      }, SILENCE_CHECK_MS);
+      return () => clearInterval(guard);
+    };
     if (playerIsOnWrongVideo(loaded, videoId)) {
       // The room moved on and this iframe did not. Put it back before the
       // drift loop below starts seeking the wrong song to the room's clock.
       repairWrongVideo(player, videoId!);
-      return;
+      if (status === "playing") {
+        return;
+      }
+      // The repair can be backing off or spent, and nothing else would stop
+      // the old song in a paused room.
+      silencePlayer(player, musicRef.current);
+      return guardSilence();
     }
     const repeat = musicRef.current.state?.repeat ?? "off";
     if (
@@ -778,10 +792,7 @@ export function MusicPlayer({
       }
     }
     if (status !== "playing" || !videoId) {
-      const guard = setInterval(() => {
-        silencePlayer(player, musicRef.current);
-      }, SILENCE_CHECK_MS);
-      return () => clearInterval(guard);
+      return guardSilence();
     }
     // Autoplay can be refused until the page has a gesture. The button in
     // the panel is that gesture.

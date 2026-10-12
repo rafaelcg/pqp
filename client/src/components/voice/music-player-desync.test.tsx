@@ -324,6 +324,22 @@ describe("the room is paused while this seat is listening", () => {
     expect(player.time).toBe(60);
   });
 
+  it("pauses the old song when the room pauses on another track and the repair is held back", async () => {
+    const player = await listeningTenSecondsIn();
+    const other = { ...TRACK, id: "track-b", videoId: "9bZkp7q19f0" };
+    await render(snapshot(roomState({ current: other, status: "paused", rev: 3 })));
+    // Every command for the new track is lost, so the old song plays on.
+    player.drop();
+    expect(player.videoId).toBe(TRACK.videoId);
+    expect(player.state).toBe(YT_STATE.PLAYING);
+
+    // A queue edit in the paused room: the repair is still backing off.
+    await render(snapshot(roomState({ current: other, status: "paused", rev: 4 })));
+    await iframeCatchesUp();
+
+    expect(player.state).toBe(YT_STATE.PAUSED);
+  });
+
   it("leaves a playing room alone", async () => {
     const player = await listeningTenSecondsIn();
     await act(async () => {
