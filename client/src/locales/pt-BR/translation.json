@@ -5251,6 +5251,7 @@
   "stories.callPicker.rooms": "Salas do {server}",
   "stories.callPicker.empty": "Esse servidor não tem sala de voz.",
   "stories.callPicker.emptyRoom": "vazia",
+  "stories.callPicker.notInRoom": "Tu não tá no {room}. O card só deixa entrar enquanto tu tá na call.",
   "stories.callPicker.inRoom_one": "{count} na call",
   "stories.callPicker.inRoom_other": "{count} na call",
   "stories.audience.title": "Quem vê",

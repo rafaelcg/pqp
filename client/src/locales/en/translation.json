@@ -5251,6 +5251,7 @@
   "stories.callPicker.rooms": "Rooms in {server}",
   "stories.callPicker.empty": "This server has no voice rooms.",
   "stories.callPicker.emptyRoom": "empty",
+  "stories.callPicker.notInRoom": "You're not in {room}. The card only lets people in while you're in the call.",
   "stories.callPicker.inRoom_one": "{count} in the call",
   "stories.callPicker.inRoom_other": "{count} in the call",
   "stories.audience.title": "Who sees it",
