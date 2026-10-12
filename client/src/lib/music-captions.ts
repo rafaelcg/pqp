@@ -118,11 +118,6 @@ export function setMusicCaptions(lang: string | null): void {
   apply?.();
 }
 
-/** The CC button: off, or back on in the last language (else the UI's). */
-export function toggleMusicCaptions(uiLocale: string): void {
-  setMusicCaptions(state.on ? null : (state.lang ?? uiLocale));
-}
-
 export function publishMusicCaptionTracks(
   tracks: CaptionTrack[] | null,
   translations: string[] = [],

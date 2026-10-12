@@ -340,6 +340,27 @@ export function shouldAdvanceOnEnded(
   return Boolean(playingVideoId && roomVideoId && playingVideoId === roomVideoId);
 }
 
+/**
+ * WHEN TO PUT THE VIEWER'S CAPTIONS ON AGAIN.
+ *
+ * Once per room track AND video, and only when the player is on the room's
+ * video: a late PLAYING from the outgoing video, or one from a wrong video
+ * the repair is about to replace, would read the wrong track list and then
+ * leave the right video on YouTube's default. The key carries the video id
+ * so the repair's reload of the same room track counts as new.
+ */
+export function captionsSyncKey(
+  loadedVideoId: string | undefined,
+  current: { id: string; videoId: string } | null | undefined,
+  lastKey: string | null,
+): string | null {
+  if (!current || !loadedVideoId || loadedVideoId !== current.videoId) {
+    return null;
+  }
+  const key = `${current.id}:${current.videoId}`;
+  return key === lastKey ? null : key;
+}
+
 export function shouldReportPositionSample(playerState: number): boolean {
   return playerState !== YT_STATE.ENDED;
 }
@@ -492,9 +513,19 @@ export function MusicPlayer({
                 onNeedsTap(false);
                 // Once per room track: a new video gets YouTube's default
                 // captions back, so the viewer's choice goes on again.
-                const playingTrack = snap.state?.current?.id ?? null;
-                if (playingTrack && captionsFor.current !== playingTrack) {
-                  captionsFor.current = playingTrack;
+                let loadedVideo: string | undefined;
+                try {
+                  loadedVideo = event.target.getVideoData().video_id;
+                } catch {
+                  loadedVideo = undefined;
+                }
+                const captionsKey = captionsSyncKey(
+                  loadedVideo,
+                  snap.state?.current,
+                  captionsFor.current,
+                );
+                if (captionsKey) {
+                  captionsFor.current = captionsKey;
                   captionsCancel.current?.();
                   captionsCancel.current = startMusicCaptionsSync(
                     event.target,

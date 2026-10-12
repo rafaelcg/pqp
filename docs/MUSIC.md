@@ -388,7 +388,7 @@ track. The captions button opens a menu with these rows:
 The choice is saved per browser (`pqp:music-captions`,
 `pqp:music-captions-lang`) and never goes on the socket. On every new room
 track, the embed reads the track list once the player reaches PLAYING. It
-retries for up to six seconds, because the list arrives late and never
+retries for about five seconds, because the list arrives late and never
 arrives for a video without captions. Then it applies the choice again,
 because a new video starts with YouTube's default. "Off" is an empty
 `track` option: it hides captions and keeps the track list readable. While

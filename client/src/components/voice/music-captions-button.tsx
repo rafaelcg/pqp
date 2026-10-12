@@ -88,7 +88,6 @@ export function MusicCaptionsButton({ className }: { className?: string }) {
         data-music-captions={captions.on ? "on" : "off"}
         aria-label={label}
         title={label}
-        aria-pressed={captions.on}
         className={className_}
       >
         <Icon className="h-3.5 w-3.5" aria-hidden="true" />

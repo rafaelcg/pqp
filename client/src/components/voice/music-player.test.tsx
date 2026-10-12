@@ -40,6 +40,7 @@ import { MusicFila } from "@/components/voice/music-fila";
 import { resetMusicLocalPlaybackForTests } from "@/components/voice/music-local-playback";
 import {
   applyYouTubeVolume,
+  captionsSyncKey,
   musicEmbedCommand,
   playerNeedsRoomSeek,
   shouldAdvanceOnEnded,
@@ -369,6 +370,29 @@ describe("shouldAdvanceOnEnded", () => {
     expect(shouldAdvanceOnEnded(undefined, "aaaaaaaaaaa")).toBe(false);
     expect(shouldAdvanceOnEnded("bbbbbbbbbbb", "aaaaaaaaaaa")).toBe(false);
     expect(shouldAdvanceOnEnded("aaaaaaaaaaa", "aaaaaaaaaaa")).toBe(true);
+  });
+});
+
+describe("captionsSyncKey", () => {
+  const room = { id: "track-1", videoId: "iG9CE55wbtY" };
+
+  it("syncs once per room track, on the room's video", () => {
+    const key = captionsSyncKey("iG9CE55wbtY", room, null);
+    expect(key).toBe("track-1:iG9CE55wbtY");
+    expect(captionsSyncKey("iG9CE55wbtY", room, key)).toBeNull();
+  });
+
+  it("ignores PLAYING from a video the room is not on", () => {
+    expect(captionsSyncKey("arj7oStGLkU", room, null)).toBeNull();
+    expect(captionsSyncKey(undefined, room, null)).toBeNull();
+    expect(captionsSyncKey("iG9CE55wbtY", null, null)).toBeNull();
+  });
+
+  it("syncs again on the next track, including a repeat of the same video", () => {
+    const first = captionsSyncKey("iG9CE55wbtY", room, null);
+    expect(
+      captionsSyncKey("iG9CE55wbtY", { id: "track-2", videoId: "iG9CE55wbtY" }, first),
+    ).toBe("track-2:iG9CE55wbtY");
   });
 });
 

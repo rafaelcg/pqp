@@ -9,7 +9,6 @@ import {
   setMusicCaptions,
   setMusicCaptionsApply,
   startMusicCaptionsSync,
-  toggleMusicCaptions,
   type CaptionTrack,
   type CaptionsPlayer,
 } from "@/lib/music-captions";
@@ -85,12 +84,10 @@ describe("the captions preference", () => {
     expect(getMusicCaptions()).toMatchObject({ on: true, lang: "pt-BR" });
   });
 
-  it("toggles back on in the last language, not the UI's", () => {
+  it("keeps the last language while captions are off", () => {
     setMusicCaptions("en");
-    toggleMusicCaptions("pt-BR");
+    setMusicCaptions(null);
     expect(getMusicCaptions()).toMatchObject({ on: false, lang: "en" });
-    toggleMusicCaptions("pt-BR");
-    expect(getMusicCaptions()).toMatchObject({ on: true, lang: "en" });
   });
 });
 
