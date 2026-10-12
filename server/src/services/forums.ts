@@ -695,6 +695,39 @@ async function readAcceptedAnswer(
   postId: string,
   messageId: string,
 ): Promise<ForumAcceptedAnswer> {
+  const [answer, marker] = await Promise.all([
+    readAnswerMessage(postId, messageId),
+    readAnswerMarker(postId),
+  ]);
+  return { ...answer, markedById: marker.id, markedByName: marker.name };
+}
+
+/**
+ * Who marked the answer, by the name this server shows them under. Null for
+ * an answer marked before `resolved_by` existed, or by an account since
+ * deleted: the card then names nobody rather than guessing.
+ */
+async function readAnswerMarker(
+  postId: string,
+): Promise<{ id: string | null; name: string | null }> {
+  const result = await getPool().query<{ id: string; name: string | null }>(
+    `SELECT u.id, COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS name
+       FROM forum_posts p
+       JOIN channels c ON c.id = p.channel_id
+       JOIN users u ON u.id = p.resolved_by
+       LEFT JOIN server_members sm
+         ON sm.user_id = p.resolved_by AND sm.server_id = c.server_id
+      WHERE p.channel_id = $1`,
+    [postId],
+  );
+  const row = result.rows[0];
+  return { id: row?.id ?? null, name: row?.name ?? null };
+}
+
+async function readAnswerMessage(
+  postId: string,
+  messageId: string,
+): Promise<Omit<ForumAcceptedAnswer, "markedById" | "markedByName">> {
   const result = await getPool().query<{
     author_id: string;
     author_name: string | null;
@@ -1362,6 +1395,8 @@ export interface ForumPostPatch {
   /** `resolved_at` and `resolved_message_id` as they should end up. */
   resolvedAt?: "now" | null;
   acceptedAnswerId?: string | null;
+  /** The person marking `acceptedAnswerId`: "Solução · marcada por {name}". */
+  answerMarkedBy?: string;
   pinned?: boolean;
   locked?: boolean;
 }
@@ -1421,6 +1456,9 @@ export async function applyForumPostPatch(
     if (patch.acceptedAnswerId !== undefined) {
       params.push(patch.acceptedAnswerId);
       sets.push(`resolved_message_id = $${params.length}::uuid`);
+      // Who marked it travels with it, and goes with it.
+      params.push(patch.acceptedAnswerId === null ? null : (patch.answerMarkedBy ?? null));
+      sets.push(`resolved_by = $${params.length}::uuid`);
     }
     if (sets.length > 0) {
       await client.query(

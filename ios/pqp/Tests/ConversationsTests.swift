@@ -130,6 +130,52 @@ final class ConversationsTests: XCTestCase {
         XCTAssertEqual(MessagePreviewText.line(for: voice, viewerId: me), String(localized: "Voice message · \("0:12")"))
     }
 
+    // MARK: - A nudge reads as what happened
+
+    func testAListedNudgeDecodesItsKind() throws {
+        let json = """
+        {"channelId":"c1","kind":"dm","participants":[],"lastMessageAt":null,"unread":{"count":1,"mentions":0},
+         "lastMessage":{"authorId":"a","authorName":"Rafa","preview":"📳","isAttachment":false,"isGif":false,"systemKind":"nudge"}}
+        """
+        let summary = try Coding.decoder.decode(DmSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(summary.lastMessage?.systemKind, "nudge")
+        // An ordinary row, and one from a server older than nudges, carry none.
+        let plain = #"{"channelId":"c1","kind":"dm","participants":[],"lastMessageAt":null,"unread":{"count":0,"mentions":0},"lastMessage":{"authorId":"a","authorName":"Rafa","preview":"oi","isAttachment":false,"isGif":false,"systemKind":null}}"#
+        XCTAssertNil(try Coding.decoder.decode(DmSummary.self, from: Data(plain.utf8)).lastMessage?.systemKind)
+    }
+
+    func testANudgeRowNeverShowsTheBareGlyph() {
+        let theirs = dm("c1", [rafa], last: DmLastMessage(authorId: rafa.id, authorName: "Rafa", preview: "📳", isAttachment: false, isGif: false, systemKind: "nudge"))
+        XCTAssertEqual(MessagePreviewText.line(for: theirs, viewerId: me), String(localized: "Nudged you! 📳"))
+        // Mine: the sentence says who, so no "tu:" in front of it.
+        let mine = dm("c1", [rafa], last: DmLastMessage(authorId: me, authorName: "Eu", preview: "📳", isAttachment: false, isGif: false, systemKind: "nudge"))
+        XCTAssertEqual(MessagePreviewText.line(for: mine, viewerId: me), String(localized: "You nudged them 📳"))
+        // A row from an older server has no kind: the body is all there is.
+        let old = dm("c1", [rafa], last: DmLastMessage(authorId: rafa.id, authorName: "Rafa", preview: "📳", isAttachment: false, isGif: false))
+        XCTAssertEqual(MessagePreviewText.line(for: old, viewerId: me), "📳")
+    }
+
+    func testALiveNudgeKeepsItsKindOnTheRow() throws {
+        let list = [dm("b", [joao], at: 100)]
+        let fromFrame = try XCTUnwrap(ConversationList.applyingActivity(
+            list, channelId: "b", mention: false,
+            preview: ConversationActivityPreview(authorId: joao.id, authorName: "João", preview: "📳", systemKind: "nudge")
+        ))
+        XCTAssertEqual(fromFrame[0].lastMessage?.systemKind, "nudge")
+        let ordinary = try XCTUnwrap(ConversationList.applyingActivity(
+            list, channelId: "b", mention: false,
+            preview: ConversationActivityPreview(authorId: joao.id, authorName: "João", preview: "oi")
+        ))
+        XCTAssertNil(ordinary[0].lastMessage?.systemKind)
+
+        let json = """
+        {"id":"44444444-4444-4444-8444-444444444444","channelId":"b","authorId":"\(me)","authorName":"Eu",
+         "body":"📳","createdAt":"2026-10-11T12:00:00.000Z","systemKind":"nudge"}
+        """
+        let message = try Coding.decoder.decode(Message.self, from: Data(json.utf8))
+        XCTAssertEqual(MessagePreviewText.preview(of: message).systemKind, "nudge")
+    }
+
     func testNoPreviewIsNoLine() {
         XCTAssertNil(MessagePreviewText.line(for: dm("c1", [rafa]), viewerId: me))
     }

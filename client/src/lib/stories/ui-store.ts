@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { StoryAuthor } from "@pqp/shared";
+import type { PostFailure } from "./post";
 import type { ViewerPerson } from "./viewer-state";
 
 /**
@@ -41,6 +42,9 @@ export interface PostingState {
   /** 0..1 while the bytes go up; null for a text card or once they are up. */
   progress: number | null;
   status: "uploading" | "processing" | "failed" | "done";
+  /** Why it failed, while `status` is "failed" (see `PostFailure`). */
+  failure: PostFailure | null;
+  /** Post again; null when posting again cannot work and a tap only dismisses. */
   retry: (() => void) | null;
 }
 

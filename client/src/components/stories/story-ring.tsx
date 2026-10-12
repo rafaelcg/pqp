@@ -1,4 +1,4 @@
-import { Headphones, Plus, RotateCw } from "lucide-react";
+import { Headphones, Plus, RotateCw, X } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
  *
  * A call story wears a headphones badge; the viewer's own ring wears a plus.
  * While a post is going up, an arc of real upload progress is drawn over the
- * ring, and a failed post turns it red with a retry.
+ * ring, and a failed post turns it red: with a retry when posting again can
+ * work, with an X when a tap only puts it away.
  */
 
 export type RingState = "unseen" | "seen" | "none";
@@ -22,6 +23,8 @@ export type RingState = "unseen" | "seen" | "none";
 export interface RingUpload {
   status: "uploading" | "processing" | "failed" | "done";
   progress: number | null;
+  /** Only with "failed": whether a tap posts again (else it dismisses). */
+  retryable?: boolean;
 }
 
 interface StoryRingProps {
@@ -160,7 +163,11 @@ export function StoryRing({
             className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-danger text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))]"
             style={{ width: badgeSize, height: badgeSize }}
           >
-            <RotateCw className="h-2.5 w-2.5" strokeWidth={3} />
+            {upload?.retryable === false ? (
+              <X className="h-2.5 w-2.5" strokeWidth={3} />
+            ) : (
+              <RotateCw className="h-2.5 w-2.5" strokeWidth={3} />
+            )}
           </span>
         ) : (
           badge

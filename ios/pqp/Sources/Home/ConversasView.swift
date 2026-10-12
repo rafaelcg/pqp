@@ -441,7 +441,7 @@ struct ConversationAvatar: View {
                     if let presence {
                         StatusDot(status: presence, size: size * 0.26)
                             .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2).padding(-1))
-                            .accessibilityLabel(Text(verbatim: presence))
+                            .accessibilityLabel(Text(PresenceLabel(presence).key))
                     }
                 }
         }

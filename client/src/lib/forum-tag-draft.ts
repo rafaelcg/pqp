@@ -2,6 +2,7 @@ import {
   FORUM_MAX_TAGS,
   FORUM_TAG_EMOJI_MAX,
   FORUM_TAG_NAME_MAX,
+  forumTagNameKey,
   type ForumTag,
   type PutForumTagsRequest,
 } from "@pqp/shared";
@@ -59,15 +60,11 @@ export function draftFromServer(
   };
 }
 
-/** Case-, accent- and space-insensitive: what makes two names "the same tag". */
-export function tagNameKey(name: string): string {
-  return name
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase();
-}
+/**
+ * Case-, accent- and space-insensitive: what makes two names "the same tag".
+ * The server's rule, so the screen and the PUT never disagree.
+ */
+export const tagNameKey = forumTagNameKey;
 
 /** What the name field holds after a keystroke: one line, never past the cap. */
 export function clampTagName(value: string): string {
