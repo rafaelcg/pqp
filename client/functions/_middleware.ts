@@ -19,7 +19,12 @@ import {
   injectMarketingHead,
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
-import { injectMarketingBody } from "../src/lib/marketing-prerender";
+import {
+  injectMarketingBody,
+  PRERENDERED_MARKETING_PAGES,
+  type MarketingChrome,
+} from "../src/lib/marketing-prerender";
+import type { EdgeConfig } from "../src/lib/edge-config";
 import {
   markdownTwinFor,
   prefersMarkdown,
@@ -87,6 +92,8 @@ interface PagesContext {
     ASSETS?: { fetch: (input: Request | string | URL) => Promise<Response> };
   };
   next: () => Promise<Response>;
+  /** Keeps background work alive after the response. Absent in tests. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /** The edge has no patience and neither does WhatsApp's unfurler. */
@@ -106,22 +113,152 @@ async function resolveApiOrigin(context: PagesContext): Promise<string | null> {
   if (fromEnv) {
     return fromEnv.replace(/\/+$/, "");
   }
+  const apiUrl = (await readEdgeConfig(context))?.apiUrl?.trim();
+  return apiUrl ? apiUrl.replace(/\/+$/, "") : null;
+}
+
+/** How long one isolate trusts what it read for the marketing chrome. */
+const CHROME_MEMO_MS = 60_000;
+/**
+ * The communities flag sits on the path of five marketing pages. The API
+ * answers it `no-store`, and from a colo far from São Paulo it takes most of a
+ * second, so the answer is kept in the colo's cache and served stale while a
+ * background request refreshes it. Only a colo with no copy at all waits, and
+ * at most this long; the request keeps running (up to `API_TIMEOUT_MS`) to
+ * fill the cache for the next reader.
+ */
+const COMMUNITIES_WAIT_MS = 1_000;
+const COMMUNITIES_FRESH_MS = 5 * 60_000;
+const COMMUNITIES_CACHE_KEY = "https://pqp-edge.internal/communities-config";
+
+let edgeConfigMemo: { at: number; value: Promise<Partial<EdgeConfig> | null> } | null =
+  null;
+
+/** `/edge-config.json` (`src/lib/edge-config.ts`), or null when it cannot be read. */
+function readEdgeConfig(context: PagesContext): Promise<Partial<EdgeConfig> | null> {
+  const now = Date.now();
+  if (edgeConfigMemo && now - edgeConfigMemo.at < CHROME_MEMO_MS) {
+    return edgeConfigMemo.value;
+  }
   const assets = context.env.ASSETS;
-  if (!assets) {
+  const value = (async () => {
+    if (!assets) {
+      return null;
+    }
+    try {
+      const url = new URL("/edge-config.json", context.request.url);
+      const response = await assets.fetch(new Request(url.toString()));
+      if (!response.ok) {
+        return null;
+      }
+      return (await response.json()) as Partial<EdgeConfig>;
+    } catch {
+      return null;
+    }
+  })();
+  const memo = { at: now, value };
+  edgeConfigMemo = memo;
+  // A failed read is not remembered: profile unfurls read the same file.
+  void value.then((config) => {
+    if (config === null && edgeConfigMemo === memo) {
+      edgeConfigMemo = null;
+    }
+  });
+  return value;
+}
+
+let communitiesMemo: { at: number; value: Promise<boolean> } | null = null;
+
+function coloCache(): Cache | null {
+  return (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
+}
+
+/** The API's answer, stored in the colo cache. Null when it did not answer. */
+async function fetchCommunities(context: PagesContext): Promise<boolean | null> {
+  const apiOrigin = await resolveApiOrigin(context);
+  if (!apiOrigin) {
     return null;
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
-    const url = new URL("/edge-config.json", context.request.url);
-    const response = await assets.fetch(new Request(url.toString()));
+    const response = await fetch(`${apiOrigin}/api/public/communities/config`, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
     if (!response.ok) {
       return null;
     }
-    const config = (await response.json()) as { apiUrl?: string };
-    const apiUrl = config.apiUrl?.trim();
-    return apiUrl ? apiUrl.replace(/\/+$/, "") : null;
+    const enabled = ((await response.json()) as { enabled?: unknown }).enabled === true;
+    await coloCache()
+      ?.put(
+        COMMUNITIES_CACHE_KEY,
+        new Response(JSON.stringify({ enabled, at: Date.now() }), {
+          headers: { "cache-control": "max-age=86400" },
+        }),
+      )
+      .catch(() => undefined);
+    return enabled;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/** The API's `COMMUNITIES_ENABLED`, from the public config the landing reads. False when unknown. */
+function communitiesEnabled(context: PagesContext): Promise<boolean> {
+  const now = Date.now();
+  if (communitiesMemo && now - communitiesMemo.at < CHROME_MEMO_MS) {
+    return communitiesMemo.value;
+  }
+  const memo = { at: now } as { at: number; value: Promise<boolean> };
+  memo.value = (async () => {
+    const cached = await coloCache()
+      ?.match(COMMUNITIES_CACHE_KEY)
+      .catch(() => undefined);
+    if (cached) {
+      try {
+        const { enabled, at } = (await cached.json()) as { enabled?: unknown; at?: number };
+        if (typeof at !== "number" || Date.now() - at > COMMUNITIES_FRESH_MS) {
+          context.waitUntil?.(fetchCommunities(context));
+        }
+        return enabled === true;
+      } catch {
+        // An unreadable entry is a miss.
+      }
+    }
+    const request = fetchCommunities(context);
+    context.waitUntil?.(request);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = await Promise.race([
+      request,
+      new Promise<"waited">((resolve) => {
+        timer = setTimeout(() => resolve("waited"), COMMUNITIES_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (answer === "waited" && communitiesMemo === memo) {
+      // Still on its way to the colo cache; the next reader looks there.
+      communitiesMemo = null;
+    }
+    return answer === true;
+  })();
+  communitiesMemo = memo;
+  return memo.value;
+}
+
+/** What the live nav and footer would show, as far as the edge can tell. */
+async function marketingChrome(context: PagesContext): Promise<MarketingChrome> {
+  const [config, communities] = await Promise.all([
+    readEdgeConfig(context),
+    communitiesEnabled(context),
+  ]);
+  return {
+    communities,
+    supportPage: config?.supportPage === true,
+    playStore: config?.playStore === true,
+  };
 }
 
 async function fetchProfile(
@@ -389,6 +526,11 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     return context.next();
   }
 
+  // Started beside the page fetch, so it costs nothing once memoized.
+  const chrome =
+    marketing && PRERENDERED_MARKETING_PAGES.includes(marketing)
+      ? marketingChrome(context)
+      : null;
   const response = await context.next();
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("text/html")) {
@@ -418,6 +560,7 @@ async function handleRequest(context: PagesContext): Promise<Response> {
         injectMarketingHead(html, marketing, locale),
         marketing,
         locale,
+        chrome ? await chrome : undefined,
       ),
     );
   }
