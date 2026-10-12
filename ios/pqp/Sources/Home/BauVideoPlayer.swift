@@ -108,6 +108,9 @@ final class BauPlayback {
     @ObservationIgnored private var floor = BauActivePlayer()
     @ObservationIgnored private var retained: [UUID: BauVideoSession] = [:]
     @ObservationIgnored private var weChangedTheAudioSession = false
+    /// Players that are not an `AVPlayer` (a YouTube embed,
+    /// `BauYoutubePlayer.swift`), by id, with how to make each one stop.
+    @ObservationIgnored private var embeds: [UUID: @MainActor () -> Void] = [:]
 
     /// The session already playing this URL (a card that was thrown away and
     /// rebuilt while its video kept going), or a fresh one.
@@ -122,10 +125,28 @@ final class BauPlayback {
     /// Called by a session the moment it starts playing.
     func claim(_ session: BauVideoSession, callActive: Bool) {
         retained[session.id] = session
-        if let displaced = floor.claim(session.id) {
-            retained[displaced]?.yieldTheFloor()
-        }
+        if let displaced = floor.claim(session.id) { displace(displaced) }
         activateAudio(callActive: callActive)
+    }
+
+    /// An embedded player started. Same floor and same audio rule as an
+    /// uploaded video; `pause` is how another video starting stops it.
+    func claimEmbed(_ id: UUID, callActive: Bool, pause: @escaping @MainActor () -> Void) {
+        embeds[id] = pause
+        if let displaced = floor.claim(id) { displace(displaced) }
+        activateAudio(callActive: callActive)
+    }
+
+    /// An embedded player stopped, or is going away.
+    func releaseEmbed(_ id: UUID) {
+        guard embeds.removeValue(forKey: id) != nil else { return }
+        floor.release(id)
+        if floor.current == nil { deactivateAudio() }
+    }
+
+    private func displace(_ id: UUID) {
+        retained[id]?.yieldTheFloor()
+        embeds.removeValue(forKey: id)?()
     }
 
     /// Called when a session stops playing (pause, end, failure).
@@ -141,6 +162,8 @@ final class BauPlayback {
         for session in retained.values where !session.isFullScreen {
             session.stopCompletely()
         }
+        // An embed's own pause keeps a full-screen player going.
+        for pause in Array(embeds.values) { pause() }
     }
 
     private func activateAudio(callActive: Bool) {

@@ -242,8 +242,8 @@ struct CommunityHomeUnreadAllResponse: Codable, Sendable { let servers: [String:
 ///
 /// `videoId` is a port of `parseYoutubeVideoId` in shared: watch, youtu.be,
 /// shorts, embed and live, eleven characters of id, anything else nil. The
-/// thumbnail is the public one every video has; there is no API key involved
-/// and no embed on the phone, a tap opens the watch page.
+/// thumbnail is the public one every video has; there is no API key involved.
+/// The card shows it until a tap builds the player (`BauYoutubeVideo`).
 enum YoutubeLinks {
     static func videoId(_ raw: String?) -> String? {
         guard let raw else { return nil }
