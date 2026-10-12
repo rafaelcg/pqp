@@ -430,6 +430,15 @@ export const userPreferencesSchema = z.object({
    */
   voiceCleanNudgeDismissedAt: z.string().optional(),
   /**
+   * When the "Aparecer no diretório" card (the one-time question to an owner
+   * whose community has a public address but is not listed) was shown or
+   * answered, as an ISO instant. Stamped when it paints, so it is asked once
+   * per account and never again, on any device. `GET
+   * /api/communities/listing-nudge` reads it too, so a second browser does not
+   * even fetch a candidate. Absent means "never asked".
+   */
+  communityListingNudgeAt: z.string().optional(),
+  /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
    *
