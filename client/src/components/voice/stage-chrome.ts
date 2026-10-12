@@ -116,6 +116,39 @@ export function stageChromeHold(
 }
 
 /**
+ * Which hover holds the element under the pointer supports, read from the
+ * element itself rather than remembered from enter and leave events.
+ *
+ * `pointerOverControls` was kept only by React's `onPointerEnter` /
+ * `onPointerLeave`, which React builds from the browser's `pointerout`. When
+ * the node under the pointer is removed (the mute button swaps its icon on the
+ * very click that pressed it), the browser sends no `pointerout` for it, and
+ * the next `pointerover` names that detached node as where the pointer came
+ * from. React reads that as the pointer arriving from outside the window, so
+ * it fires enters and no leave, and the bar believed it was hovered for the
+ * rest of the stream. Every pointer move over the stage now settles the
+ * question from the element actually under it.
+ *
+ * `controls` is the bar, the title overlay and the way back to the grid (the
+ * group that already shared one hover); `tileControls` is a tile's own corner.
+ */
+export function chromeHoverAt(target: EventTarget | null): {
+  controls: boolean;
+  tileControls: boolean;
+} {
+  if (!(target instanceof Element)) {
+    return { controls: false, tileControls: false };
+  }
+  return {
+    controls:
+      target.closest(
+        '[data-call-chrome="bar"], [data-call-chrome="overlay"], [data-call-chrome="back"]',
+      ) !== null,
+    tileControls: target.closest('[data-call-chrome="tile"]') !== null,
+  };
+}
+
+/**
  * Whether a focus event is keyboard focus. `:focus-visible` is the browser's
  * own answer: false for a button a mouse just pressed, true for a Tab or an
  * arrow key. An engine that does not know the selector throws, and the safe
