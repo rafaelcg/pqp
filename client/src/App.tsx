@@ -12465,7 +12465,11 @@ function MainAppContent({
           footer={sidebarFooter(false, { userPanel: !phoneShell })}
           storiesSlot={
             storiesSelf ? (
-              <StoryStrip audience={{ kind: "friends" }} me={storiesSelf} />
+              <StoryStrip
+                audience={{ kind: "friends" }}
+                me={storiesSelf}
+                ownSlot={friends.data.friends.length > 0}
+              />
             ) : null
           }
         />
