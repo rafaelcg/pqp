@@ -200,6 +200,17 @@ struct ForumPostCard: View {
     /// the letters rather than the top of the line box above them.
     private static let titleCapHeight = UIFont.systemFont(ofSize: 16, weight: .semibold).capHeight
 
+    /// The SF Symbol drawn before the second line when it says "Image" or
+    /// "Video" (the copy carries no emoji).
+    static func previewSymbol(for post: ForumPostSummary) -> String? {
+        if post.openingDeleted { return nil }
+        if let preview = post.preview, !preview.isEmpty { return nil }
+        guard post.openingKind == "attachment", post.attachmentCount == 1 else { return nil }
+        if post.thumbnailUrl != nil { return "photo" }
+        if post.thumbnailVideoUrl != nil { return "video" }
+        return nil
+    }
+
     /// The second line when the opening message has no words of its own.
     static func previewText(for post: ForumPostSummary) -> String {
         if post.openingDeleted { return String(localized: "The original message was deleted") }
@@ -209,10 +220,10 @@ struct ForumPostCard: View {
         case "attachment":
             // One picture or one clip says what it is; several say how many.
             if post.attachmentCount == 1, post.thumbnailUrl != nil {
-                return String(localized: "📷 Image")
+                return String(localized: "Image")
             }
             if post.attachmentCount == 1, post.thumbnailVideoUrl != nil {
-                return String(localized: "🎬 Video")
+                return String(localized: "Video")
             }
             return post.attachmentCount == 1
                 ? String(localized: "1 attachment")
@@ -288,8 +299,9 @@ struct ForumPostCard: View {
     private var preview: some View {
         let text = previewText
         if !text.isEmpty {
+            let symbol = Self.previewSymbol(for: post).map { Text(Image(systemName: $0)) + Text(verbatim: " ") } ?? Text(verbatim: "")
             (Text(verbatim: "\(authorName): ").foregroundStyle(Palette.paperSubtle).fontWeight(.semibold)
-             + Text(verbatim: text).foregroundStyle(Palette.paperMuted).italic(post.openingDeleted))
+             + (symbol + Text(verbatim: text)).foregroundStyle(Palette.paperMuted).italic(post.openingDeleted))
                 .font(.system(size: 14))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)

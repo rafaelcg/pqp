@@ -11426,26 +11426,6 @@
           }
         }
       }
-    },
-    "📷 Image" : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "📷 Imagem"
-          }
-        }
-      }
-    },
-    "🎬 Video" : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "🎬 Vídeo"
-          }
-        }
-      }
     }
   },
   "version" : "1.0"
