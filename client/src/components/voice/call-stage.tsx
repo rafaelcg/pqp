@@ -1818,6 +1818,11 @@ function ActiveCall({
     if (hover.tileControls !== tileControlsHovered) {
       setTileControlsHovered(hover.tileControls);
     }
+    // The composer's strip is never inside the stage, so a pointer here is
+    // not on it. Its own leave is lost the same way when mute swaps its icon.
+    if (dockHovered) {
+      setDockHovered(false);
+    }
   };
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") {
@@ -3469,6 +3474,7 @@ export function CallControls({
                 : shareCappedOut
                   ? "cap"
                   : null,
+              limit: shareLimit,
               onStart: startWatchParty,
             }
           : undefined,
