@@ -940,8 +940,14 @@ export type AuditInTransaction<T> = (
 /**
  * Write only the fields the patch names, so two editors changing different
  * settings at once cannot overwrite each other with the value they each
- * read. The row is locked while `before` is read, so the audit's "old" is the
- * value this write actually replaced.
+ * read. Writes to one forum's settings are serialised while `before` is
+ * read, so the audit's "old" is the value this write actually replaced.
+ *
+ * A per-forum advisory lock, not `FOR UPDATE` alone: before a forum's first
+ * save there is no row to lock, so two first saves both read the defaults,
+ * and the second one's audit compared its result with that stale "before"
+ * (true then false left the final value false and no row for the change
+ * back).
  */
 export async function updateForumSettings(
   forumId: string,
@@ -951,9 +957,12 @@ export async function updateForumSettings(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('forum-settings:' || $1))`,
+      [forumId],
+    );
     const current = await client.query<{ require_tag: boolean; default_sort: ForumSort }>(
-      `SELECT require_tag, default_sort FROM forum_settings
-        WHERE forum_id = $1 FOR UPDATE`,
+      `SELECT require_tag, default_sort FROM forum_settings WHERE forum_id = $1`,
       [forumId],
     );
     const before: ForumSettings = current.rows[0]
