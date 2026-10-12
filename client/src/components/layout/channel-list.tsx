@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   Archive,
   CheckCheck,
   ChevronDown,
@@ -55,6 +56,13 @@ import {
 } from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
+  buildSidebarLayout,
+  locateInLayout,
+  moveInLayout,
+  stepInLayout,
+  type LayoutTarget,
+  type SidebarCategory,
+  type SidebarLayout,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
   liveStateFromRoster,
@@ -137,6 +145,17 @@ import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
+import {
+  CreateCategoryRow,
+  DragStatus,
+  DropLine,
+  EmptyCategoryDrop,
+  MixedCategoryHeader,
+  PinDropBar,
+  OrganizeChannels,
+  stepAvailability,
+  type DropEdge,
+} from "@/components/layout/channel-list-mixed";
 
 const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set();
 
@@ -146,6 +165,39 @@ export interface UnreadState {
 }
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
+
+/** Where a drag in the mixed list would land, as the pointer says now. */
+type MixedDrop =
+  | { kind: "row"; id: string; edge: DropEdge }
+  | { kind: "into"; categoryId: string }
+  | { kind: "category"; id: string; edge: DropEdge }
+  /** The top edge of a header: the end of the group above it (loose, for the first). */
+  | { kind: "beforeCategory"; categoryId: string }
+  | { kind: "afterLastCategory" };
+
+/** The top this much of a category header means "above this category". */
+const HEADER_BEFORE_FRACTION = 0.3;
+
+/** A folded category held under the pointer this long opens. */
+const FOLDED_CATEGORY_OPEN_MS = 600;
+
+/** What a reorder came back as (`App.handleApplyLayout`). */
+export type ApplyLayoutResult = "ok" | "stale" | "failed";
+
+function layoutKey(layout: SidebarLayout): string {
+  return JSON.stringify([
+    layout.loose.map((channel) => channel.id),
+    layout.categories.map((entry) => [
+      entry.category.id,
+      entry.children.map((channel) => channel.id),
+    ]),
+  ]);
+}
+
+function edgeOf(event: DragEvent, host: Element): DropEdge {
+  const rect = host.getBoundingClientRect();
+  return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
 
 /** Drop-target ids that are not channels: the Pinados / TEXT / VOICE headers. */
 const PINNED_ZONE = "__pinned__";
@@ -319,7 +371,30 @@ interface ChannelListProps {
    * `watch_party` is only ever asked for while `isWatchPartyChannelsEnabled()`
    * is true; with the flag off the sidebar has no button that sends it.
    */
-  onCreateChannel: (type: ChannelType, isPrivate: boolean) => void;
+  onCreateChannel: (
+    type: ChannelType,
+    isPrivate: boolean,
+    /** The category to create it in (the mixed list's per-category "+"). */
+    parentId?: string | null,
+  ) => void;
+  /**
+   * Draw the mixed list: categories are the only headers and every type
+   * mixes in one order (`mixed_channel_list` on for the server and its data
+   * migrated, `GET /api/servers/:id/channel-layout`). Null or absent draws the
+   * old TEXTO / VOZ / CATEGORIAS list, untouched. `version` is what a reorder
+   * is sent against; null while it has not been read yet, which holds every
+   * reorder back.
+   */
+  mixedLayout?: { version: number | null } | null;
+  /**
+   * Commit a reorder of the mixed list (one full-order PUT). Applied
+   * optimistically by the caller, which reverts on a failure and adopts the
+   * server's list on a stale one.
+   */
+  onApplyLayout?: (
+    layout: SidebarLayout<Channel>,
+    baseVersion: number,
+  ) => Promise<ApplyLayoutResult>;
   /**
    * The runtime flag `forum_channels` is on for this server (`useForumConfig`).
    * Turns the Texto section's "+" into a menu offering a text channel or a
@@ -485,6 +560,8 @@ export const ChannelList = memo(function ChannelList({
   onDeleteChannel,
   onPurgeChannel,
   onMoveChannel,
+  mixedLayout = null,
+  onApplyLayout,
   favoriteChannelIds = [],
   onFavoriteChannelIdsChange,
   onInvite,
@@ -587,6 +664,18 @@ export const ChannelList = memo(function ChannelList({
     );
   }
 
+  // What the mixed list draws and every reorder is computed on: what this
+  // person sees in its place (pins live in Pinados, a watch party room is the
+  // block at the top). A channel left out of the write keeps its place on
+  // the server, so the view is the whole truth the write needs.
+  const viewLayout = buildSidebarLayout(
+    listed.filter((c) => !favoriteIdSet.has(c.id)),
+    { mixed: true },
+  );
+  // One pass for every row's Mover para cima / para baixo, not a candidate
+  // layout per row per render.
+  const viewSteps = stepAvailability(viewLayout);
+
   const speaking = new Set(speakingPeerIds);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchSeed, setSearchSeed] = useState("");
@@ -599,6 +688,48 @@ export const ChannelList = memo(function ChannelList({
   const [draggedOccupant, setDraggedOccupant] =
     useState<VoiceOccupantDrag | null>(null);
   const [dropHint, setDropHint] = useState<string | null>(null);
+  // --- the mixed list ---
+  const mixed = mixedLayout != null;
+  const [mixedDrop, setMixedDropState] = useState<MixedDrop | null>(null);
+  const mixedDropRef = useRef<MixedDrop | null>(null);
+  /** The row picked up, drawn as a dashed gap (set a tick after dragstart). */
+  const [liftedId, setLiftedId] = useState<string | null>(null);
+  const liftRef = useRef<string | null>(null);
+  const [organizing, setOrganizing] = useState<{
+    layout: SidebarLayout<Channel>;
+    baseVersion: number;
+  } | null>(null);
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
+  const statusTimerRef = useRef<number | null>(null);
+  const focusAfterRef = useRef<string | null>(null);
+  const openTimerRef = useRef<{ id: string; timer: number } | null>(null);
+  useEffect(() => {
+    const id = focusAfterRef.current;
+    if (!id) {
+      return;
+    }
+    focusAfterRef.current = null;
+    // After the menu that asked for the move has closed and handed focus
+    // back: the moved row keeps it, wherever it went.
+    window.setTimeout(() => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-channel-id="${id}"] button, [data-category-id="${id}"] button`,
+      );
+      target?.focus();
+    }, 0);
+  }, [channels]);
+  useEffect(
+    () => () => {
+      if (statusTimerRef.current !== null) {
+        window.clearTimeout(statusTimerRef.current);
+      }
+      if (openTimerRef.current) {
+        window.clearTimeout(openTimerRef.current.timer);
+      }
+    },
+    [],
+  );
   const openProfile = useProfilePopover();
   const memberById = useMemo(() => {
     const map = new Map<string, ServerMember>();
@@ -652,13 +783,23 @@ export const ChannelList = memo(function ChannelList({
   // is already fully hidden, so collapsing it saves nothing and costs the
   // names. `App.tsx` will not ask for it there either; this is the belt.
   if (iconsOnly && !mobileOpen && onExpand) {
-    const railGroups = channelRailGroups({
-      favorites: visibleFavs,
-      text: topLevelText,
-      voice: topLevelVoice,
-      categories,
-      childrenByCategory,
-    });
+    const railGroups = mixed
+      ? channelRailGroups({
+          favorites: visibleFavs,
+          text: viewLayout.loose,
+          voice: [],
+          categories: viewLayout.categories.map((entry) => entry.category),
+          childrenByCategory: new Map(
+            viewLayout.categories.map((entry) => [entry.category.id, entry.children]),
+          ),
+        })
+      : channelRailGroups({
+          favorites: visibleFavs,
+          text: topLevelText,
+          voice: topLevelVoice,
+          categories,
+          childrenByCategory,
+        });
 
     return (
       <aside
@@ -769,6 +910,240 @@ export const ChannelList = memo(function ChannelList({
     setDraggedId(null);
     setDragOverId(null);
     setDraggedOccupant(null);
+    setMixedDrop(null);
+    liftRef.current = null;
+    setLiftedId(null);
+    cancelFoldedOpen();
+  }
+
+  // --- mixed list: drag, drop, keyboard, organize -------------------------
+
+  function setMixedDrop(next: MixedDrop | null) {
+    // Mirrored in a ref: a drop in the same frame as the last dragover reads
+    // the target the pointer is on, not the one the last render saw.
+    mixedDropRef.current = next;
+    setMixedDropState((current) =>
+      JSON.stringify(current) === JSON.stringify(next) ? current : next,
+    );
+  }
+
+  function cancelFoldedOpen() {
+    if (openTimerRef.current) {
+      window.clearTimeout(openTimerRef.current.timer);
+      openTimerRef.current = null;
+    }
+  }
+
+  /** Hovering a folded category while dragging opens it after a beat. */
+  function scheduleFoldedOpen(categoryId: string) {
+    if (openTimerRef.current?.id === categoryId) {
+      return;
+    }
+    cancelFoldedOpen();
+    const timer = window.setTimeout(() => {
+      openTimerRef.current = null;
+      if (loadCollapsedCategories().has(categoryId)) {
+        setCollapsed(toggleCollapsedCategory(categoryId));
+      }
+    }, FOLDED_CATEGORY_OPEN_MS);
+    openTimerRef.current = { id: categoryId, timer };
+  }
+
+  function showStatus(text: string) {
+    setStatusLine(text);
+    if (statusTimerRef.current !== null) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+    statusTimerRef.current = window.setTimeout(() => {
+      statusTimerRef.current = null;
+      setStatusLine(null);
+    }, 4000);
+  }
+
+  function describeMove(layout: SidebarLayout<Channel>, id: string): string | null {
+    const place = locateInLayout(layout, id);
+    const row = channels.find((c) => c.id === id);
+    if (!place || !row) {
+      return null;
+    }
+    const n = place.index + 1;
+    if (place.isCategory) {
+      return t("chrome.movedCategory", { category: row.name, n, total: place.total });
+    }
+    if (place.parentId === null) {
+      return t("chrome.movedToLoose", { channel: row.name, n, total: place.total });
+    }
+    const category = layout.categories.find((entry) => entry.category.id === place.parentId);
+    return t("chrome.movedTo", {
+      channel: row.name,
+      category: category?.category.name ?? "",
+      n,
+      total: place.total,
+    });
+  }
+
+  async function commitLayout(
+    next: SidebarLayout<Channel>,
+    movedId: string | null,
+    baseVersion: number | null = mixedLayout?.version ?? null,
+  ): Promise<ApplyLayoutResult> {
+    if (!onApplyLayout || baseVersion === null) {
+      showStatus(t("chrome.reorderFailed"));
+      return "failed";
+    }
+    if (movedId) {
+      focusAfterRef.current = movedId;
+    }
+    const result = await onApplyLayout(next, baseVersion);
+    if (result === "ok") {
+      const said = movedId ? describeMove(next, movedId) : null;
+      if (said) {
+        showStatus(said);
+      }
+    } else {
+      showStatus(t(result === "stale" ? "chrome.reorderStale" : "chrome.reorderFailed"));
+    }
+    return result;
+  }
+
+  function applyMove(id: string, target: LayoutTarget) {
+    const next = moveInLayout(viewLayout, id, target);
+    if (!next || layoutKey(next) === layoutKey(viewLayout)) {
+      return;
+    }
+    void commitLayout(next, id);
+  }
+
+  function stepMove(id: string, direction: -1 | 1) {
+    const stepped = stepInLayout(viewLayout, id, direction);
+    if (stepped) {
+      void commitLayout(stepped.layout, id);
+    }
+  }
+
+  /** The slot a drop on a row (above or below its middle) lands in. */
+  function rowDropTarget(draggedRowId: string, rowId: string, edge: DropEdge): LayoutTarget | null {
+    const at = locateInLayout(viewLayout, rowId);
+    if (!at) {
+      return null;
+    }
+    let index = at.index + (edge === "after" ? 1 : 0);
+    const from = locateInLayout(viewLayout, draggedRowId);
+    // The index is read with the dragged row already taken out.
+    if (from && from.isCategory === at.isCategory && from.parentId === at.parentId && from.index < index) {
+      index -= 1;
+    }
+    return { parentId: at.isCategory ? null : at.parentId, index };
+  }
+
+  function finishMixedDrop() {
+    const dragged = draggedChannel();
+    const drop = mixedDropRef.current;
+    clearDrag();
+    if (!dragged || !drop || !canManage || favoriteIdSet.has(dragged.id)) {
+      return;
+    }
+    const end = Number.MAX_SAFE_INTEGER;
+    const isCategory = dragged.type === "category";
+    switch (drop.kind) {
+      case "row": {
+        const target = isCategory ? null : rowDropTarget(dragged.id, drop.id, drop.edge);
+        if (target) {
+          applyMove(dragged.id, target);
+        }
+        return;
+      }
+      case "into":
+        if (!isCategory) {
+          applyMove(dragged.id, { parentId: drop.categoryId, index: end });
+        }
+        return;
+      case "beforeCategory": {
+        if (isCategory) {
+          return;
+        }
+        const at = viewLayout.categories.findIndex(
+          (entry) => entry.category.id === drop.categoryId,
+        );
+        const above = at > 0 ? viewLayout.categories[at - 1]!.category.id : null;
+        applyMove(dragged.id, { parentId: above, index: end });
+        return;
+      }
+      case "category": {
+        const target = isCategory ? rowDropTarget(dragged.id, drop.id, drop.edge) : null;
+        if (target) {
+          applyMove(dragged.id, target);
+        }
+        return;
+      }
+      case "afterLastCategory":
+        if (isCategory) {
+          applyMove(dragged.id, { parentId: null, index: end });
+        }
+        return;
+    }
+  }
+
+  /** A dragged channel a manager may place (not a pin, not a category, not a person). */
+  function draggingPlaceableChannel(): Channel | null {
+    if (!mixed || !canManage || draggedOccupant || !draggedId) {
+      return null;
+    }
+    const dragged = draggedChannel();
+    if (!dragged || dragged.type === "category" || favoriteIdSet.has(dragged.id)) {
+      return null;
+    }
+    return dragged;
+  }
+
+  /** Nothing pinned yet and a channel in the air: offer the bar to pin it. */
+  function pinBarOpen(): boolean {
+    if (!draggedId || draggedOccupant || visibleFavs.length > 0 || !onFavoriteChannelIdsChange) {
+      return false;
+    }
+    const dragged = draggedChannel();
+    return Boolean(dragged && dragged.type !== "category");
+  }
+
+  function draggingCategory(): Channel | null {
+    if (!mixed || !canManage || draggedOccupant || !draggedId) {
+      return null;
+    }
+    const dragged = draggedChannel();
+    return dragged?.type === "category" ? dragged : null;
+  }
+
+  function startOrganizing() {
+    if (mixedLayout?.version == null) {
+      showStatus(t("chrome.reorderFailed"));
+      return;
+    }
+    setOrganizing({ layout: viewLayout, baseVersion: mixedLayout.version });
+  }
+
+  async function finishOrganizing() {
+    if (!organizing) {
+      return;
+    }
+    if (layoutKey(organizing.layout) === layoutKey(viewLayout)) {
+      setOrganizing(null);
+      return;
+    }
+    setOrganizeBusy(true);
+    let result: ApplyLayoutResult = "failed";
+    try {
+      result = await commitLayout(organizing.layout, null, organizing.baseVersion);
+    } catch {
+      showStatus(t("chrome.reorderFailed"));
+    } finally {
+      setOrganizeBusy(false);
+      // A stale list was swapped for the fresh one: start over from it
+      // rather than keep arranging something that no longer exists.
+      setOrganizing(null);
+    }
+    if (result === "ok") {
+      showStatus(t("chrome.organizeSaved"));
+    }
   }
 
   function showDropHint(reason: Parameters<typeof dropReasonMessageKey>[0]) {
@@ -833,6 +1208,27 @@ export const ChannelList = memo(function ChannelList({
     }
     if (draggedId) {
       event.preventDefault();
+      const placeable = draggingPlaceableChannel();
+      if (placeable && !favoriteIdSet.has(channel.id)) {
+        // Above or below the middle of the row (its occupants and threads
+        // count as the row): a line says where it lands.
+        if (placeable.id === channel.id) {
+          setMixedDrop(null);
+        } else {
+          const host =
+            (event.currentTarget as HTMLElement).closest("[data-channel-id]") ??
+            (event.currentTarget as HTMLElement);
+          setMixedDrop({ kind: "row", id: channel.id, edge: edgeOf(event, host) });
+        }
+        setDragOverId(null);
+        return;
+      }
+      if (draggingCategory()) {
+        // A category only lands between categories.
+        event.dataTransfer.dropEffect = "none";
+        setMixedDrop(null);
+        return;
+      }
       setDragOverId(channel.id);
     }
   }
@@ -1102,6 +1498,10 @@ export const ChannelList = memo(function ChannelList({
       clearDrag();
       return;
     }
+    if (mixed) {
+      finishMixedDrop();
+      return;
+    }
     clearDrag();
     if (target.type === "category" && dragged.type !== "category") {
       const kids = childrenByCategory.get(target.id) ?? [];
@@ -1158,15 +1558,34 @@ export const ChannelList = memo(function ChannelList({
       : [];
     const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
     const occupantDropOk = occupantDropAllowed(channel);
+    const mixedRow = mixed && !inFavorites;
+    const rowDrop =
+      mixedRow && mixedDrop?.kind === "row" && mixedDrop.id === channel.id
+        ? mixedDrop.edge
+        : null;
+    // The dragged row's slot stays as a dashed gap, so nothing jumps.
+    const isOrigin =
+      mixedRow && liftedId === channel.id && draggedId === channel.id && Boolean(draggingPlaceableChannel());
+    const canStepUp = mixedRow && canManage && (viewSteps.get(channel.id)?.up ?? false);
+    const canStepDown = mixedRow && canManage && (viewSteps.get(channel.id)?.down ?? false);
     return (
       <div
         key={channel.id}
-        className="mb-0.5 min-w-0"
+        className={cn(
+          "relative mb-0.5 min-w-0",
+          isOrigin &&
+            "rounded-[var(--radius-control)] outline-dashed outline-1 outline-border [&>*]:invisible",
+        )}
         data-channel-id={channel.id}
+        data-drop={rowDrop ?? undefined}
         data-channel-type={channel.type}
         onDragOver={(event) => handleRowDragOver(event, channel)}
         onDrop={(event) => {
-          if (!draggedOccupant) {
+          // A channel let go over this room's occupants or threads: they
+          // count as the row (the line said so), so the drop is the row's.
+          const channelOnRow =
+            mixedRow && mixedDropRef.current?.kind === "row" && mixedDropRef.current.id === channel.id;
+          if (!draggedOccupant && !channelOnRow) {
             return;
           }
           event.preventDefault();
@@ -1174,6 +1593,7 @@ export const ChannelList = memo(function ChannelList({
           handleRowDrop(channel);
         }}
       >
+        {rowDrop && <DropLine edge={rowDrop} />}
         <ChannelRow
           channel={channel}
           selected={selectedChannelId === channel.id}
@@ -1232,18 +1652,27 @@ export const ChannelList = memo(function ChannelList({
           }
           categories={categoryOptions}
           onMoveToCategory={(categoryId) =>
-            onMoveChannel(
-              channel.id,
-              categoryId,
-              categoryId
-                ? (childrenByCategory.get(categoryId)?.length ?? 0)
-                : isVoiceRoomChannelType(channel.type)
-                  ? topLevelVoice.length
-                  : topLevelText.length,
-            )
+            mixedRow
+              ? applyMove(channel.id, {
+                  parentId: categoryId,
+                  index: Number.MAX_SAFE_INTEGER,
+                })
+              : onMoveChannel(
+                  channel.id,
+                  categoryId,
+                  categoryId
+                    ? (childrenByCategory.get(categoryId)?.length ?? 0)
+                    : isVoiceRoomChannelType(channel.type)
+                      ? topLevelVoice.length
+                      : topLevelText.length,
+                )
           }
           onMoveUp={
-            inFavorites
+            mixedRow
+              ? canStepUp
+                ? () => stepMove(channel.id, -1)
+                : undefined
+              : inFavorites
               ? index > 0
                 ? () =>
                     commitFavorites(
@@ -1260,7 +1689,11 @@ export const ChannelList = memo(function ChannelList({
                 : undefined
           }
           onMoveDown={
-            inFavorites
+            mixedRow
+              ? canStepDown
+                ? () => stepMove(channel.id, 1)
+                : undefined
+              : inFavorites
               ? index < group.length - 1
                 ? () =>
                     commitFavorites(
@@ -1280,11 +1713,29 @@ export const ChannelList = memo(function ChannelList({
             if (draggedOccupant) {
               return;
             }
-            setDraggedId(channel.id);
+            // A tick later, never inside dragstart: the drag zones that open
+            // (Pinados, the loose drop) move rows, and the origin turns into
+            // a gap, and Chromium cancels a drag whose source moves or hides
+            // before it has taken the image. Guarded, because a cancelled
+            // drag can end before the tick.
+            liftRef.current = channel.id;
+            window.setTimeout(() => {
+              if (liftRef.current === channel.id) {
+                setDraggedId(channel.id);
+                if (mixedRow) {
+                  setLiftedId(channel.id);
+                }
+              }
+            }, 0);
           }}
           onDragEnd={() => {
+            // Esc, or a drop outside any target: nothing moves.
             setDraggedId(null);
             setDragOverId(null);
+            setMixedDrop(null);
+            liftRef.current = null;
+            setLiftedId(null);
+            cancelFoldedOpen();
           }}
           onDragOverRow={(event) => handleRowDragOver(event, channel)}
           onDrop={() => handleRowDrop(channel)}
@@ -1364,6 +1815,255 @@ export const ChannelList = memo(function ChannelList({
     );
   }
 
+  function categoryAddItems(categoryId: string): ContextMenuItemDef[] {
+    if (!canManage) {
+      return [];
+    }
+    return [
+      {
+        id: "create-text",
+        label: t("chrome.addTextChannel"),
+        icon: Hash,
+        onSelect: () => onCreateChannel("text", false, categoryId),
+      },
+      {
+        id: "create-voice",
+        label: t("chrome.addVoiceChannel"),
+        icon: Volume2,
+        onSelect: () => onCreateChannel("voice", false, categoryId),
+      },
+      ...(forumCreateEnabled
+        ? [
+            {
+              id: "create-forum",
+              label: t("chrome.addForum"),
+              icon: MessagesSquare,
+              trailing: <BetaTag />,
+              onSelect: () => onCreateChannel("forum", false, categoryId),
+            },
+          ]
+        : []),
+      { id: "sep-private", label: "", separator: true },
+      {
+        id: "create-private",
+        label: t("chrome.privateChannel"),
+        icon: Lock,
+        onSelect: () => onCreateChannel("text", true, categoryId),
+      },
+    ];
+  }
+
+  function renderMixedCategory(entry: SidebarCategory<Channel>) {
+    const category = entry.category;
+    const kids = entry.children;
+    const isCollapsed = collapsed.has(category.id);
+    // Folding never hides where you are: the open channel and the call you
+    // are in stay under a folded header.
+    const shown = isCollapsed
+      ? kids.filter((c) => c.id === selectedChannelId || c.id === activeVoiceChannelId)
+      : kids;
+    const hasUnread = kids.some(
+      (c) => c.id !== selectedChannelId && (unread[c.id]?.count ?? 0) > 0,
+    );
+    const up = canManage && (viewSteps.get(category.id)?.up ?? false);
+    const down = canManage && (viewSteps.get(category.id)?.down ?? false);
+    const menuItems: ContextMenuItemDef[] = canManage
+      ? [
+          ...(up
+            ? [{ id: "move-up", label: t("chrome.moveUp"), icon: ArrowUp, onSelect: () => stepMove(category.id, -1) }]
+            : []),
+          ...(down
+            ? [{ id: "move-down", label: t("chrome.moveDown"), icon: ArrowDown, onSelect: () => stepMove(category.id, 1) }]
+            : []),
+          ...(up || down ? [{ id: "sep-move", label: "", separator: true }] : []),
+          {
+            id: "rename",
+            label: t("chrome.renameCategory"),
+            icon: Pencil,
+            onSelect: () => onRenameChannel(category),
+          },
+          { id: "sep", label: "", separator: true },
+          {
+            id: "delete",
+            label: t("chrome.deleteCategory"),
+            icon: Trash2,
+            danger: true,
+            onSelect: () => onDeleteChannel(category.id),
+          },
+        ]
+      : [];
+    const headerDrop =
+      mixedDrop?.kind === "into" && mixedDrop.categoryId === category.id
+        ? ("into" as const)
+        : mixedDrop?.kind === "category" && mixedDrop.id === category.id
+          ? mixedDrop.edge
+          : mixedDrop?.kind === "beforeCategory" && mixedDrop.categoryId === category.id
+            ? ("before" as const)
+            : null;
+    return (
+      <div key={category.id} data-category-group={category.id}>
+        <MixedCategoryHeader
+          category={category}
+          collapsed={isCollapsed}
+          onToggle={() => toggleCollapsed(category.id)}
+          childCount={kids.length}
+          hasUnread={hasUnread}
+          addItems={categoryAddItems(category.id)}
+          menuItems={menuItems}
+          drag={{
+            draggable: canManage,
+            dragging: draggedId === category.id,
+            drop: headerDrop,
+            onDragStart: (event) => {
+              if (!canManage || draggedOccupant) {
+                event.preventDefault();
+                return;
+              }
+              event.dataTransfer.setData("application/x-pqp-channel", category.id);
+              event.dataTransfer.effectAllowed = "move";
+              // A tick later, like a row (see there).
+              liftRef.current = category.id;
+              window.setTimeout(() => {
+                if (liftRef.current === category.id) {
+                  setDraggedId(category.id);
+                }
+              }, 0);
+            },
+            onDragEnd: () => {
+              liftRef.current = null;
+              setDraggedId(null);
+              setDragOverId(null);
+              setMixedDrop(null);
+              cancelFoldedOpen();
+            },
+            onDragOver: (event) => {
+              if (draggedOccupant) {
+                event.dataTransfer.dropEffect = "none";
+                return;
+              }
+              const dragged = draggedChannel();
+              if (!dragged) {
+                return;
+              }
+              event.preventDefault();
+              if (favoriteIdSet.has(dragged.id)) {
+                // A pin dropped on a header goes back where it lives.
+                setDragOverId(category.id);
+                return;
+              }
+              if (draggingCategory()) {
+                setMixedDrop(
+                  dragged.id === category.id
+                    ? null
+                    : { kind: "category", id: category.id, edge: edgeOf(event, event.currentTarget) },
+                );
+                return;
+              }
+              if (draggingPlaceableChannel()) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                if (event.clientY < rect.top + rect.height * HEADER_BEFORE_FRACTION) {
+                  setMixedDrop({ kind: "beforeCategory", categoryId: category.id });
+                  return;
+                }
+                setMixedDrop({ kind: "into", categoryId: category.id });
+                if (isCollapsed) {
+                  scheduleFoldedOpen(category.id);
+                }
+              }
+            },
+            onDragLeave: (event) => {
+              const next = event.relatedTarget as Node | null;
+              if (!next || !event.currentTarget.contains(next)) {
+                if (openTimerRef.current?.id === category.id) {
+                  cancelFoldedOpen();
+                }
+              }
+            },
+            onDrop: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (draggedOccupant) {
+                showDropHint("category");
+                clearDrag();
+                return;
+              }
+              handleDrop(category);
+            },
+          }}
+        />
+        {!isCollapsed && kids.length === 0 ? (
+          canManage ? (
+            <EmptyCategoryDrop
+              active={mixedDrop?.kind === "into" && mixedDrop.categoryId === category.id}
+              onDragOver={(event) => {
+                if (!draggingPlaceableChannel()) {
+                  return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setMixedDrop({ kind: "into", categoryId: category.id });
+              }}
+              onDragLeave={() => undefined}
+              onDrop={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (draggedOccupant) {
+                  showDropHint("category");
+                  clearDrag();
+                  return;
+                }
+                handleDrop(category);
+              }}
+            />
+          ) : null
+        ) : (
+          shown.map((channel) => renderRow(channel, kids))
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * THE MIXED LIST: channels in no category on top with no header, then every
+   * category (an empty one only for managers, who can fill it), then
+   * "Criar categoria". Pinados, the watch party block and Baú stay above it,
+   * drawn by the caller exactly as before.
+   */
+  function renderMixedList() {
+    const lastCategoryId = viewLayout.categories.at(-1)?.category.id ?? null;
+    return (
+      <div data-channel-list-mixed="">
+        {viewLayout.loose.length > 0 && (
+          <div data-loose-channels="" className="mb-1">
+            {viewLayout.loose.map((channel) => renderRow(channel, viewLayout.loose))}
+          </div>
+        )}
+        {viewLayout.categories
+          .filter((entry) => canManage || entry.children.length > 0)
+          .map((entry) => renderMixedCategory(entry))}
+        {canManage && (
+          <CreateCategoryRow
+            onCreate={() => onCreateChannel("category", false)}
+            dropAfterLast={mixedDrop?.kind === "afterLastCategory"}
+            onDragOver={(event) => {
+              if (!draggingCategory() || !lastCategoryId) {
+                return;
+              }
+              event.preventDefault();
+              setMixedDrop({ kind: "afterLastCategory" });
+            }}
+            onDragLeave={() => undefined}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              finishMixedDrop();
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
   const headerItems: ContextMenuItemDef[] = server
     ? [
         {
@@ -1385,6 +2085,16 @@ export const ChannelList = memo(function ChannelList({
                 label: t("stories.strip.post"),
                 icon: CirclePlus,
                 onSelect: onPostStory,
+              },
+            ]
+          : []),
+        ...(mixed && canManage && onApplyLayout
+          ? [
+              {
+                id: "organize-channels",
+                label: t("chrome.organizeChannels"),
+                icon: ArrowUpDown,
+                onSelect: startOrganizing,
               },
             ]
           : []),
@@ -1585,16 +2295,28 @@ export const ChannelList = memo(function ChannelList({
       <div className="flex-1 overflow-y-auto px-3 pb-3 pt-2">
         {isLoading ? (
           <ChannelListSkeleton />
+        ) : mixed && organizing ? (
+          <OrganizeChannels
+            layout={organizing.layout}
+            onChange={(next) =>
+              setOrganizing((current) => (current ? { ...current, layout: next } : current))
+            }
+            onCancel={() => setOrganizing(null)}
+            onDone={() => void finishOrganizing()}
+            busy={organizeBusy}
+            iconFor={(channel) => <ChannelIcon channel={channel} />}
+          />
         ) : (
           <>
             {server && storiesSlot}
             {server &&
               (visibleFavs.length > 0 ||
-                Boolean(
-                  draggedId &&
-                    !draggedOccupant &&
-                    draggedChannel()?.type !== "category",
-                )) && (
+                (!mixed &&
+                  Boolean(
+                    draggedId &&
+                      !draggedOccupant &&
+                      draggedChannel()?.type !== "category",
+                  ))) && (
               <PinnedChannelsSection
                 collapsed={collapsed.has(favoritesCollapseKey(server.id))}
                 onToggle={() =>
@@ -1721,6 +2443,10 @@ export const ChannelList = memo(function ChannelList({
               </div>
             )}
 
+            {mixed ? (
+              renderMixedList()
+            ) : (
+            <>
             <ChannelSection
               label={t("chrome.text")}
               canManage={canManage}
@@ -1899,6 +2625,8 @@ export const ChannelList = memo(function ChannelList({
                 })}
               </div>
             )}
+            </>
+            )}
             {/* UNDER THE LAST CHANNEL, AND OUT OF THE FLOW.
                 At the top of the list it pushed every channel down, which
                 is what a coachmark must never do, and it covered the
@@ -1922,13 +2650,45 @@ export const ChannelList = memo(function ChannelList({
         )}
       </div>
 
-      {dropHint && (
+      {mixed && pinBarOpen() && (
+        <PinDropBar
+          active={dragOverId === PINNED_ZONE}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setMixedDrop(null);
+            setDragOverId(PINNED_ZONE);
+          }}
+          onDragLeave={() => {
+            if (dragOverId === PINNED_ZONE) {
+              setDragOverId(null);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handleDropOnFavorites();
+          }}
+        />
+      )}
+      {mixed && (draggingPlaceableChannel() || draggingCategory()) ? (
+        <DragStatus />
+      ) : statusLine && !dropHint ? (
         <p
           role="status"
-          className="border-t border-ink-4/60 px-3 py-2 text-xs text-paper"
+          data-channel-list-status=""
+          className="border-t border-border px-3 py-2 text-xs text-text-secondary"
         >
-          {dropHint}
+          {statusLine}
         </p>
+      ) : (
+        dropHint && (
+          <p
+            role="status"
+            className="border-t border-ink-4/60 px-3 py-2 text-xs text-paper"
+          >
+            {dropHint}
+          </p>
+        )
       )}
 
       {footer}
@@ -3087,6 +3847,13 @@ function ChannelRow({
           ) {
             event.preventDefault();
             return;
+          }
+          // Something on the drag, or Firefox (and an automated Chromium)
+          // ends it before it begins. A private type, so dropping a row on
+          // the composer does not type its name.
+          event.dataTransfer?.setData("application/x-pqp-channel", channel.id);
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
           }
           onDragStart();
         }}

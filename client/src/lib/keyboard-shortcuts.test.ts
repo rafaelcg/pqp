@@ -457,6 +457,23 @@ describe("channel list motion", () => {
     ]);
   });
 
+  it("walks the mixed list in its one order: loose by position, then each category", () => {
+    const mixed = [
+      { id: "cat", type: "category", parentId: null, position: 0 },
+      { id: "voice-loose", type: "voice", parentId: null, position: 0 },
+      { id: "text-loose", type: "text", parentId: null, position: 1 },
+      { id: "party", type: "watch_party", parentId: null, position: 2 },
+      { id: "v-in-cat", type: "voice", parentId: "cat", position: 0 },
+      { id: "t-in-cat", type: "text", parentId: "cat", position: 1 },
+    ];
+    expect(navigableChannelIds(mixed, { mixed: true })).toEqual([
+      "voice-loose",
+      "text-loose",
+      "v-in-cat",
+      "t-in-cat",
+    ]);
+  });
+
   it("steps to the next and previous channel, wrapping", () => {
     const ids = navigableChannelIds(channels);
     expect(stepChannelId(ids, "t-first", 1)).toBe("t-late");
