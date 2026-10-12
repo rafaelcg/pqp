@@ -405,11 +405,16 @@ export function musicCaptionsChoices(input: {
       ),
     ),
   ];
+  // Within a language, the exact regional track the viewer reads comes
+  // first, whatever order YouTube listed them in.
+  const exact = (track: CaptionTrack) =>
+    [uiLocale, s.lang].some(
+      (lang) => lang !== null && lang.toLowerCase() === track.languageCode.toLowerCase(),
+    );
   for (const language of pinned) {
-    for (const track of listed) {
-      if (primary(track.languageCode) === language) {
-        choices.push(toChoice(track));
-      }
+    const group = listed.filter((track) => primary(track.languageCode) === language);
+    for (const track of [...group.filter(exact), ...group.filter((track) => !exact(track))]) {
+      choices.push(toChoice(track));
     }
   }
   const collator = new Intl.Collator(uiLocale);

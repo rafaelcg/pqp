@@ -295,6 +295,15 @@ describe("musicCaptionsChoices", () => {
     ]);
   });
 
+  it("puts the viewer's exact region first within its language", () => {
+    const choices = musicCaptionsChoices({
+      state: { on: false, lang: null, tracks: [track("pt-PT"), track("en"), track("pt-BR")], translations: [] },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(choices.map((choice) => choice.label)).toEqual(["Desligadas", "pt-BR", "pt-PT", "en"]);
+  });
+
   it("pins the popular languages, then sorts the long tail apart", () => {
     const tracks = [track("ja"), track("de"), track("es"), track("fr"), track("en"), track("pt-BR")];
     const choices = musicCaptionsChoices({
