@@ -438,7 +438,7 @@ export function ForumComposerDialog({
     } else if (event.key === "Enter") {
       event.preventDefault();
       const chosen = similar[activeSimilar];
-      if (chosen) {
+      if (chosen && !similarLoading) {
         openSimilar(chosen.id);
       }
     } else if (event.key === "Escape" && activeSimilar >= 0) {
@@ -727,7 +727,11 @@ export function ForumComposerDialog({
                     role="option"
                     aria-selected={index === activeSimilar}
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => openSimilar(one.id)}
+                    onClick={() => {
+                      if (!similarLoading) {
+                        openSimilar(one.id);
+                      }
+                    }}
                     onMouseEnter={() => setActiveSimilar(index)}
                     className={cn(
                       "flex cursor-pointer items-center gap-2.5 border-b border-border/60 px-3 py-2 text-[13px] text-text-secondary transition-colors duration-[var(--duration-fast)] last:border-b-0",

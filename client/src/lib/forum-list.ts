@@ -644,6 +644,7 @@ export function refreshForumFirstPage(
     ]);
     const patch = (list: ForumPostSummary[]) =>
       list.map((post) => freshById.get(post.id) ?? post);
+    const pinnedIds = new Set(fresh.pinned.map((post) => post.id));
     const arrivals = fresh.posts.filter((post) => !onScreen.has(post.id));
     const queued = [
       ...patch(state.queued).filter(
@@ -653,8 +654,8 @@ export function refreshForumFirstPage(
     ];
     return {
       ...state,
-      pinned: patch(state.pinned),
-      posts: patch(state.posts),
+      pinned: fresh.pinned,
+      posts: patch(state.posts).filter((post) => !pinnedIds.has(post.id)),
       viewer: { ...state.viewer, ...fresh.viewer },
       counts: fresh.counts ?? state.counts,
       queued,

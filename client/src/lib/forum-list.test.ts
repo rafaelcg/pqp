@@ -479,4 +479,14 @@ describe("the queue behind the pill", () => {
     expect(order(refreshed)).toEqual(["Post 3 (fresh)", "Post 2", "Post 1"]);
     expect(refreshed.queued.map((one) => one.title).sort()).toEqual(["Post 40", "Post 41"]);
   });
+
+  it("a reconnect while the reader is busy takes fresh pins, and a newly pinned post leaves the list", () => {
+    const refreshed = refreshForumFirstPage(
+      base,
+      page([post(3), post(1)], { pinned: [post(2, { pinnedAt: at(9) })] }),
+      { hold: true },
+    );
+    expect(refreshed.pinned.map((one) => one.id)).toEqual([id(2)]);
+    expect(order(refreshed)).toEqual(["Post 3", "Post 1"]);
+  });
 });

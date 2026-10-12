@@ -1736,6 +1736,10 @@ export const MessageList = memo(function MessageList({
   const releaseForumHold = useCallback(() => {
     forumHoldTopRef.current = false;
   }, []);
+  // A hold belongs to the post it landed on, never to the next conversation.
+  useEffect(() => {
+    forumHoldTopRef.current = false;
+  }, [channelId]);
 
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;

@@ -425,14 +425,14 @@ export function ForumPane({
   // A stored tag that staff deleted since is dropped, or it would filter
   // every post away with no chip left to take it off.
   useEffect(() => {
-    if (tags.length === 0 && settings === null) {
+    if (!tagsLoaded) {
       return;
     }
     const known = new Set(tags.map((tag) => tag.id));
     if (filters.tagIds.some((tagId) => !known.has(tagId))) {
       changeFilters({ tagIds: filters.tagIds.filter((tagId) => known.has(tagId)) });
     }
-  }, [tags, settings, filters.tagIds, changeFilters]);
+  }, [tags, tagsLoaded, filters.tagIds, changeFilters]);
 
   // ---------------------------------------------------------------- list
   const [list, setList] = useState<ForumListState>(emptyForumList);
@@ -687,6 +687,9 @@ export function ForumPane({
             hold: isHeld(),
             openPostId: openPostIdRef.current,
           });
+          // Now, not at the next render: a second frame in the same tick
+          // must build on this one, not on the state before it.
+          listRef.current = next;
           setList(next);
           if (!wasShown && next.posts.some((one) => one.id === frame.post.id)) {
             markEntering([frame.post.id]);

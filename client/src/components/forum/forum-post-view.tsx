@@ -353,12 +353,14 @@ export function ForumPostView({
       window.clearTimeout(pendingLeave);
       leaveTimers.delete(postId);
     }
+    let transcriptLoaded = false;
     void fetchMessages(postId)
       .then(async (page) => {
         if (cancelled) {
           return;
         }
         controller.setMessages(page.messages, page.hasMore);
+        transcriptLoaded = true;
         // Read only once the transcript is in: a failed load must not mark
         // the post read. A failed read is treated as a first visit rather
         // than throwing away the transcript.
@@ -400,6 +402,10 @@ export function ForumPostView({
       // Everything the pane showed is read now; a beat later, so a remount
       // of the same post cancels it.
       const markReadNow = markReadRef.current;
+      // A post whose replies never loaded was not read: the cursor stays.
+      if (!transcriptLoaded) {
+        return;
+      }
       leaveTimers.set(
         postId,
         window.setTimeout(() => {
