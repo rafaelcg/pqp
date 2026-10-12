@@ -32,6 +32,7 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const { isFlatpak } = require("./lib/flatpak");
 const {
   clearWebCache,
   clearWebCacheIfShellUpdated,
@@ -69,13 +70,23 @@ const {
   createNativeHookSession,
 } = require("./lib/native-ptt-hook");
 const { DEFAULT_RELEASE_DELAY_MS, clampReleaseDelayMs } = require("./lib/release-delay");
+const {
+  appUserModelId,
+  shouldSetAppUserModelId,
+  notificationOptions,
+} = require("./lib/notify-options");
 const { trayIconKind, trayIconImage } = require("./lib/tray-icon");
 const {
   buildTrayTemplate,
   trayTooltip,
-  shouldHideToTray,
+  closeAction,
   normalizeVoiceState,
 } = require("./lib/tray-menu");
+const {
+  probeStatusNotifierWatcher,
+  linuxTrayHostAvailable,
+  trayNeedsRecreate,
+} = require("./lib/tray-host");
 const {
   DEFAULT_KEEP_IN_TRAY,
   loadTrayPrefs,
@@ -92,6 +103,13 @@ const {
   runShareAudioProbe,
   formatShareAudioProbe,
 } = require("./lib/win-share-audio-probe");
+
+// Windows files toasts, the taskbar group and the Start entry under this id.
+// It has to be set before the first Notification, and it has to be the
+// installer's appId or the toast shows another name (or, unpackaged, none).
+if (shouldSetAppUserModelId(process.platform)) {
+  app.setAppUserModelId(appUserModelId(require("./package.json")));
+}
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
@@ -237,6 +255,8 @@ let pickerWindow = null;
 let tray = null;
 /** What the renderer last said about the call, for the tray icon and menu. */
 let voiceState = { inCall: false, muted: false, deafened: false };
+/** Whether the renderer has a signed-in session. Unknown (false) until it says. */
+let signedIn = false;
 /** `{ keepInTray: boolean }`, read from userData at startup. */
 let trayPrefs = { keepInTray: DEFAULT_KEEP_IN_TRAY };
 /** True from `before-quit` on, so the close handler stops hiding to the tray. */
@@ -583,16 +603,18 @@ function focusMainWindow() {
  */
 const liveNotifications = new Map();
 
-function showNotification({ title, body, tag, path: appPath }) {
+function showNotification({ title, body, tag, path: appPath, silent }) {
   if (!Notification.isSupported()) {
     return;
   }
   const key = tag || appPath;
   liveNotifications.get(key)?.close();
 
-  // The OS owns the alert sound and Do Not Disturb; overriding either is how a
-  // chat app ends up muted at the system level and never heard from again.
-  const notification = new Notification({ title, body, silent: true });
+  // The OS owns Do Not Disturb; overriding it is how a chat app ends up muted
+  // at the system level and never heard from again. The alert sound is the
+  // renderer's call: silent while the app plays its own cue, the OS sound when
+  // app sounds are off (see lib/notify-options.js).
+  const notification = new Notification(notificationOptions({ title, body, silent }));
   notification.on("click", () => {
     liveNotifications.delete(key);
     focusMainWindow();
@@ -1183,8 +1205,17 @@ function runLinuxAudioTool(tool, args) {
   });
 }
 
+/**
+ * The Flathub build (`flatpak/gg.pqp.pqp.yml`). Inside it the shell builds no
+ * share audio bus: the call is told apart from other apps by process id, and
+ * in the sandbox those are pqp's own namespace ids, which another Flatpak's
+ * streams can report too. Not offered rather than half working; the page shows
+ * the Flatpak copy instead (`capabilities.flatpak`). See `lib/flatpak.js`.
+ */
+const runningInFlatpak = isFlatpak();
+
 const linuxShareAudio =
-  process.platform === "linux"
+  process.platform === "linux" && !runningInFlatpak
     ? createLinuxShareAudio({
         onActive: setLinuxShareAudioMarker,
         onReport: writeLinuxShareAudioReport,
@@ -1535,6 +1566,7 @@ function createWindow(appUrl, allowedOrigin) {
       additionalArguments: [
         `--pqp-shell-version=${app.getVersion()}`,
         `--pqp-can-exclude-own-audio=${canExcludeOwnAudioOnThisOs() ? "1" : "0"}`,
+        `--pqp-flatpak=${runningInFlatpak ? "1" : "0"}`,
       ],
     },
   });
@@ -1636,28 +1668,40 @@ function createWindow(appUrl, allowedOrigin) {
    *
    * Quitting the shell mid-call drops you out of the call, which is not what
    * the close button means to somebody who is talking to five people and
-   * wants the window off their screen. Only during a call, only while the tray
-   * preference is on, and never on the way to a real quit — so Cmd+Q, the tray
-   * Quit item and an update restart all still work.
+   * wants the window off their screen. Also while signed in on Windows and
+   * Linux. Only while the tray preference is on, and never on the way to a
+   * real quit, so Cmd+Q, the tray Quit item and an update restart all still
+   * work. With no tray to come back from, a call minimizes instead and
+   * anything else closes (`closeAction` in lib/tray-menu.js).
    */
   mainWindow.on("close", (event) => {
-    if (
-      !shouldHideToTray({
-        inCall: voiceState.inCall,
-        keepInTray: trayPrefs.keepInTray,
-        quitting,
-      })
-    ) {
-      return;
+    const action = closeAction({
+      inCall: voiceState.inCall,
+      keepInTray: trayPrefs.keepInTray,
+      quitting,
+      signedIn,
+      platform: process.platform,
+      trayAvailable: trayCanHoldWindow(),
+    });
+    if (process.platform === "linux") {
+      console.warn(
+        `[pqp] close: ${action} (tray host: ${describeTrayHost()}, signed in: ${signedIn}, in call: ${voiceState.inCall})`,
+      );
     }
-    if (!tray || tray.isDestroyed()) {
-      // Nothing to minimize *to*. Closing is better than a window that cannot
-      // be got back.
+    if (action === "close") {
       return;
     }
     event.preventDefault();
-    mainWindow?.hide();
+    if (action === "minimize") {
+      mainWindow?.minimize();
+    } else {
+      mainWindow?.hide();
+    }
   });
+
+  // The answer about the tray host is refreshed whenever the person comes back
+  // to the window, which is shortly before they close it.
+  mainWindow.on("focus", () => refreshTrayHost());
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -1763,6 +1807,7 @@ function createTray() {
     tray = null;
     return;
   }
+  trayHostAtCreation = trayHostWatcher;
   // Windows and Linux: a plain click is how people expect to get the window
   // back. macOS opens the menu on click by convention, so leave it alone.
   if (process.platform !== "darwin") {
@@ -1770,6 +1815,66 @@ function createTray() {
   }
   tray.on("double-click", () => showMainWindow());
   refreshTray();
+}
+
+/**
+ * Linux only: does the session bus have a tray host (`lib/tray-host.js`)?
+ * `true` / `false` from the bus, `null` until asked or when it cannot be.
+ * @type {boolean | null}
+ */
+let trayHostWatcher = null;
+/** What `trayHostWatcher` said when the tray was created. */
+let trayHostAtCreation = null;
+let trayHostProbedAt = 0;
+let trayHostProbe = null;
+const TRAY_HOST_REPROBE_MS = 30_000;
+
+/**
+ * Ask the bus again, at most every 30 s. A tray made while no host was there
+ * is made again once one appears, so pqp started with the session, before the
+ * panel, still gets an icon people can see.
+ */
+function refreshTrayHost({ force = false } = {}) {
+  if (process.platform !== "linux" || trayHostProbe) {
+    return trayHostProbe ?? Promise.resolve();
+  }
+  if (!force && Date.now() - trayHostProbedAt < TRAY_HOST_REPROBE_MS) {
+    return Promise.resolve();
+  }
+  trayHostProbedAt = Date.now();
+  trayHostProbe = probeStatusNotifierWatcher()
+    .then((watcher) => {
+      trayHostWatcher = watcher;
+      if (trayNeedsRecreate(trayHostAtCreation, watcher) && tray && !tray.isDestroyed()) {
+        console.warn("[pqp] a tray host appeared, creating the tray again");
+        tray.destroy();
+        tray = null;
+        createTray();
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      trayHostProbe = null;
+    });
+  return trayHostProbe;
+}
+
+/**
+ * Whether a window hidden "to the tray" can be got back from it: a tray object
+ * exists and, on Linux, something draws it.
+ */
+function trayCanHoldWindow() {
+  if (!tray || tray.isDestroyed()) {
+    return false;
+  }
+  return process.platform !== "linux" || linuxTrayHostAvailable(trayHostWatcher);
+}
+
+function describeTrayHost() {
+  if (trayHostWatcher === null) {
+    return `unknown, guessed ${linuxTrayHostAvailable(null) ? "yes" : "no"} from XDG_CURRENT_DESKTOP=${process.env.XDG_CURRENT_DESKTOP ?? ""}`;
+  }
+  return trayHostWatcher ? "yes" : "no";
 }
 
 /**
@@ -2521,6 +2626,10 @@ if (probingShareAudio) {
     refreshTray();
   });
 
+  ipcMain.on("pqp:signed-in", (_event, value) => {
+    signedIn = value === true;
+  });
+
   ipcMain.on("pqp:notify", (_event, payload) => {
     if (!payload || typeof payload.title !== "string") {
       return;
@@ -2530,6 +2639,8 @@ if (probingShareAudio) {
       body: typeof payload.body === "string" ? payload.body : "",
       tag: typeof payload.tag === "string" ? payload.tag : "",
       path: sanitizeAppPath(payload.path),
+      // Only a real boolean counts; anything else is an older renderer.
+      silent: typeof payload.silent === "boolean" ? payload.silent : undefined,
     });
   });
 
@@ -2542,6 +2653,13 @@ if (probingShareAudio) {
     setLanguage(locale);
     createAppMenu();
     trayPrefs = loadTrayPrefs(app.getPath("userData"));
+    // Asked before the tray exists so `trayHostAtCreation` is the real
+    // answer. A no-op off Linux, and never more than half a second of
+    // startup: a bus that slow leaves the answer for the next focus.
+    await Promise.race([
+      refreshTrayHost({ force: true }),
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
     createTray();
     collectDeepLinkFromArgv(process.argv);
 

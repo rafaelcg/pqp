@@ -33,9 +33,23 @@ object MessagePermissions {
 
     fun canManage(role: String?): Boolean = role == "owner" || role == "admin"
 
-    /** Only the author, and never a webhook's row: there is no account behind it. */
+    /**
+     * Only the author, and never a webhook's row: there is no account behind
+     * it. Nor a voice note: it has no words to change, and the server refuses
+     * an edit that would add some to one.
+     */
     fun canEdit(message: Message, meId: String?): Boolean =
-        meId != null && message.authorId == meId && !message.isWebhook
+        meId != null && message.authorId == meId && !message.isWebhook &&
+            message.attachments.none { it.isVoiceNote } && !isSystemLine(message)
+
+    /**
+     * A nudge is drawn as a centred line, not as words somebody typed, so its
+     * sheet offers delete and report and nothing else, like the web's
+     * `NudgeLine`. Editing one rewrites the stored `📳` behind a line that
+     * never shows it (and the list preview then shows the new text), and a
+     * reaction, a reply or a pin hangs off a row that draws none of them.
+     */
+    fun isSystemLine(message: Message): Boolean = gg.pqp.app.nudge.Nudge.isNudge(message)
 
     fun canDelete(message: Message, meId: String?, role: String?, isServerChannel: Boolean): Boolean =
         (meId != null && message.authorId == meId) || (isServerChannel && canManage(role))

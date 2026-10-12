@@ -108,6 +108,23 @@ export function shouldShowLinuxShareAudioNoticeForStartedShare(input: {
   return input.linux && !input.seen && !input.hasAudio;
 }
 
+/**
+ * Which copy the hint shows: the browser's ("share a Chrome tab"), the
+ * desktop shell's ("this app sends no sound, use the browser"), or the
+ * Flatpak build's. The Flatpak shell reports `capabilities.flatpak` and never
+ * offers the computer's sound (`electron/lib/flatpak.js`), so its copy names
+ * the way out: the .deb or AppImage, which can, or a Chrome tab.
+ */
+export function linuxShareAudioHintContext(
+  isDesktopShell: boolean,
+  capabilities: { flatpak?: boolean } | null | undefined,
+): "desktop" | "flatpak" | undefined {
+  if (!isDesktopShell) {
+    return undefined;
+  }
+  return capabilities?.flatpak === true ? "flatpak" : "desktop";
+}
+
 function safeStorage(): Storage | null {
   try {
     return typeof window === "undefined" ? null : window.localStorage;

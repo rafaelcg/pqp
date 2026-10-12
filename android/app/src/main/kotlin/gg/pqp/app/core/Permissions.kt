@@ -55,11 +55,37 @@ suspend fun ApiClient.serverPermissions(serverId: String): PermissionsSnapshot =
  */
 object Permission {
     /**
+     * Manage the server. In the Baú it is the one bit that publishes: every
+     * write route under `/home` asks the server for it, and the phone's
+     * compose button asks the same question of the same snapshot.
+     */
+    const val MANAGE_SERVER: Long = 1L shl 5
+
+    /**
+     * Forum staff, with [MANAGE_MESSAGES]: either bit on a forum pins, locks,
+     * deletes and edits other people's posts there (`forumPerms` on the
+     * server), and sees the staff-only tags in the composer.
+     */
+    const val MANAGE_CHANNELS: Long = 1L shl 4
+
+    /** Writing in a channel; on a forum, starting a post. */
+    const val SEND_MESSAGES: Long = 1L shl 7
+
+    const val MANAGE_MESSAGES: Long = 1L shl 8
+
+    /**
      * Start the stream in a `watch_party` channel. Everyone else there is
      * the audience -- see the bit's own doc on web for why it is not
      * `STREAM`.
      */
     const val START_WATCH_PARTY: Long = 1L shl 23
+
+    /**
+     * Post a story to this server. On for @everyone by default; staff can take
+     * it away per role. The strip's `canPost` already answers it, this is for
+     * the composer's audience rows and tests.
+     */
+    const val POST_STORIES: Long = 1L shl 25
 }
 
 /**

@@ -29,6 +29,21 @@ import {
 export const COMMUNITY_HOME_MAX_BYTES = 100 * 1024 * 1024;
 
 /**
+ * Ceiling for a video's cover (the picture shown before play). A still, not a
+ * clip: a 1080p JPEG is a few hundred KiB, and 10 MiB is the attachments'
+ * own ceiling. Checked when the cover is put on a post, on top of the mint's
+ * `COMMUNITY_HOME_MAX_BYTES`.
+ */
+export const COMMUNITY_HOME_COVER_MAX_BYTES = 10 * 1024 * 1024;
+
+/** What a cover may be. No GIF: a cover is one frame, not an animation. */
+export const COMMUNITY_HOME_COVER_CONTENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+
+/**
  * How many posts one feed read returns. The Baú is a durable archive, so
  * "every post since the server was made" is a page that only grows; the
  * client asks for the newest page and the pinned post always rides along.
@@ -606,6 +621,25 @@ export const communityHomeEmbedUrlSchema = z
     "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 
+/**
+ * The second cut of an uploaded video: the vertical (9:16) edit a phone plays
+ * instead of the landscape one. Always a stored video, uploaded through the
+ * same mint / PUT / claim as the main media, and only ever carried by a media
+ * whose own kind is `video`. It rides inside `media`, so a locked viewer, who
+ * gets no media at all, never gets this either.
+ */
+export const communityHomeMobileRenditionSchema = z.object({
+  name: z.string(),
+  contentType: z.string().nullable(),
+  byteSize: z.number().int().nonnegative().nullable(),
+  /** Presigned GET; null when storage is not readable right now. */
+  url: z.string().nullable(),
+});
+
+export type CommunityHomeMobileRendition = z.infer<
+  typeof communityHomeMobileRenditionSchema
+>;
+
 /** Media as returned to a viewer who may see it. Locked viewers get null. */
 export const communityHomeMediaSchema = z.object({
   kind: communityHomeMediaKindSchema,
@@ -626,6 +660,24 @@ export const communityHomeMediaSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  /**
+   * The phone cut of a `video`, when the author attached one and the
+   * `bau_mobile_rendition` flag is on for the server. Absent on an older API
+   * and on every other kind; missing reads as null, and a client that ignores
+   * it plays the main video, which is the whole compatibility story.
+   * Optional in the type too, so a media built by hand (an embed preview, a
+   * fixture) never has to name it.
+   */
+  mobile: communityHomeMobileRenditionSchema.nullable().optional(),
+  /**
+   * The cover the author chose for an uploaded `video` (a frame they picked or
+   * an image they uploaded), as a presigned GET, while the `bau_custom_cover`
+   * flag is on for the server. Null or absent means the automatic one: the
+   * player paints the video's first frame. Inside `media`, so a locked
+   * viewer, who gets no media, never gets the cover either: a frame of the
+   * video is the video's pixels.
+   */
+  posterUrl: z.string().nullable().optional(),
 });
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;
@@ -738,6 +790,66 @@ export type CommunityHomePostTranslationsResponse = z.infer<
   typeof communityHomePostTranslationsResponseSchema
 >;
 
+/**
+ * Automatic subtitles of an uploaded Baú video (`community_home_video_captions`).
+ * On the post only as "there are some, in these languages": the cues travel
+ * through `GET .../home/posts/:postId/captions?lang=`, which is authorised
+ * like the video itself, so a feed of fifty posts does not carry fifty
+ * transcripts.
+ */
+export const communityHomePostCaptionsSchema = z.object({
+  /** What Whisper heard (ISO-639-1 when it could tell, e.g. `pt`). */
+  sourceLang: z.string(),
+  /**
+   * Tracks the captions route will answer with for the language this post
+   * was read in: always the source, plus a translation into the reader's
+   * language when one is current.
+   */
+  langs: z.array(z.string()),
+  /**
+   * Length of the sound that was transcribed. A player showing another file
+   * of the same post (the phone cut) uses it to check the subtitles still fit.
+   */
+  durationMs: z.number().int().nonnegative().nullable().default(null),
+});
+
+export type CommunityHomePostCaptions = z.infer<
+  typeof communityHomePostCaptionsSchema
+>;
+
+/** Seconds, from the start of the video. */
+export const communityHomeCaptionCueSchema = z.object({
+  start: z.number().nonnegative(),
+  end: z.number().nonnegative(),
+  text: z.string(),
+});
+
+export type CommunityHomeCaptionCue = z.infer<
+  typeof communityHomeCaptionCueSchema
+>;
+
+export const communityHomeCaptionTrackSchema = z.object({
+  lang: z.string(),
+  /** True for the transcription itself, false for a translation of it. */
+  source: z.boolean(),
+  /** Machine made (speech-to-text, then machine translation). Always true today. */
+  auto: z.boolean(),
+  /** A complete WebVTT file, ready for a `<track>` (through a blob URL). */
+  vtt: z.string(),
+});
+
+export type CommunityHomeCaptionTrack = z.infer<
+  typeof communityHomeCaptionTrackSchema
+>;
+
+export const communityHomeCaptionsResponseSchema = z.object({
+  tracks: z.array(communityHomeCaptionTrackSchema),
+});
+
+export type CommunityHomeCaptionsResponse = z.infer<
+  typeof communityHomeCaptionsResponseSchema
+>;
+
 export const communityHomePostSchema = z.object({
   id: z.string().uuid(),
   serverId: z.string().uuid(),
@@ -790,6 +902,12 @@ export const communityHomePostSchema = z.object({
    * parses) when the reader sees the author's own words.
    */
   translation: communityHomePostTranslationSchema.nullable().default(null),
+  /**
+   * Automatic subtitles for an uploaded video, when the server has them on
+   * and they exist. Null for a locked viewer (the same lock as `media`), for
+   * anything that is not an uploaded video, and from an older API.
+   */
+  captions: communityHomePostCaptionsSchema.nullable().default(null),
 });
 
 export type CommunityHomePost = z.infer<typeof communityHomePostSchema>;
@@ -826,6 +944,18 @@ export const createCommunityHomePostSchema = z.object({
   /** Claimed media upload id, or omit / null for text-only / a paste URL. */
   mediaUploadId: z.string().uuid().optional().nullable(),
   /**
+   * A second claimed upload: the vertical cut phones play. Only with a
+   * `mediaUploadId` that is a video, and must be a video itself. Behind the
+   * `bau_mobile_rendition` flag.
+   */
+  mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  /**
+   * The video's cover: a claimed image upload (JPEG, PNG or WebP, at most
+   * `COMMUNITY_HOME_COVER_MAX_BYTES`). Only with a `mediaUploadId` that is a
+   * video. Omit for the automatic cover. Behind the `bau_custom_cover` flag.
+   */
+  posterUploadId: z.string().uuid().optional().nullable(),
+  /**
    * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
    * classifies which; one field so the composer stays one paste box.
    */
@@ -837,6 +967,12 @@ export const createCommunityHomePostSchema = z.object({
   status: communityHomePostStatusSchema.default("draft"),
   scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
   scheduleTimezone: z.string().min(1).max(64).optional().nullable(),
+  /**
+   * With `status: "published"`: also post the card into this channel of the
+   * same server. Best effort; a channel the author cannot send in is skipped
+   * and the post still publishes.
+   */
+  announceChannelId: z.string().uuid().optional().nullable(),
 });
 
 export type CreateCommunityHomePostRequest = z.infer<
@@ -853,6 +989,18 @@ export const updateCommunityHomePostSchema = z.object({
   youtubeUrl: z.string().max(500).optional().nullable(),
   /** Pass null to clear media (including a paste-URL embed). */
   clearMedia: z.boolean().optional(),
+  /**
+   * The phone cut. Omitted keeps the one on the post (and it goes with the
+   * main media when that is replaced by something that is not a video or
+   * cleared); a claimed upload id replaces it; `null` removes it.
+   */
+  mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  /**
+   * The video's cover, same rules as the phone cut: omitted keeps it while the
+   * main video stays the same file (a new main video drops it), a claimed
+   * image upload id replaces it, `null` goes back to the automatic one.
+   */
+  posterUploadId: z.string().uuid().optional().nullable(),
 });
 
 export type UpdateCommunityHomePostRequest = z.infer<
@@ -882,10 +1030,28 @@ export type PinCommunityHomePostRequest = z.infer<
  * opened the feed, their own excluded. */
 export const communityHomeUnreadResponseSchema = z.object({
   count: z.number().int().nonnegative(),
+  /** When the newest unread post went live (ISO), null with nothing unread.
+   * Absent from an API that predates it, which a client reads as "unknown". */
+  newestAt: z.string().nullable().optional(),
 });
 
 export type CommunityHomeUnreadResponse = z.infer<
   typeof communityHomeUnreadResponseSchema
+>;
+
+/** `GET /api/community-home/unread`: the same count for every server the
+ * viewer is in whose owner turned the Baú on, servers with nothing unread left
+ * out. What the server rail reads. */
+export const communityHomeUnreadAllResponseSchema = z.object({
+  servers: z.record(z.string(), z.number().int().positive()),
+  /** Per server, when its newest unread post went live (ISO). A server in
+   * `servers` is in here too; an API that predates it omits the field. It is
+   * what decides whether the "New" chip on the Baú row is still earned. */
+  newest: z.record(z.string(), z.string()).optional(),
+});
+
+export type CommunityHomeUnreadAllResponse = z.infer<
+  typeof communityHomeUnreadAllResponseSchema
 >;
 
 export const createCommunityHomeCommentSchema = z.object({
@@ -953,6 +1119,18 @@ export const communityHomePostsResponseSchema = z.object({
    * Defaulted: an older API never sends it.
    */
   translationEnabled: z.boolean().default(false),
+  /**
+   * `bau_mobile_rendition` is on for this server: the staff composer offers
+   * a second, vertical cut of an uploaded video. Defaulted: an older API
+   * never sends it.
+   */
+  mobileRenditionEnabled: z.boolean().default(false),
+  /**
+   * `bau_custom_cover` is on for this server: the staff composer offers a
+   * cover for an uploaded video (a frame of it, or an image). Defaulted: an
+   * older API never sends it, and a composer that cannot know stays as it was.
+   */
+  customCoverEnabled: z.boolean().default(false),
 });
 
 export type CommunityHomePostsResponse = z.infer<
@@ -1026,6 +1204,8 @@ export type ParsedCommunityHomePostFields = {
   visibility: CommunityHomeVisibility;
   commentsEnabled: boolean;
   mediaUploadId: string | null;
+  mobileMediaUploadId: string | null;
+  posterUploadId: string | null;
   youtubeUrl: string | null;
   status: CommunityHomePostStatus;
   scheduledAt: string | null;

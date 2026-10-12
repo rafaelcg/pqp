@@ -12,10 +12,17 @@ import {
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
 import { livePreviewMetrics } from "./live-preview.js";
+import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
+import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
 } from "./community-home-translation.js";
+import {
+  communityHomeCaptionsMetrics,
+  type CommunityHomeCaptionsMetrics,
+} from "./community-home-captions.js";
+import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
   communityColumns,
   communityTag,
@@ -93,6 +100,12 @@ import {
   type PushDelivery,
 } from "./push-metrics.js";
 import {
+  pushAttentionPassedSnapshot,
+  pushSkippedSnapshot,
+  type PushAttentionPassed,
+  type PushSkipped,
+} from "./push-skips.js";
+import {
   hlsTelemetryActivity,
   type HlsTelemetryActivity,
 } from "../voice/hls-latency-metrics.js";
@@ -111,9 +124,14 @@ import {
   dbTxByPath,
 } from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
-import { callRatingSummary } from "./call-ratings.js";
+import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
+import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import {
+  conversationMetrics,
+  type ConversationMetrics,
+} from "./conversation-metrics.js";
 import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
 
 /**
@@ -320,6 +338,23 @@ export interface AdminMetrics {
    */
   communityHomeTranslation: CommunityHomeTranslationMetrics;
   /**
+   * Baú video subtitles (`services/community-home-captions.ts`): captions jobs
+   * done, skipped (no provider, over budget, no speech, no audio) and failed
+   * in the last 24 hours and what is queued or running, from the database so
+   * it covers the worker; how many videos have a track and how many
+   * translations exist; and this process's own counters.
+   */
+  communityHomeCaptions: CommunityHomeCaptionsMetrics;
+  /**
+   * Stories (`services/story-metrics.ts`): this process's counters (posts,
+   * views, scans, video jobs, sweep deletes and failures) and, deployment
+   * wide and cached 30 s, the numbers the feature is judged by: posters and
+   * their concentration, viewers per story, openers, reactions, replies and
+   * whether replies got answers, repeat posters, reports, removals, holds,
+   * live bytes and the sweep lag. Live like `communityHomeCaptions`.
+   */
+  stories: StoriesMetrics;
+  /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
    * 20 s debounce or the cooldown, notices claimed, people told, why people
@@ -335,6 +370,23 @@ export interface AdminMetrics {
    * many playlist answers went to a preview token. Per process; live.
    */
   livePreview: ReturnType<typeof livePreviewMetrics>;
+  /**
+   * Chamar a atenção (`services/nudge.ts`), since this process started:
+   * whether the `nudge` flag is on here, nudges sent, and refusals by reason
+   * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
+   * like the push counters: with two instances read each. Live, never from
+   * the 30 s cache.
+   */
+  nudge: NudgeMetrics;
+  /**
+   * The mixed channel list (`services/channel-layout.ts`): the flag's global
+   * answer, servers migrated and reverted (from the table), and since this
+   * process started: migrations, no-ops, reverts, full-order PUTs, stale PUTs
+   * refused, and the two legacy rules for older clients (a per-type move index
+   * translated, a create with no parentId sent to the first category). Live,
+   * never from the 30 s cache.
+   */
+  channelLayout: ChannelLayoutReport;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -927,6 +979,23 @@ export interface AdminMetrics {
    * active. "12 of 400" here means twelve of everyone who ever signed up.
    */
   connections: ConnectionAdoption & { ofUsers: number };
+  /**
+   * Voice notes (mensagens de voz): usage, queue and transcription health,
+   * the speech budget and the refusals. Almost all of it is read from the
+   * database, so it is the same on every replica and survives a deploy; the
+   * one exception is `refusals`, per instance since boot. Field by field in
+   * `services/voice-note-metrics.ts`. With the `voice_notes` flag off
+   * everywhere the counts read zero because nobody can send, which `flags`
+   * above says; the dashboard does not draw that as a result.
+   */
+  voiceNotes: VoiceNoteMetrics;
+  /**
+   * Conversas: who is talking to people in DMs and groups, and whether new
+   * accounts start to. Field by field in `services/conversation-metrics.ts`.
+   * Null when its read failed, which the dashboard draws as "could not ask"
+   * rather than as zero.
+   */
+  conversations: ConversationMetrics | null;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1041,6 +1110,22 @@ export interface AdminMetrics {
      * — the one an alert watches). See `services/push-metrics.ts`.
      */
     pushDelivery: PushDelivery;
+    /**
+     * PUSHES NOT SENT, per kind (message / call / stream / reminder / waitlist)
+     * and the first rule that refused each recipient (live_socket, blocked,
+     * dnd, muted, level, no_subscription, transport_off). Cumulative since
+     * boot, per instance, summed by the exporter like `pushDelivery`. The
+     * `push.skipped` log line carries the same answer per person, rate
+     * limited. See `services/push-skips.ts`.
+     */
+    pushSkipped: PushSkipped;
+    /**
+     * Recipients with a live socket that the push attention gate let through
+     * because none of their sockets was foreground and active, per kind. The
+     * counter that moves when `push_attention_gate` goes on; zero while it is
+     * off. See `services/push-skips.ts`.
+     */
+    pushAttentionPassed: PushAttentionPassed;
   };
 
   /**
@@ -1160,8 +1245,12 @@ type CachedMetrics = Omit<
   | "cluster"
   | "flags"
   | "communityHomeTranslation"
+  | "communityHomeCaptions"
+  | "stories"
   | "streamAlerts"
   | "livePreview"
+  | "nudge"
+  | "channelLayout"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1179,6 +1268,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activation,
     callRatings,
     connections,
+    voiceNotes,
+    conversations,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1280,6 +1371,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => activationFunnel(),
     () => callRatingSummary(7),
     () => connectionAdoption(),
+    () => voiceNoteMetrics(),
+    () => conversationMetrics().catch((error: unknown) => {
+      console.error("[metrics] conversation metrics failed:", error);
+      return null;
+    }),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1344,7 +1440,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM (
            SELECT server_id, COUNT(*) AS n
              FROM channels
-            WHERE kind = 'server'
+            -- Sidebar channels only: a thread is a channel row too, and a
+            -- forum holds one per post, so counting them would make this
+            -- card jump the day a forum fills up.
+            WHERE kind = 'server' AND type <> 'thread'
             GROUP BY server_id
          ) t`,
     ),
@@ -1739,10 +1838,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     acquisition,
     activation,
     retention,
-    callRatings,
+    // Since-boot tallies of what the audio self-repair reported on rated
+    // calls, every score, kept in process (`call-ratings.ts`).
+    callRatings: { ...callRatings, audioHealthSinceBoot: callRatingAudioHealthCounts() },
     // The denominator travels with the numerators rather than leaving the
     // dashboard to pick one: it is the users total in this same payload.
     connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
+    voiceNotes,
+    conversations,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),
@@ -1821,6 +1924,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         fcm: Number(productCounts.rows[0]?.push_fcm ?? 0),
       },
       pushDelivery: pushDeliverySnapshot(),
+      pushSkipped: pushSkippedSnapshot(),
+      pushAttentionPassed: pushAttentionPassedSnapshot(),
     },
 
     imports: {
@@ -1923,15 +2028,27 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions, flags, communityHomeTranslation] =
-    await Promise.all([
-      getCachedMetrics(),
-      checkReady(),
-      readSfuStats(),
-      sfuRegionsReport(),
-      featureFlagMetrics(),
-      communityHomeTranslationMetrics(),
-    ]);
+  const [
+    payload,
+    ready,
+    sfu,
+    sfuRegions,
+    flags,
+    communityHomeTranslation,
+    communityHomeCaptions,
+    stories,
+    channelLayout,
+  ] = await Promise.all([
+    getCachedMetrics(),
+    checkReady(),
+    readSfuStats(),
+    sfuRegionsReport(),
+    featureFlagMetrics(),
+    communityHomeTranslationMetrics(),
+    communityHomeCaptionsMetrics(),
+    storiesMetrics(),
+    channelLayoutReport(),
+  ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
   return {
@@ -1945,8 +2062,12 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfuRegions,
     flags,
     communityHomeTranslation,
+    communityHomeCaptions,
+    stories,
     streamAlerts: streamAlertMetrics(),
     livePreview: livePreviewMetrics(),
+    nudge: nudgeMetrics(),
+    channelLayout,
   };
 }
 

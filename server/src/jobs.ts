@@ -31,7 +31,9 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
+import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
@@ -39,6 +41,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepForumPostShells } from "./services/forums.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -46,6 +49,7 @@ import {
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
+import { startSpeechJobPoller } from "./services/speech-worker.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -62,6 +66,58 @@ import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { userHasAuthenticatedSocket } from "./ws/sockets.js";
 import { hasClusterSocket } from "./ws/status.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
+import { storyAudienceTargets } from "./services/stories.js";
+import {
+  STORY_SWEEP_INTERVAL_MS,
+  STORY_VIDEO_INTERVAL_MS,
+  processStoryVideos,
+  sweepStories,
+} from "./services/story-media.js";
+import { notifyStoriesUpdate, notifyStoryAudiences } from "./ws/stories.js";
+import {
+  CHANNEL_LAYOUT_JOB_INTERVAL_MS,
+  listSidebarChannelIds,
+  runChannelLayoutMigrations,
+} from "./services/channel-layout.js";
+import { countChannelLayout } from "./services/channel-layout-metrics.js";
+import { notifyChannelsUpdate } from "./ws/chat.js";
+
+let channelLayoutRunning = false;
+
+/**
+ * The data follows the `mixed_channel_list` flag: every minute, up to 200
+ * servers the flag is on for and that were never migrated get their loose
+ * channels moved into "Canais" (services/channel-layout.ts). No deploy, no
+ * restart: an override on the dashboard is picked up on the next tick. One run
+ * at a time per process; across processes the advisory lock and the primary
+ * key make a duplicate a no-op. Open sidebars refetch through
+ * `channels-update`, over the bus where this runs without sockets.
+ */
+async function migrateChannelLayoutsJob(): Promise<void> {
+  if (channelLayoutRunning) {
+    return;
+  }
+  channelLayoutRunning = true;
+  try {
+    const changed = await runChannelLayoutMigrations();
+    // One server's nudge never stops the next one's. A nudge that is lost
+    // anyway is caught up by the clients themselves: they re-read the layout
+    // version on focus and refetch the list when it moved.
+    for (const serverId of changed) {
+      try {
+        const channelIds = await listSidebarChannelIds(serverId);
+        await notifyChannelsUpdate(serverId, { channelIds, carriesChildren: true });
+      } catch (error) {
+        console.error(`[channel-layout] nudge failed for server ${serverId}:`, error);
+      }
+    }
+  } catch (error) {
+    countChannelLayout("jobFailures");
+    console.error("[channel-layout] migration job failed:", error);
+  } finally {
+    channelLayoutRunning = false;
+  }
+}
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -78,6 +134,15 @@ export const CHANNEL_SESSION_REMINDER_INTERVAL_MS = 60_000;
 /** Daily is plenty for a 90-day retention window; a failure here costs
  * nothing but disk, and resolves on the next run. */
 export const DAILY_MS = 24 * 60 * 60_000;
+/**
+ * Forum post shells: a create that crashed between the post row and its
+ * opening message. Invisible to everyone (every read filters on
+ * `published_at`), so this is hygiene, but a shell holds the composer's staged
+ * files on the post, and those go back to the forum here. Ten minutes old
+ * before it is touched (`FORUM_SHELL_TTL_MS`), so a tick every five minutes
+ * removes one within fifteen.
+ */
+export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Five minutes rather than daily, and unlike every other sweep in this file
@@ -143,6 +208,13 @@ export async function sweepAttachments(): Promise<void> {
 }
 
 async function sweepCommunityHomeMedia(): Promise<void> {
+  // Quarantine expiry first and on its own: a failure in one sweep must not
+  // starve the other. Never touches an illegal-content row at any age.
+  try {
+    await sweepQuarantinedCommunityHomeMedia();
+  } catch (error) {
+    console.error("[content-safety] Baú quarantine sweep failed:", error);
+  }
   try {
     await sweepOrphanedCommunityHomeMedia();
   } catch (error) {
@@ -162,6 +234,77 @@ async function sweepCommunityHomeTranslation(): Promise<void> {
     await sweepCommunityHomeTranslations();
   } catch (error) {
     console.error("[community-home] translation sweep failed:", error);
+  }
+}
+
+/**
+ * Every minute too: queues subtitles for Baú videos on servers with
+ * `community_home_video_captions` on that have none (which is also how videos
+ * published before the flag get them), and translates source tracks that
+ * miss a current translation. With the flag off everywhere it is an
+ * in-memory check.
+ */
+async function sweepCommunityHomeVideoCaptions(): Promise<void> {
+  try {
+    await sweepCommunityHomeCaptions();
+  } catch (error) {
+    console.error("[community-home] captions sweep failed:", error);
+  }
+}
+
+/**
+ * Stories: the expiry sweep, every minute, whatever the flags say (a flag
+ * turned off must never make bytes outlive the 24 h promise).
+ */
+async function sweepStoriesJob(): Promise<void> {
+  try {
+    const result = await sweepStories();
+    if (result.mediaFailed > 0) {
+      console.warn(`[stories] ${result.mediaFailed} media delete(s) failed, retrying next tick`);
+    }
+  } catch (error) {
+    console.error("[stories] sweep failed:", error);
+  }
+}
+
+let storyVideosRunning = false;
+
+/**
+ * Stories: finish published videos (probe, poster, frames, scan). One at a
+ * time per process and never overlapping itself; a few per tick while there
+ * is a queue. Where this runs without sockets (the worker), the nudge goes
+ * out over the cluster bus.
+ */
+async function processStoryVideosJob(): Promise<void> {
+  if (storyVideosRunning) {
+    return;
+  }
+  storyVideosRunning = true;
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      const tick = await processStoryVideos();
+      if (tick.outcome === "idle") {
+        break;
+      }
+      if (tick.storyId && tick.authorId) {
+        const authorId = tick.authorId;
+        if (tick.wentLive) {
+          // Best effort: the story is live either way, and a missed nudge is
+          // a strip that refreshes on the next focus.
+          await storyAudienceTargets(tick.storyId)
+            .then((targets) => notifyStoryAudiences(authorId, targets))
+            .catch((error: unknown) => {
+              console.error("[stories] live nudge failed:", error);
+            });
+        } else {
+          notifyStoriesUpdate({ scope: "own", userId: authorId });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[stories] video job failed:", error);
+  } finally {
+    storyVideosRunning = false;
   }
 }
 
@@ -201,6 +344,7 @@ export function startColdJobs(): ColdJobs {
   const stoppers: Stopper[] = [
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "attachments", sweepAttachments),
     every(DAILY_MS, "audit", pruneAuditLog),
+    every(CHANNEL_LAYOUT_JOB_INTERVAL_MS, "channel-layout", migrateChannelLayoutsJob),
     // A resolved report holds a copy of reported content, so this is a privacy
     // sweep rather than a disk one. Open reports are never touched.
     every(DAILY_MS, "reports", pruneResolvedReports),
@@ -221,6 +365,7 @@ export function startColdJobs(): ColdJobs {
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
+    every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the
@@ -243,8 +388,23 @@ export function startColdJobs(): ColdJobs {
       "community-home-translation",
       sweepCommunityHomeTranslation,
     ),
+    every(
+      COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
+      "community-home-captions",
+      sweepCommunityHomeVideoCaptions,
+    ),
     (() => {
       const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);
+      return () => poller.stop();
+    })(),
+    // Voice note transcription and AAC transcodes (`speech_jobs`). Same
+    // adaptive shape as the webhook outbox: fast while there is work, 30 s
+    // when idle, woken by the NOTIFY the message transaction sends on enqueue.
+    // A process without storage claims nothing, and one without ffmpeg claims
+    // no transcode, so the API and a worker built from the API image never
+    // take a job they cannot finish.
+    (() => {
+      const poller = startSpeechJobPoller();
       return () => poller.stop();
     })(),
     every(
@@ -267,6 +427,8 @@ export function startColdJobs(): ColdJobs {
       },
     ),
     every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
+    every(STORY_SWEEP_INTERVAL_MS, "stories", sweepStoriesJob),
+    every(STORY_VIDEO_INTERVAL_MS, "stories-video", processStoryVideosJob),
     // Voice occupancy: the one job here that reads live state rather than
     // rows. It is here rather than next to the WS heartbeat because with
     // `VOICE_REGISTRY=postgres` the truth is in `voice_peers`, which the

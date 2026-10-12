@@ -28,6 +28,7 @@ import {
   useSettingsAnnounce,
   type InlineSaveState,
 } from "@/components/settings/kit";
+import { VoiceNotesGroup } from "@/components/settings/voice-notes-group";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -411,6 +412,8 @@ export function PrivacySection({
           }
         />
       </StatusGroup>
+
+      <VoiceNotesGroup />
 
       <SettingsGroup
         title={t("settings.privacy.blocked")}

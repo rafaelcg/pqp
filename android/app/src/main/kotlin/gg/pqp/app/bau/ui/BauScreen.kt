@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -35,6 +36,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +65,7 @@ import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
 import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
@@ -69,6 +73,8 @@ import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
 import gg.pqp.app.ui.components.pqpTopBarColors
+import gg.pqp.app.ui.media.GifLinks
+import gg.pqp.app.ui.media.InlineGif
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
@@ -77,10 +83,9 @@ import gg.pqp.app.ui.theme.TabularFigures
 /**
  * A server's Baú: the posts that stay, newest first.
  *
- * Read and react only. There is no composer for a post here and there will
- * not be one this pass: staff write from the web, where the media upload and
- * the schedule live. What a phone is for is reading the clip on the bus and
- * leaving a heart, and that is what this screen does.
+ * Reading and reacting is for everybody. Staff (whoever the server lets
+ * publish, see [rememberCanPostToBau]) also get a "new post" button; drafts and
+ * the schedule stay on the web.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,12 +94,65 @@ fun BauScreen(
     serverId: String,
     serverName: String,
     onBack: () -> Unit,
+    /** A voice room or a call is live; the video then leaves the audio focus alone. */
+    callActive: Boolean = false,
+    /** A post to scroll to once the feed has loaded (a card or link tapped in chat). */
+    focusPostId: String? = null,
+    onOpenChannel: (Channel) -> Unit = {},
+) {
+    // Leaving the Baú releases the player; a card scrolling away only pauses.
+    DisposableEffect(Unit) { onDispose { BauPlayback.stop() } }
+    LaunchedEffect(callActive) { BauPlayback.setCallActive(callActive) }
+    CompositionLocalProvider(LocalBauCallActive provides callActive) {
+        BauScreenContent(session, serverId, serverName, onBack, focusPostId, onOpenChannel)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BauScreenContent(
+    session: SessionStore,
+    serverId: String,
+    serverName: String,
+    onBack: () -> Unit,
+    focusPostId: String?,
+    onOpenChannel: (Channel) -> Unit,
 ) {
     val model: BauViewModel = viewModel(
         key = "bau-$serverId",
         factory = BauViewModel.factory(session, serverId),
     )
     val state by model.state.collectAsStateWithLifecycle()
+    val canPost = rememberCanPostToBau(session, serverId, state.config)
+    var composing by rememberSaveable { mutableStateOf(false) }
+
+    // Arrived from a post card in chat: bring that post to the top, once. A
+    // post that is not in the feed (gone, or not published) leaves the feed
+    // where it always starts.
+    val listState = rememberLazyListState()
+    var focused by rememberSaveable(focusPostId) { mutableStateOf(focusPostId == null) }
+    LaunchedEffect(focusPostId, state.posts) {
+        if (focused || focusPostId == null) return@LaunchedEffect
+        val index = state.posts.indexOfFirst { it.id.equals(focusPostId, ignoreCase = true) }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+            focused = true
+        }
+    }
+
+    if (composing && canPost) {
+        BauComposeDialog(
+            session = session,
+            serverId = serverId,
+            config = state.config,
+            channels = state.channels,
+            onDismiss = { composing = false },
+            onPosted = {
+                composing = false
+                model.refresh()
+            },
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -126,6 +184,20 @@ fun BauScreen(
                             )
                         }
                     },
+                    actions = {
+                        if (canPost) {
+                            IconButton(
+                                onClick = { composing = true },
+                                modifier = Modifier.testTag("bau.compose.open"),
+                            ) {
+                                Icon(
+                                    imageVector = PqpIcons.Edit,
+                                    contentDescription = stringResource(R.string.bau_compose_open),
+                                    modifier = Modifier.size(Sizes.iconAction),
+                                )
+                            }
+                        }
+                    },
                     colors = pqpTopBarColors(),
                 )
                 ChromeDivider()
@@ -151,6 +223,7 @@ fun BauScreen(
                 )
 
                 else -> LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize().testTag("bau.feed"),
                     contentPadding = PaddingValues(
                         horizontal = Spacing.gutter,
@@ -162,6 +235,8 @@ fun BauScreen(
                         PostCard(
                             post = post,
                             vipEnabled = state.config.vipEnabled,
+                            channels = state.channels,
+                            onOpenChannel = onOpenChannel,
                             expanded = state.expandedComments[post.id],
                             loadingComments = post.id in state.loadingComments,
                             submitting = post.id in state.submitting,
@@ -182,6 +257,8 @@ fun BauScreen(
 private fun PostCard(
     post: BauPost,
     vipEnabled: Boolean,
+    channels: List<Channel>,
+    onOpenChannel: (Channel) -> Unit,
     expanded: List<BauComment>?,
     loadingComments: Boolean,
     submitting: Boolean,
@@ -228,10 +305,13 @@ private fun PostCard(
         if (post.locked) {
             post.teaser?.takeIf { it.isNotBlank() }?.let { teaser ->
                 Spacer(Modifier.height(Spacing.sm))
-                Text(
+                BauChannelText(
                     text = teaser,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    channels = channels,
+                    onOpenChannel = onOpenChannel,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
                 )
             }
             Spacer(Modifier.height(Spacing.md))
@@ -239,7 +319,16 @@ private fun PostCard(
         } else {
             post.body?.takeIf { it.isNotBlank() }?.let { body ->
                 Spacer(Modifier.height(Spacing.sm))
-                Text(text = body, style = MaterialTheme.typography.bodyLarge)
+                val gifBody = remember(body) { GifLinks.mediaBody(body) }
+                if (gifBody != null) {
+                    InlineGif(gifBody)
+                } else {
+                    BauChannelText(
+                        text = body,
+                        channels = channels,
+                        onOpenChannel = onOpenChannel,
+                    )
+                }
             }
             post.media?.let { media ->
                 Spacer(Modifier.height(Spacing.md))
@@ -378,16 +467,18 @@ private fun LockedBox() {
 }
 
 /**
- * One post's media. Every kind opens *out*: the image in whatever handles it,
- * the video and the file in the browser or a viewer, YouTube / Twitch / TikTok /
- * Instagram in their apps. A phone has better players for all of those than a
- * chat app does, and a card that plays sound on scroll is the thing the web's
- * `preload="none"` exists to avoid.
+ * One post's media. An uploaded video and a YouTube link play in the card,
+ * nothing before the tap ([BauActiveVideo], [BauYoutubeCard]), the way the
+ * web's `<video>` and iframe do. The rest opens *out*: the image in whatever
+ * handles it, the file in the browser or a viewer, Twitch / TikTok / Instagram
+ * in their apps. Nothing plays on scroll, which is the web's `preload="none"`.
  */
 @Composable
 private fun MediaView(media: BauMedia) {
     val context = LocalContext.current
+    val callActive = LocalBauCallActive.current
     val target = media.openUrl
+    val youtubeId = if (media.isYoutube) YoutubeLinks.videoId(media.youtubeUrl) else null
     val open: () -> Unit = {
         if (target != null) {
             runCatching {
@@ -415,6 +506,8 @@ private fun MediaView(media: BauMedia) {
                 .clickable(role = Role.Image, onClick = open)
                 .testTag("bau.media.image"),
         )
+
+        youtubeId != null -> BauYoutubeCard(videoId = youtubeId, watchUrl = target, name = media.name)
 
         media.isYoutube -> Box(
             modifier = Modifier
@@ -476,16 +569,35 @@ private fun MediaView(media: BauMedia) {
             PlayBadge(stringResource(R.string.bau_media_instagram))
         }
 
-        media.isVideo -> Box(
+        media.canPlayInApp && target != null && BauPlayback.activeKey == target ->
+            BauActiveVideo(key = target, open = open)
+
+        media.canPlayInApp -> Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable(role = Role.Button, onClick = open)
+                // Plays in the card, in the app's own player: an `ACTION_VIEW`
+                // hand-off gets a URL that the browser or a viewer may
+                // download, not stream. The feed carries a fresh presigned URL
+                // on every load, so there is nothing to re-sign here.
+                .clickable(role = Role.Button) {
+                    target?.let { BauPlayback.play(context, it, it, callActive) }
+                }
                 .testTag("bau.media.video"),
             contentAlignment = Alignment.Center,
         ) {
+            // The author's cover under the badge. A cover that fails to load
+            // leaves the plain surface, which is how this card always looked.
+            media.coverUrl?.let { cover ->
+                AsyncImage(
+                    model = cover,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().testTag("bau.media.video.cover"),
+                )
+            }
             PlayBadge(media.name.ifBlank { stringResource(R.string.bau_media_video) })
         }
 
@@ -701,7 +813,14 @@ private fun CommentRow(comment: BauComment) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = comment.body, style = MaterialTheme.typography.bodyMedium)
+            // A comment that is only a picker GIF draws as the GIF, as in chat
+            // and on the web; any other body, or any other host, stays text.
+            val gifBody = remember(comment.body) { comment.gifUrl }
+            if (gifBody != null) {
+                InlineGif(gifBody)
+            } else {
+                Text(text = comment.body, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }

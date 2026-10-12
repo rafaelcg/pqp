@@ -1,4 +1,74 @@
-# Handover — pqp (as of 2026-08-25)
+# Handover: pqp, 2026-10-12 (read this first)
+
+This top section is the current state. Everything below it is older history; where they disagree, this section wins.
+
+## Where production is
+
+- **API:** Vultr box behind Cloudflare, `/opt/pqp`, docker compose services `api-a` and `api-b` (two rolling replicas). Deploys run from GitHub Actions after CI goes green on `main` (`deploy-api-vultr.yml`, `deploy-web.yml`). Fly apps are kept at zero machines; ignore the Fly sections further down.
+- **Database:** Vultr managed Postgres. Agents get read-only access only; writes and box operations are done by the operator.
+- **Web:** Cloudflare Pages, `https://pqp.gg`. `https://pqp.gg/version.json` and `https://api.pqp.gg/health` both print the deployed commit.
+- **As of writing:** production runs `68ef3552`; `main` is at `4c02358c` with CI in progress.
+- **Runtime flags:** flipped live with `PUT /api/admin/flags` (`{ "key", "enabled" }`, plus per-server overrides), using the operator's `ADMIN_METRICS_TOKEN`. No deploy needed. Read the whole table with `GET /api/admin/flags`.
+
+## Feature flags shipped in the last two days
+
+| Flag | Scope | State now | What it gates | Before turning on |
+|---|---|---|---|---|
+| `forum_channels` | per server | off globally, on for one test server ("PQP") | Forum channels (web, iOS, Android, webhooks, Discord import) | QA verdict: ready for QG. Turn on for QG via a per-server override. Webhook/RSS feeds want a 48 h staging run with real tools (MonitoRSS, n8n) first |
+| `conversations_home` + `conversations_home_phone_tabs` | global | **on** | DM redesign "Conversas" (rail item, WhatsApp-style list, Ctrl/Cmd+K, phone bottom bar) on web, iOS, Android | Already on; watch `conversations` on `/api/admin/metrics` (success metric: senders7d / activeSenders7d) |
+| `nudge` | global | off | "Chamar a atenção" in 1:1 friend DMs (web, iOS, Android) | QA with two accounts on web + both phones |
+| `retro_look` | global | on (kill switch) | "Modo 2005", the hidden MSN-inspired look (`/2005` or Konami code), synced to the account | Nothing; turn off only if it breaks |
+| `stories` / `stories_friends` | per server / global | off / off | Stories (server, web, iOS, Android) | QA pass on all three clients, QG first. Upload and scanning were only tested against local fakes, so test one real upload on QG |
+| `bau_latest_preview` | global | on | Latest Baú post card in the sidebar and phone channel list | n/a |
+| `bau_custom_cover` | per server | on | Choose a video cover in the Baú composer | n/a |
+| `community_listing_nudge` | global | on | One-time card asking owners of good unlisted communities to list them | n/a |
+| `mixed_channel_list` | per server | off | New sidebar: categories are the only headers, drag to reorder | See "Sidebar rollout" below |
+| `voice_audio_self_heal` | global | on | Call audio self-repair and the "Arrumar" card | It was off for 3 hours on 2026-10-12 while #1089 (false repairs froze screen shares) shipped; back on since 05:10Z |
+
+## Mobile releases
+
+- iOS: push tag `ios-vX.Y.Z` on `main`; the workflow uploads to TestFlight. Latest: **1.0.22** (Forum, Conversas, nudge, Stories, cancellation fix). iOS inline YouTube (#1106) merged after the 1.0.22 cut, so it ships in the next tag.
+- Android: open a PR bumping `versionCode` and `versionName` in `android/app/build.gradle.kts`, merge it, then push tag `android-vX.Y.Z` on the merge commit. That builds to the Play internal track. **Rafael promotes it in Play Console; never re-run production.** Latest: **0.4.15**, not yet promoted.
+- Cut both after any mobile code merges, without asking.
+- Desktop: bump `electron/package.json`, merge, push tag `vX.Y.Z`, publish the draft release. Every published release gets a `.flatpak` attached automatically (`flatpak-manifest.yml`). Latest: **0.2.6**. Do not submit to Flathub: its policy forbids AI-written manifests and agent-driven PRs.
+
+## Open PRs and next steps
+
+| PR | What | Next step |
+|---|---|---|
+| #1118 | Sidebar on web (mixed channel list, drag with a drop line, Criar categoria) | Rebasing onto main after #1110 (server, merged); then CI and merge |
+| #1119 | Sidebar on iOS (mixed list, "Organizar canais") | In progress; Android sidebar PR follows from the same agent |
+| #1120, #1121 | Forum video thumbnail on the iOS / Android post cards, plus a card alignment fix Rafael asked for | Merge when green; then cut mobile builds |
+| #1031 | Discord import "Traz tua galera" | On hold by Rafael's choice; it also carries André's #966 |
+| #1076, #1026, #1024, #975, #966, #952, #936 | André's PRs | Do not push to André's branches without asking him |
+
+## Sidebar rollout (`mixed_channel_list`)
+
+Plan, migration SQL and contract: [`plans/MIXED_CHANNEL_LIST.md`](./plans/MIXED_CHANNEL_LIST.md). To turn it on for one server: flip the per-server override, then `POST /api/admin/channel-layout` with `{ serverId, action: "migrate", dryRun: true }`, check the output, run it without `dryRun`. `action: "revert"` undoes it from the snapshot. Do QG only after #1118 and both phone PRs are live and QA'd. Old store builds (iOS 1.0.21, Android 0.4.14) keep working by server-side compatibility rules.
+
+## Owed and known gaps
+
+- **Forum polish:** 21 small items and 2 spec notes in [`plans/FORUM_QA_2026-10-12.md`](./plans/FORUM_QA_2026-10-12.md). None blocks launch. Forum webhooks still re-post a moderator-deleted item only outside the dedupe window (tombstones landed in #1098).
+- **Stories:** design and contract in [`plans/STORIES.md`](./plans/STORIES.md). Farol left one open point: the order the server applies reaction writes needs a server-side version to fix. Real R2 upload and a real scanner provider are untested.
+- **Directory:** opt-in listing stays (legal reasons in `CONTENT_SAFETY.md`). On 2026-10-12, the 19 AI-seeded demo communities from 2026-08-08 were unlisted (not deleted). The quality bar (#1108) hides listed rooms with fewer than 3 humans or no messages in 30 days; search still finds them.
+- **Linux desktop (Tebaldi, CachyOS):** "no sound" is undiagnosed. In the Flatpak, share audio is off by design; for the AppImage we need his `pactl info`, `linux-share-audio.json` and `XDG_CURRENT_DESKTOP`. Tray detection and the share area fit shipped in 0.2.6.
+- **Baú YouTube inline (#1106, #1107):** checked on simulator and emulator only. A real phone in a call and full-screen rotation are unverified.
+- **Content scanning gaps:** avatars, profile banners, server icons and banners, and the community featured image are still unscanned (table in `CONTENT_SAFETY.md`).
+
+## How we work (lessons from this push)
+
+- **Merge policy:** merge green PRs any time; hold anything `restarts-api` while a watch party is live (`hls_sessions where ended_at is null`).
+- **Squash merges and stacked PRs:** a PR based on another feature branch merges INTO that branch, not `main`. #1066 was lost that way and redone as #1077. Retarget a stacked PR to `main` before merging, and only merge PRs whose base is `main`. After its parent is squash-merged, cherry-pick the child's own commits onto `main` rather than rebasing.
+- **CI:** GitHub runs no CI on a PR that conflicts with `main`, so a "missing" run usually means a conflict. Re-running a failed job reuses the old merge commit, so a fix that landed on `main` is not picked up: use `gh pr update-branch` (or push) instead. CI was halved by #1069 (parallel server DB workers, prebuilt client for e2e, 2 lanes per e2e runner); about 48 job-minutes and 11 minutes per PR.
+- **Flaky tests fixed at the root this week:** call-stage-strip (registry-off roster race, #1075), screen-quality-received (stats poller stole the audio repair's packet data, #1089), voice-stage-controls-autohide (hover on a removed node pinned the bar, #1112), hls keep-warm owner race, forum settings race test. If a test fails twice on `main`, assume a real bug first.
+- **Farol (the PR reviewer bot):** fix findings a real user can hit. Farol does not re-check old threads, so its score lags; reply with the fixing commit and move on rather than pushing again and again.
+- **Agents on this laptop:** at most one simulator or emulator per agent, shut it down after screenshots; stop containers and dev servers; run only touched tests locally and let CI run the rest; poll CI every 5 minutes.
+- **Copy:** pt-BR first with "tu" and spoken verbs (`AGENTS.md`); no em dashes anywhere, comments included.
+- **Production credentials:** agents never touch them; the operator runs DB writes, flag flips and box operations.
+
+---
+
+# Older handover notes (as of 2026-08-25)
 
 Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.md). Roadmap checklist: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
@@ -82,6 +152,8 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **Stories, server half (2026-10-11, dormant):** a photo, a video of up to 30 s or a text card that lives 24 h, posted to servers (flag `stories`, per server, off; QG first) and/or friends (flag `stories_friends`, global, off until the Conversas redesign). Contract in `packages/shared/src/stories.ts`, rules in `server/src/services/stories.ts`, the video job and the expiry sweep in `server/src/services/story-media.ts` (cold paths), the `stories-update` frame in `server/src/ws/stories.ts`. Images are scanned before they are visible; video is probed and its poster plus three frames are scanned before it is. New permission `POST_STORIES` (bit 25, on for @everyone). Holds, reports and the operator runbook: `docs/CONTENT_SAFETY.md` §Stories. Clients (web, iOS, Android) are separate PRs.
+- **Stories, web (2026-10-12, dormant):** the strip at the top of the channel sidebar (and of Conversas while `stories_friends` is on), the viewer modal, the composer, the DM quote card and `POST_STORIES` in the role editor, all hidden while a server's strip answers `enabled: false`. Code in `client/src/lib/stories/` (the viewer's state machine is `viewer-state.ts`) and `client/src/components/stories/`; motion follows the design's Movimento spec with reduced-motion fades. End to end: `client/e2e/stories.spec.ts`.
 - **Audience mode, "Modo plateia" (2026-10-05, dormant):** a host (`MUTE_MEMBERS` or `MANAGE_CHANNELS`) turns a running voice call into a stage with one tap; only the staff and the people they let in can talk, enforced on the LiveKit grant (room-wide pass, region-routed) and the WebSocket, with the reason on every locked mic and a one-tap "Liberar o microfone" on the raised-hand queue. Per call, cleared when the room empties or nobody who runs it is left. Runtime flag `audience_mode`, **per server, default off**: turn it on for one server from the dashboard override. Native iOS and Android still only see a locked mic. See [`plans/AUDIENCE_MODE.md`](./plans/AUDIENCE_MODE.md).
 - **Past broadcasts can be downloaded (2026-09-14):** each available row of "Transmissões anteriores" gets a **Baixar** panel with up to three files: the film (the top ladder rung's MPEG-TS segments, concatenated in playlist order), the presenter's camera pip, and the host's voice archive (only when `LIVE_HLS_MIC_ARCHIVE` was on for that broadcast). Nothing is transcoded and nothing is buffered: the API signs the objects the egress already wrote and pipes them through with backpressure, so a three-hour broadcast never enters the API process's memory. Sizes are a bucket listing per file, asked per broadcast when the panel opens rather than on every history load, and cached for five minutes. `GET .../watch-party/history/:sessionAt/download` lists what exists, `GET .../download/:kind` (`film | camera | voice`) is the bytes, both behind the same permission and the same availability rule as replay (404 unknown kind, 409 once swept). The link is a plain `<a href download>` carrying the `?t=` capability, so the byte route has the same headerless door the replay proxy has. Merging **restarts `pqp-api`**. See [`WATCH_PARTY.md`](./WATCH_PARTY.md) §"Baixar: the film, the camera and the voice".
 - **Two `pqp-api` machines, executed live 2026-09-14 13:46–13:49 UTC:** blue-green flip via `fly machine clone` (`docs/deploy-fly.md` §6a-bis) — cloned two `performance-1x`/2048mb machines, verified each individually (`/health`, `/ready`, `runtime.pool.max`, the `[role]` log line, `voice.cluster.*` counters, one real WS connect, all via `fly-force-instance-id`), then stopped the old `performance-2x`/4gb machine: its drain moved 34 sockets onto the new pair with zero proxy gap. `WORKER_MODE`, `CLUSTER_BUS`, `VOICE_REGISTRY` and `PG_POOL_MAX=70` were already live Fly secrets, so both clones inherited role `api` and the rest automatically — no per-machine env step was needed. `PQP_API_MACHINES=2` is set live; this PR (ops/two-machines-fly) must merge before the next `pqp-api` deploy so `fly.toml` (`min_machines_running=2`, the same four names moved into `[env]`, `PG_POOL_MAX=70`) matches the shape already running, or the next ordinary merge diffs a stale file against two machines it didn't create. `deploy-api-fly.yml`'s post-deploy check now verifies `/health` on every started machine individually via `fly-force-instance-id` rather than trusting the load-balanced hostname. Background: `docs/plans/M6_REHEARSAL_2026-09-13.md` and `docs/plans/M6_REHEARSAL_2026-09-14.md`.

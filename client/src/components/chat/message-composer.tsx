@@ -50,7 +50,14 @@ import { ComposerFormatPreview } from "@/components/chat/composer-format-preview
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
+import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
+import {
+  VoiceNoteMicButton,
+  VoiceNotePanel,
+  VoiceNoteUndo,
+  useVoiceNoteComposer,
+} from "@/components/chat/voice-note-composer";
 import {
   useEffect,
   useId,
@@ -143,6 +150,32 @@ export interface ComposerSlashContext {
   openPurgeDialog: (count?: number) => void;
 }
 
+/**
+ * What an embedded composer reports on every change: the text as it would be
+ * sent, the files that finished uploading, and whether any is still going.
+ */
+export interface EmbeddedComposerState {
+  body: string;
+  attachments: OutgoingAttachment[];
+  uploading: boolean;
+}
+
+/**
+ * The composer as ONE FIELD of a larger form (the forum's Novo post dialog):
+ * Enter is a newline and Mod+Enter asks the form to submit, there is no send
+ * button and no voice note, and every change is reported so the form's own
+ * submit reads the text and the files. The draft is still the composer's own
+ * (keyed by `channelId`), which is what lets the form close without asking.
+ */
+export interface EmbeddedComposer {
+  onChange: (state: EmbeddedComposerState) => void;
+  onSubmit: () => void;
+  /** Drawn where the send button sits ("Markdown funciona"). */
+  trailing?: ReactNode;
+  /** Resting height of the field, in px. */
+  minHeight?: number;
+}
+
 export interface ComposerReplyTarget {
   id: string;
   authorName: string;
@@ -156,6 +189,11 @@ interface MessageComposerProps {
   onInsertConsumed?: () => void;
   /** Where uploads are minted. Null disables the paperclip along with the send. */
   channelId?: string | null;
+  /**
+   * The server the channel belongs to, null in a conversation. Only read for
+   * the `voice_notes` flag, which is answered per server.
+   */
+  voiceNotesServerId?: string | null;
   /**
    * Files (and folders) dropped on the pane this composer belongs to. The drop
    * target is the whole conversation rather than the textarea, so it lives in
@@ -196,6 +234,8 @@ interface MessageComposerProps {
    * the members rail.
    */
   music?: ReactNode;
+  /** See `EmbeddedComposer`. Null is the ordinary chat composer. */
+  embedded?: EmbeddedComposer | null;
 }
 
 /**
@@ -353,6 +393,7 @@ export function MessageComposer({
   insertText,
   onInsertConsumed,
   channelId = null,
+  voiceNotesServerId = null,
   droppedItems = null,
   onDroppedItemsConsumed,
   replyTarget = null,
@@ -365,6 +406,7 @@ export function MessageComposer({
   variant = "default",
   dock,
   music,
+  embedded = null,
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -429,6 +471,20 @@ export function MessageComposer({
   }, [slowModeUntil]);
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+  // Voice notes. Absent (flag off, no storage, no recorder) and nothing here
+  // changes: the send button stays the send button.
+  const voiceNote = useVoiceNoteComposer({
+    channelId,
+    serverId: voiceNotesServerId,
+    allowed: variant !== "stream" && !disabled && embedded === null,
+    onSend: (noteBody, noteAttachments) => onSend(noteBody, noteAttachments),
+    onFeedback: (tone, message) => setFeedback({ tone, message }),
+    onDone: () => inputRef.current?.focus(),
+  });
+  const voiceNoteActive = voiceNote.phase.kind !== "idle";
+  const voiceNoteHolding =
+    (voiceNote.phase.kind === "recording" || voiceNote.phase.kind === "starting") &&
+    voiceNote.phase.mode === "hold";
 
   // Coalesced: a write per keystroke would serialise every draft on the
   // input hot path. The draft lands a moment after typing pauses, and the
@@ -524,6 +580,40 @@ export function MessageComposer({
 
   const isUploading = pending.some((item) => item.status === "uploading");
   const readyCount = pending.filter((item) => item.status === "ready").length;
+  // Embedded in a form (the forum's Novo post), the toolbar sits under the
+  // field with room to spare, so on a phone its buttons are a full 44px
+  // finger target rather than 32 (forum QA P17). The chat composer keeps its
+  // 32px row beside the field.
+  const iconButtonClass = cn(
+    COMPOSER_ICON_BUTTON,
+    embedded && "max-sm:h-11 max-sm:w-11",
+  );
+  // Embedded: the form reads the text and the files from here, through a ref
+  // so a new callback identity per render does not report twice.
+  const embeddedRef = useRef(embedded);
+  embeddedRef.current = embedded;
+  useEffect(() => {
+    const host = embeddedRef.current;
+    if (!host) {
+      return;
+    }
+    const trimmed = body.trim();
+    host.onChange({
+      body: trimmed ? expandEmojiShortcodes(trimmed) : "",
+      attachments: pending
+        .filter((item) => item.status === "ready" && item.attachmentId)
+        .map((item) => ({
+          attachmentId: item.attachmentId!,
+          filename: item.filename,
+          contentType: item.contentType,
+          byteSize: item.byteSize,
+          width: item.width,
+          height: item.height,
+          previewUrl: item.previewUrl,
+        })),
+      uploading: pending.some((item) => item.status === "uploading"),
+    });
+  }, [body, pending]);
   const isAttachmentsEnabled = Boolean(attachmentLimits?.enabled && channelId);
 
   const menuKind: "slash" | "mention" | "emoji" | null = slashOpen
@@ -1141,6 +1231,10 @@ export function MessageComposer({
 
   async function handleSubmit(event?: React.FormEvent) {
     event?.preventDefault();
+    if (embedded) {
+      embedded.onSubmit();
+      return;
+    }
     if (slowModeRemaining > 0) {
       return;
     }
@@ -1248,6 +1342,19 @@ export function MessageComposer({
     if (marker) {
       event.preventDefault();
       applyComposerFormat(marker);
+      return;
+    }
+
+    if (
+      embedded &&
+      event.key === "Enter" &&
+      !(menuKind && menuCount > 0)
+    ) {
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        embedded.onSubmit();
+      }
+      // Plain Enter: the textarea's own newline.
       return;
     }
 
@@ -1427,7 +1534,11 @@ export function MessageComposer({
         ref={setCallHintHost}
         className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
       />
-      {formatHintEnabled && !isFormatBarOpen && !feedback && (
+      <VoiceNoteTranscriptionNotice
+        recording={voiceNoteActive}
+        serverId={voiceNotesServerId}
+      />
+      {formatHintEnabled && !isFormatBarOpen && !feedback && !voiceNoteActive && (
         <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
           <FeatureHint
             id="composerFormat"
@@ -1489,6 +1600,7 @@ export function MessageComposer({
         back. Errors and /help still need a place to land; they overlay the
         last messages instead of moving the input.
       */}
+      {!feedback && <VoiceNoteUndo controller={voiceNote} />}
       {feedback && FeedbackIcon && (
         <div
           className={cn(
@@ -1644,12 +1756,14 @@ export function MessageComposer({
         )}
           </div>
         )}
-        <div className="relative min-h-10 min-w-0">
+        {voiceNoteActive && <VoiceNotePanel controller={voiceNote} />}
+        <div className={cn("relative min-h-10 min-w-0", voiceNoteActive && "hidden")}>
           {body.length === 0 && (
             <span
               aria-hidden
               className={cn(
-                "pointer-events-none absolute inset-0 z-[1] flex items-center overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm",
+                "pointer-events-none absolute inset-0 z-[1] flex overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm",
+                embedded ? "items-start" : "items-center",
                 (disabled || isRunningSlash) && "opacity-50",
               )}
             >
@@ -1687,7 +1801,7 @@ export function MessageComposer({
             style={{
               resize: "none",
               height: composerBox.height,
-              minHeight: COMPOSER_CONTROL_PX,
+              minHeight: embedded?.minHeight ?? COMPOSER_CONTROL_PX,
               lineHeight: `${composerBox.lineHeight}px`,
               paddingTop: composerBox.paddingY,
               paddingBottom: composerBox.paddingY,
@@ -1703,7 +1817,14 @@ export function MessageComposer({
             onKeyDown={handleKeyDown}
           />
         </div>
-        <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
+        <div
+          className={cn(
+            "flex items-center gap-0.5 px-1.5 pb-1.5",
+            voiceNoteActive && !voiceNoteHolding && "hidden",
+          )}
+        >
+          {!voiceNoteHolding && (
+          <>
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
           {insertItems.length > 0 && variant !== "stream" && (
@@ -1725,7 +1846,7 @@ export function MessageComposer({
                 }}
                 onMouseDown={keepComposerFocused}
                 className={cn(
-                  COMPOSER_ICON_BUTTON,
+                  iconButtonClass,
                   isInsertMenuOpen && "bg-surface-3 text-text",
                 )}
               >
@@ -1756,7 +1877,7 @@ export function MessageComposer({
               }}
               onMouseDown={(event) => event.preventDefault()}
               className={cn(
-                COMPOSER_ICON_BUTTON,
+                iconButtonClass,
                 isFormatBarOpen && "bg-surface-3 text-text",
               )}
             >
@@ -1778,7 +1899,7 @@ export function MessageComposer({
               }}
               onMouseDown={keepComposerFocused}
               className={cn(
-                COMPOSER_ICON_BUTTON,
+                iconButtonClass,
                 isPickerOpen && "bg-surface-3 text-text",
               )}
             >
@@ -1803,7 +1924,7 @@ export function MessageComposer({
                 }}
                 onMouseDown={keepComposerFocused}
                 className={cn(
-                  COMPOSER_ICON_BUTTON,
+                  iconButtonClass,
                   isGifPickerOpen && "bg-surface-3 text-text",
                 )}
               >
@@ -1811,7 +1932,20 @@ export function MessageComposer({
               </Button>
             </Tooltip>
           )}
+          </>
+          )}
           <span className="flex-1" />
+        {embedded ? (
+          embedded.trailing ?? null
+        ) : voiceNote.available &&
+        (voiceNoteHolding ||
+          (!voiceNoteActive &&
+            composerBodyIsEmpty(body) &&
+            pending.length === 0 &&
+            slowModeRemaining <= 0 &&
+            !isPollComposerOpen)) ? (
+          <VoiceNoteMicButton controller={voiceNote} disabled={disabled || isRunningSlash} />
+        ) : (
         <Button
           type="submit"
           size="icon"
@@ -1846,6 +1980,7 @@ export function MessageComposer({
             </>
           )}
         </Button>
+        )}
         </div>
       </div>
       <p id={holdHintId} role="status" className="sr-only">

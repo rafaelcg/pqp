@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   coalesce,
   invalidate,
@@ -24,13 +24,30 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+/**
+ * Ages every cache entry by `ms` without waiting for it.
+ *
+ * The stale window is `[ttl, 2 * ttl)`, and these tests use a 20 ms TTL, so a
+ * REAL 30 ms sleep had to land inside a 20 ms-wide window. On a busy runner
+ * the timer fired late, the entry was already doubly stale, `coalesce` took
+ * the blocking path and awaited a gate the test only opens afterwards: a 20 s
+ * timeout, seen in CI once the server suites started running in parallel.
+ * The cache reads `Date.now()`, which `beforeEach` fakes, so the age is now
+ * exact. Real `setTimeout`s that only let a promise settle stay real.
+ */
+function age(ms: number): void {
+  vi.setSystemTime(Date.now() + ms);
+}
+
 describe("read-cache", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     resetReadCacheForTests();
     delete process.env.READ_CACHE;
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     delete process.env.READ_CACHE;
   });
 
@@ -299,7 +316,7 @@ describe("read-cache", () => {
     expect(await coalesce("k", 30, load)).toBe("v1");
 
     // Past the TTL but inside the one-extra-TTL stale window.
-    await new Promise((r) => setTimeout(r, 45));
+    age(45);
     const stale = await coalesce("k", 30, load);
     expect(stale).toBe("v1"); // still the old value, served with no wait
     expect(calls).toBe(2); // the background refresh WAS started
@@ -320,7 +337,7 @@ describe("read-cache", () => {
       return calls === 1 ? Promise.resolve("v1") : gate.promise;
     };
     await coalesce("k", 20, load);
-    await new Promise((r) => setTimeout(r, 30)); // now stale
+    age(30); // now stale
 
     const stale1 = await coalesce("k", 20, load);
     const stale2 = await coalesce("k", 20, load);
@@ -340,7 +357,7 @@ describe("read-cache", () => {
       return calls === 1 ? Promise.resolve("v1") : gate.promise;
     };
     await coalesce("k", 20, load);
-    await new Promise((r) => setTimeout(r, 30)); // now stale
+    age(30); // now stale
 
     // Kicks the background refresh (`revalidate`), served from the stale
     // value with no wait.
@@ -373,7 +390,7 @@ describe("read-cache", () => {
     expect(await coalesce("k", 20, load)).toBe("v1");
 
     // Past ttl * 2: no longer eligible for stale-while-revalidate.
-    await new Promise((r) => setTimeout(r, 55));
+    age(55);
     const result = await coalesce("k", 20, load);
     expect(result).toBe("v2");
     expect(calls).toBe(2);
@@ -462,7 +479,7 @@ describe("read-cache", () => {
     await coalesce("k", 20, async () => ten);
     expect(readCacheMetrics().bytes).toBe(Buffer.byteLength(JSON.stringify(ten), "utf8"));
 
-    await new Promise((r) => setTimeout(r, 30)); // into the stale window
+    age(30); // into the stale window
     await coalesce("k", 20, async () => fifty); // stale-serves `ten`, refreshes in the background
     await new Promise((r) => setTimeout(r, 10)); // let the refresh land
 
@@ -475,7 +492,7 @@ describe("read-cache", () => {
     await coalesce("grow", 20, async () => small);
     expect(readCacheMetrics().size).toBe(1);
 
-    await new Promise((r) => setTimeout(r, 30)); // stale
+    age(30); // stale
     await coalesce("grow", 20, async () => huge); // stale-serves, refresh comes back oversized
     await new Promise((r) => setTimeout(r, 10));
 

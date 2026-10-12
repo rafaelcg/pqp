@@ -91,6 +91,7 @@ import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
+import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
@@ -121,6 +122,7 @@ import {
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
+import { shareAppTarget } from "@/lib/share-app-hint";
 import {
   NO_SCREEN_FULLSCREEN,
   escapeExitsExpandedFullscreen,
@@ -181,6 +183,7 @@ import {
 import { createPortal } from "react-dom";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import {
+  chromeHoverAt,
   isKeyboardFocus,
   stageChromeAttentionKey,
   stageChromeHold,
@@ -236,6 +239,7 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  STAGE_HEIGHT_TALL,
   stageHeightClass,
   isStageCollapsed,
   markCallStarted,
@@ -670,6 +674,13 @@ export interface CallStageProps {
    * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
    */
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -787,6 +798,8 @@ export function CallStage({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -853,6 +866,8 @@ export function CallStage({
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
+      onRepairAudio={onRepairAudio}
+      onDismissAudioHealthPrompt={onDismissAudioHealthPrompt}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -902,6 +917,8 @@ function ActiveCall({
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
+  onRepairAudio,
+  onDismissAudioHealthPrompt,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -947,6 +964,13 @@ function ActiveCall({
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
+  /**
+   * "Arrumar" and the close (x) on `voiceState.audioHealthPrompt`'s card. See
+   * `lib/audio-health-monitor.ts`. Optional: without them the card is not
+   * drawn.
+   */
+  onRepairAudio?: () => void;
+  onDismissAudioHealthPrompt?: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -1537,6 +1561,30 @@ function ActiveCall({
   // A touch tap is a down and an up that did not travel. Anything that moved
   // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
+  // The hover holds, settled from the element under the pointer on every move
+  // and every `pointerover` across the stage. The enter and leave handlers on
+  // the bar, the overlay and the way back still set them as the pointer
+  // crosses, but they cannot clear a hover whose node was removed under the
+  // pointer (the mute button swaps its icon on the click that pressed it),
+  // which pinned the bar for the rest of the stream (`chromeHoverAt`). A
+  // target outside the stage's own DOM is a portal (a menu, a tooltip) that
+  // React bubbles here; it says nothing about the stage, so it is left alone.
+  const syncChromeHover = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (
+      event.pointerType === "touch" ||
+      !(event.target instanceof Node) ||
+      !event.currentTarget.contains(event.target)
+    ) {
+      return;
+    }
+    const hover = chromeHoverAt(event.target);
+    if (hover.controls !== barHovered) {
+      setBarHovered(hover.controls);
+    }
+    if (hover.tileControls !== tileControlsHovered) {
+      setTileControlsHovered(hover.tileControls);
+    }
+  };
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") {
       touchDownRef.current = { x: event.clientX, y: event.clientY };
@@ -1791,7 +1839,7 @@ function ActiveCall({
           "relative shrink-0 overflow-hidden bg-black",
           fill || watchFullscreen.active
             ? "h-full min-h-0"
-            : "h-[68svh] min-h-[280px]",
+            : STAGE_HEIGHT_TALL,
         )}
       >
         <CinemaStage
@@ -1903,15 +1951,9 @@ function ActiveCall({
         if (event.pointerType !== "touch") {
           chrome.wake();
         }
+        syncChromeHover(event);
       }}
-      onPointerOver={(event) => {
-        if (
-          event.pointerType !== "touch" &&
-          isInsideTileControls(event.target)
-        ) {
-          setTileControlsHovered(true);
-        }
-      }}
+      onPointerOver={syncChromeHover}
       onPointerOut={(event) => {
         if (
           isInsideTileControls(event.target) &&
@@ -2561,6 +2603,14 @@ function ActiveCall({
           visible={!chrome.hidden}
           onDismiss={onDismissMicFallbackNotice}
         />
+        {onRepairAudio && onDismissAudioHealthPrompt ? (
+          <AudioHealthNotice
+            prompt={voiceState.audioHealthPrompt ?? null}
+            visible={!chrome.hidden}
+            onRepair={onRepairAudio}
+            onDismiss={onDismissAudioHealthPrompt}
+          />
+        ) : null}
         <ShareGameCaptureNotice
           hint={voiceState.shareCaptureHint}
           visible={!chrome.hidden}
@@ -2810,6 +2860,12 @@ export function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // A phone browser that cannot capture still has a native app that can. Only
+  // used to point at it once the person taps the greyed-out button.
+  const shareAppLink = useMemo(
+    () => shareAppTarget({ canShareInBrowser: canShare }),
+    [canShare],
+  );
   // Watch party is a Chrome tab plus that tab's sound. The shell picker
   // lists screens and windows only, so the same door there would start a
   // silent share and the prompt would be a lie.
@@ -3661,8 +3717,31 @@ export function CallControls({
         />
       )}
     {shareHint && (
-      <p role="status" className="text-center text-[11px] text-paper-muted">
+      <p
+        role="status"
+        data-testid="share-unavailable-hint"
+        className="text-center text-[11px] text-paper-muted"
+      >
         {shareHint}
+        {shareAppLink && (
+          <>
+            {" "}
+            {t("voice.share.useApp")}{" "}
+            <a
+              href={shareAppLink.url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="share-get-app-link"
+              className="font-medium text-signal underline underline-offset-2"
+            >
+              {t(
+                shareAppLink.platform === "android"
+                  ? "voice.share.useApp.android"
+                  : "voice.share.useApp.ios",
+              )}
+            </a>
+          </>
+        )}
       </p>
     )}
     </div>

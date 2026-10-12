@@ -3,6 +3,12 @@ package gg.pqp.app.social.ui
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -65,11 +71,29 @@ fun NavGraphBuilder.conversationDestination(
             onDispose { social.markRead(route.channelId) }
         }
 
+        // Chamar a atenção: only in a 1:1, only with a friend, only while the
+        // `nudge` flag is on. The server enforces all three anyway; this only
+        // decides whether the bolt is drawn. Re-read on every entry, because
+        // the flag is flipped live.
+        var funConfig by remember { mutableStateOf(gg.pqp.app.nudge.FunConfig()) }
+        LaunchedEffect(Unit) {
+            gg.pqp.app.nudge.FunConfigs.forget()
+            funConfig = gg.pqp.app.nudge.FunConfigs.resolve(session.api)
+        }
+        val conversations by social.conversations.collectAsStateWithLifecycle()
+        val friends by social.friends.collectAsStateWithLifecycle()
+        val conversation = conversations.firstOrNull { it.channelId == route.channelId }
+        val other = conversation?.takeIf { !it.isGroup }?.participants?.singleOrNull()
+        val nudgeName = other
+            ?.takeIf { funConfig.nudge && friends.friends.any { friend -> friend.id == it.id } }
+            ?.displayName
+
         ChatScreen(
             session = session,
             channelId = route.channelId,
             channelName = route.title,
             onBack = onBack,
+            nudgeName = nudgeName,
             // A conversation's app bar is a person's name, not `#name`: there is
             // no channel here to prefix.
             title = route.title,

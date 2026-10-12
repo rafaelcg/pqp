@@ -124,6 +124,9 @@ final class SessionStore {
     // ones, and `lazy` is illegal on those.
     let api: APIClient
     let realtime: RealtimeClient
+    /// Who is in every voice room this account can see, for the channel list.
+    /// Fed from the socket for the whole session; see `VoiceOccupancyStore`.
+    let voiceOccupancy = VoiceOccupancyStore()
 
     init() {
         let mode = AppConfig.authMode
@@ -149,6 +152,10 @@ final class SessionStore {
     /// fan-out point means the socket is consumed once no matter how many
     /// screens are alive.
     var eventHandlers: [String: @MainActor (RealtimeEvent) -> Void] = [:]
+
+    /// Bumped when a reply to a story went out, so the hub re-reads its
+    /// conversations: the DM it opened is not announced to the one who sent it.
+    var storyReplyRevision = 0
 
     /// Whether the intro has ever been completed on this device.
     ///
@@ -258,7 +265,7 @@ final class SessionStore {
                 // keychain would block the next sign-in sheet the same way.
                 await purgeClerkSession()
             }
-            lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { lastError = shown }
         }
     }
 
@@ -676,10 +683,13 @@ final class SessionStore {
         eventTask?.cancel()
         eventTask = nil
         eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
+        eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
+        voiceOccupancy.clear()
         // Cached pages are one account's private messages sitting in
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.
         await ReadCache.shared.clear()
+        await BauCardStore.shared.clear()
         currentUser = nil
         phase = .onboarding
     }
@@ -719,11 +729,17 @@ final class SessionStore {
     /// would mean reopening a busy channel showed a page that is visibly
     /// behind until the refetch landed.
     private static let cacheHandlerKey = "read-cache"
+    /// The other one: voice rooms are listed with who is inside before anybody
+    /// opens the server, so the rosters sent at `auth` have to land somewhere.
+    private static let occupancyHandlerKey = "voice-occupancy"
 
     private func startRealtime() async {
         guard eventTask == nil else { return }
         eventHandlers[Self.cacheHandlerKey] = { event in
             Task { await ReadCache.shared.apply(event) }
+        }
+        eventHandlers[Self.occupancyHandlerKey] = { [voiceOccupancy] event in
+            voiceOccupancy.apply(event)
         }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in

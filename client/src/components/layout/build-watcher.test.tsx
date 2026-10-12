@@ -148,6 +148,51 @@ describe("BuildWatcher", () => {
     expect(applied).toBe(0);
   });
 
+  it("reloads right after a call ends, even with somebody at the page", async () => {
+    await mount();
+    act(() => setInCall(true));
+    markActivity();
+    act(() => setBuildStaleness(stale()));
+    expect(applied).toBe(0);
+    act(() => setInCall(false));
+    expect(applied).toBe(1);
+  });
+
+  it("does not reload after a call ends while somebody is typing", async () => {
+    await mount();
+    act(() => setInCall(true));
+    act(() => setBuildStaleness(stale()));
+    const box = document.createElement("textarea");
+    document.body.append(box);
+    box.focus();
+    box.value = "half a sentence";
+    markActivity(Date.now(), true);
+    act(() => setInCall(false));
+    expect(applied).toBe(0);
+  });
+
+  it("reloads a hidden tab even when it was used a moment ago", async () => {
+    await mount();
+    markActivity();
+    const visibility = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    try {
+      act(() => setBuildStaleness(stale()));
+      expect(applied).toBe(1);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+      if (visibility) Object.defineProperty(Document.prototype, "visibilityState", visibility);
+    }
+  });
+
+  it("reloads in a call when the operator made the update critical", async () => {
+    await mount();
+    act(() => setInCall(true));
+    markActivity();
+    act(() => setBuildStaleness(stale({ forced: true, critical: true })));
+    expect(applied).toBe(1);
+  });
+
   it("does nothing while the page is current", async () => {
     await mount();
     nobodyHere();

@@ -586,7 +586,7 @@ describeDb("server images", () => {
             iconUrl: string | null;
             bannerUrl: string | null;
           }[];
-        }>(outsider, "GET", "/api/communities?search=Ghostty");
+        }>(outsider, "GET", "/api/communities?q=Ghostty");
         const card = page.body.communities.find((c) => c.id === serverId)!;
         expect(card.iconUrl).toContain(`/api/servers/${serverId}/icon`);
         expect(card.bannerUrl).toContain(`/api/servers/${serverId}/banner`);

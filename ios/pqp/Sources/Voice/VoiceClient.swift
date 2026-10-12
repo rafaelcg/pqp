@@ -55,6 +55,10 @@ actor VoiceClient {
     private var pendingCandidates: [String: [RTCIceCandidate]] = [:]
 
     private var localAudioTrack: RTCAudioTrack?
+    /// The person's mute and deafen, kept across tracks. `startAudio` makes a
+    /// fresh track (enabled by default) on every join and every socket
+    /// reconnect, and it is written onto each one at creation.
+    private var micState = LocalMicrophoneState()
     private var localStream: RTCMediaStream?
     /// Remote audio, kept so deafening can silence it. WebRTC plays received
     /// audio automatically, so without a reference there is no way to turn it
@@ -220,6 +224,10 @@ actor VoiceClient {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let source = factory.audioSource(with: constraints)
         let track = factory.audioTrack(with: source, trackId: "pqp-audio-0")
+        // Before the track is handed to any peer connection: a muted person
+        // must never be audible, not even for the first packets after a
+        // reconnect.
+        track.isEnabled = micState.trackEnabled
         localAudioTrack = track
         let stream = factory.mediaStream(withStreamId: "pqp-stream-0")
         stream.addAudioTrack(track)
@@ -246,7 +254,8 @@ actor VoiceClient {
     }
 
     func setMuted(_ muted: Bool) {
-        localAudioTrack?.isEnabled = !muted
+        micState.muted = muted
+        localAudioTrack?.isEnabled = micState.trackEnabled
     }
 
     /// Earpiece or speaker.
@@ -265,9 +274,8 @@ actor VoiceClient {
     /// the web client — being heard while hearing nothing is a trap.
     func setDeafened(_ deafened: Bool) {
         remoteAudio.setDeafened(deafened)
-        if deafened {
-            localAudioTrack?.isEnabled = false
-        }
+        micState.deafened = deafened
+        localAudioTrack?.isEnabled = micState.trackEnabled
     }
 
     fileprivate func addRemoteTrack(
@@ -411,10 +419,10 @@ actor VoiceClient {
             scale: videoScaleFactor(
                 for: videoQuality,
                 sourceLines: screenCaptureLines,
-                // The extension caps the long side, so an upright phone screen
-                // arrives with about that many lines. A guess is only in force
-                // until the first frame lands and re-tunes for real.
-                fallbackLines: ScreenShareWire.maxLongSide
+                // The extension holds the short side at 720, so an upright
+                // phone screen arrives with about this many lines. A guess is
+                // only in force until the first frame lands and re-tunes for real.
+                fallbackLines: ScreenShareWire.typicalLongSide
             )
         )
     }

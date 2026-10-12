@@ -7,12 +7,14 @@ import {
   formatChanceBody,
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
+  MESSAGE_SYSTEM_KINDS,
   resolveChanceRequest,
   type Attachment,
   type ChanceRequest,
   type ChanceResult,
   type Embed,
   type MessagePinnedBy,
+  type MessageSystemKind,
   type MessageReaction,
   type MessageReplyRef,
   type Poll,
@@ -29,7 +31,7 @@ import {
   claimAttachments,
   listAttachmentsForMessages,
   toPublicAttachment,
-  verifyPendingAttachments,
+  verifyPendingAttachmentsWithNotes,
 } from "./attachments.js";
 import { listBlockedAmong, notBlockedSql } from "./blocks.js";
 import { listEmbedsForMessages } from "./embeds.js";
@@ -38,6 +40,17 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import {
+  ATTACHMENT_OBJECT_KEYS,
+  ATTACHMENT_VOICE_JOIN,
+  noteShapeRefusal,
+  recordVoiceNoteRefusal,
+  voiceNotesEnabledForChannel,
+} from "./voice-notes.js";
+import {
+  enqueuePlannedSpeechJobs,
+  planVoiceNoteJobs,
+} from "./voice-transcription.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
 export function nodeRandomInt(min: number, max: number): number {
@@ -47,6 +60,12 @@ export function nodeRandomInt(min: number, max: number): number {
 export interface MessageInteractive {
   chance?: ChanceRequest;
   poll?: PollRequest;
+  /**
+   * A message the server writes for a product action (`nudge`). Stored in
+   * `messages.system_kind`; the body is still written as given, because it is
+   * what every client that predates the kind renders.
+   */
+  systemKind?: MessageSystemKind;
 }
 
 /**
@@ -106,7 +125,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             (u.clerk_id = '${AUTOMOD_CLERK_ID}') as author_is_automod,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
-            m.chance,
+            m.chance, m.system_kind, m.story_id,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -239,7 +258,7 @@ async function hydrate(
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       // Cache-only — a history read must never trigger a network fetch on
       // someone else's behalf, so a link nobody has posted before yet simply
       // shows no embed until whoever's create/edit request resolves one.
@@ -376,7 +395,7 @@ export async function getMessage(
 > {
   const result = await getPool().query<DbMessage & { server_id: string | null }>(
     `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            c.server_id,
+            c.server_id, m.system_kind,
             u.display_name as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
@@ -461,6 +480,12 @@ export interface MentionWrite {
   mentionEveryone?: boolean;
   mentionHere?: boolean;
   canMentionEveryone?: boolean;
+  /**
+   * Ask `recordMentions` to hand back the ids it wrote (`mention_ids_from_db`).
+   * Off, the INSERTs carry no RETURNING and nothing is materialised, so a
+   * message that mentions a big role costs exactly what it did before.
+   */
+  collectRecipients?: boolean;
 }
 
 async function recordMentions(
@@ -471,11 +496,17 @@ async function recordMentions(
   body: string,
   reply?: { parentId: string; authorId: string },
   extra?: MentionWrite,
-): Promise<void> {
+): Promise<string[]> {
   const parsed = extractMentions(body);
   const usernames = parsed.usernames;
+  // Everyone a row was written for, from every source below. Each INSERT is
+  // `ON CONFLICT DO NOTHING ... RETURNING`, so a person already recorded by an
+  // earlier source is not returned twice and the union is the set of rows.
+  const collect = extra?.collectRecipients === true;
+  const returning = collect ? "RETURNING user_id" : "";
+  const recorded = new Set<string>();
   if (usernames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, u.id
        FROM users u
@@ -494,13 +525,17 @@ async function recordMentions(
                )
              END
          AND ${notBlockedSql("u.id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, channelId, usernames, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (parsed.roleNames.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT DISTINCT $1::uuid, mr.user_id
        FROM channels c
@@ -527,7 +562,8 @@ async function recordMentions(
                   END
          )
          AND ${notBlockedSql("mr.user_id", "$4")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [
         messageId,
         channelId,
@@ -536,33 +572,45 @@ async function recordMentions(
         extra?.mentionEveryone === true || extra?.canMentionEveryone === true,
       ],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   const extraIds = extra?.extraUserIds ?? [];
   if (extraIds.length > 0) {
-    await db.query(
+    const inserted = await db.query<{ user_id: string }>(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1::uuid, x.user_id
        FROM UNNEST($2::uuid[]) AS x(user_id)
        WHERE x.user_id <> $3
          AND ${notBlockedSql("x.user_id", "$3")}
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       ${returning}`,
       [messageId, extraIds, authorId],
     );
+    for (const row of inserted.rows) {
+      recorded.add(row.user_id);
+    }
   }
 
   if (!reply) {
-    return;
+    return [...recorded];
   }
-  await db.query(
+  const answered = await db.query<{ user_id: string }>(
     `INSERT INTO message_mentions (message_id, user_id)
      SELECT $1::uuid, parent.author_id
      FROM messages parent
      WHERE parent.id = $2 AND parent.author_id <> $3
        AND ${notBlockedSql("parent.author_id", "$3")}
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     ${returning}`,
     [messageId, reply.parentId, reply.authorId],
   );
+  for (const row of answered.rows) {
+    recorded.add(row.user_id);
+  }
+  return [...recorded];
 }
 
 /**
@@ -595,7 +643,18 @@ async function recordMentions(
  * the earlier message: the caller must not fan it out, only answer the
  * sender who asked twice.
  */
-export type CreateMessageResult = HydratedMessage & { duplicate: boolean };
+export type CreateMessageResult = HydratedMessage & {
+  duplicate: boolean;
+  /**
+   * Every account a `message_mentions` row was written for in this send:
+   * names, roles, @here, and the person replied to, already filtered by
+   * blocks and membership. Only on a freshly created message (a duplicate
+   * carries none, and is never fanned out). What the live `channel-activity`
+   * mention flag and the push recipient list read when `mention_ids_from_db`
+   * is on, because a role mention is only resolved to people here.
+   */
+  mentionedUserIds?: string[];
+};
 
 export async function createMessage(
   channelId: string,
@@ -606,6 +665,8 @@ export async function createMessage(
   mentions?: MentionWrite,
   interactive?: MessageInteractive,
   nonce?: string | null,
+  /** A reply to a story (`POST /api/stories/:id/reply`): the story it quotes. */
+  storyId?: string | null,
 ): Promise<CreateMessageResult | null> {
   if (interactive?.chance && interactive.poll) {
     return null;
@@ -623,6 +684,7 @@ export async function createMessage(
     () => {
       nonceAlreadyStored = true;
     },
+    storyId ?? null,
   );
   if (created || !nonceAlreadyStored || !nonce) {
     return created;
@@ -640,6 +702,7 @@ async function insertMessage(
   interactive: MessageInteractive | undefined,
   nonce: string | null,
   onNonceConflict: () => void,
+  storyId: string | null,
 ): Promise<CreateMessageResult | null> {
   let storedBody = clampChatNewlines(body);
   let chance: ChanceResult | null = null;
@@ -659,9 +722,49 @@ async function insertMessage(
     storedBody = interactive.poll.question;
   }
 
-  const verified = attachmentIds?.length
-    ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
-    : [];
+  const { verified, requestedNotes } = attachmentIds?.length
+    ? await verifyPendingAttachmentsWithNotes(channelId, author.id, attachmentIds)
+    : { verified: [], requestedNotes: 0 };
+
+  // A voice note travels alone, with no text: refused whole, before any
+  // transaction opens, the same way an empty frame is. Nothing is claimed, so
+  // the note stays unclaimed for the sweeper. Counted on what was asked for,
+  // not on what verified, so a note whose upload failed cannot drop out and
+  // let the rest of the send through.
+  const shapeRefusal = noteShapeRefusal({
+    requestedNotes,
+    requestedCount: new Set(attachmentIds ?? []).size,
+    // A deck draw only writes its body inside the transaction below, but it
+    // is text beside the note all the same.
+    body: deckAction ? "deck" : storedBody,
+  });
+  if (shapeRefusal) {
+    recordVoiceNoteRefusal(shapeRefusal);
+    return null;
+  }
+
+  // The flag again, at the claim. The mint checked it, but a note minted
+  // while it was on can sit unclaimed for up to an hour, and turning
+  // `voice_notes` off has to stop those too: it is the off switch, and a
+  // switch that leaves already-minted notes deliverable is not one. Refused
+  // the same way the shape rule is, with nothing claimed, so the note falls
+  // to the sweeper. Only asked when a note is in the send, so no other message
+  // pays for it.
+  if (requestedNotes > 0 && !(await voiceNotesEnabledForChannel(channelId))) {
+    recordVoiceNoteRefusal("claim-flag-off");
+    return null;
+  }
+  // What a voice note needs from the worker (an AAC copy, an eager
+  // transcript), decided now, on the pool, so the transaction below only
+  // writes rows. See `voice-transcription.ts`.
+  const speechJobs =
+    requestedNotes > 0
+      ? await planVoiceNoteJobs(
+          channelId,
+          author.id,
+          verified.map((entry) => entry.row),
+        )
+      : [];
 
   const nickRow = await getPool().query<{ nickname: string | null }>(
     `SELECT sm.nickname
@@ -686,14 +789,14 @@ async function insertMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                   mention_everyone, mention_here, chance
+                   mention_everyone, mention_here, chance, system_kind, story_id
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-              m.mention_everyone, m.mention_here, m.chance,
+              m.mention_everyone, m.mention_here, m.chance, m.system_kind, m.story_id,
               ${REPLY_COLUMNS}
        FROM inserted m
        JOIN channels msg_ch ON msg_ch.id = m.channel_id
@@ -707,6 +810,8 @@ async function insertMessage(
         mentions?.mentionHere === true,
         chance ? JSON.stringify(chance) : null,
         nonce ?? null,
+        interactive?.systemKind ?? null,
+        storyId,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
@@ -733,7 +838,22 @@ async function insertMessage(
       await insertPoll(client, message.id, interactive.poll);
     }
 
-    await recordMentions(
+    // Rows and a transactional NOTIFY only: the worker is woken at COMMIT,
+    // and a rollback leaves no job behind.
+    if (speechJobs.length > 0) {
+      const claimedIds = new Set(claimed.map((row) => row.id));
+      const pending = await enqueuePlannedSpeechJobs(
+        client,
+        speechJobs.filter((job) => claimedIds.has(job.attachmentId)),
+      );
+      for (const row of claimed) {
+        if (pending.has(row.id)) {
+          row.voice_transcript_status = "pending";
+        }
+      }
+    }
+
+    const mentionedUserIds = await recordMentions(
       client,
       message.id,
       channelId,
@@ -765,6 +885,7 @@ async function insertMessage(
       chance,
       poll: polls.get(message.id) ?? null,
       duplicate: false,
+      mentionedUserIds,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -798,6 +919,14 @@ export async function findMessageByNonce(
   return hydrated ? { ...hydrated, duplicate: true } : null;
 }
 
+/**
+ * Rewrites a message body. A message that carries a `system_kind` (a nudge) is
+ * the server's sentence, not the author's, so it is never rewritten here: the
+ * UPDATE matches no row and this returns null, the same answer as for a
+ * message that does not exist. The edit route refuses it earlier with a 400;
+ * this is the floor under it, so a second caller of this function cannot
+ * reopen the hole.
+ */
 export async function updateMessageBody(
   messageId: string,
   body: string,
@@ -806,16 +935,16 @@ export async function updateMessageBody(
   const result = await getPool().query<DbMessage>(
     `WITH updated AS (
        UPDATE messages SET body = $2, edited_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND system_kind IS NULL
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance
+                 pinned_at, pinned_by, chance, system_kind
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance,
+            m.chance, m.system_kind,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -907,7 +1036,10 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   // ON DELETE SET NULL: once the message is gone the rows are still there but
   // nothing links them back to it.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments WHERE message_id = $1`,
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+       FROM message_attachments a
+       ${ATTACHMENT_VOICE_JOIN}
+      WHERE a.message_id = $1`,
     [messageId],
   );
 
@@ -1001,9 +1133,10 @@ export async function deleteMessagesBulk(
   // `message_attachments.message_id` is ON DELETE SET NULL, so once the
   // messages are gone nothing links those rows back to them.
   const attached = await getPool().query<{ storage_key: string }>(
-    `SELECT a.storage_key
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
        FROM message_attachments a
        JOIN messages m ON m.id = a.message_id
+       ${ATTACHMENT_VOICE_JOIN}
       WHERE m.channel_id = $1 AND a.message_id = ANY($2::uuid[])`,
     [channelId, messageIds],
   );
@@ -1110,7 +1243,21 @@ export function mapMessage(
     thread: m.thread ?? null,
     chance: parseStoredChance(m.chance),
     poll: m.poll ?? null,
+    systemKind: parseStoredSystemKind(m.system_kind),
+    // Only on a story reply; absent everywhere else, so no other payload grows.
+    ...(m.story_id ? { storyId: m.story_id } : {}),
   };
+}
+
+/**
+ * Only kinds this build knows leave the server. A row written by a newer
+ * sibling with a kind this one has never heard of goes out as an ordinary
+ * message, which its plaintext body already is.
+ */
+function parseStoredSystemKind(value: unknown): MessageSystemKind | null {
+  return (MESSAGE_SYSTEM_KINDS as readonly unknown[]).includes(value)
+    ? (value as MessageSystemKind)
+    : null;
 }
 
 function parseStoredChance(value: unknown): ChanceResult | null {
@@ -1134,7 +1281,7 @@ async function hydrateOne(
 ): Promise<HydratedMessage> {
   const [reactions, attachments, embeds, threads, polls] = await Promise.all([
     listReactionsForMessages([message.id], viewerId),
-    listAttachmentsForMessages([message.id]),
+    listAttachmentsForMessages([message.id], viewerId),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
@@ -1197,14 +1344,14 @@ export async function pinMessage(
            pinned_by = COALESCE(pinned_by, $2)
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance
+                 pinned_at, pinned_by, chance, system_kind
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance,
+            m.chance, m.system_kind,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1230,14 +1377,14 @@ export async function unpinMessage(
        UPDATE messages SET pinned_at = NULL, pinned_by = NULL
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance
+                 pinned_at, pinned_by, chance, system_kind
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance,
+            m.chance, m.system_kind,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1259,6 +1406,7 @@ export async function unpinMessage(
  */
 export async function listPinnedMessages(
   channelId: string,
+  viewerId?: string,
 ): Promise<HydratedMessage[]> {
   const result = await getPool().query<DbMessage>(
     `${MESSAGE_SELECT}
@@ -1270,7 +1418,7 @@ export async function listPinnedMessages(
   const [reactionsByMessage, attachmentsByMessage, embedsByMessage, pollsByMessage] =
     await Promise.all([
       listReactionsForMessages(messageIds),
-      listAttachmentsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds, viewerId),
       listEmbedsForMessages(result.rows),
       listPollsForMessages(messageIds),
     ]);

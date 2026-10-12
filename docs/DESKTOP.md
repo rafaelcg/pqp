@@ -193,6 +193,9 @@ without both. The capture is a remap source, `pqp-share-audio`, over the monitor
 of a null sink, `pqp_share_audio` (the "bus"). pqp's own streams (the call, its
 sounds, a film it plays) never reach the bus: that is the whole point.
 
+**Not in the Flatpak build.** The Flathub package never offers it and says why
+(§7 "Share audio in the sandbox").
+
 **How the bus is fed, since 0.2.4.** The first report from real hardware (a
 CachyOS desktop, PipeWire with pipewire-pulse) said browsers and one game reached
 viewers while Spotify from Flathub and Helldivers 2 did not. Up to 0.2.3 the
@@ -1213,6 +1216,7 @@ Implementation: [`electron/lib/updater.js`](../electron/lib/updater.js).
 - **Never runs in development.** Guarded on `app.isPackaged`, so
   `pnpm electron:dev` does not poll a release feed. `PQP_DISABLE_AUTO_UPDATE=1`
   turns it off in a packaged build too.
+- **Never runs in the Flatpak build.** Flathub ships those updates; see §7.
 - **Fails silently.** No network, DNS failure, a release still in draft — all
   land in the `error` handler and are logged, never dialogued. An update that
   did not happen is invisible; an error box about an unreachable release feed is
@@ -1300,3 +1304,166 @@ download an Apple Silicon build.
 - [ ] `pqp://` deep link from a browser focuses the app on the right route.
 - [ ] Install an older version, publish a newer one, confirm the update prompt
       appears and Restart actually lands on the new version.
+
+---
+
+## 7. Flatpak / Flathub
+
+**Status:** packaging is ready in [`flatpak/`](../flatpak/); **not submitted to
+Flathub yet**. Submitting is publishing, and needs Rafael.
+
+| File | What it is |
+|---|---|
+| `flatpak/gg.pqp.pqp.yml` | The manifest. Repackages the release's `pqp-<version>-amd64.deb` on `org.electronjs.Electron2.BaseApp` 26.08 |
+| `flatpak/gg.pqp.pqp.metainfo.xml` | AppStream: description (en + pt-BR), screenshots, releases, OARS |
+| `flatpak/gg.pqp.pqp.desktop` | The launcher, with `MimeType=x-scheme-handler/pqp` for `pqp://` links |
+| `flatpak/pqp.sh` | Runs Electron through `zypak-wrapper`, with a shared `TMPDIR` |
+| `flatpak/bump.mjs` | Points the manifest at a release and adds it to the metainfo |
+| `flatpak/build-bundle.sh` | Builds the manifest and exports `pqp-<version>-x86_64.flatpak` |
+| `client/public/images/flathub/*.png` | The store screenshots, served at `pqp.gg/images/flathub/` |
+
+**App id `gg.pqp.pqp`.** Flathub derives the domain to verify from the id, so
+it is the reverse of pqp.gg, which we control. The electron-builder id,
+`gg.pqp.app`, is not allowed there: Flathub refuses ids that end in a generic
+word such as `.app`. The last component is the product name.
+
+**Why the .deb and not a source build.** Flathub builds offline, so every npm
+package must be a pinned source in the manifest, and its generator
+(`flatpak-node-generator`) reads npm and yarn lockfiles, not `pnpm-lock.yaml`.
+Repackaging the released .deb is what Signal and Element do. Be ready for the
+reviewers to push back: Flathub's requirements say a source-available app
+should be built from source, with exceptions case by case. If they insist, the
+work is a pnpm-to-sources generator for the `electron/` package (the client is
+loaded from pqp.gg, so it does not need to be in the build).
+
+**Build sources are pinned, nothing downloads during the build.** The .deb and
+pqp's `LICENSE` are `type: file` sources with a sha256, fetched by
+flatpak-builder before the build. `extra-data` is not used: it exists for
+software Flathub may not redistribute, and AGPL software it may. x86_64 only,
+because the release has no arm64 Linux build; adding one is a second source
+with `only-arches: [aarch64]`.
+
+**What the build does to the .deb:** moves `opt/pqp` to `/app/pqp`, deletes
+`chrome-sandbox` (zypak replaces it), deletes `resources/app-update.yml` (so
+even a build older than the check below never looks for an update), and runs
+`patch-electron-desktop-filename` on `app.asar` so Electron's desktop name,
+and the Wayland app id, is `gg.pqp.pqp`.
+
+### Permissions (`finish-args`)
+
+| Permission | Why |
+|---|---|
+| `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc` | Wayland when there is one, X11 otherwise. IPC is X11 shared memory |
+| `--device=all` | Webcams (V4L2) and the GPU. Flatpak has no camera-only device |
+| `--socket=pulseaudio` | Microphone and call audio |
+| `--share=network` | It is a chat app |
+| `--talk-name=org.kde.StatusNotifierWatcher` | The tray icon, which keeps a call running with the window closed |
+| `--env=XCURSOR_PATH=...` | The host's cursor theme, from Flatpak's Electron guide |
+
+Not needed: notifications (libnotify in the runtime uses the notification
+portal in a sandbox), screen capture (ScreenCast portal), file saves
+(FileChooser portal), `pqp://` (the .desktop MimeType). No `--filesystem` at all.
+
+### Share audio in the sandbox
+
+Not offered. Tested on PipeWire 1.4.2 / WirePlumber 0.5.8 with the 26.08
+runtime, which ships `pactl`, `pw-dump` and `pw-link`:
+
+- With only `--socket=pulseaudio`, a sandboxed client CAN load the bus
+  (`module-null-sink`), list every app's stream and `move-sink-input` them into
+  it. The move path would work mechanically.
+- `pw-dump` and `pw-link` need `--filesystem=xdg-run/pipewire-0`. With it, the
+  sandboxed client (`pipewire.access = flatpak`, permissions `rx`) could still
+  link another app's ports into the bus.
+- What breaks is telling the call apart. The shell recognises its own streams
+  by process id, and inside the sandbox a pulse client reports the id from its
+  own pid namespace (5, where the host saw 9648), which is the only id
+  pipewire-pulse has for it. Every other Flatpak reports the same kind of
+  small number, so Spotify from Flathub would be kept out as if it were pqp,
+  and nobody has checked that the call itself, played from a zypak child in a
+  nested sandbox, is still recognised. A wrong answer there is the call echoing
+  back to every viewer.
+
+So `electron/lib/flatpak.js` detects the sandbox (`FLATPAK_ID` or
+`/.flatpak-info`), `main.js` builds no bus and runs no audio tool,
+`capabilities.linuxShareAudio` is false and `capabilities.flatpak` is true, and
+the hint next to the share controls says that the Flatpak build sends no
+computer sound and points to the .deb, the AppImage or a Chrome tab
+(`voice.share.linuxAudioHint_flatpak`). Turning it on later needs the own-stream
+check proven under zypak, plus `xdg-run/pipewire-0` for link mode.
+
+### Updates
+
+`lib/updater.js` returns early when `isFlatpak()`, the wrapper also sets
+`PQP_DISABLE_AUTO_UPDATE=1`, and the manifest removes `app-update.yml`. Inside
+the sandbox electron-updater would pick its .deb updater, which needs pkexec
+and a writable install directory.
+
+Per release, two copies of the manifest move:
+
+- **Here:** `.github/workflows/flatpak-manifest.yml` runs when a `v*` release
+  is published. It downloads the .deb, pins its sha256 and the tag's
+  `LICENSE`, adds a `<release>` (`node flatpak/bump.mjs <version> <deb-sha256>
+  <license-sha256> <date>`), lints with `flatpak-builder-lint` and opens a PR.
+  It needs "Allow GitHub Actions to create and approve pull requests"; without
+  it the branch is pushed, the job summary links the compare page and the run
+  stays green. Independently of the PR, its `bundle` job builds that bumped
+  manifest (`flatpak/build-bundle.sh`, read-only, smoke-installed into an empty
+  Flatpak installation) and `release` attaches `pqp-<version>-x86_64.flatpak`
+  to the release, with Flathub as the bundle's runtime repo so `flatpak install`
+  on the file pulls the runtime. A bundle does not update itself.
+  `workflow_dispatch` with a tag reruns both (`gh workflow run
+  flatpak-manifest.yml -f tag=v0.2.5`); for a tag older than main's manifest
+  it attaches the bundle and opens no PR. A PR touching `flatpak/` builds the
+  bundle as a run artifact.
+- **On Flathub:** the manifest's `x-checker-data` lets Flathub's external data
+  checker open the same bump (URL, sha256 and a metainfo release) on
+  `flathub/gg.pqp.pqp` within two hours of the release going public. Merge it
+  after its test build passes.
+
+### Build and test locally
+
+Needs Linux (or a privileged Linux container) with `flatpak` and
+`flatpak-builder`:
+
+```bash
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub org.flatpak.Builder
+cd flatpak
+flatpak run org.flatpak.Builder --user --install-deps-from=flathub --force-clean \
+  --repo=repo --install build gg.pqp.pqp.yml
+flatpak run gg.pqp.pqp
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest gg.pqp.pqp.yml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
+appstreamcli validate --pedantic gg.pqp.pqp.metainfo.xml
+```
+
+The `repo` lint reports `appstream-screenshots-not-mirrored-in-ostree` locally
+(Flathub's own build mirrors them) and, until this lands on pqp.gg,
+`appstream-missing-screenshots`.
+
+Checked on 2026-10-10 in Docker on an Apple Silicon Mac: the x86_64 build
+completes under emulation up to `patch-electron-desktop-filename`, a Go tool
+that crashes under qemu; the same manifest with an arm64 .deb built from this
+branch builds natively, starts on Xvfb, loads pqp.gg/app, logs
+`[pqp/updater] skipped: running as a Flatpak`, reports
+`linuxShareAudio: false, flatpak: true` to the page, and a second
+`flatpak run gg.pqp.pqp pqp://invite/test` lands in the running window. Not
+checked: Wayland, a webcam, the tray, notifications, a real screen share.
+Do those on a Linux desktop before submitting.
+
+### Submitting (Rafael)
+
+1. Merge this, publish the next desktop release (the first with
+   `lib/flatpak.js`; 0.2.4 and older would offer the broken share audio when
+   the runtime flag is on), and merge the bump PR the workflow opens.
+2. Run the local build and the manual checks above on a Linux desktop.
+3. Fork `flathub/flathub` with all branches, branch from `new-pr`, add
+   `gg.pqp.pqp.yml`, `gg.pqp.pqp.metainfo.xml`, `gg.pqp.pqp.desktop` and
+   `pqp.sh` from `flatpak/`, and open a PR against `new-pr` titled
+   `Add gg.pqp.pqp`. Comment `bot, build` once review comments are answered.
+4. After it is merged, accept the invite to `flathub/gg.pqp.pqp` (needs 2FA).
+5. Verify the domain from the developer page on flathub.org: it gives a token
+   to serve at `https://pqp.gg/.well-known/org.flathub.VerifiedApps.txt`,
+   which is a file in `client/public/.well-known/` here.
+6. Add "Flathub" to the download page once the listing is live.

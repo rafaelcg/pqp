@@ -1,3 +1,4 @@
+import { requestVersionCheck } from "./version-watch";
 import type {
   ChatClientMessage,
   ChatServerMessage,
@@ -623,6 +624,9 @@ export function createRealtimeTransport(): RealtimeTransport {
           hasConnectedOnce = true;
           setStatus("online");
           startKeepalive(ws);
+          // A (re)connect is when a new build is most likely to have landed
+          // (an API deploy reconnects every socket): ask `/version.json` now.
+          requestVersionCheck();
           // Join (and any other ready work) must go out before queued offers
           // / ICE from the outage. Those frames are dropped if they arrive
           // before this socket owns a peer. A sync handler still flushes in

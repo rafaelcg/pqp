@@ -464,6 +464,17 @@ async function chooseQuality(page: Page, label: string): Promise<void> {
  * by the *old* value on the way down — then the upper bound fails against a
  * number the test never actually waited for.
  */
+/**
+ * A screen rung's mesh ceiling at the rate this capture runs. A 60 fps share is
+ * allowed half again what the same rung gets at 30 (`SCREEN_60FPS_BITRATE_FACTOR`
+ * in `video-quality.ts`), and so is the per-sender cap, so every rung scales.
+ * Read off the capture rather than assumed: Chromium's fake display capture
+ * runs at 60 in CI, and a machine that delivers 30 gets the 30 fps ladder.
+ */
+function screenCeiling(base: number, capture: SenderReport): number {
+  return (capture.frameRate ?? 30) >= 45 ? Math.round(base * 1.5) : base;
+}
+
 async function expectTargetBitrate(
   page: Page,
   role: "camera" | "screen",
@@ -646,31 +657,35 @@ test("a DM call's screen encoder follows the quality menu", async ({
 
     // One remote peer, so the mesh budget (5 Mbps / 1) does not bind and the
     // chosen ceiling is what governs. See `meshScreenBitrate`.
-    const auto = await senderFor(page, "screen", 3_000_000);
+    const capture = await senderFor(page, "screen");
+    const autoCeiling = screenCeiling(3_000_000, capture);
+    const highCeiling = screenCeiling(4_000_000, capture);
+    const lowCeiling = screenCeiling(800_000, capture);
+    const auto = await senderFor(page, "screen", autoCeiling);
     // eslint-disable-next-line no-console
     console.log("[quality] screen auto:", JSON.stringify(auto));
-    expect(auto.maxBitrate, "auto: screen ceiling").toBe(3_000_000);
+    expect(auto.maxBitrate, "auto: screen ceiling").toBe(autoCeiling);
     expect(auto.degradationPreference, "auto: degradation").toBe(
       "maintain-framerate",
     );
     await settleEncoder(page, "screen");
-    await expectTargetBitrate(page, "screen", 3_000_000, "auto");
+    await expectTargetBitrate(page, "screen", autoCeiling, "auto");
 
     await chooseQuality(page, "1080p");
-    const high = await senderFor(page, "screen", 4_000_000);
+    const high = await senderFor(page, "screen", highCeiling);
     // eslint-disable-next-line no-console
     console.log("[quality] screen 1080p:", JSON.stringify(high));
-    expect(high.maxBitrate, "1080p: screen ceiling").toBe(4_000_000);
+    expect(high.maxBitrate, "1080p: screen ceiling").toBe(highCeiling);
     expect(high.trackId, "1080p: the capture is not restarted").toBe(
       auto.trackId,
     );
-    await expectTargetBitrate(page, "screen", 4_000_000, "1080p");
+    await expectTargetBitrate(page, "screen", highCeiling, "1080p");
 
     await chooseQuality(page, "360p");
-    const low = await senderFor(page, "screen", 800_000);
+    const low = await senderFor(page, "screen", lowCeiling);
     // eslint-disable-next-line no-console
     console.log("[quality] screen 360p:", JSON.stringify(low));
-    expect(low.maxBitrate, "360p: screen ceiling").toBe(800_000);
+    expect(low.maxBitrate, "360p: screen ceiling").toBe(lowCeiling);
     // CAPTURE size is deliberately NOT on this ladder: a screen grabbed small
     // has lost the pixels permanently, and the encoder cannot invent them back
     // in the moments when the link has room to spare.
@@ -687,7 +702,7 @@ test("a DM call's screen encoder follows the quality menu", async ({
       auto.scaleResolutionDownBy,
       "auto: 1080 lines divided to 720",
     ).toBeCloseTo(1.5, 2);
-    await expectTargetBitrate(page, "screen", 800_000, "360p");
+    await expectTargetBitrate(page, "screen", lowCeiling, "360p");
   } finally {
     await watcher.context.close();
   }
@@ -825,12 +840,12 @@ test("a camera in a server voice channel reaches the other member", async ({
   const pair = await seedVoiceServer("vq-vc-a", "vq-vc-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 
@@ -870,15 +885,25 @@ test("a camera in a server voice channel reaches the other member", async ({
     // ---- the control this channel never had -----------------------------
     await chooseChannelQuality(page, "360p");
     const camera = await senderFor(page, "camera", 400_000);
-    const screen = await senderFor(page, "screen", 800_000);
+    const screenLow = screenCeiling(800_000, await senderFor(page, "screen"));
+    const screen = await senderFor(page, "screen", screenLow);
     // eslint-disable-next-line no-console
     console.log(
       "[quality] channel senders:",
       JSON.stringify({ camera, screen }),
     );
     expect(camera.maxBitrate, "360p: channel camera ceiling").toBe(400_000);
-    expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(800_000);
-    expect(camera.width, "360p: channel camera capture shrank").toBe(640);
+    expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(screenLow);
+    // Polled, not read off `camera`: the same race `expectCapturePixels`
+    // documents for the DM call. `senderFor` waited for the CEILING above;
+    // the capture size is a separate `applyConstraints` and lands later on a
+    // busy runner (CI, 2026-10-11: "Expected: 640, Received: 1280").
+    await expect
+      .poll(async () => (await senderFor(page, "camera")).width, {
+        timeout: 20_000,
+        message: "360p: channel camera capture shrank",
+      })
+      .toBe(640);
 
     // Still a picture at the other end after the change: the whole promise of
     // re-shaping the live track rather than re-capturing it.

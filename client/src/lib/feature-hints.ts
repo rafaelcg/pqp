@@ -27,7 +27,11 @@ export const FEATURE_HINT_IDS = [
   "musicField",
   "composerFormat",
   "channelPin",
+  "forum",
   "shortcuts",
+  // Not in the attached queue: the notice is rendered by the composer itself,
+  // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
+  "voiceNoteTranscription",
 ] as const;
 
 export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
@@ -46,7 +50,9 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   musicField: "pqp:feature-hint-music-field-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
+  forum: "pqp:feature-hint-forum-2026-10",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
+  voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
 
 /** Attached to a control, not the corner. First match mounts. */
@@ -83,6 +89,10 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   "music",
   "composerFormat",
   "channelPin",
+  // Beside Novo post, the first time somebody who can post opens a forum
+  // that has posts (an empty forum's own empty state already explains).
+  // Last: a standing tip, and the forum pane is where it lives.
+  "forum",
 ] as const;
 
 export type AttachedFeatureHintId = (typeof ATTACHED_FEATURE_HINT_ORDER)[number];
@@ -376,4 +386,19 @@ export function shouldOfferChannelPinHint(input: {
 
 export function featureHintEligible(id: FeatureHintId): boolean {
   return !isAutomatedBrowser() && !isFeatureHintSeen(id);
+}
+
+/**
+ * The one-time "your voice notes are transcribed" notice, shown while somebody
+ * records. It states a fact about THIS note, so all three must hold: transcripts
+ * exist where the note is going (the flag), this account allows its notes to be
+ * transcribed (`mine`; someone who already turned it off has been told), and a
+ * recording is under way.
+ */
+export function shouldOfferVoiceNoteTranscriptionNotice(input: {
+  recording: boolean;
+  transcriptionOn: boolean;
+  mine: boolean;
+}): boolean {
+  return input.recording && input.transcriptionOn && input.mine;
 }

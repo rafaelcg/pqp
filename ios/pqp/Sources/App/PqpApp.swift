@@ -28,6 +28,9 @@ struct PqpApp: App {
     /// cold-launched app still answer a call CallKit is already presenting.
     /// See `docs/IOS_CALLKIT.md`.
     @State private var callKit = CallKitCoordinator()
+    /// The one voice-note player. App-wide so a note keeps playing as the person
+    /// moves between screens, and so there is never a second voice under it.
+    @State private var notePlayer = VoiceNotePlayer()
     /// The only object iOS will hand an APNs device token to. SwiftUI owns its
     /// lifetime; `RootView` attaches the session to it.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var push
@@ -55,6 +58,7 @@ struct PqpApp: App {
                 .environment(voice)
                 .environment(ratings)
                 .environment(watchPartyHost)
+                .environment(notePlayer)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that
@@ -93,6 +97,7 @@ struct RootView: View {
     @Environment(CallModel.self) private var call
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
+    @Environment(VoiceNotePlayer.self) private var notePlayer
     @Environment(\.scenePhase) private var scenePhase
 
     let push: PushDelegate
@@ -203,6 +208,11 @@ struct RootView: View {
         .onChange(of: voice.remoteScreen == nil && call.remoteScreen == nil) { _, none in
             if none { WatchOrientation.releaseAllScreenShares() }
         }
+        // The same net for the call stage's own claim (`CallStageView`): the
+        // cover can go down with the call rather than through a dismiss.
+        .onChange(of: call.phase.isLive && !call.isCollapsed) { _, shown in
+            if !shown { WatchOrientation.setCallStage(false) }
+        }
         // Presented from the root rather than from the chat screen: a call
         // answered from the servers tab has to have somewhere to appear, and
         // collapsing it must not depend on which screen started it.
@@ -252,6 +262,10 @@ struct RootView: View {
         .task { await session.restore() }
         .task { call.attach(session: session, ratings: ratings, callKit: callKit) }
         .task { voice.attachCallKit(callKit) }
+        // The player reports listens and refreshes expired links through the
+        // session, so it is wired where the session is, not by whichever chat
+        // screen happens to open first.
+        .task { notePlayer.configure(session: session) }
         #if DEBUG
         // Only ever fires under a launch argument. See
         // `CallRatingModel.offerSyntheticCallIfRequested`.
@@ -264,6 +278,13 @@ struct RootView: View {
         // universal-link path on a cold launch, which does NOT come through
         // `onOpenURL`. Both are needed — shipping only the first is why "the
         // link works, but only the second time" is such a common bug.
+        // A tap on a link in a message: a Baú post of this instance opens in
+        // the Baú, everything else goes where the system sends it.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let target = BauShare.inAppTarget(for: url) else { return .systemAction }
+            session.requestNavigation(target)
+            return .handled
+        })
         .onOpenURL { url in
             guard let target = DeepLink.target(url: url) else { return }
             session.requestNavigation(target)

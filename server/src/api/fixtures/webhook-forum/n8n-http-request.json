@@ -1,0 +1,8 @@
+{
+  "source": "n8n, RSS Feed Read trigger into an HTTP Request node (POST, JSON body) with the expression '{{ $json.title }}\\n{{ $json.link }}' as content and a per-item username and avatar_url, the setup n8n's forum and community templates use for Discord webhooks.",
+  "body": {
+    "content": "Nova temporada começa dia 20 https://blog.example.com/temporada-3\nhttps://blog.example.com/temporada-3",
+    "username": "Blog do Jogo",
+    "avatar_url": "https://blog.example.com/avatar.png"
+  }
+}

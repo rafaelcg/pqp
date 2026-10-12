@@ -1,0 +1,255 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning layout (apiVersion 1): four always-on",
+    "voice-note rules reading the textfile exporter in this directory",
+    "(pqp-api-metrics-exporter.py): queue stuck, job failure rate, speech",
+    "budget refused, speech budget at 80%. Meant to stay imported, like",
+    "grafana-alert-rules-growth.json.",
+    "",
+    "Datasource is written as grafanacloud-prom (this stack's built-in",
+    "Prometheus). The README section 'Voice notes' shows how to flatten this file",
+    "into the per-rule bodies POST /api/v1/provisioning/alert-rules wants, adding",
+    "folderUID ffxfigbmjr2f4e and ruleGroup, with X-Disable-Provenance: true so",
+    "the rules stay editable in the UI.",
+    "",
+    "noDataState is OK on all four: an API or exporter older than the block, or a",
+    "budget of 0 (no ratio), is silence, not an incident. Exporter death is the",
+    "readiness rule's job (noDataState Alerting on pqp_api_ready_ok).",
+    "",
+    "The series land about once a minute, so the queue rule wraps its gauge in",
+    "max_over_time[3m] (an empty one-minute window makes false NoData). The",
+    "failure-rate rule is on a ROLLING 24h gauge, not a counter, so it has no",
+    "rate() or increase() on purpose; see its description for the tradeoff."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-voice-notes",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-voice-notes-queue-stuck",
+          "title": "Voice notes: queue stuck",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "max by (kind) (max_over_time(pqp_api_voice_notes_queue_oldest_seconds[3m]))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        300
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": {
+            "severity": "critical",
+            "area": "voice-notes"
+          },
+          "annotations": {
+            "summary": "A voice-note job has been due for more than 5 minutes and nobody is claiming it.",
+            "description": "max by (kind) of the oldest due job's wait > 300s for 5m, per kind (transcription, transcode). A healthy worker claims within its poll interval, so this is pqp-worker down, wedged, or out of Postgres connections. Check pqp_api_voice_notes_queue{state=expired_leases}: above 0 means a worker took jobs and died. A transcode stuck means a sent note has no AAC copy yet, so Safari and the iPhone apps cannot play it. Uses max_over_time[3m] because the series lands about once a minute.",
+            "runbook": "docs/MONITORING.md#voice-notes-mensagens-de-voz"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-voice-notes-job-failure-rate",
+          "title": "Voice notes: job failure rate high",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=\"failed\"}) / clamp_min(sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=~\"ok|failed\"}), 1) and on (kind) (sum by (kind) (pqp_api_voice_notes_jobs_24h{outcome=~\"ok|failed\"}) >= 5)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.25
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "15m",
+          "labels": {
+            "severity": "warning",
+            "area": "voice-notes"
+          },
+          "annotations": {
+            "summary": "More than a quarter of voice-note jobs of one kind are failing.",
+            "description": "failed / (ok + failed) > 0.25 per kind over the trailing 24h, only when at least 5 jobs settled (skipped jobs are in neither side). The 24h window is deliberate: voice-note volume is too low for an hour to hold 5 jobs. The cost is that it is slow to clear, because the series is a rolling count, not a counter, so it stays firing until the failures age out of the 24h window even after a fix. A transcription spike is the speech provider (key, quota, outage); a transcode spike is ffmpeg or storage on the worker. Look at the Jobs settled and Success rate panels on the Mensagens de voz dashboard. Do not wrap these series in rate() or increase(): they fall as old jobs age out.",
+            "runbook": "docs/MONITORING.md#voice-notes-mensagens-de-voz"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-voice-notes-budget-refused",
+          "title": "Voice notes: speech budget exhausted",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "pqp_api_voice_notes_budget_refused",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "area": "voice-notes"
+          },
+          "annotations": {
+            "summary": "Transcripts are being refused because the daily speech budget is spent.",
+            "description": "pqp_api_voice_notes_budget_refused > 0 for 10m. Jobs are turned away today because the next note would not fit VOICE_STT_DAILY_SECONDS; new notes show transcript status unavailable until the UTC day rolls over. Raise the variable on BOTH the API and pqp-worker (each reads its own) or wait for 00:00 UTC.",
+            "runbook": "docs/MONITORING.md#voice-notes-mensagens-de-voz"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-voice-notes-budget-used",
+          "title": "Voice notes: speech budget at 80%",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "pqp_api_voice_notes_budget_used_ratio >= bool 0.8",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "area": "voice-notes"
+          },
+          "annotations": {
+            "summary": "Today's speech budget is 80% spent.",
+            "description": "usedSeconds / dailySeconds >= 0.8 for 5m (UTC day); the query is `ratio >= bool 0.8` so the rule fires on 1 and the file has no off-by-epsilon threshold. Heads up before the budget-exhausted alert: decide whether to raise VOICE_STT_DAILY_SECONDS on both the API and pqp-worker, or let the rest of the day go without transcripts.",
+            "runbook": "docs/MONITORING.md#voice-notes-mensagens-de-voz"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        }
+      ]
+    }
+  ]
+}

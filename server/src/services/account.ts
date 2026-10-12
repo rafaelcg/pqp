@@ -10,6 +10,7 @@
  */
 
 import { formatUserTag, type UserPreferences } from "@pqp/shared";
+import { retireAuthorStories } from "./stories.js";
 import { getPool } from "../db.js";
 import type { PublicUser } from "@pqp/shared";
 import { deleteClerkUser, evictUserAcrossCluster } from "../auth/clerk.js";
@@ -17,6 +18,7 @@ import { listBlocks } from "./blocks.js";
 import { exportAttachments, type ExportAttachment } from "./export.js";
 import { getPreferences } from "./preferences.js";
 import { toPublicUserSummary } from "./users.js";
+import { ATTACHMENT_OBJECT_KEYS, ATTACHMENT_VOICE_JOIN } from "./voice-notes.js";
 
 /** Same ceiling and batch size as the server export, and for the same reason:
  * one HTTP response must not hold an unbounded number of rows in memory. */
@@ -826,6 +828,9 @@ export async function deleteAccount(
     throw new IdentityDeletionFailedError(error);
   }
 
+  // Stories first: the user delete only nulls their author, so the bytes of
+  // the ones nothing holds would otherwise sit in the bucket with no owner.
+  await retireAuthorStories(userId);
   await getPool().query(`DELETE FROM users WHERE id = $1`, [userId]);
   // Closes this account's sockets and drops its auth caches on THIS instance,
   // and — with `CLUSTER_BUS` on — on every other one too. Both `DELETE /api/me`
@@ -847,9 +852,12 @@ export async function deleteAccount(
  * those bytes.
  */
 async function accountAttachmentKeys(userId: string): Promise<string[]> {
+  // With a voice note's AAC copy, which the cascade would otherwise orphan.
   const result = await getPool().query<{ storage_key: string }>(
-    `SELECT storage_key FROM message_attachments
-     WHERE uploader_id = $1 AND storage_key IS NOT NULL`,
+    `SELECT ${ATTACHMENT_OBJECT_KEYS}
+     FROM message_attachments a
+     ${ATTACHMENT_VOICE_JOIN}
+     WHERE a.uploader_id = $1 AND a.storage_key IS NOT NULL`,
     [userId],
   );
   return result.rows.map((row) => row.storage_key);
@@ -897,6 +905,7 @@ export async function sweepPendingAccountDeletions(): Promise<number> {
       continue;
     }
     const keys = await accountAttachmentKeys(row.id);
+    await retireAuthorStories(row.id);
     await getPool().query(`DELETE FROM users WHERE id = $1`, [row.id]);
     // Same reasoning as the primary path above: a deletion that was only
     // interrupted long enough to need the sweeper still has to close this

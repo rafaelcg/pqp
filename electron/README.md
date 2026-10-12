@@ -227,9 +227,36 @@ renderer mirrors its call state back with `pqpDesktop.setVoiceState`, which is
 what repaints the icon.
 
 Closing the window **during a call** hides to the tray instead of quitting,
-because quitting hangs up. Out of a call, and whenever the tray checkbox is
-off, close behaves as it always did. The preference lives in
-`userData/tray.json` and is toggled from the tray menu.
+because quitting hangs up. On **Windows and Linux** it also hides **while
+signed in** (the renderer reports that with `pqpDesktop.setSignedIn`; until a
+renderer does, only the in-call rule applies). The tray's "Show pqp" (pt-BR
+"Abrir o pqp") brings the window back and "Quit pqp" ("Sair do pqp") really
+quits. macOS keeps its usual dock behaviour out of a call.
+
+On Linux the shell asks the session bus whether anything owns
+`org.kde.StatusNotifierWatcher` (`lib/tray-host.js`, through `gdbus` or
+`dbus-send`), which is the name Chromium registers the tray icon with: Plasma,
+GNOME with the AppIndicator extension, a panel with a tray module. It asks at
+startup, before the tray is made, and again when the window takes focus (at
+most every 30 s); a tray made before a host appeared is made again. With no
+host (stock GNOME, sway with no tray module) nothing is hidden: close during a
+call **minimizes**, which keeps the call and a way back, and close otherwise
+quits. Only when neither tool can ask does the shell fall back to guessing from
+`XDG_CURRENT_DESKTOP` (`trayLikelyAvailable`). Each close on Linux logs its
+decision (`[pqp] close: hide (tray host: yes, ...)`) for a run from a
+terminal. The whole decision is `closeAction` in `lib/tray-menu.js`. Whenever
+the tray checkbox is off, close behaves as it always did. The preference
+(default on) lives in `userData/tray.json` and is toggled from the tray menu.
+
+## Notifications
+
+`showNotification` in `main.js` builds the OS banner from
+`lib/notify-options.js`. The optional `silent` field of `pqpDesktop.notify`
+decides the sound: `true` (the app plays its own cue) or absent (older
+renderer) keeps the banner silent, `false` (app sounds off) lets the OS play
+its own. On Windows `app.setAppUserModelId` is called at startup with
+`build.appId` from `package.json` (`gg.pqp.app`), which is what makes a toast
+carry the "pqp" name and icon.
 
 ## Screen sharing
 

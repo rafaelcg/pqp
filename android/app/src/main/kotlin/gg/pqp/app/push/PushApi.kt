@@ -20,10 +20,9 @@ class PushApi(private val api: ApiClient) {
     /**
      * What the server can actually send, and this account's one push setting.
      *
-     * `GET /api/push/config` answers `{ enabled, publicKey, apns, dmDetails }`
-     * today: `enabled` is the Web Push (VAPID) leg, `apns` the iOS one. There
-     * is **no `fcm` member yet**, because there is no FCM leg on the server,
-     * see [PushServerConfig.fcm].
+     * `GET /api/push/config` answers `{ enabled, publicKey, apns, fcm,
+     * dmDetails }`: `enabled` is the Web Push (VAPID) leg, `apns` the iOS one
+     * and `fcm` this app's, see [PushServerConfig.fcm].
      */
     suspend fun config(): PushServerConfig =
         api.decode(api.execute(Request.Builder().url(api.url(PATH_CONFIG)).get()))
@@ -71,15 +70,10 @@ class PushApi(private val api: ApiClient) {
 }
 
 /**
- * The body `POST /api/push/subscriptions` would need for an Android device.
- *
- * THIS SHAPE DOES NOT PARSE ON THE SERVER TODAY. `pushRegistrationSchema` is a
- * union of exactly two members: an APNs body (`platform: "apns"` plus a
- * lowercase-hex token) and a Web Push body (an https endpoint plus ECDH keys).
- * An FCM registration token is neither, it is a long, opaque, mixed-case
- * string containing a `:`, so this request is refused with a 400 until the
- * server grows a third member. [PushController] expects that and treats it as
- * "the server has no FCM leg", not as an error worth showing anybody.
+ * The body `POST /api/push/subscriptions` takes for an Android device: the
+ * server's `fcmSubscriptionSchema` (`platform: "fcm"` plus an opaque token).
+ * A server without the three `FCM_*` secrets answers 409, which
+ * [PushFailures.classifyRegistration] reads as "no FCM leg" and nothing else.
  */
 @Serializable
 private data class FcmRegistration(

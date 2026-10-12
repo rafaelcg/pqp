@@ -165,11 +165,13 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     let kind: String
     let name: String
     let type: String
-    let position: Int
+    /// `var` with `parentId`: the channel list rewrites both locally when a
+    /// saved order comes back without a read-back (`ChannelLayoutRules.apply`).
+    var position: Int
     let isPrivate: Bool
     let topic: String?
     let imageUrl: String?
-    let parentId: String?
+    var parentId: String?
     /// Seconds a member must wait between sends; 0 is off. Decoded by hand
     /// because a synthesized `Codable` has no defaults: a key the server omits
     /// (an API that predates slow mode, or a cached list written by a build
@@ -214,6 +216,15 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
      */
     var isWatchParty: Bool { type == "watch_party" }
     var isCategory: Bool { type == "category" }
+    /// A forum: a list of titled posts, each its own thread. Opens the forum
+    /// screen, never a chat (a forum carries no messages of its own).
+    var isForum: Bool { type == "forum" }
+    /// A row this build can open as a chat. `type` decodes as a plain string, so
+    /// a type added server-side later arrives here as an unknown one: it is
+    /// hidden rather than drawn as a dead "#" row.
+    var opensAsChat: Bool { isText || isVoice }
+    /// A row this build can draw in the channel list: a chat, or a forum.
+    var isListed: Bool { opensAsChat || isForum }
 }
 
 struct ReactionUser: Codable, Hashable, Sendable {
@@ -263,6 +274,42 @@ struct Attachment: Codable, Identifiable, Hashable, Sendable {
     let width: Int?
     let height: Int?
     let url: String
+    /// Set only on a voice note. A `var` because receipts and the AAC copy
+    /// arrive after the message does (`voice-note-listened`, `voice-note-updated`).
+    var voice: VoiceNote?
+
+    init(
+        id: String, filename: String, contentType: String, byteSize: Int,
+        width: Int? = nil, height: Int? = nil, url: String, voice: VoiceNote? = nil
+    ) {
+        self.id = id
+        self.filename = filename
+        self.contentType = contentType
+        self.byteSize = byteSize
+        self.width = width
+        self.height = height
+        self.url = url
+        self.voice = voice
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, contentType, byteSize, width, height, url, voice
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        filename = try c.decode(String.self, forKey: .filename)
+        contentType = try c.decode(String.self, forKey: .contentType)
+        byteSize = try c.decode(Int.self, forKey: .byteSize)
+        width = try c.decodeIfPresent(Int.self, forKey: .width)
+        height = try c.decodeIfPresent(Int.self, forKey: .height)
+        url = try c.decode(String.self, forKey: .url)
+        // Lenient, unlike every other key here: a `voice` block this build
+        // cannot read must cost the card, not the message. The attachment then
+        // reads as the plain audio file it also is.
+        voice = (try? c.decodeIfPresent(VoiceNote.self, forKey: .voice)) ?? nil
+    }
 
     var isImage: Bool { contentType.hasPrefix("image/") }
     var isVideo: Bool { contentType.hasPrefix("video/") }
@@ -336,6 +383,15 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// A slash randomizer. Lenient: a shape we cannot read costs the card, not
     /// the message. Older history has no key at all.
     var chance: ChancePayload?
+    /// Set when the server wrote this message for a product action rather
+    /// than somebody typing it: `"nudge"` is chamar a atenção. Nil for an
+    /// ordinary message, and any kind this build does not know renders as its
+    /// plaintext body, which is what the body is for.
+    var systemKind: String? = nil
+    /// The story this message replies to (`POST /api/stories/:id/reply`), or
+    /// nil. The quote is drawn from `GET /api/stories/:id/card`, which stops
+    /// carrying the picture and the caption once the story expires.
+    var storyId: String? = nil
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -347,7 +403,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind, storyId
     }
 
     init(from decoder: Decoder) throws {
@@ -375,6 +431,11 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         // would drop a whole message over a shape change on an accessory.
         thread = (try? c.decodeIfPresent(ThreadSummary.self, forKey: .thread)) ?? nil
         chance = (try? c.decodeIfPresent(ChancePayload.self, forKey: .chance)) ?? nil
+        // Only the kinds this build draws; anything else is an ordinary
+        // message, the same `.catch(null)` the shared schema applies.
+        let kind = (try? c.decodeIfPresent(String.self, forKey: .systemKind)) ?? nil
+        systemKind = kind == "nudge" ? kind : nil
+        storyId = (try? c.decodeIfPresent(String.self, forKey: .storyId)) ?? nil
         isPending = false
         pendingNonce = nil
     }
@@ -438,14 +499,71 @@ struct DmUnread: Codable, Hashable, Sendable {
     let mentions: Int
 }
 
+/// The conversation list's preview line, as `GET /api/dms` sends it
+/// (`dmSummarySchema.lastMessage` in packages/shared/src/dm.ts).
+///
+/// Already redacted and cut to 140 characters by the server; never raw
+/// markdown. The "tu:" and group-author prefixes are the reader's to add, which
+/// is why the author rides along.
+struct DmLastMessage: Codable, Hashable, Sendable {
+    let authorId: String
+    let authorName: String
+    let preview: String
+    /// The message was attachments only, and `preview` is empty.
+    let isAttachment: Bool
+    let isGif: Bool
+    /// Optional on the wire: a server older than voice notes omits both.
+    var isVoice: Bool? = nil
+    var voiceDurationMs: Int? = nil
+    /// `"nudge"` when the newest message is a nudge: the row says what happened
+    /// instead of the stored `📳` body. Absent from a server older than nudges.
+    var systemKind: String? = nil
+}
+
 struct DmSummary: Codable, Identifiable, Hashable, Sendable {
     let channelId: String
     let kind: String
     let participants: [PublicUser]
-    let lastMessageAt: Date?
-    let unread: DmUnread
+    var lastMessageAt: Date?
+    var unread: DmUnread
+    /// Nil when nobody has spoken yet, when the reader turned in-app previews
+    /// off (the server leaves the text out rather than trusting the client to
+    /// hide it), or on a server older than the field.
+    var lastMessage: DmLastMessage?
 
     var id: String { channelId }
+
+    init(
+        channelId: String,
+        kind: String,
+        participants: [PublicUser],
+        lastMessageAt: Date?,
+        unread: DmUnread,
+        lastMessage: DmLastMessage? = nil
+    ) {
+        self.channelId = channelId
+        self.kind = kind
+        self.participants = participants
+        self.lastMessageAt = lastMessageAt
+        self.unread = unread
+        self.lastMessage = lastMessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channelId, kind, participants, lastMessageAt, unread, lastMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        channelId = try c.decode(String.self, forKey: .channelId)
+        kind = try c.decode(String.self, forKey: .kind)
+        participants = try c.decode([PublicUser].self, forKey: .participants)
+        lastMessageAt = try c.decodeIfPresent(Date.self, forKey: .lastMessageAt)
+        unread = try c.decode(DmUnread.self, forKey: .unread)
+        // Lenient on purpose: a preview this build cannot read costs the
+        // preview line, never the whole conversation list.
+        lastMessage = (try? c.decodeIfPresent(DmLastMessage.self, forKey: .lastMessage)) ?? nil
+    }
 
     /// Group conversations have no name of their own; the participants are it.
     var title: String {
@@ -595,6 +713,9 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
     case sexualContent = "sexual_content"
     case selfHarm = "self_harm"
     case illegalContent = "illegal_content"
+    /// A minor in sexual content. The one reason that decides routing: it
+    /// always goes to the instance queue, never to a server's own staff.
+    case minorSexual = "minor_sexual"
     case other
 
     var id: String { rawValue }
@@ -608,6 +729,7 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
         case .sexualContent: "Sexual content"
         case .selfHarm: "Self-harm"
         case .illegalContent: "Illegal content"
+        case .minorSexual: "A minor in sexual content"
         case .other: "Something else"
         }
     }
@@ -688,6 +810,13 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// device-local `SessionStore.onboardedKey`: it runs before there is an
     /// account to ask.
     var onboardedAt: String?
+    /// Conversations pinned by this account, in order: the web rail's pins
+    /// and the Fixadas section of the Conversas list, one list on every
+    /// device. Replaced as a whole on write, at most 15.
+    var pinnedConversations: [String]?
+    /// Chamar a atenção. Absent reads as on. Off works in BOTH directions:
+    /// nobody nudges this account and it nudges nobody.
+    var allowNudges: Bool?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

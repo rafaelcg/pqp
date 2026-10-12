@@ -48,6 +48,15 @@ final class PushNotificationTests: XCTestCase {
         )
     }
 
+    func testABannerForANewBauPostWhateverIsOnScreen() {
+        // The Baú is a server-wide surface, not the channel being read.
+        XCTAssertTrue(
+            PushPresentation.shouldInterrupt(
+                path: "/app/server/srv-1/home", visibleChannelId: "chan-1"
+            )
+        )
+    }
+
     func testABannerWhenNothingIsOnScreen() {
         // On the hub, in settings, in a call: nothing to be redundant with.
         XCTAssertTrue(

@@ -1929,11 +1929,11 @@ describeDb("API authorization", () => {
       expect(res.status).toBe(400);
     });
 
-    it("scopes top-level position by type: reordering text never perturbs voice", async () => {
-      // This is the one that would have silently broken without the type
-      // scope on the top-level sibling group: a naive "position among all
-      // top-level channels" would let a text-channel reorder renumber voice
-      // channels that share no visible list with it at all.
+    it("reads an older client's loose index per type: reordering text never perturbs voice", async () => {
+      // The loose area is one sequence now, but `PATCH /move` still gets the
+      // per-type index an older client counts (the legacy-move rule). Moving
+      // a text channel to "0" puts it before the first text channel and
+      // leaves every voice room where it was.
       const { serverId, textChannelId: text0 } = await makeServer();
       const text1 = await createChannel(serverId, "text-1", "text");
       const voice0 = await createChannel(serverId, "voice-0", "voice");
@@ -2012,8 +2012,17 @@ describeDb("API authorization", () => {
       );
       expect(stillExists.rows).toHaveLength(1);
 
+      // One loose sequence for every type: #general, Lobby, then the child.
       const original = await channelRow(textChannelId);
-      expect([original.position, row.position].sort()).toEqual([0, 1]);
+      const loose = await getPool().query<{ position: number }>(
+        `SELECT position FROM channels
+          WHERE server_id = $1 AND parent_id IS NULL AND type <> 'category'
+          ORDER BY position`,
+        [serverId],
+      );
+      expect(loose.rows.map((r) => r.position)).toEqual([0, 1, 2]);
+      expect(original.position).toBe(0);
+      expect(row.position).toBe(2);
     });
 
     it("appends several orphaned children in their prior relative order, after existing top-level channels", async () => {
@@ -2030,10 +2039,11 @@ describeDb("API authorization", () => {
 
       await call(owner, "DELETE", `/api/channels/${category.id}`);
 
+      // After every loose channel (#general at 0, Lobby at 1), in order.
       const positions = await Promise.all(
         [textChannelId, first.id, second.id].map((id) => channelRow(id)),
       );
-      expect(positions.map((p) => p.position)).toEqual([0, 1, 2]);
+      expect(positions.map((p) => p.position)).toEqual([0, 2, 3]);
     });
 
     it("hides move routes from an outsider", async () => {

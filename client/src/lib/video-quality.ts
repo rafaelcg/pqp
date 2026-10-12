@@ -19,6 +19,11 @@
  */
 
 import { LARGE_ROOM_PARTICIPANTS } from "@pqp/shared";
+import {
+  DEFAULT_SHARE_PRIORITY,
+  sharePriorityDegradation,
+  type SharePriority,
+} from "./share-priority";
 
 /** The user-facing choices. `auto` is the default and always will be. */
 export const VIDEO_QUALITIES = [
@@ -144,8 +149,41 @@ const AUTO_SCREEN_BITRATE = 3_000_000;
  * weak uplink (the estimator already had them covered) and takes the sharp
  * picture away from the person on a good one, which is the whole ask.
  */
-export function screenBitrateFor(quality: VideoQuality): number {
-  return quality === "auto" ? AUTO_SCREEN_BITRATE : SCREEN_BITRATES[quality];
+export function screenBitrateFor(
+  quality: VideoQuality,
+  /** What the capture actually delivers (`publishMaxFrameRateFromTrack`). */
+  fps: 30 | 60 = 30,
+): number {
+  const base =
+    quality === "auto" ? AUTO_SCREEN_BITRATE : SCREEN_BITRATES[quality];
+  return fps === 60 ? Math.round(base * SCREEN_60FPS_BITRATE_FACTOR) : base;
+}
+
+/**
+ * How much more a 60 fps share may spend than the same picture at 30.
+ *
+ * WHY THIS EXISTS (2026-10-09). An ordinary share has captured at 60 fps by
+ * default since the frame-rate setting shipped, and every ceiling on this
+ * ladder was written for 30. Twice the frames under the same allowance is half
+ * the bits per frame; under `maintain-framerate` the quality scaler pays for
+ * that in pixels, so a 720p game share at 3 Mbps held 58 fps and spent the
+ * call bouncing between 720p and 360p (call rating 710, mesh, one peer: P10
+ * height 360, 167 s "bandwidth" limited, 0 s CPU). Users read it as "the
+ * quality swings and there is no way to control it".
+ *
+ * WHY 1.5 AND NOT 2. Consecutive frames 16 ms apart are more alike than frames
+ * 33 ms apart, so inter prediction gets cheaper as the rate climbs; the usual
+ * rule of thumb for the same content at double the rate is about 1.5x the
+ * bits. Like every number here it is a ceiling and not a demand: on a link
+ * that cannot carry it the bandwidth estimate governs exactly as before.
+ */
+export const SCREEN_60FPS_BITRATE_FACTOR = 1.5;
+
+/** A measured or reported frame rate, on the two tiers the ladder knows. */
+export function screenFpsTier(fps: number | null | undefined): 30 | 60 {
+  return typeof fps === "number" && Number.isFinite(fps) && fps >= 45
+    ? 60
+    : 30;
 }
 
 /**
@@ -579,7 +617,8 @@ export function screenShareSimulcastEnabled(
 }
 
 /**
- * Always `maintain-framerate`, including for a live HLS source.
+ * `maintain-framerate` for a live HLS source, always, and for every other share
+ * unless the presenter chose sharpness (`share-priority.ts`).
  *
  * PR 475 pinned the HLS source to `maintain-resolution` (+ scaleResolutionDownBy
  * 1) so the passthrough remux never saw a resolution change. Production proved
@@ -598,9 +637,18 @@ export function screenShareSimulcastEnabled(
  * matches them.
  */
 export function screenShareDegradationPreference(
-  _hls: HlsSourceInput | null,
+  hls: HlsSourceInput | null,
+  /**
+   * The presenter's own choice (`share-priority.ts`). Honoured on every share
+   * EXCEPT one feeding a live HLS ladder, for the reason above: that share's
+   * framerate is what keeps every playlist viewer moving.
+   */
+  priority: SharePriority = DEFAULT_SHARE_PRIORITY,
 ): "maintain-framerate" | "maintain-resolution" {
-  return "maintain-framerate";
+  if (hls !== null && hls.ladderTopHeight !== null) {
+    return "maintain-framerate";
+  }
+  return sharePriorityDegradation(priority);
 }
 
 /**

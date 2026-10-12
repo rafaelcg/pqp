@@ -109,7 +109,7 @@ struct ChannelMembersView: View {
             try await session.api.addChannelMember(channelId: channel.id, userId: userId)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -118,7 +118,7 @@ struct ChannelMembersView: View {
             try await session.api.removeChannelMember(channelId: channel.id, userId: userId)
             allowed.removeAll { $0.id == userId }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }

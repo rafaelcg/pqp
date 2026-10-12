@@ -31,6 +31,13 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  bauIsFresh,
+  railServerIndicator,
+  withServerBauNewest,
+  withServerBauUnread,
+  type RailServerIndicator,
+} from "./rail-unread";
+export {
   applyCommunityHomeRead,
   applyCommunityHomeSwitch,
   mergeServerUpdate,
@@ -74,6 +81,7 @@ export {
   youtubeEmbedSrc,
   youtubePosterUrl,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomeMediaKind,
   type UploadedHomeMedia,
 } from "./media";

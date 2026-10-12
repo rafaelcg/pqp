@@ -77,8 +77,16 @@ fun MessageAttachment(
     attachment: Attachment,
     api: ApiClient,
     modifier: Modifier = Modifier,
+    /**
+     * The message this attachment rode in on. Only a voice note needs it, and
+     * a surface that does not pass it gets the plain audio chip, which is what
+     * a voice note has always degraded to.
+     */
+    voiceNote: gg.pqp.app.voicenotes.ui.VoiceNoteContext? = null,
 ) {
     when {
+        attachment.isVoiceNote && voiceNote != null ->
+            gg.pqp.app.voicenotes.ui.VoiceNoteCard(attachment, voiceNote, modifier)
         attachment.isVideo -> VideoAttachment(attachment, api, modifier)
         attachment.isImage -> ImageAttachment(attachment, modifier)
         else -> FileChip(attachment, modifier)

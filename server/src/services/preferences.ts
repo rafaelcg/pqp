@@ -48,6 +48,14 @@ export async function getPreferencesForUsers(
  * ones it has not heard of. Last write wins: two devices editing different
  * settings both keep theirs, two devices editing the same one settle on
  * whichever request the database saw last.
+ *
+ * `notifications` is merged one level deeper, for the same reason: a phone
+ * writes that object from its own model and omits the keys it does not know
+ * (`dmDefault`, `serverDefault`, `desktopChosen`, `streamAlerts`...), and a
+ * whole-object replace would silently undo a choice made on the desktop. A key
+ * the client sends wins, a key it leaves out keeps what is stored. The maps
+ * inside it (`servers`, `channels`, `streamAlerts`) are still replaced whole
+ * when sent, which is how an id is reset.
  */
 export async function mergePreferences(
   userId: string,
@@ -57,7 +65,15 @@ export async function mergePreferences(
     `INSERT INTO user_preferences (user_id, settings)
      VALUES ($1, $2::jsonb)
      ON CONFLICT (user_id) DO UPDATE
-       SET settings = user_preferences.settings || EXCLUDED.settings,
+       SET settings = CASE
+             WHEN EXCLUDED.settings ? 'notifications'
+              AND jsonb_typeof(user_preferences.settings -> 'notifications') = 'object'
+             THEN user_preferences.settings || EXCLUDED.settings || jsonb_build_object(
+                    'notifications',
+                    (user_preferences.settings -> 'notifications')
+                      || (EXCLUDED.settings -> 'notifications'))
+             ELSE user_preferences.settings || EXCLUDED.settings
+           END,
            updated_at = NOW()
      RETURNING settings`,
     [userId, JSON.stringify(patch)],

@@ -7,6 +7,7 @@ import {
 } from "@/lib/voice-stats-probe";
 import {
   chosenScreenCeilingBps,
+  sampledScreenFpsTier,
   splitShare,
 } from "@/lib/peer-connection-manager";
 import { DEFAULT_SCREEN_UPLOAD_BUDGET_BPS } from "@/lib/screen-upload-budget";
@@ -252,7 +253,10 @@ export function useShareUplinkStrain(
             : nextStrainStreak(
                 streak.current,
                 screens,
-                chosenScreenCeilingBps(quality),
+                chosenScreenCeilingBps(
+                  quality,
+                  sampledScreenFpsTier(screens[0], quality),
+                ),
                 viewers,
                 cameraChosenBps,
               );

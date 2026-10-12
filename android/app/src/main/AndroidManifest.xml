@@ -39,6 +39,13 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- Android 11+ hides other packages unless asked for. Push checks that Google
+         Play services is installed and enabled before it tries to get a token,
+         so it can say "this phone has no Play services" instead of retrying. -->
+    <queries>
+        <package android:name="com.google.android.gms" />
+    </queries>
+
     <application
         android:name=".PqpApplication"
         android:allowBackup="false"
@@ -55,10 +62,18 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Pqp.Starting">
+            <!-- supportsPictureInPicture: ONLY the Baú full screen video ever
+                 asks for it (BauPip, armed while it plays). Nothing else
+                 calls enterPictureInPictureMode or sets auto-enter, so no
+                 other screen, and no call, changes behaviour. The call UI is
+                 a bar inside this activity, not a PiP of its own.
+                 smallestScreenSize joins configChanges because a PiP resize
+                 would otherwise recreate the activity under the video. -->
             <!-- singleTask: an invite link tapped in a browser while the app is
                  already running has to reach the running Activity's
                  onNewIntent, not stack a second MainActivity (with a second
@@ -91,9 +106,10 @@
                  supported links" for it in system settings. The file lives at
                  client/public/.well-known/assetlinks.json.
 
-                 Only the invite path is claimed, on purpose. Claiming `/app`
-                 would swallow every pqp.gg link a person taps into an app that
-                 has no screen for most of them yet. -->
+                 Only the invite path (and, below, a forum post's link) is
+                 claimed, on purpose. Claiming `/app` would swallow every
+                 pqp.gg link a person taps into an app that has no screen for
+                 most of them yet. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -101,6 +117,17 @@
                 <data android:scheme="https" />
                 <data android:host="pqp.gg" />
                 <data android:pathPrefix="/app/invite/" />
+            </intent-filter>
+            <!-- A forum post's own link ("Copiar link" on every client):
+                 /app/server/<sid>/channel/<forumId>/post/<postId>. The one
+                 other pqp.gg path this app has a screen for. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="pqp.gg" />
+                <data android:pathPattern="/app/server/.*/channel/.*/post/.*" />
             </intent-filter>
         </activity>
 
@@ -155,5 +182,20 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_notification" />
+
+        <!--
+            Stories: the system camera writes a photo or a clip into the app's
+            cache through this, so the app asks for no camera or storage
+            permission. Not exported; the camera gets a one-off grant.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.stories"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/story_capture_paths" />
+        </provider>
     </application>
 </manifest>

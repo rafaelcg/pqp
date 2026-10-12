@@ -18,10 +18,30 @@ import Foundation
  to grow into a full mirror of `Permission`.
  */
 enum PermissionBit {
+    /// `Permission.MANAGE_SERVER` = `1n << 5n` in
+    /// `packages/shared/src/permissions.ts`. In the Baú it is the one bit that
+    /// publishes: every write route under `/home` asks the server for it, and
+    /// the compose button asks the same question of the same snapshot.
+    static let manageServer: UInt64 = 1 << 5
+
+    /// `Permission.MANAGE_CHANNELS` = `1n << 4n`. With MANAGE_MESSAGES below,
+    /// what makes somebody staff in a forum: pin, close, delete a post, and
+    /// the staff-only tags (`forumPerms` on the server).
+    static let manageChannels: UInt64 = 1 << 4
+
+    /// `Permission.MANAGE_MESSAGES` = `1n << 8n`.
+    static let manageMessages: UInt64 = 1 << 8
+
     /// `Permission.START_WATCH_PARTY` = `1n << 23n` in
     /// `packages/shared/src/permissions.ts`: start the stream in a
     /// `watch_party` channel. Everyone else there is the audience.
     static let startWatchParty: UInt64 = 1 << 23
+
+    /// `Permission.POST_STORIES` = `1n << 25n`: post a story to this server.
+    /// Server level only (an overwrite would mean nothing), on for @everyone
+    /// by default. The strip's `canPost` and `GET /api/stories/audiences`
+    /// already answer with it applied; this mirror is for parity and tests.
+    static let postStories: UInt64 = 1 << 25
 }
 
 /**

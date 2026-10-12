@@ -46,7 +46,26 @@ class WireProtocolTest {
      * that it never cries wolf.
      */
     private val declared: Set<String> by lazy {
-        RepoSources.sharedFrameTypeLiterals() + handshakeFrames
+        RepoSources.sharedFrameTypeLiterals() + handshakeFrames + announcedAheadOfShared
+    }
+
+    /**
+     * Frames this build handles that `packages/shared` does not declare **yet**.
+     *
+     * Empty. When a client ships a frame ahead of the server PR that adds its
+     * schema, name it here; the next test fails the day shared declares it, so
+     * the entry is deleted rather than left to excuse a typo.
+     */
+    private val announcedAheadOfShared = emptySet<String>()
+
+    @Test
+    fun `a frame announced ahead of shared is removed from the list once shared declares it`() {
+        assertEquals(
+            "These frames are now declared in packages/shared/src. Delete them from " +
+                "announcedAheadOfShared so the handled-frames check reads them from the schema.",
+            emptySet<String>(),
+            announcedAheadOfShared.intersect(RepoSources.sharedFrameTypeLiterals()),
+        )
     }
 
     @Test
@@ -194,6 +213,12 @@ class WireProtocolTest {
             "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
+            // The forum list's two frames. Losing either leaves the list
+            // frozen (no new posts, no bumps) or showing a deleted post that
+            // 404s on tap; the post screen also reads both (a lock or resolve
+            // by staff, and the removed state).
+            "forum-post-upsert",
+            "forum-post-removed",
             // handshake
             "ready",
         )
@@ -727,7 +752,7 @@ class WireProtocolTest {
     @Test
     fun `the channel enums match shared`() {
         assertEquals(
-            listOf("text", "voice", "category", "watch_party"),
+            listOf("text", "voice", "category", "watch_party", "forum"),
             RepoSources.enumValues(api, "channelTypeSchema"),
         )
         assertTrue(

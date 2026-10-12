@@ -80,6 +80,13 @@ function canExcludeOwnAudioFromArg() {
  */
 const canExcludeOwnAudio = canExcludeOwnAudioFromArg();
 
+/**
+ * Main says this shell runs inside a Flatpak (`lib/flatpak.js`), where it
+ * builds no Linux share audio bus. Missing means an older main, which is never
+ * a Flatpak build that knows about this, so "no".
+ */
+const runningInFlatpak = argvValue("--pqp-flatpak=") === "1";
+
 const SHARE_CAPABILITIES = Object.freeze({
   displayMedia: true,
   systemAudio:
@@ -107,7 +114,12 @@ const SHARE_CAPABILITIES = Object.freeze({
    * the new client opens). Whether it is ON is the runtime flag's business,
    * and whether this machine has `pactl` is `linuxShareAudioStatus()`'s.
    */
-  linuxShareAudio: process.platform === "linux",
+  linuxShareAudio: process.platform === "linux" && !runningInFlatpak,
+  /**
+   * This shell is the Flatpak build. The page uses it for copy only: why a
+   * Linux share carries no sound here, and where to get the build that can.
+   */
+  flatpak: runningInFlatpak,
   /**
    * This binary can answer `fullscreenAppState()`: whether Windows says a
    * Direct3D app holds the display in exclusive fullscreen
@@ -513,6 +525,9 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
       body: typeof payload.body === "string" ? payload.body : "",
       tag: typeof payload.tag === "string" ? payload.tag : "",
       path: typeof payload.path === "string" ? payload.path : "/app",
+      // true: the app plays its own cue, keep the banner silent. false: app
+      // sounds are off, let the OS sound play. Absent: older renderer, silent.
+      ...(typeof payload.silent === "boolean" ? { silent: payload.silent } : {}),
     });
   },
 
@@ -637,6 +652,15 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
       muted: state.muted === true,
       deafened: state.deafened === true,
     });
+  },
+
+  /**
+   * Whether somebody is signed in. On Windows and Linux the close button hides
+   * to the tray while this is true, and closes as it always did while it is
+   * not. Never sent means false.
+   */
+  setSignedIn(signedIn) {
+    ipcRenderer.send("pqp:signed-in", signedIn === true);
   },
 
   /** Mute, deafen and leave from the tray menu. */

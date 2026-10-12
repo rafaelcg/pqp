@@ -1,5 +1,7 @@
 import {
-  COMMUNITY_MEMBER_FLOOR,
+  DIRECTORY_ACTIVE_WINDOW_DAYS,
+  DIRECTORY_MIN_HUMAN_MEMBERS,
+  DIRECTORY_RECENT_WINDOW_DAYS,
   deriveCommunitySlug,
   mapCommunityFeatured,
   monthStamp,
@@ -9,6 +11,7 @@ import {
   type CommunityJoinVia,
   type CommunityLanguage,
   type CommunityLink,
+  type CommunityListingNudge,
   type CommunitySettings,
   type CommunitySummary,
   type PublicCommunity,
@@ -17,6 +20,9 @@ import { getPool } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
 import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
+// A cycle (default-community.ts imports this file), and a harmless one: only a
+// function is read, and only at call time.
+import { defaultCommunitySlug } from "./default-community.js";
 
 /**
  * Communities — a public page per room, a directory of the rooms that asked to
@@ -117,6 +123,64 @@ const DIRECTORY_SQL = `${ADDRESSED_SQL}
    AND s.is_community_listed`;
 
 /**
+ * A person, as opposed to the house cast, a webhook's pseudo-row or a
+ * labelled bot. `u` is whatever alias the caller gave `users`.
+ */
+const HUMAN_SQL = (u: string) =>
+  `NOT (${u}.is_character OR ${u}.is_webhook OR ${u}.is_bot)`;
+
+/**
+ * Two numbers per community for the quality bar and the browse order, as one
+ * LATERAL so both the directory and the owner nudge read them the same way.
+ *
+ *   `humans`        people in the room, counted only up to the bar (the QG has
+ *                   thousands and the question is "at least three").
+ *   `last_human_at` the newest message a person wrote, inside the active
+ *                   window, or NULL. Asked per channel newest first on
+ *                   `idx_messages_channel_created`, and bounded by the window,
+ *                   so a channel the cast talks in alone never walks its whole
+ *                   history.
+ *
+ * `$min` and `$days` are parameter placeholders the caller fills.
+ */
+function activitySql(min: string, days: string): string {
+  return `LEFT JOIN LATERAL (
+     SELECT
+       (SELECT COUNT(*)::int FROM (
+          SELECT 1 FROM server_members hm
+            JOIN users hu ON hu.id = hm.user_id
+           WHERE hm.server_id = s.id AND ${HUMAN_SQL("hu")}
+           LIMIT ${min}
+        ) h) AS humans,
+       (SELECT MAX(lm.created_at) FROM channels c
+          CROSS JOIN LATERAL (
+            SELECT msg.created_at FROM messages msg
+              JOIN users au ON au.id = msg.author_id
+             WHERE msg.channel_id = c.id
+               AND msg.created_at > NOW() - make_interval(days => ${days})
+               AND msg.system_kind IS NULL
+               AND ${HUMAN_SQL("au")}
+             ORDER BY msg.created_at DESC
+             LIMIT 1
+          ) lm
+         WHERE c.server_id = s.id) AS last_human_at
+   ) act ON TRUE`;
+}
+
+/**
+ * The bar itself, over the columns `activitySql` produced. `$slug` is the
+ * instance's default community, which always passes: it is where every new
+ * account lands, and a quiet week there must never empty the directory's
+ * first card.
+ */
+function qualitySql(min: string, slug: string): string {
+  return `(
+     (${slug}::text IS NOT NULL AND s.community_slug = ${slug}::text)
+     OR (act.humans >= ${min} AND act.last_human_at IS NOT NULL)
+   )`;
+}
+
+/**
  * The columns a stranger may read. Deliberately narrower than `SERVER_COLUMNS`
  * in servers.ts — no `owner_id`, no retention policy, no SSO domain. See
  * `communitySummarySchema`: this is the public projection of a server and
@@ -186,19 +250,24 @@ export interface CommunityListPage {
 /**
  * One page of the directory.
  *
- * ORDER IS SIZE, THEN AGE, and there is no ranking model behind it. Two sorts
- * a person can explain are worth more here than a score nobody can: "the
- * biggest ones" is what a directory is for, and `created_at DESC` as the
- * tiebreaker means a new community of equal size surfaces above an old one
- * rather than sitting at a permanently arbitrary position. `id` closes the
- * order completely so pagination is stable.
+ * ORDER IS RECENT ACTIVITY, THEN SIZE, and there is no ranking model behind
+ * it. Rooms where a person wrote in the last `DIRECTORY_RECENT_WINDOW_DAYS`
+ * come first, biggest first inside that group; then everything else, biggest
+ * first. Two sorts a person can explain are worth more here than a score
+ * nobody can: "the ones talking right now, the big ones first" is what a
+ * stranger opening a directory wants. The newest human message, then
+ * `created_at DESC` and `id` close the order so pagination is stable.
  *
- * THE MEMBER FLOOR APPLIES TO BROWSING AND NOT TO SEARCH. A grid whose first
- * page is forty rooms with one member each is not a directory; but somebody
- * typing the exact name of the community their friend made an hour ago is not
- * browsing, and answering "nothing found" for a server that plainly exists is
- * the one behaviour that reads as broken rather than as curation. See
- * `COMMUNITY_MEMBER_FLOOR`.
+ * THE QUALITY BAR APPLIES TO BROWSING AND NOT TO SEARCH. A listed room is
+ * browsable while it has `DIRECTORY_MIN_HUMAN_MEMBERS` people in it and a
+ * person wrote in it within `DIRECTORY_ACTIVE_WINDOW_DAYS` (the instance's
+ * default community always passes). It is a read-time filter, never a write:
+ * nobody's listing is switched off, and a room that comes back to life comes
+ * back to the grid on its own. Somebody typing the exact name of the community
+ * their friend made an hour ago is not browsing, and answering "nothing found"
+ * for a server that plainly exists is the one behaviour that reads as broken
+ * rather than as curation. The bar replaced `COMMUNITY_MEMBER_FLOOR` here, and
+ * is strictly above it.
  *
  * A COMMUNITY YOU ARE ALREADY IN STAYS LISTED, carrying `joined: true` so the
  * card offers "open" instead of "join". Hiding it would make the directory
@@ -219,47 +288,55 @@ export async function listCommunities(
 ): Promise<CommunityListPage> {
   const params: unknown[] = [viewerId];
   const filters: string[] = [DIRECTORY_SQL];
+  const param = (value: unknown, cast = "") => {
+    params.push(value);
+    return `$${params.length}${cast}`;
+  };
+
+  const minHumans = param(DIRECTORY_MIN_HUMAN_MEMBERS, "::int");
+  const activeDays = param(DIRECTORY_ACTIVE_WINDOW_DAYS, "::int");
+  const recentDays = param(DIRECTORY_RECENT_WINDOW_DAYS, "::int");
 
   if (options.category) {
-    params.push(options.category);
-    filters.push(`s.community_category = $${params.length}`);
+    filters.push(`s.community_category = ${param(options.category)}`);
   }
 
-  // Applied to SEARCH AS WELL as to browsing, unlike the member floor: the
-  // floor is a curation heuristic the searcher is deliberately exempt from, and
-  // this is a filter they set on purpose one control away from the search box.
+  // Applied to SEARCH AS WELL as to browsing, unlike the quality bar: the bar
+  // is a curation heuristic the searcher is deliberately exempt from, and this
+  // is a filter they set on purpose one control away from the search box.
   // Ignoring it there would answer a narrowed request with unnarrowed results.
   if (options.language) {
-    params.push(options.language);
-    filters.push(`s.community_language = $${params.length}`);
+    filters.push(`s.community_language = ${param(options.language)}`);
   }
 
   if (options.search) {
     // `%` and `_` are LIKE metacharacters; a search for "100%" must not become
     // a wildcard. Escaped here rather than in the schema because it is a
     // property of this query and not of the string.
-    const pattern = `%${options.search.replace(/[%_\\]/g, "\\$&")}%`;
-    params.push(pattern);
+    const pattern = param(
+      `%${options.search.replace(/[%_\\]/g, "\\$&")}%`,
+    );
     filters.push(
-      `(s.name ILIKE $${params.length} ESCAPE '\\'
-        OR s.community_tagline ILIKE $${params.length} ESCAPE '\\')`,
+      `(s.name ILIKE ${pattern} ESCAPE '\\'
+        OR s.community_tagline ILIKE ${pattern} ESCAPE '\\')`,
     );
   } else {
     // Browsing only. See the note above on why search is exempt.
-    params.push(COMMUNITY_MEMBER_FLOOR);
-    filters.push(`s.member_count >= $${params.length}`);
+    filters.push(qualitySql(minHumans, param(defaultCommunitySlug())));
   }
 
-  params.push(options.limit + 1);
-  const limitParam = `$${params.length}`;
-  params.push(options.offset);
-  const offsetParam = `$${params.length}`;
+  const limitParam = param(options.limit + 1);
+  const offsetParam = param(options.offset);
 
   const result = await getPool().query<DirectoryRow>(
     `SELECT ${DIRECTORY_COLUMNS}
      FROM servers s
+     ${activitySql(minHumans, activeDays)}
      WHERE ${filters.join(" AND ")}
-     ORDER BY s.member_count DESC, s.created_at DESC, s.id DESC
+     ORDER BY (act.last_human_at > NOW() - make_interval(days => ${recentDays})) IS TRUE DESC,
+              s.member_count DESC,
+              act.last_human_at DESC NULLS LAST,
+              s.created_at DESC, s.id DESC
      LIMIT ${limitParam} OFFSET ${offsetParam}`,
     params,
   );
@@ -269,6 +346,55 @@ export async function listCommunities(
     communities: rows.map(toSummary),
     hasMore: result.rows.length > options.limit,
   };
+}
+
+/**
+ * The owner's one-time question: "this room has a public address, should it
+ * be in the directory too?"
+ *
+ * Asked about at most one room, and only one that would actually show up if
+ * the owner said yes: it passes the same bar `listCommunities` browses with,
+ * so the card never invites an empty shell into the directory. Owner only
+ * (listing is the owner's switch, see `updateCommunitySettings`), addressed,
+ * not listed, not suspended. The biggest qualifying room wins when there are
+ * several.
+ *
+ * `null` once the account has seen the card (`communityListingNudgeAt` in
+ * preferences, stamped by the client when it paints). The runtime flag
+ * `community_listing_nudge` and `COMMUNITIES_ENABLED` are checked at the route,
+ * per rule 1 at the top of this file.
+ */
+export async function findListingNudge(
+  ownerId: string,
+): Promise<CommunityListingNudge> {
+  const result = await getPool().query<{
+    id: string;
+    name: string;
+    icon_url: string | null;
+  }>(
+    `SELECT s.id, s.name, s.icon_url
+       FROM servers s
+       ${activitySql("$2::int", "$3::int")}
+      WHERE s.owner_id = $1
+        AND s.is_community
+        AND NOT s.is_community_listed
+        AND NOT s.is_community_suspended
+        AND ${qualitySql("$2::int", "$4")}
+        AND NOT EXISTS (
+          SELECT 1 FROM user_preferences p
+           WHERE p.user_id = $1 AND p.settings ? 'communityListingNudgeAt'
+        )
+      ORDER BY s.member_count DESC, s.created_at DESC, s.id DESC
+      LIMIT 1`,
+    [
+      ownerId,
+      DIRECTORY_MIN_HUMAN_MEMBERS,
+      DIRECTORY_ACTIVE_WINDOW_DAYS,
+      defaultCommunitySlug(),
+    ],
+  );
+  const row = result.rows[0];
+  return row ? { serverId: row.id, name: row.name, iconUrl: row.icon_url } : null;
 }
 
 /**

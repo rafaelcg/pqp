@@ -263,6 +263,7 @@ const RELEASE_BODY = {
     "pqp-0.1.0-x64-portable.exe",
     "pqp-0.1.0-x86_64.AppImage",
     "pqp-0.1.0-amd64.deb",
+    "pqp-0.1.0-x86_64.flatpak",
     "latest-mac.yml",
     "latest.yml",
     "latest-linux.yml",
@@ -297,6 +298,8 @@ describe("fetchLatestAssets", () => {
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x86_64.AppImage",
       "linux-deb":
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-amd64.deb",
+      "linux-flatpak":
+        "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x86_64.flatpak",
     });
   });
 

@@ -56,6 +56,9 @@ const CONTRAST_PAIRS = [
   { fg: "--color-accent", bg: "--color-surface-1", floor: 3.0, label: "accent on panel" },
   { fg: "--color-on-accent", bg: "--color-accent", floor: 4.5, label: "text on an accent button" },
   { fg: "--color-danger", bg: "--color-surface-1", floor: 3.0, label: "danger on panel" },
+  // An unread count: bold digits on a small red pill. Graphical-object floor,
+  // the same 3.0 the danger hue itself meets on a panel.
+  { fg: "--color-on-danger", bg: "--color-danger", floor: 3.0, label: "count on a danger badge" },
   { fg: "--color-warning", bg: "--color-surface-1", floor: 3.0, label: "warning on panel" },
   { fg: "--color-success", bg: "--color-surface-1", floor: 3.0, label: "success on panel" },
   { fg: "--color-code-text", bg: "--color-code-bg", floor: 4.5, label: "inline code" },
@@ -396,7 +399,7 @@ const lightBlock = readTokens(css, /:root\[data-theme="light"\][^{]*\{([\s\S]*?)
 if (Object.keys(lightBlock).length > 0) {
   themes.light = { ...themes.dark, ...lightBlock };
 }
-for (const appearance of ["harmony", "hearth", "night"]) {
+for (const appearance of ["harmony", "hearth", "night", "retro"]) {
   const darkSkin = readTokens(
     css,
     new RegExp(
@@ -457,7 +460,7 @@ function resolveAccentTokens(tokens, hue) {
   return resolved;
 }
 if (Object.keys(accentBlock).length > 0) {
-  const accentBases = ["dark", "light", "night-dark", "harmony-light"];
+  const accentBases = ["dark", "light", "night-dark", "harmony-light", "retro-light"];
   for (const hue of [0, 90, 125, 210, 255, 330]) {
     for (const name of accentBases) {
       const tokens = themes[name];

@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "29 de setembro de 2026",
+  updated: "8 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -849,7 +849,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "dc530314",
+      sourceRev: "b82394b4",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -919,6 +919,17 @@ export const privacyPtBr: LegalDocument = {
               ou ExpressTURN como fallback, mais os STUN públicos do Google e da
               Cloudflare — estabelecimento e retransmissão da conexão de voz,
               como descrito acima.
+            </li>
+            <li>
+              <strong>Cloudflare Workers AI</strong>: transcrição das mensagens
+              de voz, quando a transcrição está ligada. O áudio da mensagem vai
+              para a Cloudflare, que roda o modelo de reconhecimento de fala
+              (Whisper) e devolve o texto. Só acontece se quem mandou a mensagem
+              deixou a transcrição ligada: ela vem ligada, e dá para desligar.
+              Numa conversa, o áudio é transcrito assim que é enviado, se alguém
+              na conversa quer ver o texto. Num canal de servidor, só quando
+              alguém pede. O texto fica guardado junto com a mensagem e é
+              apagado junto com ela. A Cloudflare roda o modelo fora do Brasil.
             </li>
           </ul>
           <p>
@@ -1010,7 +1021,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "cb94e682",
+      sourceRev: "02aaaa60",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -1040,6 +1051,13 @@ export const privacyPtBr: LegalDocument = {
               As gravações das watch parties, e os backups noturnos do nosso
               banco de dados inteiro (mensagens incluídas), ficam no Cloudflare
               R2, na região leste da América do Norte.
+            </li>
+            <li>
+              Quando a transcrição de mensagens de voz está ligada, o áudio da
+              mensagem sai do Brasil: vai para a Cloudflare Workers AI, que roda
+              o modelo fora do país, normalmente nos Estados Unidos ou na
+              Europa. Isso é uma transferência internacional de dados pessoais
+              (LGPD, art. 33), e se apoia na mesma base das outras, logo abaixo.
             </li>
           </ul>
           <p>

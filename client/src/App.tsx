@@ -7,6 +7,7 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
+  ChevronLeft,
   History,
   Lock,
   Menu,
@@ -17,7 +18,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -36,6 +37,11 @@ import {
   isVoiceRoomChannelType,
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
+  applyLayoutToChannels,
+  layoutToPayload,
+  CHANNEL_LAYOUT_OFF,
+  CHANNEL_LAYOUT_STALE,
+  type SidebarLayout,
   type VoiceAudienceEnforcement,
   type WatchParty,
   type WatchPartyOptions,
@@ -48,6 +54,7 @@ import type {
   ChannelKind,
   ChannelSession,
   ChannelType,
+  CommunityListingNudge,
   DmSummary,
   MemberRole,
   SanctionNotice,
@@ -58,6 +65,19 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
+import {
+  applyVoiceNoteListened,
+  applyVoiceNoteUpdated,
+  isVoiceNoteListenedFrame,
+  setVoiceNoteViewer,
+} from "@/lib/voice-note-player";
+import {
+  applyVoiceNoteTranscript,
+  isVoiceNoteTranscriptFrame,
+  isVoiceNoteUpdatedFrame,
+} from "@/lib/voice-note-transcript";
+import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -71,6 +91,8 @@ import {
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { ForumPane } from "@/components/forum";
+import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -107,10 +129,17 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
+import { ListingNudgeHint } from "@/components/communities/listing-nudge-hint";
+import {
+  listingNudgeSeenPatch,
+  shouldFetchListingNudge,
+  wantsListingNudge,
+} from "@/lib/community-listing-nudge";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
 import {
   VoiceCleanActivatedToast,
@@ -148,6 +177,8 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
+import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import {
   dismissPartyNewcomerStrip,
@@ -195,6 +226,7 @@ import { ConnectionCallbackOverlay } from "@/components/connections/connection-c
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import type { AudienceModeHostControls } from "@/components/voice/audience-mode";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
+import { useForumConfig } from "@/hooks/use-forum-config";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
@@ -310,6 +342,8 @@ import {
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   ApiError,
+  putChannelLayout,
+  createConversation,
   blockUser,
   bulkDeleteMessages,
   createChannel,
@@ -318,13 +352,15 @@ import {
   deleteChannel,
   fetchBlocks,
   fetchChannels,
+  fetchForumPost,
   fetchServerThreads,
   setThreadMembership,
-  fetchCommunityHomeUnread,
+  fetchCommunityHomeUnreadAll,
   fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
   fetchMe,
+  fetchListingNudge,
   fetchPublicInvitePreview,
   fetchMembers,
   fetchRoles,
@@ -359,12 +395,15 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import {
+  channelRoutePath,
+  forumPostRoutePath,
   linkFollowedAt,
   parseAppRoute,
   pickOpenableServer,
   signedOutRedirectPath,
   messageRoutePath,
 } from "@/lib/app-route";
+import { resolveRoutedThread } from "@/lib/forum-route";
 import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
@@ -403,6 +442,8 @@ import {
 } from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
+import { startNotifyConfig } from "@/lib/notify-config";
+import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -424,7 +465,11 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
+import {
+  bindPreferenceSyncAccount,
+  preferenceWriteGeneration,
+  queuePreferenceSync,
+} from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -440,6 +485,47 @@ import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
+import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
+import { useNudgeShake } from "@/hooks/use-nudge-shake";
+import {
+  adoptAllowNudges,
+  applyNudgeArrival,
+  handleNudgeRefused,
+  startFunConfig,
+} from "@/lib/nudge";
+import {
+  startConversationsConfig,
+  useConversationsConfig,
+} from "@/lib/conversations-config";
+import {
+  arrivedForPerson,
+  landingPhoneTab,
+  readStoredPhoneTab,
+  storePhoneTab,
+  usePhoneWidth,
+  type PhoneTab,
+} from "@/lib/phone-tabs";
+import { PhoneTabBar } from "@/components/conversations/phone-tab-bar";
+import {
+  PhoneServersScreen,
+  PhoneYouScreen,
+} from "@/components/conversations/phone-screens";
+import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
+import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
+import { QuickSwitcher } from "@/components/conversations/quick-switcher";
+import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
+import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
+import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
+import {
+  dismissNewcomerInvite,
+  isNewcomerInviteDismissed,
+  isRecentNewcomer,
+  newcomerInviteVisible,
+  ownRoomCount,
+  startNewcomerInviteConfig,
+  useNewcomerInviteMoment,
+} from "@/lib/newcomer-invite";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import {
@@ -448,6 +534,11 @@ import {
   type MessageKey,
 } from "@/lib/i18n";
 import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
+import {
+  markLatestSeen,
+  readBauRow,
+  type LatestPreview,
+} from "@/lib/community-home/latest";
 import {
   applyConversationMessage,
   conversationChannel,
@@ -500,6 +591,9 @@ import {
   mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
+  bauIsFresh,
+  withServerBauNewest,
+  withServerBauUnread,
 } from "@/lib/community-home";
 import { pickArrivalPartyChannel } from "@/lib/live-party-landing";
 import { LivePreviewPanel } from "@/components/live-preview/live-preview-panel";
@@ -530,6 +624,7 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
 import {
@@ -540,15 +635,30 @@ import {
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useStableCallback } from "@/hooks/use-stable-callback";
+import { useChannelLayoutConfig } from "@/hooks/use-channel-layout-config";
+import type { ApplyLayoutResult } from "@/components/layout/channel-list";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
-import { useChannelNotifications } from "@/hooks/use-notifications";
+import {
+  useChannelNotifications,
+  useNotifyOfferReady,
+} from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
+import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
+import { useRetroLook } from "@/hooks/use-appearance";
+import { useKonamiRetro } from "@/hooks/use-konami-retro";
+import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
+import {
+  RetroContacts,
+  RetroLayer,
+  RetroLogFrame,
+  RetroWindowChrome,
+} from "@/components/retro/lazy";
 import { adoptContrastPreference } from "@/lib/contrast";
 import { adoptChatDisplay } from "@/lib/chat-display";
 import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
@@ -621,6 +731,12 @@ import { feedAudienceCount } from "@/lib/watch-party-activity";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
+import type { StoryCallLive } from "@pqp/shared";
+import { StoriesHost } from "@/components/stories/stories-host";
+import { StoryStrip } from "@/components/stories/story-strip";
+import { emitStoriesRefresh, emitStoriesUpdate } from "@/lib/stories/events";
+import { openStoryComposer } from "@/lib/stories/ui-store";
+import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -1252,6 +1368,8 @@ interface ChannelPromptState {
   type?: ChannelType;
   isPrivate?: boolean;
   channel?: Channel;
+  /** Create inside this category (the mixed list's per-category "+"). */
+  parentId?: string | null;
 }
 
 export interface UnreadState {
@@ -1266,6 +1384,10 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // The voice note player remembers its speed per account.
+  useEffect(() => {
+    setVoiceNoteViewer(user?.id ?? null);
+  }, [user?.id]);
   // For callbacks that must not change identity when the account loads.
   const userIdRef = useRef<string | null>(null);
   userIdRef.current = user?.id ?? null;
@@ -1321,6 +1443,14 @@ function MainAppContent({
    * effect beside the arrival intents).
    */
   const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
+  /**
+   * What the newcomer invite strip hands Criar sala: a name already in the
+   * field and the `?ref=chama` its invite link carries. Null for every other
+   * door, and cleared when the dialog closes.
+   */
+  const [createServerPrefill, setCreateServerPrefill] = useState<{
+    name: string;
+  } | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -1391,6 +1521,12 @@ function MainAppContent({
   const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
     isPartyNewcomerStripDismissed(),
   );
+  // `newcomer_invite_moment`: the "chama teus amigos" strip was closed on
+  // this device. Read once; the write is `dismissNewcomerInvite`.
+  const [newcomerInviteClosed, setNewcomerInviteClosed] = useState(() =>
+    isNewcomerInviteDismissed(),
+  );
+  const newcomerInviteMomentOn = useNewcomerInviteMoment();
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -1558,9 +1694,17 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The one-time "Ativar notificações" card. Like the cargos card it decides
+  // for itself whether it was seen, and the queue has to know too: a card that
+  // wants the corner and never draws would hold every tip behind it.
+  const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
+    () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
+  );
+  const notifyOfferReady = useNotifyOfferReady();
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
+  const [wantsForumHint] = useState(() => featureHintEligible("forum"));
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
@@ -1770,6 +1914,13 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // A Baú permalink (or a card in chat) names a post to scroll to. The nonce
+  // makes following the same card twice scroll twice.
+  const [communityHomeFocus, setCommunityHomeFocus] = useState<{
+    serverId: string;
+    postId: string;
+    nonce: number;
+  } | null>(null);
   // A ticket for every fetch of the open server's channel list that the
   // `channels-update` refetch has to order itself against. Only the newest
   // ticket may write the list, so two quick frames (a create and a rename a
@@ -1824,6 +1975,48 @@ function MainAppContent({
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  /**
+   * The open server's Baú preview (`GET …/home/latest`), from the same read as
+   * the count above. Null while the server has the preview off or before the
+   * first read lands: the row stays the plain one.
+   */
+  const [communityHomeLatest, setCommunityHomeLatest] =
+    useState<LatestPreview | null>(null);
+  const communityHomeLatestRef = useRef<LatestPreview | null>(null);
+  communityHomeLatestRef.current = communityHomeLatest;
+  /** Bumped by "Postar no Baú" on the empty preview: the feed opens its composer. */
+  const [communityHomeComposeNonce, setCommunityHomeComposeNonce] = useState(0);
+  /**
+   * Unread Baú posts for EVERY server, for the rail's icons. The open server's
+   * own count above drives the sidebar row and the corner card; this is the
+   * same number for the servers whose channel list is not on screen.
+   */
+  const [communityHomeUnreadByServer, setCommunityHomeUnreadByServer] =
+    useState<Record<string, number>>({});
+  /**
+   * When each server's newest unread Baú post went live (ISO), for the "New"
+   * chip's 24 hour window. Servers with nothing unread are absent, and so is
+   * every server on an API that predates the field.
+   */
+  const [communityHomeNewestByServer, setCommunityHomeNewestByServer] =
+    useState<Record<string, string>>({});
+  /**
+   * Re-renders once a minute while the open server has unread Baú posts, so the
+   * row's "New" chip lets go at 24 h instead of waiting for some other render.
+   */
+  const [communityHomeFreshTick, setCommunityHomeFreshTick] = useState(0);
+  useEffect(() => {
+    if (communityHomeUnread <= 0) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => setCommunityHomeFreshTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [communityHomeUnread]);
+  /** Bumped by every Baú frame, for any server, to re-read the map above. */
+  const [communityHomeAllNudge, setCommunityHomeAllNudge] = useState(0);
   const communityHomeUnreadRef = useRef(0);
   const communityHomeUnreadServerRef = useRef<string | null>(null);
   const communityHomeUpdateNudgeRef = useRef(0);
@@ -2410,6 +2603,22 @@ function MainAppContent({
   });
 
   /**
+   * Whether this window is in front of the person (visible and focused, with a
+   * grace before "background"), for the server's push attention gate: a tab
+   * left in the background or a minimised desktop window no longer keeps the
+   * phone quiet. Re-announced on every reconnect, like idle, because the
+   * server forgets it with the socket. See `lib/attention.ts`.
+   */
+  useAttentionReport({
+    sendAttention: useCallback(
+      (foreground: boolean) =>
+        transport.sendChat({ type: "set-attention", foreground }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
+
+  /**
    * The status hook, through a ref: the socket handler is installed once per
    * connection and must not be rebuilt each time the account changes it.
    */
@@ -2470,10 +2679,24 @@ function MainAppContent({
   const selectedServerId = selectionServerId(selection);
   const selectedServerIdRef = useRef<string | null>(null);
   selectedServerIdRef.current = selectedServerId;
+  // The open server's strip answered `enabled` (its `stories` flag is on):
+  // the server menu offers "Postar story" only then.
+  const storiesOnHere = useStoriesEnabledFor(
+    selectedServerId ? { kind: "server", serverId: selectedServerId } : null,
+  );
   const serversRef = useRef(servers);
   serversRef.current = servers;
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
+  /**
+   * The mixed channel list (`mixed_channel_list`): whether this server draws
+   * it, and the version a reorder is sent against. Re-read whenever the list
+   * changes, since every change to the list moves the version.
+   */
+  const { layout: channelLayout, adopt: adoptChannelLayout } =
+    useChannelLayoutConfig(selectedServerId, channels, {
+      onDrift: (serverId) => refreshChannelListRef.current?.(serverId),
+    });
 
   /**
    * Servers whose Baú switch may have moved while this app was not listening:
@@ -2588,6 +2811,28 @@ function MainAppContent({
   // (the teaser, the camera size, a server switched on) shows without a
   // reload. See `lib/config-refresh.ts`.
   useEffect(() => startConfigRefresh(), []);
+  // The notification switches (`notify_open_channel`) ride the same refresh.
+  // Only with an account: `/api/push/config` needs a token, and a signed-out
+  // page (or one still resolving `/api/me`) would be answered with a 401.
+  const notifyConfigUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyConfigUserId ? startNotifyConfig() : undefined),
+    [notifyConfigUserId],
+  );
+  // `voice_audio_self_heal` (`lib/audio-health.ts`), same refresh, same reason
+  // to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // Modo 2005's kill switch (`retro_look`), asked only by a browser that found
+  // the look, and its Konami door. See `lib/retro-look.ts`.
+  useEffect(
+    () => (notifyConfigUserId ? startRetroLookFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  useKonamiRetro(notifyConfigUserId !== null);
+  const retroOn = useRetroLook();
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -2958,8 +3203,12 @@ function MainAppContent({
     (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
   );
   const stableOnCreateChannel = useStableCallback(
-    (type: ChannelType, isPrivate: boolean) =>
-      setChannelPrompt({ mode: "create", type, isPrivate }),
+    (type: ChannelType, isPrivate: boolean, parentId?: string | null) =>
+      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null }),
+  );
+  const stableOnApplyLayout = useStableCallback(
+    (layout: SidebarLayout<Channel>, baseVersion: number) =>
+      handleApplyLayout(layout, baseVersion),
   );
   const stableOnRenameChannel = useStableCallback((channel: Channel) =>
     setChannelPrompt({ mode: "rename", channel }),
@@ -2984,8 +3233,8 @@ function MainAppContent({
       setPurgeChannel({ id: channel.id, name: channel.name }),
   );
   const stableOnMoveChannel = useStableCallback(
-    (id: string, parentId: string | null, index: number) =>
-      void handleMoveChannel(id, parentId, index),
+    (id: string, parentId: string | null, index: number, targetId?: string) =>
+      void handleMoveChannel(id, parentId, index, targetId),
   );
   const stableOnFavoriteChannelIdsChange = useStableCallback(
     (ids: string[]) => handleFavoriteChannelIdsChange(ids),
@@ -3004,6 +3253,50 @@ function MainAppContent({
       void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
     }
   });
+  /** The preview's card: open the Baú scrolled to that post. */
+  const stableOnOpenCommunityHomePost = useStableCallback((postId: string) => {
+    const serverId = selectedServerId;
+    if (!serverId) {
+      return;
+    }
+    setWhatsNewOpen(false);
+    markCommunityHomeRowSeen(serverId);
+    setCommunityHomeRowNew(false);
+    void selectChannel(COMMUNITY_HOME_CHANNEL_ID, serverId).then(() => {
+      setCommunityHomeFocus((previous) => ({
+        serverId,
+        postId,
+        nonce: (previous?.nonce ?? 0) + 1,
+      }));
+    });
+  });
+  /** The empty preview's "Postar no Baú": the Baú with its composer up. */
+  const stableOnComposeCommunityHome = useStableCallback(() => {
+    if (!selectedServerId) {
+      return;
+    }
+    setCommunityHomeComposeNonce((n) => n + 1);
+    stableOnSelectCommunityHome();
+  });
+  const canPostInBau = perms.can(Permission.MANAGE_SERVER);
+  // One object per change, not per render: `ChannelList` is memoized.
+  const communityHomePreviewProps = useMemo(
+    () =>
+      communityHomeLatest
+        ? {
+            latest: communityHomeLatest,
+            canPost: canPostInBau,
+            onOpenPost: stableOnOpenCommunityHomePost,
+            onCompose: stableOnComposeCommunityHome,
+          }
+        : null,
+    [
+      communityHomeLatest,
+      canPostInBau,
+      stableOnOpenCommunityHomePost,
+      stableOnComposeCommunityHome,
+    ],
+  );
   // `favoriteChannelIds` is memoized by hand rather than with `useMemo`: it
   // depends on `selectedServer`, declared further down this function (after
   // the `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
@@ -3050,6 +3343,37 @@ function MainAppContent({
   const stableOnMention = useStableCallback((username: string) =>
     setComposerInsert(`@${username}`),
   );
+  // Conversas: "Mensagem" on a member row and "Mandar um oi" after a friend
+  // accepts. Opens or reuses the 1:1; a refusal (privacy, a block) comes back
+  // in the server's own words on the app's error line.
+  const stableOnMessagePerson = useStableCallback((userId: string, door?: DmDoor) => {
+    if (door) {
+      trackDmStart(door);
+    }
+    // The account that asked. A sign-out or account switch while the request
+    // is in flight must not drop this conversation into the next account.
+    const askedBy = userIdRef.current;
+    void (async () => {
+      try {
+        const { conversation } = await createConversation([userId]);
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
+        setConversations((prev) => upsertConversation(prev, conversation));
+        setWhatsNewOpen(false);
+        await selectConversation(conversation.channelId);
+      } catch (error) {
+        if (userIdRef.current !== askedBy) {
+          return;
+        }
+        setAppError(
+          error instanceof ApiError || error instanceof Error
+            ? error.message
+            : t("dm.dialog.failed"),
+        );
+      }
+    })();
+  });
   const stableOnBlockUser = useStableCallback((userId: string) =>
     void handleBlockUser(userId),
   );
@@ -3227,6 +3551,8 @@ function MainAppContent({
   }, [inCall, voiceState.isMuted, voiceState.isDeafened]);
 
   const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
+  // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
     unreadHoldRef.current.delete(channelId);
@@ -3260,7 +3586,11 @@ function MainAppContent({
         for (const row of rows) {
           const isOpen = row.channelId === selectedChannelIdRef.current;
           const held = unreadHoldRef.current.has(row.channelId);
-          if (row.count > 0 && (!isOpen || held)) {
+          // A forum's row can carry mentions with no count: somebody named
+          // this reader in a reply inside a post, and no new post arrived
+          // (forum PR 2's unread rule). Dropping it on `count` alone would
+          // lose exactly the signal a forum row exists to keep.
+          if ((row.count > 0 || row.mentions > 0) && (!isOpen || held)) {
             next[row.channelId] = {
               count: row.count,
               mentions: row.mentions,
@@ -3713,6 +4043,32 @@ function MainAppContent({
     };
   }, [selectedServerId, timeoutsEpoch, moderationBits.timeout]);
 
+  // --- forums --- state the forum pane is handed (see the header of
+  // `components/forum/forum-pane.tsx`).
+  /**
+   * The mark-read that opening a channel sends, kept for one answer: the
+   * forum pane's first `markRead(forumId)` gets the cursor from BEFORE this
+   * visit instead of moving it a second time and getting back "just now".
+   */
+  const visitReadCursorRef = useRef<{
+    channelId: string;
+    cursor: Promise<string | null>;
+    taken: boolean;
+  } | null>(null);
+  /** The post in the address bar while a forum is open (`/post/<id>`). */
+  const [forumRoutePost, setForumRoutePost] = useState<{
+    forumId: string;
+    postId: string;
+  } | null>(null);
+  /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
+  const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
+  /**
+   * Goes up on every channel open and every route applied, so a link lookup
+   * that resolves late can tell the reader has moved on since it started.
+   */
+  const navigationSeqRef = useRef(0);
+  const routeApplySeqRef = useRef(0);
+
   /**
    * Open a channel by id, whatever kind it is.
    *
@@ -3729,6 +4085,7 @@ function MainAppContent({
       }
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
+      navigationSeqRef.current += 1;
       // Not at the live end until this channel's list says so, after its
       // history has loaded.
       messageListLiveEndRef.current = null;
@@ -3750,15 +4107,21 @@ function MainAppContent({
       setMessagesLoading(true);
       chat.joinChannel(channelId);
       const load = historyLoads.begin(channelId);
+      const readCursor = held
+        ? Promise.resolve(unreadCursorByChannelRef.current[channelId] ?? null)
+        : clearUnread(channelId);
+      // --- forums --- the forum pane measures "Novo" against the cursor as
+      // it was BEFORE this visit, and this mark-read is what moves it: keep
+      // its answer for the pane's first ask (`forumMarkRead`). A new channel
+      // also closes whatever post or drop the last forum had.
+      visitReadCursorRef.current = { channelId, cursor: readCursor, taken: false };
+      setForumRoutePost(null);
+      setForumDroppedFiles(null);
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
           fetchMessages(channelId),
-          held
-            ? Promise.resolve(
-                unreadCursorByChannelRef.current[channelId] ?? null,
-              )
-            : clearUnread(channelId),
+          readCursor,
         ]);
         if (selectedChannelIdRef.current !== channelId) {
           return;
@@ -4419,6 +4782,9 @@ function MainAppContent({
       setBootstrapError(null);
 
       try {
+        // Noted before the read: a look or a find chosen while it is in flight
+        // is newer than its answer (`preferenceWrittenSince`).
+        const readGeneration = preferenceWriteGeneration();
         const me = await fetchMe();
         if (cancelled) {
           return;
@@ -4454,9 +4820,10 @@ function MainAppContent({
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
         bindPreferenceSyncAccount(me.id);
-        if (me.preferences?.appearance) {
-          adoptAppearancePreference(me.preferences.appearance);
-        }
+        // Always called: with no stored look it still hands a Modo 2005
+        // found before the look synced up to the account (`appearance.ts`).
+        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
           getAppearance(),
@@ -4473,6 +4840,8 @@ function MainAppContent({
         if (me.preferences?.chatDisplay) {
           adoptChatDisplay(me.preferences.chatDisplay);
         }
+        adoptVoiceTranscription(me.preferences);
+        adoptAllowNudges(me.preferences);
         const merged = applyRemotePreferences(
           loadLocalSettings(),
           me.preferences,
@@ -4542,7 +4911,8 @@ function MainAppContent({
         // bootstrap's `onReady` openChannel(initial) can overwrite the deep
         // link's landing (Home, or first text) and leave "Pick a channel".
         const deepLink = parseAppRoute(window.location.pathname);
-        const deepLinksServer = deepLink?.kind === "channel";
+        const deepLinksServer =
+          deepLink?.kind === "channel" || deepLink?.kind === "home";
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
         // A conversation link owns the navigation outright: opening a server
@@ -4628,6 +4998,8 @@ function MainAppContent({
               preview?: string;
               authorName?: string;
               authorId?: string;
+              /** `nudge` for chamar a atenção; absent for a message. */
+              systemKind?: "nudge";
             };
             // Where this came from, taken from the frame rather than looked up.
             // The directory is only ever fed the SELECTED server's channel
@@ -4643,6 +5015,10 @@ function MainAppContent({
               activity.kind ?? "server",
             );
             if (activity.kind && activity.kind !== "server") {
+              // Their line landed, so the list stops saying they are typing.
+              if (activity.authorId) {
+                clearListTyping(activity.channelId, activity.authorId);
+              }
               // This device's clock: the frame carries no message time. Kept
               // so the next broadcast is not ordered against it.
               const now = new Date().toISOString();
@@ -4670,6 +5046,7 @@ function MainAppContent({
                           preview: activity.preview,
                           isAttachment: false,
                           isGif: false,
+                          systemKind: activity.systemKind ?? null,
                         }
                       : undefined,
                   ),
@@ -4704,6 +5081,7 @@ function MainAppContent({
                   preview: activity.preview,
                   authorName: activity.authorName,
                   authorId: activity.authorId,
+                  systemKind: activity.systemKind,
                 },
               ),
               {
@@ -4731,6 +5109,41 @@ function MainAppContent({
                 },
               };
             });
+            return;
+          }
+
+          // Conversas: "digitando…" on a conversation's row. The server sends
+          // a conversation's typing to every participant, open or not; the
+          // chat controllers below keep owning the open channel's line, so
+          // this only records and falls through.
+          if (
+            message.type === "typing-broadcast" &&
+            message.userId !== userIdRef.current &&
+            conversationsRef.current.some(
+              (one) => one.channelId === message.channelId,
+            )
+          ) {
+            noteListTyping(message.channelId, message.userId, message.displayName);
+          }
+
+          // Somebody heard a voice note: the listener's own other sockets (so
+          // the dot goes everywhere) and the author's (for "ouviu"). The store
+          // is global because the player is; no controller owns it.
+          if (isVoiceNoteListenedFrame(message)) {
+            applyVoiceNoteListened(message);
+            return;
+          }
+
+          // A transcript settled (or was asked for), and the AAC copy of a
+          // note was made. Both go to the whole channel and into stores keyed
+          // by attachment, like the receipts above: a card in the list, a
+          // thread panel or a search hit reads the same answer.
+          if (isVoiceNoteTranscriptFrame(message)) {
+            applyVoiceNoteTranscript(message);
+            return;
+          }
+          if (isVoiceNoteUpdatedFrame(message)) {
+            applyVoiceNoteUpdated(message);
             return;
           }
 
@@ -4801,6 +5214,19 @@ function MainAppContent({
                   localStampedAt,
                 }),
               );
+            }
+            // Chamar a atenção: a nudge that just arrived live shakes the open
+            // conversation and plays its cue (or, if it is mine, starts the
+            // button's cooldown). History never comes through here.
+            if (
+              message.type === "message-broadcast" &&
+              message.message.systemKind === "nudge"
+            ) {
+              applyNudgeArrival(message.message, {
+                viewerId: userIdRef.current,
+                openChannelId: selectedChannelIdRef.current,
+                visible: document.visibilityState === "visible",
+              });
             }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
@@ -4988,6 +5414,16 @@ function MainAppContent({
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
+            // Any server's frame, the open one included: the rail's icons.
+            setCommunityHomeAllNudge((n) => n + 1);
+            return;
+          }
+
+          // Stories: content-free, it names a strip to refetch (and maybe
+          // ids an open viewer can drop). The strips and the viewer listen
+          // on `lib/stories/events.ts`; nothing here knows what they draw.
+          if (message.type === "stories-update") {
+            emitStoriesUpdate(message);
             return;
           }
 
@@ -5043,6 +5479,19 @@ function MainAppContent({
                 ? withProfileUpdate(prev, message)
                 : prev,
             );
+            return;
+          }
+
+          // --- forums --- the forum list's live rows go to the pane (the
+          // transport has one handler, and this is it). They stop here rather
+          // than falling through to the voice signaling handler, which is
+          // typed for voice frames only.
+          if (
+            message.type === "forum-post-upsert" ||
+            message.type === "forum-post-removed" ||
+            message.type === "forum-config-update"
+          ) {
+            dispatchForumFrame(message);
             return;
           }
 
@@ -5219,6 +5668,14 @@ function MainAppContent({
             return;
           }
 
+          // Chamar a atenção's refusal, sent only to the socket that sent the
+          // `nudge` frame. The reason becomes a line under the log and, for a
+          // cooldown, the button's wait.
+          if (message.type === "nudge-refused") {
+            handleNudgeRefused(message);
+            return;
+          }
+
           // --- voice state ---
           // Record each room's transport as rosters pass through (the frame
           // still falls through to the controller). Powers the members
@@ -5316,6 +5773,15 @@ function MainAppContent({
               }
             }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }
+          // --- forums --- the forum list refetches its first page: frames
+          // sent while the socket was down are not replayed.
+          dispatchForumReconnected();
+          // Stories frames sent while the socket was down are gone; the
+          // strips on screen re-read, after the same jitter.
+          setTimeout(
+            emitStoriesRefresh,
+            uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS),
+          );
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -5427,6 +5893,55 @@ function MainAppContent({
       navigate(path, { replace: true });
     },
     [navigate],
+  );
+
+  /** `syncRoute` for an address that is not a plain channel (a forum post). */
+  const syncPath = useCallback(
+    (path: string) => {
+      if (routeRef.current === path) {
+        return;
+      }
+      routeRef.current = path;
+      navigate(path, { replace: true });
+    },
+    [navigate],
+  );
+
+  /**
+   * --- forums --- the forum pane opened or closed a post: its own address
+   * goes in the bar (`/channel/<forumId>/post/<postId>`), so a refresh or a
+   * copied URL lands on the same post, and closing it puts the forum's back.
+   */
+  const setForumPostRoute = useCallback(
+    (forumId: string, postId: string | null) => {
+      setForumRoutePost(postId ? { forumId, postId } : null);
+      const serverId = selectedServerIdRef.current;
+      if (serverId && selectedChannelIdRef.current === forumId) {
+        syncPath(
+          postId
+            ? forumPostRoutePath(serverId, forumId, postId)
+            : channelRoutePath(serverId, forumId),
+        );
+      }
+    },
+    [syncPath],
+  );
+
+  /**
+   * `markRead` for the forum pane: the first ask for the channel this visit
+   * opened answers the cursor from before the visit (`openChannel` already
+   * moved it), every other ask moves the cursor, as `markChannelRead` does.
+   */
+  const forumMarkRead = useCallback(
+    (channelId: string): Promise<string | null> => {
+      const visit = visitReadCursorRef.current;
+      if (visit && visit.channelId === channelId && !visit.taken) {
+        visit.taken = true;
+        return visit.cursor;
+      }
+      return clearUnread(channelId);
+    },
+    [clearUnread],
   );
 
   /**
@@ -5601,8 +6116,16 @@ function MainAppContent({
   refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
+  /**
+   * Conversas on a phone: the bottom bar's tab follows a conversation opened
+   * by any door (a toast, a push, Ctrl+K, a profile card). Set by the phone
+   * shell below; null everywhere else.
+   */
+  const phoneFollowRef = useRef<((tab: PhoneTab) => void) | null>(null);
+
   const selectConversation = useCallback(
     async (channelId: string) => {
+      phoneFollowRef.current?.("conversas");
       setSelection(HOME_SELECTION);
       syncRoute(HOME_SELECTION, channelId);
       await openChannel(channelId);
@@ -5645,7 +6168,7 @@ function MainAppContent({
               : 1;
           const inServer = selection.kind === "server";
           const ids = inServer
-            ? navigableChannelIds(channels)
+            ? navigableChannelIds(channels, { mixed: channelLayout.mixed })
             : conversations.map((conversation) => conversation.channelId);
           const next =
             action === "previousUnreadChannel" || action === "nextUnreadChannel"
@@ -5669,6 +6192,7 @@ function MainAppContent({
     },
     [
       channels,
+      channelLayout.mixed,
       conversations,
       selectChannel,
       selectConversation,
@@ -5877,7 +6401,19 @@ function MainAppContent({
         channelPrompt.type,
         isPrivate ?? channelPrompt.isPrivate ?? false,
         topic || undefined,
-      );
+        channelPrompt.parentId ?? null,
+      ).catch((error: unknown) => {
+        // The operator turned forums off for this server between the menu
+        // drawing "Fórum" and the click: say that, not the raw token.
+        if (
+          error instanceof ApiError &&
+          error.status === 403 &&
+          error.message === "forum_channels_off"
+        ) {
+          throw new Error(translateMessage("forum.create.off"));
+        }
+        throw error;
+      });
       const next = [...channels, channel].sort(
         (a, b) => a.position - b.position,
       );
@@ -6005,13 +6541,91 @@ function MainAppContent({
    * the kind of drift the delete-category fix above just caught. The server
    * already did the work; trust its answer.
    */
+  /**
+   * A reorder of the mixed list: drawn at once, then one full-order PUT. A
+   * stale list (somebody else moved something first) adopts the server's
+   * fresh list and version; any other failure puts the list back as it was.
+   * The caller says which, in its own status line.
+   */
+  async function handleApplyLayout(
+    layout: SidebarLayout<Channel>,
+    baseVersion: number,
+  ): Promise<ApplyLayoutResult> {
+    const serverId = selectedServerId;
+    if (!serverId) {
+      return "failed";
+    }
+    // A ticket like every other write of the list: a refetch that starts
+    // after this (somebody else's change, nudged in) is newer, and this
+    // response must not land on top of it. A list older than its version is
+    // the one shape that would let the next drag overwrite that change.
+    const ticket = channelListTickets.take();
+    const current = () =>
+      channelListTickets.isLatest(ticket) && selectedServerIdRef.current === serverId;
+    setChannels(applyLayoutToChannels(channels, layout));
+    try {
+      const result = await putChannelLayout(
+        serverId,
+        layoutToPayload(layout, baseVersion),
+      );
+      if (current()) {
+        channelListTickets.wrote(ticket);
+        // `null`: committed, but the server could not read the list back.
+        // The order drawn is the order saved; the nudge brings the rest.
+        if (result.channels) {
+          setChannels(channelListTickets.withCreated(serverId, result.channels, ticket));
+        }
+        adoptChannelLayout(serverId, { version: result.version });
+      }
+      return "ok";
+    } catch (error) {
+      const details = (error instanceof ApiError ? error.details : null) as {
+        channels?: Channel[];
+        version?: number;
+      } | null;
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === CHANNEL_LAYOUT_STALE &&
+        details?.channels &&
+        typeof details.version === "number"
+      ) {
+        if (current()) {
+          channelListTickets.wrote(ticket);
+          setChannels(channelListTickets.withCreated(serverId, details.channels, ticket));
+          adoptChannelLayout(serverId, { version: details.version });
+        }
+        return "stale";
+      }
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === CHANNEL_LAYOUT_OFF &&
+        typeof details?.version === "number"
+      ) {
+        // The operator turned it off (or reverted) under us: the old list.
+        adoptChannelLayout(serverId, { version: details.version, mixed: false });
+      }
+      // Never a restore of the list from before the drag: by now it may be
+      // older than what the server holds. Read it again, ticketed, but only
+      // while this write is still the newest: a later write or refetch in
+      // flight brings the truth itself, and a read started now could land
+      // before that write commits.
+      if (current()) {
+        refreshChannelList(serverId);
+      }
+      return "failed";
+    }
+  }
+
   async function handleMoveChannel(
     channelId: string,
     parentId: string | null,
     index: number,
+    targetId?: string,
   ) {
     try {
-      const { channels: next } = await moveChannel(channelId, parentId, index);
+      const { channels: next } = await moveChannel(channelId, parentId, index, targetId);
       setChannels(next);
     } catch (error) {
       setAppError(
@@ -7232,6 +7846,9 @@ function MainAppContent({
   // the media server did with the host's last change (who is still audible),
   // which the strip shows until the room's own state says otherwise.
   const voiceConfig = useVoiceConfig(selectedServerId);
+  // `forum_channels` for this server: the "+" menu's Fórum, and whether an
+  // open forum takes new posts. Asked here, once, for every surface.
+  const forumConfig = useForumConfig(selectedServerId);
   const [audienceBusy, setAudienceBusy] = useState(false);
   // Tied to the call and the session it answered for, so a warning from one
   // call is never drawn over the next one.
@@ -7545,6 +8162,7 @@ function MainAppContent({
       channelId: string | null,
       messageId: string | null = null,
       linkedAt: number = Date.now(),
+      postId: string | null = null,
     ) => {
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
@@ -7552,6 +8170,11 @@ function MainAppContent({
       const usedFallback = openable?.usedFallback === true;
       const targetChannelId = usedFallback ? null : channelId;
       const targetMessageId = usedFallback ? null : messageId;
+      const targetPostId = usedFallback ? null : postId;
+      const routeApply = ++routeApplySeqRef.current;
+      // Taken before the first wait (the channel list), so a click made while
+      // any of this is out wins over the link.
+      const navigationBefore = navigationSeqRef.current;
 
       setChannelsLoading(true);
       beginChannelLoad(targetServerId);
@@ -7570,13 +8193,60 @@ function MainAppContent({
         const requested = targetChannelId
           ? list.find((c) => c.id === targetChannelId)
           : undefined;
-        if (targetChannelId && !requested) {
-          setAppError("That channel no longer exists or is private.");
+        // --- forums --- an id the list does not carry may still be a place:
+        // a forum post or a chat thread (the list never carries threads), so
+        // a permalink, a search hit or a push into one opens it over its
+        // parent instead of stopping at "no longer exists".
+        const routedThread =
+          targetChannelId && !requested
+            ? await resolveRoutedThread(targetChannelId, {
+                listedChannelIds: new Set(list.map((one) => one.id)),
+                // The sidebar already holds this server's active threads, so
+                // the usual thread link opens without a request.
+                heldThreads:
+                  selectedServerIdRef.current === targetServerId
+                    ? threadsByChannelRef.current
+                    : {},
+                fetchPost: fetchForumPost,
+                fetchThreads: () => fetchServerThreads(targetServerId),
+              })
+            : null;
+        // The lookup is a round trip or two. If the reader went somewhere
+        // else meanwhile (a click, another link), that is where they stay.
+        if (
+          navigationSeqRef.current !== navigationBefore ||
+          routeApplySeqRef.current !== routeApply
+        ) {
+          return;
         }
-        if (requested) {
+        if (targetChannelId && !requested && !routedThread) {
+          setAppError(translateMessage("chrome.channelUnavailable"));
+        }
+        // After opening the parent, the post or thread goes on top only if
+        // the reader is still there: a click while it loaded wins.
+        const stillOn = (channelId: string) =>
+          selectedChannelIdRef.current === channelId &&
+          routeApplySeqRef.current === routeApply;
+        if (routedThread?.kind === "forum-post") {
+          await selectChannel(routedThread.forumId, targetServerId);
+          if (stillOn(routedThread.forumId)) {
+            setForumPostRoute(routedThread.forumId, routedThread.post.id);
+          }
+        } else if (routedThread?.kind === "thread") {
+          const parentId = routedThread.thread.parentChannelId;
+          await selectChannel(parentId, targetServerId);
+          if (stillOn(parentId)) {
+            await openThreadFromSidebar(routedThread.thread);
+          }
+        } else if (requested) {
           await selectChannel(requested.id, targetServerId);
           if (targetMessageId && !sentSince(requested.id, linkedAt)) {
             setHighlightMessageId(targetMessageId);
+          }
+          // `/channel/<forumId>/post/<postId>`: the forum, with the post on
+          // top. The pane reads the post itself and says so when it is gone.
+          if (targetPostId && requested.type === "forum" && stillOn(requested.id)) {
+            setForumPostRoute(requested.id, targetPostId);
           }
         } else {
           const targetServer = serversRef.current.find(
@@ -7617,9 +8287,36 @@ function MainAppContent({
       channelListTickets,
       communityHomeOn,
       loadUnread,
+      openThreadFromSidebar,
       selectChannel,
       sentSince,
+      setForumPostRoute,
     ],
+  );
+
+  /**
+   * Apply a `/app/server/<id>/bau[/<postId>]` target: open the server on its
+   * Baú and, with a post id, scroll to that post. A server with Baú off (or a
+   * server this account is not in) lands wherever the plain server link would,
+   * and no focus is set, so a dead card never leaves a stale highlight.
+   */
+  const applyHomeRoute = useCallback(
+    async (
+      serverId: string,
+      postId: string | null,
+      linkedAt: number = Date.now(),
+    ) => {
+      await applyChannelRoute(serverId, null, null, linkedAt);
+      const target = serversRef.current.find((server) => server.id === serverId);
+      if (postId && target?.communityHomeEnabled === true) {
+        setCommunityHomeFocus((previous) => ({
+          serverId,
+          postId,
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
+      }
+    },
+    [applyChannelRoute],
   );
 
   /**
@@ -7646,7 +8343,7 @@ function MainAppContent({
       if (!list.some((one) => one.channelId === channelId)) {
         setSelectedChannelId(null);
         selectedChannelIdRef.current = null;
-        setAppError("That conversation is not available.");
+        setAppError(translateMessage("chrome.conversationUnavailable"));
         return;
       }
       await selectConversation(channelId);
@@ -7701,6 +8398,14 @@ function MainAppContent({
     isCommunityHomeChannelId(selectedChannelId) &&
     (communityHomeFeedLive || selectedIsCommunity);
   useEffect(() => {
+    // Leaving the Baú spends the focus: coming back later is not a follow.
+    if (!communityHomeOpen) {
+      setCommunityHomeFocus((current) => (current ? null : current));
+      // Same for "Postar no Baú": the next visit opens the feed, not the composer.
+      setCommunityHomeComposeNonce(0);
+    }
+  }, [communityHomeOpen]);
+  useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
       return;
@@ -7743,6 +8448,7 @@ function MainAppContent({
 
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeUnread(0);
+      setCommunityHomeLatest(null);
       communityHomeUnreadRef.current = 0;
       communityHomeUnreadServerRef.current = null;
       communityHomeUnreadBaselineRef.current = false;
@@ -7751,6 +8457,9 @@ function MainAppContent({
     }
     if (communityHomeUnreadServerRef.current !== selectedServerId) {
       communityHomeUnreadServerRef.current = selectedServerId;
+      // Another server's posts must never sit in this server's sidebar.
+      setCommunityHomeLatest(null);
+      communityHomeLatestRef.current = null;
       communityHomeUnreadRef.current = 0;
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast((current) =>
@@ -7766,6 +8475,17 @@ function MainAppContent({
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast(null);
       const serverId = selectedServerId;
+      setCommunityHomeUnreadByServer((current) =>
+        withServerBauUnread(current, serverId, 0),
+      );
+      setCommunityHomeNewestByServer((current) =>
+        withServerBauNewest(current, serverId, null),
+      );
+      // Opening the Baú folds the preview's card back into the slim row.
+      setCommunityHomeLatest((current) => markLatestSeen(current));
+      // Landed straight on the Baú (a community does), or a post arrived while
+      // reading it: the row has no last post, or a stale one, to show.
+      const refreshPreview = fromNudge || communityHomeLatestRef.current === null;
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -7774,6 +8494,17 @@ function MainAppContent({
           }
           communityHomeUnreadBaselineRef.current = true;
           communityHomeUnreadRef.current = 0;
+          if (refreshPreview) {
+            void readBauRow(serverId, locale)
+              .then(({ latest }) => {
+                if (!cancelled && communityHomeUnreadServerRef.current === serverId) {
+                  setCommunityHomeLatest(markLatestSeen(latest));
+                }
+              })
+              .catch(() => {
+                // The plain row is still right; nothing to undo.
+              });
+          }
         })
         .catch(() => {
           // Leave the baseline unset so a later nudge cannot toast against 0.
@@ -7785,10 +8516,17 @@ function MainAppContent({
     const previous = communityHomeUnreadRef.current;
     const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
-    void fetchCommunityHomeUnread(selectedServerId)
-      .then(({ count }) => {
+    void readBauRow(selectedServerId, locale)
+      .then(({ count, newestAt, latest }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          setCommunityHomeLatest(latest);
+          setCommunityHomeUnreadByServer((current) =>
+            withServerBauUnread(current, selectedServerId, count),
+          );
+          setCommunityHomeNewestByServer((current) =>
+            withServerBauNewest(current, selectedServerId, count > 0 ? newestAt : null),
+          );
           communityHomeUnreadRef.current = count;
           communityHomeUnreadBaselineRef.current = true;
           if (
@@ -7822,6 +8560,89 @@ function MainAppContent({
     communityHomeOpen,
     selectedServerId,
     communityHomeUpdateNudge,
+    locale,
+  ]);
+
+  /**
+   * Unread Baú posts for every server, for the rail.
+   *
+   * The sidebar effect above only knows the server that is open, so before this
+   * a post published in any other server left its icon untouched. One request
+   * for all of them, re-asked when a Baú frame arrives (debounced: a staff
+   * member publishing three posts is one read), when the set of servers with a
+   * Baú changes, and when the person moves between servers (a feed they just
+   * left has been stamped read by then). The open server's own entry is not
+   * trusted from here: the rail draws it as selected anyway, and the sidebar
+   * effect owns its number.
+   */
+  const bauServerKey = servers
+    .filter((row) => row.communityHomeEnabled === true)
+    .map((row) => row.id)
+    .join(",");
+  useEffect(() => {
+    if (!communityHomeFeatureOn || bauServerKey === "") {
+      setCommunityHomeUnreadByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      setCommunityHomeNewestByServer((current) =>
+        Object.keys(current).length === 0 ? current : {},
+      );
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    // The first read waits a beat so a burst of frames is one request; a read
+    // that fails is retried with a bounded backoff, so a blip does not leave a
+    // new post's pip off until the next frame or navigation.
+    const delays = [250, 5_000, 20_000, 60_000];
+    const attempt = (n: number): void => {
+      timer = window.setTimeout(() => {
+        void fetchCommunityHomeUnreadAll()
+          .then(({ servers: counts, newest }) => {
+            if (cancelled) {
+              return;
+            }
+            setCommunityHomeNewestByServer((current) => {
+              const next = { ...(newest ?? {}) };
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+            setCommunityHomeUnreadByServer((current) => {
+              const next = { ...counts };
+              // The server whose feed is open has just been stamped read; a
+              // read that raced the stamp must not light its icon on leaving.
+              if (selectedServerId && communityHomeOpen) {
+                delete next[selectedServerId];
+              }
+              return JSON.stringify(next) === JSON.stringify(current)
+                ? current
+                : next;
+            });
+          })
+          .catch(() => {
+            // Keep what is on screen (no pip is better than a wrong one) and
+            // ask again, a few times.
+            if (!cancelled && n + 1 < delays.length) {
+              attempt(n + 1);
+            }
+          });
+      }, delays[n]);
+    };
+    attempt(0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    communityHomeFeatureOn,
+    bauServerKey,
+    communityHomeAllNudge,
+    selectedServerId,
+    communityHomeOpen,
   ]);
 
   /**
@@ -7990,6 +8811,10 @@ function MainAppContent({
       return;
     }
     const linkedAt = linkFollowedAt(location.state);
+    if (target.kind === "home") {
+      void applyHomeRoute(target.serverId, target.postId, linkedAt);
+      return;
+    }
     if (target.kind === "conversation") {
       void applyConversationRoute(
         target.channelId,
@@ -8003,6 +8828,7 @@ function MainAppContent({
       target.channelId,
       target.messageId,
       linkedAt,
+      target.postId,
     );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
@@ -8492,6 +9318,11 @@ function MainAppContent({
     () => new Set(blockedUsers.map((blocked) => blocked.id)),
     [blockedUsers],
   );
+  // The open channel's banner (`notify_open_channel`) has to skip the same
+  // authors the server skips for every other channel's activity.
+  useEffect(() => {
+    setNotificationBlockedAuthors(blockedUserIds);
+  }, [blockedUserIds]);
 
   // --- watch now: the strip that says a stream is live ----------------------
   // `docs/plans/WATCH_NOW.md`. Everything it shows is read from what this
@@ -8673,7 +9504,149 @@ function MainAppContent({
     ],
     [channels, conversations],
   );
+  // `desktop_notify_default_on`, re-asked with the other runtime flags.
+  // Only with an account: `/api/push/config` needs a token, and a page still
+  // resolving `/api/me` would be answered with a 401.
+  const notifyDefaultsUserId = user?.id ?? null;
+  useEffect(
+    () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
+    [notifyDefaultsUserId],
+  );
+  // `newcomer_invite_moment`, same refresh pass. Asked only once the age
+  // gate has passed: before that every `/api` route answers 403, and the
+  // account this strip is for is exactly the one that just passed it, in this
+  // very session, with no focus change to trigger a refresh afterwards.
+  const newcomerInviteUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
+    [newcomerInviteUserId],
+  );
+  // "Aparecer no diretório" (`community_listing_nudge`, `lib/community-
+  // listing-nudge.ts`): asked once per page for an owner whose room has a
+  // public address and no listing. The server picks the room (or none) and
+  // already knows whether this account was asked before; the preference is
+  // checked here too so a second tab does not even ask.
+  const [listingNudge, setListingNudge] = useState<CommunityListingNudge>(null);
+  const [listingNudgeClosed, setListingNudgeClosed] = useState(false);
+  const fetchListingNudgeNow = shouldFetchListingNudge({
+    communitiesEnabled,
+    ready: Boolean(user) && !ageGate,
+    seen: Boolean(user?.preferences?.communityListingNudgeAt),
+    automated: isAutomatedBrowser(),
+  });
+  const listingNudgeUserId = fetchListingNudgeNow ? (user?.id ?? null) : null;
+  useEffect(() => {
+    if (!listingNudgeUserId) {
+      return;
+    }
+    let cancelled = false;
+    void fetchListingNudge()
+      .then((res) => {
+        if (!cancelled) {
+          setListingNudge(res.listingNudge);
+        }
+      })
+      .catch(() => {
+        // An old server, communities off, a blip: no card is the answer.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listingNudgeUserId]);
+  const markListingNudgeSeen = useCallback(() => {
+    // The server only: patching the local `user` would read as "already
+    // asked" and pull the card off the screen the moment it painted.
+    void updatePreferences(listingNudgeSeenPatch()).catch(() => {
+      // Worst case the card is offered once more on the next load.
+    });
+  }, []);
+  // Conversas (`conversations_home`): every signed-in account past the age
+  // gate (every `/api` route is 403 before it), same refresh pass.
+  const conversationsConfigUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (conversationsConfigUserId ? startConversationsConfig() : undefined),
+    [conversationsConfigUserId],
+  );
+  const conversationsConfig = useConversationsConfig();
+  const conversationsHome = conversationsConfig.home;
+  // Ctrl/Cmd+K is the "ir pra" switcher while Conversas is on (message search
+  // moved to F, see `channel-list.tsx`). Off, K stays message search and this
+  // listener does not exist.
+  useEffect(() => {
+    if (!conversationsHome) {
+      setSwitcherOpen(false);
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        setSwitcherOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [conversationsHome]);
+  // Conversas: the profile card's "Última conversa", read off the list.
+  const lastConversationWith = useCallback(
+    (userId: string) =>
+      conversations.find(
+        (one) =>
+          one.participants.length === 1 && one.participants[0]!.id === userId,
+      )?.lastMessageAt ?? null,
+    [conversations],
+  );
   useChannelNotifications({ channels: notificationChannels, unread });
+  // Chamar a atenção: whether the button exists (`nudge`, same refresh pass),
+  // asked for the signed-in session once the age gate has passed (before it
+  // every `/api` route answers 403), and the open conversation's pane shaking
+  // when one arrives.
+  const funConfigUserId = ageGate ? null : (user?.id ?? null);
+  useEffect(
+    () => (funConfigUserId ? startFunConfig() : undefined),
+    [funConfigUserId],
+  );
+  const nudgeShake = useNudgeShake(
+    selection.kind === "dm" ? selectedChannelId : null,
+  );
+  // The open conversation, when it can take a nudge: a 1:1 with a friend,
+  // nobody blocked. The header button and Modo 2005's toolbar both key off it.
+  const nudgeChannelId = useMemo(() => {
+    if (selection.kind !== "dm" || !selectedChannelId) {
+      return null;
+    }
+    const open = conversations.find((one) => one.channelId === selectedChannelId);
+    const peer = open?.kind === "dm" && open.participants.length === 1
+      ? open.participants[0]!.id
+      : null;
+    if (
+      !peer ||
+      !friends.data.friends.some((friend) => friend.id === peer) ||
+      blockedUserIds.has(peer)
+    ) {
+      return null;
+    }
+    return selectedChannelId;
+  }, [selection.kind, selectedChannelId, conversations, friends.data.friends, blockedUserIds]);
+  // Modo 2005 replaces the header with its own window toolbar, so the nudge
+  // there is this trigger (and `/nudge` with it) instead of the button.
+  const retroNudge = useNudgeTrigger(
+    retroOn ? nudgeChannelId : null,
+    transport.sendChat,
+    transport.isConnected,
+  );
+  // The desktop shell hides to the tray on close (Windows, Linux) only while
+  // somebody is signed in, so it has to be told when that stops being true:
+  // this shell is only mounted for a signed-in session, and unmounts with it.
+  useEffect(() => {
+    getDesktop()?.setSignedIn?.(true);
+    return () => getDesktop()?.setSignedIn?.(false);
+  }, []);
 
   /**
    * Unread per server icon.
@@ -8842,6 +9815,105 @@ function MainAppContent({
     return () => window.clearTimeout(timer);
   }, [celebrateArrivalFor]);
 
+  // CONVERSAS ON A PHONE (`conversations_home_phone_tabs`): below `md` the
+  // rail goes and the bottom bar Conversas / Servidores / Tu comes in. A live
+  // party's own phone layout outranks it, as it outranks the rail today.
+  const phoneWidth = usePhoneWidth();
+  // Before the boot gates below (hooks must not move); a live party's phone
+  // layout is folded in once it is known (`phoneShell`).
+  const phoneShellAllowed = conversationsConfig.phoneTabs && phoneWidth;
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>(() =>
+    landingPhoneTab({
+      stored: readStoredPhoneTab(),
+      arrivedForPerson: arrivedForPerson(window.location),
+    }),
+  );
+  const [phoneServersOpen, setPhoneServersOpen] = useState(false);
+
+  /** A tab was tapped: remember it, and show that tab's root screen. */
+  const selectPhoneTab = useCallback(
+    (tab: PhoneTab) => {
+      storePhoneTab(tab);
+      setPhoneTab(tab);
+      setWhatsNewOpen(false);
+      setDirectoryOpen(false);
+      if (tab === "conversas") {
+        setPhoneServersOpen(false);
+        if (selection.kind !== "dm") {
+          selectHome();
+        }
+        setMobileNavOpen(true);
+      } else if (tab === "servidores") {
+        setPhoneServersOpen(true);
+        setMobileNavOpen(false);
+      } else {
+        setPhoneServersOpen(false);
+        setMobileNavOpen(false);
+      }
+    },
+    [selection.kind, selectHome],
+  );
+
+  // The first time the phone shell is on screen, open the landing tab on its
+  // root screen, unless the page was opened on a specific conversation or
+  // channel (a push, a shared link), which then stays open. Waits for the
+  // boot to finish its own first navigation (the first server's landing
+  // channel opens on the first ready socket), or that would land on top.
+  const phoneLandedRef = useRef(false);
+  // Set further down, once the party facts are known: a live party's own
+  // phone layout outranks the tabs, so the landing must not open a list on
+  // top of the film.
+  const partyPhoneLayoutRef = useRef(false);
+  // The same fact as state, so the landing runs again once a party ends.
+  const [phonePartyLayout, setPhonePartyLayout] = useState(false);
+  const phoneOpenedPathRef = useRef(
+    typeof window === "undefined" ? "" : window.location.pathname,
+  );
+  useEffect(() => {
+    if (
+      !phoneShellAllowed ||
+      phoneLandedRef.current ||
+      phonePartyLayout ||
+      !bootstrapReady ||
+      connection !== "online"
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (partyPhoneLayoutRef.current) {
+        return;
+      }
+      phoneLandedRef.current = true;
+      // The path the page was OPENED on, not where the app has routed since.
+      const opened = phoneOpenedPathRef.current;
+      const openedOnConversation = /^\/app\/dm\/[^/]+/.test(opened);
+      const openedOnChannel = /^\/app\/server\/[^/]+\/[^/]+/.test(opened);
+      if (openedOnConversation || openedOnChannel) {
+        setPhoneTab(openedOnConversation ? "conversas" : "servidores");
+        return;
+      }
+      selectPhoneTab(phoneTab);
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // Once, when the shell and the boot are both ready; later tabs are taps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneShellAllowed, bootstrapReady, connection, phonePartyLayout]);
+
+  phoneFollowRef.current = phoneShellAllowed
+    ? (tab: PhoneTab) => {
+        // Whatever was opened is the screen now: the list drawer and the
+        // servers screen step back, the way a row tap closes them.
+        setPhoneServersOpen(false);
+        setMobileNavOpen(false);
+        setPhoneTab((current) => {
+          if (current !== tab) {
+            storePhoneTab(tab);
+          }
+          return tab;
+        });
+      }
+    : null;
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -8994,6 +10066,61 @@ function MainAppContent({
       ? (conversations.find((one) => one.channelId === selectedChannelId) ??
         null)
       : null;
+  // Modo 2005 (`components/retro/`): who "you" are on its contact list and
+  // picture frames, and the way a contact with no conversation yet opens one.
+  const retroMe = user
+    ? {
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+        status: status.effective,
+        invisible: status.manual === "invisible",
+        customStatus: customStatus.value,
+      }
+    : null;
+  const openConversationSummary = (conversation: DmSummary) => {
+    setConversations((prev) => upsertConversation(prev, conversation));
+    void selectConversation(conversation.channelId);
+  };
+  // A conversation drawn as a 2005 window: title bar, toolbar, pictures.
+  const retroWindow = retroOn && activeConversation !== null;
+  // The window's toolbar offers what the regular header offers, no more.
+  const retroCallActions = (channelId: string) => {
+    if (voiceState.voiceChannelId === channelId && voiceState.status !== "idle") {
+      return {};
+    }
+    if ((voiceState.occupancy[channelId]?.length ?? 0) > 0) {
+      return { onCall: () => void handleConversationCall(channelId, false) };
+    }
+    return {
+      onCall: () => void handleConversationCall(channelId, true),
+      onVideo: () => void handleConversationCall(channelId, true, true),
+    };
+  };
+  const retroBlockActions = (conversation: DmSummary) => {
+    const peer =
+      conversation.kind === "dm" && conversation.participants.length === 1
+        ? conversation.participants[0]!
+        : null;
+    if (!peer) {
+      return {};
+    }
+    return {
+      blocked: blockedUserIds.has(peer.id),
+      onBlock: () => void handleBlockUser(peer.id),
+      onUnblock: () => void handleUnblockUser(peer.id),
+    };
+  };
+  // The log with the framed pictures beside it, in a 2005 window only.
+  const withRetroPictures = (list: React.ReactNode) =>
+    retroWindow && activeConversation ? (
+      <Suspense fallback={list}>
+        <RetroLogFrame conversation={activeConversation} me={retroMe}>
+          {list}
+        </RetroLogFrame>
+      </Suspense>
+    ) : (
+      list
+    );
   /**
    * The open channel, whichever kind it is. A conversation is dressed as the
    * channel row it actually is so the whole pane below — header, list,
@@ -9005,6 +10132,38 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  // Stories: who is signed in (for "Teu story"), and the voice rooms of the
+  // open server, for the composer's "Chama pra call" picker. Plain values,
+  // not memos: this is past the early returns, where no hook may run.
+  const storiesSelf = user
+    ? { id: user.id, displayName: user.displayName, avatarUrl: user.avatarUrl ?? null }
+    : null;
+  const storiesVoiceRooms = selectedServer
+    ? {
+        serverId: selectedServer.id,
+        serverName: selectedServer.name,
+        rooms: channels
+          .filter((channel) => channel.type === "voice")
+          .map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            occupants: (voiceState.occupancy[channel.id] ?? []).map((person) => ({
+              id: person.userId,
+              displayName: person.displayName,
+            })),
+          })),
+      }
+    : null;
+  /** "Entrar na call" on a story's sticker: the same join as the sidebar's. */
+  function handleStoryJoinCall(call: StoryCallLive) {
+    if (call.serverId === selectedServerIdRef.current) {
+      handleJoinVoiceFromList(call.channelId);
+      return;
+    }
+    void applyChannelRoute(call.serverId, call.channelId).then(() => {
+      guardVoiceJoin(call.channelId, () => handleJoinVoice(call.channelId));
+    });
+  }
   /** The open channel is a watch party that is on air right now. */
   const selectedPartyLive =
     selectedChannel?.kind === "server" &&
@@ -9025,6 +10184,35 @@ function MainAppContent({
   }
 
   /**
+   * `newcomer_invite_moment` (`lib/newcomer-invite.ts`): somebody new, with
+   * no friends and no room of their own, standing in a public community (the
+   * QG they were placed in). Off, this is false and nothing differs.
+   */
+  const newcomerInvite = newcomerInviteVisible({
+    flagOn: newcomerInviteMomentOn,
+    // `justOnboarded` for the session that just finished the wizard, whose
+    // local `user` does not carry `onboardedAt` yet (see `partyNewcomerFacts`).
+    newcomer:
+      justOnboarded || isRecentNewcomer(user?.preferences?.onboardedAt),
+    friendsLoaded: !friends.loading && friends.error === null,
+    friendCount: friends.data.friends.length + friends.data.outgoing.length,
+    ownRooms: ownRoomCount(servers, user?.id ?? null),
+    inCommunity: selectedServer?.isCommunity === true,
+    partyLive: Boolean(selectedPartyLive),
+    dismissed: newcomerInviteClosed,
+  });
+  function openNewcomerInviteCreate() {
+    const first = (user?.displayName ?? "").trim().split(/\s+/)[0] ?? "";
+    setCreateServerPrefill({
+      name: first
+        ? t("newcomerInvite.roomName", { name: first }).slice(0, 100)
+        : "",
+    });
+    setCreateServerStart({ mode: "name", source: null });
+    setShowCreateServer(true);
+  }
+
+  /**
    * The arrival banner for whatever is on screen, or nothing. One builder for
    * the two places it mounts (the channel pane and the community home), so
    * the rule deciding what it says lives in `arrivalVariant` and nowhere else.
@@ -9039,6 +10227,19 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A newcomer alone in a public community: the one thing that changes that
+    // is bringing somebody, so this strip takes the arrival strip's place.
+    if (surface !== "party" && newcomerInvite) {
+      return (
+        <NewcomerInviteStrip
+          onInvite={openNewcomerInviteCreate}
+          onDismiss={() => {
+            dismissNewcomerInvite();
+            setNewcomerInviteClosed(true);
+          }}
+        />
+      );
     }
     if (
       !arrivalServerId ||
@@ -9123,6 +10324,23 @@ function MainAppContent({
     dismissed: partyNewcomerStripClosed,
   };
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
+  const phoneShell = phoneShellAllowed && !partyPhoneLayout;
+  partyPhoneLayoutRef.current = partyPhoneLayout;
+  if (phonePartyLayout !== partyPhoneLayout) {
+    // A render-time mirror of a derived fact, guarded so it settles at once.
+    setPhonePartyLayout(partyPhoneLayout);
+  }
+  // The bar is the way between the three lists. Inside a conversation or a
+  // channel the screen is the conversation's, the way every phone chat app
+  // does it; the header's back arrow returns to the list and the bar.
+  const phoneBarVisible =
+    phoneShell &&
+    !directoryOpen &&
+    !whatsNewOpen &&
+    (phoneTab === "tu" ||
+      (phoneTab === "servidores" && (phoneServersOpen || mobileNavOpen)) ||
+      (phoneTab === "conversas" && mobileNavOpen));
+
   const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
   const hideDownloadHintForNewcomer =
     suppressAppInviteForNewcomer(partyNewcomerFacts);
@@ -9294,6 +10512,8 @@ function MainAppContent({
       wantsChannelPinHint &&
       selection.kind === "server" &&
       Boolean(selectedServerId),
+    // The pane gates it further (posts on screen, may post, not paused).
+    forum: wantsForumHint && selectedChannel?.type === "forum",
   });
   const voiceChannel =
     voiceState.voiceChannelId
@@ -9363,7 +10583,14 @@ function MainAppContent({
     // first thing a stranger is told must not be "join the QG" (2026-10-04,
     // Filminho). It also keeps its own one-time hint, an attached card, from
     // yielding to a campaign for the whole film.
+    // A moment, not a campaign, but still a nudge: not over a live film.
+    notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
     qg: qgHintWanted && !campaignsYield,
+    listingNudge: wantsListingNudge({
+      hasCandidate: listingNudge !== null,
+      closed: listingNudgeClosed,
+      campaignsYield,
+    }),
     voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
@@ -9407,6 +10634,7 @@ function MainAppContent({
     channelType: selectedChannel?.type ?? "",
     streamChat: isWatchPartySplit,
     canSend: canSendHere,
+    forumPostingEnabled: forumConfig.loaded ? forumConfig.enabled : null,
   });
 
   /**
@@ -9482,7 +10710,10 @@ function MainAppContent({
     voiceState.status !== "idle" &&
     voiceState.voiceChannelId !== null &&
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
-  const sidebarFooter = (compact = false) => (
+  const sidebarFooter = (
+    compact = false,
+    { userPanel = true }: { userPanel?: boolean } = {},
+  ) => (
     <>
       {/* Chrome only. The embed is mounted once, below, because this
           function has three call sites and two of them can be on screen at
@@ -9578,6 +10809,7 @@ function MainAppContent({
           <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
         </>
       )}
+      {userPanel && (
       <UserPanel
         compact={compact}
         hideDownloadHint={hideDownloadHintForNewcomer}
@@ -9621,12 +10853,15 @@ function MainAppContent({
           setSettingsOpen(true);
         }}
       />
+      )}
     </>
   );
 
   const chatPane = selectedChannel ? (
     <FileDropZone
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      {...nudgeShake}
+      className={cn("flex min-h-0 min-w-0 flex-1 flex-col", nudgeShake.className)}
+      data-retro-window={retroWindow ? "" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
@@ -9641,15 +10876,33 @@ function MainAppContent({
           : undefined
       }
     >
-      {!partyOwnsHeader && (
+      {retroWindow && activeConversation && (
+        <Suspense fallback={null}>
+          <RetroWindowChrome
+            conversation={activeConversation}
+            onOpenNav={() => setMobileNavOpen(true)}
+            {...retroCallActions(activeConversation.channelId)}
+            onSendFiles={
+              chatDrop.mode === "accept"
+                ? (files) => setDroppedItems({ files, folders: [] })
+                : undefined
+            }
+            onPins={() => setPinsOpen(true)}
+            {...retroBlockActions(activeConversation)}
+            onNudge={retroNudge ? () => void retroNudge() : undefined}
+          />
+        </Suspense>
+      )}
+      {!partyOwnsHeader && !retroWindow && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
           className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
-          aria-label={t("chrome.openNav")}
+          aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
+          data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
-          <Menu className="h-5 w-5" />
+          {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
@@ -9723,6 +10976,17 @@ function MainAppContent({
                   {t("voice.join")}
                 </button>
               </Tooltip>
+            )}
+          {/* Chamar a atenção: a 1:1 with a friend, nobody blocked. The button
+              owns everything else (the flag, its states, `/nudge`). */}
+          {activeConversation &&
+            user &&
+            nudgeChannelId === activeConversation.channelId && (
+              <NudgeButton
+                channelId={activeConversation.channelId}
+                send={transport.sendChat}
+                isConnected={transport.isConnected}
+              />
             )}
           {activeConversation &&
             user &&
@@ -10485,6 +11749,8 @@ function MainAppContent({
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+            onRepairAudio={() => void voice.repairAudio()}
+            onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10542,6 +11808,8 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          onRepairAudio={() => void voice.repairAudio()}
+          onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10604,6 +11872,7 @@ function MainAppContent({
           onStageAction={handleWatchPartyStage}
         />
       ) : (
+      withRetroPictures(
       <MessageList
         onCopyOwnerInvite={
           ownerAloneHere && selectedServerId && selectedChannel.kind === "server"
@@ -10611,6 +11880,7 @@ function MainAppContent({
             : undefined
         }
         messages={chat.getMessages()}
+        participants={activeConversation?.participants}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -10680,7 +11950,8 @@ function MainAppContent({
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
         onLiveEndChange={handleMessageListLiveEnd}
-      />
+      />,
+      )
       )}
       {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
           a Chamar beside them, reaction bursts, as a strip above the
@@ -10717,6 +11988,9 @@ function MainAppContent({
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
         key={selectedChannel.id}
+        voiceNotesServerId={
+          selectedChannel.kind === "server" ? selectedServerId : null
+        }
         onSend={(body, attachments) => {
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
@@ -10837,6 +12111,7 @@ function MainAppContent({
       moderation={cardModeration}
       watchParty={cardWatchParty}
       onOpenConversation={(conversation) => {
+        trackDmOpen("profile");
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
       }}
@@ -10853,6 +12128,7 @@ function MainAppContent({
       // insert effect picks this up on mount with the text already in it.
       onComposeDraft={(text) => setComposerInsert(text)}
       onMention={(username) => setComposerInsert(`@${username}`)}
+      lastConversationAt={conversationsHome ? lastConversationWith : undefined}
       roles={serverRoles}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
@@ -10869,7 +12145,11 @@ function MainAppContent({
     >
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
-    <div className="app-shell animate-fade-in relative flex h-full">
+    <div
+      className="app-shell animate-fade-in relative flex h-full"
+      data-phone-tabs={phoneShell ? "" : undefined}
+      data-phone-bar={phoneBarVisible ? "" : undefined}
+    >
       {/* Mounted at the root so remote audio keeps playing when you navigate
           away from the voice channel. */}
       <VoiceAudioSinks
@@ -10931,13 +12211,39 @@ function MainAppContent({
         appVersion="web"
       />
 
+      {/* A voice note keeps playing across channels; this is its control
+          while its own card is off screen. */}
+      <VoiceNoteMiniPlayer />
+
       {/* Also at the root: a DM finds you wherever you are in the app. */}
+      {conversationsHome && (
+        <FriendAcceptedToast
+          onSayHi={(person) => stableOnMessagePerson(person.id, "friend-accepted")}
+        />
+      )}
       <DmToasts
         conversations={conversations}
         selectedChannelId={selectedChannelId}
-        onOpen={(channelId) => void selectConversation(channelId)}
+        onOpen={(channelId) => {
+          trackDmOpen("toast");
+          void selectConversation(channelId);
+        }}
         onActiveChange={setDmToastActive}
       />
+
+      {/* Modo 2005's own layer: its stylesheet, sounds, the discovery card
+          and "fulano acabou de entrar". Loaded only while the look is on. */}
+      {retroOn && (
+        <Suspense fallback={null}>
+          <RetroLayer
+            conversations={conversations}
+            selectedChannelId={selectedChannelId}
+            myStatus={status.effective}
+            onSelectConversation={(id) => void selectConversation(id)}
+            onOpenConversation={openConversationSummary}
+          />
+        </Suspense>
+      )}
 
       {isChannelSessionScheduleEnabled() && (
         <>
@@ -11030,11 +12336,12 @@ function MainAppContent({
         streamAlertInfo={streamAlerts.byServer}
         onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
-        phoneHidden={partyPhoneLayout}
-        mobileNavOpen={mobileNavOpen}
+        phoneHidden={partyPhoneLayout || phoneShell}
+        mobileNavOpen={phoneShell ? false : mobileNavOpen}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
+        serverBauUnread={communityHomeUnreadByServer}
         homeSelected={
           selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
         }
@@ -11063,8 +12370,14 @@ function MainAppContent({
         onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
+        conversationsHome={conversationsHome}
+        conversations={conversations}
+        openConversationId={
+          selection.kind === "dm" && !whatsNewOpen ? selectedChannelId : null
+        }
         selectedPinnedId={selectedPinnedId}
         onSelectPinned={(channelId) => {
+          trackDmOpen(pinnedChannelIds.has(channelId) ? "rail-pinned" : "rail-unread");
           setWhatsNewOpen(false);
           void selectConversation(channelId);
           setMobileNavOpen(false);
@@ -11096,6 +12409,70 @@ function MainAppContent({
         }
       />
 
+      {phoneShell && phoneTab === "servidores" && phoneServersOpen && (
+        <PhoneServersScreen
+          servers={servers}
+          serverUnread={serverUnread}
+          liveServerIds={watchParties.liveServerIds}
+          onSelectServer={(id) => {
+            setPhoneServersOpen(false);
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId: id });
+            void loadChannels(id);
+            setMobileNavOpen(true);
+          }}
+          onCreateServer={() => setShowCreateServer(true)}
+          onJoinServer={() => setInviteMode("join")}
+          onOpenCommunities={
+            communitiesEnabled
+              ? () => {
+                  setWhatsNewOpen(false);
+                  setDirectoryOpen(true);
+                }
+              : undefined
+          }
+          footer={sidebarFooter(false, { userPanel: false })}
+        />
+      )}
+      {phoneShell && phoneTab === "tu" && (
+        <PhoneYouScreen
+          me={{
+            displayName: user?.displayName ?? "",
+            avatarUrl: user?.avatarUrl ?? null,
+            tag: user?.tag ?? null,
+            handle: user?.handle ?? null,
+          }}
+          whatsNewUnread={whatsNewUnread}
+          onOpenProfile={() => {
+            setSettingsSection("profile");
+            setSettingsOpen(true);
+          }}
+          onOpenSettings={() => {
+            setSettingsSection(null);
+            setSettingsOpen(true);
+          }}
+          onOpenWhatsNew={handleOpenWhatsNew}
+          onOpenHelp={() => {
+            setSettingsSection("help");
+            setSettingsOpen(true);
+          }}
+          footer={sidebarFooter()}
+        />
+      )}
+      {phoneBarVisible && (
+        <PhoneTabBar
+          tab={phoneTab}
+          onSelect={selectPhoneTab}
+          conversations={conversations}
+          unread={unread}
+          openConversationId={selection.kind === "dm" ? selectedChannelId : null}
+          serversWaiting={
+            servers.filter((server) => (serverUnread[server.id]?.mentions ?? 0) > 0).length
+          }
+          me={{ displayName: user?.displayName ?? "", avatarUrl: user?.avatarUrl ?? null }}
+        />
+      )}
+
       {/* THE ONE EMBED. Mounted here, outside every branch, because it must
           never unmount while somebody is listening: unmounting the iframe is
           what stops the sound. The footers below draw the radio and the
@@ -11110,8 +12487,32 @@ function MainAppContent({
           whatsNewOpen && "hidden",
         )}
       >
-      {selection.kind === "dm" ? (
+      {selection.kind === "dm" && retroOn ? (
+        // Modo 2005's contact list: the same data, drawn as the old
+        // chat clients drew it. Nothing is drawn for the instant the
+        // look's chunk takes to load.
+        <Suspense fallback={null}>
+          <RetroContacts
+            conversations={conversations}
+            selectedChannelId={selectedChannelId}
+            unread={unread}
+            isLoading={conversationsLoading}
+            onSelectConversation={(id) => void selectConversation(id)}
+            onOpenConversation={openConversationSummary}
+            onStartConversation={() => setNewDmOpen(true)}
+            onOpenFriends={selectHome}
+            friendsSelected={!selectedChannelId}
+            friendRequestCount={friends.data.incoming.length}
+            mobileOpen={mobileNavOpen}
+            onMobileClose={() => setMobileNavOpen(false)}
+            footer={sidebarFooter()}
+            me={retroMe}
+          />
+        </Suspense>
+      ) : selection.kind === "dm" ? (
         <DmList
+          home={conversationsHome}
+          phoneShell={phoneShell}
           conversations={conversations}
           selectedChannelId={selectedChannelId}
           unread={unread}
@@ -11120,7 +12521,10 @@ function MainAppContent({
           viewerId={user?.id ?? null}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
-          onSelectConversation={(id) => void selectConversation(id)}
+          onSelectConversation={(id) => {
+            trackDmOpen("list");
+            void selectConversation(id);
+          }}
           onStartConversation={() => setNewDmOpen(true)}
           // Home-with-nothing-selected IS the Friends view, so "open friends"
           // is just deselecting the conversation.
@@ -11135,7 +12539,16 @@ function MainAppContent({
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
-          footer={sidebarFooter()}
+          footer={sidebarFooter(false, { userPanel: !phoneShell })}
+          storiesSlot={
+            storiesSelf ? (
+              <StoryStrip
+                audience={{ kind: "friends" }}
+                me={storiesSelf}
+                ownSlot={friends.data.friends.length > 0}
+              />
+            ) : null
+          }
         />
       ) : (
         <ChannelList
@@ -11240,11 +12653,16 @@ function MainAppContent({
           onSetPeerVolume={stableOnSetPeerVolume}
           onSetScreenVolume={stableOnSetScreenVolume}
           onCreateChannel={stableOnCreateChannel}
+          forumCreateEnabled={forumConfig.enabled}
           onRenameChannel={stableOnRenameChannel}
           onOpenChannelSettings={stableOnOpenChannelSettings}
           onDeleteChannel={stableOnDeleteChannel}
           onPurgeChannel={stableOnPurgeChannel}
           onMoveChannel={stableOnMoveChannel}
+          mixedLayout={
+            channelLayout.mixed ? { version: channelLayout.version } : null
+          }
+          onApplyLayout={stableOnApplyLayout}
           favoriteChannelIds={favoriteChannelIds}
           onFavoriteChannelIdsChange={stableOnFavoriteChannelIdsChange}
           onInvite={stableOnInvite}
@@ -11252,13 +12670,43 @@ function MainAppContent({
           onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
-          footer={sidebarFooter(sidebarIconsOnly)}
+          footer={sidebarFooter(sidebarIconsOnly, { userPanel: !phoneShell })}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
+          communityHomeUnreadFresh={
+            communityHomeFreshTick >= 0 &&
+            communityHomeUnread > 0 &&
+            bauIsFresh(
+              selectedServerId
+                ? communityHomeNewestByServer[selectedServerId]
+                : null,
+            )
+          }
           communityHomeSelected={communityHomeOpen}
+          communityHomePreview={communityHomePreviewProps}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}
+          storiesSlot={
+            selectedServer && storiesSelf ? (
+              <StoryStrip
+                audience={{
+                  kind: "server",
+                  serverId: selectedServer.id,
+                  serverName: selectedServer.name,
+                }}
+                me={storiesSelf}
+              />
+            ) : null
+          }
+          onPostStory={
+            selectedServer && storiesOnHere && perms.can(Permission.POST_STORIES)
+              ? () =>
+                  openStoryComposer({
+                    context: { kind: "server", serverId: selectedServer.id },
+                  })
+              : undefined
+          }
         />
       )}
 
@@ -11343,9 +12791,27 @@ function MainAppContent({
             only serves the server-side selections. */}
         {selection.kind === "dm" && !selectedChannel && !channelsLoading && (
           <FriendsView
+            hero={
+              conversationsHome && !conversationsLoading && conversations.length === 0
+                ? ({ openAdd }) => (
+                    <ConversationsEmpty
+                      viewerId={user?.id ?? null}
+                      servers={servers}
+                      inviteHref={
+                        user?.handle
+                          ? `${window.location.origin}/@${user.handle}`
+                          : window.location.origin
+                      }
+                      onAddFriend={openAdd}
+                      onSayHi={(userId) => stableOnMessagePerson(userId, "suggestion")}
+                    />
+                  )
+                : undefined
+            }
             currentUserId={user?.id ?? null}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
+              trackDmOpen("friends");
               setConversations((prev) => upsertConversation(prev, conversation));
               void selectConversation(conversation.channelId);
             }}
@@ -11353,7 +12819,12 @@ function MainAppContent({
               user
                 ? {
                     user,
-                    serverCount: servers.length,
+                    // With `newcomer_invite_moment` on, a public community
+                    // you were placed in (the QG) is not "a server": the row
+                    // stays open and keeps offering Criar.
+                    serverCount: newcomerInviteMomentOn
+                      ? ownRoomCount(servers, user.id)
+                      : servers.length,
                     onCreateServer: () => setShowCreateServer(true),
                     onJoinServer: () => setInviteMode("join"),
                     onImportDiscord: () =>
@@ -11472,6 +12943,17 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            canSendInChannel={(channelId) =>
+              perms.serverBits === 0n ||
+              perms.can(Permission.SEND_MESSAGES, channelId)
+            }
+            focusPostId={
+              communityHomeFocus?.serverId === selectedServer.id
+                ? communityHomeFocus.postId
+                : null
+            }
+            focusNonce={communityHomeFocus?.nonce ?? 0}
+            composeNonce={communityHomeComposeNonce}
           />
         )}
 
@@ -11490,6 +12972,137 @@ function MainAppContent({
         )}
 
         {selectedChannel?.type === "text" && chatPane}
+
+        {/* A forum holds posts, not messages, so it never mounts the chat.
+            The whole pane takes a dropped file as the start of a new post
+            (`chatDropVerdict` says when). Everything inside belongs to the
+            forum pane; see `components/forum/forum-pane.tsx` for the seam. */}
+        {selectedChannel?.type === "forum" && selectedServerId && (
+          <FileDropZone
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+            mode={chatDrop.mode}
+            onDrop={(items) => {
+              if (items.files.length > 0) {
+                setForumDroppedFiles(items.files);
+              }
+            }}
+            acceptLabel={t("forum.dropToPost")}
+            refuseLabel={
+              chatDrop.mode === "refuse"
+                ? chatDrop.reason === "attachmentsOff"
+                  ? t("chrome.dropAttachmentsOff")
+                  : chatDrop.reason === "forumPaused"
+                    ? t("forum.paused")
+                    : t("chrome.dropCannotSend")
+                : undefined
+            }
+          >
+            <ForumPane
+              key={selectedChannel.id}
+              channel={selectedChannel}
+              server={{
+                id: selectedServerId,
+                name: selectedServer?.name ?? "",
+              }}
+              viewerId={user?.id ?? null}
+              currentUser={user}
+              canPost={canSendHere}
+              isStaff={
+                perms.can(Permission.MANAGE_MESSAGES, selectedChannel.id) ||
+                perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)
+              }
+              canManage={perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)}
+              creationEnabled={forumConfig.loaded ? forumConfig.enabled : undefined}
+              postController={threadChat}
+              markRead={forumMarkRead}
+              routePostId={
+                forumRoutePost?.forumId === selectedChannel.id
+                  ? forumRoutePost.postId
+                  : null
+              }
+              onRoutePostChange={(postId) =>
+                setForumPostRoute(selectedChannel.id, postId)
+              }
+              onOpenNav={() => setMobileNavOpen(true)}
+              onOpenSettings={(section) =>
+                setChannelSettings({
+                  channelId: selectedChannel.id,
+                  section: section ?? "overview",
+                  forceAdvanced: false,
+                })
+              }
+              headerActions={
+                <>
+                  {(canManageChannels || canManageRoles) && (
+                    <Tooltip label={t("chrome.channelSettings")}>
+                      <button
+                        type="button"
+                        className={HEADER_ACTION_TILE}
+                        data-channel-header-settings=""
+                        aria-label={t("chrome.channelSettings")}
+                        onClick={() =>
+                          setChannelSettings({
+                            channelId: selectedChannel.id,
+                            section: canManageChannels ? "overview" : "permissions",
+                            forceAdvanced: false,
+                          })
+                        }
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                  {memberSidebarAvailable && (
+                    <Tooltip label={t("memberList.toggle")}>
+                      <button
+                        type="button"
+                        aria-pressed={memberSidebar.open}
+                        data-member-sidebar-toggle=""
+                        className={cn(
+                          HEADER_ACTION_TILE,
+                          memberSidebar.open && "text-paper",
+                        )}
+                        onClick={() => memberSidebar.toggle()}
+                      >
+                        <Users className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                </>
+              }
+              mentionCandidates={mentionCandidates}
+              blockedAuthorIds={blockedUserIds}
+              authors={messageAuthors}
+              roles={serverRoles}
+              showLinkEmbeds={localSettings.showLinkEmbeds}
+              slashContext={{
+                updateDisplayName: async (name: string) => {
+                  const updated = await updateMe({ displayName: name });
+                  setUser(updated);
+                  chat.setCurrentUser(updated);
+                },
+                openInvite: (mode: "create" | "join") => setInviteMode(mode),
+                joinByCode: async (code: string) => {
+                  const result = await joinInvite(code);
+                  await refreshAfterJoin(result.serverId);
+                },
+                setMuted: (muted: boolean) => voice.setMuted(muted),
+                isInVoice: voiceState.status === "connected",
+                isMuted: voiceState.isMuted,
+              }}
+              onReportMessage={(message) =>
+                setReportTarget({
+                  kind: "message",
+                  messageId: message.id,
+                  subjectName: message.authorName,
+                })
+              }
+              onForward={setForwardMessage}
+              droppedFiles={forumDroppedFiles}
+              onDroppedFilesTaken={() => setForumDroppedFiles(null)}
+            />
+          </FileDropZone>
+        )}
 
         {selectedChannel &&
           isVoiceRoomChannelType(selectedChannel.type) &&
@@ -11627,6 +13240,11 @@ function MainAppContent({
           members={serverMembers}
           onMemberNickname={stableOnMemberNickname}
           onMention={stableOnMention}
+          onMessageMember={
+            conversationsHome
+              ? (userId) => stableOnMessagePerson(userId, "member-row")
+              : undefined
+          }
           onBlockUser={stableOnBlockUser}
           onUnblockUser={stableOnUnblockUser}
           onReportUser={stableOnReportUser}
@@ -11737,9 +13355,12 @@ function MainAppContent({
         open={showCreateServer}
         startMode={createServerStart.mode}
         startSource={createServerStart.source}
+        startName={createServerPrefill?.name ?? null}
+        inviteRef={createServerPrefill ? "chama" : "convite"}
         onClose={() => {
           setShowCreateServer(false);
           setCreateServerStart({ mode: "name", source: null });
+          setCreateServerPrefill(null);
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           // Their own room, empty but for them: the owner banner and the
@@ -11834,6 +13455,20 @@ function MainAppContent({
         onClose={() => setReportTarget(null)}
       />
 
+      <StoriesHost
+        me={storiesSelf}
+        bauEnabled={communityHomeEnabled}
+        voiceRooms={storiesVoiceRooms}
+        onJoinCall={handleStoryJoinCall}
+        onOpenRoles={(serverId) => {
+          if (serverId !== selectedServerIdRef.current) {
+            return;
+          }
+          setServerSettingsSection("roles");
+          setServerSettingsOpen(true);
+        }}
+      />
+
       <ForwardDialog
         open={forwardMessage !== null}
         targets={forwardTargets}
@@ -11842,10 +13477,16 @@ function MainAppContent({
       />
 
       <NewDmDialog
+        home={conversationsHome}
+        conversations={conversations}
+        onCreatedInBackground={(conversation) =>
+          setConversations((prev) => upsertConversation(prev, conversation))
+        }
         open={newDmOpen}
         currentUserId={user?.id ?? null}
         onClose={() => setNewDmOpen(false)}
         onCreated={(conversation) => {
+          trackDmStart("new-conversation", conversation.kind === "group" ? "group" : "dm");
           setConversations((prev) => upsertConversation(prev, conversation));
           void selectConversation(conversation.channelId);
         }}
@@ -12012,14 +13653,36 @@ function MainAppContent({
                 ? t("chrome.createWatchParty")
                 : channelPrompt?.type === "voice"
                   ? t("chrome.createVoiceChannel")
-                  : t("chrome.createTextChannel")
+                  : channelPrompt?.type === "forum"
+                    ? t("chrome.createForum")
+                    : t("chrome.createTextChannel")
         }
-        placeholder={t("chrome.channelNamePlaceholder")}
+        description={
+          channelPrompt?.mode === "create" && channelPrompt.type === "forum"
+            ? t("channel.type.forum.description")
+            : undefined
+        }
+        nameMode={
+          (channelPrompt?.mode === "rename"
+            ? channelPrompt.channel?.type
+            : channelPrompt?.type) === "category"
+            ? "label"
+            : "slug"
+        }
+        placeholder={
+          (channelPrompt?.mode === "rename"
+            ? channelPrompt.channel?.type
+            : channelPrompt?.type) === "category"
+            ? t("chrome.categoryNamePlaceholder")
+            : t("chrome.channelNamePlaceholder")
+        }
         secondaryPlaceholder={
           channelPrompt?.mode === "create" &&
           channelPrompt.type === "watch_party"
             ? t("chrome.watchPartyTopicPlaceholder")
-            : undefined
+            : channelPrompt?.mode === "create" && channelPrompt.type === "forum"
+              ? t("forum.create.guidelinesPlaceholder")
+              : undefined
         }
         confirmLabel={channelPrompt?.mode === "rename" ? t("chrome.rename") : t("chrome.create")}
         initialValue={
@@ -12039,6 +13702,10 @@ function MainAppContent({
         }
       />
 
+      <NotifyOfferHint
+        enabled={effectiveCornerHint === "notifyOffer"}
+        onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}
         onDismiss={() => setWantsCargosHint(false)}
@@ -12087,6 +13754,17 @@ function MainAppContent({
           void refreshAfterJoin(result.serverId);
         }}
         onFailed={() => setAppError(t("qgHint.failed"))}
+      />
+      <ListingNudgeHint
+        enabled={effectiveCornerHint === "listingNudge"}
+        nudge={listingNudge}
+        onSeen={markListingNudgeSeen}
+        onDismiss={() => setListingNudgeClosed(true)}
+        onListed={(_serverId, name) => {
+          setListingNudgeClosed(true);
+          setAppNotice(t("listingNudge.done", { name }));
+        }}
+        onFailed={() => setAppError(t("listingNudge.failed"))}
       />
 
       {/* The dock the watch surface falls back to whenever no channel pane is
@@ -12201,11 +13879,58 @@ function MainAppContent({
       )}
 
       {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
+      {conversationsHome && (
+        <QuickSwitcher
+          open={switcherOpen}
+          onClose={() => setSwitcherOpen(false)}
+          sources={{
+            viewerId: user?.id ?? null,
+            friends: friends.data.friends,
+            conversations,
+            unread,
+            members: selection.kind === "server" ? serverMembers : [],
+            servers,
+            channels: selection.kind === "server" ? channels : [],
+            openServerName:
+              selection.kind === "server" ? (selectedServer?.name ?? null) : null,
+          }}
+          searchServerName={
+            selection.kind === "server" ? (selectedServer?.name ?? null) : null
+          }
+          onOpenConversation={(channelId) => {
+            trackDmOpen("switcher");
+            setWhatsNewOpen(false);
+            selectConversation(channelId).catch((error: unknown) =>
+              setAppError(
+                error instanceof Error ? error.message : t("dm.dialog.failed"),
+              ),
+            );
+          }}
+          onMessagePerson={(userId) => stableOnMessagePerson(userId, "switcher")}
+          onSelectServer={(serverId) => {
+            phoneFollowRef.current?.("servidores");
+            setWhatsNewOpen(false);
+            setSelection({ kind: "server", serverId });
+            void loadChannels(serverId);
+          }}
+          onSelectChannel={stableOnSelectChannel}
+          onSearchMessages={(query) =>
+            window.dispatchEvent(
+              new CustomEvent(SEARCH_MESSAGES_EVENT, { detail: { query } }),
+            )
+          }
+        />
+      )}
+
       <ShortcutOverlay
+        conversationsHome={conversationsHome}
         open={shortcutOverlayOpen}
         bindings={shortcutBindings}
         pushToTalkKey={localSettings.pushToTalkKey}
         pushToTalkOn={localSettings.inputMode === "push-to-talk"}
+        forumKeys={
+          selection.kind === "server" && channels.some((one) => one.type === "forum")
+        }
         onClose={() => setShortcutOverlayOpen(false)}
       />
 

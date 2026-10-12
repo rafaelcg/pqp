@@ -122,6 +122,7 @@ function render(one: Channel) {
     imageUrl: "",
     slowmodeSeconds: 0,
     voiceRoomSize: "auto",
+    defaultSort: "activity",
   };
   return renderToStaticMarkup(
     <TooltipProvider>

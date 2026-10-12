@@ -190,4 +190,130 @@ class YoutubeLinksTest {
         assertNull(YoutubeLinks.videoId(null))
         assertNull(YoutubeLinks.thumbnailUrl("https://example.com"))
     }
+
+    // The two media decisions that used to be placeholders.
+
+    private fun comment(body: String) = BauComment(
+        id = "c",
+        author = gg.pqp.app.social.PublicUser(id = "u", displayName = "Rafa"),
+        body = body,
+        createdAt = "2026-08-30T20:00:00.000Z",
+    )
+
+    @Test
+    fun `a stored video with an http url plays in the app`() {
+        val media = BauMedia(
+            kind = "video",
+            name = "pqp-bau-lancamento-small.mp4",
+            contentType = "video/mp4",
+            url = "https://files.example.com/bau/clip.mp4?X-Amz-Signature=abc",
+        )
+        assertTrue(media.canPlayInApp)
+    }
+
+    @Test
+    fun `only a stored video with a readable url plays in the app`() {
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = null).canPlayInApp)
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = "/relative.mp4").canPlayInApp)
+        assertFalse(BauMedia(kind = "video", name = "x.mp4", url = "file:///etc/hosts").canPlayInApp)
+        assertFalse(BauMedia(kind = "image", name = "x.png", url = "https://a.example/x.png").canPlayInApp)
+        assertFalse(BauMedia(kind = "youtube", youtubeUrl = "https://youtu.be/dQw4w9WgXcQ").canPlayInApp)
+    }
+
+    @Test
+    fun `a video with a phone cut plays the cut`() {
+        val media = BauMedia(
+            kind = "video",
+            name = "launch-16x9.mp4",
+            url = "https://files.example.com/bau/landscape.mp4?sig=1",
+            mobile = BauMobileRendition(
+                name = "launch-9x16.mp4",
+                url = "https://files.example.com/bau/vertical.mp4?sig=1",
+            ),
+        )
+        assertTrue(media.canPlayInApp)
+        assertEquals("https://files.example.com/bau/vertical.mp4?sig=1", media.videoUrl)
+        assertEquals("https://files.example.com/bau/vertical.mp4?sig=1", media.openUrl)
+    }
+
+    @Test
+    fun `a phone cut without a readable url falls back to the main video`() {
+        val main = "https://files.example.com/bau/landscape.mp4?sig=1"
+        for (cut in listOf(null, BauMobileRendition(url = null), BauMobileRendition(url = "/relative.mp4"))) {
+            val media = BauMedia(kind = "video", name = "x.mp4", url = main, mobile = cut)
+            assertEquals(main, media.videoUrl)
+            assertEquals(main, media.openUrl)
+        }
+    }
+
+    @Test
+    fun `the phone cut decodes from the feed, and an older payload without it still does`() {
+        val withCut = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+               "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null,
+               "mobile":{"name":"b.mp4","contentType":"video/mp4","byteSize":5,"url":"https://s.example/b.mp4"}}""",
+        )
+        assertEquals("https://s.example/b.mp4", withCut.videoUrl)
+        val without = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","contentType":"video/mp4","byteSize":10,
+               "url":"https://s.example/a.mp4","youtubeUrl":null,"twitchUrl":null}""",
+        )
+        assertEquals("https://s.example/a.mp4", without.videoUrl)
+    }
+
+    @Test
+    fun `the video cover decodes from the feed, and an older payload without it still does`() {
+        val withCover = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4",
+               "posterUrl":"https://s.example/cover.jpg?sig=1"}""",
+        )
+        assertEquals("https://s.example/cover.jpg?sig=1", withCover.coverUrl)
+        // The cover is only a picture to show first: the file still plays.
+        assertEquals("https://s.example/a.mp4", withCover.videoUrl)
+        assertTrue(withCover.canPlayInApp)
+
+        val without = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4"}""",
+        )
+        assertNull(without.coverUrl)
+
+        val explicitNull = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","posterUrl":null}""",
+        )
+        assertNull(explicitNull.coverUrl)
+    }
+
+    @Test
+    fun `a cover is only used when readable and only on a video`() {
+        val video = "https://s.example/a.mp4"
+        assertEquals(
+            "https://s.example/c.jpg",
+            BauMedia(kind = "video", url = video, posterUrl = "https://s.example/c.jpg").coverUrl,
+        )
+        assertNull(BauMedia(kind = "video", url = video, posterUrl = "/relative.jpg").coverUrl)
+        assertNull(BauMedia(kind = "video", url = video, posterUrl = "file:///etc/hosts").coverUrl)
+        assertNull(BauMedia(kind = "image", url = "https://s.example/a.png", posterUrl = "https://s.example/c.jpg").coverUrl)
+    }
+
+    @Test
+    fun `a comment that is only a klipy url is a gif`() {
+        val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        assertEquals(url, comment(url).gifUrl)
+        assertEquals(url, comment("  $url\n").gifUrl)
+    }
+
+    @Test
+    fun `anything else in a comment stays text`() {
+        val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
+        assertNull(comment("olha isso $url").gifUrl)
+        assertNull(comment("https://evil.example/x.gif").gifUrl)
+        assertNull(comment("http://static.klipy.com/ii/x.gif").gifUrl)
+        assertNull(comment("https://static.klipy.com/ii/page.html?x=.gif").gifUrl)
+        assertNull(comment("tá bom").gifUrl)
+    }
 }

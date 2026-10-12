@@ -118,6 +118,12 @@ export interface PqpDesktop {
     tag: string;
     /** In-app path under `/app` to open on click. */
     path: string;
+    /**
+     * `true`: the app plays its own sound, so the OS banner stays silent.
+     * `false`: app sounds are off, so the OS plays its own. Omitted (and in
+     * shells that predate the field) the banner is silent.
+     */
+    silent?: boolean;
   }): void;
   onNotificationClick?(cb: (appPath: string) => void): () => void;
   /**
@@ -200,6 +206,11 @@ export interface PqpDesktop {
    * can say it. Idle is all three false.
    */
   setVoiceState?(state: DesktopVoiceState): void;
+  /**
+   * Tell the shell whether somebody is signed in. On Windows and Linux the
+   * close button hides to the tray while this is true. Older shells lack it.
+   */
+  setSignedIn?(signedIn: boolean): void;
   /** Mute, deafen and leave requested from the tray menu. */
   onVoiceCommand?(cb: (command: DesktopVoiceCommand) => void): () => void;
 }
@@ -254,6 +265,11 @@ export interface DesktopShareCapabilities {
    * in every shell before it, and off unless the runtime flag says so.
    */
   linuxShareAudio?: boolean;
+  /**
+   * The shell is the Flatpak build (`flatpak/gg.pqp.pqp.yml`). It never
+   * offers `linuxShareAudio`; the page uses this for copy only. Absent before.
+   */
+  flatpak?: boolean;
   /** The shell answers `fullscreenAppState()` (Windows). Absent before it. */
   fullscreenAppState?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */

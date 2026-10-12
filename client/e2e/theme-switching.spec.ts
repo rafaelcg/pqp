@@ -249,7 +249,9 @@ test.describe("stage 2 — light and system", () => {
       .toBe("night");
 
     const nightSurface = await cssVar(page, "--color-surface-0");
-    expect(nightSurface).toMatch(/oklch\(\s*0\s+0\s+0\s*\)/);
+    // `0%`: a production build (vite build, what CI serves) minifies the
+    // lightness to a percentage; `vite dev` keeps the source spelling.
+    expect(nightSurface).toMatch(/oklch\(\s*0%?\s+0\s+0\s*\)/);
 
     expect(await themeAttr(page)).toBe("dark");
     const light = page

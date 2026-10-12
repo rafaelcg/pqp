@@ -32,8 +32,16 @@ import {
   useChannelNotificationLevel,
   useNotificationState,
 } from "@/hooks/use-notifications";
+import {
+  formatBauBadge,
+  railServerIndicator,
+} from "@/lib/community-home/rail-unread";
 import { useTranslation } from "@/lib/i18n";
-import { setServerStreamAlerts } from "@/lib/notifications";
+import {
+  resolveNotificationLevel,
+  setServerStreamAlerts,
+} from "@/lib/notifications";
+import { conversationsWithUnread } from "@/lib/conversation-list";
 import { conversationTitle } from "@/lib/conversations";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
@@ -53,6 +61,13 @@ interface ServerRailProps {
    * from the activity frames' own server ids.
    */
   serverUnread: Record<string, UnreadState>;
+  /**
+   * Unread Baú posts per server (`GET /api/community-home/unread`), servers
+   * with none absent. Lights the white pip like any unread channel and adds
+   * the Baú's own cue: a lime count at the corner, or a lime ring when the
+   * red mention count already holds the corner (`railServerIndicator`).
+   */
+  serverBauUnread?: Record<string, number>;
   /** True while the conversation view is what the sidebar is showing. */
   homeSelected: boolean;
   /** Unread across every conversation, which has no server icon to land on. */
@@ -141,13 +156,28 @@ interface ServerRailProps {
   streamAlertInfo?: Record<string, { flag: boolean; default: boolean }>;
   /** A server's menu opened: ask whether it has the switch. */
   onServerMenuOpen?: (serverId: string) => void;
+  /**
+   * CONVERSAS (`conversations_home`). On, the DM door is labelled
+   * "Conversas", its badge counts CONVERSATIONS waiting rather than
+   * messages, and the people with an unread conversation surface under it as
+   * faces, one click from anywhere. Off, the rail is what it was.
+   */
+  conversationsHome?: boolean;
+  /** Every conversation, for the faces under the door. */
+  conversations?: DmSummary[];
+  /** The conversation on screen: never surfaced, never counted. */
+  openConversationId?: string | null;
 }
+
+/** Faces under the door before the rest fold into a "+N". */
+export const RAIL_UNREAD_FACES = 3;
 
 export function ServerRail({
   liveServerIds,
   servers,
   selectedServerId,
   serverUnread,
+  serverBauUnread,
   homeSelected,
   homeUnread,
   friendRequestCount = 0,
@@ -176,11 +206,30 @@ export function ServerRail({
   onServerMenuOpen,
   phoneHidden = false,
   mobileNavOpen = false,
+  conversationsHome = false,
+  conversations = [],
+  openConversationId = null,
 }: ServerRailProps) {
   const { t } = useTranslation();
   // Subscribed once for the whole rail: hook rules forbid reading the store
   // inside the map below, and every icon needs the same snapshot anyway.
   const notifications = useNotificationState();
+  // Conversas: who is waiting, muted ones and the open one left out. The
+  // badge is how many of them (three people writing forty lines is 3); the
+  // faces are the first few, except the ones already pinned below, which
+  // carry their own badge in their own slot.
+  const waiting = conversationsHome
+    ? conversationsWithUnread(conversations, pinnedUnread, {
+        openChannelId: openConversationId,
+        isMuted: (channelId) =>
+          resolveNotificationLevel(notifications, null, channelId) === "none",
+      })
+    : [];
+  const pinnedIds = new Set(pinnedConversations.map((one) => one.channelId));
+  const waitingFaces = waiting.filter((one) => !pinnedIds.has(one.channelId));
+  const shownFaces = waitingFaces.slice(0, RAIL_UNREAD_FACES);
+  const foldedFaces = waitingFaces.length - shownFaces.length;
+  const doorCount = conversationsHome ? waiting.length : homeUnread.count;
 
   return (
     <nav
@@ -199,7 +248,19 @@ export function ServerRail({
       {/* Every bubble on this rail points right. The rail is 72px against the
           left edge of the window, so a bubble above or below a tile would sit
           on the tile next to it, and one on the left would be off-screen. */}
-      <Tooltip label={t("chrome.directMessages")} side="right" tone="rail">
+      <span
+        data-rail-conversations={conversationsHome ? "" : undefined}
+        className="flex shrink-0 flex-col items-center gap-1"
+      >
+      <Tooltip
+        label={
+          conversationsHome
+            ? t("conversations.rail.tooltip", { count: waiting.length })
+            : t("chrome.directMessages")
+        }
+        side="right"
+        tone="rail"
+      >
       <button
         type="button"
         onClick={onSelectHome}
@@ -211,7 +272,7 @@ export function ServerRail({
             : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
         )}
       >
-        <RailPill kind={homeSelected ? "selected" : homeUnread.count > 0 ? "unread" : "none"} />
+        <RailPill kind={homeSelected ? "selected" : doorCount > 0 ? "unread" : "none"} />
         <MessageCircle className="h-5 w-5" />
         {/* Friend requests stay lime and take the top-right corner. Unread
             DMs use the red bubble Discord puts on Home — that is how a
@@ -223,14 +284,15 @@ export function ServerRail({
             tone="signal"
             dataFriendRequests
           />
-        ) : homeUnread.count > 0 ? (
-          <RailCountBadge count={homeUnread.count} tone="danger" />
+        ) : doorCount > 0 ? (
+          <RailCountBadge count={doorCount} tone="danger" dataConversations={conversationsHome} />
         ) : null}
-        {friendRequestCount > 0 && homeUnread.count > 0 && (
+        {friendRequestCount > 0 && doorCount > 0 && (
           <RailCountBadge
-            count={homeUnread.count}
+            count={doorCount}
             tone="danger"
             corner="bottom"
+            dataConversations={conversationsHome}
           />
         )}
         {friendRequestCount > 0 && (
@@ -238,15 +300,64 @@ export function ServerRail({
             {t("friends.pendingBadge", { count: friendRequestCount })}
           </span>
         )}
-        {homeUnread.count > 0 && (
-          <span className="sr-only">
-            {homeUnread.mentions > 0
-              ? t("chrome.unreadMentions", { count: homeUnread.mentions })
-              : t("chrome.unreadMessagesSr")}
-          </span>
+        {conversationsHome ? (
+          waiting.length > 0 && (
+            <span className="sr-only">
+              {t("conversations.rail.waitingSr", { count: waiting.length })}
+            </span>
+          )
+        ) : (
+          homeUnread.count > 0 && (
+            <span className="sr-only">
+              {homeUnread.mentions > 0
+                ? t("chrome.unreadMentions", { count: homeUnread.mentions })
+                : t("chrome.unreadMessagesSr")}
+            </span>
+          )
         )}
       </button>
       </Tooltip>
+      {/* The one labelled door on the rail: a name is what makes it read as
+          a place rather than one more icon. */}
+      {conversationsHome && (
+        <span
+          aria-hidden="true"
+          data-rail-conversations-label=""
+          className={cn(
+            "max-w-[68px] truncate text-[10px] font-semibold leading-none",
+            homeSelected ? "text-text" : "text-text-secondary",
+          )}
+        >
+          {t("conversations.rail.label")}
+        </span>
+      )}
+      </span>
+      {shownFaces.map((conversation) => (
+        <PinnedConversationButton
+          key={conversation.channelId}
+          conversation={conversation}
+          unread={pinnedUnread[conversation.channelId] ?? { count: 0, mentions: 0 }}
+          selected={false}
+          surfaced
+          onSelect={() => onSelectPinned?.(conversation.channelId)}
+        />
+      ))}
+      {foldedFaces > 0 && (
+        <Tooltip
+          label={t("conversations.rail.more", { count: foldedFaces })}
+          side="right"
+          tone="rail"
+        >
+          <button
+            type="button"
+            data-rail-conversations-more={foldedFaces}
+            onClick={onSelectHome}
+            className="flex h-12 w-12 shrink-0 animate-pop-in items-center justify-center rounded-full bg-ink-3 font-display text-sm font-bold text-paper transition-colors hover:bg-signal hover:text-ink"
+          >
+            +{foldedFaces}
+          </button>
+        </Tooltip>
+      )}
       {pinnedConversations.map((conversation) => (
         <PinnedConversationButton
           key={conversation.channelId}
@@ -271,9 +382,12 @@ export function ServerRail({
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
-        const mentions = muted ? 0 : (totals?.mentions ?? 0);
-        const hasUnread =
-          !muted && !!totals && (totals.count > 0 || mentions > 0);
+        const { mentions, hasUnread, bauOnly, bauCue, bauCount } =
+          railServerIndicator({
+          totals,
+          bauUnread: serverBauUnread?.[server.id] ?? 0,
+          muted,
+        });
 
         const items: ContextMenuItemDef[] = [
           {
@@ -367,7 +481,13 @@ export function ServerRail({
                   ? "bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
                 muted && !selected && "opacity-50",
+                // The Baú's ring: only when a red mention count holds the
+                // corner. The glow is the same signal token, so it follows
+                // the theme's accent.
+                bauCue === "ring" &&
+                  "ring-2 ring-signal ring-offset-2 ring-offset-rail shadow-[0_0_12px_1px_color-mix(in_oklab,var(--color-signal)_55%,transparent)]",
               )}
+              data-bau-cue={bauCue === "none" ? undefined : bauCue}
             >
               <RailPill
                 kind={selected ? "selected" : hasUnread ? "unread" : "none"}
@@ -381,6 +501,17 @@ export function ServerRail({
               </span>
               {mentions > 0 && (
                 <RailCountBadge count={mentions} tone="danger" />
+              )}
+              {/* THE BAÚ'S OWN COUNT, in lime, where the mention count would
+                  be. A mention wins the corner (it is addressed to you); the
+                  Baú then falls back to the ring on the button. */}
+              {bauCue === "count" && (
+                <RailCountBadge
+                  count={bauCount}
+                  tone="signal"
+                  label={formatBauBadge(bauCount)}
+                  dataBau
+                />
               )}
               {/* A SHOW IS ON IN HERE. The one thing a rail bubble did not
                   say: a member sitting in another server had no way to
@@ -401,7 +532,11 @@ export function ServerRail({
                 <span className="sr-only">
                   {mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })
-                    : t("chrome.unreadMessagesSr")}
+                    : bauCue === "count"
+                      ? t("chrome.unreadBauCountSr", { count: bauCount })
+                      : bauOnly
+                        ? t("chrome.unreadBauSr")
+                        : t("chrome.unreadMessagesSr")}
                 </span>
               )}
             </button>
@@ -548,12 +683,18 @@ function PinnedConversationButton({
   selected,
   onSelect,
   onUnpin,
+  surfaced = false,
 }: {
   conversation: DmSummary;
   unread: UnreadState;
   selected: boolean;
   onSelect: () => void;
   onUnpin?: () => void;
+  /**
+   * Conversas: on the rail because it is waiting, not because it was pinned.
+   * It pops in, and it leaves on its own once read.
+   */
+  surfaced?: boolean;
 }) {
   const { t } = useTranslation();
   const notifications = useChannelNotificationLevel({
@@ -583,8 +724,10 @@ function PinnedConversationButton({
       onClick={onSelect}
       aria-label={title}
       aria-current={selected ? "page" : undefined}
+      data-rail-conversation={surfaced ? "waiting" : "pinned"}
       className={cn(
         "group relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+        surfaced && "animate-pop-in",
         selected
           ? "bg-signal text-ink"
           : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
@@ -680,11 +823,19 @@ function RailCountBadge({
   tone,
   corner = "top",
   dataFriendRequests = false,
+  label,
+  dataBau = false,
+  dataConversations = false,
 }: {
   count: number;
   tone: "danger" | "signal";
   corner?: "top" | "bottom";
   dataFriendRequests?: boolean;
+  /** Conversas: this count is conversations waiting, not messages. */
+  dataConversations?: boolean;
+  /** Shown instead of the 99+ capped count (the Baú caps at 9+). */
+  label?: string;
+  dataBau?: boolean;
 }) {
   if (count <= 0) {
     return null;
@@ -695,13 +846,15 @@ function RailCountBadge({
       key={count}
       aria-hidden="true"
       {...(dataFriendRequests ? { "data-friend-requests": count } : {})}
+      {...(dataBau ? { "data-bau-count": count } : {})}
+      {...(dataConversations ? { "data-conversations-waiting": count } : {})}
       className={cn(
         "absolute right-[-5px] flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
         corner === "top" ? "top-[-5px]" : "bottom-[-5px]",
         tone === "danger" ? "bg-danger text-paper" : "bg-signal text-ink",
       )}
     >
-      {formatBadgeCount(count)}
+      {label ?? formatBadgeCount(count)}
     </span>
   );
 }

@@ -22,6 +22,13 @@ struct MembersView: View {
     /// A kick or a ban held until it is confirmed. Both end a membership; a
     /// timeout does not, which is why it is not in here.
     @State private var pendingRemoval: PendingRemoval?
+    /// A conversation opened from this roster, pushed onto this sheet's own
+    /// stack: from the profile's Message, or the bubble on a row.
+    @State private var openedConversation: OpenedConversation?
+    /// The member a row's Message is opening a conversation with.
+    @State private var messaging: String?
+    /// Conversas on: every row offers Message, one tap from talking to them.
+    @State private var conversasOn = DmsConfig.load().home
 
     /// Who, and whether the door locks behind them. `Identifiable` so it can
     /// drive the dialog directly instead of through a second boolean that can
@@ -86,10 +93,29 @@ struct MembersView: View {
                                 Button {
                                     profileSubject = ProfileSubject(member: member)
                                 } label: {
-                                    MemberRow(member: member, isTimedOut: timeouts[member.id] != nil)
+                                    MemberRow(
+                                        member: member,
+                                        isTimedOut: timeouts[member.id] != nil,
+                                        reservesMessageSlot: offersMessage(to: member)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu { actions(for: member) }
+                                // On top of the row rather than inside its
+                                // label: a button inside a button's label never
+                                // gets the tap, the row's profile does.
+                                .overlay(alignment: .trailing) {
+                                    if offersMessage(to: member) {
+                                        MessageBubbleButton(
+                                            name: member.displayName,
+                                            memberId: member.id,
+                                            isBusy: messaging == member.id
+                                        ) {
+                                            Task { await message(member) }
+                                        }
+                                        .padding(.trailing, 12)
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, Metrics.hPadding)
@@ -116,15 +142,29 @@ struct MembersView: View {
                 ReportSheet(target: target)
             }
             .sheet(item: $profileSubject) { subject in
-                // No `onOpenConversation`: this sheet sits on a modal with no
-                // navigation stack of its own to push a chat onto. The profile
-                // dismisses itself either way, and the DM is one tap away in
-                // the Messages tab — offering a push that silently did nothing
-                // would be worse than not offering it here.
+                // Message pushes the conversation onto this sheet's own stack
+                // (it has one: the NavigationStack above). Before, Message was
+                // not offered here at all, and the comment pointed at a
+                // "Messages tab" this app never had.
                 // `server` is passed so the sheet's own ladder is available here
                 // too, and so a report filed from the roster reaches this
                 // server's moderators rather than the instance queue.
-                UserProfileSheet(subject: subject, server: server)
+                UserProfileSheet(
+                    subject: subject,
+                    onOpenConversation: { conversation, draft in
+                        openedConversation = OpenedConversation(summary: conversation, draft: draft)
+                    },
+                    server: server
+                )
+            }
+            .navigationDestination(item: $openedConversation) { opened in
+                ChatView(
+                    channelId: opened.summary.channelId,
+                    title: opened.summary.title,
+                    conversation: opened.summary,
+                    initialDraft: opened.draft
+                )
+                .onAppear { LastVisited.record(conversationId: opened.summary.channelId) }
             }
             .confirmationDialog(
                 pendingRemoval.map { pending in
@@ -159,6 +199,11 @@ struct MembersView: View {
         // Reporting is for everyone — it is how a plain member reaches the
         // moderators at all.
         if member.id != session.currentUser?.id {
+            Button {
+                Task { await message(member) }
+            } label: {
+                Label("Message", systemImage: "bubble.left")
+            }
             Button {
                 reportTarget = .user(id: member.id, displayName: member.displayName, serverId: server.id)
             } label: {
@@ -217,6 +262,23 @@ struct MembersView: View {
         }
     }
 
+    private func offersMessage(to member: ServerMember) -> Bool {
+        conversasOn && member.id != session.currentUser?.id
+    }
+
+    /// Opens (or reuses) the 1:1 and pushes it. A refusal (their DM privacy,
+    /// a block) is the server's one sentence, shown on the roster.
+    private func message(_ member: ServerMember) async {
+        messaging = member.id
+        defer { messaging = nil }
+        do {
+            let conversation = try await session.api.openConversation(userIds: [member.id])
+            openedConversation = OpenedConversation(summary: conversation)
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     private func load() async {
         loading = true
         members = (try? await session.api.members(serverId: server.id)) ?? []
@@ -233,7 +295,7 @@ struct MembersView: View {
             )
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -242,7 +304,7 @@ struct MembersView: View {
             try await session.api.liftTimeout(serverId: server.id, userId: member.id)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -251,7 +313,7 @@ struct MembersView: View {
             try await session.api.setMemberRole(serverId: server.id, userId: member.id, role: role)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -260,13 +322,38 @@ struct MembersView: View {
             try await session.api.removeMember(serverId: server.id, userId: member.id, ban: ban)
             members.removeAll { $0.id == member.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
 
 /// The status dot, everywhere one appears. One view so "which colour is idle"
 /// has exactly one answer.
+/// The words for a presence token. VoiceOver reads a status dot through this,
+/// not the wire value ("dnd" would be read letter by letter), and the profile
+/// sheet shows the same sentence.
+enum PresenceLabel: Equatable {
+    case online, idle, doNotDisturb, offline
+
+    init(_ status: String?) {
+        switch status {
+        case "online": self = .online
+        case "idle": self = .idle
+        case "dnd": self = .doNotDisturb
+        default: self = .offline
+        }
+    }
+
+    var key: LocalizedStringKey {
+        switch self {
+        case .online: "Online"
+        case .idle: "Idle"
+        case .doNotDisturb: "Do not disturb"
+        case .offline: "Offline"
+        }
+    }
+}
+
 struct StatusDot: View {
     let status: String?
     var size: CGFloat = 9
@@ -291,6 +378,8 @@ struct StatusDot: View {
 private struct MemberRow: View {
     let member: ServerMember
     var isTimedOut = false
+    /// Room on the right for the Message bubble the list lays over the row.
+    var reservesMessageSlot = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -319,9 +408,41 @@ private struct MemberRow: View {
                     .tracking(1)
                     .foregroundStyle(member.role == "owner" ? Palette.signal : Palette.paperMuted)
             }
+            if reservesMessageSlot {
+                Color.clear.frame(width: 36, height: 36)
+            }
         }
         .padding(12)
         .pqpSurface()
+    }
+}
+
+/// Message, one tap from a member row (Conversas on).
+private struct MessageBubbleButton: View {
+    let name: String
+    let memberId: String
+    let isBusy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if isBusy {
+                    ProgressView().tint(Palette.signal)
+                } else {
+                    Image(systemName: "bubble.left.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Palette.paper)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Palette.surfaceRaised))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+        .accessibilityLabel("Message \(name)")
+        .accessibilityIdentifier("members.message.\(memberId)")
     }
 }
 

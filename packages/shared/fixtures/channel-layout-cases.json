@@ -1,0 +1,341 @@
+{
+  "about": "Channel list rules shared by web (packages/shared/src/channel-layout.ts), iOS and Android. Every client runs these cases against its own port. A layout is written as loose ids, then each category with its children ids, in display order. Ids are plain strings on purpose; the rules never read anything but id, type, parentId and position. The move and step cases start from the server built with mixed true and hideWatchParty false; a null expect means the call changes nothing (null from the function).",
+  "version": 1,
+  "servers": {
+    "guris": [
+      { "id": "cat-canais", "type": "category", "parentId": null, "position": 0 },
+      { "id": "cat-jogos", "type": "category", "parentId": null, "position": 1 },
+      { "id": "cat-cinema", "type": "category", "parentId": null, "position": 2 },
+      { "id": "t-general", "type": "text", "parentId": "cat-canais", "position": 0 },
+      { "id": "v-lobby", "type": "voice", "parentId": "cat-canais", "position": 1 },
+      { "id": "f-duvidas", "type": "forum", "parentId": "cat-canais", "position": 2 },
+      { "id": "t-clipes", "type": "text", "parentId": "cat-jogos", "position": 0 },
+      { "id": "v-squad", "type": "voice", "parentId": "cat-jogos", "position": 1 },
+      { "id": "t-lfg", "type": "text", "parentId": "cat-jogos", "position": 2 },
+      { "id": "t-avisos", "type": "text", "parentId": null, "position": 0 },
+      { "id": "v-afk", "type": "voice", "parentId": null, "position": 1 },
+      { "id": "w-filme", "type": "watch_party", "parentId": null, "position": 2 },
+      { "id": "t-regras", "type": "text", "parentId": null, "position": 3 },
+      { "id": "th-1", "type": "thread", "parentId": "t-general", "position": 0 }
+    ],
+    "unsorted": [
+      { "id": "v-b", "type": "voice", "parentId": "cat-z", "position": 1 },
+      { "id": "cat-z", "type": "category", "parentId": null, "position": 1 },
+      { "id": "t-b", "type": "text", "parentId": null, "position": 2 },
+      { "id": "t-a", "type": "text", "parentId": "cat-z", "position": 0 },
+      { "id": "cat-y", "type": "category", "parentId": null, "position": 0 },
+      { "id": "v-a", "type": "voice", "parentId": null, "position": 0 },
+      { "id": "t-orphan", "type": "text", "parentId": "cat-gone", "position": 0 },
+      { "id": "t-tie-b", "type": "text", "parentId": null, "position": 5 },
+      { "id": "t-tie-a", "type": "text", "parentId": null, "position": 5 }
+    ],
+    "single": [
+      { "id": "cat-a", "type": "category", "parentId": null, "position": 0 },
+      { "id": "t-x", "type": "text", "parentId": "cat-a", "position": 0 }
+    ]
+  },
+  "build": [
+    {
+      "name": "mixed: loose in one order above the categories, threads dropped, empty category kept",
+      "server": "guris",
+      "mixed": true,
+      "hideWatchParty": false,
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "not mixed: loose split text, voice, watch party; categories unchanged",
+      "server": "guris",
+      "mixed": false,
+      "hideWatchParty": false,
+      "expect": {
+        "loose": ["t-avisos", "t-regras", "v-afk", "w-filme"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "mixed with watch party rooms hidden",
+      "server": "guris",
+      "mixed": true,
+      "hideWatchParty": true,
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "input order does not matter; a missing category makes its child loose; equal positions sort by id",
+      "server": "unsorted",
+      "mixed": true,
+      "hideWatchParty": false,
+      "expect": {
+        "loose": ["t-orphan", "v-a", "t-b", "t-tie-a", "t-tie-b"],
+        "categories": [
+          { "id": "cat-y", "children": [] },
+          { "id": "cat-z", "children": ["t-a", "v-b"] }
+        ]
+      }
+    }
+  ],
+  "move": [
+    {
+      "name": "a voice room into another category, between two rows",
+      "server": "guris",
+      "id": "v-lobby",
+      "to": { "parentId": "cat-jogos", "index": 1 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-lobby", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "within one category",
+      "server": "guris",
+      "id": "f-duvidas",
+      "to": { "parentId": "cat-canais", "index": 0 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["f-duvidas", "t-general", "v-lobby"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "out of a category to the top of the loose area",
+      "server": "guris",
+      "id": "t-general",
+      "to": { "parentId": null, "index": 0 },
+      "expect": {
+        "loose": ["t-general", "t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "into an empty category, index past the end is clamped",
+      "server": "guris",
+      "id": "t-lfg",
+      "to": { "parentId": "cat-cinema", "index": 9 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad"] },
+          { "id": "cat-cinema", "children": ["t-lfg"] }
+        ]
+      }
+    },
+    {
+      "name": "a category among categories, carrying its children",
+      "server": "guris",
+      "id": "cat-cinema",
+      "to": { "parentId": null, "index": 0 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-cinema", "children": [] },
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] }
+        ]
+      }
+    },
+    {
+      "name": "a category into a category is refused",
+      "server": "guris",
+      "id": "cat-cinema",
+      "to": { "parentId": "cat-jogos", "index": 0 },
+      "expect": null
+    },
+    {
+      "name": "an unknown id is refused",
+      "server": "guris",
+      "id": "nope",
+      "to": { "parentId": null, "index": 0 },
+      "expect": null
+    },
+    {
+      "name": "an unknown parent is refused",
+      "server": "guris",
+      "id": "t-general",
+      "to": { "parentId": "cat-gone", "index": 0 },
+      "expect": null
+    }
+  ],
+  "step": [
+    {
+      "name": "first row of a category moving up lands at the end of the loose area",
+      "server": "guris",
+      "id": "t-general",
+      "direction": -1,
+      "target": { "parentId": null, "index": 4 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras", "t-general"],
+        "categories": [
+          { "id": "cat-canais", "children": ["v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "first row of the second category moving up lands at the end of the first",
+      "server": "guris",
+      "id": "t-clipes",
+      "direction": -1,
+      "target": { "parentId": "cat-canais", "index": 3 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas", "t-clipes"] },
+          { "id": "cat-jogos", "children": ["v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "last loose row moving down lands at the top of the first category",
+      "server": "guris",
+      "id": "t-regras",
+      "direction": 1,
+      "target": { "parentId": "cat-canais", "index": 0 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-regras", "t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "last row of a category moving down lands in the next, empty, category",
+      "server": "guris",
+      "id": "t-lfg",
+      "direction": 1,
+      "target": { "parentId": "cat-cinema", "index": 0 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad"] },
+          { "id": "cat-cinema", "children": ["t-lfg"] }
+        ]
+      }
+    },
+    {
+      "name": "a step inside one category",
+      "server": "guris",
+      "id": "v-lobby",
+      "direction": 1,
+      "target": { "parentId": "cat-canais", "index": 2 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-canais", "children": ["t-general", "f-duvidas", "v-lobby"] },
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "a category swaps with the one above",
+      "server": "guris",
+      "id": "cat-jogos",
+      "direction": -1,
+      "target": { "parentId": null, "index": 0 },
+      "expect": {
+        "loose": ["t-avisos", "v-afk", "w-filme", "t-regras"],
+        "categories": [
+          { "id": "cat-jogos", "children": ["t-clipes", "v-squad", "t-lfg"] },
+          { "id": "cat-canais", "children": ["t-general", "v-lobby", "f-duvidas"] },
+          { "id": "cat-cinema", "children": [] }
+        ]
+      }
+    },
+    {
+      "name": "the first loose row cannot move up",
+      "server": "guris",
+      "id": "t-avisos",
+      "direction": -1,
+      "target": null,
+      "expect": null
+    },
+    {
+      "name": "the first category cannot move up",
+      "server": "guris",
+      "id": "cat-canais",
+      "direction": -1,
+      "target": null,
+      "expect": null
+    },
+    {
+      "name": "the last category cannot move down",
+      "server": "guris",
+      "id": "cat-cinema",
+      "direction": 1,
+      "target": null,
+      "expect": null
+    },
+    {
+      "name": "the last row of the last category cannot move down",
+      "server": "single",
+      "id": "t-x",
+      "direction": 1,
+      "target": null,
+      "expect": null
+    },
+    {
+      "name": "the only row of the first category moves up into an empty loose area",
+      "server": "single",
+      "id": "t-x",
+      "direction": -1,
+      "target": { "parentId": null, "index": 0 },
+      "expect": {
+        "loose": ["t-x"],
+        "categories": [{ "id": "cat-a", "children": [] }]
+      }
+    }
+  ],
+  "payload": [
+    {
+      "name": "the PUT body: every category in order, then loose and every category's children",
+      "server": "guris",
+      "mixed": true,
+      "hideWatchParty": true,
+      "baseVersion": 7,
+      "expect": {
+        "baseVersion": 7,
+        "categoryIds": ["cat-canais", "cat-jogos", "cat-cinema"],
+        "groups": [
+          { "parentId": null, "channelIds": ["t-avisos", "v-afk", "t-regras"] },
+          { "parentId": "cat-canais", "channelIds": ["t-general", "v-lobby", "f-duvidas"] },
+          { "parentId": "cat-jogos", "channelIds": ["t-clipes", "v-squad", "t-lfg"] },
+          { "parentId": "cat-cinema", "channelIds": [] }
+        ]
+      }
+    }
+  ]
+}

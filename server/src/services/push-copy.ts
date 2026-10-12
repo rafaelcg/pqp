@@ -12,6 +12,8 @@
  * `push.ts`: every string below is fixed copy, never message content.
  */
 
+import { formatNoteDuration } from "@pqp/shared";
+
 export type PushLocale = "pt-BR" | "en";
 
 /** The instance's own default when a recipient's `settings.locale` is unset. */
@@ -40,6 +42,18 @@ export interface ConversationPushCopyInput {
   mentionOrReply: boolean;
   /** Already truncated by the caller (`truncateLabel`), same as before. */
   authorName: string | null;
+  /**
+   * Set when the message is a voice note. Only its length reaches the push,
+   * formatted the way the card shows it; never the audio or a transcript, so
+   * the push never waits on one.
+   */
+  voiceDurationMs?: number | null;
+  /**
+   * Set when the message is a system message. `nudge` (chamar a atenção) has
+   * its own sentence: the stored body is a bare 📳, and "te mandou uma
+   * mensagem" would undersell a poke that exists to be noticed.
+   */
+  systemKind?: "nudge" | null;
 }
 
 /**
@@ -53,6 +67,20 @@ export function buildConversationPushCopy(
 ): PushCopy {
   const { locale, channelKind, dmDetails, mentionOrReply } = input;
 
+  // A nudge only happens in a 1:1, but the copy does not depend on that. With
+  // `dmDetails` off the sender stays unnamed, same as every other DM push.
+  if (input.systemKind === "nudge") {
+    if (!dmDetails) {
+      return locale === "pt-BR"
+        ? { title: "pqp", body: "Alguém chamou tua atenção! 📳" }
+        : { title: "pqp", body: "Someone sent you a nudge! 📳" };
+    }
+    const nudger = input.authorName ?? AUTHOR_FALLBACK[locale];
+    return locale === "pt-BR"
+      ? { title: nudger, body: "chamou tua atenção! 📳" }
+      : { title: nudger, body: "sent you a nudge! 📳" };
+  }
+
   if (!dmDetails) {
     if (channelKind === "group") {
       return locale === "pt-BR"
@@ -65,6 +93,16 @@ export function buildConversationPushCopy(
   }
 
   const author = input.authorName ?? AUTHOR_FALLBACK[locale];
+
+  // A voice note, DM or group alike: the sender is the title, the body says
+  // what it is and how long. Without `dmDetails` the generic copy above stands,
+  // which already says nothing about the message.
+  if (typeof input.voiceDurationMs === "number") {
+    const duration = formatNoteDuration(input.voiceDurationMs);
+    return locale === "pt-BR"
+      ? { title: author, body: `Mensagem de voz · ${duration}` }
+      : { title: author, body: `Voice message · ${duration}` };
+  }
 
   if (channelKind === "group") {
     return locale === "pt-BR"
@@ -135,6 +173,65 @@ export function buildStreamStartedPushCopy(
       return {
         title: `${sharerName} começou a transmitir em ${channelLabel}`,
         body: `${serverName} · Assistir`,
+      };
+  }
+}
+
+export interface CommunityHomePostCopyInput {
+  locale: StreamAlertLocale;
+  /** Already truncated by the caller (`truncateLabel`). */
+  serverName: string;
+  /**
+   * The posts this person is being told about, titles already truncated; a
+   * post with no title is `null`. One entry reads as a sentence about that
+   * post, several as a count, so a burst of posts is one line and not a wall.
+   */
+  titles: readonly (string | null)[];
+}
+
+/**
+ * A new post in a server's Baú. Fixed pairs per language, names and a title
+ * the person can already open in the feed; never the body. The notification's
+ * own title is the product noun, which every language spells the same.
+ */
+export function buildCommunityHomePostPushCopy(
+  input: CommunityHomePostCopyInput,
+): PushCopy {
+  const { serverName, titles, locale } = input;
+  const title = "Baú";
+  const only = titles.length === 1 ? (titles[0] ?? null) : null;
+  if (titles.length > 1) {
+    const n = titles.length;
+    switch (locale) {
+      case "en":
+        return { title, body: `${n} new posts in ${serverName}'s Baú` };
+      case "es":
+        return { title, body: `${n} posts nuevos en el Baú de ${serverName}` };
+      default:
+        return { title, body: `${n} posts novos no Baú do ${serverName}` };
+    }
+  }
+  switch (locale) {
+    case "en":
+      return {
+        title,
+        body: only
+          ? `New post in ${serverName}'s Baú: ${only}`
+          : `New post in ${serverName}'s Baú`,
+      };
+    case "es":
+      return {
+        title,
+        body: only
+          ? `Post nuevo en el Baú de ${serverName}: ${only}`
+          : `Post nuevo en el Baú de ${serverName}`,
+      };
+    default:
+      return {
+        title,
+        body: only
+          ? `Post novo no Baú do ${serverName}: ${only}`
+          : `Post novo no Baú do ${serverName}`,
       };
   }
 }

@@ -1,6 +1,7 @@
 package gg.pqp.app.bau
 
 import gg.pqp.app.social.PublicUser
+import gg.pqp.app.ui.media.GifLinks
 import java.net.URI
 import kotlinx.serialization.Serializable
 
@@ -32,6 +33,20 @@ data class CommunityHomeConfig(
 )
 
 /**
+ * The phone cut of an uploaded video: the vertical (9:16) edit the author
+ * attached beside the landscape one (`communityHomeMobileRenditionSchema`).
+ * The phone plays this one when it is there; an older server never sends it
+ * and the card plays the main video, exactly as before.
+ */
+@Serializable
+data class BauMobileRendition(
+    val name: String = "",
+    val contentType: String? = null,
+    val byteSize: Long? = null,
+    val url: String? = null,
+)
+
+/**
  * One post's media, as the viewer may see it. `url` is a presigned GET for
  * storage-backed kinds and null for YouTube / Twitch / TikTok / Instagram; a
  * locked viewer gets no media at all (the whole object is null on the post),
@@ -47,6 +62,13 @@ data class BauMedia(
     val url: String? = null,
     val youtubeUrl: String? = null,
     val twitchUrl: String? = null,
+    /** The vertical cut of a `video`, or null. Only ever set on a video. */
+    val mobile: BauMobileRendition? = null,
+    /**
+     * The cover the author chose for a `video` (a presigned image URL), or
+     * null: no cover, not a video, or an older API that never sends it.
+     */
+    val posterUrl: String? = null,
 ) {
     val isImage: Boolean get() = kind == "image"
     val isVideo: Boolean get() = kind == "video"
@@ -56,12 +78,42 @@ data class BauMedia(
     val isInstagram: Boolean get() = kind == "instagram"
     val isFile: Boolean get() = kind == "file"
 
+    /**
+     * An uploaded video with a readable http(s) URL, which the in-app player
+     * plays. A video without one (storage off, or an API-relative path this
+     * card cannot sign) falls through to the open-out file card.
+     */
+    val canPlayInApp: Boolean get() = isVideo && isHttp(videoUrl)
+
+    /**
+     * The URL the player gets for a video: the vertical cut when the post has
+     * one with a readable URL (this is a phone, which is who it is for), else
+     * the main video. The only place the choice is made, so the player never
+     * has to know there are two.
+     */
+    val videoUrl: String? get() = when {
+        !isVideo -> null
+        isHttp(mobile?.url) -> mobile?.url
+        else -> url
+    }
+
+    /**
+     * The cover to paint before play, or null to keep the plain badge. Only
+     * for a stored video and only a readable http(s) URL, so a bad value
+     * costs the cover and nothing else.
+     */
+    val coverUrl: String? get() = posterUrl.takeIf { isVideo && isHttp(it) }
+
     /** What a tap opens: the object for storage kinds, the watch page for paste URLs. */
     val openUrl: String? get() = when {
         isYoutube || isTiktok || isInstagram -> youtubeUrl
         isTwitch -> twitchUrl
+        isVideo -> videoUrl
         else -> url
     }
+
+    private fun isHttp(raw: String?): Boolean =
+        raw != null && (raw.startsWith("https://") || raw.startsWith("http://"))
 }
 
 @Serializable
@@ -70,7 +122,14 @@ data class BauComment(
     val author: PublicUser,
     val body: String,
     val createdAt: String,
-)
+) {
+    /**
+     * Non-null when the comment is nothing but an allowlisted picker GIF URL,
+     * which then draws as the GIF. The same rule chat and the web use
+     * ([GifLinks]); any other body or host stays text.
+     */
+    val gifUrl: String? get() = GifLinks.mediaBody(body)
+}
 
 @Serializable
 data class BauPost(
@@ -129,6 +188,16 @@ data class CreateBauCommentRequest(val body: String)
  */
 @Serializable
 data class BauUnreadResponse(val count: Int = 0)
+
+/**
+ * `GET /api/community-home/unread`: the same count for every server this
+ * person is in whose owner turned the Baú on, servers with nothing unread left
+ * out. What the server list reads. The API also sends `newest` (when each
+ * server's newest unread post went live), which only the web's "New" chip
+ * needs; it is ignored here.
+ */
+@Serializable
+data class BauUnreadAllResponse(val servers: Map<String, Int> = emptyMap())
 
 /** `POST /api/servers/:id/home/read` answers `{ ok: true }` and nothing else. */
 @Serializable

@@ -797,8 +797,55 @@ export const communitySearchQuerySchema = z
  * their friend just made is not browsing, and answering "no results" for a
  * server that plainly exists is the one behaviour that reads as broken rather
  * than as curation.
+ *
+ * SUPERSEDED in the directory read by `DIRECTORY_MIN_HUMAN_MEMBERS` below,
+ * which is strictly above it. Kept for anything that still names it.
  */
 export const COMMUNITY_MEMBER_FLOOR = 2;
+
+/**
+ * THE DIRECTORY'S QUALITY BAR, on top of the floor above. A listed community
+ * is browsable only while it has at least this many PEOPLE in it (character
+ * accounts, webhooks and labelled bots do not count)...
+ *
+ * Why: in October 2026 three of the eight listed rooms on pqp.gg were one
+ * owner and no messages. A stranger who opens the directory and lands in an
+ * empty room learns that the directory is empty. Nobody's setting changes:
+ * a room that drops below the bar is still listed, and comes back on its own
+ * the day it clears it again. Search is exempt, for the reason the floor
+ * above gives. The instance's default community (`DEFAULT_COMMUNITY_SLUG`,
+ * the QG on pqp.gg) always qualifies.
+ */
+export const DIRECTORY_MIN_HUMAN_MEMBERS = 3;
+
+/** ...and somebody who is a person wrote in it within this many days. */
+export const DIRECTORY_ACTIVE_WINDOW_DAYS = 30;
+
+/**
+ * Browse order: rooms where a person wrote in the last this-many days come
+ * first, biggest first inside each group. Two sorts a person can explain,
+ * same argument as the original "size, then age" order.
+ */
+export const DIRECTORY_RECENT_WINDOW_DAYS = 7;
+
+/**
+ * `GET /api/communities/listing-nudge`: the one-time card that asks an owner
+ * whose room already has a public address whether it should be in the
+ * directory too. `null` when there is nothing to ask (flag off, already
+ * answered, no qualifying room).
+ */
+export const communityListingNudgeSchema = z.object({
+  listingNudge: z
+    .object({
+      serverId: z.string().uuid(),
+      name: z.string(),
+      iconUrl: z.string().nullable(),
+    })
+    .nullable(),
+});
+export type CommunityListingNudge = z.infer<
+  typeof communityListingNudgeSchema
+>["listingNudge"];
 
 // -------------------------------------------------- the public `/c/…` page
 

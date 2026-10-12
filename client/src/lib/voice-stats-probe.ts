@@ -159,10 +159,60 @@ export interface CandidatePairSample {
   packetsReceived: number | null;
 }
 
+/**
+ * One copy of the MICROPHONE leaving this machine: one per mesh peer, one on
+ * the SFU. Read by the audio self-repair (`audio-health.ts`), which compares
+ * it with what the local meter hears.
+ */
+export interface AudioSenderSample {
+  /** Mesh: the peer this copy goes to. SFU: our own peer id. */
+  peerId: string;
+  /** The track the sender is carrying, off `media-source.trackIdentifier`. */
+  trackId: string | null;
+  /** Packets sent since the previous sample; null on the first one. */
+  packetsDelta: number | null;
+  /** `media-source.audioLevel`, linear 0..1; null where not reported. */
+  audioLevel: number | null;
+  /**
+   * `media-source.totalAudioEnergy` since the previous sample: the energy the
+   * sender was actually fed over the whole window, where `audioLevel` is one
+   * instant that can land between two words. Null where not reported and on
+   * the first sample.
+   */
+  energyDelta: number | null;
+}
+
+/**
+ * One remote voice arriving here. Mesh rows carry the receiving track's id so
+ * the caller can tell a microphone from a share's audio; SFU rows are the
+ * microphone publication only, with the server's speaking detector.
+ */
+export interface AudioReceiverSample {
+  peerId: string;
+  trackId: string | null;
+  /** Packets received since the previous sample; null on the first one. */
+  packetsDelta: number | null;
+  /** `inbound-rtp.audioLevel`, linear 0..1; null where not reported. */
+  audioLevel: number | null;
+  /** SFU only: the server says this participant is speaking right now. */
+  remoteSpeaking?: boolean;
+}
+
+export interface AudioStatsSample {
+  senders: AudioSenderSample[];
+  receivers: AudioReceiverSample[];
+}
+
 export interface VoiceStatsSnapshot {
   senders: VideoSenderSample[];
   receivers: VideoReceiverSample[];
   paths: CandidatePairSample[];
+  /**
+   * The audio half, for the self-repair. Optional so every consumer that
+   * builds or reads a snapshot without it (the readouts, the rating, tests)
+   * is unchanged.
+   */
+  audio?: AudioStatsSample;
 }
 
 /**
@@ -449,6 +499,94 @@ export function summariseStats(
 }
 
 /**
+ * A lifetime counter turned into "since the last sample". Null the first time
+ * a key is seen, and null rather than negative when the counter went
+ * backwards (a new connection reusing the key), so a rebuilt transport never
+ * reads as one sample of nothing having arrived.
+ */
+const MAX_COUNTER_MARKS = 4_000;
+
+export function counterDelta(
+  marks: Map<string, number>,
+  key: string,
+  value: number | null,
+): number | null {
+  if (value === null) {
+    return null;
+  }
+  const previous = marks.get(key);
+  // Keys are per stats row, and rows churn with every reconnect and every
+  // speaker in a big room. A long-lived tab must not keep them all: past the
+  // cap the table starts over, which costs one sample of "no reading".
+  if (previous === undefined && marks.size >= MAX_COUNTER_MARKS) {
+    marks.clear();
+  }
+  marks.set(key, value);
+  if (previous === undefined || value < previous) {
+    return null;
+  }
+  return value - previous;
+}
+
+/**
+ * The audio rows of one `getStats()` report: every outbound audio copy with
+ * the track feeding it and that track's level, and every inbound audio row.
+ * Which of them is the microphone (and not a share's audio) is the caller's
+ * call: it knows the track ids, this function does not.
+ */
+export function summariseAudioStats(
+  peerId: string,
+  stats: Iterable<RtcStatLike>,
+  marks: Map<string, number> = packetMarks,
+): AudioStatsSample {
+  const byId = new Map<string, RtcStatLike>();
+  const all: RtcStatLike[] = [];
+  for (const stat of stats) {
+    all.push(stat);
+    if (typeof stat.id === "string") {
+      byId.set(stat.id, stat);
+    }
+  }
+  const senders: AudioSenderSample[] = [];
+  const receivers: AudioReceiverSample[] = [];
+  for (const stat of all) {
+    if (stat.kind !== "audio") {
+      continue;
+    }
+    if (stat.type === "outbound-rtp") {
+      const source = byId.get(str(stat.mediaSourceId) ?? "");
+      senders.push({
+        peerId,
+        trackId: str(source?.trackIdentifier),
+        packetsDelta: counterDelta(
+          marks,
+          `aout:${peerId}:${str(stat.id) ?? "?"}`,
+          num(stat.packetsSent),
+        ),
+        audioLevel: num(source?.audioLevel),
+        energyDelta: counterDelta(
+          marks,
+          `aen:${peerId}:${str(stat.id) ?? "?"}`,
+          num(source?.totalAudioEnergy),
+        ),
+      });
+    } else if (stat.type === "inbound-rtp") {
+      receivers.push({
+        peerId,
+        trackId: str(stat.trackIdentifier),
+        packetsDelta: counterDelta(
+          marks,
+          `ain:${peerId}:${str(stat.id) ?? "?"}`,
+          num(stat.packetsReceived),
+        ),
+        audioLevel: num(stat.audioLevel),
+      });
+    }
+  }
+  return { senders, receivers };
+}
+
+/**
  * One simulcast layer from `getSenderStats()`, which is the only shape this
  * picker needs. LiveKit reports one entry per encoding; Chrome pauses the
  * top one under congestion and leaves it in the list at 0 fps with its
@@ -622,6 +760,8 @@ const registrations = new Map<RTCPeerConnection, Registration>();
 const sources = new Set<() => Promise<VoiceStatsSnapshot>>();
 const byteMarks = new Map<string, ByteMark>();
 const lossMarks = new Map<string, LossMark>();
+/** Packet counters for the audio rows, shared with the SFU's own sampler. */
+const packetMarks = new Map<string, number>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -639,6 +779,70 @@ export interface VoiceStatsConsole {
 }
 
 /**
+ * Two samples closer together than this are the same sample.
+ *
+ * WHY. Every delta in a snapshot (packets, energy, bytes) is measured from
+ * the previous sample BY ANYONE, because the mark tables are shared. Several
+ * consumers poll on their own two-second timers (the share's uplink strain,
+ * the link-quality bars) beside the shared poll the audio repair reads, and
+ * timers started in the same commit stay phase-locked for the whole call. When
+ * one of them sampled a few milliseconds before the repair's tick, the repair
+ * was handed the delta of those few milliseconds: zero packets from a peer
+ * whose voice was arriving perfectly. Chrome also serves `getStats()` from a
+ * cache for a short while, so two scans that close read identical counters.
+ * Five such ticks in a row is "their voice stopped arriving" on a mesh call,
+ * and the repair for that rebuilds the peer connection, which froze a
+ * presenter's screen share for every viewer for several seconds and took
+ * `screen-quality-received.spec.ts` down on CI about one run in twenty
+ * (2026-10-12). A caller inside this window gets the snapshot that was just
+ * taken, so no consumer can shrink another's interval to nothing.
+ */
+export const MIN_SAMPLE_GAP_MS = 1000;
+
+interface TakenSample {
+  /** When the scan started, for the gap. */
+  at: number;
+  /** Scans are numbered in the order they start; see `subscribeVoiceStats`. */
+  seq: number;
+  snapshot: VoiceStatsSnapshot;
+}
+
+let latestSample: TakenSample | null = null;
+let inFlightSample: Promise<TakenSample> | null = null;
+let nextSampleSeq = 0;
+
+function sampleCoalesced(): Promise<TakenSample> {
+  if (inFlightSample) {
+    return inFlightSample;
+  }
+  const at = Date.now();
+  if (latestSample && at - latestSample.at < MIN_SAMPLE_GAP_MS) {
+    return Promise.resolve(latestSample);
+  }
+  const seq = nextSampleSeq;
+  nextSampleSeq += 1;
+  const pending = sampleAll().then((snapshot) => {
+    const taken = { at, seq, snapshot };
+    latestSample = taken;
+    return taken;
+  });
+  inFlightSample = pending;
+  const clear = () => {
+    if (inFlightSample === pending) {
+      inFlightSample = null;
+    }
+  };
+  pending.then(clear, clear);
+  return pending;
+}
+
+/** Test seam: forget the last sample so the next call scans again. */
+export function resetVoiceStatsSamplingForTests(): void {
+  latestSample = null;
+  inFlightSample = null;
+}
+
+/**
  * One silent sample of every live connection.
  *
  * The same work `report()` does without the printing, so a UI readout and the
@@ -646,9 +850,12 @@ export interface VoiceStatsConsole {
  * byte marks, which means two consumers sampling at different intervals will
  * each see a bitrate measured from whichever sample came last. That is fine
  * for a readout and would not be for billing.
+ *
+ * Coalesced (`MIN_SAMPLE_GAP_MS`): a call made while a scan is running, or
+ * just after one finished, gets that scan rather than a new one.
  */
 export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
-  return sampleAll();
+  return sampleCoalesced().then((taken) => taken.snapshot);
 }
 
 /** How often the shared poll below samples, matching what every consumer
@@ -658,6 +865,10 @@ const SHARED_POLL_INTERVAL_MS = 2000;
 
 type VoiceStatsListener = (snapshot: VoiceStatsSnapshot) => void;
 const sharedListeners = new Set<VoiceStatsListener>();
+/** The first scan each listener may be handed: one that started after it subscribed. */
+const firstSeqFor = new Map<VoiceStatsListener, number>();
+/** The newest scan the shared poll has delivered, so none is delivered twice. */
+let lastSharedSeq = -1;
 let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -692,9 +903,15 @@ let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
  * before its call existed, folded into media-quality numbers for a call that
  * has barely started. Snapshotting the target set at tick start is what
  * keeps a sample scoped to the subscribers who were there to ask for it.
+ *
+ * Coalescing (`MIN_SAMPLE_GAP_MS`) means a tick can be answered by a scan
+ * somebody else started a moment earlier, possibly before this listener
+ * subscribed. So the rule is kept on the scan itself as well: a listener is
+ * only ever handed a scan that STARTED after it subscribed (`firstSeqFor`).
  */
 export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
   sharedListeners.add(listener);
+  firstSeqFor.set(listener, nextSampleSeq);
   if (!sharedPollTimer) {
     const tick = () => {
       // Who this SPECIFIC tick is for, fixed before the first `await` inside
@@ -702,14 +919,21 @@ export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
       // itself, which keeps mutating (new subscribers, unsubscribes) for as
       // long as this tick's `getStats()` calls are still out.
       const targets = new Set(sharedListeners);
-      sampleAll()
-        .then((snapshot) => {
+      sampleCoalesced()
+        .then((taken) => {
+          // Two ticks inside one gap (a throttled tab firing a late timer
+          // straight after its successor) get the same scan; it was already
+          // delivered, and a second delivery would count one reading twice.
+          if (taken.seq <= lastSharedSeq) {
+            return;
+          }
+          lastSharedSeq = taken.seq;
           for (const l of sharedListeners) {
             // Delivered only if this listener was both subscribed when the
             // sample was taken AND is still subscribed now -- the
             // intersection is what "this sample is for you" means.
-            if (targets.has(l)) {
-              l(snapshot);
+            if (targets.has(l) && taken.seq >= (firstSeqFor.get(l) ?? Infinity)) {
+              l(taken.snapshot);
             }
           }
         })
@@ -725,6 +949,7 @@ export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
   }
   return () => {
     sharedListeners.delete(listener);
+    firstSeqFor.delete(listener);
     if (sharedListeners.size === 0 && sharedPollTimer) {
       clearInterval(sharedPollTimer);
       sharedPollTimer = null;
@@ -781,12 +1006,17 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
   const senders: VideoSenderSample[] = [];
   const receivers: VideoReceiverSample[] = [];
   const paths: CandidatePairSample[] = [];
+  const audio: AudioStatsSample = { senders: [], receivers: [] };
   for (const registration of registrations.values()) {
     try {
       const report = await registration.pc.getStats();
+      const rows = statRows(report);
+      const audioRows = summariseAudioStats(registration.peerId, rows, packetMarks);
+      audio.senders.push(...audioRows.senders);
+      audio.receivers.push(...audioRows.receivers);
       const snapshot = summariseStats(
         registration.peerId,
-        statRows(report),
+        rows,
         registration.roleOfTrack,
         byteMarks,
         ceilingLookup(registration.pc),
@@ -811,11 +1041,20 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
       senders.push(...snapshot.senders);
       receivers.push(...snapshot.receivers);
       paths.push(...snapshot.paths);
+      if (snapshot.audio) {
+        audio.senders.push(...snapshot.audio.senders);
+        audio.receivers.push(...snapshot.audio.receivers);
+      }
     } catch {
       // The room went away mid-sample. Same answer as above.
     }
   }
-  return { senders, receivers, paths };
+  return { senders, receivers, paths, audio };
+}
+
+/** `counterDelta` on the probe's own marks, for a transport sampling itself. */
+export function measurePacketDelta(key: string, value: number | null): number | null {
+  return counterDelta(packetMarks, key, value);
 }
 
 /**
@@ -923,7 +1162,7 @@ function print(snapshot: VoiceStatsSnapshot): void {
 
 const api: VoiceStatsConsole = {
   async report() {
-    const snapshot = await sampleAll();
+    const { snapshot } = await sampleCoalesced();
     print(snapshot);
     return snapshot;
   },
@@ -932,7 +1171,7 @@ const api: VoiceStatsConsole = {
       clearInterval(timer);
     }
     timer = setInterval(() => {
-      void sampleAll().then(print);
+      void sampleCoalesced().then((taken) => print(taken.snapshot));
     }, ms);
     return `pqp voice stats: sampling every ${ms}ms — pqpVoiceStats.stop() to end`;
   },
@@ -944,7 +1183,7 @@ const api: VoiceStatsConsole = {
     return "pqp voice stats: stopped";
   },
   async dump() {
-    return JSON.stringify(await sampleAll(), null, 2);
+    return JSON.stringify((await sampleCoalesced()).snapshot, null, 2);
   },
 };
 

@@ -131,10 +131,10 @@ test("the in-call readout reports the camera that is actually on the wire", asyn
   browser,
 }) => {
   const serverId = await seedVoiceServer("ro-a", "ro-b");
-  const watcher = await secondClient(browser, `/app/servers/${serverId}`, "ro-b");
+  const watcher = await secondClient(browser, `/app/server/${serverId}`, "ro-b");
 
   try {
-    await bootAs(page, `/app/servers/${serverId}`, "ro-a");
+    await bootAs(page, `/app/server/${serverId}`, "ro-a");
     await joinVoice(page);
     await joinVoice(watcher.page);
 

@@ -21,6 +21,19 @@ class DeepLinkTest {
     }
 
     @Test
+    fun `a forum post link carries the server, the forum and the post`() {
+        val target = DeepLinkTarget.ForumPost("srv-1", "forum-2", "post-3")
+        assertEquals(target, DeepLink.target("/app/server/srv-1/channel/forum-2/post/post-3"))
+        assertEquals(target, DeepLink.target("https://pqp.gg/app/server/srv-1/channel/forum-2/post/post-3"))
+        assertEquals("post-3", target.channelId)
+        // A dangling "/post" with no id is still the forum.
+        assertEquals(
+            DeepLinkTarget.Channel("srv-1", "forum-2"),
+            DeepLink.target("/app/server/srv-1/channel/forum-2/post"),
+        )
+    }
+
+    @Test
     fun `dm path is a conversation`() {
         assertEquals(
             DeepLinkTarget.Conversation("chan-9"),
@@ -31,6 +44,26 @@ class DeepLinkTest {
     @Test
     fun `server without a channel is a server`() {
         assertEquals(DeepLinkTarget.Server("srv-1"), DeepLink.target("/app/server/srv-1"))
+    }
+
+    @Test
+    fun `the new Bau post push path opens the Bau`() {
+        // buildCommunityHomePostPayload: `/app/server/<id>/home`. The web client
+        // reads it as "this server" and lands on the Bau; the phone names it.
+        assertEquals(DeepLinkTarget.Bau("srv-1"), DeepLink.target("/app/server/srv-1/home"))
+        assertEquals(
+            DeepLinkTarget.Bau("srv-1"),
+            DeepLink.target("https://pqp.gg/app/server/srv-1/home"),
+        )
+        assertEquals(DeepLinkTarget.Bau("srv-1"), DeepLink.target("/app/server/srv-1/home/"))
+        // A server with no channel is still just the server, and nothing else
+        // under it is a Bau.
+        assertEquals(DeepLinkTarget.Server("srv-1"), DeepLink.target("/app/server/srv-1"))
+        assertEquals(DeepLinkTarget.Server("srv-1"), DeepLink.target("/app/server/srv-1/homes"))
+        assertEquals(
+            DeepLinkTarget.Server("srv-1"),
+            DeepLink.target("/app/server/srv-1/home/post-1"),
+        )
     }
 
     @Test

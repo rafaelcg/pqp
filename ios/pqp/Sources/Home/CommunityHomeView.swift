@@ -1,16 +1,26 @@
 import SwiftUI
+import AVKit
+import Combine
 
 /// A server's Baú: the posts that stay, newest first.
 ///
-/// Read and react only. There is no composer for a post here and there will
-/// not be one this pass: staff write from the web, where the media upload and
-/// the schedule live. What a phone is for is reading the clip on the bus and
-/// leaving a heart, and that is what this screen does.
+/// Reading and reacting is for everybody. Staff (whoever the server lets
+/// publish, see `communityHomeComposer`) also get a "new post" button; drafts
+/// and the schedule stay on the web.
 struct CommunityHomeView: View {
     @Environment(SessionStore.self) private var session
     let server: Server
     let config: CommunityHomeConfig
+    /// The post a Baú card in chat (or a Baú link) asked for. The feed scrolls
+    /// to it once and outlines it for a moment; a post that is not in the feed
+    /// (gone, or not this viewer's) leaves the feed as it was.
+    var focusPostId: String? = nil
+    /// The screen a `#channel` in a post opens, built by whoever owns channel
+    /// navigation (the channel list). Absent: the link is drawn but inert.
+    var chatDestination: ((Channel) -> AnyView)?
 
+    @State private var focusPending = true
+    @State private var highlightedPostId: String?
     @State private var posts: [CommunityHomePost] = []
     @State private var isLoading = true
     @State private var error: String?
@@ -18,6 +28,10 @@ struct CommunityHomeView: View {
     @State private var expanded: [String: [CommunityHomeComment]] = [:]
     @State private var loadingComments: Set<String> = []
     @State private var handlerKey = UUID().uuidString
+    /// The channels this account can see here, for drawing `#channel`. The
+    /// API stores only an id; a channel that is not in this list gets no name.
+    @State private var channels: [Channel] = []
+    @State private var openedChannel: Channel?
 
     var body: some View {
         ZStack {
@@ -40,12 +54,17 @@ struct CommunityHomeView: View {
                     message: "When the staff of \(server.name) posts, it shows up here."
                 )
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(posts) { post in
                             PostCard(
                                 post: post,
                                 vipEnabled: config.vipEnabled,
+                                channels: channels,
+                                onOpenChannel: { channel in
+                                    if chatDestination != nil, channel.opensAsChat { openedChannel = channel }
+                                },
                                 expanded: expanded[post.id],
                                 loadingComments: loadingComments.contains(post.id),
                                 onToggleLike: { Task { await toggleLike(post) } },
@@ -53,18 +72,44 @@ struct CommunityHomeView: View {
                                 onCollapse: { expanded.removeValue(forKey: post.id) },
                                 onComment: { body in await addComment(post, body: body) }
                             )
+                            .overlay {
+                                if highlightedPostId == post.id {
+                                    RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                                        .strokeBorder(Palette.signal, lineWidth: 2)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            .id(post.id)
                         }
                     }
                     .padding(.horizontal, Metrics.hPadding)
                     .padding(.vertical, 12)
                 }
-                .refreshable { await load() }
+                .pullToRefresh {
+                    async let fresh: Void = loadChannels()
+                    await load()
+                    await fresh
+                }
                 .accessibilityIdentifier("bau.feed")
+                // The restore button of a Picture in Picture window brings
+                // the person back to the post that was playing.
+                .onChange(of: BauPlayback.shared.restoreTargetPostID) { _, target in
+                    guard let target else { return }
+                    BauPlayback.shared.restoreTargetPostID = nil
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                }
+                .onChange(of: posts.map(\.id), initial: true) { _, ids in
+                    focusIfNeeded(in: ids, proxy: proxy)
+                }
+                }
             }
         }
         .navigationTitle("Baú")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // Once per opening, beside the feed and not inside every reload: a
+            // burst of updates must not turn into a burst of channel-list reads.
+            Task { await loadChannels() }
             await load()
             // A publish, a comment, a deletion: the frame says "refetch" and
             // nothing more (likes deliberately do not fan out). The feed is
@@ -78,7 +123,35 @@ struct CommunityHomeView: View {
                 }
             }
         }
-        .onDisappear { session.eventHandlers.removeValue(forKey: handlerKey) }
+        .onDisappear {
+            session.eventHandlers.removeValue(forKey: handlerKey)
+            // Scrolling a playing card away keeps it going in Picture in
+            // Picture; leaving the Baú altogether does not.
+            BauPlayback.shared.stopAllUnlessFullScreen()
+        }
+        .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
+        .navigationDestination(item: $openedChannel) { channel in
+            chatDestination?(channel) ?? AnyView(EmptyView())
+        }
+    }
+
+    /// Best effort: without it a `#channel` is the neutral "unavailable" mark.
+    private func loadChannels() async {
+        if let fresh = try? await session.api.channels(serverId: server.id) { channels = fresh }
+    }
+
+    /// Once per screen: bring the asked-for post into view and outline it.
+    private func focusIfNeeded(in ids: [String], proxy: ScrollViewProxy) {
+        guard focusPending, let focusPostId, ids.contains(focusPostId) else { return }
+        focusPending = false
+        withAnimation(Motion.standard) {
+            proxy.scrollTo(focusPostId, anchor: .top)
+            highlightedPostId = focusPostId
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(Motion.standard) { highlightedPostId = nil }
+        }
     }
 
     private func load() async {
@@ -86,6 +159,7 @@ struct CommunityHomeView: View {
         do {
             posts = try await session.api.communityHomePosts(serverId: server.id)
             error = nil
+
             // Only after the posts arrived: a read marker for a page that
             // failed to load would clear a badge for posts nobody has seen.
             // Best effort past that point, since the posts are the screen and
@@ -93,7 +167,7 @@ struct CommunityHomeView: View {
             // on the way back, which is what clears the row's badge here.
             try? await session.api.markCommunityHomeRead(serverId: server.id)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
     }
@@ -151,6 +225,8 @@ struct CommunityHomeView: View {
 private struct PostCard: View {
     let post: CommunityHomePost
     let vipEnabled: Bool
+    let channels: [Channel]
+    let onOpenChannel: (Channel) -> Void
     let expanded: [CommunityHomeComment]?
     let loadingComments: Bool
     let onToggleLike: () -> Void
@@ -178,19 +254,23 @@ private struct PostCard: View {
 
             if post.locked {
                 if let teaser = post.teaser, !teaser.isEmpty {
-                    Text(teaser)
+                    BauBodyText(text: teaser, channels: channels, onOpenChannel: onOpenChannel)
                         .font(Typography.callout)
                         .foregroundStyle(Palette.paperMuted)
                 }
                 LockedBox()
             } else {
                 if let body = post.body, !body.isEmpty {
-                    MessageBodyText(body: body)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.paper)
+                    if let gifURL = GifLinks.mediaBody(body) {
+                        BauGif(url: gifURL)
+                    } else {
+                        BauBodyText(text: body, channels: channels, onOpenChannel: onOpenChannel)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.paper)
+                    }
                 }
                 if let media = post.media {
-                    MediaView(media: media)
+                    MediaView(media: media, postID: post.id)
                 }
             }
 
@@ -320,17 +400,26 @@ private struct LockedBox: View {
     }
 }
 
-/// One post's media. Every kind opens *out*: the image in the browser, the
-/// video and the file in Safari or a viewer, YouTube / Twitch / TikTok /
-/// Instagram in their apps. A phone has better players for all of those than
-/// a chat app does, and a card that plays sound on scroll is the thing the
-/// web's `preload="none"` exists to avoid.
+/// One post's media. An uploaded video and a YouTube link play in place, poster
+/// first (`BauInlineVideo`, `BauYoutubeVideo`), the way the web's `<video>` and
+/// iframe do. The rest opens *out*: the image in the browser, the file in
+/// Safari or a viewer, Twitch / TikTok / Instagram in their apps. Nothing plays
+/// or loads a player on scroll, which is what the web's `preload="none"` is for.
 private struct MediaView: View {
     @Environment(\.openURL) private var openURL
     let media: CommunityHomeMedia
+    var postID: String?
 
     var body: some View {
-        if let target = media.openURL {
+        if let videoURL = media.inlineVideoURL {
+            // A stored video plays in place, like the web's `<video>`. It is
+            // not wrapped in the open-out button: that button would swallow
+            // the tap meant for the player's own controls.
+            BauInlineVideo(url: videoURL, name: media.name, postID: postID, posterURL: media.posterURL)
+        } else if media.isYoutube, let videoId = YoutubeLinks.videoId(media.youtubeUrl) {
+            // Same reason as above: the player's own controls need the tap.
+            BauYoutubeVideo(videoId: videoId, watchURL: media.openURL, name: media.name)
+        } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)
         } else {
@@ -410,16 +499,6 @@ private struct MediaView: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
             .accessibilityLabel(Text("Watch on Instagram"))
             .accessibilityIdentifier("bau.media.instagram")
-        } else if media.isVideo {
-            ZStack {
-                Palette.surfaceRaised
-                PlayBadge(label: media.name.isEmpty ? String(localized: "Play video") : media.name)
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
-            .accessibilityLabel(Text("Play video"))
-            .accessibilityIdentifier("bau.media.video")
         } else {
             fileCard
         }
@@ -461,6 +540,20 @@ private struct MediaView: View {
                 .fill(Palette.surfaceRaised)
         )
         .accessibilityIdentifier("bau.media.file")
+    }
+}
+
+/// A GIF posted from the picker: a body that is only an allowlisted URL.
+/// Same size and clip as the chat transcript uses for the same thing.
+private struct BauGif: View {
+    let url: URL
+
+    var body: some View {
+        AnimatedImageView(url: url)
+            .frame(maxWidth: 260, maxHeight: 260, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .accessibilityLabel(Text("GIF"))
+            .accessibilityIdentifier("bau.gif")
     }
 }
 
@@ -514,9 +607,13 @@ private struct CommentsBlock: View {
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.paper)
                                 .lineLimit(1)
-                            Text(comment.body)
-                                .font(Typography.callout)
-                                .foregroundStyle(Palette.paper)
+                            if let gifURL = comment.gifURL {
+                                BauGif(url: gifURL)
+                            } else {
+                                Text(comment.body)
+                                    .font(Typography.callout)
+                                    .foregroundStyle(Palette.paper)
+                            }
                         }
                     }
                 }

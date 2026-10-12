@@ -148,6 +148,12 @@ jobs:
       - name: Set up Docker Buildx
         if: steps.relevant.outputs.needed == 'true'
         uses: docker/setup-buildx-action@v3
+        with:
+          # BuildKit's own image, from Google's Docker Hub mirror: the default
+          # pull from registry-1.docker.io hit the anonymous rate limit on the
+          # shared runner and failed this step (2026-10-09), same as the
+          # Dockerfile's FROM did.
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         if: steps.relevant.outputs.needed == 'true'
@@ -172,6 +178,24 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.commit.outputs.sha }}
             ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The worker's image: the same stages plus ffmpeg (Dockerfile target
+      # `worker`), for the voice note AAC transcode. Same repository, tag
+      # `<sha>-worker`, which is what tools/api-host/compose.yaml's `worker`
+      # service runs. Every layer but the ffmpeg one comes from the cache the
+      # step above just filled. No `:latest` alias: nothing floats to it.
+      - name: Build & push worker image
+        if: steps.relevant.outputs.needed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: worker
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.commit.outputs.sha }}-worker
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

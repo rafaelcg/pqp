@@ -658,3 +658,145 @@ test("waitlistStatusLabel covers all three states and falls back to the raw valu
   assert.equal(waitlistStatusLabel("whatever"), "whatever");
   assert.equal(waitlistStatusLabel(null), "");
 });
+
+/**
+ * The "mensagens de voz" panel. What it flags is a claim an operator acts on
+ * ("the worker is down"), so the thresholds are pinned here, including the two
+ * things it must not do: call a retry in backoff stuck (the API already leaves
+ * those out of `oldestQueuedSeconds`, so a value is always "due and unclaimed")
+ * and read a feature that is off as a healthy row of zeroes.
+ */
+const { voiceNoteHealth, ageLabel } = globalThis.PQPInsights;
+
+function queueStats(over) {
+  return { queued: 0, running: 0, retrying: 0, oldestQueuedSeconds: 0, expiredLeases: 0, ...(over || {}) };
+}
+function outcomes(over) {
+  return { ok24h: 0, skipped24h: 0, failed24h: 0, successRate24h: null, p50Seconds: null, p95Seconds: null, ...(over || {}) };
+}
+function voiceNotes(over) {
+  const base = {
+    usage: { minted7d: 12, sent7d: 10 },
+    health: {
+      queue: { transcode: queueStats(), transcription: queueStats() },
+      jobs: { transcode: outcomes(), transcription: outcomes() },
+      budget: { dailySeconds: 36000, usedSeconds: 100, calls: 3, refused: 0, usedShare: 0.003, exhausted: false }
+    },
+    refusals: {}
+  };
+  return { ...base, ...(over || {}), health: { ...base.health, ...((over && over.health) || {}) } };
+}
+const FLAG_ON = { values: { voice_notes: { effective: true, serverOverrides: 0 } } };
+const FLAG_OFF = { values: { voice_notes: { effective: false, serverOverrides: 0 } } };
+
+test("voiceNoteHealth: a missing block is raw, never a healthy zero", () => {
+  assert.equal(voiceNoteHealth(undefined, FLAG_ON).state, "raw");
+  assert.equal(voiceNoteHealth({ usage: {} }, FLAG_ON).state, "raw");
+});
+
+test("voiceNoteHealth: a quiet, healthy pipeline is ok with nothing to flag", () => {
+  const v = voiceNoteHealth(voiceNotes(), FLAG_ON);
+  assert.equal(v.state, "ok");
+  assert.deepEqual(v.items, []);
+});
+
+test("voiceNoteHealth: the oldest due job is warn at 2 min and bad at 5 min", () => {
+  const at = (s) => voiceNoteHealth(voiceNotes({
+    health: { queue: { transcode: queueStats({ queued: 3, oldestQueuedSeconds: s }), transcription: queueStats() } }
+  }), FLAG_ON);
+  assert.equal(at(119).state, "ok");
+  assert.equal(at(120).state, "warn");
+  assert.equal(at(299).state, "warn");
+  const bad = at(300);
+  assert.equal(bad.state, "bad");
+  assert.equal(bad.queue.transcode, "bad");
+  assert.equal(bad.queue.transcription, "ok");
+  assert.match(bad.items[0].text, /5 min/);
+});
+
+test("voiceNoteHealth: an expired lease is a warn even when nothing has waited long", () => {
+  const v = voiceNoteHealth(voiceNotes({
+    health: { queue: { transcode: queueStats(), transcription: queueStats({ running: 1, expiredLeases: 1 }) } }
+  }), FLAG_ON);
+  assert.equal(v.state, "warn");
+  assert.equal(v.queue.transcription, "warn");
+  assert.match(v.items[0].text, /lease vencida/);
+});
+
+test("voiceNoteHealth: a failure rate is judged only from 5 settled jobs up", () => {
+  const rate = (ok, failed) => voiceNoteHealth(voiceNotes({
+    health: { jobs: {
+      transcode: outcomes({ ok24h: ok, failed24h: failed, successRate24h: ok / (ok + failed) }),
+      transcription: outcomes()
+    } }
+  }), FLAG_ON);
+  // One failure in two jobs is a sample too small to call bad, but it is shown.
+  assert.equal(rate(1, 1).state, "warn");
+  // Five or more: under 90% warns, under 50% is bad.
+  assert.equal(rate(9, 1).state, "ok");
+  assert.equal(rate(8, 2).state, "warn");
+  assert.equal(rate(2, 3).state, "bad");
+  assert.equal(rate(10, 0).state, "ok");
+});
+
+test("voiceNoteHealth: skipped jobs and a clean day are not failures", () => {
+  const v = voiceNoteHealth(voiceNotes({
+    health: { jobs: { transcode: outcomes({ ok24h: 4, skipped24h: 9, failed24h: 0, successRate24h: 1 }), transcription: outcomes() } }
+  }), FLAG_ON);
+  assert.equal(v.state, "ok");
+});
+
+test("voiceNoteHealth: the budget warns when spent and from 80% used, and says which", () => {
+  const budget = (over) => voiceNoteHealth(voiceNotes({
+    health: { budget: { dailySeconds: 1000, usedSeconds: 0, calls: 0, refused: 0, usedShare: 0, exhausted: false, ...over } }
+  }), FLAG_ON);
+  assert.equal(budget({ usedShare: 0.79 }).state, "ok");
+  const near = budget({ usedShare: 0.8, usedSeconds: 800 });
+  assert.equal(near.state, "warn");
+  assert.match(near.items[0].text, /80%/);
+  const spent = budget({ usedShare: 0.99, refused: 4, exhausted: true });
+  assert.equal(spent.state, "warn");
+  assert.match(spent.items[0].text, /esgotado/);
+  // A budget of zero has no share: it is configuration, not a warning.
+  assert.equal(budget({ dailySeconds: 0, usedShare: null }).state, "ok");
+});
+
+test("voiceNoteHealth: the worst item leads, and bad outranks warn", () => {
+  const v = voiceNoteHealth(voiceNotes({
+    health: {
+      queue: { transcode: queueStats({ queued: 1, oldestQueuedSeconds: 900 }), transcription: queueStats() },
+      jobs: { transcode: outcomes(), transcription: outcomes({ ok24h: 8, failed24h: 2, successRate24h: 0.8 }) },
+      budget: { dailySeconds: 1000, usedSeconds: 1000, calls: 5, refused: 2, usedShare: 1, exhausted: true }
+    }
+  }), FLAG_ON);
+  assert.equal(v.state, "bad");
+  assert.equal(v.items[0].state, "bad");
+  assert.equal(v.items.length, 3);
+});
+
+test("voiceNoteHealth: the flag off with nothing sent is off, not healthy", () => {
+  const quiet = voiceNotes({ usage: { minted7d: 0, sent7d: 0 } });
+  assert.equal(voiceNoteHealth(quiet, FLAG_OFF).state, "off");
+  // On for one server through an override: the zeros are a result.
+  const override = { values: { voice_notes: { effective: false, serverOverrides: 1 } } };
+  assert.equal(voiceNoteHealth(quiet, override).state, "ok");
+  // Off now but used last week: the history still counts, and so do its problems.
+  assert.equal(voiceNoteHealth(voiceNotes(), FLAG_OFF).state, "ok");
+  // Without the flags block there is no claim that it is off.
+  assert.equal(voiceNoteHealth(quiet, undefined).state, "ok");
+  // Off does not hide a problem left over from before: a stuck job is still bad.
+  const stuck = voiceNotes({
+    usage: { minted7d: 0, sent7d: 0 },
+    health: { queue: { transcode: queueStats({ oldestQueuedSeconds: 900 }), transcription: queueStats() } }
+  });
+  assert.equal(voiceNoteHealth(stuck, FLAG_OFF).state, "bad");
+});
+
+test("ageLabel: seconds, minutes, then hours", () => {
+  assert.equal(ageLabel(0), "0 s");
+  assert.equal(ageLabel(45), "45 s");
+  assert.equal(ageLabel(60), "1 min");
+  assert.equal(ageLabel(7 * 60 + 20), "7 min");
+  assert.equal(ageLabel(2 * 3600 + 5 * 60), "2 h 5 min");
+  assert.equal(ageLabel(3600), "1 h");
+});

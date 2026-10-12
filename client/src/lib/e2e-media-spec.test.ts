@@ -31,6 +31,7 @@ const MEDIA_FILES = [
   "voice-fast-reconnect.spec.ts",
   "voice-lobby.spec.ts",
   "voice-move-speaking-ring.spec.ts",
+  "voice-note-dm.spec.ts",
   "voice-stage-controls-autohide.spec.ts",
   "voice-state-badges.spec.ts",
 ] as const;

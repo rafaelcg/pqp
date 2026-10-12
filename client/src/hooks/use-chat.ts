@@ -14,7 +14,10 @@ import type {
   ThreadSummary,
 } from "@pqp/shared";
 import { buildReplyExcerpt, clampChatNewlines, MESSAGE_PAGE_SIZE } from "@pqp/shared";
-import { notifyOpenChannelMessage } from "@/lib/notifications";
+import {
+  notifyOpenChannelMessage,
+  notifyOpenChannelWhileAway,
+} from "@/lib/notifications";
 import { messagePingsYou } from "@/lib/message-mentions-you";
 import {
   apiFetch,
@@ -64,6 +67,7 @@ export function failedSendKey(
   | "chat.reject.slowMode"
   | "chat.reject.automod"
   | "chat.reject.databaseUnavailable"
+  | "chat.reject.locked"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -80,6 +84,8 @@ export function failedSendKey(
       return "chat.reject.automod";
     case "database-unavailable":
       return "chat.reject.databaseUnavailable";
+    case "locked":
+      return "chat.reject.locked";
     default:
       return "chat.failedSend";
   }
@@ -91,6 +97,8 @@ const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
   "undeliverable",
   // Retrying the same body hits the same rule. The author edits instead.
   "automod",
+  // A forum post staff closed. Stays closed until staff reopen it.
+  "locked",
 ]);
 
 export function isPermanentRejectReason(
@@ -367,6 +375,17 @@ export const THREAD_CHANNEL_FRAMES: ChannelFrames = {
   join: (channelId) => ({ type: "thread-join", channelId }),
   leave: () => ({ type: "thread-leave" }),
 };
+
+/** Whether the window is in front of the reader. Browser only; true elsewhere. */
+function windowState(): { documentVisible: boolean; windowFocused: boolean } {
+  if (typeof document === "undefined") {
+    return { documentVisible: true, windowFocused: true };
+  }
+  return {
+    documentVisible: document.visibilityState === "visible",
+    windowFocused: document.hasFocus(),
+  };
+}
 
 export function createChatController(
   transport: RealtimeTransport,
@@ -1381,6 +1400,8 @@ export function createChatController(
         width: item.width,
         height: item.height,
         url: item.previewUrl,
+        // The sender has heard their own note; the dot is for everyone else.
+        ...(item.voice ? { voice: { ...item.voice, listenedByMe: true } } : {}),
       }));
       const optimistic = buildOptimistic({
         nonce,
@@ -1763,6 +1784,23 @@ export function createChatController(
           if (messages.some((entry) => entry.id === incoming.id)) {
             return;
           }
+          // The server sends no `channel-activity` for the channel a socket has
+          // open, so this broadcast is the only signal a window that is away
+          // (minimised, hidden, blurred) ever gets. Decided before the
+          // `hasNewer` return: a reader scrolled back in history is no less
+          // away. The thread panel's controller never banners; it is not the
+          // channel the person chose.
+          const fromSomebodyElse = incoming.authorId !== currentUserId;
+          const pingsYou =
+            fromSomebodyElse &&
+            messagePingsYou(incoming, currentUsername, currentUserId);
+          const bannered =
+            fromSomebodyElse &&
+            frames === PRIMARY_CHANNEL_FRAMES &&
+            notifyOpenChannelWhileAway(channelId, pingsYou, {
+              authorId: incoming.authorId,
+              ...windowState(),
+            });
           // The window stops short of the present, so appending here would fake
           // a continuity that paging forward then has to unpick. Returning to
           // the tail fetches this message along with everything it skipped.
@@ -1772,11 +1810,8 @@ export function createChatController(
           messages = [...messages, incoming];
           newestLoadedId = incoming.id;
           emit();
-          if (incoming.authorId !== currentUserId) {
-            notifyOpenChannelMessage(
-              channelId,
-              messagePingsYou(incoming, currentUsername, currentUserId),
-            );
+          if (fromSomebodyElse && !bannered) {
+            notifyOpenChannelMessage(channelId, pingsYou);
           }
           return;
         }

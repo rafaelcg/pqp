@@ -127,6 +127,8 @@ struct ScreenShareControlButton: View {
     /// Told that the control was used, so a start that never happens can be
     /// reported instead of being indistinguishable from a missed tap.
     var onTap: () -> Void = {}
+    /// Print what the control does under it. See `caption`.
+    var showsCaption = false
 
     var body: some View {
         ZStack {
@@ -140,9 +142,44 @@ struct ScreenShareControlButton: View {
             BroadcastPickerRepresentable(onTap: onTap, side: side)
         }
         .frame(width: side, height: side)
+        .overlay(alignment: .top) {
+            if showsCaption { caption }
+        }
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(isSharing ? "Stop sharing your screen" : "Share your screen")
     }
+
+    /// "Compartilhar tela", in words, under the circle.
+    ///
+    /// WHY THIS ONE CONTROL HAS WORDS. Every other control on the row is a
+    /// glyph people already know (a microphone, headphones, a red phone), and
+    /// this one is two overlapping rectangles, which nobody reads as "show my
+    /// game to the call". People asked for phone screen sharing while the
+    /// button sat in front of them.
+    ///
+    /// An overlay hung below the circle rather than a stack: the circle keeps
+    /// the row's centre line and its exact square (the picker's hit target is
+    /// that square and nothing else, `ScreenSharePickerTests`), and the words
+    /// may run wider than the circle without pushing its neighbours apart. The
+    /// row reserves the height (`captionReserve`). Hidden from VoiceOver,
+    /// which already has the button's own label.
+    private var caption: some View {
+        let drop = side + Self.captionGap
+        return Text(isSharing ? "Stop" : "Share screen")
+            .font(Typography.label)
+            .foregroundStyle(isSharing ? Palette.signal : Palette.paperMuted)
+            .lineLimit(1)
+            .fixedSize()
+            // Moved, not laid out: the circle's frame stays the control's
+            // frame, and the reserve below the row is what makes room.
+            .offset(y: drop)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private static let captionGap: CGFloat = 5
+    /// Height a row must leave under its circles for the caption.
+    static let captionReserve: CGFloat = 18
 }
 
 /// Somebody's shared screen, as the stage of whatever room you are in.
@@ -294,13 +331,22 @@ struct ScreenShareFullscreenView: View {
 struct ScreenSharePresenterBanner: View {
     let isSharing: Bool
     let errorMessage: String?
+    /// The room cannot carry the share's sound (a mesh room; see
+    /// `ScreenShareAppAudio`). Said once, here, rather than left for the far
+    /// end to report as a bug: somebody sharing a game expects its sound.
+    var isPictureOnly = false
 
     var body: some View {
         Group {
             if let errorMessage {
                 label(errorMessage, tint: Palette.danger)
             } else if isSharing {
-                label(String(localized: "You are presenting"), tint: Palette.signal)
+                label(
+                    isPictureOnly
+                        ? String(localized: "Presenting the picture only, without sound")
+                        : String(localized: "You are presenting"),
+                    tint: Palette.signal
+                )
             }
         }
         .accessibilityIdentifier("voice.presenting")

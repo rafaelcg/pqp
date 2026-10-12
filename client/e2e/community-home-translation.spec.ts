@@ -54,6 +54,19 @@ const ES: Record<string, string> = {
     "El Baú ahora traduce los posts solo, así que escribes en tu idioma y la gente lee en el suyo.",
 };
 
+/**
+ * The API never shows the model a brand word: "Baú" and "QG" go out as `<k1>`
+ * and `<k2>` (in order of first appearance, which is Baú then QG in both texts
+ * here) and come back as the author's own words. The stub therefore sees, and
+ * answers in, the guarded form.
+ */
+function guarded(text: string): string {
+  return text.replace(/Baú|QG/g, (word) => (word === "Baú" ? "<k1>" : "<k2>"));
+}
+function guardedTable(table: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(table).map(([k, v]) => [guarded(k), guarded(v)]));
+}
+
 test.setTimeout(90_000);
 test.describe.configure({ mode: "serial" });
 
@@ -85,7 +98,7 @@ test.beforeAll(async () => {
         res.end("bad request");
         return;
       }
-      const table = into.startsWith("Spanish") ? ES : EN;
+      const table = guardedTable(into.startsWith("Spanish") ? ES : EN);
       res.setHeader("Content-Type", "application/json");
       res.end(
         JSON.stringify({

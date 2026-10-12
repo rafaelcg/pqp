@@ -1,0 +1,330 @@
+name: Flatpak manifest
+
+# Keeps flatpak/gg.pqp.pqp.yml pointing at the newest desktop release and
+# attaches a Flatpak bundle to it. When a `v*` release is published (the draft
+# electron.yml made, published by hand):
+#
+# - `bump` downloads its Linux .deb, pins the sha256, adds the release to the
+#   metainfo, lints, and hands the bumped flatpak/ over as an artifact;
+# - `pr` pushes that bump to a branch and opens a PR to main;
+# - `bundle` builds THAT bumped manifest (this release, not whatever main has)
+#   into `pqp-<version>-x86_64.flatpak`, installs it into an empty Flatpak
+#   installation as a smoke test, and keeps it as an artifact. It has no
+#   write access and no token;
+# - `release` attaches the bundle to the release.
+#
+# `pr` and `bundle` are independent: a failed PR does not cost the release its
+# bundle. The bundle names Flathub as its runtime repo, so `flatpak install` on
+# it pulls the runtime from there.
+#
+# On a pull request that touches flatpak/, only `bundle` runs, against the
+# manifest as it is on the branch.
+#
+# This is the canonical copy. Once the app is on Flathub, Flathub's own
+# external data checker opens the same bump on flathub/gg.pqp.pqp from the
+# manifest's `x-checker-data`, every two hours. See docs/DESKTOP.md
+# "Flatpak / Flathub".
+#
+# Opening the PR needs "Allow GitHub Actions to create and approve pull
+# requests" (Settings > Actions > General). Without it the branch is still
+# pushed and the job summary links the compare page; the run stays green.
+#
+# Backfill an older release (no PR is opened for a version older than main's
+# manifest):
+#   gh workflow run flatpak-manifest.yml -f tag=v0.2.5
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to point the manifest at and bundle, e.g. v0.2.5"
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - "flatpak/**"
+      - ".github/workflows/flatpak-manifest.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per release tag: a shared group keeps only one PENDING run, so a
+  # third release published while a bundle builds would drop the second.
+  group: flatpak-manifest-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bump:
+    # Desktop releases only (`v1.2.3`); android-v* and ios-v* are not ours.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' &&
+       startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.pin.outputs.version }}
+      deb_sha: ${{ steps.pin.outputs.deb_sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Pin the release's .deb and LICENSE
+        id: pin
+        env:
+          PUBLISHED_AT: ${{ github.event.release.published_at }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::not a desktop tag: $TAG"; exit 1 ;; esac
+          version="${TAG#v}"
+          mkdir -p "$RUNNER_TEMP/flatpak"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "pqp-${version}-amd64.deb" --dir "$RUNNER_TEMP/flatpak"
+          deb_sha=$(sha256sum "$RUNNER_TEMP/flatpak/pqp-${version}-amd64.deb" | cut -d' ' -f1)
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/LICENSE" \
+            -o "$RUNNER_TEMP/flatpak/LICENSE"
+          license_sha=$(sha256sum "$RUNNER_TEMP/flatpak/LICENSE" | cut -d' ' -f1)
+          published="$PUBLISHED_AT"
+          if [ -z "$published" ]; then
+            published=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt -q .publishedAt)
+          fi
+          node flatpak/bump.mjs "$version" "$deb_sha" "$license_sha" "${published:0:10}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "deb_sha=$deb_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate metainfo and manifest
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
+            manifest gg.pqp.pqp.yml
+          docker run --rm -v "$PWD/flatpak:/src" -w /src ghcr.io/flathub/flatpak-builder-lint:latest \
+            appstream gg.pqp.pqp.metainfo.xml
+
+      # The bumped manifest and metainfo, for `pr` to commit and `bundle` to
+      # build. Only those two: an artifact drops the executable bit, and the
+      # rest of flatpak/ comes from each job's own checkout.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-manifest
+          path: |
+            flatpak/gg.pqp.pqp.yml
+            flatpak/gg.pqp.pqp.metainfo.xml
+          retention-days: 7
+
+  pr:
+    needs: bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      VERSION: ${{ needs.bump.outputs.version }}
+      DEB_SHA: ${{ needs.bump.outputs.deb_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # What main's manifest is on now, before the bump lands on it, so a
+      # backfill of an older tag does not offer to move main backwards.
+      - name: Read main's version
+        id: main
+        run: echo "version=$(node flatpak/bump.mjs --pinned)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-manifest
+          path: flatpak/
+
+      - name: Open the PR
+        env:
+          MAIN_VERSION: ${{ steps.main.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- flatpak/; then
+            echo "Manifest already points at ${VERSION}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          newest=$(printf '%s\n%s\n' "$MAIN_VERSION" "$VERSION" | sort -V | tail -n1)
+          if [ "$newest" != "$VERSION" ]; then
+            echo "main's manifest is on ${MAIN_VERSION}, newer than ${VERSION}: no PR, bundle only." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          branch="flatpak/v${VERSION}"
+          title="Flatpak: point the manifest at ${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add flatpak/gg.pqp.pqp.yml flatpak/gg.pqp.pqp.metainfo.xml
+          git commit -m "$title"
+          git push --force origin "$branch"
+          if [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number -q '.[].number')" ]; then
+            echo "A PR for \`${branch}\` is already open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          body="Points \`flatpak/gg.pqp.pqp.yml\` at the ${TAG} .deb (sha256 \`${DEB_SHA}\`) and adds ${VERSION} to the metainfo. Opened by \`.github/workflows/flatpak-manifest.yml\`. Flathub's own checker makes the same bump on flathub/gg.pqp.pqp."
+          if ! gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "$title" --body "$body"; then
+            # Actions may not be allowed to open PRs in this repo. That is a
+            # setting, not a failure of the bump: the branch is pushed, a human
+            # opens the PR from the link.
+            compare="https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}?quick_pull=1&title=$(jq -rn --arg t "$title" '$t|@uri')"
+            echo "::notice title=Open the Flatpak PR by hand::${compare}"
+            {
+              echo "### Flatpak manifest bumped to ${VERSION}"
+              echo
+              echo "GitHub Actions could not open the PR (Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\" is off). Branch \`${branch}\` is pushed:"
+              echo
+              echo "**[Open the PR](${compare})**"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  bundle:
+    needs: bump
+    # After a successful bump, or on its own for a pull request. Read-only on
+    # purpose: on a pull request this runs the branch's build script.
+    if: >-
+      !cancelled() &&
+      (needs.bump.result == 'success' ||
+       (github.event_name == 'pull_request' && needs.bump.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      name: ${{ steps.build.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test bump.mjs
+        if: github.event_name == 'pull_request'
+        run: node --test flatpak/bump.test.mjs
+
+      # Replace the checked-out manifest and metainfo with the ones `bump`
+      # pinned to this release.
+      - uses: actions/download-artifact@v4
+        if: needs.bump.result == 'success'
+        with:
+          name: flatpak-manifest
+          path: flatpak/
+
+      - name: Install flatpak and flatpak-builder
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder
+          # Ubuntu 24.04 confines unprivileged user namespaces, which bwrap
+          # (the build and `flatpak run` sandbox) needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          flatpak --version
+          flatpak-builder --version
+
+      - name: Build the bundle
+        id: build
+        env:
+          RELEASE_VERSION: ${{ needs.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          version=$(node flatpak/bump.mjs --pinned)
+          if [ -n "$RELEASE_VERSION" ] && [ "$version" != "$RELEASE_VERSION" ]; then
+            echo "::error::manifest is on ${version}, release is ${RELEASE_VERSION}"
+            exit 1
+          fi
+          file="pqp-${version}-x86_64.flatpak"
+          FLATPAK_WORK_DIR="$RUNNER_TEMP/flatpak" bash flatpak/build-bundle.sh "$RUNNER_TEMP/out/$file"
+          echo "file=$RUNNER_TEMP/out/$file" >> "$GITHUB_OUTPUT"
+          echo "name=$file" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: ${{ steps.build.outputs.file }}
+          retention-days: 7
+          # Already compressed; zipping it again only costs time.
+          compression-level: 0
+
+  release:
+    needs: bundle
+    if: github.event_name != 'pull_request' && needs.bundle.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      NAME: ${{ needs.bundle.outputs.name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Attach to the release
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/bundle/$NAME"
+          test -f "$file"
+          api="repos/${GITHUB_REPOSITORY}/releases"
+          asset_id() {
+            gh api "${api}/tags/${TAG}" --jq ".assets[] | select(.name == \"$1\") | .id"
+          }
+          rename() { gh api -X PATCH "${api}/assets/$1" -f name="$2" > /dev/null; }
+          existing=$(asset_id "$NAME")
+          # An earlier run stopped mid-swap: put the old bundle back first.
+          if [ -z "$existing" ] && [ -n "$(asset_id "${NAME}.old")" ]; then
+            existing=$(asset_id "${NAME}.old")
+            rename "$existing" "$NAME"
+          fi
+          if [ -z "$existing" ]; then
+            gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+          else
+            # A rerun. `--clobber` would delete the published bundle before
+            # the upload, and a failed upload would leave the release without
+            # one. Upload beside it, then swap the names; the old file is only
+            # deleted once the new one carries the name.
+            staged="$RUNNER_TEMP/staged/${NAME}.new"
+            mkdir -p "$(dirname "$staged")"
+            cp "$file" "$staged"
+            # --clobber here only replaces a .new left by an earlier failed run.
+            gh release upload "$TAG" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
+            staged_id=$(asset_id "${NAME}.new")
+            leftover=$(asset_id "${NAME}.old")
+            if [ -n "$leftover" ]; then
+              gh api -X DELETE "${api}/assets/${leftover}"
+            fi
+            rename "$existing" "${NAME}.old"
+            if ! rename "$staged_id" "$NAME"; then
+              rename "$existing" "$NAME"
+              echo "::error::could not rename ${NAME}.new; the previous bundle is back in place"
+              exit 1
+            fi
+            gh api -X DELETE "${api}/assets/${existing}"
+          fi
+          {
+            echo "### Flatpak bundle"
+            echo
+            echo "Attached \`${NAME}\` to [${TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG})."
+            echo
+            echo '```'
+            echo "flatpak install ${NAME}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

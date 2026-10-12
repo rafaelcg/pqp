@@ -23,22 +23,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.core.ServerSummary
+import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.social.ConversasHome
+import gg.pqp.app.social.ConversationList
 import gg.pqp.app.social.DmSummary
+import gg.pqp.app.social.PhoneTab
 import gg.pqp.app.social.SocialRepository
+import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.screens.ServersScreen
+import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
+import kotlinx.coroutines.launch
 
 /**
  * The signed-in home: servers, messages, friends.
@@ -56,6 +70,15 @@ import gg.pqp.app.ui.theme.Sizes
  * `BackHandler` gives the platform behaviour instead: back from any tab returns
  * to the first, and back from the first leaves.
  *
+ * ## Conversas
+ *
+ * `GET /api/dms/config` can turn on the DM redesign without a release. With
+ * `home` on, the Messages tab becomes the Conversas list (preview, presence,
+ * typing, search, chips). With `phoneTabs` on as well, the bar itself becomes
+ * Conversas / Servidores / Tu, Friends moves into the Conversas header, and
+ * the app opens on the last tab used (Servidores for somebody who never
+ * chose). Both off, or a server that answers 404, is exactly the home below.
+ *
  * ## The bar itself
  *
  * This is the one piece of chrome on screen on every tab, so it is the piece
@@ -72,10 +95,26 @@ fun HomeScreen(
     onOpenServer: (ServerSummary) -> Unit,
     onOpenConversation: (ConversationRoute) -> Unit,
     onOpenProfile: () -> Unit,
+    /** Conversas phone tabs: Friends is a screen opened from the header. */
+    onOpenFriends: () -> Unit = {},
+    /** A story's call sticker, from the friends strip. */
+    onJoinStoryCall: (serverId: String, channelId: String, channelName: String) -> Unit = { _, _, _ -> },
 ) {
     val social = remember { SocialRepository.of(session) }
-    var tab by rememberSaveable { mutableStateOf(HomeTab.Servers) }
+    val context = LocalContext.current
+    val conversas = remember(context) { ConversasHome.of(context) }
+    val config by conversas.config.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
+    // Read again on every resume (throttled inside): the flags are flipped
+    // live, and coming back to the app is when a flip should show.
+    LifecycleResumeEffect(conversas) {
+        val read = scope.launch { conversas.refresh(session.api) }
+        onPauseOrDispose { read.cancel() }
+    }
+
     var startingConversation by remember { mutableStateOf(false) }
+    var addingFriend by remember { mutableStateOf(false) }
 
     // The route carries the title because a conversation has no name of its own,
     // and the caller is the one holding the participants. Resolved here so the
@@ -85,13 +124,81 @@ fun HomeScreen(
         onOpenConversation(ConversationRoute(conversation.channelId, conversation.titleOr(emptyTitle)))
     }
 
+    if (config.phoneTabs) {
+        PhoneTabsHome(
+            session = session,
+            social = social,
+            conversas = conversas,
+            onOpenServer = onOpenServer,
+            onOpen = open,
+            onNewConversation = { startingConversation = true },
+            onOpenFriends = onOpenFriends,
+            onAddFriend = { addingFriend = true },
+            onJoinStoryCall = onJoinStoryCall,
+        )
+    } else {
+        ClassicHome(
+            session = session,
+            social = social,
+            conversasRows = config.home,
+            onOpenServer = onOpenServer,
+            onOpen = open,
+            onOpenProfile = onOpenProfile,
+            onNewConversation = { startingConversation = true },
+            onAddFriend = { addingFriend = true },
+            onJoinStoryCall = onJoinStoryCall,
+        )
+    }
+
+    if (startingConversation) {
+        NewConversationSheet(
+            social = social,
+            onDismiss = { startingConversation = false },
+            onOpened = open,
+            conversas = config.home,
+            onAddFriend = {
+                startingConversation = false
+                addingFriend = true
+            },
+        )
+    }
+
+    if (addingFriend) {
+        val friends by social.friends.collectAsStateWithLifecycle()
+        AddFriendSheet(
+            social = social,
+            known = buildSet {
+                friends.friends.forEach { add(it.id) }
+                friends.incoming.forEach { add(it.id) }
+                friends.outgoing.forEach { add(it.id) }
+            },
+            onDismiss = { addingFriend = false },
+        )
+    }
+}
+
+/** Today's home: Servers / Messages / Friends, opening on Servers. */
+@Composable
+private fun ClassicHome(
+    session: SessionStore,
+    social: SocialRepository,
+    conversasRows: Boolean,
+    onOpenServer: (ServerSummary) -> Unit,
+    onOpen: (DmSummary) -> Unit,
+    onOpenProfile: () -> Unit,
+    onNewConversation: () -> Unit,
+    onAddFriend: () -> Unit,
+    onJoinStoryCall: (String, String, String) -> Unit,
+) {
+    var tab by rememberSaveable { mutableStateOf(HomeTab.Servers) }
+
     val conversations by social.conversations.collectAsStateWithLifecycle()
     val friends by social.friends.collectAsStateWithLifecycle()
 
     // Rows with something unread, not messages: "4" next to Messages means four
     // conversations want you, which is the number a person can act on. A sum of
     // message counts would say 200 for one chatty group.
-    val unreadConversations = conversations.count { it.unread.count > 0 }
+    val unreadConversations = ConversationList.waiting(conversations)
     val pendingRequests = friends.pendingCount
 
     BackHandler(enabled = tab != HomeTab.Servers) { tab = HomeTab.Servers }
@@ -147,17 +254,7 @@ fun HomeScreen(
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                             },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                // Low alpha, because a solid lime pill behind a
-                                // lime glyph would leave the glyph unreadable
-                                // and would be the loudest thing on every
-                                // screen in the app at once.
-                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
+                            colors = homeBarColors(),
                             modifier = Modifier.testTag("home.tab.${entry.name.lowercase()}"),
                         )
                     }
@@ -193,30 +290,198 @@ fun HomeScreen(
                         onOpenProfile = onOpenProfile,
                     )
 
-                    HomeTab.Messages -> ConversationsScreen(
-                        social = social,
-                        onOpen = open,
-                        onNewConversation = { startingConversation = true },
-                    )
+                    HomeTab.Messages -> if (conversasRows) {
+                        ConversasScreen(
+                            session = session,
+                            social = social,
+                            onOpen = onOpen,
+                            onNewConversation = onNewConversation,
+                            onOpenFriends = { tab = HomeTab.Friends },
+                            onAddFriend = onAddFriend,
+                            onJoinStoryCall = onJoinStoryCall,
+                        )
+                    } else {
+                        ConversationsScreen(
+                            social = social,
+                            onOpen = onOpen,
+                            onNewConversation = onNewConversation,
+                            session = session,
+                            onJoinStoryCall = onJoinStoryCall,
+                        )
+                    }
 
                     HomeTab.Friends -> FriendsScreen(
                         social = social,
                         api = session.api,
-                        onOpenConversation = open,
+                        onOpenConversation = onOpen,
                     )
                 }
             }
         }
     }
+}
 
-    if (startingConversation) {
-        NewConversationSheet(
-            social = social,
-            onDismiss = { startingConversation = false },
-            onOpened = open,
-        )
+/**
+ * The Conversas phone shell: Conversas / Servidores / Tu. Each tab is a full
+ * screen; a conversation, a server or Friends opens above it on the real back
+ * stack, so the bar is never under a conversation. The call bar lives above
+ * the whole NavHost (`PqpApp`), so switching tabs never touches a call.
+ */
+@Composable
+private fun PhoneTabsHome(
+    session: SessionStore,
+    social: SocialRepository,
+    conversas: ConversasHome,
+    onOpenServer: (ServerSummary) -> Unit,
+    onOpen: (DmSummary) -> Unit,
+    onNewConversation: () -> Unit,
+    onOpenFriends: () -> Unit,
+    onAddFriend: () -> Unit,
+    onJoinStoryCall: (String, String, String) -> Unit,
+) {
+    // Read once per entry into the shell: the last tab used, Servidores for
+    // somebody who never chose. Back from another tab returns here, the way
+    // back from any tab used to return to the first.
+    val landing = remember { conversas.landingTab() }
+    var tab by rememberSaveable { mutableStateOf(landing) }
+    val select: (PhoneTab) -> Unit = { next ->
+        tab = next
+        conversas.rememberTab(next)
+    }
+
+    val conversations by social.conversations.collectAsStateWithLifecycle()
+    val phase by session.phase.collectAsStateWithLifecycle()
+    val me = (phase as? SessionPhase.Ready)?.me
+    val waiting = ConversationList.waiting(conversations)
+
+    BackHandler(enabled = tab != landing) { select(landing) }
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            Column {
+                ChromeDivider()
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                    PhoneTab.entries.forEach { entry ->
+                        val waitingLabel = if (entry == PhoneTab.Conversas && waiting > 0) {
+                            pluralStringResource(R.plurals.conversas_waiting, waiting, waiting)
+                        } else {
+                            null
+                        }
+                        NavigationBarItem(
+                            selected = tab == entry,
+                            onClick = { select(entry) },
+                            icon = {
+                                BadgedBox(
+                                    badge = {
+                                        if (entry == PhoneTab.Conversas) {
+                                            // Red, the WhatsApp count: people are
+                                            // waiting on a reply. It counts
+                                            // conversations, never messages.
+                                            CountBadge(count = waiting, loud = false, danger = true)
+                                        }
+                                    },
+                                    modifier = Modifier.semantics {
+                                        waitingLabel?.let { contentDescription = it }
+                                    },
+                                ) {
+                                    when (entry) {
+                                        PhoneTab.Conversas -> Icon(
+                                            PqpIcons.Messages,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(Sizes.iconAction),
+                                        )
+                                        PhoneTab.Servidores -> Icon(
+                                            PqpIcons.Server,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(Sizes.iconAction),
+                                        )
+                                        PhoneTab.Tu -> if (me != null) {
+                                            Avatar(
+                                                name = me.displayName,
+                                                url = me.avatarUrl,
+                                                size = 24.dp,
+                                                seed = me.id,
+                                            )
+                                        } else {
+                                            Icon(
+                                                PqpIcons.Person,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(Sizes.iconAction),
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(
+                                        when (entry) {
+                                            PhoneTab.Conversas -> R.string.conversas_tab_conversas
+                                            PhoneTab.Servidores -> R.string.conversas_tab_servidores
+                                            PhoneTab.Tu -> R.string.conversas_tab_tu
+                                        },
+                                    ),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            },
+                            colors = homeBarColors(),
+                            modifier = Modifier.testTag("home.tab.${entry.name.lowercase()}"),
+                        )
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(bottom = padding.calculateBottomPadding()),
+        ) {
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = {
+                    fadeIn(tween(Motion.QUICK_MILLIS)) togetherWith fadeOut(tween(Motion.QUICK_MILLIS))
+                },
+                label = "phone-tab",
+            ) { current ->
+                when (current) {
+                    PhoneTab.Conversas -> ConversasScreen(
+                        session = session,
+                        social = social,
+                        onOpen = onOpen,
+                        onNewConversation = onNewConversation,
+                        onOpenFriends = onOpenFriends,
+                        onAddFriend = onAddFriend,
+                        onJoinStoryCall = onJoinStoryCall,
+                    )
+                    PhoneTab.Servidores -> ServersScreen(
+                        session = session,
+                        onOpenServer = onOpenServer,
+                        onOpenProfile = null,
+                    )
+                    PhoneTab.Tu -> YouScreen(
+                        session = session,
+                        onBack = null,
+                        title = stringResource(R.string.conversas_tab_tu),
+                    )
+                }
+            }
+        }
     }
 }
+
+@Composable
+private fun homeBarColors() = NavigationBarItemDefaults.colors(
+    selectedIconColor = MaterialTheme.colorScheme.primary,
+    selectedTextColor = MaterialTheme.colorScheme.primary,
+    // Low alpha, because a solid lime pill behind a lime glyph would leave the
+    // glyph unreadable and would be the loudest thing on every screen in the
+    // app at once.
+    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+)
 
 enum class HomeTab(val label: Int) {
     Servers(R.string.servers_title),

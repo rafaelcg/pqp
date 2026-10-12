@@ -29,11 +29,11 @@ import Foundation
 /// ReplayKit hands the extension one. Sending NV12 bytes means no encode in the
 /// extension and no decode in the app — an encoder in a 50 MB process, feeding a
 /// decoder, to cross a link that is local memory, would be pure loss. The link
-/// is bounded instead by shrinking the picture: ≤720p on the long side at
-/// `defaultFrameRate`, which is ~41 MB/s of memcpy, and the H.264 encode that
+/// is bounded instead by shrinking the picture: 720 lines on the short side at
+/// `defaultFrameRate`, which is ~50 MB/s of memcpy, and the H.264 encode that
 /// actually costs something happens once, in WebRTC, where it always did.
 ///
-/// 41 MB/s is a real number to hold in a ~50 MB process, so the path that
+/// 50 MB/s is a real number to hold in a ~50 MB process, so the path that
 /// carries it allocates nothing per frame: the scaler keeps its destination
 /// planes across frames and the socket writes header and planes in place. The
 /// concatenation that used to sit between them cost two 1.38 MB copies a frame,
@@ -50,10 +50,27 @@ enum ScreenShareWire {
     /// `sockaddr_un` path is 104 bytes including the container prefix.
     static let socketName = "s.sock"
 
-    /// Longest side of a published frame. A shared screen is read, not admired;
-    /// 720p is legible for code and slides and is the point past which a mesh
-    /// call on a phone battery stops being worth it.
-    static let maxLongSide = 1280
+    /// Lines on the SHORT side of a published frame: 720p, measured the way a
+    /// phone is actually held.
+    ///
+    /// It used to be 1280 on the long side, which on a 19.5:9 iPhone in
+    /// portrait is 590x1280: a "720p" share with fewer columns than 480p. A
+    /// game held in landscape fared no better. The short side is the dimension
+    /// that keeps the label meaning the same amount of detail on a phone, on a
+    /// tablet either way up, and on Android, whose capture uses this exact rule
+    /// (`SCREEN_TARGET_SHORT_SIDE` in `android/voice/ScreenCapture.kt`).
+    ///
+    /// WHAT IT COSTS. An iPhone 15 Pro (1179x2556) now publishes 720x1560, so
+    /// one NV12 frame is ~1.68 MB instead of ~1.13 MB, held once in the
+    /// extension (the scaler reuses its planes) and copied ~30 times a second
+    /// across the socket: ~50 MB/s of memcpy, inside the same allocation-free
+    /// path. The extension's resident cost grows by about half a megabyte.
+    static let maxShortSide = 720
+
+    /// The long side a typical phone frame arrives with at `maxShortSide`
+    /// (19.5:9 in portrait). Only a guess for the sender's scale until the
+    /// first real frame says what the capture is.
+    static let typicalLongSide = 1560
 
     /// Frames per second.
     ///
@@ -104,7 +121,13 @@ enum ScreenShareWire {
     /// `"PQPS"`, so a stale socket from an older build is rejected rather than
     /// misread as geometry.
     static let magic: UInt32 = 0x5051_5053
-    static let version: UInt16 = 1
+    /// `"PQPA"`: one buffer of the broadcast's app audio. Same header size as a
+    /// video frame, so the reader needs four bytes to know which it holds.
+    static let audioMagic: UInt32 = 0x5051_5041
+    /// 2 since app audio joined the stream. The app and the extension ship in
+    /// one bundle, so the only peer a version mismatch can meet is a broadcast
+    /// that outlived an app update, and that one is refused and reconnects.
+    static let version: UInt16 = 2
     static let headerSize = 20
 
     /// The socket path, or nil when the App Group is not available — which on a
@@ -192,6 +215,70 @@ struct ScreenShareFrame: Equatable, Sendable {
     let payload: Data
 }
 
+/// One buffer of app audio, as it travels.
+///
+/// The payload is always signed 16-bit little-endian PCM, interleaved, one or
+/// two channels. Whatever ReplayKit handed the extension (its format varies by
+/// device and by what is playing, see `ScreenShareAudioConverter`) is turned
+/// into this before it crosses, so the app only ever reads one shape. As with
+/// video, the length is derived from the geometry rather than trusted.
+struct ScreenShareAudioHeader: Equatable, Sendable {
+    let sampleRate: Int
+    /// 1 or 2. Anything wider is folded to its first two channels on the way.
+    let channels: Int
+    /// Samples per channel.
+    let frameCount: Int
+
+    var payloadLength: Int { frameCount * channels * 2 }
+
+    var isPlausible: Bool {
+        (1...2).contains(channels)
+            && (8_000...192_000).contains(sampleRate)
+            // ReplayKit delivers about 1024 frames per buffer. The ceiling is
+            // the guard against a corrupt length becoming an allocation.
+            && (1...16_384).contains(frameCount)
+    }
+
+    func encoded() -> Data {
+        var data = Data(capacity: ScreenShareWire.headerSize)
+        data.appendLittleEndian(ScreenShareWire.audioMagic)
+        data.appendLittleEndian(ScreenShareWire.version)
+        data.appendLittleEndian(UInt16(channels))
+        data.appendLittleEndian(UInt32(sampleRate))
+        data.appendLittleEndian(UInt32(frameCount))
+        data.appendLittleEndian(UInt32(payloadLength))
+        return data
+    }
+
+    static func decode(_ data: Data) -> ScreenShareAudioHeader? {
+        guard data.count >= ScreenShareWire.headerSize else { return nil }
+        let bytes = [UInt8](data.prefix(ScreenShareWire.headerSize))
+        guard bytes.littleEndian32(at: 0) == ScreenShareWire.audioMagic,
+              bytes.littleEndian16(at: 4) == ScreenShareWire.version else { return nil }
+        let header = ScreenShareAudioHeader(
+            sampleRate: Int(bytes.littleEndian32(at: 8)),
+            channels: Int(bytes.littleEndian16(at: 6)),
+            frameCount: Int(bytes.littleEndian32(at: 12))
+        )
+        guard header.isPlausible,
+              Int(bytes.littleEndian32(at: 16)) == header.payloadLength else { return nil }
+        return header
+    }
+}
+
+/// One buffer of app audio off the wire.
+struct ScreenShareAudioFrame: Equatable, Sendable {
+    let header: ScreenShareAudioHeader
+    /// `header.payloadLength` bytes of interleaved Int16 little-endian.
+    let payload: Data
+}
+
+/// Whatever the extension sent: a picture or a piece of sound.
+enum ScreenShareMessage: Equatable, Sendable {
+    case video(ScreenShareFrame)
+    case audio(ScreenShareAudioFrame)
+}
+
 /// Reassembles frames from a byte stream.
 ///
 /// A stream socket has no message boundaries: one `read` can hold three frames,
@@ -201,30 +288,41 @@ struct ScreenShareFrame: Equatable, Sendable {
 struct ScreenShareFrameParser: Sendable {
     private var buffer = Data()
 
-    /// Adds bytes and returns every whole frame now available.
+    /// Adds bytes and returns every whole message now available, pictures and
+    /// sound in the order they were written.
     ///
-    /// Returns nil when the stream is out of sync — a header where a header
+    /// Returns nil when the stream is out of sync: a header where a header
     /// cannot be. There is no resynchronising on a link only this app writes to,
     /// so the caller drops the connection and lets the extension reconnect.
-    mutating func append(_ chunk: Data) -> [ScreenShareFrame]? {
+    mutating func append(_ chunk: Data) -> [ScreenShareMessage]? {
         buffer.append(chunk)
-        var frames: [ScreenShareFrame] = []
+        var messages: [ScreenShareMessage] = []
         while buffer.count >= ScreenShareWire.headerSize {
-            guard let header = ScreenShareFrameHeader.decode(buffer) else {
+            let start = ScreenShareWire.headerSize
+            if let header = ScreenShareFrameHeader.decode(buffer) {
+                let total = start + header.payloadLength
+                guard buffer.count >= total else { break }
+                // `subdata` rather than a slice: a `Data` slice keeps the parent
+                // buffer alive, so every frame would pin the whole read.
+                messages.append(.video(ScreenShareFrame(
+                    header: header,
+                    payload: buffer.subdata(in: start..<total)
+                )))
+                buffer.removeSubrange(0..<total)
+            } else if let header = ScreenShareAudioHeader.decode(buffer) {
+                let total = start + header.payloadLength
+                guard buffer.count >= total else { break }
+                messages.append(.audio(ScreenShareAudioFrame(
+                    header: header,
+                    payload: buffer.subdata(in: start..<total)
+                )))
+                buffer.removeSubrange(0..<total)
+            } else {
                 buffer.removeAll(keepingCapacity: false)
                 return nil
             }
-            let total = ScreenShareWire.headerSize + header.payloadLength
-            guard buffer.count >= total else { break }
-            // `subdata` rather than a slice: a `Data` slice keeps the parent
-            // buffer alive, so every frame would pin the whole read.
-            frames.append(ScreenShareFrame(
-                header: header,
-                payload: buffer.subdata(in: ScreenShareWire.headerSize..<total)
-            ))
-            buffer.removeSubrange(0..<total)
         }
-        return frames
+        return messages
     }
 
     mutating func reset() {
@@ -235,16 +333,17 @@ struct ScreenShareFrameParser: Sendable {
 /// The size a captured screen is published at.
 ///
 /// Even in both axes (NV12 has no odd dimension) and never larger than the
-/// source: upscaling a screen costs bandwidth and adds nothing, and iPhone
-/// screens are already below the ceiling in one axis.
+/// source: upscaling a screen costs bandwidth and adds nothing. The short side
+/// is held at `maxShortSide` and the long side follows the screen's own aspect
+/// ratio, so nothing is letterboxed into the pixels.
 func screenShareTargetSize(
     width: Int,
     height: Int,
-    maxLongSide: Int = ScreenShareWire.maxLongSide
+    maxShortSide: Int = ScreenShareWire.maxShortSide
 ) -> (width: Int, height: Int) {
-    guard width > 0, height > 0, maxLongSide >= 2 else { return (0, 0) }
-    let longSide = max(width, height)
-    let scale = longSide > maxLongSide ? Double(maxLongSide) / Double(longSide) : 1
+    guard width > 0, height > 0, maxShortSide >= 2 else { return (0, 0) }
+    let shortSide = min(width, height)
+    let scale = shortSide > maxShortSide ? Double(maxShortSide) / Double(shortSide) : 1
     return (
         width: evenDimension(Double(width) * scale, limit: width),
         height: evenDimension(Double(height) * scale, limit: height)

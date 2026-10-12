@@ -44,13 +44,13 @@ Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
 
 Write the Portuguese **first**. Do not write English and translate. Translated PT-BR is what sounds fake.
 
-It has to sound like a person in the QG. `você`. Short. What to click. The bar is `dados-discord-e-cargos.pt-BR.md`, not a press release.
+It has to sound like a person in the QG. `tu`. Short. What to click. The bar is `dados-discord-e-cargos.pt-BR.md`, not a press release.
 
 Do:
 
 - Read it out loud. If you would not send it in the QG, rewrite.
 - Concrete: the button, the menu, the slash command.
-- Gerund (`está fazendo`), not European `a fazer`. `você`, not `tu` / `a gente` as a system voice.
+- Gerund (`está fazendo`), not European `a fazer`. `tu` with the spoken verb (`tu clica`, `tu tá`, `teus amigos`), not `você` and not `a gente` as a system voice. Older strings still say `você`: move a whole screen to `tu` when you touch it, never mix the two on one surface.
 
 Loanwords: Brazilian gaming Portuguese keeps a lot of English. Do not "fix" that.
 

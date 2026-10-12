@@ -7,28 +7,38 @@
  * desktop field test that wrote this). Ordered, first match wins:
  *
  *  - up to date: nothing;
- *  - IN A CALL: only the quiet card, never a reload and never the blocking
- *    screen. A reload ends a screen share (a browser cannot restore a capture
- *    without the picker) and drops the seat; the update waits for the hangup,
- *    it is not lost;
+ *  - CRITICAL (the operator's `client_force_update_in_call`, or a bundle built
+ *    before `CLIENT_CRITICAL_MIN_BUILT_AT`): reload now, in a call or not. The
+ *    one rule that ends a call, and only an operator can trigger it. If an
+ *    automatic reload for this build already failed to land, the blocking
+ *    screen instead, so it cannot loop;
+ *  - IN A CALL: only the lime in-call banner, never a reload and never the
+ *    blocking screen. A reload ends a screen share (a browser cannot restore a
+ *    capture without the picker) and drops the seat; the update waits for the
+ *    hangup, it is not lost;
  *  - the operator forced it: the blocking screen, one button, no dismissal;
  *  - an automatic reload was already tried for this build a moment ago: the card
  *    only. Whatever stopped the reload from landing (a CDN still serving the old
  *    page, a deploy half propagated) is not cured by trying again in a loop;
+ *  - watching a live party: the card (a reload is a rebuffer and a visible gap
+ *    for a viewer who did nothing wrong);
+ *  - the tab is HIDDEN: reload. Nobody is looking, and the composer's draft
+ *    store keeps what was typed;
+ *  - somebody is TYPING (text in the focused field, or a key in the last 20 s):
+ *    the card;
+ *  - the call ENDED a moment ago (`LEFT_CALL_RELOAD_MS`): reload. This is the
+ *    update the in-call banner promised;
  *  - out of date for longer than `maxStaleMs` (twelve hours by default): reload
  *    without asking. This is the window somebody left open overnight, and the
  *    desktop app that is never closed;
  *  - the person has not touched the page for `idleReloadMs`: reload, because
  *    nobody is there to be interrupted;
  *  - otherwise the card, which comes back after "Later".
- *
- * Both automatic branches also refuse while somebody is TYPING (a draft is
- * saved, but a reload mid-sentence still loses the caret and the moment) or
- * WATCHING a live party (a reload is a rebuffer and a visible gap for a viewer
- * who did nothing wrong). They fall through to the card instead.
  */
 
 export const IDLE_RELOAD_MS = 3 * 60_000;
+/** After a hangup, how long the page counts as "just left a call". */
+export const LEFT_CALL_RELOAD_MS = 2 * 60_000;
 export const DEFAULT_MAX_STALE_MS = 12 * 60 * 60_000;
 /** One automatic reload per target build per this long. */
 export const AUTO_RELOAD_COOLDOWN_MS = 15 * 60_000;
@@ -46,6 +56,12 @@ export interface UpdatePolicyInput {
   inCall: boolean;
   watching: boolean;
   typing: boolean;
+  /** The operator made it critical: reload even in a call. */
+  critical?: boolean;
+  /** `document.visibilityState === "hidden"`. */
+  hidden?: boolean;
+  /** Time since this page's last call ended, or null if it was never in one. */
+  sinceCallEndedMs?: number | null;
   /** False when an automatic reload for this build already happened lately. */
   autoReloadAllowed: boolean;
   idleReloadMs?: number;
@@ -56,6 +72,9 @@ export function decideUpdateAction(input: UpdatePolicyInput): UpdateAction {
   if (!input.stale) {
     return "none";
   }
+  if (input.critical) {
+    return input.autoReloadAllowed ? "auto-reload" : "block";
+  }
   if (input.inCall) {
     return "banner";
   }
@@ -65,9 +84,21 @@ export function decideUpdateAction(input: UpdatePolicyInput): UpdateAction {
   if (!input.autoReloadAllowed) {
     return "banner";
   }
-  const occupied = input.typing || input.watching;
-  if (occupied) {
+  if (input.watching) {
     return "banner";
+  }
+  if (input.hidden) {
+    return "auto-reload";
+  }
+  if (input.typing) {
+    return "banner";
+  }
+  if (
+    input.sinceCallEndedMs !== null &&
+    input.sinceCallEndedMs !== undefined &&
+    input.sinceCallEndedMs < LEFT_CALL_RELOAD_MS
+  ) {
+    return "auto-reload";
   }
   const maxStaleMs = input.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
   if (maxStaleMs > 0 && input.staleForMs >= maxStaleMs) {
@@ -86,19 +117,23 @@ export function decideUpdateAction(input: UpdatePolicyInput): UpdateAction {
  * can never disagree about it.
  */
 export function isBlockingUpdate(
-  build: { stale: boolean; forced: boolean },
+  build: { stale: boolean; forced: boolean; critical?: boolean },
   inCall: boolean,
 ): boolean {
   return (
     decideUpdateAction({
       stale: build.stale,
       forced: build.forced,
+      // A critical build reloads by itself (`BuildWatcher`), and the screen is
+      // up as well, in a call too, so a reload that does not land still leaves
+      // the one button and nothing else.
+      critical: build.critical,
       staleForMs: 0,
       idleMs: 0,
       inCall,
       watching: false,
       typing: false,
-      autoReloadAllowed: true,
+      autoReloadAllowed: !build.critical,
     }) === "block"
   );
 }

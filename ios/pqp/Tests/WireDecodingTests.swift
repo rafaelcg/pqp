@@ -397,7 +397,7 @@ final class WireDecodingTests: XCTestCase {
          "channelId":"22222222-2222-2222-2222-222222222222","mention":true}
         """
         let event = await firstEvent(from: json)
-        guard case .activity(_, let serverId, let mention) = event else {
+        guard case .activity(_, let serverId, let mention, _) = event else {
             return XCTFail("Expected activity, got \(String(describing: event))")
         }
         XCTAssertNil(serverId)
@@ -413,10 +413,42 @@ final class WireDecodingTests: XCTestCase {
          "kind":"server","channelId":"22222222-2222-2222-2222-222222222222","mention":false}
         """
         let event = await firstEvent(from: json)
-        guard case .activity(_, let serverId, _) = event else {
+        guard case .activity(_, let serverId, _, _) = event else {
             return XCTFail("Expected activity, got \(String(describing: event))")
         }
         XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
+    }
+
+    /// Conversas: a conversation's `channel-activity` carries the redacted
+    /// preview and its author, which the list patches in place and which ends
+    /// that person's "digitando…".
+    func testConversationActivityCarriesThePreview() async throws {
+        let json = """
+        {"type":"channel-activity","serverId":null,"kind":"dm",
+         "channelId":"22222222-2222-2222-2222-222222222222","mention":false,
+         "preview":"bora jogar?","authorName":"Rafa",
+         "authorId":"44444444-4444-4444-4444-444444444444"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .activity(_, _, _, let preview) = event else {
+            return XCTFail("Expected activity, got \(String(describing: event))")
+        }
+        XCTAssertEqual(preview?.preview, "bora jogar?")
+        XCTAssertEqual(preview?.authorName, "Rafa")
+        XCTAssertEqual(preview?.authorId, "44444444-4444-4444-4444-444444444444")
+    }
+
+    /// A server channel's frame has no preview, and none is invented.
+    func testServerActivityHasNoPreview() async throws {
+        let json = """
+        {"type":"channel-activity","serverId":"33333333-3333-3333-3333-333333333333",
+         "kind":"server","channelId":"22222222-2222-2222-2222-222222222222","mention":false}
+        """
+        let event = await firstEvent(from: json)
+        guard case .activity(_, _, _, let preview) = event else {
+            return XCTFail("Expected activity, got \(String(describing: event))")
+        }
+        XCTAssertNil(preview)
     }
 
     /// `permissions-update` is what tells a phone that a channel it is showing
@@ -448,6 +480,21 @@ final class WireDecodingTests: XCTestCase {
             return XCTFail("Expected permissionsUpdate, got \(String(describing: event))")
         }
         XCTAssertNil(version)
+    }
+
+    /// `channels-update` is what makes an open channel list re-read itself and
+    /// which list to draw. As `.other` (what it was before the mixed list), a
+    /// reorder somebody else made, or the mixed list switching on, never
+    /// reached an open list.
+    func testChannelsUpdateDecodes() async throws {
+        let json = """
+        {"type":"channels-update","serverId":"33333333-3333-3333-3333-333333333333"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .channelsUpdate(let serverId) = event else {
+            return XCTFail("Expected channelsUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
     }
 
     /// `/api/me` decides the age-gate route; absent must read as "predates the

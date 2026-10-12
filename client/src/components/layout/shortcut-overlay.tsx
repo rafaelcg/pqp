@@ -3,9 +3,20 @@ import { bindingKeycaps } from "@/components/voice/key-binding-field";
 import { Dialog } from "@/components/ui/dialog";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  FORUM_KEY_ROWS,
   SHORTCUT_GROUPS,
+  type ForumKeyRowId,
   type ShortcutAction,
 } from "@/lib/keyboard-shortcuts";
+
+const FORUM_KEY_LABEL: Record<ForumKeyRowId, MessageKey> = {
+  forumMove: "shortcuts.action.forumMove",
+  forumOpen: "shortcuts.action.forumOpen",
+  forumNew: "shortcuts.action.forumNew",
+  forumSearch: "shortcuts.action.forumSearch",
+  forumBack: "shortcuts.action.forumBack",
+  forumReply: "shortcuts.action.forumReply",
+};
 
 const ACTION_LABEL: Record<ShortcutAction | "pushToTalk", MessageKey> = {
   toggleMute: "shortcuts.action.toggleMute",
@@ -25,6 +36,21 @@ const GROUP_LABEL: Record<(typeof SHORTCUT_GROUPS)[number]["id"], MessageKey> = 
   navigation: "shortcuts.group.navigation",
   app: "shortcuts.group.app",
 };
+
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
+/** Cmd on Apple, Ctrl elsewhere, plus a letter: the fixed Conversas chords. */
+function fixedChord(code: string, label: string): KeyBinding {
+  return {
+    code,
+    label,
+    ctrl: !IS_APPLE_KEYBOARD,
+    meta: IS_APPLE_KEYBOARD,
+    alt: false,
+    shift: false,
+  };
+}
 
 function ShortcutKeys({ binding }: { binding: KeyBinding }) {
   const { t } = useTranslation();
@@ -81,7 +107,37 @@ interface ShortcutOverlayProps {
    * nothing, so the map says "Off" instead of listing it as a shortcut.
    */
   pushToTalkOn?: boolean;
+  /**
+   * Conversas (`conversations_home`): Ctrl/Cmd+K is "ir pra" and message
+   * search is Ctrl/Cmd+F. Both are fixed chords, so they are listed here
+   * rather than in the remappable table.
+   */
+  conversationsHome?: boolean;
+  /**
+   * Show the forum's single keys. They are context keys (they act only while
+   * a forum is on screen), so the map lists them only where a forum exists.
+   */
+  forumKeys?: boolean;
   onClose: () => void;
+}
+
+/** One forum key row: fixed caps, since these keys are not rebindable. */
+function ForumKeyRow({ label, keys }: { label: string; keys: readonly string[] }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <span className="min-w-0 text-sm text-paper">{label}</span>
+      <span className="flex flex-wrap items-center justify-end gap-1">
+        {keys.map((key) => (
+          <kbd
+            key={key}
+            className="rounded border border-ink-4 bg-ink-3 px-1.5 py-0.5 font-mono text-[11px] text-paper"
+          >
+            {key}
+          </kbd>
+        ))}
+      </span>
+    </div>
+  );
 }
 
 export function ShortcutOverlay({
@@ -89,6 +145,8 @@ export function ShortcutOverlay({
   bindings,
   pushToTalkKey = defaultPushToTalkBinding,
   pushToTalkOn = true,
+  conversationsHome = false,
+  forumKeys = false,
   onClose,
 }: ShortcutOverlayProps) {
   const { t } = useTranslation();
@@ -141,6 +199,18 @@ export function ShortcutOverlay({
                     />
                   </>
                 )}
+                {group.id === "navigation" && conversationsHome && (
+                  <>
+                    <ShortcutRow
+                      label={t("switcher.title")}
+                      binding={fixedChord("KeyK", "K")}
+                    />
+                    <ShortcutRow
+                      label={t("chrome.searchMessages")}
+                      binding={fixedChord("KeyF", "F")}
+                    />
+                  </>
+                )}
                 {group.id !== "voice" &&
                   group.actions.map((action) => (
                     <ShortcutRow
@@ -152,6 +222,22 @@ export function ShortcutOverlay({
               </div>
             </section>
           ))}
+          {forumKeys && (
+            <section data-shortcut-group="forum">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                {t("shortcuts.group.forum")}
+              </h3>
+              <div className="divide-y divide-ink-4/70">
+                {FORUM_KEY_ROWS.map((row) => (
+                  <ForumKeyRow
+                    key={row.id}
+                    label={t(FORUM_KEY_LABEL[row.id])}
+                    keys={row.keys}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </Dialog>
     </div>

@@ -6,6 +6,9 @@
  * plain `tsc` run, neither of which knows about the virtual module.
  */
 
+import { reportFaroEvent } from "./faro";
+import { INSTALL_FAILED_MESSAGE } from "./sw-build-script";
+
 export interface ServiceWorkerControls {
   /** Activate the waiting worker and reload. */
   update: () => Promise<void>;
@@ -14,8 +17,155 @@ export interface ServiceWorkerControls {
 
 type RegisterSW = (options: {
   onNeedRefresh?: () => void;
+  onNeedReload?: () => void;
   onRegisterError?: (error: unknown) => void;
+  onRegisteredSW?: (
+    swUrl: string,
+    registration: ServiceWorkerRegistration | undefined,
+  ) => void;
 }) => (reloadPage?: boolean) => Promise<void>;
+
+/**
+ * Calls `onFailed` when a worker of this registration fails to install: it
+ * goes `redundant` without ever reaching `installed`. A worker that is
+ * replaced after it installed also ends `redundant`, and is not a failure.
+ *
+ * `onRegisterError` never sees this: registration succeeds, and the install
+ * fails afterwards (a precache entry that is not 200, for example). From
+ * 2026-09-30 to 2026-10-10 every install failed that way, and nothing on the
+ * page noticed (`docs/PWA.md` §"A precache entry that 404s").
+ */
+export function watchInstallFailures(
+  registration: ServiceWorkerRegistration,
+  onFailed: () => void,
+): void {
+  const watch = (worker: ServiceWorker | null) => {
+    if (!worker) {
+      return;
+    }
+    let installed = false;
+    worker.addEventListener("statechange", () => {
+      if (worker.state === "redundant") {
+        if (!installed) {
+          onFailed();
+        }
+      } else if (worker.state !== "installing" && worker.state !== "parsed") {
+        installed = true;
+      }
+    });
+  };
+  watch(registration.installing);
+  registration.addEventListener("updatefound", () => watch(registration.installing));
+}
+
+/** How long a failed install waits for the worker to say why before reporting without it. */
+export const INSTALL_CAUSE_WAIT_MS = 3000;
+
+/** The attributes of a worker's `PQP_SW_INSTALL_FAILED` message, or null for any other message. */
+export function installCauseAttributes(message: unknown): Record<string, string> | null {
+  const data = message as {
+    type?: unknown;
+    build?: unknown;
+    reason?: unknown;
+    path?: unknown;
+    status?: unknown;
+  } | null;
+  if (!data || data.type !== INSTALL_FAILED_MESSAGE) {
+    return null;
+  }
+  const text = (value: unknown, max: number) =>
+    typeof value === "string" ? value.slice(0, max) : "";
+  return {
+    reason: text(data.reason, 80) || "unknown",
+    path: text(data.path, 200),
+    status: typeof data.status === "number" ? String(data.status) : "0",
+    build: text(data.build, 64),
+  };
+}
+
+/**
+ * Turns the two signals of a failed install into ONE report.
+ *
+ * The worker says why (`cause`, the `PQP_SW_INSTALL_FAILED` message from
+ * `sw-build-script.ts`: failing path, status, error name) and the page sees
+ * the outcome (`failed`, from `watchInstallFailures`). Either can come first,
+ * and a worker from before the message existed never sends one. So a cause is
+ * reported at once, and an outcome is reported on its own only if no cause
+ * arrived within `waitMs` either side of it.
+ *
+ * This is per tab. Every open tab sees both signals; `onceAcrossTabs` makes
+ * them one event.
+ */
+export function installFailureReporter(
+  report: (attributes: Record<string, string>) => void,
+  waitMs = INSTALL_CAUSE_WAIT_MS,
+): { cause: (message: unknown) => void; failed: () => void } {
+  let lastReportAt = Number.NEGATIVE_INFINITY;
+  const send = (attributes: Record<string, string>) => {
+    lastReportAt = Date.now();
+    report(attributes);
+  };
+  return {
+    cause(message) {
+      const attributes = installCauseAttributes(message);
+      if (attributes && Date.now() - lastReportAt >= waitMs) {
+        send(attributes);
+      }
+    },
+    failed() {
+      const at = Date.now();
+      setTimeout(() => {
+        if (lastReportAt < at - waitMs) {
+          send({ reason: "unknown", path: "", status: "0", build: "" });
+        }
+      }, waitMs);
+    },
+  };
+}
+
+/** How long one tab's report of a failure keeps the other tabs from repeating it. */
+export const INSTALL_REPORT_DEDUPE_MS = 60_000;
+
+const REPORTED_PREFIX = "pqp:sw-install-reported:";
+
+/**
+ * Runs `fn` in at most one tab per `key` per `windowMs`.
+ *
+ * A failed install is seen by every open tab of the origin. The first tab to
+ * take the Web Lock for `key` writes the time to `localStorage` and reports;
+ * a tab that finds a recent time stays quiet. Without Web Locks the storage
+ * check alone still dedupes everything but an exact tie. Without storage
+ * (private mode, blocked site data) every tab reports: a duplicate is better
+ * than a failure nobody hears about.
+ */
+export async function onceAcrossTabs(
+  key: string,
+  fn: () => void,
+  windowMs = INSTALL_REPORT_DEDUPE_MS,
+): Promise<void> {
+  const name = `${REPORTED_PREFIX}${key}`;
+  const run = () => {
+    try {
+      const at = Number(localStorage.getItem(name));
+      if (at && Date.now() - at < windowMs) {
+        return;
+      }
+      localStorage.setItem(name, String(Date.now()));
+    } catch {
+      // No storage: report from this tab anyway.
+    }
+    fn();
+  };
+  try {
+    if (navigator.locks?.request) {
+      await navigator.locks.request(name, async () => run());
+      return;
+    }
+  } catch {
+    // Locks refused: fall through to the storage check alone.
+  }
+  run();
+}
 
 /** Longest a first-time visitor to the marketing home page goes unregistered. */
 export const HOME_REGISTER_DELAY_MS = 20_000;
@@ -99,10 +249,38 @@ export function registerServiceWorker(
         if (disposed) {
           return;
         }
+        const installFailure = installFailureReporter((attributes) => {
+          console.warn("[pwa] service worker install failed", attributes);
+          const key = [attributes.build, attributes.path, attributes.status, attributes.reason].join("|");
+          void onceAcrossTabs(key, () => reportFaroEvent("pwa_sw_install_failed", attributes));
+        });
+        // Reporting must never stand between the page and its worker.
+        try {
+          navigator.serviceWorker.addEventListener("message", (event) =>
+            installFailure.cause(event.data),
+          );
+          navigator.serviceWorker.startMessages();
+        } catch {
+          // No message channel: the outcome is still reported without a cause.
+        }
         updateSW = module.registerSW({
           onNeedRefresh,
+          // Without this, vite-plugin-pwa's prompt mode RELOADS THE PAGE when a
+          // worker this page did not register takes control (`installed` with
+          // `isExternal`, then `controlling` with `isUpdate`). With `skipWaiting`
+          // that is every deploy found by another tab, by the worker's own
+          // check or by the browser, and it reloaded pages in a call. When to
+          // reload is `update-policy.ts`'s decision; this only says a build is in.
+          // Bundles from before this line still reload that way, which is what
+          // rescues the 2026-09-23 to 09-29 tabs (`docs/PWA.md`).
+          onNeedReload: onNeedRefresh,
           onRegisterError: (error) => {
             console.warn("[pwa] service worker registration failed", error);
+          },
+          onRegisteredSW: (_url, registration) => {
+            if (registration) {
+              watchInstallFailures(registration, installFailure.failed);
+            }
           },
         });
       } catch {

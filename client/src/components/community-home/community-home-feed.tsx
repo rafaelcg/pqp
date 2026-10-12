@@ -1,4 +1,5 @@
 import {
+  bauPostPath,
   parseCommunityLink,
   type Channel,
   type Gif,
@@ -9,6 +10,7 @@ import {
   CalendarClock,
   Eye,
   Heart,
+  Link2,
   Lock,
   LockOpen,
   Menu as MenuIcon,
@@ -20,6 +22,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Share2,
   Smile,
   Trash2,
   Upload,
@@ -55,6 +58,7 @@ import {
   deleteCommunityHomePost,
   fetchCommunityHomeComments,
   fetchCommunityHomeDrafts,
+  fetchCommunityHomePost,
   fetchCommunityHomePosts,
   deleteServerImage,
   pinCommunityHomePost,
@@ -93,18 +97,34 @@ import {
   youtubePosterUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
+  type CommunityHomeMobileRendition,
   type CommunityHomePost,
   type CommunityHomeViewerMode,
   type CommunityHomeVisibility,
   type UploadedHomeMedia,
 } from "@/lib/community-home";
+import { toDisplayBody, toStoredBody } from "@/lib/community-home/channel-refs";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  ChannelPickerHint,
+  ChannelRefsProvider,
+  ChannelText,
+  useChannelPicker,
+} from "./community-home-channel-refs";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
+import {
+  coverForCreate,
+  coverForPreview,
+  coverForUpdate,
+  type CoverDraft,
+} from "@/lib/community-home/cover";
+import { ComposeCover } from "./community-home-compose-cover";
+import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
 import {
   ComposeTranslationNote,
@@ -115,6 +135,8 @@ import {
   CommunityHomeStaffGuide,
 } from "./community-home-onboarding";
 import { OverviewStartHere } from "./overview-start-here";
+import { CommunityHomeShareDialog } from "./community-home-share-dialog";
+import { pickAnnounceChannel, shareableChannels } from "@/lib/community-home/announce";
 
 /**
  * Baú: the durable media feed of a server. Posts, likes, flat comments,
@@ -171,6 +193,23 @@ type Props = {
   onServerUpdated?: (server: Server) => void;
   /** Bumped by App on `community-home-update` for this server. */
   refreshSignal?: number;
+  /**
+   * Whether the caller may speak in a channel. Keeps the share picker and the
+   * announce default honest; the server still decides for real.
+   */
+  canSendInChannel?: (channelId: string) => boolean;
+  /**
+   * A post to scroll to and highlight (a Baú permalink or a card in chat).
+   * `focusNonce` changes on every follow, so the same card clicked twice
+   * scrolls twice.
+   */
+  focusPostId?: string | null;
+  focusNonce?: number;
+  /**
+   * Bumped by the sidebar's "Postar no Baú" (empty Baú, staff): open the
+   * composer. Zero, the initial value, opens nothing.
+   */
+  composeNonce?: number;
 };
 
 type StaffTab = "feed" | "compose" | "drafts";
@@ -686,6 +725,11 @@ type PostCardProps = {
   onUnpublish?: (post: CommunityHomePost) => void;
   onTogglePin?: (post: CommunityHomePost) => void;
   onToggleLock?: (post: CommunityHomePost) => void;
+  /** Staff: post this into a channel as a card. */
+  onShare?: (post: CommunityHomePost) => void;
+  onCopyLink?: (post: CommunityHomePost) => void;
+  /** Followed from a permalink or a chat card: ring it for a moment. */
+  highlighted?: boolean;
 };
 
 /**
@@ -713,6 +757,9 @@ export function PostCard({
   onUnpublish,
   onTogglePin,
   onToggleLock,
+  onShare,
+  onCopyLink,
+  highlighted = false,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -747,7 +794,9 @@ export function PostCard({
         onTogglePin ||
         onPublishNow ||
         onUnpublish ||
-        onToggleLock,
+        onToggleLock ||
+        onShare ||
+        onCopyLink,
     );
 
   useEffect(() => {
@@ -781,17 +830,34 @@ export function PostCard({
   return (
     <article
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-border bg-surface-1",
+        "relative scroll-mt-4 overflow-hidden rounded-2xl border border-border bg-surface-1 transition-shadow duration-[var(--duration-slow)]",
         isPreview && "border-dashed border-accent/40",
+        highlighted &&
+          "border-accent/60 shadow-[0_0_0_2px_var(--color-accent),0_0_32px_var(--glow-accent)]",
       )}
       data-home-post
+      data-home-post-id={post.id}
       data-home-post-visibility={post.visibility}
       data-home-post-status={post.status}
       data-home-post-locked={locked ? "1" : "0"}
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
       {showMedia && post.media ? (
-        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+        <UnlockedMedia
+          media={post.media}
+          flush
+          reserveCorner={showStaffMenu}
+          captions={
+            post.captions && !isPreview
+              ? {
+                  serverId: post.serverId,
+                  postId: post.id,
+                  sourceLang: post.captions.sourceLang,
+                  durationMs: post.captions.durationMs,
+                }
+              : null
+          }
+        />
       ) : null}
       {showStaffMenu && (
         <div
@@ -840,6 +906,34 @@ export function PostCard({
                 title={t("communityHome.drafts.unscheduleHint")}
               >
                 {t("communityHome.drafts.unschedule")}
+              </button>
+            )}
+            {onShare && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onShare(post);
+                }}
+                data-home-share
+              >
+                <Share2 className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.share.menu")}
+              </button>
+            )}
+            {onCopyLink && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onCopyLink(post);
+                }}
+                data-home-copy-link
+              >
+                <Link2 className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.share.copyLink")}
               </button>
             )}
             {onTogglePin && post.status === "published" && (
@@ -979,7 +1073,7 @@ export function PostCard({
           <>
             {summary && summary !== view.title?.trim() && (
               <p className="mt-3 break-words text-sm leading-relaxed text-text">
-                {summary}
+                <ChannelText text={summary} />
               </p>
             )}
             <LockedBodyBlur />
@@ -1005,7 +1099,7 @@ export function PostCard({
                 </div>
               ) : (
                 <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-text">
-                  {view.body}
+                  <ChannelText text={view.body} />
                 </p>
               ))}
           </>
@@ -1087,7 +1181,47 @@ type ComposeState = {
   /** Media already on the post being edited, until replaced or removed. */
   existingMedia: CommunityHomeMedia | null;
   clearMedia: boolean;
+  /** The vertical cut picked in this session, not yet on a post. */
+  mobileUpload: UploadedHomeMedia | null;
+  /** Local preview of `mobileUpload`, an object URL. */
+  mobilePreviewUrl: string | null;
+  /** The vertical cut already on the post being edited. */
+  existingMobile: CommunityHomeMobileRendition | null;
+  /** The author removed the cut on the post. */
+  clearMobile: boolean;
+  /** The cover picked in this session (a frame or an image), not yet on a post. */
+  coverUpload: UploadedHomeMedia | null;
+  /** Local preview of `coverUpload`, an object URL. */
+  coverPreviewUrl: string | null;
+  /** The cover already on the post being edited (`media.posterUrl`). */
+  existingCover: string | null;
+  /** The author went back to the automatic cover (the first frame). */
+  clearCover: boolean;
 };
+
+/**
+ * What every change of the MAIN media does to the phone cut: forget it. The
+ * cut is a second edit of one particular video, and the server drops it too
+ * when the main file changes.
+ */
+const NO_MOBILE = {
+  mobileUpload: null,
+  mobilePreviewUrl: null,
+  existingMobile: null,
+  clearMobile: false,
+} as const;
+
+/**
+ * Same for the cover: it is a picture of one particular video (or chosen for
+ * it), so a new main file starts from the automatic cover again. The server
+ * drops it too when the main file changes.
+ */
+const NO_COVER = {
+  coverUpload: null,
+  coverPreviewUrl: null,
+  existingCover: null,
+  clearCover: false,
+} as const;
 
 const emptyCompose = (): ComposeState => ({
   editingId: null,
@@ -1102,9 +1236,14 @@ const emptyCompose = (): ComposeState => ({
   uploadPreviewUrl: null,
   existingMedia: null,
   clearMedia: false,
+  ...NO_MOBILE,
+  ...NO_COVER,
 });
 
-function composeFromPost(post: CommunityHomePost): ComposeState {
+function composeFromPost(
+  post: CommunityHomePost,
+  channels: readonly Channel[],
+): ComposeState {
   // A reader in another language is served a translation in `title` / `body`
   // / `teaser`; staff edit the author's own words, which ride along.
   const own = displayFields(post, true);
@@ -1113,14 +1252,61 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     editingId: post.id,
     editingStatus: post.status,
     title: own.title ?? "",
-    body: own.body ?? "",
+    // `<#id>` becomes a readable `#name` in the textarea; `run` converts back.
+    body: toDisplayBody(own.body ?? "", channels),
     teaser: own.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
     youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
     existingMedia:
       post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
+    existingMobile: post.media?.mobile ?? null,
+    existingCover: post.media?.posterUrl ?? null,
   };
+}
+
+/** The main media is an uploaded video, which is what a phone cut goes beside. */
+function composeMainIsVideo(state: ComposeState): boolean {
+  if (state.upload) {
+    return state.upload.kind === "video";
+  }
+  return !state.clearMedia && state.existingMedia?.kind === "video";
+}
+
+/** Which main video the composer holds: the session upload, else the post's own. */
+function composeMainKey(state: ComposeState): string {
+  return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
+/** The cut as the composer shows it: picked now, else the one on the post. */
+function composeMobile(state: ComposeState): CommunityHomeMobileRendition | null {
+  if (!composeMainIsVideo(state)) {
+    return null;
+  }
+  if (state.mobileUpload) {
+    return {
+      name: state.mobileUpload.name,
+      contentType: state.mobileUpload.contentType,
+      byteSize: state.mobileUpload.byteSize,
+      url: state.mobilePreviewUrl,
+    };
+  }
+  return state.clearMobile ? null : state.existingMobile;
+}
+
+function composeCoverDraft(state: ComposeState): CoverDraft {
+  return {
+    mainIsVideo: composeMainIsVideo(state),
+    upload: state.coverUpload,
+    previewUrl: state.coverPreviewUrl,
+    existing: state.existingCover,
+    cleared: state.clearCover,
+  };
+}
+
+/** The cover as the composer shows it: picked now, else the one on the post. Null is the first frame. */
+function composeCover(state: ComposeState): string | null {
+  return coverForPreview(composeCoverDraft(state));
 }
 
 function composeHasFileMedia(state: ComposeState): boolean {
@@ -1143,7 +1329,13 @@ function composeYoutubeUrlForSubmit(state: ComposeState): string | null {
 }
 
 /** The post the preview renders, built from what is typed so far. */
-function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
+function previewPost(
+  state: ComposeState,
+  me: PublicUser,
+  serverId: string,
+  isOwner: boolean,
+  channels: readonly Channel[],
+): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
   const embed = communityHomeEmbedMedia(composeEmbedUrl(state));
   if (embed) {
@@ -1157,9 +1349,15 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       url: state.uploadPreviewUrl,
       youtubeUrl: null,
       twitchUrl: null,
+      mobile: composeMobile(state),
+      posterUrl: composeCover(state),
     };
   } else if (state.existingMedia && !state.clearMedia) {
-    media = state.existingMedia;
+    media = {
+      ...state.existingMedia,
+      mobile: composeMobile(state),
+      posterUrl: composeCover(state),
+    };
   }
   const now = new Date().toISOString();
   return {
@@ -1168,7 +1366,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     author: me,
     authorBadge: isOwner ? "owner" : "staff",
     title: state.title.trim() || null,
-    body: state.body,
+    body: toStoredBody(state.body, channels),
     teaser: state.visibility === "members" ? state.teaser.trim() || null : null,
     visibility: state.visibility,
     status: "published",
@@ -1190,6 +1388,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     createdAt: now,
     updatedAt: now,
     translation: null,
+    captions: null,
   };
 }
 
@@ -1204,6 +1403,10 @@ function ComposeCard({
   vipEnabled,
   mediaEnabled,
   translationEnabled,
+  mobileRenditionEnabled,
+  customCoverEnabled,
+  channels,
+  announceChannel,
   onDone,
   onCancelEdit,
 }: {
@@ -1216,10 +1419,27 @@ function ComposeCard({
   mediaEnabled: boolean;
   /** Readers in other languages are served an automatic translation here. */
   translationEnabled: boolean;
-  onDone: (post: CommunityHomePost, action: ComposeAction) => void;
+  /** `bau_mobile_rendition` is on here: offer a vertical cut beside a video. */
+  mobileRenditionEnabled: boolean;
+  /** `bau_custom_cover` is on here: offer a cover (a frame or an image) for a video. */
+  customCoverEnabled: boolean;
+  /** Channels the author can see: the `#` picker lists these. */
+  channels: readonly Channel[];
+  /**
+   * The channel a published post can also be announced in, or null when there
+   * is nowhere this person may speak. The box is ticked by default: a post
+   * nobody is told about is the problem the card exists to fix.
+   */
+  announceChannel: Channel | null;
+  onDone: (
+    post: CommunityHomePost,
+    action: ComposeAction,
+    announce: { channelName: string; ok: boolean } | null,
+  ) => void;
   onCancelEdit: () => void;
 }) {
   const { t } = useTranslation();
+  const [announce, setAnnounce] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleValue);
@@ -1231,6 +1451,18 @@ function ComposeCard({
   const uploadAbort = useRef<AbortController | null>(null);
   const nextPick = useMemo(createPickSequence, []);
   const timezone = useMemo(browserTimezone, []);
+  const channelPicker = useChannelPicker({
+    value: state.body,
+    channels,
+    onInsert: (next, caret) => {
+      setState((prev) => ({ ...prev, body: next }));
+      window.setTimeout(() => {
+        const field = bodyRef.current;
+        field?.focus();
+        field?.setSelectionRange(caret, caret);
+      }, 0);
+    },
+  });
 
   const hasMedia =
     composeHasFileMedia(state) || Boolean(composeEmbedUrl(state));
@@ -1246,6 +1478,24 @@ function ComposeCard({
       }
     };
   }, [state.uploadPreviewUrl]);
+
+  useEffect(() => {
+    const url = state.mobilePreviewUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [state.mobilePreviewUrl]);
+
+  useEffect(() => {
+    const url = state.coverPreviewUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [state.coverPreviewUrl]);
 
   async function pickFile(file: File | null) {
     if (!file) {
@@ -1304,6 +1554,8 @@ function ComposeCard({
         uploadPreviewUrl: previewUrl,
         youtubeUrl: "",
         clearMedia: true,
+        ...NO_MOBILE,
+        ...NO_COVER,
       }));
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -1326,6 +1578,8 @@ function ComposeCard({
       uploadPreviewUrl: null,
       youtubeUrl: "",
       clearMedia: true,
+      ...NO_MOBILE,
+      ...NO_COVER,
     }));
   }
 
@@ -1343,6 +1597,17 @@ function ComposeCard({
       return;
     }
     const youtubeUrl = composeYoutubeUrlForSubmit(state);
+    // The textarea holds `#name`; the API stores `<#id>` so a rename never
+    // breaks the link and the body never carries a name a reader may not see.
+    const storedBody = toStoredBody(state.body, channels);
+    if (storedBody.length > COMMUNITY_HOME_BODY_MAX) {
+      setError(
+        t("communityHome.compose.tooLongWithChannels", {
+          max: COMMUNITY_HOME_BODY_MAX,
+        }),
+      );
+      return;
+    }
     let scheduledIso: string | null = null;
     if (action === "schedule") {
       const when = new Date(scheduleAt);
@@ -1357,14 +1622,24 @@ function ComposeCard({
       const teaser =
         vipEnabled && state.visibility === "members" ? state.teaser.trim() || null : null;
       const visibility: CommunityHomeVisibility = vipEnabled ? state.visibility : "free";
+      // Only beside an uploaded video; a stale pick never rides along.
+      const mobileUploadId =
+        composeMainIsVideo(state) && state.mobileUpload
+          ? state.mobileUpload.uploadId
+          : null;
       let post: CommunityHomePost;
+      const announceChannelId =
+        action === "publish" && announce && announceChannel
+          ? announceChannel.id
+          : null;
+      let announced: boolean | undefined;
       if (state.editingId) {
         const { post: updated } = await updateCommunityHomePost(
           serverId,
           state.editingId,
           {
             title: state.title.trim() || null,
-            body: state.body,
+            body: storedBody,
             teaser,
             visibility,
             commentsEnabled: state.commentsEnabled,
@@ -1375,11 +1650,23 @@ function ComposeCard({
                 : state.clearMedia
                   ? { clearMedia: true }
                   : {}),
+            // Omitted keeps the cut on the post (the server drops it with a
+            // replaced main video by itself); null removes it.
+            ...(mobileUploadId
+              ? { mobileMediaUploadId: mobileUploadId }
+              : state.clearMobile
+                ? { mobileMediaUploadId: null }
+                : {}),
+            ...coverForUpdate(composeCoverDraft(state)),
           },
         );
         post = updated;
         if (action === "publish" && post.status !== "published") {
-          post = (await publishCommunityHomePost(serverId, post.id)).post;
+          const published = await publishCommunityHomePost(serverId, post.id, {
+            announceChannelId,
+          });
+          post = published.post;
+          announced = published.announced;
         } else if (action === "schedule" && scheduledIso) {
           post = (
             await scheduleCommunityHomePost(serverId, post.id, {
@@ -1389,13 +1676,15 @@ function ComposeCard({
           ).post;
         }
       } else {
-        const { post: created } = await createCommunityHomePost(serverId, {
+        const created = await createCommunityHomePost(serverId, {
           title: state.title.trim() || null,
-          body: state.body,
+          body: storedBody,
           teaser,
           visibility,
           commentsEnabled: state.commentsEnabled,
           mediaUploadId: state.upload?.uploadId ?? null,
+          mobileMediaUploadId: mobileUploadId,
+          ...coverForCreate(composeCoverDraft(state)),
           youtubeUrl,
           status:
             action === "publish"
@@ -1405,12 +1694,20 @@ function ComposeCard({
                 : "draft",
           scheduledAt: scheduledIso,
           scheduleTimezone: scheduledIso ? timezone : null,
+          ...(announceChannelId ? { announceChannelId } : {}),
         });
-        post = created;
+        post = created.post;
+        announced = created.announced;
       }
       setShowPreview(false);
       setScheduling(false);
-      onDone(post, action);
+      onDone(
+        post,
+        action,
+        announceChannelId && announceChannel
+          ? { channelName: announceChannel.name, ok: announced === true }
+          : null,
+      );
     } catch (error) {
       setError(errorMessage(error, t("communityHome.error.generic")));
     } finally {
@@ -1420,7 +1717,7 @@ function ComposeCard({
 
   const editing = Boolean(state.editingId);
   const editingPublished = state.editingStatus === "published";
-  const preview = previewPost(state, me, serverId, isOwner);
+  const preview = previewPost(state, me, serverId, isOwner, channels);
 
   async function handleClose() {
     if (busy) {
@@ -1490,18 +1787,35 @@ function ComposeCard({
           placeholder={t("communityHome.compose.titlePlaceholder")}
           data-home-compose-title
         />
-        <textarea
-          ref={bodyRef}
-          className="w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-          rows={4}
-          value={state.body}
-          maxLength={COMMUNITY_HOME_BODY_MAX}
-          onChange={(event) =>
-            setState((prev) => ({ ...prev, body: event.target.value }))
-          }
-          placeholder={t("communityHome.compose.placeholder")}
-          data-home-compose-body
-        />
+        <div className="relative">
+          <textarea
+            ref={bodyRef}
+            className="w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            rows={4}
+            value={state.body}
+            maxLength={COMMUNITY_HOME_BODY_MAX}
+            onChange={(event) => {
+              const field = event.target;
+              setState((prev) => ({ ...prev, body: field.value }));
+              channelPicker.syncCaret(field);
+            }}
+            onKeyDown={(event) => {
+              channelPicker.handleKeyDown(event);
+            }}
+            onKeyUp={(event) => {
+              if (
+                ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              ) {
+                channelPicker.syncCaret(event.currentTarget);
+              }
+            }}
+            onClick={(event) => channelPicker.syncCaret(event.currentTarget)}
+            placeholder={t("communityHome.compose.placeholder")}
+            aria-autocomplete="list"
+            data-home-compose-body
+          />
+          {channelPicker.menu}
+        </div>
         <div className="relative mb-2 mt-1 flex items-center">
           <button
             type="button"
@@ -1513,6 +1827,7 @@ function ComposeCard({
           >
             <Smile className="h-4 w-4" aria-hidden />
           </button>
+          <ChannelPickerHint className="ml-2" />
           {emojiOpen && (
             <EmojiPickerPanel
               onSelect={(emoji) => {
@@ -1587,6 +1902,7 @@ function ComposeCard({
                   upload: youtubeUrl ? null : prev.upload,
                   uploadPreviewUrl: youtubeUrl ? null : prev.uploadPreviewUrl,
                   clearMedia: youtubeUrl ? true : prev.clearMedia,
+                  ...(youtubeUrl ? { ...NO_MOBILE, ...NO_COVER } : {}),
                 }));
               }}
               placeholder="https://youtu.be/…"
@@ -1620,6 +1936,82 @@ function ComposeCard({
               {t("communityHome.compose.clearMedia")}
             </button>
           </p>
+        )}
+
+        {mobileRenditionEnabled && mediaEnabled && composeMainIsVideo(state) && (
+          <ComposeMobileRendition
+            // Keyed by the main video: a new main file remounts the picker,
+            // which aborts a cut still uploading for the old one, so it can
+            // never land beside a video it was not cut from.
+            key={composeMainKey(state)}
+            serverId={serverId}
+            current={composeMobile(state)}
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  mobileUpload: uploaded,
+                  mobilePreviewUrl: previewUrl,
+                  clearMobile: false,
+                };
+              });
+            }}
+            onRemove={() =>
+              setState((prev) => ({
+                ...prev,
+                mobileUpload: null,
+                mobilePreviewUrl: null,
+                clearMobile: true,
+              }))
+            }
+          />
+        )}
+
+        {customCoverEnabled && mediaEnabled && composeMainIsVideo(state) && (
+          <ComposeCover
+            // Keyed by the main video, like the phone cut: a new main file
+            // remounts the picker, which aborts a cover still uploading for
+            // the old one.
+            key={composeMainKey(state)}
+            serverId={serverId}
+            videoUrl={
+              state.upload ? state.uploadPreviewUrl : (state.existingMedia?.url ?? null)
+            }
+            videoIsLocal={Boolean(state.upload)}
+            current={composeCover(state)}
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  coverUpload: uploaded,
+                  coverPreviewUrl: previewUrl,
+                  clearCover: false,
+                };
+              });
+            }}
+            onRemove={() =>
+              setState((prev) => ({
+                ...prev,
+                coverUpload: null,
+                coverPreviewUrl: null,
+                clearCover: true,
+              }))
+            }
+          />
         )}
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-paper-muted">
@@ -1679,6 +2071,28 @@ function ComposeCard({
             placeholder={t("communityHome.compose.teaserPlaceholder")}
             data-home-compose-teaser
           />
+        )}
+
+        {announceChannel && !editingPublished && (
+          <label
+            className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-ink-4 bg-ink px-3 py-2 text-xs text-paper-muted"
+            data-home-compose-announce
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={announce}
+              onChange={(event) => setAnnounce(event.target.checked)}
+            />
+            <span>
+              <span className="block font-semibold text-paper">
+                {t("communityHome.compose.announce", {
+                  channel: announceChannel.name,
+                })}
+              </span>
+              {t("communityHome.compose.announceHint")}
+            </span>
+          </label>
         )}
 
         <ComposeTranslationNote
@@ -1969,11 +2383,17 @@ export function CommunityHomeFeed({
   refreshSignal = 0,
   channels = [],
   onOpenChannel,
+  canSendInChannel,
+  focusPostId = null,
+  focusNonce = 0,
+  composeNonce = 0,
 }: Props) {
   const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [mobileRenditionEnabled, setMobileRenditionEnabled] = useState(false);
+  const [customCoverEnabled, setCustomCoverEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [staffTab, setStaffTab] = useState<StaffTab>("feed");
@@ -1982,6 +2402,13 @@ export function CommunityHomeFeed({
     loadCommunityHomeViewerMode(),
   );
   const [notice, setNotice] = useState<MessageKey | null>(null);
+  const [announceWarning, setAnnounceWarning] = useState<string | null>(null);
+  const [shareTarget, setShareTarget] = useState<CommunityHomePost | null>(null);
+  const [sharedNotice, setSharedNotice] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  /** A permalink to a post older than the page the feed loads. */
+  const [focusedExtra, setFocusedExtra] = useState<CommunityHomePost | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const [identityEditing, setIdentityEditing] = useState(false);
   const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
     () => identityDraftFrom(server),
@@ -2014,6 +2441,8 @@ export function CommunityHomeFeed({
         setPosts(feed.posts);
         setDrafts(staff.posts);
         setTranslationEnabled(feed.translationEnabled === true);
+        setMobileRenditionEnabled(feed.mobileRenditionEnabled === true);
+        setCustomCoverEnabled(feed.customCoverEnabled === true);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setPosts([]);
@@ -2213,7 +2642,7 @@ export function CommunityHomeFeed({
   }
 
   function beginEdit(post: CommunityHomePost) {
-    setCompose(composeFromPost(post));
+    setCompose(composeFromPost(post, channels));
     setStaffTab("compose");
   }
 
@@ -2312,8 +2741,19 @@ export function CommunityHomeFeed({
     }
   }
 
-  function onComposed(post: CommunityHomePost, action: ComposeAction) {
+  function onComposed(
+    post: CommunityHomePost,
+    action: ComposeAction,
+    announce: { channelName: string; ok: boolean } | null,
+  ) {
     setCompose(emptyCompose());
+    setAnnounceWarning(
+      announce && !announce.ok
+        ? t("communityHome.compose.announceFailed", {
+            channel: announce.channelName,
+          })
+        : null,
+    );
     // Reconcile both lists from the returned post rather than guessing.
     setPosts((previous) => {
       const rest = (previous ?? []).filter((p) => p.id !== post.id);
@@ -2341,6 +2781,102 @@ export function CommunityHomeFeed({
     }
   }
 
+  const sendable = useCallback(
+    (channelId: string) => canSendInChannel?.(channelId) ?? true,
+    [canSendInChannel],
+  );
+  const shareChannels = useMemo(
+    () => shareableChannels(channels, sendable),
+    [channels, sendable],
+  );
+  const announceChannel = useMemo(
+    () => pickAnnounceChannel(channels, sendable),
+    [channels, sendable],
+  );
+
+  async function copyPostLink(post: CommunityHomePost) {
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${bauPostPath(post.serverId, post.id)}`,
+      );
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch {
+      setActionError(t("communityHome.error.generic"));
+    }
+  }
+
+  // Reset the transient strips with the server they belong to.
+  useEffect(() => {
+    setShareTarget(null);
+    setSharedNotice(null);
+    setAnnounceWarning(null);
+    setFocusedExtra(null);
+    setHighlightId(null);
+  }, [serverId]);
+
+  useEffect(() => {
+    if (!sharedNotice) {
+      return;
+    }
+    const timer = setTimeout(() => setSharedNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [sharedNotice]);
+
+  // A permalink (or a card in chat) names one post: show the feed, find the
+  // post, scroll to it and mark it for a moment. A post older than the page
+  // the feed loads is fetched on its own and shown at the top.
+  useEffect(() => {
+    if (!focusPostId || posts === null) {
+      return;
+    }
+    setStaffTab("feed");
+    let cancelled = false;
+    const inFeed = posts.some((one) => one.id === focusPostId);
+    const reveal = () => {
+      if (cancelled) {
+        return;
+      }
+      setHighlightId(focusPostId);
+      const scroll = (behavior: ScrollBehavior) =>
+        document
+          .querySelector(`[data-home-post-id="${CSS.escape(focusPostId)}"]`)
+          ?.scrollIntoView({ block: "start", behavior });
+      requestAnimationFrame(() => scroll("smooth"));
+      // Pictures and players above it settle after the first paint and move
+      // the post; one more nudge once they have.
+      settle = setTimeout(() => scroll("auto"), 700);
+    };
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    if (inFeed) {
+      reveal();
+    } else {
+      void fetchCommunityHomePost(serverId, focusPostId)
+        .then(({ post }) => {
+          if (!cancelled && post.status === "published") {
+            setFocusedExtra(post);
+            reveal();
+          }
+        })
+        .catch(() => undefined);
+    }
+    const timer = setTimeout(() => {
+      setHighlightId((current) => (current === focusPostId ? null : current));
+    }, 3200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(settle);
+    };
+    // `posts` is read once per follow; a later refetch must not re-scroll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPostId, focusNonce, serverId, posts === null]);
+
+  const shownPosts =
+    posts && focusedExtra && !posts.some((one) => one.id === focusedExtra.id)
+      ? [focusedExtra, ...posts]
+      : posts;
+
   const feedEmpty = posts !== null && posts.length === 0;
   // A scheduled post lives in the drafts list, not the feed, so after a reload
   // it looked deleted. Staff get a strip on the feed that says it is still coming.
@@ -2352,6 +2888,12 @@ export function CommunityHomeFeed({
   function openCompose() {
     setStaffTab("compose");
   }
+
+  useEffect(() => {
+    if (composeNonce > 0 && canManageServer) {
+      setStaffTab("compose");
+    }
+  }, [composeNonce, canManageServer]);
 
   function openDrafts() {
     setStaffTab("drafts");
@@ -2389,6 +2931,11 @@ export function CommunityHomeFeed({
     ) : null;
 
   return (
+    <ChannelRefsProvider
+      serverId={serverId}
+      channels={channels}
+      onOpenChannel={onOpenChannel}
+    >
     <div className="flex min-h-0 flex-1 flex-col" data-community-home-feed>
       {showPaneHeader && (
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
@@ -2506,6 +3053,24 @@ export function CommunityHomeFeed({
               {t(notice)}
             </p>
           )}
+          {(sharedNotice || linkCopied) && (
+            <p
+              className="animate-rise rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-success"
+              role="status"
+              data-home-notice
+            >
+              {linkCopied ? t("communityHome.share.linkCopied") : sharedNotice}
+            </p>
+          )}
+          {announceWarning && (
+            <p
+              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+              role="status"
+              data-home-announce-warning
+            >
+              {announceWarning}
+            </p>
+          )}
           {actionError && (
             <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {actionError}
@@ -2526,6 +3091,10 @@ export function CommunityHomeFeed({
                 vipEnabled={vipEnabled}
                 mediaEnabled={mediaEnabled}
                 translationEnabled={translationEnabled}
+                mobileRenditionEnabled={mobileRenditionEnabled}
+                customCoverEnabled={customCoverEnabled}
+                channels={channels}
+                announceChannel={announceChannel}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());
@@ -2686,10 +3255,11 @@ export function CommunityHomeFeed({
                         {t("communityHome.feed.heading")}
                       </h3>
                     )}
-                    {posts.map((post) => (
+                    {(shownPosts ?? posts).map((post) => (
                 <PostCard
                   key={post.id}
                   post={post}
+                  highlighted={highlightId === post.id}
                   me={me}
                   locked={isPostLockedForViewer(
                     post,
@@ -2710,6 +3280,10 @@ export function CommunityHomeFeed({
                     canManageServer && vipEnabled
                       ? (target) => void toggleLock(target)
                       : undefined
+                  }
+                  onShare={canManageServer ? setShareTarget : undefined}
+                  onCopyLink={
+                    canManageServer ? (target) => void copyPostLink(target) : undefined
                   }
                 />
                     ))}
@@ -2749,6 +3323,23 @@ export function CommunityHomeFeed({
         onConfirm={cancelIdentityEdit}
         onClose={() => setIdentityDiscardOpen(false)}
       />
+      {shareTarget && (
+        <CommunityHomeShareDialog
+          open
+          serverId={serverId}
+          postId={shareTarget.id}
+          channels={shareChannels}
+          defaultChannelId={announceChannel?.id ?? null}
+          onClose={() => setShareTarget(null)}
+          onShared={(channel) => {
+            setShareTarget(null);
+            setSharedNotice(
+              t("communityHome.share.sent", { channel: channel.name }),
+            );
+          }}
+        />
+      )}
     </div>
+    </ChannelRefsProvider>
   );
 }

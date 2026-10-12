@@ -172,3 +172,71 @@ describe("the Baú video", () => {
     expect(bar.querySelector("[aria-label='Unmute']")).not.toBeNull();
   });
 });
+
+describe("the phone cut of a video", () => {
+  const withCut: CommunityHomeMedia = {
+    ...video,
+    mobile: {
+      name: "lancamento-9x16.mp4",
+      contentType: "video/mp4",
+      byteSize: 9 * 1024 * 1024,
+      url: "https://bucket.example/lancamento-9x16.mp4?sig=1",
+    },
+  };
+
+  const realMatchMedia = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = realMatchMedia;
+  });
+
+  function viewport(width: number, height: number, coarse: boolean) {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(width);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(height);
+    window.matchMedia = ((query: string) => ({
+      matches: query === "(pointer: coarse)" ? coarse : false,
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("a phone in portrait plays the vertical cut", async () => {
+    viewport(390, 844, true);
+    const el = await mount(withCut);
+    expect(el.querySelector("[data-home-video-rendition]")?.getAttribute("data-home-video-rendition")).toBe("mobile");
+    expect(el.querySelector("video")?.getAttribute("src")).toBe(`${withCut.mobile!.url}#t=0.001`);
+  });
+
+  it("a desktop plays the main video", async () => {
+    viewport(1440, 900, false);
+    const el = await mount(withCut);
+    expect(el.querySelector("[data-home-video-rendition]")?.getAttribute("data-home-video-rendition")).toBe("main");
+    expect(el.querySelector("video")?.getAttribute("src")).toBe(`${video.url}#t=0.001`);
+  });
+
+  it("a phone plays the main video when the post has no cut", async () => {
+    viewport(390, 844, true);
+    const el = await mount(video);
+    expect(el.querySelector("video")?.getAttribute("src")).toBe(`${video.url}#t=0.001`);
+  });
+});
+
+describe("the Baú video cover", () => {
+  it("with no cover, paints the first frame (the automatic cover)", async () => {
+    const el = await mount(video);
+    const v = el.querySelector("video")!;
+    expect(v.hasAttribute("poster")).toBe(false);
+    expect(v.getAttribute("src")).toBe(`${video.url}#t=0.001`);
+    expect(v.dataset.homeVideoPoster).toBe("first-frame");
+  });
+
+  it("with the author's cover, shows it before play and does not seek past it", async () => {
+    const el = await mount({ ...video, posterUrl: "https://bucket.example/capa.jpg?sig=1" });
+    const v = el.querySelector("video")!;
+    expect(v.getAttribute("poster")).toBe("https://bucket.example/capa.jpg?sig=1");
+    // `#t=` is a seek, and a seek hides the poster.
+    expect(v.getAttribute("src")).toBe(video.url);
+    expect(v.dataset.homeVideoPoster).toBe("custom");
+    expect(el.querySelector("[data-home-video-play]")).not.toBeNull();
+  });
+});

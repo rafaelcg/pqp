@@ -1,4 +1,5 @@
 import Accelerate
+import CoreAudioTypes
 import CoreMedia
 import CoreVideo
 import Foundation
@@ -24,6 +25,10 @@ class SampleHandler: RPBroadcastSampleHandler {
     private let client = ScreenShareSocketClient()
     private var clock = ScreenShareFrameClock()
     private let scaler = ScreenShareScaler()
+    /// The app audio path's own scratch, touched only from ReplayKit's audio
+    /// callbacks. See `forwardAppAudio`.
+    private var audioConverter = ScreenShareAudioConverter()
+    private var audioBytes: [UInt8] = []
     /// When the app first refused the connection. The app has to be running and
     /// in a call to listen, and a broadcast started before that is a mistake
     /// worth reporting rather than a black rectangle nobody can explain.
@@ -47,8 +52,14 @@ class SampleHandler: RPBroadcastSampleHandler {
         _ sampleBuffer: CMSampleBuffer,
         with type: RPSampleBufferType
     ) {
-        // Audio is deliberately ignored. The app already has the microphone open
-        // for the call, and app audio would arrive as a second, unmixable track.
+        // App audio (the game, the video, whatever is playing) is forwarded;
+        // the app decides whether the room can carry it (a LiveKit room mixes
+        // it into the microphone track; a mesh room drops it). The extension's
+        // microphone stays off: the app already has one open for the call.
+        if type == .audioApp {
+            forwardAppAudio(sampleBuffer)
+            return
+        }
         guard type == .video else { return }
 
         let now = CACurrentMediaTime()
@@ -83,6 +94,49 @@ class SampleHandler: RPBroadcastSampleHandler {
             // than writing into a dead descriptor forever.
             client.close()
         }
+    }
+
+    /// One buffer of app audio, converted to the wire's Int16 and written.
+    ///
+    /// Never connects: the video path owns the connection and its deadline, and
+    /// audio arriving first must not race it. Allocates only when a buffer is
+    /// larger than any before it, which in practice is the first one.
+    private func forwardAppAudio(_ sampleBuffer: CMSampleBuffer) {
+        guard client.isConnected,
+              let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let basic = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+              let format = ScreenSharePCMFormat(basic.pointee),
+              format.isSupported,
+              let block = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        let length = CMBlockBufferGetDataLength(block)
+        guard frameCount > 0, length > 0 else { return }
+        if audioBytes.count < length {
+            audioBytes = [UInt8](repeating: 0, count: length)
+        }
+        let copied = audioBytes.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            return CMBlockBufferCopyDataBytes(
+                block, atOffset: 0, dataLength: length, destination: base
+            ) == kCMBlockBufferNoErr
+        }
+        guard copied else { return }
+        let count = audioBytes.withUnsafeBytes { raw in
+            audioConverter.convert(
+                UnsafeRawBufferPointer(rebasing: raw[0..<length]),
+                format: format,
+                frameCount: frameCount
+            )
+        }
+        guard count > 0 else { return }
+        let header = ScreenShareAudioHeader(format: format, frameCount: frameCount)
+        let outcome = audioConverter.samples.withUnsafeBytes { samples in
+            client.write(
+                header: header.encoded(),
+                payload: UnsafeRawBufferPointer(rebasing: samples[0..<(count * 2)])
+            )
+        }
+        if outcome == .failed { client.close() }
     }
 
     /// Connects, at most every `connectRetryInterval`, and gives up loudly once

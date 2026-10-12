@@ -12,9 +12,17 @@ import {
  *
  *   /app                                → null (default landing)
  *   /app/server/<serverId>              → { kind: "channel", serverId }
+ *   /app/server/<serverId>/home         → same: a server URL with no channel
+ *                                         lands on the Baú when it is on (the
+ *                                         path a new-post push carries; the
+ *                                         phones parse `/home` as the Baú)
  *   /app/server/<sid>/channel/<cid>     → { kind: "channel", serverId, channelId }
  *   /app/server/<sid>/channel/<cid>/message/<mid>
  *                                       → …and highlight that message
+ *   /app/server/<sid>/channel/<forumId>/post/<postId>
+ *                                       → …the forum, with that post open
+ *   /app/server/<sid>/bau               → { kind: "home", serverId, postId: null }
+ *   /app/server/<sid>/bau/<postId>      → { kind: "home", serverId, postId }
  *   /app/dm                             → { kind: "conversation", channelId: null }
  *   /app/dm/<channelId>                 → { kind: "conversation", channelId }
  *   /app/dm/<cid>/message/<mid>         → …and highlight that message
@@ -33,12 +41,27 @@ export type AppRouteTarget =
       serverId: string;
       channelId: string | null;
       messageId: string | null;
+      /**
+       * A forum post open over its forum (`channelId` is the forum). A post
+       * is a thread channel of its own, but it is addressed through the
+       * forum because the forum is what the sidebar and the back button know.
+       */
+      postId: string | null;
     }
   | {
       kind: "conversation";
       /** Null for the conversation list with nothing open in it. */
       channelId: string | null;
       messageId: string | null;
+    }
+  | {
+      /**
+       * The server's Baú (Community Home), optionally scrolled to one post.
+       * The Baú is not a channel, so it has a segment of its own.
+       */
+      kind: "home";
+      serverId: string;
+      postId: string | null;
     }
   | { kind: "invite"; code: string }
   | { kind: "connection-callback"; provider: ConnectionProvider };
@@ -76,6 +99,14 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
     };
   }
 
+  if (section === "server" && first && nested === "bau" && !deeper) {
+    return {
+      kind: "home",
+      serverId: decodeURIComponent(first),
+      postId: second ? decodeURIComponent(second) : null,
+    };
+  }
+
   if (section === "server" && first) {
     const channelId =
       nested === "channel" && second ? decodeURIComponent(second) : null;
@@ -85,6 +116,10 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
       channelId,
       messageId:
         channelId && deeper === "message" && third
+          ? decodeURIComponent(third)
+          : null,
+      postId:
+        channelId && deeper === "post" && third
           ? decodeURIComponent(third)
           : null,
     };
@@ -120,6 +155,25 @@ export function channelRoutePath(
 ): string {
   const base = `/app/server/${encodeURIComponent(serverId)}`;
   return channelId ? `${base}/channel/${encodeURIComponent(channelId)}` : base;
+}
+
+/**
+ * A forum post's shareable address: the forum, with the post open on top.
+ * What "Copiar link" copies and what the address bar shows while a post is
+ * open, so a refresh or a pasted link lands on the same post.
+ */
+export function forumPostRoutePath(
+  serverId: string,
+  forumId: string,
+  postId: string,
+): string {
+  return `${channelRoutePath(serverId, forumId)}/post/${encodeURIComponent(postId)}`;
+}
+
+/** Inverse of {@link parseAppRoute} for the Baú case. */
+export function homeRoutePath(serverId: string, postId?: string | null): string {
+  const base = `/app/server/${encodeURIComponent(serverId)}/bau`;
+  return postId ? `${base}/${encodeURIComponent(postId)}` : base;
 }
 
 /** Inverse of {@link parseAppRoute} for the conversation case. */
@@ -219,6 +273,11 @@ export function signedOutRedirectPath(pathname: string): string {
   if (target.kind === "connection-callback") {
     return connectionCallbackPath(target.provider);
   }
+  // A shared Baú post: dropping the post id here would sign somebody up for a
+  // link that promised one specific thing and land them on the server's door.
+  if (target.kind === "home") {
+    return homeRoutePath(target.serverId, target.postId);
+  }
   // Both remaining kinds can carry a message permalink, and that is the form
   // people actually paste at each other — dropping the message id here would
   // land them in the right channel at the wrong end of the scrollback.
@@ -226,6 +285,9 @@ export function signedOutRedirectPath(pathname: string): string {
     return target.channelId && target.messageId
       ? messageRoutePath(null, target.channelId, target.messageId)
       : conversationRoutePath(target.channelId);
+  }
+  if (target.channelId && target.postId) {
+    return forumPostRoutePath(target.serverId, target.channelId, target.postId);
   }
   return target.channelId && target.messageId
     ? messageRoutePath(target.serverId, target.channelId, target.messageId)

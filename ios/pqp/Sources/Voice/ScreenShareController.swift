@@ -88,11 +88,17 @@ final class ScreenShareController {
     /// Starts listening for a broadcast. Called when the room becomes live.
     func arm() {
         guard receiver == nil else { return }
-        let receiver = ScreenShareReceiver { [weak self] buffer, rotation in
-            Task { @MainActor [weak self] in
-                self?.accept(buffer, rotation: rotation)
-            }
-        }
+        let receiver = ScreenShareReceiver(
+            onFrame: { [weak self] buffer, rotation in
+                Task { @MainActor [weak self] in
+                    self?.accept(buffer, rotation: rotation)
+                }
+            },
+            // Straight to the gate, off the main actor. It stays shut unless a
+            // LiveKit room has a live share, so a mesh call, a refused share
+            // and a broadcast with no call all drop the sound right here.
+            onAudio: { frame in ScreenShareAppAudio.shared.deliver(frame) }
+        )
         #if DEBUG
         // Stands in for the extension, which cannot run in the simulator. See
         // `ScreenShareReceiver.startSynthetic`.

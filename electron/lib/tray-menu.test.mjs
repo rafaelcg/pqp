@@ -6,7 +6,9 @@ const require = createRequire(import.meta.url);
 const {
   buildTrayTemplate,
   trayTooltip,
+  closeAction,
   shouldHideToTray,
+  trayLikelyAvailable,
   normalizeVoiceState,
 } = require("./tray-menu.js");
 const { trayIconKind, paintTrayIcon, encodePng } = require("./tray-icon.js");
@@ -132,6 +134,99 @@ describe("shouldHideToTray", () => {
       shouldHideToTray({ inCall: true, keepInTray: true, quitting: true }),
       false,
     );
+  });
+});
+
+describe("shouldHideToTray while signed in", () => {
+  const base = { inCall: false, keepInTray: true, quitting: false };
+
+  it("hides on Windows and on a Linux with a tray", () => {
+    assert.equal(shouldHideToTray({ ...base, signedIn: true, platform: "win32" }), true);
+    assert.equal(
+      shouldHideToTray({ ...base, signedIn: true, platform: "linux", trayAvailable: true }),
+      true,
+    );
+  });
+
+  it("never hides on macOS out of a call, so the dock keeps its convention", () => {
+    assert.equal(shouldHideToTray({ ...base, signedIn: true, platform: "darwin" }), false);
+    assert.equal(
+      shouldHideToTray({ ...base, inCall: true, platform: "darwin" }),
+      true,
+    );
+  });
+
+  it("does not hide signed out, or when the signal never arrived", () => {
+    assert.equal(shouldHideToTray({ ...base, signedIn: false, platform: "win32" }), false);
+    assert.equal(shouldHideToTray({ ...base, platform: "win32" }), false);
+  });
+
+  it("does not hide on a Linux desktop with no tray", () => {
+    assert.equal(
+      shouldHideToTray({ ...base, signedIn: true, platform: "linux", trayAvailable: false }),
+      false,
+    );
+  });
+
+  it("respects the preference and a real quit", () => {
+    assert.equal(
+      shouldHideToTray({ ...base, keepInTray: false, signedIn: true, platform: "win32" }),
+      false,
+    );
+    assert.equal(
+      shouldHideToTray({ ...base, quitting: true, signedIn: true, platform: "win32" }),
+      false,
+    );
+  });
+});
+
+describe("closeAction", () => {
+  const base = { keepInTray: true, quitting: false };
+
+  it("hides during a call or signed in when a tray is there", () => {
+    assert.equal(closeAction({ ...base, inCall: true, platform: "linux", trayAvailable: true }), "hide");
+    assert.equal(
+      closeAction({ ...base, inCall: false, signedIn: true, platform: "linux", trayAvailable: true }),
+      "hide",
+    );
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: true, platform: "win32" }), "hide");
+  });
+
+  it("never hides with no tray: a call minimizes, anything else closes", () => {
+    assert.equal(
+      closeAction({ ...base, inCall: true, platform: "linux", trayAvailable: false }),
+      "minimize",
+    );
+    assert.equal(
+      closeAction({ ...base, inCall: false, signedIn: true, platform: "linux", trayAvailable: false }),
+      "close",
+    );
+    assert.equal(
+      closeAction({ ...base, inCall: true, platform: "win32", trayAvailable: false }),
+      "minimize",
+    );
+  });
+
+  it("closes while quitting, with the preference off, or with nothing to keep up", () => {
+    assert.equal(closeAction({ ...base, quitting: true, inCall: true, trayAvailable: true }), "close");
+    assert.equal(closeAction({ ...base, keepInTray: false, inCall: true, trayAvailable: true }), "close");
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: false, platform: "linux" }), "close");
+    assert.equal(closeAction({ ...base, inCall: false, signedIn: true, platform: "darwin" }), "close");
+  });
+});
+
+describe("trayLikelyAvailable", () => {
+  it("is true off Linux", () => {
+    assert.equal(trayLikelyAvailable("win32", {}), true);
+    assert.equal(trayLikelyAvailable("darwin", { XDG_CURRENT_DESKTOP: "GNOME" }), true);
+  });
+
+  it("is false on stock GNOME, true where a tray host is the norm", () => {
+    assert.equal(trayLikelyAvailable("linux", { XDG_CURRENT_DESKTOP: "GNOME" }), false);
+    assert.equal(trayLikelyAvailable("linux", { XDG_CURRENT_DESKTOP: "ubuntu:GNOME" }), true);
+    assert.equal(trayLikelyAvailable("linux", { XDG_CURRENT_DESKTOP: "KDE" }), true);
+    assert.equal(trayLikelyAvailable("linux", { XDG_CURRENT_DESKTOP: "X-Cinnamon" }), true);
+    assert.equal(trayLikelyAvailable("linux", {}), true);
   });
 });
 
