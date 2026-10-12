@@ -328,15 +328,20 @@ fun ChannelsScreen(
         layoutConfig = next
         scope.launch { layoutMemory.save(serverId, next) }
     }
-    // Refreshes overlap (open, resume, every channels-update). The answer of a
-    // request that a later one has superseded is dropped, so an older mode
-    // that finishes last never lands on top of a newer one.
+    // Refreshes overlap (open, resume, every channels-update). An answer is
+    // applied unless a LATER request's answer was applied already, so an older
+    // mode that finishes last never lands on top of a newer one, and an older
+    // answer still counts when the newer request fails.
     val layoutRequests = remember(serverId) { AtomicInteger(0) }
+    var layoutApplied by remember(serverId) { mutableIntStateOf(0) }
     suspend fun refreshLayoutConfig() {
         val request = layoutRequests.incrementAndGet()
         try {
             val answer = session.api.channelLayoutConfig(serverId) ?: ChannelLayoutConfig.Legacy
-            if (request == layoutRequests.get()) adoptLayout(answer)
+            if (request > layoutApplied) {
+                layoutApplied = request
+                adoptLayout(answer)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -585,7 +590,8 @@ fun ChannelsScreen(
             null
         }
         if (fresh == null) {
-            rollbackOrder(before)
+            // A newer fetch has taken over: its list is the truth, not this snapshot.
+            if (channelsTickets.isLatest(ticket)) rollbackOrder(before)
             return
         }
         if (channelsTickets.tryWrite(ticket)) channels = fresh
