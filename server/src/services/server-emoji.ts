@@ -7,7 +7,9 @@ import {
   type ServerEmojiContentType,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import type { ScanResult } from "./content-scan.js";
 import {
+  copyObject,
   deleteObject,
   headObject,
   isStorageConfigured,
@@ -80,6 +82,46 @@ export function serverEmojiObjectKey(
 export function isServerEmojiKey(serverId: string, key: string): boolean {
   const prefix = emojiPrefix(serverId);
   return key.startsWith(prefix) && !key.includes("..") && key.length > prefix.length;
+}
+
+function pinnedEmojiPrefix(serverId: string): string {
+  return `${emojiPrefix(serverId)}pinned/`;
+}
+
+/**
+ * A key a claim may name: one a mint could have signed. A `pinned/` key is
+ * only ever written by this process, so a client naming one is pointing at
+ * bytes somebody else's claim judged.
+ */
+export function isServerEmojiUploadKey(serverId: string, key: string): boolean {
+  return isServerEmojiKey(serverId, key) && !key.startsWith(pinnedEmojiPrefix(serverId));
+}
+
+/**
+ * Copy an upload to a key nobody holds a PUT URL for, so the bytes the scanner
+ * judges are the bytes every message serves. The mint's PUT URL stays valid
+ * for 15 minutes and a PUT overwrites, which is why Baú does the same
+ * (`pinCommunityHomeUpload`). Null when the copy failed; the original is the
+ * caller's to discard.
+ */
+export async function pinServerEmojiUpload(
+  serverId: string,
+  sourceKey: string,
+): Promise<string | null> {
+  const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
+  const pinnedKey = `${pinnedEmojiPrefix(serverId)}${randomUUID()}${extension}`;
+  try {
+    await copyObject(sourceKey, pinnedKey);
+    return pinnedKey;
+  } catch (error) {
+    console.error(
+      `[server-emoji] could not pin ${sourceKey}:`,
+      error instanceof Error ? error.message : error,
+    );
+    // A copy can land and still answer with an error; nothing names the key.
+    scheduleDiscardServerEmojiObject(pinnedKey);
+    return null;
+  }
 }
 
 export function serverEmojiUrlForKey(emojiId: string, key: string): string {
@@ -155,7 +197,7 @@ export function createServerEmojiUpload(input: {
 export async function verifyServerEmojiObject(
   serverId: string,
   key: string,
-): Promise<number | null> {
+): Promise<{ byteSize: number; contentType: ServerEmojiContentType } | null> {
   if (!isStorageConfigured() || !isServerEmojiKey(serverId, key)) {
     return null;
   }
@@ -174,11 +216,11 @@ export async function verifyServerEmojiObject(
   }
   const expected = Object.entries(EXTENSION_BY_CONTENT_TYPE).find(([, suffix]) =>
     key.endsWith(suffix),
-  )?.[0];
+  )?.[0] as ServerEmojiContentType | undefined;
   if (!expected || head.contentType !== expected) {
     return null;
   }
-  return head.contentLength;
+  return { byteSize: head.contentLength, contentType: expected };
 }
 
 /**
@@ -190,6 +232,7 @@ export async function insertServerEmoji(input: {
   name: string;
   key: string;
   createdBy: string;
+  scan: ScanResult;
 }): Promise<ServerEmoji> {
   const limit = await serverEmojiLimit(input.serverId);
   const client = await getPool().connect();
@@ -212,11 +255,23 @@ export async function insertServerEmoji(input: {
       throw new ServerEmojiError("limit_reached", "This server has no room for more emoji.");
     }
     const inserted = await client.query<ServerEmojiRow>(
-      `INSERT INTO server_emoji (server_id, name, storage_key, created_by)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO server_emoji
+         (server_id, name, storage_key, created_by,
+          scan_status, scan_provider, scan_score, scan_labels, scanned_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
+               CASE WHEN $5 = 'unscanned' THEN NULL ELSE NOW() END)
        ON CONFLICT (server_id, name) DO NOTHING
        RETURNING ${COLUMNS}`,
-      [input.serverId, input.name, input.key, input.createdBy],
+      [
+        input.serverId,
+        input.name,
+        input.key,
+        input.createdBy,
+        input.scan.status,
+        input.scan.provider,
+        input.scan.score,
+        input.scan.status === "unscanned" ? null : JSON.stringify(input.scan.labels),
+      ],
     );
     if (inserted.rows.length === 0) {
       await client.query("ROLLBACK");

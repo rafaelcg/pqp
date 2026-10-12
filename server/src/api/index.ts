@@ -412,7 +412,9 @@ import {
   deleteServerEmoji,
   insertServerEmoji,
   isServerEmojiUploadConfigured,
+  isServerEmojiUploadKey,
   listServerEmoji,
+  pinServerEmojiUpload,
   presignServerEmojiRead,
   renameServerEmoji,
   scheduleDiscardServerEmojiObject,
@@ -420,6 +422,11 @@ import {
   ServerEmojiError,
   verifyServerEmojiObject,
 } from "../services/server-emoji.js";
+import {
+  checkServerEmojiUpload,
+  escalateServerEmojiScan,
+} from "../services/server-emoji-scan.js";
+import { isContentScanConfigured } from "../services/content-scan.js";
 import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
@@ -4518,24 +4525,61 @@ router.post("/api/servers/:serverId/emoji", async (ctx, { serverId }) => {
   await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
 
   const body = createServerEmojiSchema.parse(await readJsonBody(ctx.req));
-  const byteSize = await verifyServerEmojiObject(serverId!, body.key);
-  if (byteSize === null) {
-    throw new HttpErrorWithDetail(400, "That upload could not be verified. Try again.", {
+  const unverified = () =>
+    new HttpErrorWithDetail(400, "That upload could not be verified. Try again.", {
       code: "emoji_upload_unverified",
     });
+  if (!isServerEmojiUploadKey(serverId!, body.key)) {
+    throw unverified();
   }
+
+  let key = body.key;
+  if (isContentScanConfigured()) {
+    const pinned = await pinServerEmojiUpload(serverId!, body.key);
+    scheduleDiscardServerEmojiObject(body.key);
+    if (!pinned) {
+      throw unverified();
+    }
+    key = pinned;
+  }
+
+  const verified = await verifyServerEmojiObject(serverId!, key);
+  if (!verified) {
+    if (key !== body.key) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
+  const scanTarget = {
+    serverId: serverId!,
+    uploaderId: ctx.user.id,
+    name: body.name,
+    storageKey: key,
+    contentType: verified.contentType,
+  };
+  const scan = await checkServerEmojiUpload(scanTarget);
+  if (!scan.allowed) {
+    if (!scan.retained) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
   let emoji;
   try {
     emoji = await insertServerEmoji({
       serverId: serverId!,
       name: body.name,
-      key: body.key,
+      key,
       createdBy: ctx.user.id,
+      scan: scan.result,
     });
   } catch (error) {
-    scheduleDiscardServerEmojiObject(body.key);
+    scheduleDiscardServerEmojiObject(key);
     serverEmojiHttpError(error);
   }
+  await escalateServerEmojiScan(scanTarget, scan.result, emoji.id);
   await logAudit({
     serverId: serverId!,
     actorId: ctx.user.id,

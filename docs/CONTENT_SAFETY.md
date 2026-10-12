@@ -31,13 +31,12 @@ the row and is not a pass.
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
+| Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
+| Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
-| Custom server emoji (`server-emoji.ts`) | **no** | | |
 
-The last three rows are open gaps, not decisions. The community featured image
-in particular is shown on the public `pqp.gg/c/<slug>` page. A custom emoji is
-shown inside every message that uses it, and its image route `/api/emoji/:id`
-answers without a session.
+The last two rows are open gaps, not decisions. The community featured image
+in particular is shown on the public `pqp.gg/c/<slug>` page.
 
 ---
 
@@ -158,6 +157,18 @@ once: a re-claim of a row that passed, was flagged or was skipped does not call
 the provider again, while an `error` is scanned again on retry and a
 quarantined row is refused outright.
 
+Custom server emoji follow the Baú rules on their own claim,
+`POST /api/servers/:id/emoji` (`checkServerEmojiUpload` in
+`server/src/services/server-emoji-scan.ts`). The claim copies the upload to a
+`servers/<server>/emoji/pinned/` key, deletes the original, HEADs and scans the
+copy, and only then writes the `server_emoji` row, so a refused emoji is never
+served: `/api/emoji/:id` answers only for a row. A claim naming a `pinned/` key
+itself is refused. A rejection answers the same "could not be verified" as a
+failed HEAD, and the pinned object is kept in `server_emoji_quarantine`. An
+`error` under the default fail mode is refused and the object discarded,
+because nothing was found wrong with it. With no provider configured the claim
+neither copies nor scans, and the row says `unscanned`.
+
 The cost is latency, bounded by `CONTENT_SCAN_TIMEOUT_MS` (default 6s) and paid
 only by messages carrying a freshly uploaded image (and, for Baú, by the claim
 of a freshly uploaded image). That bound is the "never
@@ -227,7 +238,12 @@ adapters therefore fail when they understand **nothing** in a response, and
    `channel_label` "Baú · <server name>"): only Manage Server can upload to a
    Baú, so the uploader is somebody who reads that server's own queue, and the
    finding would land in front of the accused. Same rule as a community
-   report.
+   report. **A custom emoji goes there too**, for the same reason, with
+   `channel_label` "Emoji · <server name>".
+
+A refused emoji has no row in `server_emoji` to stamp, so steps 2 and 3 are one
+row in `server_emoji_quarantine` (server, uploader, name, pinned key, provider,
+score, labels, `quarantined_at`) instead.
 
 ### Flagged
 
@@ -264,6 +280,12 @@ SELECT id, uploader_id, server_id, scan_status, scan_provider,
 FROM community_home_media_uploads
 WHERE quarantined_at IS NOT NULL
 ORDER BY quarantined_at DESC;
+
+-- Custom emoji: every row here was refused.
+SELECT id, uploader_id, server_id, name, storage_key, scan_provider,
+       scan_score, scan_labels, quarantined_at
+FROM server_emoji_quarantine
+ORDER BY quarantined_at DESC;
 ```
 
 ### Retention
@@ -273,9 +295,10 @@ ORDER BY quarantined_at DESC;
 | Ordinary rejection (e.g. gore) | `CONTENT_SCAN_QUARANTINE_DAYS`, default 30 |
 | Labelled `illegal` or `csam_suspected` | **Forever, until deleted by hand** |
 
-Both tables follow this, each with its own sweep
-(`sweepQuarantinedAttachments`, `sweepQuarantinedCommunityHomeMedia`), and the
-ordinary orphan sweeps skip a quarantined row on both.
+All three tables follow this, each with its own sweep
+(`sweepQuarantinedAttachments`, `sweepQuarantinedCommunityHomeMedia`,
+`sweepQuarantinedServerEmoji`), and the ordinary orphan sweeps skip a
+quarantined row on the first two. Emoji have no orphan sweep.
 
 Thirty days is long enough to answer an appeal and short enough that the bucket
 does not become a private archive of everything the scanner ever disliked. The
@@ -997,7 +1020,9 @@ processing explicit images, so it is the wrong tool here regardless of price.
 | `server/src/services/attachments.ts` | Where the scan runs, quarantine, escalation |
 | `server/src/services/community-home-scan.ts` | The Baú scan: verdict, quarantine, instance-queue report, quarantine expiry |
 | `server/src/services/community-home.ts` | `claimCommunityHomeMediaUpload`, where the Baú scan runs |
+| `server/src/services/server-emoji-scan.ts` | The custom emoji scan: verdict, quarantine, instance-queue report, quarantine expiry |
 | `server/src/services/reports.ts` | `createAutomatedReport` |
 | `server/src/services/content-scan.test.ts` | Failure modes, per provider |
 | `server/src/services/attachments.test.ts` | `describe("scanning")` — the DB consequences |
 | `server/src/services/community-home-media-scan.test.ts` | The same consequences for Baú, through the real claim route |
+| `server/src/api/server-emoji-scan.test.ts` | The same consequences for custom emoji, through the real claim route |

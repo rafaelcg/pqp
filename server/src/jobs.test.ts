@@ -106,6 +106,10 @@ vi.mock("./services/channel-layout.js", () => ({
   listSidebarChannelIds: vi.fn(async () => []),
 }));
 vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }));
+// `server-emoji.test.ts` pins what the emoji quarantine sweep does.
+vi.mock("./services/server-emoji-scan.js", () => ({
+  sweepQuarantinedServerEmoji: vi.fn(async () => 0),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -128,6 +132,7 @@ import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
+import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -212,11 +217,12 @@ describe("cold jobs", () => {
     // the Baú video subtitles sweep (a minute, asserted below); 22 with the
     // forum shell sweep (five minutes, asserted below); 24 with the stories
     // sweep (a minute) and the stories video job (5 s), both asserted below;
-    // 25 with the channel layout migration job (a minute, asserted below).
+    // 25 with the channel layout migration job (a minute, asserted below);
+    // 26 with the custom emoji quarantine sweep (hourly, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(25);
+    expect(jobs.count).toBe(26);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -256,6 +262,8 @@ describe("cold jobs", () => {
     await vi.advanceTimersByTimeAsync(ATTACHMENT_SWEEP_INTERVAL_MS);
     // Boot sweep plus the first hourly tick.
     expect(sweepOrphanedAttachments).toHaveBeenCalledTimes(2);
+    // The emoji quarantine sweep: hourly, no boot run.
+    expect(sweepQuarantinedServerEmoji).toHaveBeenCalledTimes(1);
     expect(pruneAuditLog).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(DAILY_MS);

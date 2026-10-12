@@ -6013,5 +6013,34 @@ CREATE TABLE IF NOT EXISTS server_emoji (
   storage_key TEXT NOT NULL,
   created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The image scan's verdict, same columns and meaning as on
+  -- `message_attachments` (docs/CONTENT_SAFETY.md). A row only exists for an
+  -- emoji the scan let through, so `rejected` never appears here: a refused
+  -- upload goes to `server_emoji_quarantine` instead.
+  scan_status   TEXT NOT NULL DEFAULT 'unscanned'
+    CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'error')),
+  scan_provider TEXT,
+  scan_score    REAL,
+  scan_labels   JSONB,
+  scanned_at    TIMESTAMPTZ,
   UNIQUE (server_id, name)
 );
+
+-- Emoji uploads the image scan refused. The object is kept as evidence and is
+-- never served (no `server_emoji` row names it); `sweepQuarantinedServerEmoji`
+-- deletes it after CONTENT_SCAN_QUARANTINE_DAYS, and never one labelled
+-- `illegal` or `csam_suspected`. Same hold as Baú's `quarantined_at`.
+CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id      UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  uploader_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+  name           TEXT NOT NULL,
+  storage_key    TEXT NOT NULL UNIQUE,
+  scan_provider  TEXT,
+  scan_score     REAL,
+  scan_labels    JSONB,
+  quarantined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
+  ON server_emoji_quarantine (quarantined_at);
