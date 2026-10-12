@@ -449,7 +449,11 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
+import {
+  bindPreferenceSyncAccount,
+  preferenceWriteGeneration,
+  queuePreferenceSync,
+} from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -4670,6 +4674,9 @@ function MainAppContent({
       setBootstrapError(null);
 
       try {
+        // Noted before the read: a look or a find chosen while it is in flight
+        // is newer than its answer (`preferenceWrittenSince`).
+        const readGeneration = preferenceWriteGeneration();
         const me = await fetchMe();
         if (cancelled) {
           return;
@@ -4707,8 +4714,8 @@ function MainAppContent({
         bindPreferenceSyncAccount(me.id);
         // Always called: with no stored look it still hands a Modo 2005
         // found before the look synced up to the account (`appearance.ts`).
-        adoptAppearancePreference(me.preferences?.appearance);
-        adoptRetroFound(me.preferences?.easterEggs?.retro);
+        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
           getAppearance(),

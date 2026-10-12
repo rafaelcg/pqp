@@ -9,6 +9,8 @@ const {
   bindPreferenceSyncAccount,
   failedPreferenceKeys,
   isPreferencePending,
+  preferenceWriteGeneration,
+  preferenceWrittenSince,
   queuePreferenceSync,
   subscribePreferenceSync,
 } = await import("@/lib/preferences");
@@ -43,6 +45,16 @@ describe("preference sync", () => {
     answer({ preferences: {} });
     await settle();
     expect(isPreferencePending("appearance")).toBe(false);
+  });
+
+  it("knows which keys were written after a read began, answered or not", async () => {
+    const before = preferenceWriteGeneration();
+    queuePreferenceSync({ appearance: "retro" }, { immediate: true });
+    await settle();
+    expect(isPreferencePending("appearance")).toBe(false);
+    expect(preferenceWrittenSince("appearance", before)).toBe(true);
+    expect(preferenceWrittenSince("easterEggs", before)).toBe(false);
+    expect(preferenceWrittenSince("appearance", preferenceWriteGeneration())).toBe(false);
   });
 
   it("a key kept for a retry stays pending", async () => {

@@ -8,7 +8,11 @@
  */
 
 import type { AppearancePreference } from "@pqp/shared";
-import { isPreferencePending, queuePreferenceSync } from "@/lib/preferences";
+import {
+  isPreferencePending,
+  preferenceWrittenSince,
+  queuePreferenceSync,
+} from "@/lib/preferences";
 
 export type { AppearancePreference };
 
@@ -267,10 +271,16 @@ export function setAppearancePreference(appearance: AppearancePreference): void 
  */
 export function adoptAppearancePreference(
   appearance: AppearancePreference | undefined,
+  /** `preferenceWriteGeneration()` when the read began, if the caller noted it. */
+  readGeneration?: number,
 ): void {
-  // A look this tab chose and the account has not answered for yet is newer
-  // than any read of the account; adopting that read would undo it.
-  if (isPreferencePending("appearance")) {
+  // A look this tab chose after the read began (answered or not) is newer
+  // than what the read says; adopting it would undo the choice.
+  if (
+    isPreferencePending("appearance") ||
+    (readGeneration !== undefined &&
+      preferenceWrittenSince("appearance", readGeneration))
+  ) {
     return;
   }
   if (appearance === undefined) {

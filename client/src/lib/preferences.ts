@@ -178,6 +178,26 @@ export function isPreferencePending(key: keyof UserPreferences): boolean {
   return key in pending || latestRequest.has(key) || unsent.has(key);
 }
 
+/** Bumped by every local write; a read notes it before it starts. */
+let writeGeneration = 0;
+const writtenAt = new Map<keyof UserPreferences, number>();
+
+export function preferenceWriteGeneration(): number {
+  return writeGeneration;
+}
+
+/**
+ * Whether this tab wrote `key` after a read that noted `generation` began.
+ * Such a read can answer with the value from before the write, even once the
+ * write has landed, so a store adopting it must keep its own value.
+ */
+export function preferenceWrittenSince(
+  key: keyof UserPreferences,
+  generation: number,
+): boolean {
+  return (writtenAt.get(key) ?? -1) > generation;
+}
+
 /** Keys the account has not accepted yet. A new array only when it changes. */
 export function failedPreferenceKeys(): readonly (keyof UserPreferences)[] {
   return failedKeys;
@@ -218,6 +238,10 @@ export function queuePreferenceSync(
 ): void {
   if (Object.keys(patch).length === 0) {
     return;
+  }
+  writeGeneration += 1;
+  for (const key of Object.keys(patch) as (keyof UserPreferences)[]) {
+    writtenAt.set(key, writeGeneration);
   }
   pending = { ...pending, ...patch };
   if (timer !== null) {

@@ -3,12 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
   isPreferencePending: vi.fn(() => false),
+  preferenceWrittenSince: vi.fn(() => false),
 }));
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isPreferencePending, queuePreferenceSync } from "./preferences";
+import {
+  isPreferencePending,
+  preferenceWrittenSince,
+  queuePreferenceSync,
+} from "./preferences";
 import {
   APPEARANCE_STORAGE_KEY,
   RETRO_KILLED_STORAGE_KEY,
@@ -197,6 +202,17 @@ describe("Modo 2005 over the preference", () => {
     vi.mocked(isPreferencePending).mockReturnValueOnce(true);
 
     adoptAppearancePreference("signal");
+
+    expect(getLook()).toBe("retro");
+  });
+
+  it("a read that began before this tab's write, answered after it landed, does not undo it", () => {
+    setRetroLook(true);
+    vi.mocked(preferenceWrittenSince).mockImplementationOnce(
+      (key, generation) => key === "appearance" && generation === 7,
+    );
+
+    adoptAppearancePreference("signal", 7);
 
     expect(getLook()).toBe("retro");
   });
