@@ -346,8 +346,9 @@ export function shouldAdvanceOnEnded(
  * Once per room track AND video, and only when the player is on the room's
  * video: a late PLAYING from the outgoing video, or one from a wrong video
  * the repair is about to replace, would read the wrong track list and then
- * leave the right video on YouTube's default. The key carries the video id
- * so the repair's reload of the same room track counts as new.
+ * leave the right video on YouTube's default. Every load, the repair's
+ * reload of the same room track included, clears the stored key
+ * (`resetCaptions` in `loadRoomTrack`), so a reload always syncs again.
  */
 export function captionsSyncKey(
   loadedVideoId: string | undefined,
@@ -598,6 +599,14 @@ export function MusicPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Forget the captions of what was loaded; the next PLAYING reads them. */
+  const resetCaptions = useCallback(() => {
+    captionsCancel.current?.();
+    captionsCancel.current = null;
+    captionsFor.current = null;
+    publishMusicCaptionTracks(null);
+  }, []);
+
   /**
    * Put this iframe on the room's track, at the room's position.
    *
@@ -607,12 +616,16 @@ export function MusicPlayer({
    */
   const loadRoomTrack = useCallback(
     (player: YTPlayer, id: string, playing: boolean) => {
+      // A load, including the repair's reload of the SAME room track,
+      // starts the video on YouTube's default captions, so the next
+      // matching PLAYING must read the tracks and apply the choice again.
+      resetCaptions();
       const seconds = expectedPositionMs(musicRef.current) / 1000;
       // A player that throws here cannot play this track, and saying so is
       // better than leaving a stale picture with no explanation.
       setFailed(!applyRoomTrack(player, id, playing, seconds));
     },
-    [],
+    [resetCaptions],
   );
 
   const tryRepair = useWrongVideoRepair(trackId);
@@ -637,10 +650,7 @@ export function MusicPlayer({
       return;
     }
     // The menu must not offer the last video's tracks for this one.
-    captionsCancel.current?.();
-    captionsCancel.current = null;
-    captionsFor.current = null;
-    publishMusicCaptionTracks(null);
+    resetCaptions();
     const command = musicEmbedCommand(videoId, status);
     if (command === "stop") {
       try {
