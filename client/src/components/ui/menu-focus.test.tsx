@@ -137,4 +137,15 @@ describe("Menu focus after a row is chosen", () => {
     noteMenuRowChosen(null);
     expect(dialogOpener(document.body)).toBe(document.body);
   });
+
+  it("forgets the chosen row once the menu has settled focus", async () => {
+    const trigger = mount(() => undefined);
+    await openWithKeyboard(trigger);
+    await chooseFirstRow();
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    // A dialog opened later, by something else, with focus on <body>, must not
+    // send focus back to this menu's trigger when it closes.
+    trigger.blur();
+    expect(dialogOpener(document.body)).toBe(document.body);
+  });
 });

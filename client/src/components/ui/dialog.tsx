@@ -176,7 +176,11 @@ interface DialogProps {
   phoneFullScreen?: boolean;
 }
 
-/** How long a chosen menu row may still name the opener of a dialog. */
+/**
+ * How long a chosen menu row may still name the opener of a dialog. The menu
+ * clears its note as soon as it has settled focus; this only bounds a note
+ * whose menu never got that far.
+ */
 const CHOSEN_MENU_ROW_MS = 1_000;
 
 let chosenMenuTrigger: { element: HTMLElement; at: number } | null = null;
@@ -188,6 +192,17 @@ let chosenMenuTrigger: { element: HTMLElement; at: number } | null = null;
  */
 export function noteMenuRowChosen(trigger: HTMLElement | null): void {
   chosenMenuTrigger = trigger ? { element: trigger, at: Date.now() } : null;
+}
+
+/**
+ * The menu has settled focus itself: a dialog opening from now on finds the
+ * trigger, or whatever the row opened, as the focused element. Only clears the
+ * note this trigger made, never a newer one.
+ */
+export function forgetMenuRowChosen(trigger: HTMLElement | null): void {
+  if (chosenMenuTrigger && chosenMenuTrigger.element === trigger) {
+    chosenMenuTrigger = null;
+  }
 }
 
 /**

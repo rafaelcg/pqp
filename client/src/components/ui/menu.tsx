@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
-import { noteMenuRowChosen } from "@/components/ui/dialog";
+import { forgetMenuRowChosen, noteMenuRowChosen } from "@/components/ui/dialog";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
 import {
   MenuItemRows,
@@ -108,6 +108,9 @@ export function Menu({
             chosenRef.current = false;
             event.preventDefault();
             window.setTimeout(() => {
+              // From here on a dialog the row opened has focus, or the
+              // trigger does: the note is no longer needed to find it.
+              forgetMenuRowChosen(triggerRef.current);
               const active = document.activeElement;
               if (!active || active === document.body) {
                 triggerRef.current?.focus();
