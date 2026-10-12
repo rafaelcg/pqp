@@ -514,14 +514,19 @@ function ClipVolume({
   const timer = useRef<number | null>(null);
   const latest = useRef(volume);
   const saved = useRef(volume);
+  // Saves sent and not yet answered. A reload that lands meanwhile can carry
+  // an earlier save's value, so it may not move the thumb.
+  const inFlight = useRef(0);
+  const stored = useRef(volume);
+  stored.current = volume;
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
 
   // A reload brings the stored value back. Not while a change is waiting to
-  // be saved: it would snap the thumb under the person's hand.
+  // be saved or is being saved: it would snap the thumb under the person's hand.
   useEffect(() => {
-    saved.current = volume;
-    if (timer.current === null) {
+    if (timer.current === null && inFlight.current === 0) {
+      saved.current = volume;
       setValue(volume);
       latest.current = volume;
     }
@@ -536,13 +541,27 @@ function ClipVolume({
       const previous = saved.current;
       const next = latest.current;
       saved.current = next;
+      inFlight.current += 1;
+      let failed = false;
       // A failed save is not saved: put the old value back so the same
       // position can be tried again.
-      void Promise.resolve(commitRef.current(next)).catch(() => {
-        if (saved.current === next) {
-          saved.current = previous;
-        }
-      });
+      void Promise.resolve(commitRef.current(next))
+        .catch(() => {
+          failed = true;
+          if (saved.current === next) {
+            saved.current = previous;
+          }
+        })
+        .finally(() => {
+          inFlight.current -= 1;
+          // A success leaves the thumb where it is, which is what was stored.
+          // After a failure, the last save to settle shows what the list holds.
+          if (failed && inFlight.current === 0 && timer.current === null) {
+            saved.current = stored.current;
+            latest.current = stored.current;
+            setValue(stored.current);
+          }
+        });
     }
   }
 

@@ -290,6 +290,49 @@ describe("clip volume", () => {
   });
 });
 
+describe("clip volume while a save is in flight", () => {
+  it("keeps the thumb where it was dragged when an earlier save's reload lands", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await mount();
+    const slider = document.body.querySelector<HTMLElement>('[role="slider"][aria-label="Volume for Grilo"]')!;
+    const press = async () => {
+      await act(async () => {
+        slider.focus();
+        slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      });
+    };
+    const original = update.getMockImplementation()!;
+    const releases: Array<() => void> = [];
+    const held = (...args: Parameters<typeof original>) =>
+      new Promise((resolve) => {
+        releases.push(() => resolve(original(...args)));
+      });
+    update.mockImplementationOnce(held).mockImplementationOnce(held);
+    await press();
+    await act(async () => {
+      vi.advanceTimersByTime(450);
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+    await press();
+    await press();
+    await act(async () => {
+      vi.advanceTimersByTime(450);
+    });
+    expect(slider.getAttribute("aria-valuetext")).toBe("75%");
+    // The first save lands and its reload says 65%: the thumb stays put.
+    await act(async () => {
+      releases[0]!();
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(slider.getAttribute("aria-valuetext")).toBe("75%");
+    await act(async () => {
+      releases[1]!();
+    });
+    expect(slider.getAttribute("aria-valuetext")).toBe("75%");
+    expect(board.sounds.find((c) => c.id === "c")!.volume).toBeCloseTo(0.75);
+  });
+});
+
 describe("when the settings page and the server disagree", () => {
   it("cancels only the rename on Escape after the person clicked away from the field", async () => {
     await mount();
