@@ -39,9 +39,7 @@ import gg.pqp.app.nudge.NudgeRefusalReason
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
-import gg.pqp.app.nudge.setAllowNudges
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /**
  * The app bar's bolt. Rests for the cooldown after a send, and says so in its
@@ -193,9 +191,10 @@ fun NudgeSettingsRow(session: gg.pqp.app.core.SessionStore, modifier: Modifier =
     }
     if (!enabled) return
     val phase by session.phase.collectAsStateWithLifecycle()
-    val stored = (phase as? gg.pqp.app.core.SessionPhase.Ready)?.me?.preferences?.allowNudges != false
-    var allowed by remember(stored) { androidx.compose.runtime.mutableStateOf(stored) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // One source: the session. The switch shows what the session says, and a
+    // tap moves the session first (see `NudgePreference`), so a remount or any
+    // other screen never reads a value from before the change.
+    val allowed = (phase as? gg.pqp.app.core.SessionPhase.Ready)?.me?.preferences?.allowNudges != false
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
@@ -216,13 +215,7 @@ fun NudgeSettingsRow(session: gg.pqp.app.core.SessionStore, modifier: Modifier =
         androidx.compose.foundation.layout.Spacer(Modifier.size(12.dp))
         androidx.compose.material3.Switch(
             checked = allowed,
-            onCheckedChange = { wanted ->
-                allowed = wanted
-                scope.launch {
-                    val saved = runCatching { session.api.setAllowNudges(wanted) }.isSuccess
-                    if (!saved) allowed = !wanted
-                }
-            },
+            onCheckedChange = { wanted -> gg.pqp.app.nudge.NudgePreference.change(session, wanted) },
         )
     }
 }

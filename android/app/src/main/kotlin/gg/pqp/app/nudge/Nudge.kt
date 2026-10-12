@@ -7,6 +7,8 @@ import gg.pqp.app.core.PqpJson
 import java.time.Instant
 import java.util.WeakHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -114,6 +116,61 @@ object FunConfigs {
 
     /** Forget, so a resume asks again: the flag is flipped live. */
     fun forget() = synchronized(cache) { cache.clear() }
+}
+
+/**
+ * Writes the opt-out in the order it was tapped. Each write waits its turn on
+ * a fair mutex, so two quick taps reach the server first-then-second and the
+ * last tap is the value that stays. A failure is reported only for the newest
+ * call: an older write failing while a newer one is queued changes nothing
+ * the person can see.
+ */
+class AllowNudgesWriter {
+    private val mutex = kotlinx.coroutines.sync.Mutex()
+    private val latest = java.util.concurrent.atomic.AtomicInteger(0)
+
+    suspend fun set(value: Boolean, write: suspend (Boolean) -> Unit): Boolean {
+        val ticket = latest.incrementAndGet()
+        // kotlinx's Mutex is fair: waiters get the lock first come, first served.
+        return mutex.withLock {
+            val ok = try {
+                write(value)
+                true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            ok || ticket != latest.get()
+        }
+    }
+}
+
+/**
+ * The opt-out switch's one entry point. The session moves at once (so the
+ * switch, and anything else reading it, shows the choice), and the write runs
+ * in a scope that outlives the screen, so leaving settings mid-write cannot
+ * cancel a request the session already claims was made. A refused newest
+ * write puts the session back.
+ */
+object NudgePreference {
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
+    )
+    private val writer = AllowNudgesWriter()
+
+    fun change(session: gg.pqp.app.core.SessionStore, allow: Boolean) {
+        val before = allowed(session)
+        session.applyAllowNudges(allow)
+        scope.launch {
+            val saved = writer.set(allow) { session.api.setAllowNudges(it) }
+            if (!saved) session.applyAllowNudges(before)
+        }
+    }
+
+    /** `nudgesAllowed`: on unless turned off. */
+    fun allowed(session: gg.pqp.app.core.SessionStore): Boolean =
+        (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.preferences?.allowNudges != false
 }
 
 @Serializable

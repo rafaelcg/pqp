@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.async
 import org.junit.Test
 
 /**
@@ -61,6 +62,46 @@ class NudgeTest {
         assertTrue(Nudge.isFresh(message(createdAt = "2026-10-12T21:00:10.000Z"), "me", now))
         assertFalse(Nudge.isFresh(message(createdAt = "2026-10-12T21:00:16.000Z"), "me", now))
         assertFalse(Nudge.isFresh(message(createdAt = "yesterday"), "me", now))
+    }
+
+    @Test
+    fun `quick taps reach the server in the order they were made, the last one staying`() = kotlinx.coroutines.test.runTest {
+        val writer = AllowNudgesWriter()
+        val written = mutableListOf<Boolean>()
+        val firstGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        // The first write is slow; the second must still go out after it.
+        val first = async {
+            writer.set(false) {
+                firstGate.await()
+                written += it
+            }
+        }
+        val second = async { writer.set(true) { written += it } }
+        testScheduler.runCurrent()
+        assertEquals(emptyList<Boolean>(), written)
+        firstGate.complete(Unit)
+        assertTrue(first.await())
+        assertTrue(second.await())
+        assertEquals(listOf(false, true), written)
+    }
+
+    @Test
+    fun `only the newest write failing is a failure the switch has to undo`() = kotlinx.coroutines.test.runTest {
+        val writer = AllowNudgesWriter()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val older = async {
+            writer.set(false) {
+                gate.await()
+                error("network")
+            }
+        }
+        val newer = async { writer.set(true) { } }
+        testScheduler.runCurrent()
+        gate.complete(Unit)
+        // The older one failed, but a newer value was already queued behind it.
+        assertTrue(older.await())
+        assertTrue(newer.await())
+        assertFalse(writer.set(false) { error("network") })
     }
 
     @Test
