@@ -919,6 +919,14 @@ export async function findMessageByNonce(
   return hydrated ? { ...hydrated, duplicate: true } : null;
 }
 
+/**
+ * Rewrites a message body. A message that carries a `system_kind` (a nudge) is
+ * the server's sentence, not the author's, so it is never rewritten here: the
+ * UPDATE matches no row and this returns null, the same answer as for a
+ * message that does not exist. The edit route refuses it earlier with a 400;
+ * this is the floor under it, so a second caller of this function cannot
+ * reopen the hole.
+ */
 export async function updateMessageBody(
   messageId: string,
   body: string,
@@ -927,7 +935,7 @@ export async function updateMessageBody(
   const result = await getPool().query<DbMessage>(
     `WITH updated AS (
        UPDATE messages SET body = $2, edited_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND system_kind IS NULL
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
                  pinned_at, pinned_by, chance, system_kind
      )
