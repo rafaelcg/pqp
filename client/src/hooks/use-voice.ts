@@ -4669,6 +4669,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           console.warn("[pqp] share could not be republished on the SFU; stopping it", err);
           state.error = screenShareErrorMessage(err);
+          state.errorKind = "share";
           await stopScreenShareInternal().catch(() => {});
         }
       }
@@ -4689,6 +4690,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           console.warn("[pqp] camera could not be republished on the SFU; turning it off", err);
           state.error = translateMessage("voice.error.cameraFailed");
+          state.errorKind = null;
           await stopCameraInternal().catch(() => {});
         }
       }
