@@ -981,11 +981,20 @@
     <string name="stories_viewer_more">More</string>
     <string name="stories_viewer_send">Send</string>
     <string name="stories_viewer_paused">Paused</string>
+    <string name="stories_viewer_next">Next story</string>
+    <string name="stories_viewer_previous">Previous story</string>
+    <string name="stories_viewer_pause">Pause</string>
+    <string name="stories_viewer_resume">Resume</string>
+    <string name="stories_viewer_sound_on">Turn the sound on</string>
+    <string name="stories_viewer_sound_off">Turn the sound off</string>
+    <string name="stories_viewer_react">React %1$s</string>
+    <string name="stories_compose_background">Background %1$d</string>
     <string name="stories_viewers_title">Seen by %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reaction · gone in %2$s</item>
         <item quantity="other">%1$d reactions · gone in %2$s</item>
     </plurals>
+    <string name="stories_viewers_meta_none">No reactions · gone in %1$s</string>
     <string name="stories_viewers_none">Nobody has seen it yet</string>
     <string name="stories_viewers_replied">replied</string>
     <string name="stories_own_delete">Delete</string>
