@@ -224,12 +224,40 @@ export function ForumComposerDialog({
       firstWrite.current = false;
       return;
     }
+    // Seeding from a restored draft is not a change: the note keeps saying
+    // "Rascunho recuperado" until the person actually edits something.
+    if (
+      restored &&
+      title === restored.title &&
+      tagIds.length === restored.tagIds.length &&
+      tagIds.every((tagId) => restored.tagIds.includes(tagId))
+    ) {
+      return;
+    }
     const timer = window.setTimeout(() => {
       writeComposerDraft(forumId, { title, tagIds });
-      setDraftNote("saved");
+      // A blank title and no tags is no draft at all (`writeComposerDraft`
+      // stores nothing), so the footer does not claim one was saved.
+      setDraftNote(title.trim() || tagIds.length > 0 ? "saved" : null);
     }, DRAFT_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [open, forumId, title, tagIds]);
+  }, [open, forumId, title, tagIds, restored]);
+
+  // The body is the embedded composer's own draft, and the composer writes it
+  // one last time from its unmount cleanup. After a publish or a discard that
+  // write must not win, so the clear waits for the commit that closed the
+  // dialog: passive unmount cleanups (the composer's) always run before this
+  // effect. A timer is not enough: when the close lands in a deferred render
+  // (opening the new post navigates), the timer fires first and the stale body
+  // comes back as the next post's draft.
+  const clearBodyOnClose = useRef(false);
+  useEffect(() => {
+    if (open || !clearBodyOnClose.current) {
+      return;
+    }
+    clearBodyOnClose.current = false;
+    clearDraft(forumId);
+  }, [open, forumId]);
 
   // --------------------------------------------------------- similar posts
   const [similar, setSimilar] = useState<ForumPostSummary[]>([]);
@@ -331,10 +359,9 @@ export function ForumComposerDialog({
       const { post, viewer } = await createForumPost(forumId, { ...payload, nonce });
       pendingAttempts.delete(forumId);
       clearComposerDraft(forumId);
+      clearBodyOnClose.current = true;
+      clearDraft(forumId);
       onPublished(post, viewer);
-      // The body is the composer's own draft, written one last time as the
-      // dialog closes and the composer unmounts: cleared after that.
-      window.setTimeout(() => clearDraft(forumId), 0);
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
@@ -400,9 +427,9 @@ export function ForumComposerDialog({
     setTitle("");
     setTagIds([]);
     setDraftNote(null);
+    clearBodyOnClose.current = true;
+    clearDraft(forumId);
     onClose();
-    // After the composer unmounts, which writes its draft one last time.
-    window.setTimeout(() => clearDraft(forumId), 0);
   }
 
   function toggleTag(tagId: string) {
