@@ -31,8 +31,57 @@ import {
 import { ApiError, apiFetch } from "@/lib/api";
 import { onConfigRefresh } from "@/lib/config-refresh";
 import type { MessageKey } from "@/lib/i18n";
+import {
+  isPreferencePending,
+  preferenceWrittenSince,
+  queuePreferenceSync,
+} from "@/lib/preferences";
 
 export const RETRO_FOUND_KEY = "pqp-retro-found";
+
+/**
+ * The find, merged with the account's (`preferences.easterEggs.retro`). The
+ * account wins; a find this browser made before it synced is sent up.
+ */
+export function mergeFoundAt(
+  local: string | null,
+  account: string | null | undefined,
+): { foundAt: string | null; push: boolean } {
+  if (account) {
+    return { foundAt: account, push: false };
+  }
+  return { foundAt: local, push: local !== null };
+}
+
+/** The first find, here and on the account, so every device shows the tile. */
+function markFound(): void {
+  const at = new Date().toISOString();
+  write(RETRO_FOUND_KEY, at);
+  queuePreferenceSync({ easterEggs: { retro: at } }, { immediate: true });
+}
+
+/** `/api/me` answered: take the account's find, or hand ours to it. */
+export function adoptRetroFound(
+  account: string | null | undefined,
+  readGeneration?: number,
+): void {
+  // A find this tab made after the read began is newer than the read.
+  if (
+    isPreferencePending("easterEggs") ||
+    (readGeneration !== undefined &&
+      preferenceWrittenSince("easterEggs", readGeneration))
+  ) {
+    return;
+  }
+  const merged = mergeFoundAt(read(RETRO_FOUND_KEY), account);
+  if (merged.foundAt !== null && merged.foundAt !== read(RETRO_FOUND_KEY)) {
+    write(RETRO_FOUND_KEY, merged.foundAt);
+  }
+  if (merged.push && merged.foundAt) {
+    queuePreferenceSync({ easterEggs: { retro: merged.foundAt } }, { immediate: true });
+  }
+  changed();
+}
 export const RETRO_SOUNDS_KEY = "pqp-retro-sounds";
 export const RETRO_TOASTS_KEY = "pqp-retro-toasts";
 /** How long the tile in Aparência wears its "novo" tag after the find. */
@@ -151,7 +200,7 @@ export async function chooseRetroLook(): Promise<void> {
   await preloadChunk().catch(() => {});
   await switchWithTransition(() => {
     if (!read(RETRO_FOUND_KEY)) {
-      write(RETRO_FOUND_KEY, new Date().toISOString());
+      markFound();
     }
     setRetroLook(true);
     changed();
@@ -312,7 +361,7 @@ async function toggleOnce(): Promise<RetroToggleResult> {
   await preloadChunk().catch(() => {});
   await switchWithTransition(() => {
     if (first) {
-      write(RETRO_FOUND_KEY, new Date().toISOString());
+      markFound();
       foundCardPending = true;
     }
     setRetroLook(true);

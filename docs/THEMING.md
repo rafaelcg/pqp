@@ -166,11 +166,15 @@ dark is Madrugada. Found by typing `/2005` in any composer (never sent) or the
 Konami code, after which it has a tile in Aparência with a "novo" tag; `/2005`
 again, or picking another look, turns it off.
 
-It sits ON TOP of the synced `appearance` instead of being a fifth enum value,
-because the server's schema does not accept `retro` yet: the account keeps the
-look underneath, and `pqp-appearance-retro` / `pqp-retro-found` are local to
-the browser (`Look` in `client/src/lib/appearance.ts`). The boot script reads
-the same keys. The operator's kill switch is `retro_look`, read from
+It follows the account: `preferences.appearance = "retro"` while it is on, and
+`preferences.easterEggs.retro` (when it was found) puts the tile on every
+device. The server is the source of truth; `pqp-appearance-retro` and
+`pqp-retro-found` are the fast-path copies the boot script and the first paint
+read. In the client it is an overlay on the look underneath, kept in
+`pqp-appearance`, so turning it off gives that look back on this device. A
+find or a look turned on before this synced is sent up once rather than undone
+(`mergeAccountAppearance` in `client/src/lib/appearance.ts`, `mergeFoundAt` in
+`retro-look.ts`). The operator's kill switch is `retro_look`, read from
 `GET /api/fun/config` (`{ retroLook }`, a 404 counts as on) only by a browser
 that found the look; off paints the look underneath and hides the tile.
 

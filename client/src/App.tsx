@@ -449,7 +449,11 @@ import {
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
-import { bindPreferenceSyncAccount, queuePreferenceSync } from "@/lib/preferences";
+import {
+  bindPreferenceSyncAccount,
+  preferenceWriteGeneration,
+  queuePreferenceSync,
+} from "@/lib/preferences";
 import {
   arrivalVariant,
   browserStorage,
@@ -615,7 +619,7 @@ import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
-import { startRetroLookFlag } from "@/lib/retro-look";
+import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
 import {
   RetroContacts,
   RetroLayer,
@@ -4670,6 +4674,9 @@ function MainAppContent({
       setBootstrapError(null);
 
       try {
+        // Noted before the read: a look or a find chosen while it is in flight
+        // is newer than its answer (`preferenceWrittenSince`).
+        const readGeneration = preferenceWriteGeneration();
         const me = await fetchMe();
         if (cancelled) {
           return;
@@ -4705,9 +4712,10 @@ function MainAppContent({
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
         bindPreferenceSyncAccount(me.id);
-        if (me.preferences?.appearance) {
-          adoptAppearancePreference(me.preferences.appearance);
-        }
+        // Always called: with no stored look it still hands a Modo 2005
+        // found before the look synced up to the account (`appearance.ts`).
+        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
           getAppearance(),

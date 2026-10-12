@@ -8,6 +8,9 @@ const {
   UNSENT_TTL_MS,
   bindPreferenceSyncAccount,
   failedPreferenceKeys,
+  isPreferencePending,
+  preferenceWriteGeneration,
+  preferenceWrittenSince,
   queuePreferenceSync,
   subscribePreferenceSync,
 } = await import("@/lib/preferences");
@@ -28,6 +31,42 @@ afterEach(async () => {
 });
 
 describe("preference sync", () => {
+  it("a key is pending from the queue until the account answers", async () => {
+    let answer: (value: unknown) => void = () => {};
+    api.updatePreferences.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    expect(isPreferencePending("appearance")).toBe(false);
+    queuePreferenceSync({ appearance: "retro" });
+    expect(isPreferencePending("appearance")).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(api.updatePreferences).toHaveBeenCalled();
+    expect(isPreferencePending("appearance")).toBe(true);
+    answer({ preferences: {} });
+    await settle();
+    expect(isPreferencePending("appearance")).toBe(false);
+  });
+
+  it("knows which keys were written after a read began, answered or not", async () => {
+    const before = preferenceWriteGeneration();
+    queuePreferenceSync({ appearance: "retro" }, { immediate: true });
+    await settle();
+    expect(isPreferencePending("appearance")).toBe(false);
+    expect(preferenceWrittenSince("appearance", before)).toBe(true);
+    expect(preferenceWrittenSince("easterEggs", before)).toBe(false);
+    expect(preferenceWrittenSince("appearance", preferenceWriteGeneration())).toBe(false);
+  });
+
+  it("a key kept for a retry stays pending", async () => {
+    api.updatePreferences.mockRejectedValueOnce(new Error("offline"));
+    queuePreferenceSync({ appearance: "retro" }, { immediate: true });
+    await settle();
+    expect(isPreferencePending("appearance")).toBe(true);
+    queuePreferenceSync({ appearance: "signal" }, { immediate: true });
+    await settle();
+    expect(isPreferencePending("appearance")).toBe(false);
+  });
+
   it("reports the keys of a request the account refused", async () => {
     api.updatePreferences.mockRejectedValueOnce(new Error("offline"));
     const listener = vi.fn();

@@ -104,7 +104,8 @@
         // to). Lockstep with `applyAppearance`: on, and not switched off by
         // the operator's kill switch.
         if (
-          localStorage.getItem("pqp-appearance-retro") === "1" &&
+          (localStorage.getItem("pqp-appearance-retro") === "1" ||
+            storedAppearance === "retro") &&
           localStorage.getItem("pqp-retro-killed") !== "1"
         ) {
           document.documentElement.dataset.appearance = "retro";

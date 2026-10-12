@@ -2,15 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
+  isPreferencePending: vi.fn(() => false),
+  preferenceWrittenSince: vi.fn(() => false),
 }));
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { queuePreferenceSync } from "./preferences";
+import {
+  isPreferencePending,
+  preferenceWrittenSince,
+  queuePreferenceSync,
+} from "./preferences";
 import {
   APPEARANCE_STORAGE_KEY,
   RETRO_KILLED_STORAGE_KEY,
+  RETRO_SYNCED_STORAGE_KEY,
+  mergeAccountAppearance,
   RETRO_STORAGE_KEY,
   adoptAppearancePreference,
   appearanceForcesDark,
@@ -126,21 +134,112 @@ describe("Modo 2005 over the preference", () => {
     vi.unstubAllGlobals();
   });
 
-  it("paints retro, keeps the look underneath, and never syncs", () => {
+  it("paints retro, keeps the look underneath, and tells the account", () => {
     setRetroLook(true);
 
     expect(getLook()).toBe("retro");
     expect(getAppearance()).toBe("harmony");
     expect(store.get(RETRO_STORAGE_KEY)).toBe("1");
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { appearance: "retro" },
+      { immediate: true },
+    );
+  });
+
+  it("turning it off sends the look underneath back", () => {
+    setRetroLook(true);
+    vi.mocked(queuePreferenceSync).mockClear();
+    setRetroLook(false);
+
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { appearance: "harmony" },
+      { immediate: true },
+    );
+  });
+
+  it("the account saying retro turns it on here, without writing back", () => {
+    adoptAppearancePreference("retro");
+
+    expect(getLook()).toBe("retro");
+    expect(getAppearance()).toBe("harmony");
     expect(queuePreferenceSync).not.toHaveBeenCalled();
   });
 
-  it("a value from the server keeps it on", () => {
+  it("the account naming another look turns it off here (another device left it)", () => {
     setRetroLook(true);
+    vi.mocked(queuePreferenceSync).mockClear();
     adoptAppearancePreference("hearth");
 
+    expect(getLook()).toBe("hearth");
+    expect(queuePreferenceSync).not.toHaveBeenCalled();
+  });
+
+  it("a look turned on here before it synced is sent up once, not undone", () => {
+    store.clear();
+    store.set(RETRO_STORAGE_KEY, "1");
+    reloadRetroLookForTests();
+    vi.mocked(queuePreferenceSync).mockClear();
+
+    adoptAppearancePreference("signal");
+
     expect(getLook()).toBe("retro");
-    expect(getAppearance()).toBe("hearth");
+    expect(getAppearance()).toBe("signal");
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { appearance: "retro" },
+      { immediate: true },
+    );
+    expect(store.get(RETRO_SYNCED_STORAGE_KEY)).toBe("1");
+
+    // From then on the account wins.
+    vi.mocked(queuePreferenceSync).mockClear();
+    adoptAppearancePreference("hearth");
+    expect(getLook()).toBe("hearth");
+    expect(queuePreferenceSync).not.toHaveBeenCalled();
+  });
+
+  it("a read that arrives while this tab's write is unanswered does not undo it", () => {
+    setRetroLook(true);
+    vi.mocked(isPreferencePending).mockReturnValueOnce(true);
+
+    adoptAppearancePreference("signal");
+
+    expect(getLook()).toBe("retro");
+  });
+
+  it("a read that began before this tab's write, answered after it landed, does not undo it", () => {
+    setRetroLook(true);
+    vi.mocked(preferenceWrittenSince).mockImplementationOnce(
+      (key, generation) => key === "appearance" && generation === 7,
+    );
+
+    adoptAppearancePreference("signal", 7);
+
+    expect(getLook()).toBe("retro");
+  });
+
+  it("an account with no look at all still receives an unsynced Modo 2005", () => {
+    store.clear();
+    store.set(RETRO_STORAGE_KEY, "1");
+    reloadRetroLookForTests();
+    vi.mocked(queuePreferenceSync).mockClear();
+
+    adoptAppearancePreference(undefined);
+
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { appearance: "retro" },
+      { immediate: true },
+    );
+  });
+
+  it("a stored `retro` from an older tab reads as Modo 2005 over the default", () => {
+    store.clear();
+    store.set(APPEARANCE_STORAGE_KEY, "retro");
+    reloadRetroLookForTests();
+
+    expect(isRetroLookOn()).toBe(true);
+    adoptAppearancePreference("retro");
+    expect(getAppearance()).toBe("signal");
+    expect(store.get(APPEARANCE_STORAGE_KEY)).toBe("signal");
   });
 
   it("picking any look turns it off", () => {
@@ -174,5 +273,26 @@ describe("Modo 2005 over the preference", () => {
       `localStorage.getItem("${RETRO_KILLED_STORAGE_KEY}") !== "1"`,
     );
     expect(html).toContain('dataset.appearance = "retro"');
+    expect(html).toContain('storedAppearance === "retro"');
+  });
+});
+
+describe("mergeAccountAppearance", () => {
+  it("the account is the truth once the look has synced", () => {
+    expect(
+      mergeAccountAppearance({ account: "retro", localRetro: false, synced: true }),
+    ).toEqual({ retro: true, base: null, push: false });
+    expect(
+      mergeAccountAppearance({ account: "night", localRetro: true, synced: true }),
+    ).toEqual({ retro: false, base: "night", push: false });
+  });
+
+  it("a local-only Modo 2005 survives its first meeting with the account", () => {
+    expect(
+      mergeAccountAppearance({ account: "signal", localRetro: true, synced: false }),
+    ).toEqual({ retro: true, base: "signal", push: true });
+    expect(
+      mergeAccountAppearance({ account: "signal", localRetro: false, synced: false }),
+    ).toEqual({ retro: false, base: "signal", push: false });
   });
 });
