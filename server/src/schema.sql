@@ -5999,3 +5999,19 @@ CREATE TABLE IF NOT EXISTS channel_layout_migrations (
   migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   reverted_at TIMESTAMPTZ
 );
+
+-- Custom server emoji (`packages/shared/src/server-emoji.ts`). A row per emoji
+-- because a message stores `<:name:id>` and must keep resolving across a
+-- rename. The bytes live in the attachment bucket under
+-- `servers/<server_id>/emoji/`, exactly like the icon; the row is only written
+-- after the claim has HEADed the object. The name CHECK mirrors
+-- `SERVER_EMOJI_NAME_PATTERN`; the count limit is enforced by the route.
+CREATE TABLE IF NOT EXISTS server_emoji (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL CHECK (name ~ '^[a-z0-9_]{2,32}$'),
+  storage_key TEXT NOT NULL,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (server_id, name)
+);

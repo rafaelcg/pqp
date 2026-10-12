@@ -68,6 +68,13 @@ export const AUDIT_ACTIONS = [
    */
   "server.icon_update",
   "server.banner_update",
+  /**
+   * A custom emoji added, renamed or removed. Target is the emoji; `changes`
+   * carries the name (old and new on a rename), never the storage key.
+   */
+  "emoji.create",
+  "emoji.update",
+  "emoji.delete",
   "server.sso_domain_update",
   "member.sso_join",
   /**
