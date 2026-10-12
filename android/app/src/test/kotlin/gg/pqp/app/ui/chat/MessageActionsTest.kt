@@ -64,6 +64,24 @@ class MessageActionsTest {
         assertFalse(MessagePermissions.canEdit(message(), null))
     }
 
+    @Test
+    fun `my own nudge is not editable`() {
+        // The line never shows the stored `📳`, so an edit would rewrite text
+        // nobody sees (and the list preview after it). The web's NudgeLine
+        // offers delete and report only.
+        val nudge = message(authorId = ME).copy(systemKind = "nudge")
+        assertFalse(MessagePermissions.canEdit(nudge, ME))
+        assertTrue(MessagePermissions.isSystemLine(nudge))
+        assertFalse(MessagePermissions.isSystemLine(message(authorId = ME)))
+    }
+
+    @Test
+    fun `a nudge can still be deleted by its author`() {
+        val nudge = message(authorId = ME).copy(systemKind = "nudge")
+        assertTrue(MessagePermissions.canDelete(nudge, ME, null, isServerChannel = false))
+        assertFalse(MessagePermissions.canDelete(nudge.copy(authorId = THEM), ME, null, isServerChannel = false))
+    }
+
     // --- deleting ---
 
     @Test
