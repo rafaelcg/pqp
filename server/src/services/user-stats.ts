@@ -83,8 +83,15 @@ const MIN_SAMPLE_GAP_SECONDS = 45;
 const MAX_FAILED_SAMPLES = 5;
 const MIN_PEOPLE_IN_ROOM = 2;
 const MAX_PENDING_MUSIC = 50_000;
-/** Track ids already counted, kept so a track is counted once per add. */
-const MAX_CREDITED_TRACKS = 20_000;
+/**
+ * Track ids already counted, kept so a track is counted once per add. A repeat
+ * report is a client re-sending a track after a reconnect or a restart of the
+ * room, which happens within minutes. An id is therefore kept for a window
+ * well past that, and the size bound is only a memory guard: 50,000 adds in
+ * six hours is over two adds a second across the whole instance.
+ */
+const CREDITED_TRACK_WINDOW_MS = 6 * 60 * 60_000;
+const MAX_CREDITED_TRACKS = 50_000;
 const BLIND_WARNING_INTERVAL_MS = 60 * 60_000;
 
 export type UserStatsSource = "registry" | "local" | "unavailable" | "off";
@@ -209,7 +216,7 @@ export interface UserStatsMetrics {
 
 export interface UserStatsRecorder {
   sample(now?: Date): Promise<{ source: UserStatsSource; written: number }>;
-  noteMusicQueued(userId: string, count: number): void;
+  noteMusicQueued(userId: string, count: number): boolean;
   /** Counts each of these track ids once, however many writes report it. */
   noteTracksQueued(userId: string, trackIds: readonly string[]): void;
   flushMusic(): Promise<number>;
@@ -227,20 +234,22 @@ export function createUserStatsRecorder(
     readSeats?: typeof readLiveSeats;
     enabled?: () => boolean;
     flushIntervalMs?: number;
+    maxPendingMusic?: number;
   } = {},
 ): UserStatsRecorder {
   const now = options.now ?? Date.now;
   const pool = options.pool ?? getPool;
   const readSeats = options.readSeats ?? readLiveSeats;
   const enabled = options.enabled ?? (() => isEnabled("user_stats"));
+  const maxPendingMusic = options.maxPendingMusic ?? MAX_PENDING_MUSIC;
   const flushIntervalMs =
     options.flushIntervalMs ?? USER_STATS_MUSIC_FLUSH_INTERVAL_MS;
 
   /** Noted and not yet stored, keyed `day|userId`. */
   let pendingMusic = new Map<string, { userId: string; day: string; count: number }>();
   let flushing: Promise<number> | null = null;
-  /** `userId|trackId` already counted, oldest first, bounded. */
-  let creditedTracks = new Set<string>();
+  /** `userId|trackId` already counted, with when, oldest first, bounded. */
+  let creditedTracks = new Map<string, number>();
   /** Sample writes that failed, oldest first, retried before the next tick. */
   let failedSamples: { at: Date; seats: LiveSeat[] }[] = [];
   let lastBlindWarningAt = 0;
@@ -401,22 +410,24 @@ export function createUserStatsRecorder(
     }
   }
 
-  function noteMusicQueued(userId: string, count: number): void {
+  /** True when the count was taken into the buffer. */
+  function noteMusicQueued(userId: string, count: number): boolean {
     if (count <= 0 || !enabled()) {
-      return;
+      return false;
     }
     const day = activityDay(now());
     const key = `${day}|${userId}`;
     const entry = pendingMusic.get(key);
     if (entry) {
       entry.count += count;
-    } else if (pendingMusic.size >= MAX_PENDING_MUSIC) {
+    } else if (pendingMusic.size >= maxPendingMusic) {
       m.musicDropped += count;
-      return;
+      return false;
     } else {
       pendingMusic.set(key, { userId, day, count });
     }
     m.musicNoted += count;
+    return true;
   }
 
   function noteTracksQueued(userId: string, trackIds: readonly string[]): void {
@@ -426,22 +437,34 @@ export function createUserStatsRecorder(
     // Two writes can report the same add: two writes that both lost in the
     // row to a winner holding the track, or a client re-sending a track
     // after the room dropped it. One add is one track.
-    let fresh = 0;
+    const at = now();
+    for (const [key, creditedAt] of creditedTracks) {
+      if (at - creditedAt <= CREDITED_TRACK_WINDOW_MS) {
+        break;
+      }
+      creditedTracks.delete(key);
+    }
+    const fresh = new Set<string>();
     for (const trackId of trackIds) {
       const key = `${userId}|${trackId}`;
-      if (creditedTracks.has(key)) {
-        continue;
+      if (!creditedTracks.has(key)) {
+        fresh.add(key);
       }
-      creditedTracks.add(key);
+    }
+    // Credited only once the buffer took the count: a refused count stays
+    // reportable, so a later report of the same track can still land it.
+    if (fresh.size === 0 || !noteMusicQueued(userId, fresh.size)) {
+      return;
+    }
+    for (const key of fresh) {
+      creditedTracks.set(key, at);
       if (creditedTracks.size > MAX_CREDITED_TRACKS) {
-        const oldest = creditedTracks.values().next().value;
+        const oldest = creditedTracks.keys().next().value;
         if (oldest !== undefined) {
           creditedTracks.delete(oldest);
         }
       }
-      fresh += 1;
     }
-    noteMusicQueued(userId, fresh);
   }
 
   function flushMusic(): Promise<number> {
@@ -570,7 +593,7 @@ export function createUserStatsRecorder(
     resetForTests() {
       pendingMusic = new Map();
       flushing = null;
-      creditedTracks = new Set();
+      creditedTracks = new Map();
       failedSamples = [];
       lastBlindWarningAt = 0;
       m = emptyMetrics();

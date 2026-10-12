@@ -357,6 +357,47 @@ describeDb("user stats", () => {
     expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 3 } });
   });
 
+  it("keeps a counted track recognised for the whole window, then forgets it", async () => {
+    const ana = await person("ana");
+    let at = Date.parse("2026-10-10T12:00:00Z");
+    const r = createUserStatsRecorder({ enabled: () => true, now: () => at });
+    r.noteTracksQueued(ana, ["t1"]);
+    // A busy instance adds many other tracks meanwhile; t1 is still known.
+    for (let i = 0; i < 25_000; i += 1) {
+      r.noteTracksQueued(ana, [`filler-${i}`]);
+    }
+    at += 60 * 60_000;
+    r.noteTracksQueued(ana, ["t1"]);
+    expect(r.metrics().musicNoted).toBe(25_001);
+    // Past the window a re-send is a new add.
+    at += 7 * 60 * 60_000;
+    r.noteTracksQueued(ana, ["t1"]);
+    expect(r.metrics().musicNoted).toBe(25_002);
+  });
+
+  it("credits a track only once the buffer accepted its count", async () => {
+    const ana = await person("ana");
+    const bia = await person("bia");
+    const r = createUserStatsRecorder({
+      enabled: () => true,
+      now: () => Date.parse("2026-10-10T12:00:00Z"),
+      maxPendingMusic: 1,
+    });
+    r.noteTracksQueued(ana, ["a1"]);
+    // The buffer is full for a new person: refused, not credited.
+    r.noteTracksQueued(bia, ["b1"]);
+    expect(r.metrics()).toMatchObject({ musicNoted: 1, musicDropped: 1 });
+    await r.flushMusic();
+    // The same report again now lands, because the first one never counted.
+    r.noteTracksQueued(bia, ["b1"]);
+    r.noteTracksQueued(bia, ["b1"]);
+    await r.flushMusic();
+    expect(await stats()).toEqual({
+      [ana]: { voice: 0, share: 0, music: 1 },
+      [bia]: { voice: 0, share: 0, music: 1 },
+    });
+  });
+
   it("flushes queued tracks per person per day, beside the call time", async () => {
     const ana = await person("ana");
     const r = createUserStatsRecorder({
