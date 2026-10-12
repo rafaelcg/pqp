@@ -394,7 +394,12 @@ Image, native video (`mp4`/`webm`), PDF, up to 100 MiB each (`COMMUNITY_HOME_MAX
 mint / PUT / claim dance as attachments (`client/src/lib/community-home/media.ts`,
 `POST …/home/media`, `POST …/home/media/claim`). Bytes never pass through the
 Node process. YouTube is URL only (`watch`, `youtu.be`, `shorts`, `embed`,
-`live`), embedded from `youtube-nocookie.com`. TikTok is the same paste box
+`live`), embedded from `youtube-nocookie.com`. The iOS app plays it in the
+card too (`BauYoutubePlayer.swift`): the public poster until a tap, then a
+`WKWebView` with YouTube's IFrame Player on the same host, inline, loaded
+under the `pqp.gg` origin so YouTube sees a referrer (without one it answers
+player error 153). The web view never navigates out; **Abrir no YouTube**
+under the card is the only way to the YouTube app. TikTok is the same paste box
 (`tiktok.com/@user/video/{id}`, `m.tiktok.com/v/{id}`; short `vm.` / `vt.` /
 `/t/` links are refused because they only resolve after a redirect),
 embedded from `tiktok.com/player/v1/{id}` (TikTok's current Embed Player URL;

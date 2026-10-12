@@ -4909,6 +4909,16 @@
         }
       }
     },
+    "Open on YouTube" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir no YouTube"
+          }
+        }
+      }
+    },
     "Open source. Self-host it, or use the hosted one. Same product either way." : {
       "localizations" : {
         "pt-BR" : {
@@ -7145,6 +7155,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse post foi excluído."
+          }
+        }
+      }
+    },
+    "This video does not play here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse vídeo não toca aqui."
           }
         }
       }
