@@ -4,8 +4,10 @@ vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
 }));
 
+import INDEX_HTML from "../../index.html?raw";
 import { queuePreferenceSync } from "./preferences";
 import {
+  APPEARANCES,
   APPEARANCE_STORAGE_KEY,
   adoptAppearancePreference,
   appearanceForcesDark,
@@ -16,11 +18,21 @@ import {
 } from "./appearance";
 
 describe("isAppearance", () => {
-  it("accepts the four skins the stylesheet defines", () => {
-    expect(isAppearance("signal")).toBe(true);
-    expect(isAppearance("harmony")).toBe(true);
-    expect(isAppearance("hearth")).toBe(true);
-    expect(isAppearance("night")).toBe(true);
+  it("accepts every look the stylesheet defines", () => {
+    for (const look of [
+      "signal",
+      "harmony",
+      "hearth",
+      "night",
+      "ocean",
+      "catppuccin",
+      "rosepine",
+      "dracula",
+      "everforest",
+      "solarized",
+    ]) {
+      expect(isAppearance(look)).toBe(true);
+    }
   });
 
   it("rejects a brand name and anything else", () => {
@@ -36,6 +48,18 @@ describe("isAppearance", () => {
     expect(appearanceForcesDark("signal")).toBe(false);
     expect(appearanceForcesDark("harmony")).toBe(false);
     expect(appearanceForcesDark("hearth")).toBe(false);
+    expect(appearanceForcesDark("ocean")).toBe(false);
+  });
+});
+
+describe("the boot script in index.html", () => {
+  // The pre-paint script cannot import this module, so its list is a copy.
+  it("accepts exactly the looks APPEARANCES lists", () => {
+    const script = INDEX_HTML.slice(INDEX_HTML.indexOf('getItem("pqp-appearance")'));
+    const list = /\[([^\]]*)\]\.includes\(storedAppearance\)/.exec(script)?.[1];
+    expect(list).toBeDefined();
+    const boot = [...list!.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(["signal", ...boot].sort()).toEqual([...APPEARANCES].sort());
   });
 });
 

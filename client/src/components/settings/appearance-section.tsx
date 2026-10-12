@@ -75,7 +75,7 @@ export function AppearanceSection({
           </SettingsNotice>
         </div>
       ) : null}
-      <ThemeGroup />
+      <ThemeAndColorGroups />
       <ChatGroup
         showLinkEmbeds={showLinkEmbeds}
         onShowLinkEmbeds={onShowLinkEmbeds}
@@ -90,7 +90,7 @@ export function AppearanceSection({
 // Tema
 // ---------------------------------------------------------------------------
 
-function ThemeGroup() {
+function ThemeAndColorGroups() {
   const { t } = useTranslation();
   return (
     <>
@@ -381,7 +381,7 @@ function LookRow() {
         {hint ? <span className="text-xs text-text-tertiary">{hint}</span> : null}
       </div>
       <SettingsChoiceGrid
-        label={`${t("settings.appearance.preset")}: ${caption}`}
+        label={t("settings.appearance.preset.groupName", { group: caption })}
         value={appearance}
         onValueChange={choose}
         columns={4}

@@ -2136,6 +2136,7 @@
   "settings.privacy.description": "Mensagens diretas, mensagens de voz e pessoas bloqueadas.",
   "settings.appearance.group.theme.title": "Tema",
   "settings.appearance.group.colors.title": "Cores",
+  "settings.appearance.preset.groupName": "Visual: {group}",
   "settings.appearance.preset.group.pqp": "Do pqp",
   "settings.appearance.preset.group.community": "Paletas da comunidade",
   "settings.appearance.preset.group.communityHint": "De temas open source",

@@ -857,7 +857,8 @@
  * onto our roles: their canvas is surface-0 and the rail, their sidebar is
  * surface-1, their row hover/active ladder is surface-2/3. Roles they do not
  * have (rail below the page, text-secondary, accent-hover) are filled in on
- * the same hue.
+ * the same hue. Ocean has no success color, so the success roles stay
+ * Signal's.
  */
 :root[data-appearance="ocean"] {
   --color-surface-0: oklch(0.2426 0.0241 250.57);

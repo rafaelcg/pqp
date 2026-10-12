@@ -256,6 +256,19 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });
 
+  it("accepts the ported community looks", () => {
+    for (const appearance of [
+      "ocean",
+      "catppuccin",
+      "rosepine",
+      "dracula",
+      "everforest",
+      "solarized",
+    ]) {
+      expect(userPreferencesSchema.safeParse({ appearance }).success).toBe(true);
+    }
+  });
+
   it("accepts the four appearance skins and rejects a brand name", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
       true,
