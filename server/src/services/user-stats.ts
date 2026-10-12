@@ -339,6 +339,11 @@ export function createUserStatsRecorder(
     const batch = pendingMusic;
     pendingMusic = new Map();
     const entries = [...batch.values()];
+    if (!enabled()) {
+      // Off stops every write, including tracks noted before the flip.
+      m.musicDropped += entries.reduce((sum, e) => sum + e.count, 0);
+      return 0;
+    }
     try {
       const result = await pool().query(
         `INSERT INTO user_daily_stats (user_id, day, music_queued)

@@ -256,6 +256,17 @@ describeDb("user stats", () => {
     expect(await stats()).toEqual({});
   });
 
+  it("drops noted tracks when the flag goes off before the flush", async () => {
+    const ana = await person("ana");
+    let on = true;
+    const r = createUserStatsRecorder({ enabled: () => on });
+    r.noteMusicQueued(ana, 2);
+    on = false;
+    expect(await r.flushMusic()).toBe(0);
+    expect(await stats()).toEqual({});
+    expect(r.metrics()).toMatchObject({ musicPending: 0, musicDropped: 2 });
+  });
+
   it("flushes queued tracks per person per day, beside the call time", async () => {
     const ana = await person("ana");
     const r = createUserStatsRecorder({
