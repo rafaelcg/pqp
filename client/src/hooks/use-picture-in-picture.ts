@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
 import { readPlatformSignals } from "@/lib/downloads";
 import {
+  afterPictureInPictureRequest,
   isInPictureInPicture,
   pictureInPictureOnThisDevice,
   pictureInPictureSupport,
@@ -34,11 +35,21 @@ export function usePictureInPicture(
     const doc = typeof document === "undefined" ? undefined : document;
     if (!video || source == null) {
       setAvailable(false);
-      if (video && doc && isInPictureInPicture(video, doc)) {
-        void togglePictureInPicture(video, doc);
-      }
       setActive(false);
-      return;
+      if (!video || !doc) {
+        return;
+      }
+      // Also after a request still in flight lands, unless the source came
+      // back by then.
+      let current = true;
+      afterPictureInPictureRequest(video, () => {
+        if (current && isInPictureInPicture(video, doc)) {
+          void togglePictureInPicture(video, doc);
+        }
+      });
+      return () => {
+        current = false;
+      };
     }
     setAvailable(
       pictureInPictureOnThisDevice(readPlatformSignals()) &&
@@ -55,11 +66,14 @@ export function usePictureInPicture(
       stopWatching();
       // Chromium keeps the window open for an element that left the page,
       // showing its last frame. A stream swap keeps the element connected and
-      // the window with it; only a tile that unmounted gets it closed.
+      // the window with it; only a tile that unmounted gets it closed, also
+      // when its request was still in flight.
       setTimeout(() => {
-        if (!video.isConnected && isInPictureInPicture(video, doc)) {
-          void togglePictureInPicture(video, doc);
-        }
+        afterPictureInPictureRequest(video, () => {
+          if (!video.isConnected && isInPictureInPicture(video, doc)) {
+            void togglePictureInPicture(video, doc);
+          }
+        });
       }, 0);
     };
   }, [videoRef, source]);

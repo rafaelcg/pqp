@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  afterPictureInPictureRequest,
   isInPictureInPicture,
   pictureInPictureOnThisDevice,
   pictureInPictureSupport,
@@ -158,6 +159,67 @@ describe("togglePictureInPicture", () => {
 
   it("does nothing where there is no API", async () => {
     expect(await togglePictureInPicture(fakeVideo(), {})).toBe("unsupported");
+  });
+});
+
+describe("afterPictureInPictureRequest", () => {
+  it("checks now, and again once a request still in flight lands", async () => {
+    const { doc } = standardPlatform();
+    let land: () => void = () => {};
+    const video: ReturnType<typeof fakeVideo> = fakeVideo({
+      requestPictureInPicture: () =>
+        new Promise<void>((resolve) => {
+          land = () => {
+            doc.pictureInPictureElement = video;
+            resolve();
+          };
+        }),
+    });
+    const entering = togglePictureInPicture(video, doc);
+    // The share goes away before the browser has set the element.
+    const seen: boolean[] = [];
+    afterPictureInPictureRequest(video, () => {
+      seen.push(isInPictureInPicture(video, doc));
+      if (isInPictureInPicture(video, doc)) {
+        void togglePictureInPicture(video, doc);
+      }
+    });
+    expect(seen).toEqual([false]);
+    land();
+    expect(await entering).toBe("entered");
+    await Promise.resolve();
+    expect(seen).toEqual([false, true]);
+    expect(doc.exitPictureInPicture).toHaveBeenCalledTimes(1);
+    expect(isInPictureInPicture(video, doc)).toBe(false);
+  });
+
+  it("checks once when nothing is in flight", async () => {
+    const { doc, makeVideo } = standardPlatform();
+    const video = makeVideo();
+    await togglePictureInPicture(video, doc);
+    const check = vi.fn();
+    afterPictureInPictureRequest(video, check);
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not check again after a refused request, and does not throw", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { doc } = standardPlatform();
+    let refuse: () => void = () => {};
+    const video = fakeVideo({
+      requestPictureInPicture: () =>
+        new Promise<void>((_resolve, reject) => {
+          refuse = () => reject(new DOMException("gone", "InvalidStateError"));
+        }),
+    });
+    const entering = togglePictureInPicture(video, doc);
+    const check = vi.fn();
+    afterPictureInPictureRequest(video, check);
+    refuse();
+    expect(await entering).toBe("refused");
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledTimes(1);
   });
 });
 

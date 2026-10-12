@@ -121,6 +121,26 @@ export type PictureInPictureToggle =
   | "unsupported"
   | "refused";
 
+/** A standard PiP request that has not settled yet, per element. */
+const pendingRequests = new WeakMap<PipVideo, Promise<unknown>>();
+
+/**
+ * Runs `check` now, and once more when a PiP request still in flight on
+ * `video` settles. The browser sets `pictureInPictureElement` only when the
+ * request lands, so a share that went away during that gap would otherwise
+ * leave a window open that nothing on the page closes.
+ */
+export function afterPictureInPictureRequest(
+  video: PipVideo,
+  check: () => void,
+): void {
+  check();
+  const pending = pendingRequests.get(video);
+  if (pending) {
+    void pending.then(check, () => {});
+  }
+}
+
 /**
  * Enter PiP, or leave it when this element already holds the window. Must run
  * inside the click that asked for it: the platform refuses a request with no
@@ -137,7 +157,15 @@ export async function togglePictureInPicture(
         await doc.exitPictureInPicture?.();
         return "exited";
       }
-      await video.requestPictureInPicture!();
+      const request = video.requestPictureInPicture!();
+      pendingRequests.set(video, request);
+      try {
+        await request;
+      } finally {
+        if (pendingRequests.get(video) === request) {
+          pendingRequests.delete(video);
+        }
+      }
       return "entered";
     }
     if (support === "webkit") {
