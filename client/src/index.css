@@ -1980,6 +1980,140 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
 }
 
+/*
+ * CHAMAR A ATENÇÃO (the nudge). Transform and opacity only, so none of it
+ * relayouts the chat it sits on.
+ *
+ * `nudge-shake` is the receiving pane's one shake: 0.4 s, 4 px, a decaying
+ * side to side on the curve a struck object settles with (fast out, long
+ * tail). Polite on purpose in the default look; Modo 2005 gets its own,
+ * bigger one. Under reduced motion it is not shortened but replaced:
+ * `nudge-pulse` draws a warning-coloured border on the pane and fades it in
+ * twice, opacity only, no movement anywhere.
+ */
+@keyframes nudge-shake {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  14% {
+    transform: translate3d(-4px, 0, 0);
+  }
+  30% {
+    transform: translate3d(4px, 0, 0);
+  }
+  46% {
+    transform: translate3d(-3px, 0, 0);
+  }
+  62% {
+    transform: translate3d(2px, 0, 0);
+  }
+  78% {
+    transform: translate3d(-1px, 0, 0);
+  }
+}
+
+@keyframes nudge-pulse {
+  0%,
+  45%,
+  100% {
+    opacity: 0;
+  }
+  20%,
+  70% {
+    opacity: 1;
+  }
+}
+
+/* The line in the log arriving, and the little phone on it (and on the
+   header button when my nudge lands) rattling once. */
+@keyframes nudge-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nudge-wiggle {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  15% {
+    transform: rotate(-16deg);
+  }
+  35% {
+    transform: rotate(13deg);
+  }
+  55% {
+    transform: rotate(-9deg);
+  }
+  75% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes nudge-pending {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* The cooldown bar under the header button empties over the wait the server
+   announced; its duration is set inline from `retryAfterMs`. */
+@keyframes nudge-cooldown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.nudge-shake {
+  animation: nudge-shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.nudge-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border: 2px solid var(--color-warning);
+  border-radius: inherit;
+  opacity: 0;
+  animation: nudge-pulse 0.8s var(--ease-standard) both;
+}
+
+.nudge-line-in {
+  animation: nudge-line-in 0.32s var(--ease-emphasized) both;
+}
+
+.nudge-wiggle {
+  transform-origin: 50% 60%;
+  animation: nudge-wiggle 0.45s var(--ease-standard) both;
+}
+
+.nudge-pending {
+  animation: nudge-pending 0.9s var(--ease-standard) infinite;
+}
+
+.nudge-cooldown-bar {
+  transform-origin: left center;
+  animation-name: nudge-cooldown;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
 /* Corner cards and steps inside a dialog: one entrance, one exit. */
 @keyframes pop-in {
   from {
@@ -2507,8 +2641,19 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .vem-swap-out,
   .vem-swap-in,
   .vem-cursor,
-  .vem-ring {
+  .vem-ring,
+  .nudge-shake,
+  .nudge-line-in,
+  .nudge-wiggle,
+  .nudge-pending,
+  .nudge-cooldown-bar {
     animation: none;
+  }
+
+  /* Never reached from the app, which picks `nudge-pulse` instead under this
+     query; stated anyway so a stray class can never move the pane. */
+  .nudge-shake {
+    transform: none;
   }
 
   .vem-cta-arrow svg {

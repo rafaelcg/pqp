@@ -14,6 +14,7 @@ import {
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import { isRetroOffered, toggleRetroLook } from "@/lib/retro-look";
+import { getNudgeTarget } from "@/lib/nudge";
 
 export interface SlashCommandMeta {
   name: string;
@@ -383,6 +384,25 @@ const commands: SlashCommand[] = [
           // The first find gets its own card instead of a line.
           return ok();
       }
+    },
+  },
+  {
+    // Chamar a atenção. Acts on the conversation whose header button is on
+    // screen (`lib/nudge.ts` keeps that registration), so it exists exactly
+    // where the button does: a 1:1 with a friend, with the flag on. What the
+    // server says back lands as the same line under the log the button gets.
+    name: "nudge",
+    descriptionKey: "slash.nudge.description",
+    usage: "/nudge",
+    takesArgs: false,
+    hidden: () => getNudgeTarget() === null,
+    execute() {
+      const target = getNudgeTarget();
+      if (!target) {
+        return errKey("slash.nudge.unavailable");
+      }
+      target.trigger();
+      return ok();
     },
   },
 ];
