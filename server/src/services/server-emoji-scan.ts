@@ -22,8 +22,8 @@ import { createAutomatedInstanceReport } from "./reports.js";
  * - The bytes judged are pinned. The claim copies the upload to a key nobody
  *   holds a PUT URL for (`pinServerEmojiUpload` in `server-emoji.ts`) and
  *   scans the copy, so it cannot be swapped after the scan.
- * - A finding goes to the INSTANCE queue. Only Manage Server can upload emoji,
- *   so the uploader reads that server's own queue.
+ * - A finding goes to the INSTANCE queue. Only Manage Emoji can upload emoji,
+ *   a staff bit, so the uploader may well read that server's own queue.
  * - A refusal answers exactly like a failed verification, as Baú does, so the
  *   claim does not tell an uploader which images the scanner catches.
  *

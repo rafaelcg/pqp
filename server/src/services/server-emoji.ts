@@ -23,7 +23,7 @@ import {
  * Storage is the server-icon contract (`server-images.ts`) with a row per
  * object: same bucket, same presign-then-HEAD claim, and the same caveat that
  * the key prefix only proves "this object belongs to the server in the URL".
- * The route proves the caller holds Manage Server there; this file cannot.
+ * The route proves the caller holds Manage Emoji there; this file cannot.
  */
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;

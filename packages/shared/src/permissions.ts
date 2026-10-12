@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–25). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–26). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -58,12 +58,19 @@ export const Permission = {
    * account, which is a rule and not a bit.
    */
   POST_STORIES: 1n << 25n,
+  /**
+   * Upload, rename and delete the server's custom emoji (Discord's "Manage
+   * Expressions"). Server level only, like POST_STORIES: an emoji belongs to
+   * the server, so no channel overwrite editor lists it. Using an emoji needs
+   * no bit at all.
+   */
+  MANAGE_EMOJI: 1n << 26n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 26n) - 1n;
+export const PERMISSION_ALL = (1n << 27n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -250,6 +257,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
   { bit: Permission.MANAGE_MUSIC, key: "MANAGE_MUSIC" },
   { bit: Permission.POST_STORIES, key: "POST_STORIES" },
+  { bit: Permission.MANAGE_EMOJI, key: "MANAGE_EMOJI" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

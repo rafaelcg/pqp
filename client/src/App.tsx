@@ -10346,6 +10346,7 @@ function MainAppContent({
     (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
       perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageEmoji = perms.can(Permission.MANAGE_EMOJI);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
@@ -12492,6 +12493,7 @@ function MainAppContent({
           canManage={canManageChannels}
           canManageRoles={canManageRoles}
           canManageMessages={canManageMessages}
+          canManageEmoji={canManageEmoji}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
@@ -13226,6 +13228,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
+        canManageEmoji={canManageEmoji}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||

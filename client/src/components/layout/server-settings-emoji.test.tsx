@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "@pqp/shared";
 
 /**
- * The Emoji section follows Manage Server, the bit the server enforces on every
- * emoji write: owner and Manage Server see it, a plain member does not.
+ * The Emoji section follows Manage Emoji, the bit the server enforces on every
+ * emoji write: owner and Manage Emoji see it, Manage Server alone does not.
  */
 
 vi.stubEnv("VITE_DEV_AUTH_BYPASS", "true");
@@ -46,7 +46,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(role: "owner" | "admin" | "member", canManageServer: boolean) {
+function mount(
+  role: "owner" | "admin" | "member",
+  { canManageServer = false, canManageEmoji = false } = {},
+) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -63,6 +66,7 @@ function mount(role: "owner" | "admin" | "member", canManageServer: boolean) {
           server={server}
           currentUserId="u1"
           canManageServer={canManageServer}
+          canManageEmoji={canManageEmoji}
           onClose={() => {}}
           onRenamed={() => {}}
           onOwnershipTransferred={() => {}}
@@ -83,22 +87,32 @@ function emojiTab(): HTMLElement | null {
 
 describe("server settings: Emoji section", () => {
   it("is there for the owner", () => {
-    mount("owner", true);
+    mount("owner");
     expect(emojiTab()).not.toBeNull();
   });
 
-  it("is there for somebody with Manage Server", () => {
-    mount("admin", true);
+  it("is there for somebody with Manage Emoji", () => {
+    mount("admin", { canManageServer: true, canManageEmoji: true });
     expect(emojiTab()).not.toBeNull();
   });
 
-  it("is not there without Manage Server", () => {
-    mount("admin", false);
+  it("is there for a cargo that holds only Manage Emoji", () => {
+    mount("member", { canManageEmoji: true });
+    expect(emojiTab()).not.toBeNull();
+  });
+
+  it("is not there with Manage Server alone", () => {
+    mount("admin", { canManageServer: true });
+    expect(emojiTab()).toBeNull();
+  });
+
+  it("is not there for a plain member", () => {
+    mount("member");
     expect(emojiTab()).toBeNull();
   });
 
   it("opens to the upload control and the counter", async () => {
-    mount("owner", true);
+    mount("owner");
     await act(async () => {
       emojiTab()!.click();
     });

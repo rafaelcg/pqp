@@ -4494,7 +4494,7 @@ router.get("/api/servers/:serverId/emoji", async ({ user }, { serverId }) => {
 
 router.post("/api/servers/:serverId/emoji/uploads", async (ctx, { serverId }) => {
   requireServerEmojiStorage();
-  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
 
   const key = `user:${ctx.user.id}`;
   if (!uploadLimiter.take(key)) {
@@ -4522,7 +4522,7 @@ router.post("/api/servers/:serverId/emoji/uploads", async (ctx, { serverId }) =>
 
 router.post("/api/servers/:serverId/emoji", async (ctx, { serverId }) => {
   requireServerEmojiStorage();
-  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
 
   const body = createServerEmojiSchema.parse(await readJsonBody(ctx.req));
   const unverified = () =>
@@ -4594,7 +4594,7 @@ router.post("/api/servers/:serverId/emoji", async (ctx, { serverId }) => {
 router.patch(
   "/api/servers/:serverId/emoji/:emojiId",
   async (ctx, { serverId, emojiId }) => {
-    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
+    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
     const body = updateServerEmojiSchema.parse(await readJsonBody(ctx.req));
     let renamed;
     try {
@@ -4621,7 +4621,7 @@ router.patch(
 router.delete(
   "/api/servers/:serverId/emoji/:emojiId",
   async ({ user }, { serverId, emojiId }) => {
-    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_EMOJI);
     let removed;
     try {
       removed = await deleteServerEmoji(serverId!, emojiId!);

@@ -65,6 +65,7 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   START_WATCH_PARTY: "roles.perm.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.perm.MANAGE_MUSIC",
   POST_STORIES: "roles.perm.POST_STORIES",
+  MANAGE_EMOJI: "roles.perm.MANAGE_EMOJI",
 };
 
 /** One-liners for flags whose names collide or oversell. Labels stay for the rest. */
@@ -90,6 +91,7 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
   POST_STORIES: "roles.permHint.POST_STORIES",
+  MANAGE_EMOJI: "roles.permHint.MANAGE_EMOJI",
 };
 
 /** Display order. Bit numbers stay as defined in `@pqp/shared`. */
@@ -101,6 +103,7 @@ const PERMISSION_GROUPS = [
       "CREATE_INVITE",
       "MANAGE_CHANNELS",
       "MANAGE_SERVER",
+      "MANAGE_EMOJI",
       "MANAGE_WEBHOOKS",
       "MANAGE_ROLES",
       "CHANGE_NICKNAME",

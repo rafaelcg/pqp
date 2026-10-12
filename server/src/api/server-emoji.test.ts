@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -75,7 +76,9 @@ vi.mock("../lib/s3.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { MAX_SERVER_EMOJI_BYTES, SERVER_EMOJI_DEFAULT_LIMIT } = await import("@pqp/shared");
+const { MAX_SERVER_EMOJI_BYTES, Permission, SERVER_EMOJI_DEFAULT_LIMIT } = await import(
+  "@pqp/shared"
+);
 
 let server: Server;
 let baseUrl: string;
@@ -226,7 +229,7 @@ describeDb("server emoji", () => {
       expect((await call(outsider, "GET", `/api/servers/${serverId}/emoji`)).status).toBe(404);
     });
 
-    it("lets an admin (Manage Server) add one", async () => {
+    it("lets an admin add one", async () => {
       const emoji = await addEmoji("admin_made", admin);
       expect(emoji.name).toBe("admin_made");
     });
@@ -254,18 +257,104 @@ describeDb("server emoji", () => {
       ).toBe(403);
     });
 
-    it("lets a member with Manage Server granted by a cargo add one", async () => {
+    async function grantCargo(name: string, bits: bigint) {
       const role = await getPool().query<{ id: string }>(
         `INSERT INTO roles (server_id, name, permissions, position)
-         VALUES ($1, 'Emoji crew', $2, 1) RETURNING id`,
-        [serverId, (1n << 5n).toString()],
+         VALUES ($1, $2, $3, 1) RETURNING id`,
+        [serverId, name, bits.toString()],
       );
       await getPool().query(
         "INSERT INTO member_roles (server_id, user_id, role_id) VALUES ($1, $2, $3)",
         [serverId, member.id, role.rows[0]!.id],
       );
+    }
+
+    it("lets a member with only Manage Emoji granted by a cargo add, rename and delete", async () => {
+      await grantCargo("Emoji_crew", Permission.MANAGE_EMOJI);
       const emoji = await addEmoji("crew", member);
       expect(emoji.name).toBe("crew");
+      expect(
+        (
+          await call(member, "PATCH", `/api/servers/${serverId}/emoji/${emoji.id}`, {
+            name: "crew_two",
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (await call(member, "DELETE", `/api/servers/${serverId}/emoji/${emoji.id}`)).status,
+      ).toBe(200);
+    });
+
+    it("no longer lets Manage Server alone touch emoji", async () => {
+      await grantCargo("Server_crew", Permission.MANAGE_SERVER);
+      const emoji = await addEmoji("pog");
+      expect((await mint(member)).status).toBe(403);
+      expect(
+        (
+          await call(member, "PATCH", `/api/servers/${serverId}/emoji/${emoji.id}`, {
+            name: "renamed",
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (await call(member, "DELETE", `/api/servers/${serverId}/emoji/${emoji.id}`)).status,
+      ).toBe(403);
+    });
+
+    it("gives the seeded Admin and Manager cargos Manage Emoji on a new server", async () => {
+      const seeded = await getPool().query<{ system_key: string; permissions: string }>(
+        `SELECT system_key, permissions::text FROM roles
+          WHERE server_id = $1 AND system_key IN ('admin', 'manager', 'moderator', 'everyone')`,
+        [serverId],
+      );
+      const holds = Object.fromEntries(
+        seeded.rows.map((row) => [
+          row.system_key,
+          (BigInt(row.permissions) & Permission.MANAGE_EMOJI) === Permission.MANAGE_EMOJI,
+        ]),
+      );
+      expect(holds).toEqual({ admin: true, manager: true, moderator: false, everyone: false });
+    });
+
+    it("backfills Manage Emoji onto an existing server's Admin and Manager once, and nowhere else", async () => {
+      const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
+      const start = schema.indexOf("-- MANAGE_EMOJI (bit 26");
+      const block = schema.slice(
+        schema.indexOf("DO $$", start),
+        schema.indexOf("END $$;", start) + "END $$;".length,
+      );
+      const bit = Permission.MANAGE_EMOJI.toString();
+      await grantCargo("Homemade", Permission.MANAGE_SERVER);
+      // A server from before the bit existed.
+      await getPool().query(
+        `UPDATE roles SET permissions = permissions & ~$2::bigint WHERE server_id = $1`,
+        [serverId, bit],
+      );
+      await getPool().query(
+        `DELETE FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10'`,
+      );
+
+      const holders = async () =>
+        (
+          await getPool().query<{ label: string }>(
+            `SELECT COALESCE(system_key, name) AS label FROM roles
+              WHERE server_id = $1 AND (permissions & $2::bigint) <> 0
+              ORDER BY 1`,
+            [serverId, bit],
+          )
+        ).rows.map((row) => row.label);
+
+      await getPool().query(block);
+      expect(await holders()).toEqual(["admin", "manager"]);
+
+      // An owner who turns it off keeps it off on the next boot.
+      await getPool().query(
+        `UPDATE roles SET permissions = permissions & ~$2::bigint
+          WHERE server_id = $1 AND system_key = 'manager'`,
+        [serverId, bit],
+      );
+      await getPool().query(block);
+      expect(await holders()).toEqual(["admin"]);
     });
 
     it("never signs a URL for an outsider", async () => {

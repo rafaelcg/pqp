@@ -480,6 +480,8 @@ interface ServerSettingsDialogProps {
   currentUserId: string | null;
   canManageRoles?: boolean;
   canManageServer?: boolean;
+  /** Manage Emoji: the Emoji pane. */
+  canManageEmoji?: boolean;
   canManageWebhooks?: boolean;
   canModerateQueue?: boolean;
   /** Manage Messages: sees AutoMod read-only, with the test box. */
@@ -507,6 +509,7 @@ export function ServerSettingsDialog({
   currentUserId,
   canManageRoles = false,
   canManageServer = false,
+  canManageEmoji = false,
   canManageWebhooks = false,
   canModerateQueue = false,
   canManageMessages = false,
@@ -560,6 +563,7 @@ export function ServerSettingsDialog({
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
   const canSeeOverview = isOwner || canManageServer;
+  const canSeeEmoji = (isOwner || canManageEmoji) && Boolean(serverId);
   const canSeeRoles = canManageRoles;
   const canSeeIntegrations = canManageWebhooks;
   const canSeeModeration = canModerateQueue || isOwner;
@@ -570,6 +574,7 @@ export function ServerSettingsDialog({
     isOwner ||
     canSeeAutomod ||
     canSeeOverview ||
+    canSeeEmoji ||
     canSeeRoles ||
     canSeeIntegrations ||
     canSeeModeration ||
@@ -614,13 +619,15 @@ export function ServerSettingsDialog({
     ? "overview"
     : canSeeOverview
       ? "overview"
-      : canSeeRoles
-        ? "roles"
-        : canSeeIntegrations
-          ? "integrations"
-          : canSeeModeration
-            ? "moderation"
-            : "audit";
+      : canSeeEmoji
+        ? "emoji"
+        : canSeeRoles
+          ? "roles"
+          : canSeeIntegrations
+            ? "integrations"
+            : canSeeModeration
+              ? "moderation"
+              : "audit";
   const canSeeCommunity =
     communitiesEnabled && Boolean(serverId) && (isOwner || canManageServer);
   const openingSection: SectionId =
@@ -815,7 +822,7 @@ export function ServerSettingsDialog({
       case "overview":
         return canSeeOverview;
       case "emoji":
-        return canSeeOverview && Boolean(serverId);
+        return canSeeEmoji;
       case "community":
         return canSeeCommunity;
       case "access":
