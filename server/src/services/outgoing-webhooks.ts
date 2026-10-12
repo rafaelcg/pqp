@@ -14,6 +14,7 @@ import {
   OUTGOING_WEBHOOK_EVENT_TYPE,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { forumChannelsEnabled } from "../lib/forum-config.js";
 import { HttpError } from "../lib/http.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { notifyOutgoingWebhookEnqueued } from "./outgoing-webhook-poller.js";
@@ -177,7 +178,7 @@ async function channelsFor(
     `SELECT id, name FROM channels
       WHERE server_id = $1
         AND kind = 'server'
-        AND type = 'text'
+        AND type IN ('text', 'forum')
         AND id = ANY($2::uuid[])`,
     [serverId, unique],
   );
@@ -256,8 +257,13 @@ export type OutgoingWebhookChannelProblem = {
   id: string;
   name: string;
   type: string;
-  /** `type` is not text. `server` is on this server but not a server text channel. */
-  reason: "type" | "server";
+  /**
+   * `type`: not a text or forum channel.
+   * `server`: a text channel that is not a server channel.
+   * `forums_off`: a forum, and `forum_channels` is off. A forum already on
+   * the hook is not this: it stays selected so a later flip can deliver again.
+   */
+  reason: "type" | "server" | "forums_off";
 };
 
 type Sql = Pick<PoolClient, "query">;
@@ -301,28 +307,38 @@ export class OutgoingWebhookSkipUsersError extends HttpError {
 
 function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string {
   const name = problem.name.replace(/^#/, "");
+  if (problem.reason === "forums_off") {
+    return `#${name} is a forum, and forum channels are off on this server.`;
+  }
   if (problem.reason === "server") {
-    return `#${name} is not a text channel in this server.`;
+    return `#${name} is not a text or forum channel in this server.`;
   }
   switch (problem.type) {
     case "voice":
-      return `#${name} is a voice channel, not a text channel.`;
+      return `#${name} is a voice channel, not a text or forum channel.`;
     case "thread":
-      return `#${name} is a thread, not a text channel.`;
+      return `#${name} is a thread, not a text or forum channel.`;
     case "category":
-      return `#${name} is a category, not a text channel.`;
+      return `#${name} is a category, not a text or forum channel.`;
     case "watch_party":
-      return `#${name} is a watch party channel, not a text channel.`;
+      return `#${name} is a watch party channel, not a text or forum channel.`;
     default:
-      return `#${name} is not a text channel.`;
+      return `#${name} is not a text or forum channel.`;
   }
 }
 
+/**
+ * Text channels, and forum channels when `forum_channels` is on for the
+ * server. A forum already stored on this hook is kept while the flag is off
+ * (`alreadySelected`), so editing the hook does not drop it. Threads, posts,
+ * voice, categories and watch parties are rejected.
+ */
 async function validateTextChannelIds(
   serverId: string,
   channelIds: string[],
   db: Sql = getPool(),
   share = false,
+  alreadySelected: ReadonlySet<string> = new Set(),
 ): Promise<string[]> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -335,7 +351,7 @@ async function validateTextChannelIds(
     unique.push(id);
   }
   if (unique.length === 0) {
-    throw new HttpError(400, "Select at least one text channel");
+    throw new HttpError(400, "Select at least one text or forum channel");
   }
   // Server id is in the WHERE, not applied after the read. A manager of
   // this server must not learn the name of a channel on another server by
@@ -370,6 +386,20 @@ async function validateTextChannelIds(
       kept.push(row.id);
       continue;
     }
+    if (row.kind === "server" && row.type === "forum") {
+      const forumsOn = forumChannelsEnabled(serverId);
+      if (forumsOn || alreadySelected.has(id.toLowerCase())) {
+        kept.push(row.id);
+        continue;
+      }
+      problems.push({
+        id,
+        name: row.name,
+        type: row.type,
+        reason: "forums_off",
+      });
+      continue;
+    }
     problems.push({
       id,
       name: row.name,
@@ -381,7 +411,7 @@ async function validateTextChannelIds(
     throw new OutgoingWebhookChannelsError(problems);
   }
   if (kept.length === 0) {
-    throw new HttpError(400, "Select at least one text channel");
+    throw new HttpError(400, "Select at least one text or forum channel");
   }
   return kept;
 }
@@ -419,7 +449,7 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
             disabled_reason = CASE
               WHEN cardinality(kept.ids) >= 1 THEN w.disabled_reason
               WHEN kept.status = 'disabled' THEN w.disabled_reason
-              ELSE 'The last text channel was deleted'
+              ELSE 'The last channel was deleted'
             END,
             updated_at = NOW()
        FROM (
@@ -434,7 +464,7 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
                         WHERE c.id = cid
                           AND c.server_id = locked.server_id
                           AND c.kind = 'server'
-                          AND c.type = 'text'
+                          AND c.type IN ('text', 'forum')
                      )
                    ORDER BY ord
                 ) AS ids
@@ -670,6 +700,8 @@ export async function updateOutgoingWebhook(
             existing.server_id,
             body.channelIds ?? existing.channel_ids,
             client,
+            false,
+            new Set(existing.channel_ids.map((channelId) => channelId.toLowerCase())),
           )
         : existing.channel_ids;
     const skipUserIds =
@@ -786,7 +818,7 @@ export async function rotateOutgoingWebhookSecret(
 export function serializeMessageCreatedPayload(
   payload: OutgoingMessageCreatedPayload,
 ): string {
-  return JSON.stringify({
+  const core = {
     type: payload.type,
     id: payload.id,
     createdAt: payload.createdAt,
@@ -805,6 +837,17 @@ export function serializeMessageCreatedPayload(
     },
     body: payload.body,
     replyToId: payload.replyToId,
+  };
+  // Forum fields ride after the original keys, and only on a post, so a text
+  // channel's signed bytes stay the shape receivers already verify.
+  if (payload.forumId === undefined) {
+    return JSON.stringify(core);
+  }
+  return JSON.stringify({
+    ...core,
+    forumId: payload.forumId,
+    postTitle: payload.postTitle ?? "",
+    isPostStart: payload.isPostStart === true,
   });
 }
 
@@ -812,6 +855,43 @@ function clipError(message: string): string {
   return message.length > MAX_LAST_ERROR
     ? message.slice(0, MAX_LAST_ERROR)
     : message;
+}
+
+function sameId(left: string | null, right: string): boolean {
+  return left !== null && left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * Forum fields for a message in a post. The opening message is enqueued
+ * before `opening_message_id` is written, so a null id falls back to the
+ * earliest message in the post.
+ */
+async function forumPostEvent(
+  postId: string,
+  forumId: string,
+  postTitle: string,
+  messageId: string,
+): Promise<Pick<OutgoingMessageCreatedPayload, "forumId" | "postTitle" | "isPostStart">> {
+  const post = await getPool().query<{ opening_message_id: string | null }>(
+    `SELECT opening_message_id FROM forum_posts WHERE channel_id = $1`,
+    [postId],
+  );
+  const openingId = post.rows[0]?.opening_message_id ?? null;
+  if (openingId) {
+    return { forumId, postTitle, isPostStart: sameId(openingId, messageId) };
+  }
+  const first = await getPool().query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE channel_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1`,
+    [postId],
+  );
+  return {
+    forumId,
+    postTitle,
+    isPostStart: sameId(first.rows[0]?.id ?? null, messageId),
+  };
 }
 
 /**
@@ -840,9 +920,13 @@ export async function enqueueOutgoingMessageCreated(input: {
     type: string;
     kind: string;
     parent_id: string | null;
+    parent_type: string | null;
   }>(
-    `SELECT id, server_id, name, type, kind, parent_id
-       FROM channels WHERE id = $1`,
+    `SELECT c.id, c.server_id, c.name, c.type, c.kind, c.parent_id,
+            p.type AS parent_type
+       FROM channels c
+       LEFT JOIN channels p ON p.id = c.parent_id
+      WHERE c.id = $1`,
     [input.channelId],
   );
   const row = channel.rows[0];
@@ -854,8 +938,16 @@ export async function enqueueOutgoingMessageCreated(input: {
   }
 
   const matchIds = [row.id];
+  const parentIsForum =
+    row.type === "thread" && row.parent_type === "forum" && row.parent_id !== null;
+  // A chat thread matches its text parent. A forum post matches the forum
+  // only while `forum_channels` is on for this server.
+  const forumHook =
+    parentIsForum && forumChannelsEnabled(row.server_id);
   if (row.type === "thread" && row.parent_id) {
-    matchIds.push(row.parent_id);
+    if (row.parent_type === "text" || forumHook) {
+      matchIds.push(row.parent_id);
+    }
   }
 
   const hooks = await getPool().query<{ id: string; skip_user_ids: string[] }>(
@@ -897,6 +989,9 @@ export async function enqueueOutgoingMessageCreated(input: {
   );
   const serverName = server.rows[0]?.name ?? "";
   const createdAt = input.createdAt.toISOString();
+  const forumEvent = forumHook
+    ? await forumPostEvent(row.id, row.parent_id!, row.name, input.messageId)
+    : undefined;
 
   let inserted = 0;
   for (const hook of hooks.rows) {
@@ -923,6 +1018,7 @@ export async function enqueueOutgoingMessageCreated(input: {
       },
       body: input.body,
       replyToId: input.replyToId,
+      ...forumEvent,
     };
     const result = await getPool().query(
       `INSERT INTO outgoing_webhook_deliveries (
