@@ -2,7 +2,10 @@
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { usePictureInPicture } from "./use-picture-in-picture";
+import {
+  usePictureInPicture,
+  usePictureInPictureKey,
+} from "./use-picture-in-picture";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -125,5 +128,50 @@ describe("usePictureInPicture with a request in flight", () => {
     await settle();
     expect(exitPictureInPicture).not.toHaveBeenCalled();
     expect(pipElement).not.toBeNull();
+  });
+});
+
+describe("usePictureInPictureKey", () => {
+  let seen: string | null = null;
+  function Keyed({ videos }: { videos: ReadonlyMap<string, HTMLVideoElement> }) {
+    seen = usePictureInPictureKey(videos);
+    return null;
+  }
+
+  it("names the share holding the window as it opens, swaps and closes", () => {
+    const a = document.createElement("video");
+    const b = document.createElement("video");
+    const videos = new Map([
+      ["a", a],
+      ["b", b],
+    ]);
+    act(() => root!.render(<Keyed videos={videos} />));
+    expect(seen).toBeNull();
+
+    act(() => {
+      pipElement = a;
+      a.dispatchEvent(new Event("enterpictureinpicture"));
+    });
+    expect(seen).toBe("a");
+
+    act(() => {
+      pipElement = b;
+      a.dispatchEvent(new Event("leavepictureinpicture"));
+      b.dispatchEvent(new Event("enterpictureinpicture"));
+    });
+    expect(seen).toBe("b");
+
+    act(() => {
+      pipElement = null;
+      b.dispatchEvent(new Event("leavepictureinpicture"));
+    });
+    expect(seen).toBeNull();
+  });
+
+  it("reads a window already open when the share registers", () => {
+    const a = document.createElement("video");
+    pipElement = a;
+    act(() => root!.render(<Keyed videos={new Map([["a", a]])} />));
+    expect(seen).toBe("a");
   });
 });

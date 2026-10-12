@@ -110,3 +110,37 @@ export function useAutoPictureInPicture(video: HTMLVideoElement | null): void {
     );
   }, [video]);
 }
+
+/**
+ * Which of `videos` holds the PiP window right now, by key, or null. Follows
+ * each element's own PiP events, so it moves when the window is swapped to
+ * another share or closed.
+ */
+export function usePictureInPictureKey(
+  videos: ReadonlyMap<string, HTMLVideoElement>,
+): string | null {
+  const [key, setKey] = useState<string | null>(null);
+  useEffect(() => {
+    const doc = typeof document === "undefined" ? undefined : document;
+    const read = () => {
+      let found: string | null = null;
+      for (const [candidate, video] of videos) {
+        if (isInPictureInPicture(video as HTMLVideoElement & PipVideo, doc)) {
+          found = candidate;
+          break;
+        }
+      }
+      setKey(found);
+    };
+    read();
+    const stops = [...videos.values()].map((video) =>
+      watchPictureInPicture(video as HTMLVideoElement & PipVideo, doc, read),
+    );
+    return () => {
+      for (const stop of stops) {
+        stop();
+      }
+    };
+  }, [videos]);
+  return key;
+}

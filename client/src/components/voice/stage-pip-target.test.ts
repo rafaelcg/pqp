@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { stagePipTarget } from "./stage-pip-target";
 
-const none = { soloPeerId: null, pinnedTileId: null, focusedPeerId: null };
+const none = {
+  inPipPeerId: null,
+  soloPeerId: null,
+  pinnedTileId: null,
+  focusedPeerId: null,
+};
 
 describe("stagePipTarget", () => {
   it("is nothing when no remote share can go into PiP", () => {
@@ -23,10 +28,24 @@ describe("stagePipTarget", () => {
     ).toBe("b");
   });
 
+  it("prefers the share already in the PiP window over everything else", () => {
+    // Opened from a tile, so the bar reads as on and closes it.
+    expect(
+      stagePipTarget({
+        candidates: ["a", "b", "c"],
+        inPipPeerId: "c",
+        soloPeerId: "a",
+        pinnedTileId: "b",
+        focusedPeerId: "b",
+      }),
+    ).toBe("c");
+  });
+
   it("prefers the share alone in fullscreen over the pin", () => {
     expect(
       stagePipTarget({
         candidates: ["a", "b"],
+        inPipPeerId: null,
         soloPeerId: "a",
         pinnedTileId: "b",
         focusedPeerId: "b",
@@ -46,6 +65,7 @@ describe("stagePipTarget", () => {
     expect(
       stagePipTarget({
         candidates: ["b"],
+        inPipPeerId: "self",
         soloPeerId: "camera:x",
         pinnedTileId: "camera:y",
         focusedPeerId: "self",

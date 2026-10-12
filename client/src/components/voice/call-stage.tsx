@@ -113,6 +113,7 @@ import { useImmersiveStage } from "@/hooks/use-immersive-stage";
 import {
   useAutoPictureInPicture,
   usePictureInPicture,
+  usePictureInPictureKey,
 } from "@/hooks/use-picture-in-picture";
 import { stagePipTarget } from "@/components/voice/stage-pip-target";
 import {
@@ -1385,10 +1386,12 @@ function ActiveCall({
     },
     [],
   );
+  const pipOpenPeerId = usePictureInPictureKey(pipVideos);
   const pipTargetPeerId = stagePipTarget({
     candidates: screenTiles
       .map((tile) => tile.peerId)
       .filter((peerId) => pipVideos.has(peerId)),
+    inPipPeerId: pipOpenPeerId,
     soloPeerId: fullscreen.soloPeerId,
     pinnedTileId,
     focusedPeerId: voiceState.focusedScreenPeerId,
