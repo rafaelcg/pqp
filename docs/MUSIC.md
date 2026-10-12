@@ -349,6 +349,59 @@ Autoplay can be refused until the page has a gesture; the dock shows
 "Toque para tocar" when the player has not started two seconds after being
 told to.
 
+### YouTube's own controls, and where each one went
+
+The embed runs with `controls: 0` and `disablekb: 1`. YouTube's bar would
+let one viewer pause or scrub their own copy of a synced room, and the
+drift loop would then fight them. So pqp draws every control that matters,
+and leaves out the ones that would break sync.
+
+| YouTube control | In pqp |
+|---|---|
+| Play and pause, clicking the video, `k` and space | Play and pause on the music bar, for the whole room. Clicking the tile goes fullscreen instead. |
+| Seek bar, `j`, `l`, arrows, `0` to `9` | The seek bar on the music bar. Only someone who manages music may seek, on purpose. |
+| Next video | Skip on the bar. A member without the right gets vote skip. |
+| Volume, mute, `m` | The speaker and slider on the bar. Personal. |
+| Current time and length | The clocks under the bar. |
+| Fullscreen, `f` | The fullscreen button on the stage tile. |
+| CC button, `c`, Settings > Subtitles | The captions button on the stage tile. Personal, see below. |
+| Title, YouTube logo, "Watch on YouTube" | "Abrir no YouTube" under "Só pra você" in the bar's `…`. It opens the video at the room's position. |
+| Playback speed, `<` and `>` | Left out. One viewer at 1.5x would drift from the room, and the drift loop would seek them back every few seconds. |
+| Quality | Left out. YouTube's IFrame API reference no longer lists a way to set it. YouTube picks it from the frame size and the connection. |
+| Caption font size and style | Not yet. The captions module has a documented `fontSize` option, so this can be added later. |
+| End screens, "More videos" | Not controls. Nothing is needed. |
+
+The buttons above are ordinary focusable buttons. pqp adds no global
+shortcuts for them.
+
+**Captions.** `client/src/lib/music-captions.ts`. They are off by default.
+YouTube's own default is what users reported: an English talk showed
+English captions to a pt-BR viewer even when the video had a Portuguese
+track. The captions button opens a menu with these rows:
+
+1. Desligadas.
+2. The viewer's UI language: the video's track, or YouTube's translation
+   into it when the video has none.
+3. Every other track the video has. Language names come from
+   `Intl.DisplayNames`, not from YouTube.
+
+The choice is saved per browser (`pqp:music-captions`,
+`pqp:music-captions-lang`) and never goes on the socket. On every new room
+track, the embed reads the track list once the player reaches PLAYING. It
+retries for up to six seconds, because the list arrives late and never
+arrives for a video without captions. Then it applies the choice again,
+because a new video starts with YouTube's default. "Off" is an empty
+`track` option: it hides captions and keeps the track list readable. While
+captions show, the tile hides its title, because YouTube draws captions in
+the same place and nothing outside the iframe can move them.
+
+The calls behind this (`loadModule`, `getOption`, and the `track`,
+`tracklist` and `translationLanguages` options) are not in YouTube's
+documented API. The reference documents only the captions module's
+`fontSize` and `reload` options. Every call is optional and wrapped in
+`try`, so an embed without them shows a dimmed captions button and nothing
+breaks.
+
 ## Not done yet
 
 - A "now playing" line in the channel, and on o recado.

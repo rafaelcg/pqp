@@ -10,6 +10,13 @@ import {
 } from "@/lib/music-duck";
 import { musicRelatedTracks } from "@/lib/music-related";
 import {
+  applyCaptionsPref,
+  getMusicCaptions,
+  publishMusicCaptionTracks,
+  setMusicCaptionsApply,
+  startMusicCaptionsSync,
+} from "@/lib/music-captions";
+import {
   expectedPositionMs,
   fillAutoplayBuffer,
   clearCurrentEnded,
@@ -387,7 +394,12 @@ export function MusicPlayer({
   mutedRef.current = muted;
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const localeRef = useRef<string>(locale);
+  localeRef.current = locale;
+  /** The room track the captions were last read for, and how to stop it. */
+  const captionsFor = useRef<string | null>(null);
+  const captionsCancel = useRef<(() => void) | null>(null);
   const videoId = music.state?.current?.videoId ?? null;
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";
@@ -437,6 +449,16 @@ export function MusicPlayer({
               setSeekApply((positionMs) => {
                 event.target.seekTo(positionMs / 1000, true);
               });
+              setMusicCaptionsApply(() => {
+                const captions = getMusicCaptions();
+                applyCaptionsPref(
+                  event.target,
+                  captions,
+                  captions.tracks ?? [],
+                  captions.translations,
+                  localeRef.current,
+                );
+              });
               setReady(true);
             },
             onStateChange: (event) => {
@@ -468,6 +490,17 @@ export function MusicPlayer({
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
+                // Once per room track: a new video gets YouTube's default
+                // captions back, so the viewer's choice goes on again.
+                const playingTrack = snap.state?.current?.id ?? null;
+                if (playingTrack && captionsFor.current !== playingTrack) {
+                  captionsFor.current = playingTrack;
+                  captionsCancel.current?.();
+                  captionsCancel.current = startMusicCaptionsSync(
+                    event.target,
+                    () => localeRef.current,
+                  );
+                }
                 /*
                  * Out of ENDED, so this machine's player is not at the end
                  * any more and the mark is stale. The store clears it when
@@ -521,6 +554,9 @@ export function MusicPlayer({
       playerRef.current = null;
       setPositionProbe(null);
       setSeekApply(null);
+      setMusicCaptionsApply(null);
+      captionsCancel.current?.();
+      publishMusicCaptionTracks(null);
       try {
         player?.destroy();
       } catch {
@@ -569,6 +605,11 @@ export function MusicPlayer({
     if (!ready || !player) {
       return;
     }
+    // The menu must not offer the last video's tracks for this one.
+    captionsCancel.current?.();
+    captionsCancel.current = null;
+    captionsFor.current = null;
+    publishMusicCaptionTracks(null);
     const command = musicEmbedCommand(videoId, status);
     if (command === "stop") {
       try {

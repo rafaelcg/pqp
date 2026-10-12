@@ -18,7 +18,12 @@ import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-music-card-rights";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
-import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/components/voice/music-extras";
+import {
+  currentTrackYouTubeHref,
+  effectiveCanManageMusic,
+  musicOverflowItems,
+  nextMusicRepeat,
+} from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
 import {
   formatMusicClockOrUnknown,
@@ -591,6 +596,33 @@ describe("musicOverflowItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual(["duck", "stop-listening"]);
     expect(items[1]?.label).toBe(translateMessage("music.dismiss"));
+  });
+
+  /* The embed's title and logo link, which `controls: 0` hides. */
+  it("opens the track on screen on YouTube, for a member too", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: false,
+      canSetSwitches: false,
+      listening: true,
+      ducking: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+      onOpenCurrent: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual([
+      "duck",
+      "stop-listening",
+      "open-current",
+    ]);
+    expect(items[2]?.label).toBe(translateMessage("music.openYoutube"));
+    expect(currentTrackYouTubeHref("iG9CE55wbtY", 63_900)).toBe(
+      "https://www.youtube.com/watch?v=iG9CE55wbtY&t=63s",
+    );
+    expect(currentTrackYouTubeHref("iG9CE55wbtY", 0)).toBe(
+      "https://www.youtube.com/watch?v=iG9CE55wbtY",
+    );
   });
 
   it("offers the way back in once this machine has stopped", () => {
