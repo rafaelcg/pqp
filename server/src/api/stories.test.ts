@@ -361,7 +361,10 @@ describeDb("stories", () => {
         author: { id: alice.id, displayName: "Alice" },
         storyIds: [story.id],
         unseen: true,
+        // A boolean, never null, for a story with no sticker (Android QA).
+        hasCall: false,
       });
+      expect(bobStrip.items[0]!.hasCall).toBe(false);
       expect(bobStrip.own).toBeNull();
       expect((await strip(alice)).own?.storyIds).toEqual([story.id]);
 
@@ -561,6 +564,8 @@ describeDb("stories", () => {
         sticker: { type: "call", serverId, channelId: lobbyId },
       });
       expect(ok.status).toBe(201);
+      expect((await strip(alice)).own?.hasCall).toBe(true);
+      as(alice);
       // Nobody is in the Lobby: the sticker reads as ended.
       expect((ok.body.story as Story).call).toMatchObject({
         channelName: "Lobby",

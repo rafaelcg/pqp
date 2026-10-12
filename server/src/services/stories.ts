@@ -980,8 +980,8 @@ function stripItem(row: StripRow): StoryStripItem {
     storyIds: row.story_ids,
     latestAt: row.latest_at.toISOString(),
     expiresAt: row.expires_at.toISOString(),
-    unseen: row.unseen,
-    hasCall: row.has_call,
+    unseen: row.unseen === true,
+    hasCall: row.has_call === true,
   };
 }
 
@@ -1004,7 +1004,10 @@ async function stripRows(
               max(l.published_at) AS latest_at,
               max(l.expires_at) AS expires_at,
               bool_or(v.story_id IS NULL) AS unseen,
-              bool_or(l.sticker->>'type' = 'call') AS has_call
+              -- COALESCE: a story with no sticker compares NULL, and bool_or
+              -- over nothing but NULLs is NULL, which the contract says is a
+              -- boolean (hasCall).
+              COALESCE(bool_or(l.sticker->>'type' = 'call'), FALSE) AS has_call
          FROM live l
          LEFT JOIN story_views v ON v.story_id = l.id AND v.viewer_id = $1
         GROUP BY l.author_id
