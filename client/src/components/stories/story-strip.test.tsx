@@ -20,7 +20,7 @@ function item(name: string, unseen: boolean, hasCall = false): StoryStripItem {
 }
 
 function render(strip: StoryStripData): string {
-  primeStoryStripCache({ kind: "server", serverId: SERVER }, strip);
+  primeStoryStripCache({ kind: "server", serverId: SERVER }, strip, me.id);
   return renderToStaticMarkup(<StoryStrip audience={audience} me={me} />);
 }
 

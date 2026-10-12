@@ -5268,5 +5268,7 @@
   "stories.quote.expiredHint": "Sumiu com a imagem e a legenda",
   "stories.quote.left": "some em {left}",
   "stories.quote.photo": "Foto",
-  "stories.quote.video": "Vídeo"
+  "stories.quote.video": "Vídeo",
+  "stories.viewer.retry": "Tentar de novo",
+  "stories.audience.loadFailed": "Não deu pra carregar onde postar."
 }

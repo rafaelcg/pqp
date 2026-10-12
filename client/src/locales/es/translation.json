@@ -5336,5 +5336,7 @@
   "stories.quote.expiredHint": "Se fue con la imagen y la leyenda",
   "stories.quote.left": "desaparece en {left}",
   "stories.quote.photo": "Foto",
-  "stories.quote.video": "Video"
+  "stories.quote.video": "Video",
+  "stories.viewer.retry": "Intentar de nuevo",
+  "stories.audience.loadFailed": "No se pudo cargar dónde publicar."
 }

@@ -3,6 +3,7 @@ import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import type { StoryCard } from "@pqp/shared";
 import { useTranslation } from "@/lib/i18n";
 import { fetchStoryCard } from "@/lib/stories/api";
+import { onStoriesSignal } from "@/lib/stories/events";
 import { formatStoryLeft } from "@/lib/stories/format";
 import { cn } from "@/lib/utils";
 
@@ -16,18 +17,59 @@ import { cn } from "@/lib/utils";
  * it is given.
  */
 
-const cards = new Map<string, Promise<StoryCard | null>>();
+/**
+ * One card per story, shared by every message quoting it, and kept only
+ * briefly: a removal or deletion arrives as a `stories-update` naming the
+ * story (dropped here at once), and anything else that ends a story (expiry,
+ * a removal from a server this reader is not in) is caught by the short
+ * lifetime. A conversation full of replies to different stories asks for at
+ * most `MAX_IN_FLIGHT` cards at a time.
+ */
+const CARD_TTL_MS = 60_000;
+const MAX_IN_FLIGHT = 4;
+
+const cards = new Map<string, { at: number; card: Promise<StoryCard | null> }>();
+const waiting: (() => void)[] = [];
+let inFlight = 0;
+const invalidated = new Set<(storyIds: readonly string[]) => void>();
+
+onStoriesSignal((signal) => {
+  const ids = signal.kind === "update" ? (signal.frame.removedStoryIds ?? []) : [];
+  if (ids.length === 0) {
+    return;
+  }
+  for (const id of ids) {
+    cards.delete(id);
+  }
+  for (const listener of [...invalidated]) {
+    listener(ids);
+  }
+});
+
+async function limited<T>(run: () => Promise<T>): Promise<T> {
+  if (inFlight >= MAX_IN_FLIGHT) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+  inFlight += 1;
+  try {
+    return await run();
+  } finally {
+    inFlight -= 1;
+    waiting.shift()?.();
+  }
+}
 
 function loadCard(storyId: string): Promise<StoryCard | null> {
-  let pending = cards.get(storyId);
-  if (!pending) {
-    pending = fetchStoryCard(storyId).catch(() => {
-      cards.delete(storyId);
-      return null;
-    });
-    cards.set(storyId, pending);
+  const cached = cards.get(storyId);
+  if (cached && Date.now() - cached.at < CARD_TTL_MS) {
+    return cached.card;
   }
-  return pending;
+  const card = limited(() => fetchStoryCard(storyId)).catch(() => {
+    cards.delete(storyId);
+    return null;
+  });
+  cards.set(storyId, { at: Date.now(), card });
+  return card;
 }
 
 interface StoryQuoteCardProps {
@@ -42,6 +84,20 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
   const [card, setCard] = useState<StoryCard | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  // Bumped when this story is named in a removal frame, to read it again.
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const listener = (ids: readonly string[]) => {
+      if (ids.includes(storyId)) {
+        setVersion((value) => value + 1);
+      }
+    };
+    invalidated.add(listener);
+    return () => {
+      invalidated.delete(listener);
+    };
+  }, [storyId]);
+
   useEffect(() => {
     let alive = true;
     void loadCard(storyId).then((value) => {
@@ -52,7 +108,7 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
     return () => {
       alive = false;
     };
-  }, [storyId]);
+  }, [storyId, version]);
 
   // A live quote turns into the plate on its own once the story expires.
   useEffect(() => {

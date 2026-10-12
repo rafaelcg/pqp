@@ -1,5 +1,5 @@
 import { Archive, Download, MessageCircle, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Story, StoryViewerRow } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -49,19 +49,34 @@ export function StoryViewersSheet({
     reactions: story.own?.reactionCount ?? 0,
   });
   const [loading, setLoading] = useState(false);
+  // Every request gets a ticket. A refresh (the first page again) takes a new
+  // generation, so a "Ver mais" page or an older refresh still in flight can
+  // never append to, or overwrite, the list that replaced it.
+  const generation = useRef(0);
+  const latest = useRef(0);
 
   const load = useCallback(
     async (next: string | null) => {
+      if (!next) {
+        generation.current += 1;
+      }
+      const ticket = ++latest.current;
+      const forGeneration = generation.current;
       setLoading(true);
       try {
         const page = await fetchStoryViewers(story.id, next);
+        if (forGeneration !== generation.current || (!next && ticket !== latest.current)) {
+          return;
+        }
         setRows((current) => (next ? [...current, ...page.viewers] : page.viewers));
         setCursor(page.nextCursor);
         setCounts({ views: page.viewCount, reactions: page.reactionCount });
       } catch {
         // Keep what is on screen; the next frame or reopening asks again.
       } finally {
-        setLoading(false);
+        if (ticket === latest.current) {
+          setLoading(false);
+        }
       }
     },
     [story.id],

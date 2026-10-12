@@ -58,7 +58,7 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ringAudienceKey(audience)],
   );
-  const { strip, now, setPointerOnStrip } = useStoryStrip(stripAudience);
+  const { strip, now, setPointerOnStrip } = useStoryStrip(stripAudience, me.id);
   const seen = useSeenStories();
   const ui = useStoriesUi();
   const hintKey = firstRunKey(me.id, audience);

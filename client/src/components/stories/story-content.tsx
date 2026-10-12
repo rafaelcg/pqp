@@ -181,19 +181,17 @@ function StoryVideo({
     }
   }, [paused, src]);
 
-  // The bar is the video's own clock: one rAF reading `currentTime`, so the
-  // bar never runs ahead of a stalled download.
+  // The bar is the video's own clock, read off `currentTime` so it never runs
+  // ahead of a stalled download. Ten reads a second, the same step as the
+  // viewer's clock, so playback does not re-render the viewer every frame.
   useEffect(() => {
-    let frame = 0;
-    const step = () => {
+    const timer = window.setInterval(() => {
       const element = video.current;
       if (element && !element.paused) {
         callbacks.current.onTime?.(element.currentTime * 1000);
       }
-      frame = requestAnimationFrame(step);
-    };
-    frame = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(frame);
+    }, 100);
+    return () => window.clearInterval(timer);
   }, []);
 
   return (

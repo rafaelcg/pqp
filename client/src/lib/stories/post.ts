@@ -98,24 +98,65 @@ function finish(id: string): void {
   }, 600);
 }
 
+/** Re-read a processing video this often even without a frame, for so long. */
+const PROCESSING_POLL_MS = 15_000;
+const PROCESSING_GIVE_UP_MS = 10 * 60_000;
+
+/**
+ * Wait for a processing video to go live: on every `own` frame, on a
+ * reconnect (frames sent while the socket was down are lost), and on a slow
+ * poll as the last resort, so a missed frame cannot leave the ring spinning.
+ * After ten minutes the ring stops waiting; the strip shows the story
+ * whenever it does go live.
+ */
 function waitUntilLive(id: string, storyId: string): void {
-  const off = onStoriesSignal((signal) => {
-    if (signal.kind !== "update" || signal.frame.scope !== "own") {
+  let done = false;
+  let checking = false;
+  const startedAt = Date.now();
+  const stop = () => {
+    done = true;
+    off();
+    window.clearInterval(poll);
+  };
+  const check = () => {
+    if (done || checking) {
       return;
     }
+    if (getStoriesUi().posting?.id !== id) {
+      stop();
+      return;
+    }
+    if (Date.now() - startedAt > PROCESSING_GIVE_UP_MS) {
+      stop();
+      setPosting(null);
+      return;
+    }
+    checking = true;
     void fetchStories([storyId])
       .then(([story]) => {
+        if (done) {
+          return;
+        }
         if (!story) {
           // Refused at processing (a frame failed the scan) or deleted.
-          off();
+          stop();
           patchPosting(id, { status: "failed", progress: null, retry: null });
           return;
         }
         if (story.own?.status === "live") {
-          off();
+          stop();
           finish(id);
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        checking = false;
+      });
+  };
+  const off = onStoriesSignal((signal) => {
+    if (signal.kind === "refresh" || signal.frame.scope === "own") {
+      check();
+    }
   });
+  const poll = window.setInterval(check, PROCESSING_POLL_MS);
 }

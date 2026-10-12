@@ -31,6 +31,30 @@ export type StripAudience =
 const cache = new Map<string, StoryStrip>();
 
 /**
+ * The account every module-level cache below belongs to. A strip, a notice
+ * or an `enabled` answer is about one viewer; signing out and in as somebody
+ * else in the same tab must not show them the last person's.
+ */
+let cacheOwner: string | null = null;
+
+export function scopeStoriesCachesTo(viewerId: string): void {
+  if (cacheOwner === viewerId) {
+    return;
+  }
+  cacheOwner = viewerId;
+  cache.clear();
+  enabledByKey.clear();
+  noticesCache = [];
+  noticesLoaded = false;
+  for (const listener of [...enabledListeners]) {
+    listener();
+  }
+  for (const listener of [...noticeListeners]) {
+    listener([]);
+  }
+}
+
+/**
  * Whether each audience's strip answered `enabled`, for the entry points that
  * live outside the strip (the server menu's "Postar story"): with the flag
  * off for a server, no entry point may offer a feature that will 404.
@@ -69,12 +93,13 @@ function cacheKey(audience: StripAudience): string {
 const COALESCE_MS = 300;
 const FOCUS_REFETCH_MIN_MS = 30_000;
 
-export function useStoryStrip(audience: StripAudience | null): {
+export function useStoryStrip(audience: StripAudience | null, viewerId: string): {
   strip: StoryStrip | null;
   now: number;
   refetch: () => void;
   setPointerOnStrip: (on: boolean) => void;
 } {
+  scopeStoriesCachesTo(viewerId);
   const key = audience ? cacheKey(audience) : null;
   const [strip, setStrip] = useState<StoryStrip | null>(() =>
     key ? (cache.get(key) ?? null) : null,
@@ -87,6 +112,9 @@ export function useStoryStrip(audience: StripAudience | null): {
   const lastFetch = useRef(0);
   const audienceRef = useRef(audience);
   audienceRef.current = audience;
+  // Only the newest request may write: a slow answer from an earlier fetch
+  // must not land on top of a newer one.
+  const latestRequest = useRef(0);
 
   const apply = useCallback((next: StoryStrip, forKey: string) => {
     cache.set(forKey, next);
@@ -107,18 +135,23 @@ export function useStoryStrip(audience: StripAudience | null): {
         return;
       }
       const forKey = cacheKey(current);
+      const ticket = ++latestRequest.current;
       lastFetch.current = Date.now();
       try {
         const next =
           current.kind === "server"
             ? await fetchServerStoryStrip(current.serverId, signal)
             : await fetchFriendsStoryStrip(signal);
-        if (signal?.aborted || cacheKey(audienceRef.current ?? current) !== forKey) {
+        if (
+          signal?.aborted ||
+          ticket !== latestRequest.current ||
+          cacheKey(audienceRef.current ?? current) !== forKey
+        ) {
           return;
         }
         apply(next, forKey);
       } catch {
-        if (signal?.aborted) {
+        if (signal?.aborted || ticket !== latestRequest.current) {
           return;
         }
         // A failed strip draws nothing rather than an error: stories are an
@@ -285,12 +318,18 @@ export function useStoryNotices(active: boolean): {
 }
 
 /** Tests only: what a strip draws before its first fetch lands. */
-export function primeStoryStripCache(audience: StripAudience, strip: StoryStrip): void {
+export function primeStoryStripCache(
+  audience: StripAudience,
+  strip: StoryStrip,
+  viewerId: string,
+): void {
+  scopeStoriesCachesTo(viewerId);
   cache.set(cacheKey(audience), strip);
 }
 
 /** Tests only. */
 export function resetStoryStripCache(): void {
+  cacheOwner = null;
   cache.clear();
   enabledByKey.clear();
   noticesCache = [];

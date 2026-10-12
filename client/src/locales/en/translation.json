@@ -5268,5 +5268,7 @@
   "stories.quote.expiredHint": "Gone with its picture and caption",
   "stories.quote.left": "gone in {left}",
   "stories.quote.photo": "Photo",
-  "stories.quote.video": "Video"
+  "stories.quote.video": "Video",
+  "stories.viewer.retry": "Try again",
+  "stories.audience.loadFailed": "Couldn't load where to post."
 }

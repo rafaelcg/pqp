@@ -47,7 +47,6 @@ import {
   deleteStory,
   fetchStories,
   muteStoryAuthor,
-  recordStoryViews,
   removeStoryFromServer,
   replyToStory,
   saveStoryToBau,
@@ -60,6 +59,7 @@ import {
   formatStoryAge,
 } from "@/lib/stories/format";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
+import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
 import { ringAudienceKey, type ViewerRequest } from "@/lib/stories/ui-store";
 import {
   createViewerState,
@@ -106,7 +106,11 @@ export function storyToDisplay(story: Story): StoryDisplay {
 }
 
 const SEEN_AFTER_MS = 1_000;
-const VIEWS_FLUSH_MS = 1_500;
+/** The clock's step: ten renders a second, the bar eased linearly between them. */
+const CLOCK_STEP_MS = 100;
+/** A story that could not be fetched still moves the walk on after this. */
+const FAILED_STORY_MS = 4_000;
+const FETCH_RETRY_MS = 3_000;
 const DRAG_DECIDE_PX = 8;
 
 function readToken(name: string, fallback: string): string {
@@ -152,6 +156,9 @@ export function StoryViewer({
   );
   const [stories, setStories] = useState<ReadonlyMap<string, Story>>(new Map());
   const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
+  // Fetches that failed (offline, a 5xx): retried after a pause, and shown as
+  // a failure with a retry meanwhile, never an endless spinner.
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
   const inflight = useRef(new Set<string>());
   const [now, setNow] = useState(() => Date.now());
   const [muted, setMuted] = useState(true);
@@ -176,8 +183,7 @@ export function StoryViewer({
   const restoreFocus = useRef<Element | null>(
     typeof document === "undefined" ? null : document.activeElement,
   );
-  const pendingViews = useRef(new Set<string>());
-  const flushTimer = useRef<number | null>(null);
+  const reactionSeq = useRef(new Map<string, number>());
   const markedSeen = useRef(new Set<string>());
   const lastDisplay = useRef<StoryDisplay | null>(null);
   const lastGeneration = useRef(state.generation);
@@ -199,7 +205,7 @@ export function StoryViewer({
   useEffect(() => {
     const pending = inflight.current;
     const wanted = idsToPreload(state).filter(
-      (id) => !stories.has(id) && !missing.has(id) && !pending.has(id),
+      (id) => !stories.has(id) && !missing.has(id) && !failed.has(id) && !pending.has(id),
     );
     if (wanted.length === 0) {
       return;
@@ -235,7 +241,21 @@ export function StoryViewer({
           }
         }
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setFailed((current) => new Set([...current, ...wanted]));
+        window.setTimeout(() => {
+          setFailed((current) => {
+            const next = new Set(current);
+            for (const id of wanted) {
+              next.delete(id);
+            }
+            return next;
+          });
+        }, FETCH_RETRY_MS);
+      })
       .finally(() => {
         for (const id of wanted) {
           pending.delete(id);
@@ -249,7 +269,7 @@ export function StoryViewer({
     };
     // `state` is read through idsToPreload; the indices are what move it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.personIndex, state.storyIndex, state.people, stories, missing]);
+  }, [state.personIndex, state.storyIndex, state.people, stories, missing, failed]);
 
   // A frame that names removed stories drops them at once; an `own` frame
   // while watching our own stories refreshes their counts and status.
@@ -296,6 +316,10 @@ export function StoryViewer({
 
   // How long this story stays up. A video tells us itself.
   useEffect(() => {
+    if (!story && storyId && failed.has(storyId) && state.durationMs === null) {
+      dispatch({ type: "duration", durationMs: FAILED_STORY_MS });
+      return;
+    }
     if (!story || state.durationMs !== null) {
       return;
     }
@@ -306,36 +330,29 @@ export function StoryViewer({
       return;
     }
     dispatch({ type: "duration", durationMs: storyDisplayMs(story) });
-  }, [story, state.durationMs, state.generation]);
+  }, [story, storyId, failed, state.durationMs, state.generation]);
 
-  // One rAF loop for every story that is not a playing video.
+  // The clock for every story that is not a playing video. Ten steps a
+  // second, not one per frame: a frame-rate dispatch re-rendered the whole
+  // viewer sixty times a second. The bar eases linearly across each step
+  // (its `transition` below), so it still reads as a continuous fill.
   const videoDriven = story?.kind === "video" && Boolean(story.media?.url) && story.own?.status !== "processing";
   useEffect(() => {
     if (videoDriven || phase !== "open") {
       return;
     }
-    let frame = 0;
     let last = performance.now();
-    const step = (time: number) => {
+    const timer = window.setInterval(() => {
+      const time = performance.now();
       dispatch({ type: "tick", deltaMs: time - last });
       last = time;
-      frame = requestAnimationFrame(step);
-    };
-    frame = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(frame);
+    }, CLOCK_STEP_MS);
+    return () => window.clearInterval(timer);
   }, [videoDriven, phase]);
 
   // ---------------------------------------------------------------- seen
   const flushViews = useCallback(() => {
-    if (flushTimer.current !== null) {
-      window.clearTimeout(flushTimer.current);
-      flushTimer.current = null;
-    }
-    const ids = [...pendingViews.current];
-    pendingViews.current.clear();
-    if (ids.length > 0) {
-      void recordStoryViews(ids).catch(() => undefined);
-    }
+    void flushStoryViews();
   }, []);
 
   useEffect(() => {
@@ -347,11 +364,8 @@ export function StoryViewer({
     if (story.author.id === me.id || story.own) {
       return;
     }
-    pendingViews.current.add(story.id);
-    if (flushTimer.current === null) {
-      flushTimer.current = window.setTimeout(flushViews, VIEWS_FLUSH_MS);
-    }
-  }, [story, state.elapsedMs, me.id, flushViews]);
+    queueStoryViews([story.id]);
+  }, [story, state.elapsedMs, me.id]);
 
   // ---------------------------------------------------------------- pauses
   useEffect(() => {
@@ -828,8 +842,15 @@ export function StoryViewer({
           : { kind: "fly", key: Date.now(), glyph: STORY_REACTION_GLYPH[next] },
       );
     }
-    void setStoryReaction(story.id, next).catch(() => {
-      patchStory(story.id, (item) => ({ ...item, viewer: { ...item.viewer, reaction: previous } }));
+    // Only the newest tap may roll back: an older request failing after a
+    // newer one was sent must not undo the newer choice.
+    const id = story.id;
+    const seq = (reactionSeq.current.get(id) ?? 0) + 1;
+    reactionSeq.current.set(id, seq);
+    void setStoryReaction(id, next).catch(() => {
+      if (reactionSeq.current.get(id) === seq) {
+        patchStory(id, (item) => ({ ...item, viewer: { ...item.viewer, reaction: previous } }));
+      }
     });
   }
 
@@ -1091,10 +1112,29 @@ export function StoryViewer({
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
-                {storyId && missing.has(storyId) ? (
-                  <p className="px-6 text-center text-sm" style={{ color: "var(--story-on-media-2)" }}>
-                    {t("stories.viewer.failed")}
-                  </p>
+                {storyId && (missing.has(storyId) || failed.has(storyId)) ? (
+                  <div className="flex flex-col items-center gap-3 px-6 text-center">
+                    <p className="text-sm" style={{ color: "var(--story-on-media-2)" }}>
+                      {t("stories.viewer.failed")}
+                    </p>
+                    {failed.has(storyId) && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setFailed((current) => {
+                            const next = new Set(current);
+                            next.delete(storyId);
+                            return next;
+                          });
+                        }}
+                      >
+                        {t("stories.viewer.retry")}
+                      </Button>
+                    )}
+                  </div>
                 ) : (
                   <span
                     className="h-8 w-8 animate-spin rounded-full border-2 border-transparent"
@@ -1130,7 +1170,9 @@ export function StoryViewer({
                       transition:
                         index < state.storyIndex
                           ? "transform var(--duration-fast) var(--ease-standard)"
-                          : "none",
+                          : index === state.storyIndex && state.elapsedMs > 0 && !paused
+                            ? `transform ${CLOCK_STEP_MS}ms linear`
+                            : "none",
                     }}
                   />
                 </span>

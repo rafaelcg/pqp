@@ -70,6 +70,7 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
   const { t, locale } = useTranslation();
   const [config, setConfig] = useState<StoriesConfig>(STORIES_CONFIG_OFF);
   const [options, setOptions] = useState<StoryAudienceOptions | null>(null);
+  const [optionsFailed, setOptionsFailed] = useState(false);
   const [tab, setTab] = useState<Tab>(request.tab ?? "media");
   const [media, setMedia] = useState<PreparedStoryMedia | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -92,13 +93,20 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
   const [repliesEnabled, setRepliesEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // The newest file wins: a slow decode of an earlier pick must not replace
+  // the one chosen after it.
+  const fileTicket = useRef(0);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    void loadStoriesConfig().then(setConfig);
+  const loadOptions = () => {
+    setOptionsFailed(false);
     fetchStoryAudiences()
       .then(setOptions)
-      .catch(() => setOptions({ servers: [], friends: { enabled: false, canPost: false } }));
+      .catch(() => setOptionsFailed(true));
+  };
+  useEffect(() => {
+    void loadStoriesConfig().then(setConfig);
+    loadOptions();
   }, []);
 
   // No media on this deployment: there is only the text card to offer.
@@ -131,6 +139,7 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
     if (!file) {
       return;
     }
+    const ticket = ++fileTicket.current;
     setPreparing(true);
     setProblem(null);
     const result = await prepareStoryFile(file, {
@@ -138,6 +147,12 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
       maxVideoMs: config.maxVideoMs,
       videoEnabled: config.videoEnabled,
     });
+    if (ticket !== fileTicket.current) {
+      if (result.ok) {
+        URL.revokeObjectURL(result.media.previewUrl);
+      }
+      return;
+    }
     setPreparing(false);
     if (!result.ok) {
       const key =
@@ -185,14 +200,20 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
       ? { type: "call", serverId: voiceRooms.serverId, channelId: room.id }
       : null;
 
-  // The call lives in one server: the story has to go there too.
+  // The call lives in one server: the story has to go there too, which only
+  // works where the author may post. Elsewhere the call cannot be posted at
+  // all, and the server stays unticked with its reason.
   const lockedServerId = sticker?.serverId ?? null;
+  const lockedServerCanPost = Boolean(
+    lockedServerId &&
+      options?.servers.some((server) => server.serverId === lockedServerId && server.canPost),
+  );
   const effectiveServerIds = useMemo(
     () =>
-      lockedServerId && !serverIds.includes(lockedServerId)
+      lockedServerId && lockedServerCanPost && !serverIds.includes(lockedServerId)
         ? [...serverIds, lockedServerId]
         : serverIds,
-    [lockedServerId, serverIds],
+    [lockedServerId, lockedServerCanPost, serverIds],
   );
 
   const body = tab === "call" ? callText : text;
@@ -201,7 +222,7 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
     !submitting &&
     (effectiveServerIds.length > 0 || friends) &&
     (tab === "media" ? Boolean(media) : body.trim().length > 0) &&
-    (tab !== "call" || Boolean(sticker));
+    (tab !== "call" || (Boolean(sticker) && lockedServerCanPost));
 
   const display: StoryDisplay = {
     id: "draft",
@@ -421,8 +442,18 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
             <legend className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary">
               {t("stories.audience.title")}
             </legend>
+            {optionsFailed && (
+              <div className="flex items-center gap-3 px-2 py-1">
+                <p role="alert" className="flex-1 text-sm text-danger">
+                  {t("stories.audience.loadFailed")}
+                </p>
+                <Button size="sm" variant="secondary" onClick={loadOptions}>
+                  {t("stories.viewer.retry")}
+                </Button>
+              </div>
+            )}
             {options?.servers.map((server) => {
-              const locked = server.serverId === lockedServerId;
+              const locked = server.serverId === lockedServerId && server.canPost;
               const checked = effectiveServerIds.includes(server.serverId);
               const reason =
                 server.blockedReason === "timed_out"

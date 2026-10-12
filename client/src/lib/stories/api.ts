@@ -94,13 +94,16 @@ export async function fetchStories(ids: readonly string[]): Promise<Story[]> {
   for (let index = 0; index < unique.length; index += STORY_IDS_MAX) {
     chunks.push(unique.slice(index, index + STORY_IDS_MAX));
   }
-  const answers = await Promise.all(
-    chunks.map((chunk) =>
-      apiFetch<StoriesResponse>(
+  // One chunk at a time: the viewer asks for a handful of ids, and a burst of
+  // parallel reads per open is not worth the API's budget.
+  const answers: StoriesResponse[] = [];
+  for (const chunk of chunks) {
+    answers.push(
+      await apiFetch<StoriesResponse>(
         `/api/stories?ids=${chunk.map(encodeURIComponent).join(",")}`,
       ),
-    ),
-  );
+    );
+  }
   const byId = new Map<string, Story>();
   for (const answer of answers) {
     for (const story of answer.stories) {
