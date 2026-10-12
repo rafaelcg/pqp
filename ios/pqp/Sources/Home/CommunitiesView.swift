@@ -328,7 +328,7 @@ final class CommunitiesModel {
             hasMore = page.hasMore
             offset = page.communities.count
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
     }
@@ -367,7 +367,7 @@ final class CommunitiesModel {
         } catch {
             // Verbatim. "You are banned from this community" and "not found" are
             // the server's two answers and both are its wording to give.
-            joinError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { joinError = shown }
             return false
         }
     }

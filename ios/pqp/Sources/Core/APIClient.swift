@@ -261,6 +261,16 @@ actor APIClient {
         }
     }
 
+    /// What a URLSession failure becomes. A cancelled request is
+    /// `CancellationError`, never `APIError.transport`: the transport case is
+    /// shown to people ("Could not connect to the server."), and URLSession's
+    /// sentence for a cancelled task is the bare word "cancelled". See
+    /// `Error.isCancellation`.
+    static func transportFailure(_ error: any Error) -> any Error {
+        if error.isCancellation { return CancellationError() }
+        return APIError.transport(error.localizedDescription)
+    }
+
     /// The transport, minus decoding.
     ///
     /// Split out so a conditional GET can see the status code: a `304` is a
@@ -300,13 +310,18 @@ actor APIClient {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
+        // A caller cancelled while the token was being read. Clerk answers that
+        // with no token at all, and sending the request anyway would come back
+        // 401 and read as "Your session expired" to somebody who only pulled
+        // to refresh.
+        try Task.checkCancellation()
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
 
         guard let http = response as? HTTPURLResponse else {
@@ -1013,7 +1028,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
@@ -1068,7 +1083,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")

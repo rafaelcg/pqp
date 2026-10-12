@@ -233,7 +233,7 @@ struct MembersView: View {
             )
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -242,7 +242,7 @@ struct MembersView: View {
             try await session.api.liftTimeout(serverId: server.id, userId: member.id)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -251,7 +251,7 @@ struct MembersView: View {
             try await session.api.setMemberRole(serverId: server.id, userId: member.id, role: role)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -260,7 +260,7 @@ struct MembersView: View {
             try await session.api.removeMember(serverId: server.id, userId: member.id, ban: ban)
             members.removeAll { $0.id == member.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
