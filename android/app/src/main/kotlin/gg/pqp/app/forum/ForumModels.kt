@@ -133,6 +133,12 @@ data class ForumPostSummary(
     val thumbnailAttachmentId: String? = null,
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
+    /**
+     * The opening message's first video when it has no image. Read so the
+     * contract stays whole; the card does not draw a video frame yet and keeps
+     * using `thumbnailUrl`, which is only ever an image.
+     */
+    val thumbnailVideoUrl: String? = null,
     /** In the forum's tag order. */
     val tagIds: List<String> = emptyList(),
 ) {

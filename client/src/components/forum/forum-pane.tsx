@@ -162,6 +162,10 @@ export interface ForumPaneProps {
 
 /** The content area must be this wide for the post to sit beside the list. */
 const SPLIT_MIN_WIDTH = 900;
+/** The post pane beside the list (`md:w-[488px]` in the post view). */
+const POST_PANE_WIDTH = 488;
+/** From this list width on, the cards beside an open post keep every line. */
+const ROOMY_LIST_MIN_WIDTH = 640;
 /** Infinite scroll asks for the next page this far before the end. */
 const NEXT_PAGE_MARGIN_PX = 600;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -634,10 +638,18 @@ export function ForumPane({
     return () => observer.disconnect();
   }, []);
   const [maximized, setMaximized] = useState(readPostMaximized);
+  // A double click on a card opens that one post over the whole content
+  // area, without touching the remembered maximize choice: a single click
+  // on the next card is beside the list again.
+  const [fullOnceId, setFullOnceId] = useState<string | null>(null);
   const canSplit = !isPhone && width >= SPLIT_MIN_WIDTH;
   const postOpen = openPostId !== null && (openPost !== null || removedOpenId === openPostId);
-  const postFull = postOpen && (!canSplit || maximized);
+  const fullOnce = postOpen && fullOnceId === openPostId;
+  const postFull = postOpen && (!canSplit || maximized || fullOnce);
   const compactList = postOpen && !postFull;
+  // On a wide screen the list beside an open post has room for the whole
+  // card (author, preview, a full thumbnail); only a narrow one compacts.
+  const compactCards = compactList && width - POST_PANE_WIDTH < ROOMY_LIST_MIN_WIDTH;
 
   // ---------------------------------------------------------- live rules
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -818,6 +830,7 @@ export function ForumPane({
       setList((current) => markForumPostRead(current, closing, new Date().toISOString()));
     }
     setOpenPostId(null);
+    setFullOnceId(null);
     setRemovedOpenId(null);
     setRemovedOpenPost(null);
     if (back) {
@@ -825,12 +838,26 @@ export function ForumPane({
     }
   }, [setOpenPostId]);
 
+  const openPostFull = useCallback(
+    (postId: string) => {
+      setFullOnceId(postId);
+      openPostById(postId);
+    },
+    [openPostById],
+  );
+
   const toggleMaximize = useCallback(() => {
+    // Opened full by a double click: the button puts it beside the list,
+    // and the remembered choice stays what it was.
+    if (fullOnceId !== null && fullOnceId === openPostIdRef.current) {
+      setFullOnceId(null);
+      return;
+    }
     setMaximized((current) => {
       writePostMaximized(!current);
       return !current;
     });
-  }, []);
+  }, [fullOnceId]);
 
   // ----------------------------------------------------------- composer
   const [composerOpen, setComposerOpen] = useState(false);
@@ -1253,7 +1280,7 @@ export function ForumPane({
           )}
           tagsById={tagsById}
           href={forumPostPath(server.id, forumId, post.id)}
-          compact={compactList}
+          compact={compactCards}
           narrow={isPhone}
           open={post.id === openPostId}
           pinnedRow={pinnedRow}
@@ -1261,6 +1288,7 @@ export function ForumPane({
           leaving={leavingIds.has(post.id)}
           tabIndex={post.id === rovingId ? 0 : -1}
           onOpen={openPostById}
+          onOpenFull={canSplit ? openPostFull : undefined}
           onFocus={setFocusedId}
           onKeyDown={onCardKeyDown}
           registerLink={registerLink}
@@ -1579,7 +1607,7 @@ export function ForumPane({
           layout={postFull ? "full" : "side"}
           forcedFull={!canSplit}
           isPhone={isPhone}
-          maximized={maximized}
+          maximized={maximized || fullOnce}
           onToggleMaximize={toggleMaximize}
           removed={removedOpenId === openPost.id}
           pinnedCount={list.pinned.length}
