@@ -24,6 +24,10 @@ import {
   type DeliveryPublication,
 } from "./remote-video-delivery";
 import {
+  isInPictureInPicture,
+  watchPictureInPicture,
+} from "./picture-in-picture";
+import {
   cameraBitrateFor,
   cameraProfileFor,
   cameraSimulcastRungs,
@@ -792,13 +796,47 @@ export async function connectLiveKit({
     track: { attach(el: HTMLMediaElement): HTMLMediaElement },
     publication: DeliveryPublication,
   ) {
+    // Per element: whether it is counted as in PiP, and how to stop watching.
+    const pipWatches = new Map<
+      HTMLVideoElement,
+      { inPip: boolean; stop: () => void }
+    >();
+    const setPip = (element: HTMLVideoElement, inPip: boolean) => {
+      const watch = pipWatches.get(element);
+      if (!watch || watch.inPip === inPip) {
+        return;
+      }
+      watch.inPip = inPip;
+      if (inPip) {
+        delivery.enteredPictureInPicture(publication);
+      } else {
+        delivery.leftPictureInPicture(publication);
+      }
+    };
     return {
       attach(element: HTMLVideoElement) {
         track.attach(element);
         delivery.attached(publication);
         releaseEarlyShareRequest(publication);
+        if (!pipWatches.has(element)) {
+          const doc = typeof document === "undefined" ? undefined : document;
+          const watch = {
+            inPip: false,
+            stop: watchPictureInPicture(element, doc, (inPip) =>
+              setPip(element, inPip),
+            ),
+          };
+          pipWatches.set(element, watch);
+          setPip(element, isInPictureInPicture(element, doc));
+        }
       },
       detach(element: HTMLVideoElement) {
+        const watch = pipWatches.get(element);
+        if (watch) {
+          setPip(element, false);
+          watch.stop();
+          pipWatches.delete(element);
+        }
         const stop = (
           track as unknown as {
             stopObservingElement?: (el: HTMLMediaElement) => void;

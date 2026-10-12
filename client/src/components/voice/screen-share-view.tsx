@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Loader2, Maximize2, Minimize2, ScreenShareOff } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  PictureInPicture2,
+  ScreenShareOff,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -14,6 +22,7 @@ import {
   requestElementFullscreen,
   type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
+import { usePictureInPicture } from "@/hooks/use-picture-in-picture";
 import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
@@ -89,6 +98,7 @@ export function ScreenShareView({
   // One name for "this share fills the viewport", whichever route got it there.
   const isFullscreen =
     fullscreenMode === "element" ? elementFullscreen : isExpanded;
+  const pip = usePictureInPicture(videoRef, isSelf ? null : stream);
 
   useEffect(() => {
     if (hidePreview) {
@@ -321,6 +331,21 @@ export function ScreenShareView({
               <ScreenShareOff className="h-3 w-3" aria-hidden="true" />
               {t("voice.share.stop")}
             </Button>
+          )}
+          {pip.available && (
+            <Tooltip label={t("voice.hls.pip")} side="bottom">
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn("h-6 w-6", pip.active && "text-signal")}
+                data-testid="share-pip"
+                aria-label={t("voice.hls.pip")}
+                aria-pressed={pip.active}
+                onClick={pip.toggle}
+              >
+                <PictureInPicture2 className="h-3.5 w-3.5" />
+              </Button>
+            </Tooltip>
           )}
           {/* `expand` needs no platform support; withheld only when there is
               no picture to enlarge, which is the hidden-preview placeholder. */}

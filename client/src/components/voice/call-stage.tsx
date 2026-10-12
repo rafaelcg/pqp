@@ -22,6 +22,7 @@ import {
   Minimize2,
   PhoneOff,
   Pin,
+  PictureInPicture2,
   Scan,
   ScreenShare,
   ScreenShareOff,
@@ -109,6 +110,7 @@ import {
   useMusicStagePresence,
 } from "@/lib/music-prefs";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
+import { usePictureInPicture } from "@/hooks/use-picture-in-picture";
 import {
   chooseFullscreenStrategy,
   enterNativeVideoFullscreen,
@@ -4552,6 +4554,15 @@ export function ScreenTileFrame({
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
+  const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
+  const ownVideoRef = useRef<WebkitFullscreenVideo | null>(null);
+  const shareVideoRef = videoRef ?? ownVideoRef;
+  // A peer's live share only. The HLS player carries its own PiP control, and
+  // popping out our own screen is a mirror of what we are already looking at.
+  const pip = usePictureInPicture(
+    shareVideoRef,
+    tile.isSelf || useHls || dismissed?.active ? null : tile.stream,
+  );
   const hasAudio = Boolean(audio?.voice || audio?.share);
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
@@ -4585,8 +4596,6 @@ export function ScreenTileFrame({
     );
   }
 
-  const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
-
   return (
     <div className={cn("group relative", className)}>
       {hideSelfPreview ? (
@@ -4614,7 +4623,7 @@ export function ScreenTileFrame({
       ) : (
         <StageVideo
           stream={tile.stream}
-          videoRef={videoRef}
+          videoRef={shareVideoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           // Contain by default: a crop on a shared screen eats a toolbar or a
           // margin, which is very often the thing being presented. Fill is one
@@ -4713,6 +4722,23 @@ export function ScreenTileFrame({
               ) : (
                 <Maximize2 className="h-3.5 w-3.5" />
               )}
+            </button>
+          </Tooltip>
+        )}
+        {pip.available && (
+          <Tooltip label={t("voice.hls.pip")} side="bottom" align="start">
+            <button
+              type="button"
+              data-testid="share-pip"
+              aria-label={t("voice.hls.pip")}
+              aria-pressed={pip.active}
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
+                pip.active && "text-signal",
+              )}
+              onClick={pip.toggle}
+            >
+              <PictureInPicture2 className="h-3.5 w-3.5" />
             </button>
           </Tooltip>
         )}
