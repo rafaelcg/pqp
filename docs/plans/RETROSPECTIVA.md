@@ -52,15 +52,24 @@ The rules:
 
 1. The sampler reads the same sources as the voice occupancy sampler. A worker
    that cannot see seats writes nothing and counts `blindTicks`.
-2. Each minute is added once. The row stores the last minute bucket it added.
+2. Each minute is added once. The row stores the time of the last sample
+   that added a minute. A sample less than 45 seconds after it, or older than
+   it, adds nothing. A failed write is retried on the next tick.
 3. A seat held for resume, a room of one, a bot and a second tab add nothing.
-4. A queue adopted from another machine adds no tracks.
+   A parked seat counts: two people muted and deafened, or away from the
+   keyboard, add call time for as long as they stay. The idle hangup only
+   ends a seat that is alone.
+4. A queue adopted from another machine adds no tracks. A write the
+   registry row refused adds none either.
 5. Runtime flag `user_stats` (default on) stops every write.
 6. Everything is deleted with the account.
 
 Known gap: a seat in a live party that never loaded the stream (host,
 co-host, speaker) has no viewer row. Hosting is counted from
 `channel_sessions`.
+
+The party copy looks back over the viewer table's whole 24-hour retention, so
+a worker that was down for hours still copies every row not yet pruned.
 
 ## Privacy
 
@@ -77,3 +86,6 @@ The privacy policy names this data in both languages ("Retrospectiva" /
 2. Export the last 14 days of `voice.join` and `voice.leave` logs from
    Grafana to backfill call time from about 26 September? The window
    shrinks by one day each day.
+3. Should a parked seat count? Today it does (rule 3). Not counting it would
+   mean, for example, leaving out seats that are deafened, or rooms where
+   nobody has changed state for hours.
