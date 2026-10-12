@@ -79,6 +79,23 @@ class CancellationTest {
         assertTrue(result.isFailure)
     }
 
+    @Test
+    fun `an OkHttp cancelled call stops the caller instead of failing`() = runTest {
+        var reported = false
+        val thrown = runCatching {
+            runSuspendCatching { throw IOException("Canceled") }.onFailure { reported = true }
+        }.exceptionOrNull()
+        assertTrue(thrown is CancellationException)
+        assertTrue(thrown!!.cause is IOException)
+        assertFalse(reported)
+    }
+
+    @Test
+    fun `an ordinary IOException is still a failure`() = runTest {
+        val result = runSuspendCatching { throw IOException("unexpected end of stream") }
+        assertTrue(result.exceptionOrNull() is IOException)
+    }
+
     /**
      * The shape of `SessionStore.restore()`: a second call cancels the first
      * while it waits on the network. With `runCatching` the first one carried

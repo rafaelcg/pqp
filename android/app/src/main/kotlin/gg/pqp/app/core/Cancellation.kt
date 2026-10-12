@@ -46,6 +46,10 @@ fun Throwable.userMessage(): String? {
 /**
  * `runCatching` for suspending work: a failure is a [Result], a cancellation
  * is rethrown so the coroutine actually stops. Timeouts stay failures.
+ *
+ * OkHttp's `IOException("Canceled")` is rethrown as a [CancellationException]
+ * too, so a call cancelled underneath this coroutine stops it the same way
+ * rather than running the caller's failure handler.
  */
 inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
     Result.success(block())
@@ -54,6 +58,7 @@ inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
 } catch (cancelled: CancellationException) {
     throw cancelled
 } catch (error: Throwable) {
+    if (error.isCancellation()) throw CancellationException(error.message, error)
     Result.failure(error)
 }
 
