@@ -51,6 +51,7 @@ import { ApiError, fetchMessages } from "@/lib/api";
 import {
   deleteForumPost,
   fetchForumPost,
+  readForumPublishError,
   setForumPostFollow,
   updateForumPost,
   type ForumTagsStatus,
@@ -83,6 +84,8 @@ export interface ForumPostViewProps {
   forumName: string;
   serverId: string;
   tags: readonly ForumTag[];
+  /** The forum asks for at least one tag: Edit tags cannot save none. */
+  requireTag?: boolean;
   /** Whether `tags` is an answered read: a failed one is not "no tags". */
   tagsStatus?: ForumTagsStatus;
   /** The tags are read again as the editor opens (a saved list is not replayed). */
@@ -176,6 +179,7 @@ export function EditTagsDialog({
   open,
   tags,
   tagsStatus = "ready",
+  requireTag = false,
   current,
   isStaff,
   canManageTags = false,
@@ -188,6 +192,7 @@ export function EditTagsDialog({
   open: boolean;
   tags: readonly ForumTag[];
   tagsStatus?: ForumTagsStatus;
+  requireTag?: boolean;
   current: readonly string[];
   isStaff: boolean;
   canManageTags?: boolean;
@@ -214,6 +219,9 @@ export function EditTagsDialog({
   // still shows, unchangeable. With none of those the dialog would be a title
   // and two buttons around nothing, so it says why instead.
   const shown = tags.filter((tag) => !(tag.moderated && !isStaff) || picked.includes(tag.id));
+  // The forum asks for a tag: unticking the last one would be refused, so
+  // Save waits and the reason is written under the chips.
+  const noneLeft = requireTag && shown.length > 0 && picked.length === 0;
   return (
     <Dialog
       open={open}
@@ -225,9 +233,11 @@ export function EditTagsDialog({
           <Button variant="ghost" onClick={onClose}>
             {t("forum.edit.cancel")}
           </Button>
-          <Button disabled={shown.length === 0} onClick={() => onSave(picked)}>
-            {t("forum.edit.save")}
-          </Button>
+          {shown.length > 0 && (
+            <Button disabled={noneLeft} onClick={() => onSave(picked)}>
+              {t("forum.edit.save")}
+            </Button>
+          )}
         </div>
       }
     >
@@ -295,6 +305,15 @@ export function EditTagsDialog({
           );
         })}
       </div>
+      {noneLeft && (
+        <p
+          role="status"
+          data-forum-edit-tags-required=""
+          className="-mt-2 px-5 pb-4 text-xs text-text-secondary"
+        >
+          {t("forum.composer.tagsRequiredError")}
+        </p>
+      )}
     </Dialog>
   );
 }
@@ -386,6 +405,7 @@ export function ForumPostView({
   forumName,
   serverId,
   tags,
+  requireTag = false,
   tagsStatus = "ready",
   onRefreshTags,
   onRetryTags,
@@ -600,10 +620,20 @@ export function ForumPostView({
           });
           return;
         }
-        notify(t("forum.saveFailed"));
+        const refusal = readForumPublishError(error);
+        if (refusal.kind === "tag-required") {
+          notify(t("forum.composer.tagsRequiredError"));
+        } else if (refusal.kind === "tag-moderated") {
+          notify(t("forum.composer.tagModerated"));
+        } else if (refusal.kind === "tag-unknown") {
+          notify(t("forum.composer.tagUnknown"));
+          onRefreshTags?.();
+        } else {
+          notify(t("forum.saveFailed"));
+        }
       }
     },
-    [post, postId, onPostChange, notify, onShowPinned, t],
+    [post, postId, onPostChange, notify, onShowPinned, onRefreshTags, t],
   );
 
   const nowIso = () => new Date().toISOString();
@@ -692,6 +722,22 @@ export function ForumPostView({
   // Inline title edit.
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(post.title);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  // From the More menu the menu hands focus back to its button as it closes,
+  // after the input has autofocused: take it again once that has settled, so
+  // typing and Enter reach the field.
+  useEffect(() => {
+    if (!editingTitle) {
+      return;
+    }
+    const id = window.setTimeout(() => {
+      const input = titleInputRef.current;
+      if (input && document.activeElement !== input) {
+        input.focus();
+      }
+    }, 80);
+    return () => window.clearTimeout(id);
+  }, [editingTitle]);
   function saveTitle() {
     const next = titleDraft.replace(/\s+/g, " ").trim();
     setEditingTitle(false);
@@ -703,10 +749,10 @@ export function ForumPostView({
 
   const [editTagsOpen, setEditTagsOpen] = useState(false);
   // The action opens a dialog of toggle chips: with no chip this person could
-  // toggle, and nobody to send to the settings, it would open an empty box.
+  // toggle it would open an empty box, so it is not offered. Managers find the
+  // way to the Tags settings in the forum's empty state and in the composer.
   const canEditTags =
     tagsStatus !== "ready" ||
-    canManageTags ||
     tags.some((tag) => !tag.moderated || isStaff || post.tagIds.includes(tag.id));
   const [deleteOpen, setDeleteOpen] = useState(false);
   async function confirmDelete() {
@@ -927,6 +973,7 @@ export function ForumPostView({
       >
         {editingTitle ? (
           <input
+            ref={titleInputRef}
             autoFocus
             value={titleDraft}
             maxLength={FORUM_TITLE_MAX}
@@ -1167,6 +1214,7 @@ export function ForumPostView({
         open={editTagsOpen}
         tags={tags}
         tagsStatus={tagsStatus}
+        requireTag={requireTag}
         current={post.tagIds}
         isStaff={isStaff}
         canManageTags={canManageTags}

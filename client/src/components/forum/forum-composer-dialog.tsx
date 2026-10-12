@@ -455,7 +455,12 @@ export function ForumComposerDialog({
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
-      if (reason.kind === "paused" || reason.kind === "tag-required") {
+      if (
+        reason.kind === "paused" ||
+        reason.kind === "tag-required" ||
+        reason.kind === "tag-unknown" ||
+        reason.kind === "tag-moderated"
+      ) {
         onRefused?.(reason.kind);
       }
       if (reason.kind === "slow-mode" && reason.retryAfterMs > 0) {
@@ -631,6 +636,18 @@ export function ForumComposerDialog({
         };
       case "tag-required":
         return null;
+      case "tag-moderated":
+        return {
+          icon: <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />,
+          text: t("forum.composer.tagModerated"),
+          tone: "danger" as const,
+        };
+      case "tag-unknown":
+        return {
+          icon: <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />,
+          text: t("forum.composer.tagUnknown"),
+          tone: "danger" as const,
+        };
       case "paused":
         return {
           icon: <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />,
@@ -931,7 +948,11 @@ export function ForumComposerDialog({
                   <span
                     className={cn(
                       "ml-2 font-semibold",
-                      tagRequiredShown ? "text-danger" : "text-warning",
+                      tagRequiredShown
+                        ? "text-danger"
+                        : tagIds.length > 0
+                          ? "text-text-tertiary"
+                          : "text-warning",
                     )}
                   >
                     {t("forum.composer.tagsRequired")}

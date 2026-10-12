@@ -1352,7 +1352,7 @@ export function ForumPane({
         {canManage && onOpenSettings && (
           <Button variant="secondary" onClick={() => onOpenSettings("tags")} className="gap-1.5">
             <Tag className="h-4 w-4" aria-hidden />
-            {t("forum.empty.setupTags")}
+            {tags.length > 0 ? t("forum.empty.starterEdit") : t("forum.empty.setupTags")}
           </Button>
         )}
         {pausedLine}
@@ -1622,6 +1622,7 @@ export function ForumPane({
           forumName={channel.name}
           serverId={server.id}
           tags={tags}
+          requireTag={settings?.requireTag ?? false}
           tagsStatus={tagsStatus}
           onRefreshTags={refreshForumRules}
           onRetryTags={retryTags}
