@@ -2299,6 +2299,55 @@ async function pinCommunityHomeUpload(
   return pinnedKey;
 }
 
+/**
+ * Media that reached the bucket by a server-side copy rather than a browser
+ * PUT ("Salvar no Baú" copies a story's object here). The copy is ours, so
+ * the row is born verified; it is claimed onto a draft like any upload. The
+ * scanner's verdict travels with the bytes (`scan`), so the Baú row says what
+ * was checked rather than starting over as unscanned.
+ */
+export async function registerCopiedCommunityHomeMedia(input: {
+  serverId: string;
+  uploaderId: string;
+  key: string;
+  filename: string;
+  contentType: CommunityHomeContentType;
+  byteSize: number;
+  scan?: {
+    status: string;
+    provider: string | null;
+    score: number | null;
+    labels: unknown;
+    scannedAt: Date | null;
+  };
+}): Promise<string> {
+  if (!isCommunityHomeKey(input.serverId, input.key)) {
+    throw new CommunityHomeError("invalid", "Invalid storage key");
+  }
+  const result = await getPool().query<{ id: string }>(
+    `INSERT INTO community_home_media_uploads (
+       server_id, uploader_id, storage_key, filename, content_type, byte_size,
+       kind, verified_at, scan_status, scan_provider, scan_score, scan_labels, scanned_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11::jsonb, $12)
+     RETURNING id`,
+    [
+      input.serverId,
+      input.uploaderId,
+      input.key,
+      input.filename,
+      input.contentType,
+      input.byteSize,
+      communityHomeMediaKindFromContentType(input.contentType),
+      input.scan?.status ?? "unscanned",
+      input.scan?.provider ?? null,
+      input.scan?.score ?? null,
+      input.scan?.labels == null ? null : JSON.stringify(input.scan.labels),
+      input.scan?.scannedAt ?? null,
+    ],
+  );
+  return result.rows[0]!.id;
+}
+
 export async function claimCommunityHomeMediaUpload(input: {
   serverId: string;
   uploaderId: string;

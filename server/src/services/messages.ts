@@ -125,7 +125,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             (u.clerk_id = '${AUTOMOD_CLERK_ID}') as author_is_automod,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
-            m.chance, m.system_kind,
+            m.chance, m.system_kind, m.story_id,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -665,6 +665,8 @@ export async function createMessage(
   mentions?: MentionWrite,
   interactive?: MessageInteractive,
   nonce?: string | null,
+  /** A reply to a story (`POST /api/stories/:id/reply`): the story it quotes. */
+  storyId?: string | null,
 ): Promise<CreateMessageResult | null> {
   if (interactive?.chance && interactive.poll) {
     return null;
@@ -682,6 +684,7 @@ export async function createMessage(
     () => {
       nonceAlreadyStored = true;
     },
+    storyId ?? null,
   );
   if (created || !nonceAlreadyStored || !nonce) {
     return created;
@@ -699,6 +702,7 @@ async function insertMessage(
   interactive: MessageInteractive | undefined,
   nonce: string | null,
   onNonceConflict: () => void,
+  storyId: string | null,
 ): Promise<CreateMessageResult | null> {
   let storedBody = clampChatNewlines(body);
   let chance: ChanceResult | null = null;
@@ -785,14 +789,14 @@ async function insertMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                   mention_everyone, mention_here, chance, system_kind
+                   mention_everyone, mention_here, chance, system_kind, story_id
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-              m.mention_everyone, m.mention_here, m.chance, m.system_kind,
+              m.mention_everyone, m.mention_here, m.chance, m.system_kind, m.story_id,
               ${REPLY_COLUMNS}
        FROM inserted m
        JOIN channels msg_ch ON msg_ch.id = m.channel_id
@@ -807,6 +811,7 @@ async function insertMessage(
         chance ? JSON.stringify(chance) : null,
         nonce ?? null,
         interactive?.systemKind ?? null,
+        storyId,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
@@ -1231,6 +1236,8 @@ export function mapMessage(
     chance: parseStoredChance(m.chance),
     poll: m.poll ?? null,
     systemKind: parseStoredSystemKind(m.system_kind),
+    // Only on a story reply; absent everywhere else, so no other payload grows.
+    ...(m.story_id ? { storyId: m.story_id } : {}),
   };
 }
 

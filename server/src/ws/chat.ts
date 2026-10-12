@@ -2262,6 +2262,8 @@ export type PostChannelMessageInput = {
    * nudge handler sets it, after its own rules; every check below still runs.
    */
   systemKind?: MessageSystemKind;
+  /** A story reply: the story the message quotes. Conversations only. */
+  storyId?: string;
 };
 
 export type PostChannelMessageResult =
@@ -2522,6 +2524,7 @@ async function postChannelMessageAttempt(
       ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind }
       : undefined,
     input.nonce,
+    channel?.kind !== "server" ? (input.storyId ?? null) : null,
   );
   if (dbMessage?.duplicate) {
     // The first copy was stored, fanned out and charged. Answer only the

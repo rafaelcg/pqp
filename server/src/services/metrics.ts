@@ -20,6 +20,7 @@ import {
   communityHomeCaptionsMetrics,
   type CommunityHomeCaptionsMetrics,
 } from "./community-home-captions.js";
+import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
   communityColumns,
   communityTag,
@@ -342,6 +343,15 @@ export interface AdminMetrics {
    * translations exist; and this process's own counters.
    */
   communityHomeCaptions: CommunityHomeCaptionsMetrics;
+  /**
+   * Stories (`services/story-metrics.ts`): this process's counters (posts,
+   * views, scans, video jobs, sweep deletes and failures) and, deployment
+   * wide and cached 30 s, the numbers the feature is judged by: posters and
+   * their concentration, viewers per story, openers, reactions, replies and
+   * whether replies got answers, repeat posters, reports, removals, holds,
+   * live bytes and the sweep lag. Live like `communityHomeCaptions`.
+   */
+  stories: StoriesMetrics;
   /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
@@ -1218,6 +1228,7 @@ type CachedMetrics = Omit<
   | "flags"
   | "communityHomeTranslation"
   | "communityHomeCaptions"
+  | "stories"
   | "streamAlerts"
   | "nudge"
 >;
@@ -2005,6 +2016,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
   ] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
@@ -2013,6 +2025,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
+    storiesMetrics(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -2028,6 +2041,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
     streamAlerts: streamAlertMetrics(),
     nudge: nudgeMetrics(),
   };

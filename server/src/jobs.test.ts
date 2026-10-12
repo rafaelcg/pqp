@@ -78,6 +78,26 @@ vi.mock("./services/watch-parties.js", () => ({
 vi.mock("./ws/watch-party-events.js", () => ({
   broadcastWatchParty: vi.fn(async () => undefined),
 }));
+// Stories: `story-media.test.ts` pins what the sweep and the video job do.
+vi.mock("./services/story-media.js", () => ({
+  STORY_SWEEP_INTERVAL_MS: 60_000,
+  STORY_VIDEO_INTERVAL_MS: 5_000,
+  sweepStories: vi.fn(async () => ({
+    expired: 0,
+    orphaned: 0,
+    mediaDeleted: 0,
+    mediaFailed: 0,
+    rowsDeleted: 0,
+  })),
+  processStoryVideos: vi.fn(async () => ({ storyId: null, outcome: "idle" as const })),
+}));
+vi.mock("./services/stories.js", () => ({
+  storyAudienceTargets: vi.fn(async () => ({ serverIds: [], friends: false })),
+}));
+vi.mock("./ws/stories.js", () => ({
+  notifyStoriesUpdate: vi.fn(),
+  notifyStoryAudiences: vi.fn(),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -98,6 +118,7 @@ import { startSpeechJobPoller } from "./services/speech-worker.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
+import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -180,11 +201,12 @@ describe("cold jobs", () => {
     // Baú translation sweep (a minute, asserted below); 20 with the speech
     // job poller (its own test above: adaptive, not a fixed cadence); 21 with
     // the Baú video subtitles sweep (a minute, asserted below); 22 with the
-    // forum shell sweep (five minutes, asserted below). Bump
-    // this when a job is added, and assert the new job's cadence below
+    // forum shell sweep (five minutes, asserted below); 24 with the stories
+    // sweep (a minute) and the stories video job (5 s), both asserted below.
+    // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(22);
+    expect(jobs.count).toBe(24);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -206,6 +228,11 @@ describe("cold jobs", () => {
     expect(sweepCommunityHomeTranslations).toHaveBeenCalledTimes(4);
     // And four of the video subtitles sweep, on the same minute.
     expect(sweepCommunityHomeCaptions).toHaveBeenCalledTimes(4);
+    // The stories expiry sweep: a minute, so four. It has no boot run: a
+    // minute is the whole grace the 24 h promise allows anyway.
+    expect(sweepStories).toHaveBeenCalledTimes(4);
+    // The stories video job: every 5 s, idle here, so once per tick.
+    expect(processStoryVideos).toHaveBeenCalledTimes(48);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
