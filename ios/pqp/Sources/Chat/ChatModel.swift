@@ -94,6 +94,14 @@ final class ChatModel {
 
     private var session: SessionStore?
     private var channelId: String?
+    /// Whether the app is in front. A message that lands while the phone is
+    /// locked or the app is behind another one has not been read; test seam.
+    var appIsActive: () -> Bool = { UIApplication.shared.applicationState == .active }
+    /// How "this conversation is read" is written. Production posts to the
+    /// server; a test records the call instead. Test seam.
+    var markReadAction: ((String) async -> Void)?
+    private var markReadTask: Task<Void, Never>?
+    private var markReadAgain = false
     /// Opened in the thread slot (a forum post); `close` gives it back.
     private var joinedAsThread = false
     private var handlerKey = UUID().uuidString
@@ -270,6 +278,8 @@ final class ChatModel {
         }
         typingSweeper?.cancel()
         typingSweeper = nil
+        markReadTask?.cancel()
+        markReadTask = nil
         // Leaving the screen is leaving the retry: no file is kept behind it,
         // neither a failed note nor one still in flight (its bytes are already
         // read; the file is only for playing the row and for a retry).
@@ -746,6 +756,29 @@ final class ChatModel {
         }
     }
 
+    /// Writes "read" for the open conversation, one request at a time: a burst
+    /// of messages while the previous write is in flight asks for one more
+    /// write afterwards rather than one per message.
+    func markReadSoon() {
+        guard let channelId else { return }
+        if markReadTask != nil {
+            markReadAgain = true
+            return
+        }
+        markReadTask = Task { [weak self] in
+            repeat {
+                guard let self else { return }
+                self.markReadAgain = false
+                if let action = self.markReadAction {
+                    await action(channelId)
+                } else {
+                    try? await self.session?.api.markRead(channelId: channelId)
+                }
+            } while self?.markReadAgain == true
+            self?.markReadTask = nil
+        }
+    }
+
     func noteTyping() {
         guard let session, let channelId, !draft.isEmpty else { return }
         // The server rate-limits typing to ~1/s and silently drops the rest, so
@@ -783,6 +816,14 @@ final class ChatModel {
                 // of one already on screen is not news.
                 if NudgeRules.isFresh(message, viewerId: session?.currentUser?.id) {
                     freshNudges += 1
+                }
+                // Looking at it is reading it. Without this the row stays
+                // unread behind the screen, and the Conversas tab, the Não
+                // lidas chip and the app icon count a message already seen.
+                if ChatReadRules.shouldMarkRead(
+                    message, viewerId: session?.currentUser?.id, appIsActive: appIsActive()
+                ) {
+                    markReadSoon()
                 }
             }
 
@@ -997,4 +1038,15 @@ struct HeldVoiceNote: Equatable, Sendable {
     let note: RecordedVoiceNote
     /// The message it answers, if it was a reply.
     let replyId: String?
+}
+
+
+/// When a message that arrives in the open conversation counts as read.
+enum ChatReadRules {
+    /// Somebody else's message, with the app in front. Your own echo is not
+    /// news, and a message that lands behind a locked screen has not been seen
+    /// (the screen marks the conversation read again when the app returns).
+    static func shouldMarkRead(_ message: Message, viewerId: String?, appIsActive: Bool) -> Bool {
+        appIsActive && message.authorId != viewerId
+    }
 }

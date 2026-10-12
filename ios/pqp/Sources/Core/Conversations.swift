@@ -419,3 +419,8 @@ enum ConversationTime {
         return date.formatted(style)
     }
 }
+
+/// How often the Conversas tab re-reads which friends are online.
+enum ConversasPresence {
+    static let pollSeconds = 30
+}
