@@ -495,7 +495,7 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
             val on = tag.id in state.tagIds
             val full = !on && state.tagIds.size >= ForumLimits.MAX_TAGS_PER_POST
             ForumFilterChip(
-                label = tag.name,
+                label = tag.displayName(),
                 selected = on,
                 showClose = false,
                 trailingIcon = when {
@@ -503,7 +503,11 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
                     tag.moderated -> PqpIcons.StaffOnly
                     else -> null
                 },
-                leading = tag.emoji?.takeIf { it.isNotBlank() }?.let { emoji -> { Text(emoji) } },
+                leading = if (tag.hasGlyph()) {
+                    { ForumTagGlyph(tag, size = 16.dp) }
+                } else {
+                    null
+                },
                 onClick = { onToggle(tag.id) },
                 modifier = Modifier.alpha(if (full) 0.45f else 1f),
                 testTag = "forum.composer.tag.${tag.id}",
