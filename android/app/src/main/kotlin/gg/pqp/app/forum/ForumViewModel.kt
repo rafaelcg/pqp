@@ -386,6 +386,10 @@ class ForumViewModel(
         if (frame.forumId != forumId) return
         if (frame is ForumFrame.Upsert && frame.post.forumId != forumId) return
         if (pageReading) {
+            // Bounded: a page stuck on a bad network must not hold a busy
+            // forum's every frame. Past the cap the oldest go; the reader
+            // still gets them with the next page 1 (return, reconnect, pill).
+            if (held.size >= HELD_MAX) held.removeAt(0)
             held += frame
             return
         }
@@ -438,6 +442,9 @@ class ForumViewModel(
     }
 
     companion object {
+        /** Frames held while a page 1 is out, at most. */
+        private const val HELD_MAX = 100
+
         fun factory(
             session: SessionStore,
             prefs: ForumPrefs,
