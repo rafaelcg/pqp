@@ -72,6 +72,11 @@ export interface ConversationHomeListProps {
    * there is nothing to close it to and no X.
    */
   phoneShell?: boolean;
+  /**
+   * The friends' stories strip, under the title and above search (design A2).
+   * Draws nothing while the friends audience is off or nobody has a story up.
+   */
+  storiesSlot?: ReactNode;
 }
 
 /**
@@ -115,6 +120,7 @@ export function ConversationHomeList({
   onMobileClose,
   fullScreen = false,
   phoneShell = false,
+  storiesSlot = null,
 }: ConversationHomeListProps) {
   const { t } = useTranslation();
   const {
@@ -302,6 +308,8 @@ export function ConversationHomeList({
           )}
         </div>
       </div>
+
+      <div className="shrink-0 px-3 pt-3 empty:hidden">{storiesSlot}</div>
 
       {conversations.length > 0 && (
         <div data-conversations-tools="" className="shrink-0 space-y-2.5 px-3 pb-1 pt-3">

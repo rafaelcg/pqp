@@ -35,6 +35,7 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import { displayRoleName } from "@/lib/role-labels";
+import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
@@ -154,11 +155,16 @@ void _groupsCoverEveryFlag;
 const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
   "ATTACH_FILES",
   "READ_MESSAGE_HISTORY",
-  // Enforced by the stories server routes; shown by the stories web PR,
-  // together with the strip, so a server without stories never sees a toggle
-  // for a feature it cannot use.
-  "POST_STORIES",
 ]);
+
+/**
+ * Bits for a feature behind a per-server runtime flag: enforced, but drawn
+ * only where the feature is on, so a server without stories never sees a
+ * toggle for something it cannot use.
+ */
+function flagGatedOff(key: PermissionFlagKey, storiesOn: boolean): boolean {
+  return key === "POST_STORIES" && !storiesOn;
+}
 
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([
   "ADMINISTRATOR",
@@ -236,6 +242,19 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<RoleEditorTab>("display");
+  const [storiesOn, setStoriesOn] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void loadServerStoriesEnabled(serverId).then((on) => {
+      if (alive) {
+        setStoriesOn(on);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [serverId]);
 
   const selected = roles.find((role) => role.id === selectedId) ?? null;
   const availableTabs = tabsFor(selected);
@@ -604,7 +623,9 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 />
               </div>
               {PERMISSION_GROUPS.map((group) => {
-                const keys = group.keys.filter((key) => !UNENFORCED_FLAGS.has(key));
+                const keys = group.keys.filter(
+                  (key) => !UNENFORCED_FLAGS.has(key) && !flagGatedOff(key, storiesOn),
+                );
                 if (keys.length === 0) {
                   return null;
                 }

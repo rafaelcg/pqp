@@ -1,3 +1,4 @@
+import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import type {
   Embed,
   MessageReaction,
@@ -3562,6 +3563,12 @@ const MessageRow = memo(function MessageRow({
                 <>
                   {/* A message carrying attachments is allowed to say nothing, so
                       an empty body renders as nothing rather than an empty line. */}
+                  {message.storyId ? (
+                    <StoryQuoteCard
+                      storyId={message.storyId}
+                      currentUserId={currentUserId}
+                    />
+                  ) : null}
                   {message.chance ? (
                     <ChanceCard result={message.chance} />
                   ) : message.poll ? (

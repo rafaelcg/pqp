@@ -5,6 +5,7 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronRight,
+  CirclePlus,
   Copy,
   Eraser,
   ExternalLink,
@@ -386,6 +387,14 @@ interface ChannelListProps {
    */
   communityHomePreview?: CommunityHomePreviewProps | null;
   /**
+   * The stories strip (`components/stories/story-strip.tsx`), drawn at the
+   * top of the list, above Baú. It draws nothing unless the server has
+   * stories on and something is live. Never in the icons-only rail.
+   */
+  storiesSlot?: ReactNode;
+  /** "Postar story" in the server menu, for someone who may post here. */
+  onPostStory?: () => void;
+  /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
    */
@@ -490,6 +499,8 @@ export const ChannelList = memo(function ChannelList({
   communityHomePreview = null,
   communityHomeSelected = false,
   onSelectCommunityHome,
+  storiesSlot = null,
+  onPostStory,
   members = [],
   iconsOnly = false,
   onExpand,
@@ -1343,6 +1354,16 @@ export const ChannelList = memo(function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
+        ...(onPostStory
+          ? [
+              {
+                id: "post-story",
+                label: t("stories.strip.post"),
+                icon: CirclePlus,
+                onSelect: onPostStory,
+              },
+            ]
+          : []),
         ...(canManage || canManageMessages
           ? [
               { id: "sep", label: "", separator: true },
@@ -1542,6 +1563,7 @@ export const ChannelList = memo(function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
+            {server && storiesSlot}
             {server &&
               (visibleFavs.length > 0 ||
                 Boolean(
