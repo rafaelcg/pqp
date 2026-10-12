@@ -815,6 +815,45 @@ describe("MusicNowPlaying", () => {
     expect(html.match(/aria-expanded/g)?.length).toBe(2);
   });
 
+  it("says so on the bar when YouTube will not play the video here", () => {
+    const render = (playbackFailed: boolean, listening = true) =>
+      renderToStaticMarkup(
+        <TooltipProvider>
+          <MusicNowPlaying
+            current={track("now")}
+            music={{
+              channelId: CHANNEL,
+              state: state(),
+              receivedAt: Date.now(),
+              open: false,
+              listening,
+              parked: null,
+            }}
+            voiceState={voiceState()}
+            canManage
+            canSetSwitches
+            playing
+            needsTap={false}
+            playbackFailed={playbackFailed}
+            onPlayPause={() => {}}
+            onSkip={() => {}}
+            onTapToPlay={() => {}}
+            {...extras}
+            listening={listening}
+          />
+        </TooltipProvider>,
+      );
+    const failed = render(true);
+    expect(failed).toContain("data-music-unplayable");
+    expect(failed).toContain(translateMessage("music.error.playback"));
+    expect(failed).not.toContain("Ana");
+    const fine = render(false);
+    expect(fine).not.toContain("data-music-unplayable");
+    expect(fine).toContain("Ana");
+    /* A machine that stopped listening says that, not the video error. */
+    expect(render(true, false)).not.toContain("data-music-unplayable");
+  });
+
   it("says the room picked a similar track", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
