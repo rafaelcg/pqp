@@ -5,6 +5,7 @@ import android.util.Log
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.runSuspendCatching
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -207,7 +208,7 @@ class SocialRepository(
     suspend fun searchPeople(query: String): Result<List<PublicUser>> {
         val term = query.trim()
         if (term.length < USER_SEARCH_MIN_LENGTH) return Result.success(emptyList())
-        return runCatching {
+        return runSuspendCatching {
             if (looksLikeTag(term)) {
                 listOf(session.api.lookupUser(term))
             } else {
@@ -226,7 +227,7 @@ class SocialRepository(
      * navigates into it in the same breath and an empty list behind the back
      * button reads as a conversation that failed to open.
      */
-    suspend fun openConversation(userIds: List<String>): Result<DmSummary> = runCatching {
+    suspend fun openConversation(userIds: List<String>): Result<DmSummary> = runSuspendCatching {
         val conversation = session.api.openConversation(userIds)
         upsert(conversation)
         refreshConversations()

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import gg.pqp.app.R
+import gg.pqp.app.core.userMessage
 import gg.pqp.app.social.PublicUser
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.USER_SEARCH_MIN_LENGTH
@@ -81,7 +82,7 @@ fun PeopleSearchEffect(state: PeopleSearchState, social: SocialRepository) {
                 state.results = it
                 state.error = null
             }
-            .onFailure { state.error = it.message }
+            .onFailure { state.error = it.userMessage() }
         state.searching = false
     }
 }
