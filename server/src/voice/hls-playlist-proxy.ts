@@ -756,6 +756,13 @@ async function runKeepWarmTick(
       return;
     }
     for (const rung of rungs) {
+      // STOOD DOWN MID-TICK. The owner's answer (or an idle stop) can land
+      // while this tick is awaiting the ownership probe or the rung list; a
+      // stopped loop must not render afterwards, or "relieved" would still
+      // mean one more fetch from the bucket on this machine's account.
+      if (keepWarmLoops.get(key) !== loop) {
+        return;
+      }
       try {
         await renderCachedPlaylist(channelId, startedAt, rung, now);
         keepWarmRenders += 1;
