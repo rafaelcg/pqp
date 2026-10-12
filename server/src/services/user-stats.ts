@@ -54,8 +54,9 @@ import { activityDay } from "./user-activity.js";
  * retried, oldest first, before the next tick's own write.
  *
  * TRACKS QUEUED
- * Noted where a music write is ACCEPTED (`ws/voice.ts`), never where a queue
+ * Noted where a music write is kept (`ws/voice.ts`), never where a queue
  * decided elsewhere is adopted, and flushed once a minute as one statement.
+ * Each added track id counts once, however many writes report it.
  * A retried flush can count a batch twice; for a recap that is acceptable,
  * and it is why this is a count and not a ledger.
  *
@@ -82,6 +83,8 @@ const MIN_SAMPLE_GAP_SECONDS = 45;
 const MAX_FAILED_SAMPLES = 5;
 const MIN_PEOPLE_IN_ROOM = 2;
 const MAX_PENDING_MUSIC = 50_000;
+/** Track ids already counted, kept so a track is counted once per add. */
+const MAX_CREDITED_TRACKS = 20_000;
 const BLIND_WARNING_INTERVAL_MS = 60 * 60_000;
 
 export type UserStatsSource = "registry" | "local" | "unavailable" | "off";
@@ -101,19 +104,22 @@ export interface LiveSeat {
  * `kept`, when given, is the queue the room actually kept after this write
  * lost in the registry row: only the tracks it still holds (playing, queued
  * or already played) count.
+ *
+ * Returns the tracks' ids. A track id is minted once per add, so
+ * `noteTracksQueued` counts each id once.
  */
 export function newlyQueuedTracks(
   held: MusicState | null,
   next: MusicState | null,
   userId: string,
   kept?: MusicState | null,
-): number {
+): string[] {
   if (!next) {
-    return 0;
+    return [];
   }
   const known = musicTrackIds(held);
   const keptIds = kept === undefined ? null : musicTrackIds(kept);
-  let added = 0;
+  const added: string[] = [];
   const candidates = next.current ? [next.current, ...next.queue] : next.queue;
   for (const track of candidates) {
     if (
@@ -123,7 +129,7 @@ export function newlyQueuedTracks(
       !track.autoplayed
     ) {
       known.add(track.id);
-      added += 1;
+      added.push(track.id);
     }
   }
   return added;
@@ -204,6 +210,8 @@ export interface UserStatsMetrics {
 export interface UserStatsRecorder {
   sample(now?: Date): Promise<{ source: UserStatsSource; written: number }>;
   noteMusicQueued(userId: string, count: number): void;
+  /** Counts each of these track ids once, however many writes report it. */
+  noteTracksQueued(userId: string, trackIds: readonly string[]): void;
   flushMusic(): Promise<number>;
   copyWatchParties(): Promise<number>;
   /** Starts the music flush. The sampler and the copy run from `jobs.ts`. */
@@ -231,6 +239,8 @@ export function createUserStatsRecorder(
   /** Noted and not yet stored, keyed `day|userId`. */
   let pendingMusic = new Map<string, { userId: string; day: string; count: number }>();
   let flushing: Promise<number> | null = null;
+  /** `userId|trackId` already counted, oldest first, bounded. */
+  let creditedTracks = new Set<string>();
   /** Sample writes that failed, oldest first, retried before the next tick. */
   let failedSamples: { at: Date; seats: LiveSeat[] }[] = [];
   let lastBlindWarningAt = 0;
@@ -409,6 +419,31 @@ export function createUserStatsRecorder(
     m.musicNoted += count;
   }
 
+  function noteTracksQueued(userId: string, trackIds: readonly string[]): void {
+    if (trackIds.length === 0 || !enabled()) {
+      return;
+    }
+    // Two writes can report the same add: two writes that both lost in the
+    // row to a winner holding the track, or a client re-sending a track
+    // after the room dropped it. One add is one track.
+    let fresh = 0;
+    for (const trackId of trackIds) {
+      const key = `${userId}|${trackId}`;
+      if (creditedTracks.has(key)) {
+        continue;
+      }
+      creditedTracks.add(key);
+      if (creditedTracks.size > MAX_CREDITED_TRACKS) {
+        const oldest = creditedTracks.values().next().value;
+        if (oldest !== undefined) {
+          creditedTracks.delete(oldest);
+        }
+      }
+      fresh += 1;
+    }
+    noteMusicQueued(userId, fresh);
+  }
+
   function flushMusic(): Promise<number> {
     if (flushing) {
       return flushing;
@@ -522,6 +557,7 @@ export function createUserStatsRecorder(
   return {
     sample,
     noteMusicQueued,
+    noteTracksQueued,
     flushMusic,
     copyWatchParties,
     start,
@@ -534,6 +570,7 @@ export function createUserStatsRecorder(
     resetForTests() {
       pendingMusic = new Map();
       flushing = null;
+      creditedTracks = new Set();
       failedSamples = [];
       lastBlindWarningAt = 0;
       m = emptyMetrics();

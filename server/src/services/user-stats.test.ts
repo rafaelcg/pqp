@@ -76,18 +76,18 @@ describe("newlyQueuedTracks", () => {
       track("4", "other"),
       track("5", "me", true),
     ]);
-    expect(newlyQueuedTracks(held, next, "me")).toBe(1);
+    expect(newlyQueuedTracks(held, next, "me")).toEqual(["3"]);
   });
 
   it("counts nothing for a skip, a removal or a teardown", () => {
     const held = music(track("1", "me"), [track("2", "me")]);
-    expect(newlyQueuedTracks(held, music(track("2", "me"), []), "me")).toBe(0);
-    expect(newlyQueuedTracks(held, music(track("1", "me"), []), "me")).toBe(0);
-    expect(newlyQueuedTracks(held, null, "me")).toBe(0);
+    expect(newlyQueuedTracks(held, music(track("2", "me"), []), "me")).toHaveLength(0);
+    expect(newlyQueuedTracks(held, music(track("1", "me"), []), "me")).toHaveLength(0);
+    expect(newlyQueuedTracks(held, null, "me")).toHaveLength(0);
   });
 
   it("counts the first track of an empty room", () => {
-    expect(newlyQueuedTracks(null, music(track("1", "me"), []), "me")).toBe(1);
+    expect(newlyQueuedTracks(null, music(track("1", "me"), []), "me")).toHaveLength(1);
   });
 
   it("counts only the tracks the room kept, when given what it kept", () => {
@@ -95,10 +95,10 @@ describe("newlyQueuedTracks", () => {
     const next = music(track("1", "me"), [track("2", "me"), track("3", "me")]);
     // A later write kept track 2 (and has already played it) but not 3.
     const kept = music(track("4", "other"), [], [track("1", "me"), track("2", "me")]);
-    expect(newlyQueuedTracks(held, next, "me", kept)).toBe(1);
+    expect(newlyQueuedTracks(held, next, "me", kept)).toEqual(["2"]);
     // A winner that never saw this write holds none of it.
-    expect(newlyQueuedTracks(held, next, "me", music(track("9", "other"), []))).toBe(0);
-    expect(newlyQueuedTracks(held, next, "me", null)).toBe(0);
+    expect(newlyQueuedTracks(held, next, "me", music(track("9", "other"), []))).toHaveLength(0);
+    expect(newlyQueuedTracks(held, next, "me", null)).toHaveLength(0);
   });
 });
 
@@ -340,6 +340,21 @@ describeDb("user stats", () => {
     expect(await r.flushMusic()).toBe(0);
     expect(await stats()).toEqual({});
     expect(r.metrics()).toMatchObject({ musicPending: 0, musicDropped: 2 });
+  });
+
+  it("counts one add once, however many writes report it", async () => {
+    const ana = await person("ana");
+    const r = createUserStatsRecorder({
+      enabled: () => true,
+      now: () => Date.parse("2026-10-10T23:30:00Z"),
+    });
+    r.noteTracksQueued(ana, ["t1", "t2"]);
+    // Two writes that both lost to a winner holding t2 report it again.
+    r.noteTracksQueued(ana, ["t2"]);
+    r.noteTracksQueued(ana, ["t2", "t3"]);
+    expect(r.metrics().musicNoted).toBe(3);
+    await r.flushMusic();
+    expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 3 } });
   });
 
   it("flushes queued tracks per person per day, beside the call time", async () => {

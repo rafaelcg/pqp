@@ -9263,7 +9263,7 @@ export async function handleVoiceMessage(
         // row first, and that winner does not count these tracks again
         // (they were in its `heldMusic`). So count the ones the row holds.
         // A winner from another machine never saw this write and holds none.
-        userStats.noteMusicQueued(
+        userStats.noteTracksQueued(
           user.id,
           newlyQueuedTracks(heldMusic, write.state, user.id, persisted.held),
         );
@@ -9293,7 +9293,7 @@ export async function handleVoiceMessage(
     // is counted above, for the tracks the row kept. The `adopt*` paths take
     // a queue another machine already counted. A failed persist leaves the
     // local decision standing, so it counts.
-    userStats.noteMusicQueued(
+    userStats.noteTracksQueued(
       user.id,
       newlyQueuedTracks(heldMusic, write.state, user.id),
     );

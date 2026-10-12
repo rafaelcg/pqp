@@ -60,7 +60,8 @@ The rules:
    keyboard, add call time for as long as they stay. The idle hangup only
    ends a seat that is alone.
 4. A queue adopted from another machine adds no tracks. A write the
-   registry row refused adds none either.
+   registry row refused counts only the tracks the winning row still holds.
+   Each added track counts once, however many writes report it.
 5. Runtime flag `user_stats` (default on) stops every write.
 6. Everything is deleted with the account.
 
