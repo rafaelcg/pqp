@@ -8,6 +8,7 @@ import {
   useNudgeChannelState,
   useNudgeEnabled,
   type NudgeSendOptions,
+  type NudgeSendOutcome,
 } from "@/lib/nudge";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +36,36 @@ export interface NudgeButtonProps {
  *    over the ten seconds the server will refuse another;
  *  - refused: the tile stays usable; the reason is a line under the log.
  */
+/**
+ * The send for one conversation, and its registration as the `/nudge` target
+ * while it is mounted. Null while the flag is off or there is no eligible
+ * conversation (the caller decides eligibility: a 1:1 with a friend, nobody
+ * blocked). The header button uses it, and so does Modo 2005's window
+ * toolbar, which replaces that header.
+ */
+export function useNudgeTrigger(
+  channelId: string | null,
+  send: NudgeSendOptions["send"],
+  isConnected: () => boolean,
+): (() => NudgeSendOutcome) | null {
+  const enabled = useNudgeEnabled();
+  const trigger = useCallback(
+    () =>
+      channelId
+        ? sendNudge(channelId, { send, connected: isConnected() })
+        : ("offline" as const),
+    [channelId, send, isConnected],
+  );
+  useEffect(() => {
+    if (!enabled || !channelId) {
+      return;
+    }
+    setNudgeTarget({ channelId, trigger });
+    return () => setNudgeTarget(null);
+  }, [enabled, channelId, trigger]);
+  return enabled && channelId ? trigger : null;
+}
+
 export function NudgeButton({ channelId, send, isConnected, className }: NudgeButtonProps) {
   const { t } = useTranslation();
   const enabled = useNudgeEnabled();
@@ -60,19 +91,7 @@ export function NudgeButton({ channelId, send, isConnected, className }: NudgeBu
     return () => window.clearInterval(timer);
   }, [state.cooldownUntil]);
 
-  const trigger = useCallback(
-    () => sendNudge(channelId, { send, connected: isConnected() }),
-    [channelId, send, isConnected],
-  );
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const registration = { channelId, trigger };
-    setNudgeTarget(registration);
-    return () => setNudgeTarget(null);
-  }, [enabled, channelId, trigger]);
+  const trigger = useNudgeTrigger(channelId, send, isConnected);
 
   // The rattle plays once per landing since this button mounted: the icon is
   // keyed on the counter, so each landing remounts it and replays the
@@ -108,7 +127,7 @@ export function NudgeButton({ channelId, send, isConnected, className }: NudgeBu
           className,
         )}
         onClick={() => {
-          trigger();
+          trigger?.();
         }}
       >
         <Vibrate

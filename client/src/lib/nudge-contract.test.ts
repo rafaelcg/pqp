@@ -72,4 +72,10 @@ describe("the wire", () => {
     const app = read("client/src/App.tsx");
     expect(app).toMatch(/<FileDropZone\s+\{\.\.\.nudgeShake\}/);
   });
+
+  it("Modo 2005's window toolbar, which replaces the header, still nudges", () => {
+    const app = read("client/src/App.tsx");
+    expect(app).toMatch(/onNudge=\{retroNudge \?/);
+    expect(app).toMatch(/useNudgeTrigger\(\s*retroOn \? nudgeChannelId : null/);
+  });
 });

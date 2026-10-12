@@ -470,7 +470,7 @@ import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
-import { NudgeButton } from "@/components/dm/nudge-button";
+import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
 import { useNudgeShake } from "@/hooks/use-nudge-shake";
 import {
   adoptAllowNudges,
@@ -9364,6 +9364,32 @@ function MainAppContent({
   const nudgeShake = useNudgeShake(
     selection.kind === "dm" ? selectedChannelId : null,
   );
+  // The open conversation, when it can take a nudge: a 1:1 with a friend,
+  // nobody blocked. The header button and Modo 2005's toolbar both key off it.
+  const nudgeChannelId = useMemo(() => {
+    if (selection.kind !== "dm" || !selectedChannelId) {
+      return null;
+    }
+    const open = conversations.find((one) => one.channelId === selectedChannelId);
+    const peer = open?.kind === "dm" && open.participants.length === 1
+      ? open.participants[0]!.id
+      : null;
+    if (
+      !peer ||
+      !friends.data.friends.some((friend) => friend.id === peer) ||
+      blockedUserIds.has(peer)
+    ) {
+      return null;
+    }
+    return selectedChannelId;
+  }, [selection.kind, selectedChannelId, conversations, friends.data.friends, blockedUserIds]);
+  // Modo 2005 replaces the header with its own window toolbar, so the nudge
+  // there is this trigger (and `/nudge` with it) instead of the button.
+  const retroNudge = useNudgeTrigger(
+    retroOn ? nudgeChannelId : null,
+    transport.sendChat,
+    transport.isConnected,
+  );
   // The desktop shell hides to the tray on close (Windows, Linux) only while
   // somebody is signed in, so it has to be told when that stops being true:
   // this shell is only mounted for a signed-in session, and unmounts with it.
@@ -10576,6 +10602,7 @@ function MainAppContent({
             }
             onPins={() => setPinsOpen(true)}
             {...retroBlockActions(activeConversation)}
+            onNudge={retroNudge ? () => void retroNudge() : undefined}
           />
         </Suspense>
       )}
@@ -10667,12 +10694,7 @@ function MainAppContent({
               owns everything else (the flag, its states, `/nudge`). */}
           {activeConversation &&
             user &&
-            activeConversation.kind === "dm" &&
-            activeConversation.participants.length === 1 &&
-            friends.data.friends.some(
-              (friend) => friend.id === activeConversation.participants[0]!.id,
-            ) &&
-            !blockedUserIds.has(activeConversation.participants[0]!.id) && (
+            nudgeChannelId === activeConversation.channelId && (
               <NudgeButton
                 channelId={activeConversation.channelId}
                 send={transport.sendChat}
