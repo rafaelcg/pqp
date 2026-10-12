@@ -176,17 +176,42 @@ interface DialogProps {
   phoneFullScreen?: boolean;
 }
 
+/** How long a chosen menu row may still name the opener of a dialog. */
+const CHOSEN_MENU_ROW_MS = 1_000;
+
+let chosenMenuTrigger: { element: HTMLElement; at: number } | null = null;
+
+/**
+ * A menu row was chosen. A dialog it opens may mount after the menu is gone,
+ * with focus on <body>, and that dialog still has to return focus to this
+ * trigger when it closes.
+ */
+export function noteMenuRowChosen(trigger: HTMLElement | null): void {
+  chosenMenuTrigger = trigger ? { element: trigger, at: Date.now() } : null;
+}
+
 /**
  * Where focus goes back to when the dialog closes. A menu row that opened the
  * dialog unmounts with its menu, so the menu's trigger stands in for it (Radix
- * labels the menu with the trigger's id).
+ * labels the menu with the trigger's id). When the menu has already unmounted,
+ * the row chosen a moment ago names it.
  */
 export function dialogOpener(active: HTMLElement | null): HTMLElement | null {
+  // Read, not consumed: a render can run twice, and both must agree.
+  const chosen = chosenMenuTrigger;
   const menu = active?.closest?.('[role="menu"][aria-labelledby]');
-  const trigger = menu
-    ? document.getElementById(menu.getAttribute("aria-labelledby") ?? "")
-    : null;
-  return trigger ?? active;
+  if (menu) {
+    return document.getElementById(menu.getAttribute("aria-labelledby") ?? "") ?? active;
+  }
+  if (
+    (!active || active === document.body) &&
+    chosen &&
+    chosen.element.isConnected &&
+    Date.now() - chosen.at < CHOSEN_MENU_ROW_MS
+  ) {
+    return chosen.element;
+  }
+  return active;
 }
 
 /**

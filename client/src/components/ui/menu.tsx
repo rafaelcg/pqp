@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { noteMenuRowChosen } from "@/components/ui/dialog";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
 import {
   MenuItemRows,
@@ -85,6 +86,7 @@ export function Menu({
           onClickCapture={(event: ReactMouseEvent) => {
             if ((event.target as Element).closest?.('[role^="menuitem"]')) {
               chosenRef.current = true;
+              noteMenuRowChosen(triggerRef.current);
             }
           }}
           onKeyDownCapture={(event: ReactKeyboardEvent) => {
@@ -93,6 +95,7 @@ export function Menu({
               (event.target as Element).closest?.('[role^="menuitem"]')
             ) {
               chosenRef.current = true;
+              noteMenuRowChosen(triggerRef.current);
             }
           }}
           // Escape or a click outside: Radix's default, focus back on this

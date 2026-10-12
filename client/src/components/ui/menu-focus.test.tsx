@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Dialog } from "./dialog";
+import { Dialog, dialogOpener, noteMenuRowChosen } from "./dialog";
 import { Menu } from "./menu";
 
 /*
@@ -124,5 +124,17 @@ describe("Menu focus after a row is chosen", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("names the chosen row's trigger for a dialog that opens after the menu is gone", async () => {
+    const trigger = mount(() => undefined);
+    noteMenuRowChosen(trigger);
+    expect(dialogOpener(document.body)).toBe(trigger);
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    // Focus that is somewhere real is the opener, whatever was chosen.
+    expect(dialogOpener(elsewhere)).toBe(elsewhere);
+    noteMenuRowChosen(null);
+    expect(dialogOpener(document.body)).toBe(document.body);
   });
 });
