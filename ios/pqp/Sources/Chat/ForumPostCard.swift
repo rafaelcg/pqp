@@ -108,10 +108,8 @@ struct ForumTagChip: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if let emoji = tag.emoji, !emoji.isEmpty {
-                Text(verbatim: emoji).font(.system(size: compact ? 10 : 12))
-            }
-            Text(verbatim: tag.name)
+            ForumTagGlyph(tag: tag, size: compact ? 10 : 12)
+            Text(verbatim: tag.displayName)
                 .font(.system(size: compact ? 11 : 13, weight: .medium))
                 .lineLimit(1)
         }
