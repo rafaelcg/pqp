@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,12 +85,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.core.Channel
+import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.stories.CreateStoryRequest
 import gg.pqp.app.stories.PrepResult
 import gg.pqp.app.stories.PreparedMedia
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
+import gg.pqp.app.stories.StoryCallRoom
 import gg.pqp.app.stories.StoryAudienceOptions
 import gg.pqp.app.stories.StoryAudienceTargets
 import gg.pqp.app.stories.StoryMediaInput
@@ -151,6 +154,12 @@ fun StoryComposer(
     var background by remember { mutableStateOf("night") }
     var caption by remember { mutableStateOf("") }
     var callChannel by remember { mutableStateOf<Channel?>(null) }
+    // Who sits in which voice room, for the call sticker: it is live only
+    // while its author is in the room.
+    val phase by session.phase.collectAsStateWithLifecycle()
+    val voice = (context.applicationContext as? gg.pqp.app.PqpApplication)?.voice
+    val occupancy by (voice?.rooms?.rooms ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) })
+        .collectAsStateWithLifecycle()
     var choosingAudience by remember { mutableStateOf(false) }
 
     var options by remember { mutableStateOf<StoryAudienceOptions?>(null) }
@@ -430,6 +439,8 @@ fun StoryComposer(
                         options = options,
                         selected = callChannel,
                         onPick = { callChannel = it },
+                        meId = (phase as? SessionPhase.Ready)?.me?.id,
+                        occupancy = occupancy,
                     )
                 }
 
@@ -655,14 +666,24 @@ private fun CallPicker(
     options: StoryAudienceOptions?,
     selected: Channel?,
     onPick: (Channel) -> Unit,
+    meId: String?,
+    occupancy: Map<String, List<gg.pqp.app.core.VoiceParticipant>>,
 ) {
     var rooms by remember { mutableStateOf<List<Pair<String, Channel>>?>(null) }
+    val liveOccupancy by rememberUpdatedState(occupancy)
+    val liveMeId by rememberUpdatedState(meId)
     LaunchedEffect(options) {
         val servers = options?.servers?.filter { it.canPost } ?: return@LaunchedEffect
-        rooms = servers.flatMap { server ->
+        val found = servers.flatMap { server ->
             runCatching { session.api.channels(server.serverId) }.getOrDefault(emptyList())
                 .filter { it.type == "voice" }
                 .map { server.serverName to it.copy(serverId = it.serverId ?: server.serverId) }
+        }
+        rooms = found
+        // Start on the room the author is in: it is the only sticker that is
+        // open once posted. Never overrides a room they already picked.
+        if (selected == null) {
+            StoryCallRoom.defaultRoom(found.map { it.second }, liveMeId, liveOccupancy)?.let(onPick)
         }
     }
     Column(
@@ -682,6 +703,14 @@ private fun CallPicker(
             color = Color.White.copy(alpha = 0.7f),
             style = MaterialTheme.typography.bodySmall,
         )
+        if (selected != null && !StoryCallRoom.authorIn(selected.id, meId, occupancy)) {
+            Text(
+                stringResource(R.string.stories_call_not_in_room, selected.name),
+                color = Palette.Warning,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = Spacing.xs).testTag("stories.composer.callNotInRoom"),
+            )
+        }
         val list = rooms
         when {
             list == null -> CircularProgressIndicator(color = Color.White, modifier = Modifier.padding(Spacing.sm).size(20.dp))

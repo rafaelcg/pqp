@@ -58,10 +58,18 @@ export const FORUM_POST_BUCKET = {
 /** One token's worth of wait, for the `retryAfterMs` of a refusal. */
 const POST_BUCKET_RETRY_MS = Math.ceil(1000 / FORUM_POST_BUCKET.refillPerSecond);
 
-/** A refusal the composer renders with the chat composer's own copy. */
+/**
+ * A refusal the composer renders with the chat composer's own copy. `field`
+ * names which half AutoMod refused, so the composer can say "esse título"
+ * rather than "esse post" (forum QA P18).
+ */
 function rejected(
   reason: MessageRejectReason,
-  extra: { retryAfterMs?: number; automodMessage?: string } = {},
+  extra: {
+    retryAfterMs?: number;
+    automodMessage?: string;
+    field?: "title" | "body";
+  } = {},
 ): ForumError {
   return new ForumError(422, FORUM_ERRORS.postRejected, {
     reason,
@@ -69,6 +77,7 @@ function rejected(
       ? { retryAfterMs: extra.retryAfterMs }
       : {}),
     ...(extra.automodMessage ? { automodMessage: extra.automodMessage } : {}),
+    ...(extra.field ? { field: extra.field } : {}),
   });
 }
 
@@ -129,7 +138,10 @@ export async function createForumPost(
       .catch((error: unknown) => {
         console.error("[automod] forum title hit effects failed:", error);
       });
-    throw rejected("automod", { automodMessage: verdict.customMessage ?? undefined });
+    throw rejected("automod", {
+      automodMessage: verdict.customMessage ?? undefined,
+      field: "title",
+    });
   }
 
   // The per-user send bucket every door shares (socket, bot HTTP, and now
@@ -211,6 +223,8 @@ export async function createForumPost(
           throw rejected(posted.reason, {
             retryAfterMs: posted.retryAfterMs,
             automodMessage: posted.automodMessage,
+            // The message path checked the opening message: the body.
+            ...(posted.reason === "automod" ? { field: "body" as const } : {}),
           });
       }
     }

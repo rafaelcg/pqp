@@ -182,6 +182,41 @@ class ForumViewModelTest {
     }
 
     @Test
+    fun `staff saving the tags or the settings reaches the open list live`() = runTest {
+        val backend = FakeBackend().apply { pages += page(post("a", 1)) }
+        val vm = model(backend)
+        assertEquals(listOf("Bug"), vm.state.value.tags.map { it.name })
+        assertFalse(vm.state.value.settings.requireTag)
+
+        backend.frames.emit(
+            PqpJson.parseToJsonElement(
+                """{"type":"forum-config-update","forumId":"f",
+                    "tags":[{"id":"t2","name":"Dica","position":1},{"id":"t1","name":"Bug","position":0}],
+                    "settings":{"requireTag":true,"defaultSort":"created"}}""",
+            ).jsonObject,
+        )
+        assertEquals(listOf("Bug", "Dica"), vm.state.value.tags.map { it.name })
+        assertTrue(vm.state.value.settings.requireTag)
+
+        // Either half may be missing: the other keeps what it had.
+        backend.frames.emit(
+            PqpJson.parseToJsonElement(
+                """{"type":"forum-config-update","forumId":"f","settings":{"requireTag":false}}""",
+            ).jsonObject,
+        )
+        assertEquals(listOf("Bug", "Dica"), vm.state.value.tags.map { it.name })
+        assertFalse(vm.state.value.settings.requireTag)
+
+        // Another forum's settings are not this one's.
+        backend.frames.emit(
+            PqpJson.parseToJsonElement(
+                """{"type":"forum-config-update","forumId":"other","settings":{"requireTag":true}}""",
+            ).jsonObject,
+        )
+        assertFalse(vm.state.value.settings.requireTag)
+    }
+
+    @Test
     fun `staff, and the paused flag`() = runTest {
         val backend = FakeBackend().apply {
             bits = Permission.SEND_MESSAGES or Permission.MANAGE_MESSAGES

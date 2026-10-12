@@ -54,7 +54,7 @@ sealed interface ForumComposerError {
     data class RateLimited(val minutes: Int) : ForumComposerError
 
     /** AutoMod refused the title or the body; [message] is the rule's own words. */
-    data class Automod(val message: String?) : ForumComposerError
+    data class Automod(val message: String?, val field: String? = null) : ForumComposerError
 
     /** No SEND_MESSAGES here, or a timeout: the server's own sentence when it has one. */
     data class CannotPost(val message: String?) : ForumComposerError
@@ -172,6 +172,7 @@ class ForumComposerViewModel(
             else -> ForumComposerState()
         }
         viewModelScope.launch { loadContext() }
+        viewModelScope.launch { followConfig() }
         if (_state.value.title.length >= SIMILAR_MIN_CHARS) searchSimilar(_state.value.title)
     }
 
@@ -188,6 +189,10 @@ class ForumComposerViewModel(
             }
         }
         val snapshotAsync = async { runCatching { session.api.serverPermissions(serverId) }.getOrNull() }
+        // The flag is operator data, flipped with no deploy and with no frame:
+        // ask as a post starts, so a pause shows before the whole post is
+        // written. A failed read says nothing (the server refuses anyway).
+        val flagAsync = async { runCatching { session.api.forumConfig(serverId) }.getOrNull() }
         val tags = tagsAsync.await()
         val settings = settingsAsync.await()
         val config = configAsync.await()
@@ -202,7 +207,21 @@ class ForumComposerViewModel(
             isStaff = hasPermission(bits, Permission.MANAGE_MESSAGES) || hasPermission(bits, Permission.MANAGE_CHANNELS),
             attachmentsEnabled = config.enabled,
             maxAttachmentBytes = config.maxBytes,
+            error = if (flagAsync.await()?.enabled == false) ForumComposerError.Paused else _state.value.error,
         )
+    }
+
+    /**
+     * Staff saved the forum's tags or settings while this composer is open:
+     * the tag list and "Exigir pelo menos uma tag" follow now. A tag that
+     * was picked and is gone leaves the pick, or Publicar would send a tag
+     * that no longer exists.
+     */
+    private suspend fun followConfig() {
+        session.realtime.frames.collect { frame ->
+            val update = ForumConfigUpdate.decode(frame)?.takeIf { it.forumId == forumId } ?: return@collect
+            _state.value = applyConfig(_state.value, update)
+        }
     }
 
     fun setTitle(value: String) {
@@ -436,7 +455,18 @@ class ForumComposerViewModel(
                         prefs?.clearPendingNonce(draftKey)
                     }
                     _state.value = _state.value.copy(publishing = false, error = error)
+                    rereadRules(error)
                 }
+        }
+    }
+
+    /** The server refused for a rule this screen held stale: read it again. */
+    private fun rereadRules(error: ForumComposerError) {
+        if (error != ForumComposerError.TagRequired) return
+        viewModelScope.launch {
+            runCatching { session.api.forumSettings(forumId) }.getOrNull()?.let { fresh ->
+                _state.value = _state.value.copy(requireTag = fresh.requireTag)
+            }
         }
     }
 
@@ -455,7 +485,7 @@ class ForumComposerViewModel(
                 "rate-limited" -> ForumComposerError.RateLimited(
                     ((retryAfterMs + 59_999L) / 60_000L).toInt().coerceAtLeast(1),
                 )
-                "automod" -> ForumComposerError.Automod(field("automodMessage"))
+                "automod" -> automodError(body)
                 "no-access", "cannot-send" -> ForumComposerError.CannotPost(null)
                 else -> ForumComposerError.Failed
             }
@@ -474,6 +504,26 @@ class ForumComposerViewModel(
     }
 
     companion object {
+        /** The 422 body of an AutoMod refusal: the rule's words, and which half it refused. */
+        internal fun automodError(body: kotlinx.serialization.json.JsonObject?): ForumComposerError.Automod {
+            fun text(key: String) = runCatching { body?.get(key)?.jsonPrimitive?.contentOrNull }.getOrNull()
+            return ForumComposerError.Automod(
+                message = text("automodMessage")?.takeIf { it.isNotBlank() },
+                field = text("field")?.takeIf { it == "title" || it == "body" },
+            )
+        }
+
+        /** A saved tags/settings frame applied to the composer's state. */
+        internal fun applyConfig(state: ForumComposerState, update: ForumConfigUpdate): ForumComposerState {
+            val tags = update.tags?.sortedBy { it.position } ?: state.tags
+            val known = tags.map { it.id }.toSet()
+            return state.copy(
+                tags = tags,
+                tagIds = if (update.tags == null) state.tagIds else state.tagIds.filter { it in known },
+                requireTag = update.settings?.requireTag ?: state.requireTag,
+            )
+        }
+
         private const val SIMILAR_MIN_CHARS = 4
         private const val ATTACH_READS = 2
         private const val SIMILAR_DEBOUNCE_MS = 300L

@@ -137,6 +137,8 @@ data class LastMessagePreview(
     val isGif: Boolean = false,
     val isVoice: Boolean? = null,
     val voiceDurationMs: Long? = null,
+    /** "nudge" when the newest message is one: the row says what happened, not its `📳` body. */
+    val systemKind: String? = null,
 )
 
 /**
