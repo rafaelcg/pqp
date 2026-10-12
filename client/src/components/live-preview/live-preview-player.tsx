@@ -78,7 +78,11 @@ export function LivePreviewPlayer({
       }
     };
     const play = () => {
+      // Every start is muted, the only autoplay a phone allows, so the
+      // button has to say so too, even if the visitor unmuted before the
+      // playlist arrived or the URL changed under them.
       video.muted = true;
+      setMuted(true);
       void video.play().catch((error: unknown) => {
         // Muted autoplay is allowed almost everywhere; a refusal leaves the
         // poster and the tap that unmutes also starts it. Any other rejection
