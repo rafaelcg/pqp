@@ -102,6 +102,9 @@ struct HomeView: View {
             Task { await model.refreshDmsConfig() }
         }
         .onChange(of: tab) { _, next in next.store() }
+        .onChange(of: session.storyReplyRevision) { _, _ in
+            Task { await model.refresh() }
+        }
         // The app icon says how many conversations are waiting (Conversas I4),
         // the same number as the tab. Set from here, on every change the app
         // sees; the server's push does not carry a badge yet, so a phone that

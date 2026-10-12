@@ -151,6 +151,18 @@ final class StoriesTests: XCTestCase {
         XCTAssertFalse(playback.next(), "The end closes the viewer")
     }
 
+    /// Deleting your own story is announced twice (the DELETE answer and the
+    /// `stories-update` frame). Stepping past it on each skipped the next one.
+    func testAnOwnDeleteStepsPastTheStoryOnlyOnce() {
+        var playback = StoryPlayback(people: [["a1", "a2", "a3"]])
+        let removed: Set<String> = ["a1"]
+        for _ in 0..<2 {
+            if playback.currentIsAmong(removed) { _ = playback.next() }
+        }
+        XCTAssertEqual(playback.currentId, "a2", "The second announcement must not move the viewer")
+        XCTAssertFalse(playback.currentIsAmong(removed))
+    }
+
     func testTapLeftGoesBackAndStaysAtTheStart() {
         var playback = StoryPlayback(people: [["a1"], ["b1", "b2"]], startPerson: 1)
         XCTAssertEqual(playback.currentId, "b1")

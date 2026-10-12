@@ -4229,6 +4229,16 @@
         }
       }
     },
+    "Next story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Próximo story"
+          }
+        }
+      }
+    },
     "Night" : {
       "localizations" : {
         "pt-BR" : {
@@ -4989,6 +4999,16 @@
         }
       }
     },
+    "Pause" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        }
+      }
+    },
     "Pending" : {
       "localizations" : {
         "pt-BR" : {
@@ -5225,6 +5245,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Preparando…"
+          }
+        }
+      }
+    },
+    "Previous story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story anterior"
           }
         }
       }
@@ -5735,6 +5765,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "RESOLVIDO"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar"
           }
         }
       }
@@ -7395,6 +7435,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ativar notificações"
+          }
+        }
+      }
+    },
+    "Turn the sound off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar o som"
+          }
+        }
+      }
+    },
+    "Turn the sound on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar o som"
           }
         }
       }
