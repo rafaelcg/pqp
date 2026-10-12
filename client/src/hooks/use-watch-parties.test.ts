@@ -50,6 +50,7 @@ const PARTY: WatchParty = {
     slowModeSeconds: 0,
     reactionsEnabled: true,
     lowLatency: false,
+    publicPreview: false,
   },
   viewerRole: "viewer",
   reminding: false,

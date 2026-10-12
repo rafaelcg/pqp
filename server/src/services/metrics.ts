@@ -11,6 +11,7 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { livePreviewMetrics } from "./live-preview.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
@@ -363,6 +364,13 @@ export interface AdminMetrics {
    * Live, never from the 30 s cache.
    */
   streamAlerts: StreamAlertMetrics;
+  /**
+   * The signed-out live preview (`services/live-preview.ts`), since this
+   * process started: windows started and resumed, visitors sent to sign up at
+   * the end of one, refusals by reason (start and playlist apart), and how
+   * many playlist answers went to a preview token. Per process; live.
+   */
+  livePreview: ReturnType<typeof livePreviewMetrics>;
   /**
    * Chamar a atenção (`services/nudge.ts`), since this process started:
    * whether the `nudge` flag is on here, nudges sent, and refusals by reason
@@ -1248,6 +1256,7 @@ type CachedMetrics = Omit<
   | "communityHomeCaptions"
   | "stories"
   | "streamAlerts"
+  | "livePreview"
   | "nudge"
   | "channelLayout"
 >;
@@ -2065,6 +2074,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeCaptions,
     stories,
     streamAlerts: streamAlertMetrics(),
+    livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
     channelLayout,
   };

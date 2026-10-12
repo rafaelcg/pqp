@@ -502,6 +502,21 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config?serverId= (streamStartNotifications)",
   },
+  live_preview: {
+    description:
+      "Prévia ao vivo sem conta: em comunidade, quem abre o link sem estar logado e confirma a idade assiste a watch party no navegador por alguns minutos (LIVE_PREVIEW_SECONDS, padrão 5 min), sem chat e sem microfone, e depois é chamado a criar conta.",
+    env: "LIVE_PREVIEW",
+    parseEnv: exactTrue,
+    // Off: it opens a door to people with no account, so it goes on for one
+    // community first (its override), then wider. Off also changes nothing in
+    // what the public endpoints answer.
+    codeDefault: false,
+    // Every reader holds the channel's server: the public listing resolves the
+    // community first, the start route reads the channel row, and the playlist
+    // proxy re-checks the channel it is serving.
+    perServer: true,
+    clientVia: "GET /api/public/live-preview/communities/:slug (livePreview)",
+  },
   desktop_notify_default_on: {
     description:
       "Notificações padrão (só cliente: no app desktop o banner do sistema já vem ligado, DMs e servidores têm níveis padrão separados, e o servidor fica em só menções; no navegador, depois da primeira DM ou menção com a aba escondida, aparece um cartão único pra ativar).",

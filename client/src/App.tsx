@@ -428,6 +428,8 @@ import {
   takeInviteRef,
   takeJoinIntent,
   peekJoinIntent,
+  peekLiveChannelIntent,
+  takeLiveChannelIntent,
   takeWaitlistIntent,
   takeWaitlistIntentWithSource,
   WAITLIST_SOURCE_PARAM,
@@ -600,7 +602,14 @@ import {
   withServerBauNewest,
   withServerBauUnread,
 } from "@/lib/community-home";
-import { pickLivePartyChannel } from "@/lib/live-party-landing";
+import { pickArrivalPartyChannel } from "@/lib/live-party-landing";
+import { LivePreviewPanel } from "@/components/live-preview/live-preview-panel";
+import {
+  ClerkLivePreviewAuth,
+  ClerkSignUpReturn,
+} from "@/components/live-preview/live-preview-auth";
+import { heroHue } from "@/lib/hero-tint";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -667,6 +676,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { useChannelLivePreview } from "@/hooks/use-channel-live-preview";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { useWatchNow, useWatchNowFlag } from "@/hooks/use-watch-now";
 import { useStreamAlertSettings } from "@/hooks/use-stream-alert-settings";
@@ -877,6 +887,10 @@ function ClerkAppGate() {
   const invitePreview = useSignedOutInvitePreview(
     isLoaded && !isSignedIn ? location.pathname : null,
   );
+  // The code again, for the live preview's listing (`invitePreview` carries
+  // no code, on purpose: it is the public body).
+  const inviteRoute = parseAppRoute(location.pathname);
+  const inviteCode = inviteRoute?.kind === "invite" ? inviteRoute.code : null;
   const desktop = getDesktop();
   const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
   const [waiting, setWaiting] = useState(false);
@@ -1206,6 +1220,41 @@ function ClerkAppGate() {
                   <p className="mt-4 max-w-sm text-pretty text-paper-muted">
                     {t("signedOut.invite.body")}
                   </p>
+                  {/* "Ao vivo agora · Assistir" when the invite opens a
+                      community whose live preview is on (the server only
+                      marks it then) and a watch party is live. Its sign-up
+                      keeps this invite path as the redirect, so the join
+                      happens exactly as it would from the button below. */}
+                  {invitePreview.livePreview && inviteCode && !canDesktopAuth ? (
+                    <div className="mt-6 w-full">
+                      <ClerkSignUpReturn redirectUrl={redirectUrl} />
+                      <ClerkLivePreviewAuth redirectUrl={redirectUrl}>
+                        {(auth) => (
+                          <LivePreviewPanel
+                            source={{ kind: "invite", code: inviteCode }}
+                            landing="/app"
+                            surface="invite"
+                            // The invite's public preview is all this page
+                            // has: name, icon and member count. No address,
+                            // tagline or category, so those parts stay out.
+                            community={{
+                              name: invitePreview.serverName,
+                              slug: null,
+                              tagline: null,
+                              category: null,
+                              memberCount:
+                                invitePreview.memberCount > 0 ? invitePreview.memberCount : null,
+                              iconUrl: resolveUploadedImageUrl(invitePreview.iconUrl),
+                              bannerUrl: null,
+                              hue: heroHue(inviteCode),
+                            }}
+                            auth={auth}
+                            onSignUpIntent={() => noteSignupCta("gate", "")}
+                          />
+                        )}
+                      </ClerkLivePreviewAuth>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -2730,6 +2779,15 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  // "Prévia pública" in the open watch party's options: drawn only where the
+  // signed-out live preview could actually show this party.
+  const publicPreviewSeconds = useChannelLivePreview(
+    selection.kind === "server" &&
+      channels.find((channel) => channel.id === selectedChannelId)?.type === "watch_party"
+      ? selectedChannelId
+      : null,
+    liveHlsConfig,
+  );
   // `party_fast_start` (runtime flag, per server): the selected server's
   // answer is what the watch player reads, and the player chunk is fetched
   // as soon as it is on, not when the first playlist URL arrives.
@@ -6347,6 +6405,12 @@ function MainAppContent({
        * fetched, so a join during a show opens the show.
        */
       liveParties?: readonly WatchParty[],
+      /**
+       * The channel a signed-out live preview was showing this person
+       * (`peekLiveChannelIntent`). Wins over the party order when it is in
+       * this server's list, and the stash is spent only then.
+       */
+      preferredChannelId: string | null = null,
     ) => {
       setChannelsLoading(true);
       beginChannelLoad(serverId);
@@ -6372,8 +6436,11 @@ function MainAppContent({
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
         const liveParty = liveParties
-          ? pickLivePartyChannel(liveParties, list)
+          ? pickArrivalPartyChannel(liveParties, list, preferredChannelId)
           : null;
+        if (liveParty !== null && liveParty === preferredChannelId) {
+          takeLiveChannelIntent(browserStorage());
+        }
         const land = liveParty
           ? { id: liveParty }
           : pickServerLandingTarget(
@@ -8175,7 +8242,13 @@ function MainAppContent({
       ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId, liveParties);
+      // A join that came out of the signed-out live preview lands back on the
+      // film the person was watching (`lib/live-preview.ts`).
+      await loadChannels(
+        serverId,
+        liveParties,
+        peekLiveChannelIntent(browserStorage()),
+      );
     },
     [loadChannels],
   );
@@ -11393,6 +11466,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -11740,6 +11814,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}

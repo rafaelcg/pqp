@@ -41,6 +41,7 @@ const DRAFT: WatchParty = {
     slowModeSeconds: 0,
     reactionsEnabled: true,
     lowLatency: true,
+    publicPreview: false,
   },
   viewerRole: "host",
   reminding: false,

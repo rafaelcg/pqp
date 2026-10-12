@@ -355,6 +355,18 @@ import {
 import { Etagged, etagged } from "../lib/etag.js";
 import { summarizeHlsTelemetryBatch } from "../voice/hls-telemetry-summary.js";
 import { noteHlsViewer } from "../voice/hls-viewer-counts.js";
+import {
+  handleLivePreviewRoute,
+  resetLivePreviewRateLimits,
+} from "./live-preview-routes.js";
+import {
+  livePreviewChannelAvailable,
+  livePreviewOnFor,
+  livePreviewPlaylistAllowed,
+  livePreviewRungAllowed,
+  livePreviewSeconds,
+  noteLivePreviewPlaylistServed,
+} from "../services/live-preview.js";
 import { logEvent } from "../lib/log.js";
 import {
   clientAddress,
@@ -1178,6 +1190,17 @@ const publicInviteLimiter = createRateLimiter({
   refillPerSecond: 0.5,
 });
 /**
+ * Playlist fetches by signed-out live preview viewers, keyed on the ADDRESS
+ * (a preview token's visitor id is free to rotate, so a per-id bucket bounds
+ * nothing). Sized for a handful of phones behind one carrier address, each
+ * polling a rendition every two seconds; it sits under `anonLimiter`, which
+ * every request has already paid.
+ */
+const previewPlaylistLimiter = createRateLimiter({
+  capacity: 120,
+  refillPerSecond: 20,
+});
+/**
  * `GET /api/public/communities/config` (`servePublicCommunitiesConfig`). Its own
  * bucket for the reason its siblings have theirs. Generous: a landing page
  * fetches it once per load, and it sits UNDER `anonLimiter`.
@@ -1290,6 +1313,8 @@ export function resetApiRateLimits(): void {
   // drain across them.
   operatorLimiter.reset();
   musicResolveLimiter.reset();
+  resetLivePreviewRateLimits();
+  previewPlaylistLimiter.reset();
   // Declared in the stories section below; same temporal dead zone note as
   // `depoimentoLimiter` above.
   resetStoryRateLimits();
@@ -2954,9 +2979,18 @@ router.get("/api/voice/backend", async () => {
 // allowlist); without it, the global flag, which is what a client asks before
 // it knows the server. Read per request, so an operator flipping a server on
 // the dashboard is answered correctly by the very next call.
-router.get("/api/live-hls/config", async ({ url }) =>
-  liveHlsConfigForServer(url.searchParams.get("serverId")),
-);
+router.get("/api/live-hls/config", async ({ url }) => {
+  const serverId = url.searchParams.get("serverId");
+  const config = await liveHlsConfigForServer(serverId);
+  // `livePreview` only while the signed-out live preview's flag is on for
+  // this server, and absent otherwise, so with the flag off this answer is
+  // byte for byte what it always was and the client asks nothing more. It
+  // says the setup card MAY offer "Prévia pública"; whether this channel can
+  // is `GET /api/channels/:id/live-preview`.
+  return serverId && livePreviewOnFor(serverId)
+    ? { ...config, livePreview: { seconds: livePreviewSeconds() } }
+    : config;
+});
 
 /**
  * The signed playlist proxy (`hls-playlist-proxy.ts`): rewrites the live
@@ -2998,6 +3032,10 @@ async function tryHlsCapabilityDoor(
     token,
     channelId,
     startedAt,
+    // The signed-out live preview's token is accepted HERE and nowhere else
+    // on this origin (`HlsViewerTokenPurpose`). This door has no account to
+    // compare it with, so the checks below are the whole of its authority.
+    allowPreview: true,
   });
   if (!viewer) {
     // Say why before handing back to the 401. A rejection here used to be
@@ -3010,6 +3048,46 @@ async function tryHlsCapabilityDoor(
     );
     return false;
   }
+  if (viewer.preview && match[3] === undefined) {
+    // A preview token proves only that this server let somebody start a
+    // window on this channel, minutes ago at most. On the SESSION URL (the
+    // master playlist, fetched once per player) whether the channel may
+    // still be previewed (the flag, the community, @everyone VIEW) is asked
+    // again, and the address bucket is taken. `livePreviewPlaylistAllowed`
+    // logs its refusals.
+    //
+    // NOT ON A RENDITION, on purpose. The edge Worker (`tools/hls-edge/`)
+    // coalesces every viewer's rendition poll into ONE origin fetch per rung
+    // per 2 s, carrying the token of whichever viewer missed its cache, and
+    // hands that one answer to everybody waiting on it. A preview-only
+    // refusal here (a 404 because the flag just went off, a 429 from the
+    // bucket below, keyed on the Worker's address) would then reach the
+    // MEMBERS polling the same rung. A rendition body is identical for every
+    // viewer and names nobody, so a valid, unexpired preview token is enough
+    // for it; the token's own expiry, the end of the window, is the bound.
+    // That makes the kill switch "no new preview, no new player, and every
+    // running one gone within `LIVE_PREVIEW_SECONDS`", not "within 2 s".
+    const address = clientAddress(req as never);
+    const key = `preview-playlist:${address}`;
+    if (!previewPlaylistLimiter.take(key)) {
+      res.setHeader("Retry-After", String(previewPlaylistLimiter.retryAfter(key)));
+      sendError(res, 429, "Too many requests", req);
+      return true;
+    }
+    if (!(await livePreviewPlaylistAllowed(channelId))) {
+      sendError(res, 404, "Channel not found", req);
+      return true;
+    }
+  }
+  if (viewer.preview && match[3] !== undefined && !livePreviewRungAllowed(channelId, match[3])) {
+    // The film's ladder only: never the presenter's camera, which is a
+    // rendition of the same session. Unlike the checks above this one is
+    // the same answer for every preview token and never changes while a
+    // party runs, and the edge Worker refuses the same request before its
+    // shared cache, so a member polling the camera never shares it.
+    sendError(res, 404, "Not found", req);
+    return true;
+  }
   await serveHlsPlaylistWithToken(
     req,
     res,
@@ -3017,7 +3095,7 @@ async function tryHlsCapabilityDoor(
     match[2]!,
     viewer.userId,
     viewer.issuedAt ?? 0,
-    { rung: match[3], token },
+    { rung: match[3], token, preview: viewer.preview === true },
   );
   return true;
 }
@@ -3092,9 +3170,21 @@ async function hlsPlaylistResponse(
   /**
    * Which rendition of a ladder is being asked for. Absent means the caller
    * asked for the SESSION, which is the master playlist listing them all.
+   *
+   * `preview`: the caller is a signed-out live preview viewer. Not counted
+   * as a viewer (the count is distinct ACCOUNTS, and a visitor id is free to
+   * rotate) and never handed a party pass. See `services/live-preview.ts`.
    */
-  options: { rung?: string; token?: string | null } = {},
+  options: { rung?: string; token?: string | null; preview?: boolean } = {},
 ): Promise<RawResponse> {
+  const preview = options.preview === true;
+  const countViewer = (startedAtMs: number) => {
+    if (preview) {
+      noteLivePreviewPlaylistServed();
+    } else {
+      noteHlsViewer(channelId, startedAtMs, userId, "playlist");
+    }
+  };
   if (tokenIssuedAt === null) {
     await requireChannelAccess(channelId, userId);
   } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
@@ -3117,9 +3207,10 @@ async function hlsPlaylistResponse(
       startedAt: parsedStartedAt,
       userId,
       token: options.token,
+      allowPartyPass: !preview,
     });
     if (master !== null) {
-      noteHlsViewer(channelId, parsedStartedAt, userId, "playlist");
+      countViewer(parsedStartedAt);
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Vary", "Authorization");
       return new RawResponse(master, "application/vnd.apple.mpegurl");
@@ -3138,8 +3229,8 @@ async function hlsPlaylistResponse(
   }
   // Counted as a viewer (a map write, `hls-viewer-counts.ts`): the poll
   // itself is authenticated, and this catches players that predate the
-  // presence heartbeat.
-  noteHlsViewer(channelId, parsedStartedAt, userId, "playlist");
+  // presence heartbeat. A preview viewer is counted apart (`countViewer`).
+  countViewer(parsedStartedAt);
   // Not even one second. `AVPlayer` treats `max-age` as permission to replay
   // a live playlist it already has, and a ten second window replayed is a
   // playhead sitting on segments the bucket has already deleted. hls.js
@@ -3232,7 +3323,7 @@ async function serveHlsPlaylistWithToken(
   startedAt: string,
   userId: string,
   tokenIssuedAt: number,
-  options: { rung?: string; token?: string | null } = {},
+  options: { rung?: string; token?: string | null; preview?: boolean } = {},
 ): Promise<void> {
   if (!apiLimiter.take(`user:${userId}`)) {
     res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${userId}`)));
@@ -7109,6 +7200,24 @@ router.post(
  * for this caller, watchers without a seat, and seats. The socket path is
  * the live one; this is belt and braces, and the same VIEW check.
  */
+/**
+ * Whether a watch party on this channel could be previewed by signed-out
+ * visitors if its host turned "Prévia pública" on: the flag for its server, a
+ * community that is not suspended, a public watch party channel @everyone can
+ * VIEW (`livePreviewChannelAvailable`). The setup card draws the switch only
+ * when this says yes, and asks only when `GET /api/live-hls/config` carried
+ * `livePreview`. Anybody who can see the channel may ask; the answer is one
+ * bit about the channel and the window length, and the switch itself is
+ * written through the party's options PATCH, which checks the role.
+ */
+router.get("/api/channels/:channelId/live-preview", async ({ user }, { channelId }) => {
+  await requireChannelAccess(channelId!, user.id);
+  return {
+    available: await livePreviewChannelAvailable(channelId!),
+    seconds: livePreviewSeconds(),
+  };
+});
+
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
   const state = await getChannelLiveState(channelId!);
@@ -13140,6 +13249,12 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_INVITE_PATH.exec(pathname) : null;
   if (publicInviteMatch) {
     await servePublicInvitePreview(req, res, publicInviteMatch[1]!);
+    return;
+  }
+
+  // The signed-out live preview's listing and start routes. Not matched at
+  // all while `live_preview` is off everywhere (see `live-preview-routes.ts`).
+  if (await handleLivePreviewRoute(req, res, pathname)) {
     return;
   }
 

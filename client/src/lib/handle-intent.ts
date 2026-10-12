@@ -223,6 +223,52 @@ export function peekJoinIntent(
   return peek(storage, JOIN_KEY, now);
 }
 
+// ------------------------------------------------------- live channel
+
+const LIVE_CHANNEL_KEY = "pqp:pending-live-channel";
+
+const CHANNEL_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * LIVE CHANNEL. Somebody watched a community's watch party in the signed-out
+ * live preview (`lib/live-preview.ts`) and tapped "create an account". The
+ * JOIN intent (or the invite path) gets them into the community; this one
+ * says WHICH channel to open once they are in, so they land back on the film
+ * they were watching rather than wherever the server's landing would put
+ * them. A channel id, because the preview had to hold one to play anything.
+ *
+ * Read with `peekLiveChannelIntent` when the landing is chosen, and spent with
+ * `takeLiveChannelIntent` only once it has actually been used: a stash that
+ * names a channel of a server the person has not joined yet must survive
+ * until they have.
+ */
+export function stashLiveChannelIntent(
+  storage: WritableStorage | null,
+  channelId: string,
+  now: number = Date.now(),
+): void {
+  if (CHANNEL_ID_PATTERN.test(channelId)) {
+    write(storage, LIVE_CHANNEL_KEY, channelId.toLowerCase(), now);
+  }
+}
+
+export function peekLiveChannelIntent(
+  storage: Pick<Storage, "getItem"> | null,
+  now: number = Date.now(),
+): string | null {
+  const stored = peek(storage, LIVE_CHANNEL_KEY, now);
+  return stored && CHANNEL_ID_PATTERN.test(stored) ? stored : null;
+}
+
+export function takeLiveChannelIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): string | null {
+  const stored = take(storage, LIVE_CHANNEL_KEY, now);
+  return stored && CHANNEL_ID_PATTERN.test(stored) ? stored : null;
+}
+
 /**
  * `?add=rafa` on any `/app` URL.
  *
