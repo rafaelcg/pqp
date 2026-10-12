@@ -301,11 +301,12 @@ export const STREAMERS_PRERENDER_CTA_HREF =
 export const CREATE_ROOM_PRERENDER_HREF = "/app";
 
 /**
- * The iOS beta button on `/vs-discord`. The live page links the TestFlight URL,
- * which a build secret may override, so the static block links the join page
- * that reads the same value.
+ * The iOS beta button on `/vs-discord`: `PUBLIC_TESTFLIGHT_URL` in
+ * `testflight.ts`, pinned by the test. The live page reads `testflightUrl()`,
+ * and the `VITE_TESTFLIGHT_URL` build secret overrides it there. The edge cannot
+ * see that secret, so when it is set this link can drift from the live button.
  */
-export const IOS_BETA_PRERENDER_HREF = "/beta";
+export const IOS_BETA_PRERENDER_HREF = "https://testflight.apple.com/join/envnP5vV";
 
 /** `RELEASES_PAGE_URL` in `downloads.ts`, pinned by the test. Every desktop row links it until the bundle resolves the asset URLs. */
 export const DOWNLOAD_PRERENDER_RELEASES_URL =
@@ -480,7 +481,7 @@ function vsDiscordBlock(locale: MarketingLocale): string {
     featured,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
-    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${IOS_BETA_PRERENDER_HREF}" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
+    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${IOS_BETA_PRERENDER_HREF}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
     CLOSE_PAGE,
   ].join("");
 }

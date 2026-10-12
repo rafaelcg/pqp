@@ -21,6 +21,7 @@ import {
   STREAMERS_PRERENDER_KEYS,
 } from "./marketing-prerender";
 import { stripPrerenderHero } from "./prerender-hero";
+import { PUBLIC_TESTFLIGHT_URL } from "./testflight";
 import {
   CREATE_ROOM_PRERENDER_HREF,
   DOWNLOAD_PRERENDER_RELEASES_URL,
@@ -257,7 +258,7 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       "vsDiscord.seo.title",
       "vsDiscord.seo.description",
       // Shown only when the build has no TestFlight URL; the static block
-      // links `/beta` instead.
+      // always links the default one.
       "vsDiscord.cta.beta.hint",
       "downloadPage.seo.title",
       "downloadPage.seo.description",
@@ -289,7 +290,7 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
     expect(CREATE_ROOM_PRERENDER_HREF).toBe("/app");
     expect(readSource("../pages/tela-page.tsx")).toContain('forceRedirectUrl="/app"');
     expect(readSource("../pages/vs-discord-page.tsx")).toContain('forceRedirectUrl="/app"');
-    expect(IOS_BETA_PRERENDER_HREF).toBe("/beta");
+    expect(IOS_BETA_PRERENDER_HREF).toBe(PUBLIC_TESTFLIGHT_URL);
   });
 
   it("writes /tela's hero, the four options, the steps and the FAQ", () => {
@@ -327,7 +328,7 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
         expect(root).toContain(esc(c[`vsDiscord.faq.${id}.q`]));
       }
       expect(root).toContain('href="/tela"');
-      expect(root).toContain('href="/beta"');
+      expect(root).toContain(`href="${PUBLIC_TESTFLIGHT_URL}"`);
       expect(root).toContain('id="ios-beta"');
       // The Brazilian suspension card is not on the Spanish page.
       if (locale === "es") {

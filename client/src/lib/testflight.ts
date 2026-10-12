@@ -10,7 +10,7 @@
  *
  * Runbook: `docs/TESTFLIGHT.md`.
  */
-const PUBLIC_TESTFLIGHT_URL = "https://testflight.apple.com/join/envnP5vV";
+export const PUBLIC_TESTFLIGHT_URL = "https://testflight.apple.com/join/envnP5vV";
 
 export function testflightUrl(): string | null {
   const raw = import.meta.env.VITE_TESTFLIGHT_URL;
