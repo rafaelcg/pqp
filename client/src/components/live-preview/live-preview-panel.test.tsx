@@ -153,6 +153,22 @@ describe("LivePreviewPanel", () => {
     expect(siteRoot!.inert).toBe(false);
   });
 
+  it("does not count two player failures as in a row when the picture played between them", async () => {
+    await mount();
+    await watchNow();
+    await answerStart(0, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
+
+    for (let round = 1; round <= 3; round += 1) {
+      // The presenter restarts: the playlist refuses and the panel asks again.
+      await act(async () => player.unavailable!());
+      await answerStart(round, okResult());
+      expect(page()?.dataset.livePreview).toBe("watching");
+      // And the picture moves again before the next one.
+      await act(async () => player.playing!());
+    }
+  });
+
   it("shows the error after failures with no picture in between", async () => {
     await mount();
     await watchNow();

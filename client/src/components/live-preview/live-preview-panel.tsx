@@ -326,6 +326,12 @@ export function LivePreviewPanel({
     void begin(shown.id, { restart: true });
   };
 
+  // The picture is moving: the failures before this one are not "in a row"
+  // with the next.
+  const onPlayerPlaying = () => {
+    restarts.current = 0;
+  };
+
   /**
    * Every way to an account from here runs this first: the surface's own
    * intent (the community join, or the invite), the channel to land on, and
@@ -441,6 +447,7 @@ export function LivePreviewPanel({
                 url={phase.hlsUrl}
                 mode={phase.mode}
                 onUnavailable={onPlayerUnavailable}
+                onPlaying={onPlayerPlaying}
               >
                 {/* Floats over the picture so the page never moves under it. */}
                 <div aria-hidden className="absolute inset-x-0 top-0 h-[3px] bg-text/15 lg:h-1">

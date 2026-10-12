@@ -18,7 +18,9 @@ import { useTranslation } from "@/lib/i18n";
  *
  * `onUnavailable` fires when the playlist refuses (401, 403 or 404: the
  * window ended, the flag went off, the party ended) or the native player
- * gives up. The panel decides what that means by asking the server again.
+ * gives up. The panel decides what that means by asking the server
+ * again. `onPlaying` fires whenever the picture is moving, so the panel can
+ * tell a run of failures apart from failures with good playback between them.
  *
  * The controls are only the ones this player can really do: sound on and
  * off, and full screen (the frame, so the badges come along; the native
@@ -30,11 +32,13 @@ export function LivePreviewPlayer({
   url,
   mode,
   onUnavailable,
+  onPlaying,
   children,
 }: {
   url: string;
   mode: "conventional" | "ll";
   onUnavailable: () => void;
+  onPlaying?: () => void;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -43,6 +47,8 @@ export function LivePreviewPlayer({
   const [muted, setMuted] = useState(true);
   const unavailableRef = useRef(onUnavailable);
   unavailableRef.current = onUnavailable;
+  const onPlayingRef = useRef(onPlaying);
+  onPlayingRef.current = onPlaying;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -183,6 +189,7 @@ export function LivePreviewPlayer({
         controlsList="nodownload noremoteplayback"
         disablePictureInPicture
         onClick={toggleSound}
+        onPlaying={() => onPlayingRef.current?.()}
       />
       {children}
       {muted && (
