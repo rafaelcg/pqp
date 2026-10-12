@@ -220,7 +220,11 @@ function flatten(body: string | null, max: number): string | null {
 
 function toSummary(row: SummaryRow): Omit<
   ForumPostSummary,
-  "thumbnailUrl" | "thumbnailAttachmentId" | "thumbnailWidth" | "thumbnailHeight"
+  | "thumbnailUrl"
+  | "thumbnailAttachmentId"
+  | "thumbnailWidth"
+  | "thumbnailHeight"
+  | "thumbnailVideoUrl"
 > {
   const openingDeleted = row.om_id === null;
   const preview = openingDeleted ? null : flatten(row.om_body, FORUM_PREVIEW_MAX);
@@ -295,17 +299,21 @@ export async function readForumPostSummaries(
     if (!row) {
       continue;
     }
-    const image = row.om_id
-      ? (attachments.get(row.om_id) ?? []).find(
-          (file) => file.contentType.startsWith("image/") && !file.voice,
-        )
-      : undefined;
+    const files = row.om_id ? (attachments.get(row.om_id) ?? []) : [];
+    const image = files.find(
+      (file) => file.contentType.startsWith("image/") && !file.voice,
+    );
+    // No image: the first video stands in, drawn by its first frame.
+    const video = image
+      ? undefined
+      : files.find((file) => file.contentType.startsWith("video/") && !file.voice);
     out.push({
       ...toSummary(row),
       thumbnailUrl: image?.url ?? null,
       thumbnailAttachmentId: image?.id ?? null,
       thumbnailWidth: image?.width ?? null,
       thumbnailHeight: image?.height ?? null,
+      thumbnailVideoUrl: video?.url ?? null,
     });
   }
   return out;

@@ -11,6 +11,7 @@
  * action in this table.
  */
 
+import { buildSidebarLayout, navigableIds } from "@pqp/shared";
 import {
   isTextEntryTarget,
   matchesBinding,
@@ -244,10 +245,24 @@ function sortByPosition<T extends { position: number }>(list: T[]): T[] {
  * top-level voice, then each category's children.
  *
  * The list the API already filtered is the list the user can see.
+ *
+ * With the mixed list (`mixed`), the order is the shared layout's: loose
+ * channels in their one order, then each category's children, types mixed,
+ * exactly as `ChannelList` draws them.
  */
 export function navigableChannelIds(
   channels: readonly NavigableChannel[],
+  options: { mixed?: boolean } = {},
 ): string[] {
+  if (options.mixed) {
+    return navigableIds(
+      buildSidebarLayout(
+        channels.map((channel) => ({ ...channel, parentId: channel.parentId ?? null })),
+        // Watch party rooms stay out, as they always have here.
+        { mixed: true, hideWatchParty: true },
+      ),
+    );
+  }
   const ids: string[] = [];
   // A forum sits in the Texto group with the text channels, as the sidebar
   // draws it, so Alt+arrow walks the list in the order the eye reads it.

@@ -163,6 +163,7 @@ function summary(overrides: Partial<ForumPostSummary> = {}): ForumPostSummary {
     thumbnailAttachmentId: randomUUID(),
     thumbnailWidth: 1280,
     thumbnailHeight: 720,
+    thumbnailVideoUrl: null,
     tagIds: Array.from({ length: 5 }, () => randomUUID()),
     ...overrides,
   });

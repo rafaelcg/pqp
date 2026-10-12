@@ -133,6 +133,13 @@ data class ForumPostSummary(
     val thumbnailAttachmentId: String? = null,
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
+    /**
+     * The opening message's first video, signed, when it has no image. The card
+     * draws its first frame under a play badge, like the web card. Separate
+     * from `thumbnailUrl` on purpose: that one is only ever an image, so an
+     * image loader is never handed a video. Null from an older API.
+     */
+    val thumbnailVideoUrl: String? = null,
     /** In the forum's tag order. */
     val tagIds: List<String> = emptyList(),
 ) {

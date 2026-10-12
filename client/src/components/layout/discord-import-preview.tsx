@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import { legacyTypeRank } from "@pqp/shared";
 import type {
   DiscordImportPlan,
   MappedAwayReason,
@@ -86,21 +87,19 @@ export function DiscordImportPreview({
   const categories = plan.channels
     .filter((channel) => channel.type === "category")
     .sort((a, b) => a.position - b.position);
-  const topText = plan.channels
-    .filter(
-      (channel) =>
-        (channel.type === "text" || channel.type === "forum") &&
-        channel.parentTemplateId == null,
-    )
-    .sort((a, b) => a.position - b.position);
-  const topVoice = plan.channels
-    .filter((channel) => channel.type === "voice" && channel.parentTemplateId == null)
-    .sort((a, b) => a.position - b.position);
+  // Channels in no category, in Discord's order (one sequence, text first),
+  // drawn above the categories with no header: how Discord shows them and
+  // how the channel list draws them once categories are the only headers.
+  const loose = plan.channels
+    .filter((channel) => channel.type !== "category" && channel.parentTemplateId == null)
+    .sort(
+      (a, b) =>
+        legacyTypeRank(a.type) - legacyTypeRank(b.type) || a.position - b.position,
+    );
   const cosmeticRoles = plan.roles;
 
   const comingCount =
-    topText.length +
-    topVoice.length +
+    loose.length +
     categories.length +
     plan.channels.filter((channel) => channel.parentTemplateId != null).length +
     (cosmeticRoles.length > 0 ? 1 : 0);
@@ -131,9 +130,9 @@ export function DiscordImportPreview({
           </p>
         </div>
         <div className="max-h-72 overflow-y-auto px-1 py-3">
-          {topText.length > 0 && (
-            <PreviewSection label={t("chrome.text")}>
-              {topText.map((channel) => (
+          {loose.length > 0 && (
+            <div className="mb-3 last:mb-0" data-preview-loose="">
+              {loose.map((channel) => (
                 <PreviewChannelRow
                   key={channel.templateId}
                   channel={channel}
@@ -141,22 +140,10 @@ export function DiscordImportPreview({
                   style={nextComing()}
                 />
               ))}
-            </PreviewSection>
-          )}
-          {topVoice.length > 0 && (
-            <PreviewSection label={t("chrome.voice")}>
-              {topVoice.map((channel) => (
-                <PreviewChannelRow
-                  key={channel.templateId}
-                  channel={channel}
-                  reduced={reduced}
-                  style={nextComing()}
-                />
-              ))}
-            </PreviewSection>
+            </div>
           )}
           {categories.length > 0 && (
-            <PreviewSection label={t("chrome.categories")}>
+            <div className="mb-3 last:mb-0">
               {categories.map((category) => {
                 const children = plan.channels
                   .filter(
@@ -189,7 +176,7 @@ export function DiscordImportPreview({
                   </div>
                 );
               })}
-            </PreviewSection>
+            </div>
           )}
           {cosmeticRoles.length > 0 && (
             <PreviewSection label={t("importDiscord.preview.rolesSection")}>

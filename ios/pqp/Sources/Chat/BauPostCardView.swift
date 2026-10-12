@@ -266,8 +266,12 @@ private struct PosterBase: View {
 
 /// The first frame of a stored video, painted without playing it. A signed
 /// file URL is all the card has, so the frame comes from the asset itself.
-private struct BauVideoFrame: View {
+/// Shared with the forum card, which draws the same frame at thumbnail size.
+struct BauVideoFrame: View {
     let url: URL
+    /// The longest side the frame is decoded at: a 56 pt thumbnail has no use
+    /// for an 800 px picture.
+    var maxSide: CGFloat = 800
     @State private var frame: CGImage?
 
     var body: some View {
@@ -279,11 +283,48 @@ private struct BauVideoFrame: View {
             }
         }
         .task(id: url) {
+            if let cached = BauVideoFrameCache.frame(for: url, maxSide: maxSide) {
+                frame = cached
+                return
+            }
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
             generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 800, height: 800)
-            frame = try? await generator.image(at: CMTime(seconds: 0.001, preferredTimescale: 600)).image
+            generator.maximumSize = CGSize(width: maxSide, height: maxSide)
+            guard let image = try? await generator.image(at: CMTime(seconds: 0.001, preferredTimescale: 600)).image else {
+                return
+            }
+            BauVideoFrameCache.store(image, for: url, maxSide: maxSide)
+            frame = image
         }
+    }
+}
+
+/// A list scrolls cards off and back on; the frame is a network read and a
+/// decode, so it is kept for the next time. Bounded by count: NSCache also
+/// drops entries under memory pressure.
+@MainActor
+enum BauVideoFrameCache {
+    private final class Box {
+        let image: CGImage
+        init(_ image: CGImage) { self.image = image }
+    }
+
+    private static let cache: NSCache<NSString, Box> = {
+        let cache = NSCache<NSString, Box>()
+        cache.countLimit = 60
+        return cache
+    }()
+
+    private static func key(_ url: URL, _ maxSide: CGFloat) -> NSString {
+        "\(Int(maxSide))|\(url.absoluteString)" as NSString
+    }
+
+    static func frame(for url: URL, maxSide: CGFloat) -> CGImage? {
+        cache.object(forKey: key(url, maxSide))?.image
+    }
+
+    static func store(_ image: CGImage, for url: URL, maxSide: CGFloat) {
+        cache.setObject(Box(image), forKey: key(url, maxSide))
     }
 }
 

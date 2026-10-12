@@ -799,6 +799,35 @@ describeDb("forum posts", () => {
     );
   });
 
+  it("a post that is only a clip gives the card its video, never as the image thumbnail", async () => {
+    // A remote row is the only attachment a test can mint without storage;
+    // the remote helper takes image hosts only, so the row is made a video
+    // afterwards, which is all the summary reads.
+    const clip = await createRemoteAttachment({
+      channelId: forumId,
+      uploaderId: bob.id,
+      url: "https://static.klipy.com/gifs/abc/clip.webp",
+      filename: "clip.webp",
+      contentType: "image/webp",
+      width: 640,
+      height: 360,
+    });
+    await getPool().query(
+      `UPDATE message_attachments
+          SET content_type = 'video/mp4', filename = 'clip.mp4'
+        WHERE id = $1`,
+      [clip.id],
+    );
+    const created = await post(bob, "Gravei o bug", { body: "", attachmentIds: [clip.id] });
+    expect(created.status).toBe(201);
+    const summary = forumPostSummarySchema.parse(created.body.post);
+    expect(summary.thumbnailUrl).toBeNull();
+    expect(summary.thumbnailVideoUrl).toBe("https://static.klipy.com/gifs/abc/clip.webp");
+    expect(summary.openingKind).toBe("attachment");
+    const listed = (await list(bob)).posts.find((one) => one.id === summary.id)!;
+    expect(listed.thumbnailVideoUrl).toBe("https://static.klipy.com/gifs/abc/clip.webp");
+  });
+
   it("patch permissions field by field, the pin cap, and the audit trail", async () => {
     const [bug, oficial] = await putTags([
       { name: "Bug", moderated: false },
