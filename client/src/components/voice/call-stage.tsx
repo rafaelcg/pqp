@@ -238,6 +238,7 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  STAGE_HEIGHT_TALL,
   stageHeightClass,
   isStageCollapsed,
   markCallStarted,
@@ -1813,7 +1814,7 @@ function ActiveCall({
           "relative shrink-0 overflow-hidden bg-black",
           fill || watchFullscreen.active
             ? "h-full min-h-0"
-            : "h-[68svh] min-h-[280px]",
+            : STAGE_HEIGHT_TALL,
         )}
       >
         <CinemaStage

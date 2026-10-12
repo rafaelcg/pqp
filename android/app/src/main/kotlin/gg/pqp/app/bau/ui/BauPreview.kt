@@ -48,6 +48,7 @@ import gg.pqp.app.bau.BauPostCard
 import gg.pqp.app.bau.BauPreviewState
 import gg.pqp.app.bau.BauThumb
 import gg.pqp.app.bau.bauThumb
+import gg.pqp.app.bau.bauThumbSource
 import gg.pqp.app.bau.bauThumbUrl
 import gg.pqp.app.core.Backend
 import gg.pqp.app.social.ui.relativeTime
@@ -231,7 +232,7 @@ private fun Thumb(post: BauPostCard, serverId: String, size: Dp, width: Dp = siz
             ),
         contentAlignment = Alignment.Center,
     ) {
-        val imageUrl = if (bauThumb(post) == BauThumb.Image) bauThumbUrl(post.mediaUrl, Backend.apiUrl) else null
+        val imageUrl = if (bauThumb(post) == BauThumb.Image) bauThumbUrl(bauThumbSource(post), Backend.apiUrl) else null
         if (imageUrl != null) {
             AsyncImage(
                 model = imageUrl,

@@ -187,7 +187,7 @@ struct AccountSettingsView: View {
             await session.refreshCurrentUser()
             saved = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         saving = false
     }
@@ -420,7 +420,7 @@ private struct HandleRow: View {
             // VERBATIM. "That handle is taken" is not a property of the string —
             // only the unique index can say it — so the local mirror cannot
             // produce this sentence and must not paraphrase it.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -520,7 +520,7 @@ private struct AvatarRow: View {
             // memory matches every other field it holds.
             await session.refreshCurrentUser()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -532,7 +532,7 @@ private struct AvatarRow: View {
             _ = try await session.api.deleteAvatar()
             await session.refreshCurrentUser()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -902,7 +902,7 @@ struct WebhooksView: View {
             webhooks = try await session.api.webhooks(channelId: channel.id)
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         loading = false
     }
@@ -913,7 +913,7 @@ struct WebhooksView: View {
         do {
             webhooks.append(try await session.api.createWebhook(channelId: channel.id, name: trimmed))
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -922,7 +922,7 @@ struct WebhooksView: View {
             try await session.api.deleteWebhook(id: webhook.id)
             webhooks.removeAll { $0.id == webhook.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }

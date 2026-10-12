@@ -26,6 +26,21 @@ const GROUP_LABEL: Record<(typeof SHORTCUT_GROUPS)[number]["id"], MessageKey> = 
   app: "shortcuts.group.app",
 };
 
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
+/** Cmd on Apple, Ctrl elsewhere, plus a letter: the fixed Conversas chords. */
+function fixedChord(code: string, label: string): KeyBinding {
+  return {
+    code,
+    label,
+    ctrl: !IS_APPLE_KEYBOARD,
+    meta: IS_APPLE_KEYBOARD,
+    alt: false,
+    shift: false,
+  };
+}
+
 function ShortcutKeys({ binding }: { binding: KeyBinding }) {
   const { t } = useTranslation();
   const { keys: parts, label } = bindingKeycaps(binding, undefined, t);
@@ -81,6 +96,12 @@ interface ShortcutOverlayProps {
    * nothing, so the map says "Off" instead of listing it as a shortcut.
    */
   pushToTalkOn?: boolean;
+  /**
+   * Conversas (`conversations_home`): Ctrl/Cmd+K is "ir pra" and message
+   * search is Ctrl/Cmd+F. Both are fixed chords, so they are listed here
+   * rather than in the remappable table.
+   */
+  conversationsHome?: boolean;
   onClose: () => void;
 }
 
@@ -89,6 +110,7 @@ export function ShortcutOverlay({
   bindings,
   pushToTalkKey = defaultPushToTalkBinding,
   pushToTalkOn = true,
+  conversationsHome = false,
   onClose,
 }: ShortcutOverlayProps) {
   const { t } = useTranslation();
@@ -138,6 +160,18 @@ export function ShortcutOverlay({
                       label={t(ACTION_LABEL.pushToTalk)}
                       binding={pushToTalkKey}
                       off={!pushToTalkOn}
+                    />
+                  </>
+                )}
+                {group.id === "navigation" && conversationsHome && (
+                  <>
+                    <ShortcutRow
+                      label={t("switcher.title")}
+                      binding={fixedChord("KeyK", "K")}
+                    />
+                    <ShortcutRow
+                      label={t("chrome.searchMessages")}
+                      binding={fixedChord("KeyF", "F")}
                     />
                   </>
                 )}

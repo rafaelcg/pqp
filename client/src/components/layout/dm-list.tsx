@@ -1,39 +1,22 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
-import {
-  Ban,
-  BellOff,
-  Copy,
-  Phone,
-  Pin,
-  PinOff,
-  Plus,
-  UserRound,
-  Users,
-  X,
-} from "lucide-react";
+import { BellOff, Phone, Plus, Users, X } from "lucide-react";
 import { useRef, type CSSProperties, type ReactNode } from "react";
+import { ConversationHomeList } from "@/components/conversations/conversation-home-list";
+import { useConversationRowMenu } from "@/components/conversations/use-conversation-row-menu";
 import { useHasDraft } from "@/lib/composer-drafts";
 import { DraftMark } from "@/components/layout/channel-list";
 import {
   formatBadgeCount,
   type UnreadState,
 } from "@/components/layout/channel-list";
-import {
-  ContextMenu,
-  type ContextMenuItemDef,
-} from "@/components/ui/context-menu";
+import { ContextMenu } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { UserAvatar } from "@/components/user/user-avatar";
-import {
-  notificationLevelItems,
-  useChannelNotificationLevel,
-} from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
-import { conversationTitle, formatMessagePreview } from "@/lib/conversations";
+import { formatMessagePreview } from "@/lib/conversations";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
@@ -77,6 +60,32 @@ interface DmListProps {
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  /**
+   * Conversas (`conversations_home`): draw `ConversationHomeList` instead.
+   * Off, this component is exactly what it was.
+   */
+  home?: boolean;
+  /** Pinned ids in pin order, for the Conversas list's Fixadas section. */
+  pinnedIds?: readonly string[];
+  /** Conversas on a phone: the list is the Conversas tab (see `ConversationHomeList`). */
+  phoneShell?: boolean;
+}
+
+/**
+ * The conversation sidebar. With `home` on it is the Conversas list; off, the
+ * classic one below. One entry point so the shell passes one set of props.
+ */
+export function DmList({ home = false, pinnedIds, phoneShell = false, ...props }: DmListProps) {
+  if (home) {
+    return (
+      <ConversationHomeList
+        {...props}
+        phoneShell={phoneShell}
+        pinnedIds={pinnedIds ?? [...(props.pinnedChannelIds ?? [])]}
+      />
+    );
+  }
+  return <ClassicDmList {...props} />;
 }
 
 /**
@@ -89,7 +98,7 @@ interface DmListProps {
  * derived from who is in it, which is the one thing a channel row never has to
  * do.
  */
-export function DmList({
+function ClassicDmList({
   conversations,
   selectedChannelId,
   unread,
@@ -112,7 +121,7 @@ export function DmList({
   footer,
   mobileOpen = false,
   onMobileClose,
-}: DmListProps) {
+}: Omit<DmListProps, "home" | "pinnedIds" | "phoneShell">) {
   const { t } = useTranslation();
   const {
     width: sidebarWidth,
@@ -322,98 +331,18 @@ function ConversationRow({
   onStartCall?: () => void;
 }) {
   const { t } = useTranslation();
-  const openProfile = useProfilePopover();
   /** What the profile card hangs off, since the trigger is a menu item. */
   const rowRef = useRef<HTMLDivElement>(null);
-  // The same per-channel levels a server channel gets. Muting a conversation is
-  // the same act as muting #general, and giving it its own store would be a
-  // second place for "leave me alone" to be recorded and forgotten.
-  const notifications = useChannelNotificationLevel({
-    id: conversation.channelId,
-    serverId: null,
+  const { items, notifications, title, blocked } = useConversationRowMenu({
+    conversation,
+    blockedUserIds,
+    rowRef,
+    onHide,
+    pinned,
+    onTogglePin,
+    onBlock,
+    onUnblock,
   });
-  const title = conversationTitle(conversation.participants);
-  // Blocking is between two people. In a group there is no single "them" to
-  // block, and blocking one member would leave you in a room reading around a
-  // hole — so the row only offers it for a 1:1.
-  const solo =
-    conversation.participants.length === 1 ? conversation.participants[0]! : null;
-  const blocked = solo ? blockedUserIds.has(solo.id) : false;
-
-  const items: ContextMenuItemDef[] = [
-    // The profile card is a menu item here rather than a click on the avatar,
-    // which is the one place it does NOT drop in cleanly: a conversation row
-    // is one big button whose entire job is opening the conversation, and
-    // stealing part of it for a popover would break the row's own purpose.
-    // A group row offers nothing — there is no single "them" to profile.
-    ...(solo
-      ? [
-          {
-            id: "profile",
-            label: t("profile.viewProfile"),
-            icon: UserRound,
-            onSelect: () => {
-              const anchor = rowRef.current;
-              if (anchor) {
-                openProfile(
-                  {
-                    id: solo.id,
-                    displayName: solo.displayName,
-                    tag: solo.tag ?? null,
-                    avatarUrl: solo.avatarUrl ?? null,
-                  },
-                  anchor,
-                );
-              }
-            },
-          },
-        ]
-      : []),
-    ...(onTogglePin
-      ? [
-          {
-            id: "pin",
-            label: pinned
-              ? t("chrome.unpinConversation")
-              : t("chrome.pinConversation"),
-            icon: pinned ? PinOff : Pin,
-            onSelect: onTogglePin,
-          },
-        ]
-      : []),
-    {
-      id: "copy-id",
-      label: t("dm.copyId"),
-      icon: Copy,
-      onSelect: () => void navigator.clipboard.writeText(conversation.channelId),
-    },
-    ...notificationLevelItems("notify", notifications, "account"),
-    { id: "sep", label: "", separator: true },
-    {
-      id: "hide",
-      label: t("dm.close"),
-      icon: X,
-      onSelect: onHide,
-    },
-  ];
-  if (solo) {
-    items.push(
-      blocked
-        ? {
-            id: "unblock",
-            label: t("profile.unblock"),
-            icon: Ban,
-            onSelect: () => onUnblock(solo.id),
-          }
-        : {
-            id: "block",
-            label: t("profile.block"),
-            icon: Ban,
-            danger: true,
-            onSelect: () => onBlock(solo),
-          },
-    );
-  }
 
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
@@ -520,7 +449,7 @@ function ConversationRow({
             {badge > 0 ? (
               <span
                 key={badge}
-                className="min-w-[18px] h-[18px] animate-badge-pop rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-none text-text"
+                className="inline-flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger"
                 aria-label={
                   mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })

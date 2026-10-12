@@ -85,7 +85,7 @@ struct CommunityHomeView: View {
                     .padding(.horizontal, Metrics.hPadding)
                     .padding(.vertical, 12)
                 }
-                .refreshable {
+                .pullToRefresh {
                     async let fresh: Void = loadChannels()
                     await load()
                     await fresh
@@ -167,7 +167,7 @@ struct CommunityHomeView: View {
             // on the way back, which is what clears the row's badge here.
             try? await session.api.markCommunityHomeRead(serverId: server.id)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
     }

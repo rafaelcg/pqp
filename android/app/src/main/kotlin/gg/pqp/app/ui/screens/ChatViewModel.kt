@@ -21,6 +21,7 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.VoiceNote
+import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.ui.chat.ChatMarkdown
 import gg.pqp.app.ui.chat.ComposerTarget
 import gg.pqp.app.ui.chat.MentionCandidate
@@ -882,7 +883,7 @@ class ChatViewModel(
     }
 
     private suspend fun loadInitial() {
-        runCatching { session.api.messages(channelId) }
+        runSuspendCatching { session.api.messages(channelId) }
             .onSuccess { page ->
                 _state.value = _state.value.copy(
                     messages = page.messages,

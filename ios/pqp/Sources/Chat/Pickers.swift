@@ -516,7 +516,7 @@ private struct GifGrid: View {
                 : try await session.api.searchGifs(query: trimmed)
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         loading = false
     }

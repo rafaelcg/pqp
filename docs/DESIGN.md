@@ -51,7 +51,7 @@ The role set, as defined today:
 | Borders | `border`, `border-strong` |
 | Text | `text`, `text-secondary`, `text-tertiary` |
 | Accent | `accent`, `accent-hover`, `on-accent` |
-| Status | `danger`, `warning`, `success` |
+| Status | `danger`, `warning`, `success`, and `on-danger` for a count drawn on the danger fill (an unread badge) |
 | Soft | `accent-soft`, `danger-soft`, `danger-soft-hover`, `warning-soft`, `success-soft`, and an `on-` for each fill |
 | Code | `code-bg`, `code-text` |
 | State | `focus-ring`, `ring-offset`, `selection`, `indicator` |
