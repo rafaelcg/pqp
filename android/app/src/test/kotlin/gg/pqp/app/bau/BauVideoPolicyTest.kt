@@ -75,4 +75,20 @@ class BauVideoPolicyTest {
         floor.release("b")
         assertNull(floor.current)
     }
+
+    @Test
+    fun `an embed starting pauses the embed that held the floor, and releasing is per key`() {
+        var aPaused = 0
+        var bPaused = 0
+        BauPlayback.claimEmbed("youtube:a") { aPaused++ }
+        BauPlayback.claimEmbed("youtube:b") { bPaused++ }
+        assertEquals(1, aPaused)
+        assertEquals(0, bPaused)
+        // A late "stopped" from the displaced player must not free b's floor.
+        BauPlayback.releaseEmbed("youtube:a")
+        BauPlayback.claimEmbed("youtube:a") { aPaused++ }
+        assertEquals(1, bPaused)
+        assertEquals(1, aPaused)
+        BauPlayback.releaseEmbed("youtube:a")
+    }
 }

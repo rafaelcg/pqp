@@ -417,6 +417,16 @@ viewing hostname and autoplay off. The API returns the stored URL in
 Over-limit video is refused with "upload it to YouTube". Files are signed as
 downloads, never inline.
 
+The Android app plays a YouTube post in the card (`BauYoutube.kt`, rules in
+`BauYoutubeEmbed.kt`): the public poster until a tap, then a `WebView` with
+YouTube's IFrame Player from `youtube-nocookie.com`, loaded under the
+`pqp.gg` origin so YouTube sees a referrer. Main-frame navigations and app
+schemes are refused, so **Abrir no YouTube** under the card is the only way
+to the YouTube app. Full screen is WebView's own video view, shown immersive
+in landscape. WebView asks for media focus itself when the clip plays; the
+app does not ask too, and in a call the voice stack ignores focus changes,
+so the clip mixes in.
+
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
 
