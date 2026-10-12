@@ -250,6 +250,8 @@ export function createUserStatsRecorder(
   let flushing: Promise<number> | null = null;
   /** `userId|trackId` already counted, with when, oldest first, bounded. */
   let creditedTracks = new Map<string, number>();
+  /** Credits whose count is still buffered, so a dropped flush can undo them. */
+  let unflushedCredits: string[] = [];
   /** Sample writes that failed, oldest first, retried before the next tick. */
   let failedSamples: { at: Date; seats: LiveSeat[] }[] = [];
   let lastBlindWarningAt = 0;
@@ -458,6 +460,10 @@ export function createUserStatsRecorder(
     }
     for (const key of fresh) {
       creditedTracks.set(key, at);
+      unflushedCredits.push(key);
+      if (unflushedCredits.length > MAX_CREDITED_TRACKS) {
+        unflushedCredits.shift();
+      }
       if (creditedTracks.size > MAX_CREDITED_TRACKS) {
         const oldest = creditedTracks.keys().next().value;
         if (oldest !== undefined) {
@@ -484,9 +490,15 @@ export function createUserStatsRecorder(
     const batch = pendingMusic;
     pendingMusic = new Map();
     const entries = [...batch.values()];
+    const batchCredits = unflushedCredits;
+    unflushedCredits = [];
     if (!enabled()) {
       // Off stops every write, including tracks noted before the flip.
       m.musicDropped += entries.reduce((sum, e) => sum + e.count, 0);
+      // The counts are gone, so the tracks must be reportable again.
+      for (const key of batchCredits) {
+        creditedTracks.delete(key);
+      }
       return 0;
     }
     try {
@@ -508,6 +520,9 @@ export function createUserStatsRecorder(
       return result.rowCount ?? 0;
     } catch (error) {
       m.musicFlushFailures += 1;
+      unflushedCredits = [...batchCredits, ...unflushedCredits].slice(
+        -MAX_CREDITED_TRACKS,
+      );
       // Put back what did not land, merged with anything noted meanwhile.
       for (const entry of entries) {
         const key = `${entry.day}|${entry.userId}`;
@@ -594,6 +609,7 @@ export function createUserStatsRecorder(
       pendingMusic = new Map();
       flushing = null;
       creditedTracks = new Map();
+      unflushedCredits = [];
       failedSamples = [];
       lastBlindWarningAt = 0;
       m = emptyMetrics();

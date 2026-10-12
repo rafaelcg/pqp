@@ -342,6 +342,23 @@ describeDb("user stats", () => {
     expect(r.metrics()).toMatchObject({ musicPending: 0, musicDropped: 2 });
   });
 
+  it("lets a track dropped by an off flush count when reported again", async () => {
+    const ana = await person("ana");
+    let on = true;
+    const r = createUserStatsRecorder({
+      enabled: () => on,
+      now: () => Date.parse("2026-10-10T12:00:00Z"),
+    });
+    r.noteTracksQueued(ana, ["t1"]);
+    on = false;
+    expect(await r.flushMusic()).toBe(0);
+    on = true;
+    r.noteTracksQueued(ana, ["t1"]);
+    r.noteTracksQueued(ana, ["t1"]);
+    await r.flushMusic();
+    expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 1 } });
+  });
+
   it("counts one add once, however many writes report it", async () => {
     const ana = await person("ana");
     const r = createUserStatsRecorder({
