@@ -5731,6 +5731,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_story_audience_friends
   ON story_audiences (story_id) WHERE server_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_story_audience_strip
   ON story_audiences (server_id, expires_at DESC) WHERE removed_at IS NULL;
+-- Every story's own audiences (reads, and the cascade when a story row goes).
+-- The two unique indexes above are partial, so neither serves `story_id = $1`.
+CREATE INDEX IF NOT EXISTS idx_story_audience_story ON story_audiences (story_id);
 
 -- One row per viewer per story. The author's own views are never written.
 -- One reaction per viewer, changeable; a reaction never creates a message.
@@ -5745,6 +5748,9 @@ CREATE TABLE IF NOT EXISTS story_views (
 );
 CREATE INDEX IF NOT EXISTS idx_story_views_viewer
   ON story_views (viewer_id, viewed_at DESC);
+-- The author's viewers sheet, newest first, keyset on (viewed_at, viewer_id).
+CREATE INDEX IF NOT EXISTS idx_story_views_recent
+  ON story_views (story_id, viewed_at DESC, viewer_id DESC);
 
 -- "Silenciar stories do Caio": hides an author from the muter's strips. The
 -- author is never told, and their view list is unaffected.
@@ -5772,6 +5778,9 @@ CREATE TABLE IF NOT EXISTS story_notices (
 );
 CREATE INDEX IF NOT EXISTS idx_story_notices_open
   ON story_notices (user_id, created_at DESC) WHERE acked_at IS NULL;
+-- `story_id ... ON DELETE SET NULL` looks notices up by story.
+CREATE INDEX IF NOT EXISTS idx_story_notices_story
+  ON story_notices (story_id) WHERE story_id IS NOT NULL;
 
 -- Which processes can check a video's frames (ffmpeg present), refreshed by
 -- each one's stories job. `GET /api/stories/config` reads it so that, with a
@@ -5827,13 +5836,9 @@ BEGIN
   END IF;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_story_dedupe
-  ON reports (reporter_id, reported_story_id)
-  WHERE status = 'open' AND subject_type = 'story';
-
--- The sweep's hold check: "is anybody still looking at this story".
-CREATE INDEX IF NOT EXISTS idx_reports_story
-  ON reports (reported_story_id) WHERE reported_story_id IS NOT NULL;
+-- The story-report indexes (dedupe and the sweep's hold check) are built
+-- CONCURRENTLY at boot (`CONCURRENT_INDEXES` in db.ts), so adding them never
+-- blocks writes to `reports` while the existing rows are scanned.
 
 -- POST_STORIES (bit 25 = 33554432): post a story to the server. On for
 -- @everyone by default, like SEND_MESSAGES, so staff can take it away per

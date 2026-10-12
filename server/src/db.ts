@@ -1428,6 +1428,26 @@ const CONCURRENT_INDEXES: ReadonlyArray<{
     unique: false,
     definition: "ON messages (story_id) WHERE story_id IS NOT NULL",
   },
+  {
+    // A reporter's open report about a story: a second tap is a duplicate.
+    name: "idx_reports_open_story_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_story_id) WHERE status = 'open' AND subject_type = 'story'",
+  },
+  {
+    // The scanner's open report about a story: one per story, whatever races.
+    name: "idx_reports_open_story_automated",
+    unique: true,
+    definition:
+      "ON reports (reported_story_id) WHERE status = 'open' AND subject_type = 'story' AND reporter_id IS NULL",
+  },
+  {
+    // The stories sweep's hold check: "is anybody still looking at this story".
+    name: "idx_reports_story",
+    unique: false,
+    definition: "ON reports (reported_story_id) WHERE reported_story_id IS NOT NULL",
+  },
 ];
 
 async function ensureConcurrentIndexes(
