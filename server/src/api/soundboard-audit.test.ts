@@ -210,4 +210,18 @@ describeDb("soundboard management audit rows", () => {
       },
     ]);
   });
+
+  it("deletes the server's clip files, and its uploads in flight, with the server", async () => {
+    const claimedKey = await upload();
+    expect((await claim(claimedKey)).status).toBe(200);
+    const pendingKey = await upload();
+    const stored = [...s3.objects.keys()].filter((key) => key.includes(".clip."));
+    expect(stored).toHaveLength(1);
+    expect((await call(owner, "DELETE", `/api/servers/${serverId}`)).status).toBe(200);
+    // The file delete runs in the background after the rows cascade.
+    await vi.waitFor(() => {
+      expect(s3.objects.has(stored[0]!)).toBe(false);
+      expect(s3.objects.has(pendingKey)).toBe(false);
+    });
+  });
 });

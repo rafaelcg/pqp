@@ -232,6 +232,24 @@ export function deleteObjectsInBackground(keys: string[]): void {
   })();
 }
 
+/**
+ * Every soundboard object the server owns: saved clips plus uploads still on
+ * the ledger. Both tables cascade away with the server, and with them the
+ * only record of the keys, so they are read before the delete like the rest.
+ */
+async function serverSoundboardKeys(serverId: string): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await getPool().query<{ storage_key: string }>(
+    `SELECT storage_key FROM soundboard_sounds WHERE server_id = $1
+     UNION
+     SELECT storage_key FROM soundboard_pending_uploads WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
 async function ownerLocaleFor(
   db: Pick<PoolClient, "query">,
   userId: string,
@@ -998,6 +1016,7 @@ export async function deleteServer(
   // is about to delete, so read afterwards nothing in Postgres names the bytes
   // ever again.
   keys.push(...(await serverImageKeys(serverId)));
+  keys.push(...(await serverSoundboardKeys(serverId)));
 
   // channels / members / invites / bans all cascade from servers — and so do
   // the attachment rows, which is why their keys are already in hand.
