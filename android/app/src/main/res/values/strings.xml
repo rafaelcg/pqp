@@ -822,6 +822,13 @@
     <string name="forum_sort_created">Newest</string>
     <string name="forum_filter_open">Open</string>
     <string name="forum_filter_resolved">Resolved</string>
+    <string name="forum_tag_preset_question">Question</string>
+    <string name="forum_tag_preset_bug">Bug</string>
+    <string name="forum_tag_preset_suggestion">Suggestion</string>
+    <string name="forum_tag_preset_tutorial">Guide</string>
+    <string name="forum_tag_preset_release">Release</string>
+    <string name="forum_tag_preset_wip">WIP</string>
+    <string name="forum_tag_preset_discussion">Discussion</string>
     <string name="forum_filter_mine">My posts</string>
     <string name="forum_pinned">Pinned</string>
     <plurals name="forum_live">

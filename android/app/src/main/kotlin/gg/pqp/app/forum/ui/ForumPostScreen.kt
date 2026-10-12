@@ -770,11 +770,15 @@ private fun EditTagsSheet(
                 pickable.forEach { tag ->
                     val on = tag.id in picked
                     ForumFilterChip(
-                        label = tag.name,
+                        label = tag.displayName(),
                         selected = on,
                         showClose = false,
                         trailingIcon = if (on) PqpIcons.Confirm else if (tag.moderated) PqpIcons.StaffOnly else null,
-                        leading = tag.emoji?.takeIf { it.isNotBlank() }?.let { e -> { Text(e) } },
+                        leading = if (tag.hasGlyph()) {
+                            { ForumTagGlyph(tag, size = 16.dp) }
+                        } else {
+                            null
+                        },
                         onClick = {
                             if (tag.moderated && !isStaff) return@ForumFilterChip
                             picked = when {
