@@ -185,6 +185,7 @@ export function StoryViewer({
   );
   const reactionSeq = useRef(new Map<string, number>());
   const confirmedReaction = useRef(new Map<string, StoryReaction | null>());
+  const confirmedSeq = useRef(new Map<string, number>());
   const markedSeen = useRef(new Set<string>());
   const lastDisplay = useRef<StoryDisplay | null>(null);
   const lastGeneration = useRef(state.generation);
@@ -854,7 +855,10 @@ export function StoryViewer({
     reactionSeq.current.set(id, seq);
     void setStoryReaction(id, next)
       .then(() => {
-        if (reactionSeq.current.get(id) === seq) {
+        // The newest request that succeeded is what the server holds, even
+        // when a later tap is still in flight (and may yet fail).
+        if (seq > (confirmedSeq.current.get(id) ?? 0)) {
+          confirmedSeq.current.set(id, seq);
           confirmedReaction.current.set(id, next);
         }
       })

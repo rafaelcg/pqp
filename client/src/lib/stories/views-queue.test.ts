@@ -38,6 +38,21 @@ describe("story views queue", () => {
     expect(pendingStoryViews()).toEqual([]);
   });
 
+  it("a batch that fails after another account signed in is not retried for them", async () => {
+    let fail: (error: Error) => void = () => {};
+    const send = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)))
+      .mockResolvedValue({ recorded: 1 });
+    resetStoryViewsQueue(send);
+    queueStoryViews(["a"], "alice");
+    const flushing = flushStoryViews();
+    queueStoryViews(["b"], "bob");
+    fail(new Error("offline"));
+    await flushing;
+    expect(pendingStoryViews()).toEqual(["b"]);
+  });
+
   it("another account queueing drops the previous account's pending views", () => {
     resetStoryViewsQueue(vi.fn().mockResolvedValue({ recorded: 0 }));
     queueStoryViews(["a"], "alice");

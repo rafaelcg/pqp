@@ -65,14 +65,19 @@ export async function flushStoryViews(): Promise<void> {
     pending.delete(id);
   }
   inFlight = true;
+  const batchOwner = owner;
   try {
     await send(batch);
     failures = 0;
   } catch {
-    for (const id of batch) {
-      pending.add(id);
+    // Put the batch back only if it still belongs to whoever is queueing
+    // now: another account signing in meanwhile must not inherit it.
+    if (owner === batchOwner) {
+      for (const id of batch) {
+        pending.add(id);
+      }
+      failures += 1;
     }
-    failures += 1;
   } finally {
     inFlight = false;
   }
