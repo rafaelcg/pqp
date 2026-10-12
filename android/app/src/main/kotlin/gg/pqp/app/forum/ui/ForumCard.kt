@@ -65,8 +65,16 @@ import gg.pqp.app.ui.theme.TabularFigures
 /** The card's corner, the web's `--radius-card`. */
 private val CardShape = RoundedCornerShape(14.dp)
 
-/** UX §5: 56dp on a phone. */
-private val Thumbnail = 56.dp
+/**
+ * UX §5 asked for about 56dp. 58 is what measures on the emulator from the
+ * title's capitals (titleMedium), 4 to one line of preview, 8 to the numbers,
+ * down to their baseline. Change the card's type or spacing and these move
+ * too.
+ */
+private val Thumbnail = 58.dp
+
+/** titleMedium's line box starts this far above its capitals. */
+private val ThumbnailCapInset = 4.dp
 
 /**
  * One post in the list (UX §2.3): status badges then the title, the author
@@ -129,65 +137,77 @@ fun ForumPostCard(
                 }
                 .testTag("forum.card.${post.id}"),
         ) {
-            Row(Modifier.padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) {
-                Column(Modifier.weight(1f)) {
-                    if (isNew || post.pinned || post.resolved || post.locked || post.authorIsWebhook) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(bottom = 6.dp),
-                        ) {
-                            if (isNew) ForumBadge(BadgeKind.New)
-                            if (post.resolved) ForumBadge(BadgeKind.Resolved)
-                            if (post.locked) ForumBadge(BadgeKind.Locked)
-                            if (post.authorIsWebhook) ForumBadge(BadgeKind.Feed)
-                        }
+            // One text column on one leading edge: badges, title, "author:
+            // start of the question", then tags and numbers. The badges sit
+            // above the title-and-thumbnail row, so the thumbnail hangs off the
+            // title's capitals and not off the badges; on the common card (one
+            // line of title, one of preview) its bottom lands on the numbers'
+            // baseline.
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                if (isNew || post.pinned || post.resolved || post.locked || post.authorIsWebhook) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    ) {
+                        if (isNew) ForumBadge(BadgeKind.New)
+                        if (post.resolved) ForumBadge(BadgeKind.Resolved)
+                        if (post.locked) ForumBadge(BadgeKind.Locked)
+                        if (post.authorIsWebhook) ForumBadge(BadgeKind.Feed)
                     }
-                    Text(
-                        text = post.title,
-                        // The line people scan: 16sp, heavier than the rest of the
-                        // card read or not, heavier still unread (the web card).
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (bold) colors.onSurface else colors.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    val preview = when {
-                        post.openingDeleted -> stringResource(R.string.forum_preview_deleted)
-                        post.openingKind == "voice" -> stringResource(R.string.forum_preview_voice)
-                        !post.preview.isNullOrBlank() -> previewText(post.preview)
-                        // One picture or one clip says what it is; several say how many.
-                        post.attachmentCount == 1 && post.thumbnailUrl != null ->
-                            stringResource(R.string.forum_preview_image)
-                        post.attachmentCount == 1 && post.thumbnailVideoUrl != null ->
-                            stringResource(R.string.forum_preview_video)
-                        post.attachmentCount > 0 ->
-                            pluralStringResource(R.plurals.forum_preview_files, post.attachmentCount, post.attachmentCount)
-                        else -> null
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant)) {
-                                append(author)
-                            }
-                            if (preview != null) {
-                                append(": ")
-                                append(preview)
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.onSurfaceVariant.copy(alpha = 0.82f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
-                    CardFooter(post, tagsById, newReplies, time)
                 }
-                if (post.thumbnailUrl != null || post.thumbnailVideoUrl != null) {
-                    Spacer(Modifier.width(Spacing.md))
-                    ForumThumbnail(imageUrl = post.thumbnailUrl, videoUrl = post.thumbnailVideoUrl)
+                Row {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = post.title,
+                            // The line people scan: 16sp, heavier than the rest of the
+                            // card read or not, heavier still unread (the web card).
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
+                            color = if (bold) colors.onSurface else colors.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val preview = when {
+                            post.openingDeleted -> stringResource(R.string.forum_preview_deleted)
+                            post.openingKind == "voice" -> stringResource(R.string.forum_preview_voice)
+                            !post.preview.isNullOrBlank() -> previewText(post.preview)
+                            // One picture or one clip says what it is; several say how many.
+                            post.attachmentCount == 1 && post.thumbnailUrl != null ->
+                                stringResource(R.string.forum_preview_image)
+                            post.attachmentCount == 1 && post.thumbnailVideoUrl != null ->
+                                stringResource(R.string.forum_preview_video)
+                            post.attachmentCount > 0 ->
+                                pluralStringResource(R.plurals.forum_preview_files, post.attachmentCount, post.attachmentCount)
+                            else -> null
+                        }
+                        Spacer(Modifier.height(Spacing.xs))
+                        Text(
+                            text = buildAnnotatedString {
+                                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant)) {
+                                    append(author)
+                                }
+                                if (preview != null) {
+                                    append(": ")
+                                    append(preview)
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant.copy(alpha = 0.82f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(Spacing.sm))
+                        CardFooter(post, tagsById, newReplies, time)
+                    }
+                    if (post.thumbnailUrl != null || post.thumbnailVideoUrl != null) {
+                        Spacer(Modifier.width(Spacing.md))
+                        ForumThumbnail(
+                            imageUrl = post.thumbnailUrl,
+                            videoUrl = post.thumbnailVideoUrl,
+                            modifier = Modifier.padding(top = ThumbnailCapInset),
+                        )
+                    }
                 }
             }
         }
@@ -215,11 +235,11 @@ fun ForumPostCard(
  * keeps the plate and the badge, which still say "video".
  */
 @Composable
-private fun ForumThumbnail(imageUrl: String?, videoUrl: String?) {
+private fun ForumThumbnail(imageUrl: String?, videoUrl: String?, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
     val shape = MaterialTheme.shapes.small
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(Thumbnail)
             .clip(shape)
             .background(colors.surfaceContainerHigh)
@@ -274,24 +294,29 @@ private fun CardFooter(
 ) {
     val colors = MaterialTheme.colorScheme
     val numbers = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = TabularFigures)
+    // Tags on the left and the numbers on the right, the web card's row. With
+    // no tags there is nothing to push against, so the numbers start on the
+    // text's leading edge instead of floating at the far end of an empty row.
     Row(verticalAlignment = Alignment.CenterVertically) {
         val tags = post.tagIds.mapNotNull(tagsById::get)
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Two chips fit beside the numbers on a 360dp phone; the rest is "+N".
-            tags.take(MAX_CARD_TAGS).forEach { ForumTagChip(it) }
-            if (tags.size > MAX_CARD_TAGS) {
-                Text(
-                    text = "+${tags.size - MAX_CARD_TAGS}",
-                    style = numbers,
-                    color = colors.onSurfaceVariant,
-                )
+        if (tags.isNotEmpty()) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Two chips fit beside the numbers on a 360dp phone; the rest is "+N".
+                tags.take(MAX_CARD_TAGS).forEach { ForumTagChip(it) }
+                if (tags.size > MAX_CARD_TAGS) {
+                    Text(
+                        text = "+${tags.size - MAX_CARD_TAGS}",
+                        style = numbers,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
             }
+            Spacer(Modifier.width(Spacing.sm))
         }
-        Spacer(Modifier.width(Spacing.sm))
         post.topReaction?.let { top ->
             Text(text = "${top.emoji} ${top.count}", style = numbers, color = colors.onSurfaceVariant)
             Spacer(Modifier.width(Spacing.md))
@@ -317,7 +342,14 @@ private fun CardFooter(
         } else {
             Text(text = stringResource(R.string.forum_replies_zero), style = numbers, color = colors.onSurfaceVariant)
         }
-        Spacer(Modifier.width(Spacing.md))
+        // Read left to right now, so the time needs a break from the count
+        // before it ("Sem respostas · agora").
+        Text(
+            text = "·",
+            style = numbers,
+            color = colors.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp),
+        )
         Text(text = time, style = numbers, color = colors.onSurfaceVariant)
     }
 }
