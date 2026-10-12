@@ -32,6 +32,7 @@ const post: ForumPostSummary = {
   thumbnailAttachmentId: null,
   thumbnailWidth: null,
   thumbnailHeight: null,
+  thumbnailVideoUrl: null,
   tagIds: [],
 };
 

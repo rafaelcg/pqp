@@ -740,6 +740,10 @@ export function ForumPostView({
     .filter(Boolean)
     .join(" · ");
 
+  const hasHeaderChips =
+    Boolean(post.resolvedAt || post.lockedAt || post.pinnedAt) ||
+    post.tagIds.length > 0;
+
   const topBar = (
       <div className="flex h-12 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
@@ -835,12 +839,12 @@ export function ForumPostView({
                 setEditingTitle(false);
               }
             }}
-            className="w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display text-[19px] font-bold leading-6 text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display text-[21px] font-bold leading-7 text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           />
         ) : (
           <h2
             className={cn(
-              "group/title font-display text-[19px] font-bold leading-6 text-text",
+              "group/title font-display text-[21px] font-bold leading-7 text-text",
               canEdit && "cursor-text",
             )}
             onDoubleClick={() => {
@@ -881,7 +885,16 @@ export function ForumPostView({
               </button>
             </Tooltip>
           )}
-          <span className="ml-auto text-xs tabular-nums text-text-tertiary max-sm:hidden">
+          {/* Right after the status and tags, not pushed to the far edge: on
+              a post with no tags, or a pane as wide as the screen, the line
+              floated alone on the right and read as belonging to nothing. */}
+          <span
+            className={cn(
+              "text-xs tabular-nums text-text-tertiary max-sm:hidden",
+              hasHeaderChips &&
+                "before:mr-1.5 before:text-text-tertiary/60 before:content-['·']",
+            )}
+          >
             {replyLine}
           </span>
         </div>

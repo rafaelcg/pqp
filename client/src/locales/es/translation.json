@@ -5176,6 +5176,8 @@
   "forum.card.srOpen": "abierto",
   "forum.deletedAuthor": "Cuenta eliminada",
   "forum.preview.voice": "Mensaje de voz",
+  "forum.preview.image": "📷 Imagen",
+  "forum.preview.video": "🎬 Video",
   "forum.preview.files_one": "{count} archivo",
   "forum.preview.files_other": "{count} archivos",
   "forum.end_one": "Eso es todo. {count} post.",
