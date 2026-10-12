@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const claim = vi.fn();
 const mint = vi.fn();
+const update = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   createSoundboardUpload: (...args: unknown[]) => mint(...args),
   claimSoundboardSound: (...args: unknown[]) => claim(...args),
+  updateSoundboardSound: (...args: unknown[]) => update(...args),
 }));
 
 const { ApiError } = await import("@/lib/api");
@@ -22,10 +24,12 @@ const input = {
   name: "Buzina",
   emoji: "✨",
 };
+const stored = { id: "x", name: "Buzina", emoji: "✨" };
 
 beforeEach(() => {
   claim.mockReset();
   mint.mockReset();
+  update.mockReset();
   mint.mockResolvedValue({ key: "k1", uploadUrl: "https://bucket/put", expiresAt: "x" });
   vi.stubGlobal(
     "fetch",
@@ -43,15 +47,15 @@ describe("uploadSoundboardFile claim", () => {
   it("asks again with the same key after a lost response", async () => {
     claim
       .mockRejectedValueOnce(new ApiError(0, "Network error reaching API."))
-      .mockResolvedValueOnce({ sound: { id: "x" } });
-    await expect(uploadSoundboardFile(input)).resolves.toEqual({ id: "x" });
+      .mockResolvedValueOnce({ sound: stored });
+    await expect(uploadSoundboardFile(input)).resolves.toEqual(stored);
     expect(claim).toHaveBeenCalledTimes(2);
     expect(claim.mock.calls[0]![1].key).toBe("k1");
     expect(claim.mock.calls[1]![1].key).toBe("k1");
   });
 
   it("claims a stored key again without storing the file twice", async () => {
-    claim.mockResolvedValueOnce({ sound: { id: "x" } });
+    claim.mockResolvedValueOnce({ sound: stored });
     const onUploaded = vi.fn();
     await uploadSoundboardFile({ ...input, uploadedKey: "k0", onUploaded });
     expect(mint).not.toHaveBeenCalled();
@@ -69,10 +73,39 @@ describe("uploadSoundboardFile claim", () => {
     expect(onUploaded).toHaveBeenCalledWith("k1");
   });
 
+  it("renames a clip a repeated claim answered with its first name", async () => {
+    claim.mockResolvedValueOnce({ sound: { ...stored, name: "Buzna" } });
+    update.mockResolvedValueOnce({ sound: stored });
+    await expect(uploadSoundboardFile({ ...input, uploadedKey: "k0" })).resolves.toEqual(stored);
+    expect(update).toHaveBeenCalledWith("s1", "x", { name: "Buzina", emoji: "✨" });
+  });
+
+  it("does not rename a clip that already has the name", async () => {
+    claim.mockResolvedValueOnce({ sound: stored });
+    await uploadSoundboardFile(input);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stored key when the rename fails, and drops it when the claim is refused", async () => {
+    const onUploaded = vi.fn();
+    claim.mockResolvedValueOnce({ sound: { ...stored, name: "Buzna" } });
+    update.mockRejectedValueOnce(new ApiError(400, "Invalid request"));
+    await expect(
+      uploadSoundboardFile({ ...input, uploadedKey: "k0", onUploaded }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(onUploaded).not.toHaveBeenCalled();
+
+    claim.mockRejectedValueOnce(new ApiError(409, "slots"));
+    await expect(uploadSoundboardFile({ ...input, onUploaded })).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(onUploaded.mock.calls).toEqual([["k1"], [null]]);
+  });
+
   it("asks again after a 5xx", async () => {
     claim
       .mockRejectedValueOnce(new ApiError(503, "storage"))
-      .mockResolvedValueOnce({ sound: { id: "x" } });
+      .mockResolvedValueOnce({ sound: stored });
     await uploadSoundboardFile(input);
     expect(claim).toHaveBeenCalledTimes(2);
   });
@@ -95,7 +128,7 @@ describe("uploadSoundboardFile abort", () => {
   });
 
   it("hands the signal to the file transfer", async () => {
-    claim.mockResolvedValue({ sound: { id: "x" } });
+    claim.mockResolvedValue({ sound: stored });
     const controller = new AbortController();
     await uploadSoundboardFile({ ...input, signal: controller.signal });
     const init = vi.mocked(fetch).mock.calls[0]![1]!;

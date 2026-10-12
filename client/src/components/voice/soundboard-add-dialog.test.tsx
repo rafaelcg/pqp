@@ -207,8 +207,9 @@ describe("soundboard add dialog", () => {
   });
 
   it("stores the file afresh after a refusal or a new pick", async () => {
-    upload.mockImplementation(async (input: { onUploaded: (key: string) => void }) => {
+    upload.mockImplementation(async (input: { onUploaded: (key: string | null) => void }) => {
       input.onUploaded("k1");
+      input.onUploaded(null);
       throw new ApiError(400, "Invalid request");
     });
     await mount();

@@ -195,7 +195,7 @@ export function SoundboardAddDialog({
           uploadedRef.current?.file === file ? uploadedRef.current.key : undefined,
         onUploaded: (key) => {
           if (session === sessionRef.current) {
-            uploadedRef.current = { file, key };
+            uploadedRef.current = key ? { file, key } : null;
           }
         },
       });
@@ -214,11 +214,6 @@ export function SoundboardAddDialog({
           onAddedAfterClose?.();
         }
         return;
-      }
-      // A 4xx is the server's final answer, so a retry starts over. A lost
-      // answer or a 5xx keeps the stored key: the clip may exist already.
-      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
-        uploadedRef.current = null;
       }
       const key = soundboardErrorKey(err);
       if (key === "soundboard.error.nameRejected") {

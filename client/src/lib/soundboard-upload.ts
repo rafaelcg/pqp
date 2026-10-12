@@ -9,6 +9,7 @@ import {
   ApiError,
   claimSoundboardSound,
   createSoundboardUpload,
+  updateSoundboardSound,
   type SoundboardSoundDto,
 } from "@/lib/api";
 
@@ -151,8 +152,11 @@ export async function uploadSoundboardFile(input: {
    * the claim is idempotent by key, a new upload is not.
    */
   uploadedKey?: string;
-  /** Called once the bytes are stored, with the key a retry should reuse. */
-  onUploaded?: (key: string) => void;
+  /**
+   * Called with the key a retry should reuse once the bytes are stored, and
+   * with null once the server refused the claim, so a retry starts over.
+   */
+  onUploaded?: (key: string | null) => void;
 }): Promise<SoundboardSoundDto> {
   let key = input.uploadedKey;
   if (!key) {
@@ -183,15 +187,37 @@ export async function uploadSoundboardFile(input: {
       emoji: input.emoji,
       volume: input.volume,
     });
+  const refused = (error: unknown) =>
+    error instanceof ApiError && error.status >= 400 && error.status < 500;
+  let sound: SoundboardSoundDto;
   try {
-    return (await claim()).sound;
-  } catch (error) {
-    // A 4xx is the server's final answer (bad name, full board, flag off);
-    // asking again with the same key only gets it twice.
-    if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-      throw error;
+    try {
+      sound = (await claim()).sound;
+    } catch (error) {
+      // A 4xx is the server's final answer (bad name, full board, flag off);
+      // asking again with the same key only gets it twice.
+      if (refused(error)) {
+        throw error;
+      }
+      input.signal?.throwIfAborted();
+      sound = (await claim()).sound;
     }
-    input.signal?.throwIfAborted();
-    return (await claim()).sound;
+  } catch (error) {
+    if (refused(error)) {
+      input.onUploaded?.(null);
+    }
+    throw error;
   }
+  // A repeated claim answers with the clip as the first claim made it, so a
+  // name corrected before the retry is applied here. A failure keeps the key:
+  // the clip exists, and the next retry renames it rather than adding another.
+  if (sound.name !== input.name || sound.emoji !== input.emoji) {
+    sound = (
+      await updateSoundboardSound(input.serverId, sound.id, {
+        name: input.name,
+        emoji: input.emoji,
+      })
+    ).sound;
+  }
+  return sound;
 }
