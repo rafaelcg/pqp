@@ -35,6 +35,18 @@ export function useForumRules(forumId: string) {
   // read that finds it moved on is older than what the screen holds, and
   // applying it would put the list back.
   const epoch = useRef(0);
+  // The same for the switches, which move on their own (a settings frame, a
+  // newer refresh, another forum) and must not be put back by an older read.
+  const settingsEpoch = useRef(0);
+  // The pending retry of the tags read: a read that is superseded or whose
+  // pane is gone must not go on asking for a forum nobody is looking at.
+  const retryTimer = useRef<number | null>(null);
+  const cancelRetry = useCallback(() => {
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+  }, []);
 
   /**
    * Read the tags again, retrying a failed read. `quiet` is a refresh over a
@@ -45,6 +57,7 @@ export function useForumRules(forumId: string) {
     (quiet = false) => {
       epoch.current += 1;
       const mine = epoch.current;
+      cancelRetry();
       if (!quiet) {
         setStatus((current) => (current === "ready" ? current : "loading"));
       }
@@ -63,7 +76,7 @@ export function useForumRules(forumId: string) {
             }
             attempt += 1;
             if (attempt < TAGS_READ_ATTEMPTS) {
-              window.setTimeout(run, TAGS_RETRY_MS * 2 ** (attempt - 1));
+              retryTimer.current = window.setTimeout(run, TAGS_RETRY_MS * 2 ** (attempt - 1));
             } else {
               setStatus((current) => (current === "ready" ? current : "error"));
             }
@@ -71,12 +84,18 @@ export function useForumRules(forumId: string) {
       };
       run();
     },
-    [forumId],
+    [forumId, cancelRetry],
   );
 
   const loadSettings = useCallback(() => {
+    settingsEpoch.current += 1;
+    const mine = settingsEpoch.current;
     fetchForumSettings(forumId)
-      .then(({ settings: next }) => setSettings(next))
+      .then(({ settings: next }) => {
+        if (settingsEpoch.current === mine) {
+          setSettings(next);
+        }
+      })
       .catch(() => {});
   }, [forumId]);
 
@@ -88,8 +107,10 @@ export function useForumRules(forumId: string) {
     loadSettings();
     return () => {
       epoch.current += 1;
+      settingsEpoch.current += 1;
+      cancelRetry();
     };
-  }, [forumId, loadTags, loadSettings]);
+  }, [forumId, loadTags, loadSettings, cancelRetry]);
 
   const refresh = useCallback(() => {
     loadTags(true);
@@ -98,11 +119,15 @@ export function useForumRules(forumId: string) {
   const retryTags = useCallback(() => loadTags(), [loadTags]);
 
   /** A list this tab just saved itself (the starter tags). */
-  const applyTags = useCallback((next: ForumTag[]) => {
-    epoch.current += 1;
-    setTags(next);
-    setStatus("ready");
-  }, []);
+  const applyTags = useCallback(
+    (next: ForumTag[]) => {
+      epoch.current += 1;
+      cancelRetry();
+      setTags(next);
+      setStatus("ready");
+    },
+    [cancelRetry],
+  );
 
   useEffect(
     () =>
@@ -114,6 +139,7 @@ export function useForumRules(forumId: string) {
           applyTags(frame.tags);
         }
         if (frame.settings) {
+          settingsEpoch.current += 1;
           setSettings(frame.settings);
         }
       }),

@@ -223,6 +223,55 @@ describe("useForumRules", () => {
     expect(latest.tags).toHaveLength(4);
   });
 
+  it("does not let an older settings read overwrite a settings frame or another forum's rules", async () => {
+    let answerOld: (value: { settings: ForumSettings }) => void = () => {};
+    fetchForumTagsMock.mockResolvedValue({ tags: [] });
+    fetchForumSettingsMock.mockReturnValue(
+      new Promise((resolve) => {
+        answerOld = resolve;
+      }),
+    );
+    await mount();
+    await flush();
+    act(() =>
+      dispatchForumFrame({
+        type: "forum-config-update",
+        forumId: FORUM_ID,
+        settings: { requireTag: true, defaultSort: "created" },
+      }),
+    );
+    await act(async () => answerOld({ settings: { requireTag: false, defaultSort: "activity" } }));
+    expect(latest.settings).toEqual({ requireTag: true, defaultSort: "created" });
+
+    // A read for the first forum that lands after the switch is dropped too.
+    let answerFirst: (value: { settings: ForumSettings }) => void = () => {};
+    fetchForumSettingsMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerFirst = resolve;
+      }),
+    );
+    await act(async () => latest.refresh());
+    fetchForumSettingsMock.mockResolvedValue({ settings: { requireTag: false, defaultSort: "hot" } });
+    await act(async () =>
+      root!.render(<Probe forumId="11111111-1111-4111-8111-111111111111" />),
+    );
+    await flush();
+    await act(async () => answerFirst({ settings: { requireTag: true, defaultSort: "created" } }));
+    expect(latest.settings).toEqual({ requireTag: false, defaultSort: "hot" });
+  });
+
+  it("stops retrying when the pane goes away", async () => {
+    vi.useFakeTimers();
+    fetchForumTagsMock.mockRejectedValue(new Error("offline"));
+    await mount();
+    await flush();
+    expect(fetchForumTagsMock).toHaveBeenCalledTimes(1);
+    act(() => root?.unmount());
+    root = null;
+    await vi.advanceTimersByTimeAsync(TAGS_RETRY_MS * 10);
+    expect(fetchForumTagsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("starts over for another forum", async () => {
     fetchForumTagsMock.mockResolvedValue({ tags: STARTER });
     await mount();
