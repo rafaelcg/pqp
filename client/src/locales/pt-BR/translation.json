@@ -4622,7 +4622,7 @@
   "vem.import.title": "A estrutura vem em dois minutos. A galera, no tempo que ela levar pra clicar.",
   "vem.import.lede": "O pqp lê um link de template do Discord e recria a barra lateral do seu servidor aqui. Sem bot, sem login no Discord, sem exportar nada. O seu Discord não muda em nada.",
   "vem.import.step1.title": "No Discord",
-  "vem.import.step1.body": "Configurações do servidor, Modelos, cria um modelo se ainda não tiver, copia o link (discord.new/…).",
+  "vem.import.step1.body": "Pelo PC ou navegador (o app do celular não cria modelo): Configurações do servidor, a aba de modelo, cria um modelo, copia o link (discord.new/…). Precisa ser dono do servidor ou ter Gerenciar servidor.",
   "vem.import.step2.title": "No pqp",
   "vem.import.step2.body": "Cria a conta (de graça, sem cartão), clica em Criar comunidade e escolhe {option}. Cola o link.",
   "vem.import.step3.title": "A prévia",
