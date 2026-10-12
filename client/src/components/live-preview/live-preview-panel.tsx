@@ -203,6 +203,10 @@ export function LivePreviewPanel({
       generation.current += 1;
       const run = generation.current;
       setPhase({ kind: "starting" });
+      // The window is timed from when the request LEFT, not when the answer
+      // arrived: the server's `remainingMs` was already running while the
+      // answer travelled, so this errs early rather than past the token.
+      const sentAt = Date.now();
       let result: LivePreviewStartResult;
       try {
         result = await startLivePreview({
@@ -230,7 +234,7 @@ export function LivePreviewPanel({
         track("live_preview_play", { surface });
       }
       setNow(Date.now());
-      setPhase(phaseAfterStart(result));
+      setPhase(phaseAfterStart(result, sentAt));
     },
     [surface],
   );
