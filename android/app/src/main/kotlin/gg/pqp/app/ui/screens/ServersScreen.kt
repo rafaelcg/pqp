@@ -90,7 +90,7 @@ import kotlinx.coroutines.launch
 fun ServersScreen(
     session: SessionStore,
     onOpenServer: (ServerSummary) -> Unit,
-    onOpenProfile: () -> Unit,
+    onOpenProfile: (() -> Unit)?,
 ) {
     val servers by session.servers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
@@ -176,12 +176,16 @@ fun ServersScreen(
                         )
                     },
                     actions = {
-                        IconButton(onClick = onOpenProfile) {
-                            Icon(
-                                imageVector = PqpIcons.Person,
-                                contentDescription = stringResource(R.string.you_title),
-                                modifier = Modifier.size(Sizes.iconAction),
-                            )
+                        // Null on the Conversas phone tabs, where "Tu" is a tab
+                        // of its own and a second door to it is noise.
+                        if (onOpenProfile != null) {
+                            IconButton(onClick = onOpenProfile) {
+                                Icon(
+                                    imageVector = PqpIcons.Person,
+                                    contentDescription = stringResource(R.string.you_title),
+                                    modifier = Modifier.size(Sizes.iconAction),
+                                )
+                            }
                         }
                     },
                     colors = pqpLargeTopBarColors(),

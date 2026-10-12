@@ -746,4 +746,45 @@
     <string name="bau_preview_empty_staff_body">Posta o primeiro clipe, print ou aviso. Aqui ele não some no meio do chat.</string>
     <string name="bau_preview_post">Postar no Baú</string>
     <string name="bau_preview_empty_member">Ainda vazio. Quando a staff postar, aparece aqui.</string>
+
+    <!-- Conversas: o redesenho das DMs, atrás de GET /api/dms/config. -->
+    <string name="conversas_title">Conversas</string>
+    <string name="conversas_tab_conversas">Conversas</string>
+    <string name="conversas_tab_servidores">Servidores</string>
+    <string name="conversas_tab_tu">Tu</string>
+    <string name="conversas_search">Procura uma conversa ou alguém</string>
+    <string name="conversas_filter_all">Tudo</string>
+    <string name="conversas_filter_unread">Não lidas</string>
+    <string name="conversas_filter_groups">Grupos</string>
+    <string name="conversas_typing">digitando…</string>
+    <string name="conversas_typing_named">%1$s tá digitando…</string>
+    <string name="conversas_preview_you">tu: %1$s</string>
+    <string name="conversas_preview_group_author">%1$s: %2$s</string>
+    <string name="conversas_preview_voice">Mensagem de voz · %1$s</string>
+    <string name="conversas_preview_gif">Enviou um GIF</string>
+    <string name="conversas_preview_attachment">Enviou um arquivo</string>
+    <string name="conversas_new">Nova conversa</string>
+    <string name="conversas_new_description">Escolhe uma pessoa. Marca mais gente e vira grupo (até %1$d).</string>
+    <string name="conversas_new_online">Online agora</string>
+    <string name="conversas_new_friends">Amigos</string>
+    <string name="conversas_new_tick">Marcar %1$s</string>
+    <string name="conversas_new_no_friends">Ainda não tem amigos aqui. Procura alguém pelo nome ou nome#0000 aí em cima.</string>
+    <string name="conversas_friends">Amigos</string>
+    <plurals name="conversas_friends_requests">
+        <item quantity="one">Amigos, %1$d pedido esperando</item>
+        <item quantity="other">Amigos, %1$d pedidos esperando</item>
+    </plurals>
+    <plurals name="conversas_waiting">
+        <item quantity="one">%1$d conversa te esperando</item>
+        <item quantity="other">%1$d conversas te esperando</item>
+    </plurals>
+    <string name="conversas_empty_title">Tuas conversas moram aqui</string>
+    <string name="conversas_empty_body">Manda um oi pra alguém e a conversa fica nessa lista, sempre a um toque.</string>
+    <string name="conversas_empty_invite">Chamar alguém pro pqp</string>
+    <string name="conversas_invite_text">Vem falar comigo no pqp: %1$s</string>
+    <string name="conversas_empty_unread">Tudo lido por aqui.</string>
+    <string name="conversas_empty_groups">Nenhum grupo ainda. Marca duas pessoas ou mais em Nova conversa.</string>
+    <string name="conversas_no_match">Nenhuma conversa com “%1$s”.</string>
+    <string name="conversas_message_author">Mandar mensagem pra %1$s</string>
+    <string name="conversas_yesterday">ontem</string>
 </resources>

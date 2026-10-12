@@ -753,4 +753,45 @@
     <string name="bau_preview_empty_staff_body">Post the first clip, screenshot or announcement. Here it does not get lost in the chat.</string>
     <string name="bau_preview_post">Post to the Baú</string>
     <string name="bau_preview_empty_member">Empty for now. When the staff posts, it shows up here.</string>
+
+    <!-- Conversas: the DM redesign, behind GET /api/dms/config. -->
+    <string name="conversas_title">Chats</string>
+    <string name="conversas_tab_conversas">Chats</string>
+    <string name="conversas_tab_servidores">Servers</string>
+    <string name="conversas_tab_tu">You</string>
+    <string name="conversas_search">Search chats or people</string>
+    <string name="conversas_filter_all">All</string>
+    <string name="conversas_filter_unread">Unread</string>
+    <string name="conversas_filter_groups">Groups</string>
+    <string name="conversas_typing">typing…</string>
+    <string name="conversas_typing_named">%1$s is typing…</string>
+    <string name="conversas_preview_you">you: %1$s</string>
+    <string name="conversas_preview_group_author">%1$s: %2$s</string>
+    <string name="conversas_preview_voice">Voice message · %1$s</string>
+    <string name="conversas_preview_gif">Sent a GIF</string>
+    <string name="conversas_preview_attachment">Sent a file</string>
+    <string name="conversas_new">New chat</string>
+    <string name="conversas_new_description">Pick a person. Tick more people and it becomes a group (up to %1$d).</string>
+    <string name="conversas_new_online">Online now</string>
+    <string name="conversas_new_friends">Friends</string>
+    <string name="conversas_new_tick">Tick %1$s</string>
+    <string name="conversas_new_no_friends">No friends here yet. Search for someone by name or name#0000 above.</string>
+    <string name="conversas_friends">Friends</string>
+    <plurals name="conversas_friends_requests">
+        <item quantity="one">Friends, %1$d request waiting</item>
+        <item quantity="other">Friends, %1$d requests waiting</item>
+    </plurals>
+    <plurals name="conversas_waiting">
+        <item quantity="one">%1$d chat waiting for you</item>
+        <item quantity="other">%1$d chats waiting for you</item>
+    </plurals>
+    <string name="conversas_empty_title">Your chats live here</string>
+    <string name="conversas_empty_body">Say hi to someone and the chat stays in this list, one tap away.</string>
+    <string name="conversas_empty_invite">Invite someone to pqp</string>
+    <string name="conversas_invite_text">Come talk to me on pqp: %1$s</string>
+    <string name="conversas_empty_unread">All caught up.</string>
+    <string name="conversas_empty_groups">No groups yet. Tick two people or more in New chat.</string>
+    <string name="conversas_no_match">No chat with “%1$s”.</string>
+    <string name="conversas_message_author">Message %1$s</string>
+    <string name="conversas_yesterday">Yesterday</string>
 </resources>

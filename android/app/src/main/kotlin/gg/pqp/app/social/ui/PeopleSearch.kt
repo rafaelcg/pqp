@@ -203,6 +203,8 @@ fun PersonRow(
     user: PublicUser,
     modifier: Modifier = Modifier,
     subtitle: String? = user.tag,
+    /** A friend's presence, drawn in the corner of the picture. Null draws none. */
+    status: String? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
@@ -214,12 +216,23 @@ fun PersonRow(
     ) {
         // Seeded by id, not by name: two people called "Ana" are two colours,
         // and one person who renames themselves keeps theirs.
-        Avatar(
-            name = user.displayName,
-            url = user.avatarUrl,
-            size = Sizes.avatarPerson,
-            seed = user.id,
-        )
+        if (status != null) {
+            PersonAvatar(
+                name = user.displayName,
+                avatarUrl = user.avatarUrl,
+                status = status,
+                size = Sizes.avatarPerson,
+                seed = user.id,
+                ringColor = MaterialTheme.colorScheme.surfaceContainer,
+            )
+        } else {
+            Avatar(
+                name = user.displayName,
+                url = user.avatarUrl,
+                size = Sizes.avatarPerson,
+                seed = user.id,
+            )
+        }
         Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(

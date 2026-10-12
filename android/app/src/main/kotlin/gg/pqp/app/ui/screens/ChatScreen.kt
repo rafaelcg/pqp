@@ -197,6 +197,12 @@ fun ChatScreen(
      * that does (`PqpApp`) already knows which channels open a voice room.
      */
     header: @Composable () -> Unit = {},
+    /**
+     * Conversas: "Mandar mensagem pra {name}" on a message's sheet, the
+     * Android door that a member row is on the web. Null hides it, which is
+     * what a conversation (already a DM) and the flag-off app pass.
+     */
+    onMessageAuthor: ((authorId: String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -617,6 +623,19 @@ fun ChatScreen(
                 reporting = message
                 acting = null
             },
+            // Not on yourself, a webhook (nobody to talk to) or a blocked
+            // author (the server would refuse, and the row is hidden anyway).
+            onMessageAuthor = onMessageAuthor
+                ?.takeIf {
+                    state.isServerChannel && me != null && message.authorId != me.id &&
+                        !message.isWebhook && !message.blocked
+                }
+                ?.let { open ->
+                    {
+                        acting = null
+                        open(message.authorId)
+                    }
+                },
             onDismiss = { acting = null },
         )
     }
@@ -1044,6 +1063,7 @@ private fun MessageActionsSheet(
     onTogglePin: () -> Unit,
     onReport: () -> Unit,
     onDismiss: () -> Unit,
+    onMessageAuthor: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -1094,6 +1114,14 @@ private fun MessageActionsSheet(
                 testTag = "message.reply-action",
                 onClick = onReply,
             )
+            if (onMessageAuthor != null) {
+                SheetAction(
+                    icon = PqpIcons.Messages,
+                    label = stringResource(R.string.conversas_message_author, message.authorName),
+                    testTag = "message.dm-author",
+                    onClick = onMessageAuthor,
+                )
+            }
             if (canEdit) {
                 SheetAction(
                     icon = PqpIcons.Edit,
