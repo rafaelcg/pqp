@@ -231,8 +231,8 @@ describe("musicCaptionsChoices", () => {
     ]);
   });
 
-  it("names a generated track and ticks only the person's one", () => {
-    const choices = musicCaptionsChoices({
+  it("lists a generated track only when its language has no person's track", () => {
+    const both = musicCaptionsChoices({
       state: {
         on: true,
         lang: "en",
@@ -242,10 +242,33 @@ describe("musicCaptionsChoices", () => {
       uiLocale: "en",
       ...labels,
     });
-    expect(choices.map((choice) => [choice.label, choice.checked])).toEqual([
+    expect(both.map((choice) => [choice.label, choice.checked])).toEqual([
       ["Desligadas", false],
-      ["en (gerada automaticamente)", false],
       ["en", true],
     ]);
+    const generatedOnly = musicCaptionsChoices({
+      state: { on: true, lang: "ja", tracks: [track("ja", "asr")], translations: [] },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(generatedOnly.map((choice) => [choice.label, choice.checked])).toEqual([
+      ["Desligadas", false],
+      ["ja (gerada automaticamente)", true],
+    ]);
   });
+
+  it("offers and ticks the translation into a saved language that is not the UI's", () => {
+    const choices = musicCaptionsChoices({
+      state: { on: true, lang: "es", tracks: [track("en")], translations: TRANSLATIONS },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(choices.map((choice) => [choice.label, choice.lang, choice.checked])).toEqual([
+      ["Desligadas", null, false],
+      ["pt-BR (tradução automática)", "pt-BR", false],
+      ["es (tradução automática)", "es", true],
+      ["en", "en", false],
+    ]);
+  });
+
 });

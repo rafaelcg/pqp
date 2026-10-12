@@ -342,32 +342,45 @@ export function musicCaptionsChoices(input: {
   const choices: CaptionsChoice[] = [
     { id: "off", label: input.offLabel, lang: null, checked: !s.on },
   ];
-  const ownTrack = findTrack(tracks, uiLocale);
-  const translateInto = ownTrack ? undefined : findTranslation(s.translations, uiLocale);
-  if (translateInto) {
+  // A translation row for the UI language and, when it differs, for the
+  // language the viewer last picked: a saved English on a video with no
+  // English track is translated into English, and must show as a ticked row.
+  const wanted = [uiLocale, s.lang].filter(
+    (lang, index, all): lang is string =>
+      lang !== null && all.findIndex((other) => other !== null && primary(other) === primary(lang)) === index,
+  );
+  for (const lang of wanted) {
+    const translateInto = findTrack(tracks, lang)
+      ? undefined
+      : findTranslation(s.translations, lang);
+    if (!translateInto) {
+      continue;
+    }
     choices.push({
       id: `translate:${translateInto}`,
-      label: input.autoTranslatedLabel(input.languageName(uiLocale, uiLocale)),
-      lang: uiLocale,
+      label: input.autoTranslatedLabel(input.languageName(lang, lang)),
+      lang,
       checked: active?.translationLanguage?.languageCode === translateInto,
     });
   }
   const mine = (track: CaptionTrack) => primary(track.languageCode) === primary(uiLocale);
-  const ordered = [...tracks.filter(mine), ...tracks.filter((track) => !mine(track))];
-  // A language can have a person's track and a generated one; the target
-  // names only the code, and `findTrack` took the person's, which is first.
-  let marked = false;
+  // The choice is a language, and `findTrack` takes a person's track over a
+  // generated one, so a generated track is only a row of its own when its
+  // language has no person's track to pick instead.
+  const listed = tracks.filter(
+    (track) =>
+      track.kind !== "asr" ||
+      !tracks.some(
+        (other) => other.languageCode === track.languageCode && other.kind !== "asr",
+      ),
+  );
+  const ordered = [...listed.filter(mine), ...listed.filter((track) => !mine(track))];
   for (const track of ordered) {
     const name = input.languageName(track.languageCode, track.displayName);
-    const checked: boolean =
-      !marked &&
+    const checked =
       active !== null &&
       !active.translationLanguage &&
-      active.languageCode === track.languageCode &&
-      (track.kind !== "asr" || !tracks.some(
-        (other) => other.languageCode === track.languageCode && other.kind !== "asr",
-      ));
-    marked ||= checked;
+      active.languageCode === track.languageCode;
     choices.push({
       id: `track:${track.languageCode}:${track.kind}`,
       label: track.kind === "asr" ? input.generatedLabel(name) : name,
