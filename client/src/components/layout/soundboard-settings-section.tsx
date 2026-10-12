@@ -48,6 +48,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pollTick, setPollTick] = useState(0);
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);
@@ -63,6 +64,11 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const focusAfterDelete = useRef<number | null>(null);
 
   function reload(): Promise<void> {
+    // A callback captured for a server we have left must not count as a request:
+    // it would invalidate the current server's fetch in flight.
+    if (currentServer.current !== serverId) {
+      return Promise.resolve();
+    }
     const seq = (reloadSeq.current += 1);
     return fetchSoundboard(serverId)
       .then((page) => {
@@ -83,7 +89,12 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
           void warmSoundboardBuiltins();
         }
       })
-      .catch(() => setError(t("soundboard.settings.loadFailed")));
+      .catch(() => {
+        // An older miss must not paint over a newer answer or another server.
+        if (seq === reloadSeq.current && currentServer.current === serverId) {
+          setError(t("soundboard.settings.loadFailed"));
+        }
+      });
   }
 
   useEffect(() => {
@@ -170,11 +181,14 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
     if (pending <= 0) {
       return;
     }
-    const timer = window.setTimeout(() => void reload(), PENDING_REFRESH_MS);
+    const timer = window.setTimeout(
+      () => void reload().finally(() => setPollTick((n) => n + 1)),
+      PENDING_REFRESH_MS,
+    );
     return () => window.clearTimeout(timer);
-    // Re-armed by every answer (`sounds` is a new array each time) and by a
-    // failed one (`error` changes), so a dropped poll does not end the polling.
-  }, [pending, sounds, error]);
+    // Re-armed after every poll, answered or failed (`pollTick`), so a run of
+    // identical failures does not end the polling.
+  }, [pending, sounds, pollTick]);
   const confirmSound = sounds?.find((sound) => sound.id === confirmId) ?? null;
 
   return (
@@ -266,7 +280,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                   onCommit={(volume) => {
                     // One save at a time, in the order they were made, so a
                     // slow earlier request cannot land after a later one.
-                    saveQueue.current = saveQueue.current
+                    const run = saveQueue.current
                       .then(() => updateSoundboardSound(serverId, sound.id, { volume }))
                       .then(
                         () => reload(),
@@ -277,8 +291,13 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
                           }
                           return reload();
                         },
-                      )
-                      .catch(() => setError(t("soundboard.settings.saveFailed")));
+                      );
+                    saveQueue.current = run.catch(() => undefined);
+                    // A failure is told to the slider too, so it can retry.
+                    return run.catch((err: unknown) => {
+                      setError(t("soundboard.settings.saveFailed"));
+                      throw err;
+                    });
                   }}
                 />
               </div>
@@ -476,7 +495,7 @@ function ClipVolume({
 }: {
   volume: number;
   label: string;
-  onCommit: (volume: number) => void;
+  onCommit: (volume: number) => Promise<void> | void;
 }) {
   const [value, setValue] = useState(volume);
   const timer = useRef<number | null>(null);
@@ -501,8 +520,16 @@ function ClipVolume({
       timer.current = null;
     }
     if (latest.current !== saved.current) {
-      saved.current = latest.current;
-      commitRef.current(latest.current);
+      const previous = saved.current;
+      const next = latest.current;
+      saved.current = next;
+      // A failed save is not saved: put the old value back so the same
+      // position can be tried again.
+      void Promise.resolve(commitRef.current(next)).catch(() => {
+        if (saved.current === next) {
+          saved.current = previous;
+        }
+      });
     }
   }
 

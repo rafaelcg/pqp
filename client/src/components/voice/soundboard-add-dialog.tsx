@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ApiError } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { decodeAudioBuffer, unlockSounds } from "@/lib/sounds";
 import { previewSoundboardBuffer, stopSoundboardPreview } from "@/lib/soundboard";
@@ -59,6 +60,8 @@ export function SoundboardAddDialog({
   // under and may act only while it is still current: closing moves it on, so
   // a slow upload finishing later cannot close or fill the NEXT dialog.
   const sessionRef = useRef(0);
+  // One number per file pick: a slower inspection of an earlier pick is ignored.
+  const inspectSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const wasOpen = useRef(false);
   const formId = useId();
@@ -91,6 +94,7 @@ export function SoundboardAddDialog({
   /** The dialog is going away: drop what is in flight and what is playing. */
   function endSession(): void {
     sessionRef.current += 1;
+    inspectSeq.current += 1;
     previewSeq.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
@@ -130,6 +134,7 @@ export function SoundboardAddDialog({
   }
 
   async function onFile(next: File | null): Promise<void> {
+    const seq = (inspectSeq.current += 1);
     setFile(null);
     setContentType(null);
     setFileError(null);
@@ -138,6 +143,9 @@ export function SoundboardAddDialog({
       return;
     }
     const inspected = await inspectSoundboardFile(next);
+    if (seq !== inspectSeq.current) {
+      return;
+    }
     if (typeof inspected === "string") {
       setFileError(t(fileErrorKey(inspected)));
       return;
@@ -184,6 +192,12 @@ export function SoundboardAddDialog({
       close();
     } catch (err) {
       if (session !== sessionRef.current) {
+        // An abort or a dropped connection can land after the server
+        // committed: refresh the board rather than treat it as proof that
+        // nothing was added. A refusal from the server is a plain no.
+        if (!(err instanceof ApiError)) {
+          onAddedAfterClose?.();
+        }
         return;
       }
       const key = soundboardErrorKey(err);
