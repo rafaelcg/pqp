@@ -9258,6 +9258,15 @@ export async function handleVoiceMessage(
         });
       }
       if (persisted?.kind === "stale") {
+        // A write that lost in the row can still have been kept: a later
+        // write on this machine, built on top of it, may have reached the
+        // row first, and that winner does not count these tracks again
+        // (they were in its `heldMusic`). So count the ones the row holds.
+        // A winner from another machine never saw this write and holds none.
+        userStats.noteMusicQueued(
+          user.id,
+          newlyQueuedTracks(heldMusic, write.state, user.id, persisted.held),
+        );
         adoptMusicWithAnchor(
           peer.voiceChannelId,
           persisted.held,
@@ -9280,10 +9289,10 @@ export async function handleVoiceMessage(
         return;
       }
     }
-    // Counted here and only here, once the write is the room's queue: a
-    // write the row refused (above) kept no track, and the `adopt*` paths
-    // take a queue another machine already counted. A failed persist leaves
-    // the local decision standing, so it counts.
+    // Counted once the write is the room's queue. A write the row refused
+    // is counted above, for the tracks the row kept. The `adopt*` paths take
+    // a queue another machine already counted. A failed persist leaves the
+    // local decision standing, so it counts.
     userStats.noteMusicQueued(
       user.id,
       newlyQueuedTracks(heldMusic, write.state, user.id),

@@ -1107,6 +1107,42 @@ describeDb("voice across two instances", () => {
       expect(a.stats.userStats.metrics().musicNoted).toBe(2);
       expect(b.stats.userStats.metrics().musicNoted).toBe(0);
     });
+
+    it("counts a losing write's track when the row's winner kept it", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const userA = randomUUID();
+      const dj = await join(a, userA, channel);
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, dj.peerId, musicTrack("ccccccccccc", userA)),
+        },
+      );
+      expect(a.stats.userStats.metrics().musicNoted).toBe(1);
+
+      // A later write on this machine, built on top of the next one, reaches
+      // the row first. That winner already holds the next write's track, so
+      // it would not count it; the loser has to.
+      const added = musicTrack("fffffffffff", userA);
+      await a.registry.persistMusic(
+        channel,
+        queue(5, dj.peerId, musicTrack("ccccccccccc", userA), { queue: [added] }),
+        null,
+      );
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(3, dj.peerId, musicTrack("ccccccccccc", userA), {
+            queue: [added],
+          }),
+        },
+      );
+      expect(frames(dj, "music").at(-1)?.state).toMatchObject({ rev: 5 });
+      expect(a.stats.userStats.metrics().musicNoted).toBe(2);
+    });
   });
 
   describe("music listening across instances", () => {

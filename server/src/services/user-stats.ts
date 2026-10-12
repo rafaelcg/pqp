@@ -97,32 +97,28 @@ export interface LiveSeat {
  * or queued), absent from everything the room held before (playing, queued,
  * or already played), added by that person, and not picked by autoplay. A
  * reorder, a skip or a removal adds nothing.
+ *
+ * `kept`, when given, is the queue the room actually kept after this write
+ * lost in the registry row: only the tracks it still holds (playing, queued
+ * or already played) count.
  */
 export function newlyQueuedTracks(
   held: MusicState | null,
   next: MusicState | null,
   userId: string,
+  kept?: MusicState | null,
 ): number {
   if (!next) {
     return 0;
   }
-  const known = new Set<string>();
-  if (held) {
-    if (held.current) {
-      known.add(held.current.id);
-    }
-    for (const track of held.queue) {
-      known.add(track.id);
-    }
-    for (const track of held.history ?? []) {
-      known.add(track.id);
-    }
-  }
+  const known = musicTrackIds(held);
+  const keptIds = kept === undefined ? null : musicTrackIds(kept);
   let added = 0;
   const candidates = next.current ? [next.current, ...next.queue] : next.queue;
   for (const track of candidates) {
     if (
       !known.has(track.id) &&
+      (keptIds === null || keptIds.has(track.id)) &&
       track.addedByUserId === userId &&
       !track.autoplayed
     ) {
@@ -131,6 +127,23 @@ export function newlyQueuedTracks(
     }
   }
   return added;
+}
+
+/** Every track id a queue holds: playing, queued, or already played. */
+function musicTrackIds(state: MusicState | null): Set<string> {
+  const ids = new Set<string>();
+  if (state) {
+    if (state.current) {
+      ids.add(state.current.id);
+    }
+    for (const track of state.queue) {
+      ids.add(track.id);
+    }
+    for (const track of state.history ?? []) {
+      ids.add(track.id);
+    }
+  }
+  return ids;
 }
 
 async function readLiveSeats(): Promise<{

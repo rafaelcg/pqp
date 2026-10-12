@@ -89,6 +89,17 @@ describe("newlyQueuedTracks", () => {
   it("counts the first track of an empty room", () => {
     expect(newlyQueuedTracks(null, music(track("1", "me"), []), "me")).toBe(1);
   });
+
+  it("counts only the tracks the room kept, when given what it kept", () => {
+    const held = music(track("1", "me"), []);
+    const next = music(track("1", "me"), [track("2", "me"), track("3", "me")]);
+    // A later write kept track 2 (and has already played it) but not 3.
+    const kept = music(track("4", "other"), [], [track("1", "me"), track("2", "me")]);
+    expect(newlyQueuedTracks(held, next, "me", kept)).toBe(1);
+    // A winner that never saw this write holds none of it.
+    expect(newlyQueuedTracks(held, next, "me", music(track("9", "other"), []))).toBe(0);
+    expect(newlyQueuedTracks(held, next, "me", null)).toBe(0);
+  });
 });
 
 describeDb("user stats", () => {
