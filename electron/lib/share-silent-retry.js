@@ -21,38 +21,73 @@
  * one-shot, never carries audio, and expires after `windowMs`, because the
  * rejection lands within a second of the answer and a stale surface is a
  * share nobody picked.
+ *
+ * The memory belongs to the frame that made the request (`requesterKey`).
+ * Only that frame may arm it, and only its next request gets the surface, so
+ * another window can never take a screen somebody picked for a different one.
  */
 
 const SILENT_RETRY_WINDOW_MS = 15_000;
+
+/**
+ * A stable key for the frame behind a display-media request or an IPC call:
+ * its renderer process and routing id. Null when the frame is gone or cannot
+ * be read, and a null key never matches anything.
+ */
+function requesterKey(frame) {
+  try {
+    if (!frame) {
+      return null;
+    }
+    const { processId, routingId } = frame;
+    return Number.isInteger(processId) && Number.isInteger(routingId)
+      ? `${processId}:${routingId}`
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function createShareSilentRetry({ now = Date.now, windowMs = SILENT_RETRY_WINDOW_MS } = {}) {
   let remembered = null;
   let armed = false;
 
-  function fresh() {
-    return remembered !== null && now() - remembered.at <= windowMs;
+  function fresh(requester) {
+    return (
+      remembered !== null &&
+      requester !== null &&
+      remembered.requester === requester &&
+      now() - remembered.at <= windowMs
+    );
   }
 
   return {
     /**
      * Called at the top of every display-media request. Returns the surface
-     * to reuse when the page armed a retry and this request is the video-only
-     * one it promised, otherwise null. Clears the memory either way.
+     * to reuse when the same frame armed a retry and this request is the
+     * video-only one it promised, otherwise null. Clears the memory either way.
      */
-    take(audioRequested) {
-      const reuse = armed && audioRequested !== true && fresh() ? remembered.source : null;
+    take(audioRequested, requester = null) {
+      const reuse =
+        armed && audioRequested !== true && fresh(requester) ? remembered.source : null;
       remembered = null;
       armed = false;
       return reuse;
     },
-    /** The request just answered carried loopback for `source`. */
-    rememberLoopback(source) {
-      remembered = source ? { source, at: now() } : null;
+    /** The request `requester` just made was answered with loopback for `source`. */
+    rememberLoopback(source, requester = null) {
+      remembered = source && requester !== null ? { source, requester, at: now() } : null;
       armed = false;
     },
-    /** The page saw that request fail. True when a retry is now armed. */
-    arm() {
-      armed = fresh();
+    /**
+     * The page saw its request fail. True when a retry is now armed. Another
+     * frame gets false and changes nothing: the surface is not its to retry.
+     */
+    arm(requester = null) {
+      if (remembered !== null && remembered.requester !== requester) {
+        return false;
+      }
+      armed = fresh(requester);
       if (!armed) {
         remembered = null;
       }
@@ -61,4 +96,4 @@ function createShareSilentRetry({ now = Date.now, windowMs = SILENT_RETRY_WINDOW
   };
 }
 
-module.exports = { SILENT_RETRY_WINDOW_MS, createShareSilentRetry };
+module.exports = { SILENT_RETRY_WINDOW_MS, createShareSilentRetry, requesterKey };

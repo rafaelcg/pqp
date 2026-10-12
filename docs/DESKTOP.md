@@ -185,11 +185,12 @@ learns about it. From the shell that publishes `capabilities.silentRetry`:
 
 1. The handler remembers the surface of a request it answered with loopback
    (`electron/lib/share-silent-retry.js`). Every new request clears it.
-2. The page sees the failure and calls `shareSilentRetryArm()`. The arm
-   succeeds only if the request that just failed carried loopback, in the
-   last 15 seconds.
+2. The page sees a `NotReadableError` and calls `shareSilentRetryArm()`. The
+   arm succeeds only if the request that just failed carried loopback, in the
+   last 15 seconds, and came from the same frame.
 3. The page asks again with `audio: false`. The handler returns the same
-   surface, video only, with no second picker.
+   surface, video only, with no second picker. A request from any other frame
+   gets the picker.
 4. The share starts and the stage shows `voice.notice.shareAudioFallback`:
    shared without sound, plus the Chrome tab path for sound.
 

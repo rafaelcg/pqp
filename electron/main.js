@@ -53,7 +53,7 @@ const {
   pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
-const { createShareSilentRetry } = require("./lib/share-silent-retry");
+const { createShareSilentRetry, requesterKey } = require("./lib/share-silent-retry");
 const {
   createLinuxShareAudio,
   SHARE_SOURCE_LABEL: LINUX_SHARE_SOURCE_LABEL,
@@ -1304,7 +1304,7 @@ async function startLinuxShareAudio() {
  * returns a plausible-looking list of nothing useful, and the only way to know
  * is to ask again.
  */
-async function chooseDisplaySource(audioRequested) {
+async function chooseDisplaySource(audioRequested, requester = null) {
   const platform = process.platform;
   // Read first and exactly once per request: an arm is good for the next
   // share only, including one that ends at the permission dialog below.
@@ -1318,8 +1318,8 @@ async function chooseDisplaySource(audioRequested) {
 
   // PQP-31: the previous request carried loopback, Chromium could not open
   // it and failed the whole capture, and the page armed a video-only retry.
-  // Same surface, no picker, no sound.
-  const silentRetrySource = shareSilentRetry.take(audioRequested);
+  // Same surface, no picker, no sound, and only for the frame that armed it.
+  const silentRetrySource = shareSilentRetry.take(audioRequested, requester);
   if (silentRetrySource) {
     return captureResponse(silentRetrySource, platform, false, os.release());
   }
@@ -1407,7 +1407,7 @@ async function chooseDisplaySource(audioRequested) {
     os.release(),
   );
   if (response?.audio === "loopback") {
-    shareSilentRetry.rememberLoopback(source);
+    shareSilentRetry.rememberLoopback(source, requester);
   }
   return response;
 }
@@ -1493,7 +1493,7 @@ function configureSessionSecurity(appOrigin) {
         callback(null);
         return;
       }
-      chooseDisplaySource(request?.audioRequested === true)
+      chooseDisplaySource(request?.audioRequested === true, requesterKey(request?.frame))
         .then((response) => {
           // `null` cancels. Chromium turns that into a NotAllowedError, which
           // the client already words as "blocked or cancelled" rather than as
@@ -2572,7 +2572,7 @@ if (probingShareAudio) {
     if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
       return false;
     }
-    return shareSilentRetry.arm();
+    return shareSilentRetry.arm(requesterKey(event.senderFrame));
   });
 
   ipcMain.handle("pqp:native-share-audio-claim", async (event) => {
