@@ -942,11 +942,13 @@ async function main() {
         question,
       )
         ? "NAO_SEI"
-        : /iphone|celular/i.test(question)
+        : /iphone/i.test(question)
           ? "no app do iphone dá pra assistir. transmitir a tela do iphone existe no código, mas ainda não foi testado num aparelho de verdade. no safari do iphone só dá pra assistir."
-          : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
-            ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
-            : "NAO_SEI",
+          : /android|celular/i.test(question)
+            ? "o app de android tá na google play, em pqp.gg/android. dá pra assistir e compartilhar a tela, com o som do celular a partir do android 10. câmera ainda não. no iphone tem o beta em pqp.gg/beta."
+            : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
+              ? "tem ajuste, sim: Configurações, Voz e vídeo, Vídeo que você envia, de 360p a 1080p. é um teto: se a conexão não aguenta, a imagem diminui pra não travar."
+              : "NAO_SEI",
   };
   /**
    * The same fixture, in the shape the unprompted parser expects.

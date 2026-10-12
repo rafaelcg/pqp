@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { loadFacts } from "../src/facts.js";
+import { loadFacts, parseFacts, MAINTAINER_MARKER } from "../src/facts.js";
 import {
   screenAnswer,
   disallowedLink,
@@ -26,15 +26,16 @@ describe("screenAnswer: the answers it must let through", () => {
   // A screen that rejects correct answers is a bot that says "não sei" to
   // everything, which is a different failure and just as useless.
   const good = [
-    "a captura é 1080p30 e não existe ajuste manual de qualidade.",
+    "tem sim: Configurações, Voz e vídeo, Vídeo que você envia. Vai de 360p a 1080p, a 30 ou 60 fps.",
     "quanto menos gente assistindo, mais nítida a imagem fica. o envio divide uns 5 Mbps entre os espectadores.",
+    "o app de Android tá na Google Play, em pqp.gg/android.",
     "o som só vai junto no chrome, compartilhando uma guia, com a caixinha de áudio da guia marcada.",
     "o código é aberto, tá em github.com/rafaelcg/pqp.",
     "tem um beta de iphone pelo testflight em pqp.gg/beta.",
     "o app não está na App Store ainda.",
     "não, as mensagens não são criptografadas de ponta a ponta. o pqp está em beta.",
     "sou um bot, sim.",
-    "a voz vai bem até umas 5 ou 6 pessoas por sala.",
+    "numa sala grande a tela sai em 720p, a menos que quem apresenta escolha 1080p.",
     "essa eu não sei responder. @rafa consegue te dizer.",
   ];
   for (const body of good) {
@@ -88,16 +89,19 @@ describe("the em dash canary", () => {
 
 describe("ungroundedMeasurement", () => {
   test("is the grounding check, and it is harvest-driven", () => {
-    // Nobody listed "60fps" anywhere. It is caught because it is a measurement
+    // Nobody listed "120fps" anywhere. It is caught because it is a measurement
     // the fact file has never seen, which is what makes this rule cover claims
     // nobody predicted.
-    assert.equal(ungroundedMeasurement("60fps garantidos", facts), "60fps");
-    assert.equal(ungroundedMeasurement("1080p e 2,5 Mbps", facts), null);
+    assert.equal(ungroundedMeasurement("120fps garantidos", facts), "120fps");
+    assert.equal(ungroundedMeasurement("1080p e 5 Mbps", facts), null);
   });
 
   test("accepts a fact restated with the other decimal separator", () => {
-    assert.equal(ungroundedMeasurement("teto de 2.5 Mbps", facts), null);
-    assert.equal(ungroundedMeasurement("teto de 2,5 Mbps", facts), null);
+    const decimal = parseFacts(
+      `# T\n\nteto de 2,5 Mbps.\n\n## nunca diga\n\n- nada\n\n## não sei\n\n- nada\n\n${MAINTAINER_MARKER}\n`,
+    );
+    assert.equal(ungroundedMeasurement("teto de 2.5 Mbps", decimal), null);
+    assert.equal(ungroundedMeasurement("teto de 2,5 Mbps", decimal), null);
   });
 
   test("does nothing when there are no facts to check against", () => {

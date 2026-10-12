@@ -136,7 +136,7 @@ describe("the real facts.md", () => {
   test("permits exactly the measurements the code actually implements", () => {
     assert.deepEqual(
       [...facts.measurements].sort(),
-      ["1080p", "2.5mbps", "5mbps", "600kbps"],
+      ["1080p", "30fps", "360p", "480p", "5mbps", "60fps", "720p"],
     );
   });
 
