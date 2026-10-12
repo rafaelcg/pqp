@@ -52,6 +52,9 @@ export function startSfu() {
     "run", "-d", "--name", CONTAINER,
     "-p", "127.0.0.1:7880:7880", "-p", "127.0.0.1:7881:7881",
     "-p", "127.0.0.1:7882:7882/udp", "-p", "127.0.0.1:3478:3478/udp",
+    // The TURN relay's allocations (`relay_range_*` in livekit.yaml): a
+    // shaped run that forces the browser through the relay reaches them here.
+    "-p", "127.0.0.1:30000-30100:30000-30100/udp",
     "-v", `${path.join(HERE, "livekit.yaml")}:/etc/livekit.yaml:ro`,
     "livekit/livekit-server:v1.13.6",
     "--config", "/etc/livekit.yaml", "--node-ip", "127.0.0.1", "--bind", "0.0.0.0",
