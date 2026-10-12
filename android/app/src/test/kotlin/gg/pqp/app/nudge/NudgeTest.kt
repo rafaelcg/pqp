@@ -73,10 +73,10 @@ class NudgeTest {
         val first = async {
             writer.set(false) {
                 firstGate.await()
-                written += it
+                written.add(it)
             }
         }
-        val second = async { writer.set(true) { written += it } }
+        val second = async { writer.set(true) { written.add(it) } }
         testScheduler.runCurrent()
         assertEquals(emptyList<Boolean>(), written)
         firstGate.complete(Unit)
@@ -95,7 +95,7 @@ class NudgeTest {
                 error("network")
             }
         }
-        val newer = async { writer.set(true) { } }
+        val newer = async { writer.set(true) { true } }
         testScheduler.runCurrent()
         gate.complete(Unit)
         // The older one failed, but a newer value was already queued behind it.
@@ -124,7 +124,11 @@ class NudgeTest {
         // the second tap replaced.
         assertEquals(true, writer.confirmed)
         // A success moves the confirmed value.
-        assertTrue(writer.set(false) { })
+        assertTrue(writer.set(false) { true })
+        assertEquals(false, writer.confirmed)
+        // A write that chose not to happen (its account signed out) is not a
+        // failure, and confirms nothing.
+        assertTrue(writer.set(true) { false })
         assertEquals(false, writer.confirmed)
     }
 

@@ -137,13 +137,16 @@ class AllowNudgesWriter {
     @Volatile
     var confirmed: Boolean? = null
 
-    suspend fun set(value: Boolean, write: suspend (Boolean) -> Unit): Boolean {
+    /**
+     * [write] answers whether it actually wrote. One that chose not to (its
+     * account is gone) is not a failure and confirms nothing.
+     */
+    suspend fun set(value: Boolean, write: suspend (Boolean) -> Boolean): Boolean {
         val ticket = latest.incrementAndGet()
         // kotlinx's Mutex is fair: waiters get the lock first come, first served.
         return mutex.withLock {
             val ok = try {
-                write(value)
-                confirmed = value
+                if (write(value)) confirmed = value
                 true
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -166,9 +169,12 @@ object NudgePreference {
     private val scope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
     )
-    private val writer = AllowNudgesWriter()
-
-    /** The account [writer]'s confirmed value belongs to. */
+    /**
+     * One writer per account. A new account gets a fresh one, so writes still
+     * queued for the previous account settle into the previous writer and can
+     * never move this account's confirmed value.
+     */
+    private var writer = AllowNudgesWriter()
     private var owner: String? = null
 
     fun change(session: gg.pqp.app.core.SessionStore, allow: Boolean) {
@@ -176,24 +182,22 @@ object NudgePreference {
         if (owner != userId) {
             // First tap for this account: what the session holds came from
             // `/api/me`, so it is what the server has.
-            writer.confirmed = allowed(session)
+            writer = AllowNudgesWriter().also { it.confirmed = allowed(session) }
             owner = userId
         }
+        val mine = writer
         session.applyAllowNudges(allow)
         scope.launch {
-            var skipped = false
-            val saved = writer.set(allow) { value ->
+            val saved = mine.set(allow) { value ->
                 // Bound to the account that tapped. A write that waited its
                 // turn across a sign-out and a sign-in must not change the
-                // next account's preference.
-                if (userId(session) != userId) {
-                    skipped = true
-                    return@set
-                }
+                // next account's preference: it does nothing, and says so.
+                if (userId(session) != userId) return@set false
                 session.api.setAllowNudges(value)
+                true
             }
-            if (!saved && !skipped && userId(session) == userId) {
-                writer.confirmed?.let(session::applyAllowNudges)
+            if (!saved && userId(session) == userId) {
+                mine.confirmed?.let(session::applyAllowNudges)
             }
         }
     }
