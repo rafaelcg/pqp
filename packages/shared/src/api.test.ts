@@ -260,10 +260,7 @@ describe("userPreferencesSchema", () => {
     for (const appearance of [
       "ocean",
       "catppuccin",
-      "rosepine",
-      "dracula",
       "everforest",
-      "solarized",
     ]) {
       expect(userPreferencesSchema.safeParse({ appearance }).success).toBe(true);
     }

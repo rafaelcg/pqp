@@ -219,10 +219,7 @@ describe("Visual", () => {
     expect(names("Look: Community palettes")).toEqual([
       "Ocean",
       "Catppuccin",
-      "Rosé Pine",
-      "Dracula",
       "Everforest",
-      "Solarized",
     ]);
   });
 
@@ -243,8 +240,8 @@ describe("Visual", () => {
     click(radio(group("Mode"), "Light"));
     click(radio(host!, /^Night/));
     expect(getThemeState().resolved).toBe("dark");
-    click(radio(group("Look: Community palettes"), "Solarized"));
-    expect(getAppearance()).toBe("solarized");
+    click(radio(group("Look: Community palettes"), "Everforest"));
+    expect(getAppearance()).toBe("everforest");
     expect(getThemeState().preference).toBe("light");
   });
 });

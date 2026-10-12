@@ -336,10 +336,7 @@ const PQP_LOOKS: LookOption[] = [
 const COMMUNITY_LOOKS: LookOption[] = [
   { value: "ocean", label: "settings.appearance.preset.ocean" },
   { value: "catppuccin", label: "settings.appearance.preset.catppuccin" },
-  { value: "rosepine", label: "settings.appearance.preset.rosepine" },
-  { value: "dracula", label: "settings.appearance.preset.dracula" },
   { value: "everforest", label: "settings.appearance.preset.everforest" },
-  { value: "solarized", label: "settings.appearance.preset.solarized" },
 ];
 
 function LookRow() {

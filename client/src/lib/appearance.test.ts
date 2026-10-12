@@ -26,10 +26,7 @@ describe("isAppearance", () => {
       "night",
       "ocean",
       "catppuccin",
-      "rosepine",
-      "dracula",
       "everforest",
-      "solarized",
     ]) {
       expect(isAppearance(look)).toBe(true);
     }

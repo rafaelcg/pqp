@@ -402,10 +402,7 @@ for (const appearance of [
   "night",
   "ocean",
   "catppuccin",
-  "rosepine",
-  "dracula",
   "everforest",
-  "solarized",
 ]) {
   const darkSkin = readTokens(
     css,

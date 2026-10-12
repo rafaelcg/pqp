@@ -79,8 +79,8 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
  * skin for dark, not a clone of another product's AMOLED theme. `ocean`,
- * `catppuccin`, `rosepine`, `dracula`, `everforest` and `solarized` are the
- * deliberate exception: credited ports of MIT palettes (see DECISIONS.md).
+ * `catppuccin` and `everforest` are the deliberate exception: credited ports
+ * of MIT palettes (see DECISIONS.md).
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
@@ -95,10 +95,7 @@ export const appearancePreferenceSchema = z.preprocess(
     "night",
     "ocean",
     "catppuccin",
-    "rosepine",
-    "dracula",
     "everforest",
-    "solarized",
   ]),
 );
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;

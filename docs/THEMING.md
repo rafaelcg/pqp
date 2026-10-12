@@ -149,14 +149,14 @@ boot-script rule as theme and appearance.
 
 A second axis, not a second `data-theme` value. Brightness stays
 `light | dark | system`. The skin is `signal | harmony | hearth | night` plus the
-ported `ocean | catppuccin | rosepine | dracula | everforest | solarized`, stored as
+ported `ocean | catppuccin | everforest`, stored as
 `pqp-appearance` and `user_preferences.settings.appearance`.
 
 `signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
 `night` is a near-black look (true black page and rail, lifted panels). It is
 dark-only: picking it pins brightness to dark, and Light / System stay off
 until another look is chosen. They do not change layout. They do not use another product's
-name or brand hex values. The exception is the six ported looks, credited copies
+name or brand hex values. The exception is the three ported looks, credited copies
 of MIT palettes (see `DECISIONS.md`); they follow light and dark like the others.
 Hearth tints the rail; it does not paint a two-tone
 sidebar, because that needs an `--color-on-sidebar` token the message pane does

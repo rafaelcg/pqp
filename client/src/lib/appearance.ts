@@ -22,10 +22,7 @@ export const APPEARANCES = [
   "night",
   "ocean",
   "catppuccin",
-  "rosepine",
-  "dracula",
   "everforest",
-  "solarized",
 ] as const satisfies readonly AppearancePreference[];
 
 export function appearanceForcesDark(
