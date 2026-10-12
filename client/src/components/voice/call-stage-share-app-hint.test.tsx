@@ -83,6 +83,7 @@ const idle: VoiceState = {
   isShareCursorVisible: false,
   shareCaptureHint: null,
   screenShareAudioFailed: false,
+  screenShareError: null,
   sharePublishRecovering: false,
   incomingCalls: [],
   isCameraOn: false,

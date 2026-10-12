@@ -696,6 +696,12 @@ export interface VoiceState {
    */
   screenShareAudioFailed: boolean;
   /**
+   * The message of the last screen share that failed to start, the same
+   * string as `error`. The docked call bar shows the share error only while
+   * `error` still equals this, so another error or a cleared one hides it.
+   */
+  screenShareError: string | null;
+  /**
    * We are the SFU presenter of a watch party and our OWN screen-share
    * publication is not currently live — a reconnect dropped it and the client
    * is re-establishing it. The presenter's surfaces (the AO VIVO pill, the
@@ -1921,6 +1927,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isShareCursorVisible: false,
     shareCaptureHint: null,
     screenShareAudioFailed: false,
+    screenShareError: null,
     sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,
@@ -5102,6 +5109,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isShareCursorVisible: false,
       shareCaptureHint: null,
       screenShareAudioFailed: false,
+      screenShareError: null,
       sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
@@ -6820,6 +6828,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.screenShareError = state.error;
         emit();
         return;
       }
@@ -6829,6 +6838,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // programmatic call, not a user tapping a button we should not have shown.
       if (!supportsScreenShare()) {
         state.error = screenShareUnsupportedMessage();
+        state.screenShareError = state.error;
         emit();
         return;
       }
@@ -6919,6 +6929,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             (err.name === "TypeError" || err.name === "NotSupportedError");
           if (!shapeRefused) {
             state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
             // Everything audio can do to a capture, it does to the whole capture:
             // the video was fine and the person still got nothing. Offer the same
             // share without sound rather than leaving them to work out that the
@@ -6939,6 +6950,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
           } catch {
             state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
             discardPrimedNativeShareAudio();
             emit();
             return;
@@ -6950,6 +6962,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        state.screenShareError = state.error;
         discardPrimedNativeShareAudio();
         emit();
         return;
@@ -7193,6 +7206,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void publishMicArchiveIfRecording();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
+        state.screenShareError = state.error;
         await stopScreenShareInternal();
         emit();
       }

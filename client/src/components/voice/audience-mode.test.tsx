@@ -114,6 +114,7 @@ function stateFor(overrides: Partial<VoiceState>): VoiceState {
     isShareCursorVisible: false,
     shareCaptureHint: null,
     screenShareAudioFailed: false,
+    screenShareError: null,
     sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,

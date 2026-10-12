@@ -928,6 +928,8 @@ describe("screen share audio", () => {
       expect(displayMediaCalls).toHaveLength(1);
       expect(voice.getState().error).not.toBeNull();
       expect(voice.getState().screenShareAudioFailed).toBe(true);
+      // The docked call bar keys on this to show the error with no stage.
+      expect(voice.getState().screenShareError).toBe(voice.getState().error);
     });
 
     it("never retries a picker the person cancelled", async () => {
@@ -1237,6 +1239,8 @@ describe("screen share audio", () => {
     expect(voice.getState().isSharingScreen).toBe(true);
     expect(voice.getState().error).toBeNull();
     expect(voice.getState().screenShareAudioFailed).toBe(false);
+    // The docked bar compares the two, so a cleared error hides the row.
+    expect(voice.getState().error).not.toBe(voice.getState().screenShareError);
   });
 
   it("explains a failed audio capture instead of quoting the browser", async () => {

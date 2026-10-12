@@ -232,6 +232,10 @@ import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
 import {
+  DockedShareError,
+  showsDockedShareError,
+} from "@/components/voice/docked-share-error";
+import {
   callStartKey,
   callStartedAt,
   cameraSoloId,
@@ -1908,6 +1912,13 @@ function ActiveCall({
       data-testid="call-stage-collapsed"
       className="@container flex flex-col gap-1.5"
     >
+      {showsDockedShareError(collapsed, voiceState) && voiceState.error && (
+        <DockedShareError
+          message={voiceState.error}
+          audioFailed={voiceState.screenShareAudioFailed}
+          onShareWithoutSound={onShareWithoutSound}
+        />
+      )}
       {controls}
       <PttFocusHint
         show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
