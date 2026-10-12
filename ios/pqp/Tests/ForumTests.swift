@@ -115,6 +115,42 @@ final class ForumTests: XCTestCase {
         XCTAssertThrowsError(try Coding.decoder.decode(ForumPostSummary.self, from: Data(missingTitle.utf8)))
     }
 
+    /// UX #18: a video post carries its signed clip in `thumbnailVideoUrl`
+    /// (the picture field stays an image). An older API omits it.
+    func testTheSummaryDecodesTheVideoThumbnail() throws {
+        let json = """
+        {"id":"\(them)","forumId":"\(forumId)","title":"clip","createdAt":"2026-10-11T23:19:06.610Z",
+         "openingKind":"attachment","attachmentCount":1,"thumbnailUrl":null,
+         "thumbnailVideoUrl":"https://x/clip.mp4?sig=1","tagIds":[]}
+        """
+        let post = try Coding.decoder.decode(ForumPostSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(post.thumbnailVideoUrl, "https://x/clip.mp4?sig=1")
+        XCTAssertNil(post.thumbnailUrl)
+
+        let older = #"{"id":"x","forumId":"y","title":"t","createdAt":"2026-10-11T23:19:06.610Z"}"#
+        XCTAssertNil(try Coding.decoder.decode(ForumPostSummary.self, from: Data(older.utf8)).thumbnailVideoUrl)
+
+        let explicitNull = #"{"id":"x","forumId":"y","title":"t","createdAt":"2026-10-11T23:19:06.610Z","thumbnailVideoUrl":null}"#
+        XCTAssertNil(try Coding.decoder.decode(ForumPostSummary.self, from: Data(explicitNull.utf8)).thumbnailVideoUrl)
+    }
+
+    /// One picture or one clip says what it is; several say how many.
+    func testThePreviewNamesASinglePictureOrClip() {
+        func summary(count: Int, image: String? = nil, video: String? = nil, words: String? = nil) -> ForumPostSummary {
+            ForumPostSummary(
+                id: "p", forumId: forumId, title: "t", createdAt: at(0),
+                preview: words, openingKind: "attachment", attachmentCount: count,
+                thumbnailUrl: image, thumbnailVideoUrl: video
+            )
+        }
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, image: "https://x/a.png")), "📷 Image")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4")), "🎬 Video")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 3, video: "https://x/a.mp4")), "3 attachments")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1)), "1 attachment")
+        // Words always win over the file label.
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4", words: "olha")), "olha")
+    }
+
     func testTheListAndTheDetailDecode() throws {
         let list = """
         {"pinned":[],"posts":[{"id":"p1","forumId":"f","title":"t","createdAt":"2026-10-11T23:19:06.610Z"}],
@@ -139,6 +175,29 @@ final class ForumTests: XCTestCase {
         XCTAssertEqual(decoded.viewer.newReplyCount, 3)
         XCTAssertEqual(decoded.acceptedAnswer?.excerpt, "Desliga e reinicia")
         XCTAssertEqual(decoded.participantCount, 9)
+    }
+
+    /// "Solução · marcada por {name}": the marker rides on the accepted answer,
+    /// absent on an older API and null when nobody is known.
+    func testTheSolutionNamesWhoMarkedIt() throws {
+        let json = """
+        {"messageId":"m","deleted":false,"authorId":null,"authorName":"kaique","excerpt":"x",
+         "createdAt":"2026-10-11T23:19:10.046Z","markedById":"\(them)","markedByName":"Bia Souza"}
+        """
+        let answer = try Coding.decoder.decode(ForumAcceptedAnswer.self, from: Data(json.utf8))
+        XCTAssertEqual(answer.markedByName, "Bia Souza")
+        XCTAssertEqual(ForumSolutionCard.markedByLine(answer, viewerId: me), String(localized: "marked by Bia Souza"))
+        XCTAssertEqual(ForumSolutionCard.markedByLine(answer, viewerId: them), String(localized: "marked by you"))
+
+        let old = """
+        {"messageId":"m","deleted":false,"authorId":null,"authorName":"kaique","excerpt":"x","createdAt":null}
+        """
+        let legacy = try Coding.decoder.decode(ForumAcceptedAnswer.self, from: Data(old.utf8))
+        XCTAssertNil(ForumSolutionCard.markedByLine(legacy, viewerId: me))
+        let unknown = try Coding.decoder.decode(ForumAcceptedAnswer.self, from: Data(
+            #"{"messageId":"m","deleted":false,"authorId":null,"authorName":null,"excerpt":null,"createdAt":null,"markedById":null,"markedByName":null}"#.utf8
+        ))
+        XCTAssertNil(ForumSolutionCard.markedByLine(unknown, viewerId: me))
     }
 
     func testSettingsReadAnUnknownSortAsTheDefault() throws {
@@ -199,6 +258,30 @@ final class ForumTests: XCTestCase {
         }
         XCTAssertEqual(rfid, forumId)
         XCTAssertEqual(postId, "p9")
+    }
+
+    /// Staff saved a forum's tags or settings: either half may be absent, and
+    /// a half this build cannot read drops the frame, not the socket.
+    func testTheForumConfigFrameDecodesEitherHalf() async {
+        let both = """
+        {"type":"forum-config-update","forumId":"\(forumId)",
+         "tags":[{"id":"\(tagBug)","name":"Bug","emoji":null,"moderated":false,"position":0}],
+         "settings":{"requireTag":true,"defaultSort":"created"}}
+        """
+        let onlySettings = #"{"type":"forum-config-update","forumId":"\#(forumId)","settings":{"requireTag":false,"defaultSort":"activity"}}"#
+        let broken = #"{"type":"forum-config-update","settings":{"requireTag":true}}"#
+        let got = await events(from: [both, onlySettings, broken])
+        XCTAssertEqual(got.count, 2)
+        guard case .forumConfigUpdate(let fid, let tags, let settings) = got.first else {
+            return XCTFail("expected a config update, got \(String(describing: got.first))")
+        }
+        XCTAssertEqual(fid, forumId)
+        XCTAssertEqual(tags?.map(\.name), ["Bug"])
+        XCTAssertEqual(settings?.requireTag, true)
+        XCTAssertEqual(settings?.defaultSort, .created)
+        guard case .forumConfigUpdate(_, let none, let next) = got.last else { return XCTFail("expected a config update") }
+        XCTAssertNil(none)
+        XCTAssertEqual(next?.requireTag, false)
     }
 
     /// A summary this build cannot read drops the frame, not the socket.
@@ -499,7 +582,21 @@ final class ForumTests: XCTestCase {
         let automod = ForumComposerRefusal.from(.rejected(ForumPostRejection(
             error: "forum_post_rejected", reason: "automod", retryAfterMs: nil, automodMessage: "Sem links"
         )))
-        XCTAssertEqual(automod.message, "Sem links")
+        XCTAssertEqual(automod.message, "\(String(localized: "AutoMod blocked this post.")) Sem links")
+        XCTAssertEqual(automod.field, .general)
+
+        // The server says which half it refused: the line names it, and the
+        // title field is the one that lights up for a title.
+        let title = ForumComposerRefusal.from(.rejected(ForumPostRejection(
+            error: "forum_post_rejected", reason: "automod", retryAfterMs: nil, automodMessage: nil, field: "title"
+        )))
+        XCTAssertEqual(title.message, String(localized: "AutoMod blocked this title."))
+        XCTAssertEqual(title.field, .title)
+        let body = ForumComposerRefusal.from(.rejected(ForumPostRejection(
+            error: "forum_post_rejected", reason: "automod", retryAfterMs: nil, automodMessage: "Sem links", field: "body"
+        )))
+        XCTAssertEqual(body.message, "\(String(localized: "AutoMod blocked this text.")) Sem links")
+        XCTAssertEqual(body.field, .general)
 
         XCTAssertEqual(ForumComposerRefusal.from(.refused(status: 422, error: "forum_tag_required")).field, .tags)
         XCTAssertEqual(ForumComposerRefusal.from(.transport("down")).field, .general)

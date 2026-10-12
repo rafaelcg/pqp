@@ -1482,6 +1482,27 @@
 }
 
 /*
+ * A control drawn smaller than a finger still takes a 44px tap: an invisible
+ * box centred on it, at least 44 by 44, catches the touch. Used as
+ * `max-sm:hit-44` where a 44px drawing would crowd a row (a filter chip, the
+ * live pill), the same "28px drawn, 44px to a finger" the dialog's X uses.
+ * Not for controls packed edge to edge: the boxes would overlap and the later
+ * one would win the shared strip.
+ */
+@utility hit-44 {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
+/*
  * The gradient lives on the runnable track, not the input, so WebKit cannot
  * fall back to its native control rendering. `writing-mode` + `direction`
  * pin the control horizontal regardless of ancestor styles.
@@ -3423,6 +3444,12 @@ html[data-immersive-stage] [data-immersive-hide] {
   --story-tray: oklch(0.19 0.014 250 / 0.985);
   --story-sticker: oklch(0.17 0.03 132 / 0.95);
   --story-sticker-edge: oklch(0.88 0.19 125 / 0.34);
+  /* The accent as it reads on the story's own dark surface, in both themes:
+     the light theme's accent is a dark green made for paper, and on this
+     surface it all but disappears. */
+  --story-accent: oklch(0.88 0.19 125);
+  --story-accent-soft: oklch(0.9 0.16 125);
+  --story-on-accent: oklch(0.16 0.012 250);
   --story-shadow: 0 18px 40px oklch(0 0 0 / 0.55);
   --story-hatch: repeating-linear-gradient(
     135deg,

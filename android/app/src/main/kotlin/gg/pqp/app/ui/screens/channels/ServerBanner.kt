@@ -185,6 +185,12 @@ fun CompactServerBar(
     collapsed: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Buttons at the end of the bar (the server menu). Given how far the bar
+     * has faded in, so a button over the banner can keep the same dark disc
+     * the back button sits on.
+     */
+    actions: @Composable (shown: Float) -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val shown by animateFloatAsState(
@@ -239,6 +245,7 @@ fun CompactServerBar(
                     )
                     if (!activity.isEmpty) ActivityLine(activity)
                 }
+                actions(shown)
             }
         }
         if (shown > 0.01f) ChromeDivider(Modifier.alpha(shown))

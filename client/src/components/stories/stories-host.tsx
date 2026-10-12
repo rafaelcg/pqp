@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { StoryCallLive } from "@pqp/shared";
 import { useTranslation } from "@/lib/i18n";
+import { failedPostNotice } from "@/lib/stories/post";
 import {
+  clearStoriesNotice,
   closeStoryComposer,
   closeStoryViewer,
   ringAudienceKey,
@@ -63,6 +65,30 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
     return () => window.clearTimeout(timer);
   }, [posted]);
 
+  // A failed post says why, once, out loud: the red ring alone does not tell
+  // "try again" from "not today" from "this one will not go up".
+  const failedId = ui.posting?.status === "failed" ? ui.posting.id : null;
+  const failure = ui.posting?.status === "failed" ? ui.posting.failure : null;
+  const [failedNote, setFailedNote] = useState<{ id: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!failedId) {
+      return;
+    }
+    const { key, vars } = failedPostNotice(failure);
+    setFailedNote({ id: failedId, text: t(key, vars) });
+    // `t` changes identity with the locale only; the note is said once per failure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [failedId, failure]);
+  // Its own timer: a retry or a dismissal ends the failure, and must not
+  // cancel the timer that takes the note away.
+  useEffect(() => {
+    if (!failedNote) {
+      return;
+    }
+    const timer = window.setTimeout(() => setFailedNote(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [failedNote]);
+
   /**
    * "The composed card shrinks into the Teu story ring (400 ms emphasized)":
    * a copy of the preview flies from where it was to the ring, then goes.
@@ -116,6 +142,15 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
     [ui.composer?.context],
   );
 
+  const notice = ui.notice;
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timer = window.setTimeout(() => clearStoriesNotice(notice.key), notice.action ? 5000 : 2000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   if (!me) {
     return null;
   }
@@ -136,6 +171,7 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
       {ui.composer && (
         <StoryComposer
           request={ui.composer}
+          meId={me.id}
           voiceRooms={
             ui.composer.context.kind === "server" &&
             voiceRooms?.serverId === ui.composer.context.serverId
@@ -146,6 +182,43 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
           onPosted={flyIntoRing}
         />
       )}
+      {failedNote &&
+        createPortal(
+          <div
+            key={failedNote.id}
+            role="status"
+            style={{ animationDuration: "5s" }}
+            className="story-pill fixed bottom-6 left-1/2 z-[70] max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-full bg-surface-2 px-4 py-2 text-center text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+          >
+            {failedNote.text}
+          </div>,
+          document.body,
+        )}
+      {notice &&
+        createPortal(
+          <div
+            key={notice.key}
+            role="status"
+            className="story-pill fixed bottom-6 left-1/2 z-[70] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-3 rounded-full bg-surface-2 px-4 py-2 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+            style={{ animationDuration: notice.action ? "5s" : "2s" }}
+          >
+            <span className="min-w-0 truncate">{notice.text}</span>
+            {notice.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  const run = notice.action?.run;
+                  clearStoriesNotice(notice.key);
+                  run?.();
+                }}
+                className="shrink-0 rounded-full px-1 font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                {notice.action.label}
+              </button>
+            )}
+          </div>,
+          document.body,
+        )}
       {posted !== null &&
         createPortal(
           <div

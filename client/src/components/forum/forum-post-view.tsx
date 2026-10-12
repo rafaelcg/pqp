@@ -27,6 +27,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plus,
   RotateCcw,
   Tags,
   Trash2,
@@ -247,13 +248,23 @@ function EditTagsDialog({
 function SolutionCard({
   answer,
   onJump,
+  viewerId,
   compact = false,
 }: {
   answer: ForumAcceptedAnswer;
   onJump: () => void;
+  viewerId: string | null;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
+  // Who picked it, as mock 02 draws it (forum QA P9). Nobody named when the
+  // server does not know (an answer marked before it kept the marker).
+  const markedBy =
+    answer.markedById && answer.markedById === viewerId
+      ? t("forum.solution.markedByYou")
+      : answer.markedByName
+        ? t("forum.solution.markedBy", { name: answer.markedByName })
+        : null;
   return (
     <section
       aria-label={t("forum.solution.title")}
@@ -264,8 +275,13 @@ function SolutionCard({
       )}
     >
       <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide">
-        <CircleCheck className="h-3.5 w-3.5" aria-hidden />
+        <CircleCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("forum.solution.title")}
+        {markedBy && (
+          <span className="min-w-0 truncate font-normal normal-case tracking-normal opacity-80">
+            · {markedBy}
+          </span>
+        )}
       </p>
       {!compact && (
         <p className="mt-1.5 line-clamp-2 text-sm">
@@ -292,6 +308,22 @@ function SolutionCard({
         </button>
       )}
     </section>
+  );
+}
+
+/** "23 RESPOSTAS" and a rule: where the question ends and the replies begin. */
+function RepliesDivider({ count }: { count: number }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="mx-4 mb-1 mt-3 flex items-center gap-3 sm:mx-5"
+      data-forum-replies-divider=""
+    >
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] tabular-nums text-text-tertiary">
+        {t("forum.post.repliesDivider", { count })}
+      </span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -536,6 +568,8 @@ export function ForumPostView({
           authorName: message.authorName,
           excerpt: message.body.replace(/\s+/g, " ").trim().slice(0, 280) || null,
           createdAt: message.createdAt,
+          markedById: viewerId,
+          markedByName: currentUser?.displayName ?? null,
         });
       }
       void patch(
@@ -547,7 +581,7 @@ export function ForumPostView({
         },
       );
     },
-    [controller, patch, post],
+    [controller, patch, post, viewerId, currentUser?.displayName],
   );
 
   function toggleResolved() {
@@ -740,6 +774,11 @@ export function ForumPostView({
     .filter(Boolean)
     .join(" · ");
 
+  const hasHeaderChips =
+    Boolean(post.resolvedAt || post.lockedAt || post.pinnedAt) ||
+    post.tagIds.length > 0 ||
+    (canEdit && tags.length > 0);
+
   const topBar = (
       <div className="flex h-12 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
@@ -835,12 +874,12 @@ export function ForumPostView({
                 setEditingTitle(false);
               }
             }}
-            className="w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display text-[19px] font-bold leading-6 text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display text-[21px] font-bold leading-7 text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           />
         ) : (
           <h2
             className={cn(
-              "group/title font-display text-[19px] font-bold leading-6 text-text",
+              "group/title font-display text-[21px] font-bold leading-7 text-text",
               canEdit && "cursor-text",
             )}
             onDoubleClick={() => {
@@ -870,7 +909,20 @@ export function ForumPostView({
             </Badge>
           )}
           <ForumTagList tagIds={post.tagIds} tagsById={tagsById} max={FORUM_MAX_TAGS_PER_POST} />
-          {canEdit && tags.length > 0 && (
+          {canEdit && tags.length > 0 && post.tagIds.length === 0 && (
+            // No tags yet: a lone pencil read as "edit the title" or as
+            // nothing at all (forum QA P12). Say what it adds.
+            <button
+              type="button"
+              onClick={() => setEditTagsOpen(true)}
+              data-forum-add-tags=""
+              className="inline-flex h-5 items-center gap-1 rounded-full border border-dashed border-border-strong px-2 text-[11px] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:border-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3 max-sm:text-xs"
+            >
+              <Plus className="h-3 w-3" aria-hidden />
+              {t("forum.post.addTags")}
+            </button>
+          )}
+          {canEdit && tags.length > 0 && post.tagIds.length > 0 && (
             <Tooltip label={t("forum.editTags")}>
               <button
                 type="button"
@@ -881,7 +933,16 @@ export function ForumPostView({
               </button>
             </Tooltip>
           )}
-          <span className="ml-auto text-xs tabular-nums text-text-tertiary max-sm:hidden">
+          {/* Right after the status and tags, not pushed to the far edge: on
+              a post with no tags, or a pane as wide as the screen, the line
+              floated alone on the right and read as belonging to nothing. */}
+          <span
+            className={cn(
+              "text-xs tabular-nums text-text-tertiary max-sm:hidden",
+              hasHeaderChips &&
+                "before:mr-1.5 before:text-text-tertiary/60 before:content-['·']",
+            )}
+          >
             {replyLine}
           </span>
         </div>
@@ -947,7 +1008,15 @@ export function ForumPostView({
   const decor = {
     authorId: post.authorId,
     acceptedAnswerId: post.acceptedAnswerId,
-    afterOpening: answer ? <SolutionCard answer={answer} onJump={jumpToAnswer} /> : null,
+    // Under the question: its answer, then where the replies start (mock 02,
+    // forum QA P5). Neither on a post nobody answered yet.
+    afterOpening:
+      answer || post.replyCount > 0 ? (
+        <>
+          {answer && <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} />}
+          {post.replyCount > 0 && <RepliesDivider count={post.replyCount} />}
+        </>
+      ) : null,
     onToggleAnswer: canEdit ? toggleAnswer : undefined,
     landAtTop: firstVisit,
     listHeader: isPhone ? titleBlock : null,
@@ -992,7 +1061,7 @@ export function ForumPostView({
           header,
           beforeList:
             answer && !openingLoaded ? (
-              <SolutionCard answer={answer} onJump={jumpToAnswer} compact />
+              <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} compact />
             ) : null,
           decor,
           locked: post.lockedAt !== null,

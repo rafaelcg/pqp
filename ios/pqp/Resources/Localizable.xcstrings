@@ -101,12 +101,12 @@
         }
       }
     },
-    "%@ only gets messages from friends" : {
+    "%@ doesn't take direct messages" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ só recebe mensagem de amigos"
+            "value" : "%@ não recebe mensagem direta"
           }
         }
       }
@@ -1247,6 +1247,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Automático (%lldp)"
+          }
+        }
+      }
+    },
+    "AutoMod blocked this text." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou esse texto."
+          }
+        }
+      }
+    },
+    "AutoMod blocked this title." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou esse título."
           }
         }
       }
@@ -3809,6 +3829,26 @@
         }
       }
     },
+    "marked by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "marcada por %@"
+          }
+        }
+      }
+    },
+    "marked by you" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "marcada por ti"
+          }
+        }
+      }
+    },
     "Mark as resolved" : {
       "localizations" : {
         "pt-BR" : {
@@ -4225,6 +4265,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Avançar"
+          }
+        }
+      }
+    },
+    "Next story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Próximo story"
           }
         }
       }
@@ -4989,6 +5039,16 @@
         }
       }
     },
+    "Pause" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        }
+      }
+    },
     "Pending" : {
       "localizations" : {
         "pt-BR" : {
@@ -5229,6 +5289,16 @@
         }
       }
     },
+    "Previous story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story anterior"
+          }
+        }
+      }
+    },
     "Processing the video…" : {
       "localizations" : {
         "pt-BR" : {
@@ -5359,12 +5429,12 @@
         }
       }
     },
-    "Reason: %@. It stays up for your Friends until it expires." : {
+    "Reason: %@. If you posted it somewhere else too, it stays there until it expires." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Motivo: %@. Ele continua pros teus Amigos até expirar."
+            "value" : "Motivo: %@. Se tu postou ele em outro lugar também, lá ele continua até expirar."
           }
         }
       }
@@ -5735,6 +5805,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "RESOLVIDO"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar"
           }
         }
       }
@@ -7399,6 +7479,26 @@
         }
       }
     },
+    "Turn the sound off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar o som"
+          }
+        }
+      }
+    },
+    "Turn the sound on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar o som"
+          }
+        }
+      }
+    },
     "Turn your camera on or share your screen during a call to see what is really going out." : {
       "localizations" : {
         "pt-BR" : {
@@ -8099,6 +8199,26 @@
         }
       }
     },
+    "You nudged them 📳" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu chamou a atenção 📳"
+          }
+        }
+      }
+    },
+    "Nudged you! 📳" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chamou tua atenção! 📳"
+          }
+        }
+      }
+    },
     "You turned nudges off. Turn them back on in Settings." : {
       "localizations" : {
         "pt-BR" : {
@@ -8125,6 +8245,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você está aqui"
+          }
+        }
+      }
+    },
+    "You're not in %@. The card only lets people in while you're in the call." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não tá no %@. O card só deixa entrar enquanto tu tá na call."
           }
         }
       }
@@ -10985,6 +11115,222 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apresentando só a imagem, sem o som"
+          }
+        }
+      }
+    },
+    "Organize channels" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizar canais"
+          }
+        }
+      }
+    },
+    "Remove from category" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar da categoria"
+          }
+        }
+      }
+    },
+    "Text channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal de texto"
+          }
+        }
+      }
+    },
+    "Voice channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal de voz"
+          }
+        }
+      }
+    },
+    "Private channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal privado"
+          }
+        }
+      }
+    },
+    "Create channel in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar canal em %@"
+          }
+        }
+      }
+    },
+    "Couldn't move it. The list changed, try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mover. A lista mudou, tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't move it. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mover. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Voice rooms" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salas de voz"
+          }
+        }
+      }
+    },
+    "Rename category" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renomear categoria"
+          }
+        }
+      }
+    },
+    "Category name" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome da categoria"
+          }
+        }
+      }
+    },
+    "Empty. Drag a channel here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vazia. Arrasta um canal pra cá."
+          }
+        }
+      }
+    },
+    "Move up" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover para cima"
+          }
+        }
+      }
+    },
+    "Move down" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover para baixo"
+          }
+        }
+      }
+    },
+    "Hold ≡ and drag a channel or a category. Nothing is saved until you tap Done." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segura o ≡ e arrasta um canal ou uma categoria. Só salva quando tu toca em Concluir."
+          }
+        }
+      }
+    },
+    "%@ moved to position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ foi pra posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "%@ moved to %@, position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ foi pra %@, posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "%@ is outside the categories, position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ficou fora das categorias, posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "organize.done" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concluir"
+          }
+        }
+      }
+    },
+    "📷 Image" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "📷 Imagem"
+          }
+        }
+      }
+    },
+    "🎬 Video" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🎬 Vídeo"
           }
         }
       }

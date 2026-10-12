@@ -2,6 +2,8 @@ package gg.pqp.app.forum
 
 import gg.pqp.app.core.PqpJson
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -133,6 +135,13 @@ data class ForumPostSummary(
     val thumbnailAttachmentId: String? = null,
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
+    /**
+     * The opening message's first video, signed, when it has no image. The card
+     * draws its first frame under a play badge, like the web card. Separate
+     * from `thumbnailUrl` on purpose: that one is only ever an image, so an
+     * image loader is never handed a video. Null from an older API.
+     */
+    val thumbnailVideoUrl: String? = null,
     /** In the forum's tag order. */
     val tagIds: List<String> = emptyList(),
 ) {
@@ -178,7 +187,27 @@ data class ForumAcceptedAnswer(
     val authorName: String? = null,
     val excerpt: String? = null,
     val createdAt: String? = null,
-)
+    /**
+     * Who marked it ("Solução · marcada por {name}"). Null when nobody is
+     * known (marked before the server kept it, or by an account deleted
+     * since); absent on an older API.
+     */
+    val markedById: String? = null,
+    val markedByName: String? = null,
+) {
+    /** What the card says after "Solução": you, a name, or nothing. */
+    fun marker(viewerId: String?): ForumMarker? = when {
+        markedById != null && markedById == viewerId -> ForumMarker.You
+        !markedByName.isNullOrBlank() -> ForumMarker.Named(markedByName)
+        else -> null
+    }
+}
+
+sealed interface ForumMarker {
+    data object You : ForumMarker
+
+    data class Named(val name: String) : ForumMarker
+}
 
 /** `GET /api/forum-posts/:postId`. */
 @Serializable
@@ -225,6 +254,33 @@ data class SetForumPostFollowRequest(val following: Boolean)
 
 @Serializable
 data class ForumPostViewerResponse(val viewer: ForumPostViewer)
+
+/**
+ * `forum-config-update`: staff saved the forum's tags or its settings. Either
+ * half may be absent. A frame the phone cannot read is dropped (the copy read
+ * on open stays, and the server still enforces the rule).
+ */
+data class ForumConfigUpdate(
+    val forumId: String,
+    val tags: List<ForumTag>? = null,
+    val settings: ForumSettings? = null,
+) {
+    companion object {
+        fun decode(frame: JsonObject): ForumConfigUpdate? = runCatching {
+            if (frame["type"]?.jsonPrimitive?.contentOrNull != "forum-config-update") return@runCatching null
+            val forumId = frame["forumId"]?.jsonPrimitive?.contentOrNull ?: return@runCatching null
+            ForumConfigUpdate(
+                forumId = forumId,
+                tags = frame["tags"]?.takeUnless { it is JsonNull }?.let {
+                    PqpJson.decodeFromJsonElement(ListSerializer(ForumTag.serializer()), it)
+                },
+                settings = frame["settings"]?.takeUnless { it is JsonNull }?.let {
+                    PqpJson.decodeFromJsonElement(ForumSettings.serializer(), it)
+                },
+            )
+        }.getOrNull()
+    }
+}
 
 /** The two live frames (`forum-post-upsert`, `forum-post-removed`), decoded. */
 sealed interface ForumFrame {

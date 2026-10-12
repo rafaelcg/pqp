@@ -56,6 +56,7 @@ import {
   putForumTags,
 } from "@/lib/forum-api";
 import { fetchForumConfig } from "@/lib/api";
+import { loadForumConfig } from "@/hooks/use-forum-config";
 import { readCursorOnce } from "@/lib/forum-visit";
 import {
   subscribeForumFrames,
@@ -162,6 +163,10 @@ export interface ForumPaneProps {
 
 /** The content area must be this wide for the post to sit beside the list. */
 const SPLIT_MIN_WIDTH = 900;
+/** The post pane beside the list (`md:w-[488px]` in the post view). */
+const POST_PANE_WIDTH = 488;
+/** From this list width on, the cards beside an open post keep every line. */
+const ROOMY_LIST_MIN_WIDTH = 640;
 /** Infinite scroll asks for the next page this far before the end. */
 const NEXT_PAGE_MARGIN_PX = 600;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -634,10 +639,18 @@ export function ForumPane({
     return () => observer.disconnect();
   }, []);
   const [maximized, setMaximized] = useState(readPostMaximized);
+  // A double click on a card opens that one post over the whole content
+  // area, without touching the remembered maximize choice: a single click
+  // on the next card is beside the list again.
+  const [fullOnceId, setFullOnceId] = useState<string | null>(null);
   const canSplit = !isPhone && width >= SPLIT_MIN_WIDTH;
   const postOpen = openPostId !== null && (openPost !== null || removedOpenId === openPostId);
-  const postFull = postOpen && (!canSplit || maximized);
+  const fullOnce = postOpen && fullOnceId === openPostId;
+  const postFull = postOpen && (!canSplit || maximized || fullOnce);
   const compactList = postOpen && !postFull;
+  // On a wide screen the list beside an open post has room for the whole
+  // card (author, preview, a full thumbnail); only a narrow one compacts.
+  const compactCards = compactList && width - POST_PANE_WIDTH < ROOMY_LIST_MIN_WIDTH;
 
   // ---------------------------------------------------------- live rules
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -674,6 +687,18 @@ export function ForumPane({
     () =>
       subscribeForumFrames((frame) => {
         if (frame.forumId !== forumId) {
+          return;
+        }
+        // Staff saved tags or settings: an open composer follows them now,
+        // not at the next reload (forum QA P11).
+        if (frame.type === "forum-config-update") {
+          if (frame.tags) {
+            setTags(frame.tags);
+            setTagsLoaded(true);
+          }
+          if (frame.settings) {
+            setSettings(frame.settings);
+          }
           return;
         }
         if (frame.type === "forum-post-upsert") {
@@ -818,6 +843,7 @@ export function ForumPane({
       setList((current) => markForumPostRead(current, closing, new Date().toISOString()));
     }
     setOpenPostId(null);
+    setFullOnceId(null);
     setRemovedOpenId(null);
     setRemovedOpenPost(null);
     if (back) {
@@ -825,20 +851,41 @@ export function ForumPane({
     }
   }, [setOpenPostId]);
 
+  const openPostFull = useCallback(
+    (postId: string) => {
+      setFullOnceId(postId);
+      openPostById(postId);
+    },
+    [openPostById],
+  );
+
   const toggleMaximize = useCallback(() => {
+    // Opened full by a double click: the button puts it beside the list,
+    // and the remembered choice stays what it was.
+    if (fullOnceId !== null && fullOnceId === openPostIdRef.current) {
+      setFullOnceId(null);
+      return;
+    }
     setMaximized((current) => {
       writePostMaximized(!current);
       return !current;
     });
-  }, []);
+  }, [fullOnceId]);
 
   // ----------------------------------------------------------- composer
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerTitle, setComposerTitle] = useState<string | null>(null);
-  const openComposer = useCallback((title: string | null = null) => {
-    setComposerTitle(title);
-    setComposerOpen(true);
-  }, []);
+  const openComposer = useCallback(
+    (title: string | null = null) => {
+      setComposerTitle(title);
+      setComposerOpen(true);
+      // The flag is operator data flipped with no deploy: ask again as a
+      // post starts, so a pause made since this tab opened shows before the
+      // person has written the whole thing (forum QA P11).
+      void loadForumConfig(server.id).catch(() => {});
+    },
+    [server.id],
+  );
   const canCompose = canPost && creationEnabled;
 
   // A drop on the forum starts a post with the files attached.
@@ -1040,7 +1087,16 @@ export function ForumPane({
             ),
         ],
       });
+      const added = next.length - tags.length;
       setTags(next);
+      // The suggestion row goes away with the tags it offered, so say what
+      // happened and where they live now (forum QA P1).
+      notify(
+        t("forum.empty.starterDone", { count: Math.max(added, 1) }),
+        onOpenSettings
+          ? { label: t("forum.empty.starterEdit"), onClick: () => onOpenSettings("tags") }
+          : undefined,
+      );
     } catch {
       notify(t("forum.saveFailed"));
     } finally {
@@ -1140,7 +1196,11 @@ export function ForumPane({
         </Tooltip>
       )}
       {compactList && newPostButton}
-      {headerActions}
+      {/* The shell's header tiles are 32px; on a phone the forum's header has
+          room for a full finger target (forum QA P17). */}
+      <span className="flex shrink-0 items-center gap-1 max-sm:gap-0 max-sm:[&_button]:h-11 max-sm:[&_button]:w-11">
+        {headerActions}
+      </span>
     </header>
   );
 
@@ -1228,7 +1288,7 @@ export function ForumPane({
             searchRef.current?.focus();
           }}
           aria-label={t("forum.search.clear")}
-          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text"
+          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text max-sm:hit-44"
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
@@ -1253,7 +1313,7 @@ export function ForumPane({
           )}
           tagsById={tagsById}
           href={forumPostPath(server.id, forumId, post.id)}
-          compact={compactList}
+          compact={compactCards}
           narrow={isPhone}
           open={post.id === openPostId}
           pinnedRow={pinnedRow}
@@ -1261,6 +1321,7 @@ export function ForumPane({
           leaving={leavingIds.has(post.id)}
           tabIndex={post.id === rovingId ? 0 : -1}
           onOpen={openPostById}
+          onOpenFull={canSplit ? openPostFull : undefined}
           onFocus={setFocusedId}
           onKeyDown={onCardKeyDown}
           registerLink={registerLink}
@@ -1333,8 +1394,10 @@ export function ForumPane({
               type="button"
               disabled={starterBusy}
               onClick={() => void applyStarterTags()}
-              className="rounded-[var(--radius-control)] px-1.5 py-1 font-semibold text-accent hover:underline disabled:opacity-50"
+              aria-busy={starterBusy || undefined}
+              className="inline-flex items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-1 font-semibold text-accent hover:underline disabled:opacity-50 max-sm:hit-44"
             >
+              {starterBusy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
               {t("forum.empty.starterUse")}
             </button>
           </div>
@@ -1378,7 +1441,13 @@ export function ForumPane({
               body={t("forum.searchEmpty.body")}
             >
               {canCompose && (
-                <Button onClick={() => openComposer(filters.q)} className="gap-1.5">
+                // Secondary: Novo post in the toolbar stays the one primary
+                // button on the screen (forum QA P6, DESIGN.md).
+                <Button
+                  variant="secondary"
+                  onClick={() => openComposer(filters.q)}
+                  className="gap-1.5"
+                >
                   <Plus className="h-4 w-4" aria-hidden />
                   {t("forum.searchEmpty.post", { query: filters.q })}
                 </Button>
@@ -1471,22 +1540,6 @@ export function ForumPane({
       )}
     >
       {header}
-      {/* "N posts com novidade": the list never reorders under the reader. */}
-      {list.queued.length > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 top-16 z-20 flex justify-center">
-          <button
-            type="button"
-            onClick={flushQueue}
-            className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full bg-accent px-3.5 text-xs font-semibold text-on-accent shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
-            data-forum-live-pill=""
-          >
-            <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-            {t("forum.live", { count: list.queued.length })}
-            <span aria-hidden className="opacity-70">·</span>
-            {t("forum.live.refresh")}
-          </button>
-        </div>
-      )}
       <div
         ref={scrollRef}
         onScroll={onListScroll}
@@ -1535,6 +1588,25 @@ export function ForumPane({
               />
             </>
           )}
+          {/* "N posts com novidade": the list never reorders under the
+              reader. Sticky over the cards, never over the toolbar: pinned to
+              the pane's top it sat on the search field, worst beside an open
+              post (forum QA P10). Zero height, so it never pushes the list. */}
+          {list.queued.length > 0 && (
+            <div className="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 justify-center">
+              <button
+                type="button"
+                onClick={flushQueue}
+                className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-accent px-3.5 text-xs font-semibold text-on-accent shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:hit-44"
+                data-forum-live-pill=""
+              >
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+                {t("forum.live", { count: list.queued.length })}
+                <span aria-hidden className="opacity-70">·</span>
+                {t("forum.live.refresh")}
+              </button>
+            </div>
+          )}
           <div className="min-w-0">{listBody}</div>
         </div>
       </div>
@@ -1579,7 +1651,7 @@ export function ForumPane({
           layout={postFull ? "full" : "side"}
           forcedFull={!canSplit}
           isPhone={isPhone}
-          maximized={maximized}
+          maximized={maximized || fullOnce}
           onToggleMaximize={toggleMaximize}
           removed={removedOpenId === openPost.id}
           pinnedCount={list.pinned.length}
@@ -1650,6 +1722,18 @@ export function ForumPane({
         onOpenPost={(postId) => {
           setComposerOpen(false);
           openPostById(postId);
+        }}
+        onRefused={(kind) => {
+          // The server knew better than the screen: read the rule again, so
+          // the paused line or "pelo menos 1" shows without a reload.
+          if (kind === "paused") {
+            setFetchedEnabled(false);
+            void loadForumConfig(server.id).catch(() => {});
+          } else {
+            fetchForumSettings(forumId)
+              .then(({ settings: next }) => setSettings(next))
+              .catch(() => {});
+          }
         }}
         onPublished={(post, viewer) => {
           setComposerOpen(false);

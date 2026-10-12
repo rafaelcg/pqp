@@ -182,6 +182,12 @@ URL as if it were a Discord webhook makes one post per item.
 | `?thread_id=<postId>` | A reply in that post. `404` unless it is a post of this forum, `403` when the post is locked. `thread_name` and `applied_tags` are ignored on a reply (Discord would refuse the pair with a 400) |
 | `Idempotency-Key` header | The dedupe key (pqp extension) |
 
+The execute payload is cleaned before it is checked, so what a Discord tool may
+legally send never costs a post: U+0000 is dropped and a lone surrogate half
+(a title cut through an emoji) becomes U+FFFD, a `null` field is the same as an
+absent one, and an empty `username`, `avatar_url` or embed `url` is absent.
+Anything else Discord refuses is still `400`.
+
 The answer is `200 { message, post, ignored_tags? }`. A repeat of the same item
 inside the webhook's dedupe window (default 72 h) answers the existing post with
 `X-Pqp-Deduplicated: 1` and writes nothing; the key is the `Idempotency-Key`

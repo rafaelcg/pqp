@@ -733,12 +733,7 @@ struct UserProfileSheet: View {
     }
 
     private func presenceLabel(_ status: String) -> LocalizedStringKey {
-        switch status {
-        case "online": "Online"
-        case "idle": "Idle"
-        case "dnd": "Do not disturb"
-        default: "Offline"
-        }
+        PresenceLabel(status).key
     }
 
     // MARK: - Work

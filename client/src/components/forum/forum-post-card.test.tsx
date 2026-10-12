@@ -39,6 +39,7 @@ const POST: ForumPostSummary = {
   thumbnailAttachmentId: null,
   thumbnailWidth: null,
   thumbnailHeight: null,
+  thumbnailVideoUrl: null,
   tagIds: TAGS.map((one) => one.id),
 };
 
@@ -73,6 +74,24 @@ describe("ForumPostCard", () => {
     expect(html).toContain("+5 new");
   });
 
+  it("draws a phone's pinned post as one line: pin, title, status glyphs", () => {
+    const html = render({ pinnedRow: true, narrow: true });
+    expect(html).toContain("data-forum-pinned-row");
+    // Status still named, as glyphs; no preview, tags or numbers.
+    expect(html).toContain('aria-label="Closed"');
+    expect(html).toContain('aria-label="Resolved"');
+    expect(html).not.toContain("Desde ontem");
+    expect(html).not.toContain("+2");
+    expect(html).not.toContain("lari_gg:");
+    // The whole row is still the post's link, with the full accessible name.
+    expect(html).toMatch(/<a [^>]*aria-label="Valorant fecha sozinho, /);
+  });
+
+  it("draws the tiny avatar's monogram on a disc", () => {
+    const html = render({ pinnedRow: true });
+    expect(html).toMatch(/rounded-full[^"]*bg-surface-3[^"]*">L</);
+  });
+
   it("says Novo with a word, not only a colour", () => {
     expect(render({ unread: { kind: "new" } })).toContain(">New<");
   });
@@ -88,5 +107,51 @@ describe("ForumPostCard", () => {
     });
     expect(html).toContain("Deleted account");
     expect(html).toContain("The original message was deleted");
+  });
+});
+
+describe("ForumPostCard, the three lines", () => {
+  it("keeps the author and the start of the post beside an open post, on one line", () => {
+    const full = render();
+    const compact = render({ compact: true });
+    expect(full).toContain("Desde ontem o jogo abre e fecha.");
+    expect(full).toContain("line-clamp-2");
+    expect(compact).toContain("lari_gg:");
+    expect(compact).toContain("Desde ontem o jogo abre e fecha.");
+    expect(compact).toContain("line-clamp-1");
+  });
+
+  it("draws the title heavier than the rest of the card, read or not", () => {
+    expect(render({ unread: { kind: "read" } })).toMatch(/<a [^>]*class="[^"]*font-semibold/);
+    expect(render({ unread: { kind: "new" } })).toMatch(/<a [^>]*class="[^"]*font-bold/);
+  });
+
+  it("names a post that is one picture or one clip, and counts several files", () => {
+    const filesOnly = { ...POST, preview: null, openingKind: "attachment" as const };
+    expect(
+      render({ post: { ...filesOnly, attachmentCount: 1, thumbnailUrl: "https://x/y.png" } }),
+    ).toContain("📷 Image");
+    expect(
+      render({ post: { ...filesOnly, attachmentCount: 1, thumbnailVideoUrl: "https://x/y.mp4" } }),
+    ).toContain("🎬 Video");
+    expect(render({ post: { ...filesOnly, attachmentCount: 3 } })).toContain("3 files");
+  });
+
+  it("draws a clip's first frame when there is no picture", () => {
+    const html = render({ post: { ...POST, thumbnailVideoUrl: "https://x/y.mp4" } });
+    expect(html).toContain('<video src="https://x/y.mp4#t=0.1"');
+    expect(html).toContain('preload="metadata"');
+    // A picture wins over a clip.
+    const both = render({
+      post: { ...POST, thumbnailUrl: "https://x/y.png", thumbnailVideoUrl: "https://x/y.mp4" },
+    });
+    expect(both).toContain("<img");
+    expect(both).not.toContain("<video");
+  });
+
+  it("ends a preview the server cut with an ellipsis", () => {
+    const long = "a".repeat(200);
+    expect(render({ post: { ...POST, preview: long } })).toContain(`${long}…`);
+    expect(render()).not.toContain("fecha.…");
   });
 });

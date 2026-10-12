@@ -126,6 +126,11 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
     let thumbnailAttachmentId: String?
     let thumbnailWidth: Int?
     let thumbnailHeight: Int?
+    /// The opening message's first video, signed, when it has no picture. The
+    /// card draws its first frame (like the web card); it is a separate field
+    /// from `thumbnailUrl` so an image view is never handed a video. Nil from
+    /// an older API.
+    let thumbnailVideoUrl: String?
     /// In the forum's tag order.
     var tagIds: [String]
 
@@ -158,6 +163,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         thumbnailAttachmentId: String? = nil,
         thumbnailWidth: Int? = nil,
         thumbnailHeight: Int? = nil,
+        thumbnailVideoUrl: String? = nil,
         tagIds: [String] = []
     ) {
         self.id = id
@@ -184,6 +190,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         self.thumbnailAttachmentId = thumbnailAttachmentId
         self.thumbnailWidth = thumbnailWidth
         self.thumbnailHeight = thumbnailHeight
+        self.thumbnailVideoUrl = thumbnailVideoUrl
         self.tagIds = tagIds
     }
 
@@ -214,6 +221,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         thumbnailAttachmentId = try c.decodeIfPresent(String.self, forKey: .thumbnailAttachmentId)
         thumbnailWidth = try c.decodeIfPresent(Int.self, forKey: .thumbnailWidth)
         thumbnailHeight = try c.decodeIfPresent(Int.self, forKey: .thumbnailHeight)
+        thumbnailVideoUrl = try c.decodeIfPresent(String.self, forKey: .thumbnailVideoUrl)
         tagIds = (try? c.decodeIfPresent([String].self, forKey: .tagIds)) ?? []
     }
 
@@ -222,7 +230,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         case createdAt, lastActivityAt, pinnedAt, lockedAt, resolvedAt, acceptedAnswerId
         case preview, openingDeleted, openingKind, attachmentCount, replyCount
         case reactionCount, topReaction, thumbnailUrl, thumbnailAttachmentId
-        case thumbnailWidth, thumbnailHeight, tagIds
+        case thumbnailWidth, thumbnailHeight, thumbnailVideoUrl, tagIds
     }
 }
 
@@ -311,6 +319,11 @@ struct ForumAcceptedAnswer: Codable, Hashable, Sendable {
     let authorName: String?
     let excerpt: String?
     let createdAt: Date?
+    /// Who marked it: "Solução · marcada por {name}". Absent on an older API,
+    /// and null when the marker is not known (marked before the server kept it,
+    /// or by an account deleted since): the card then names nobody.
+    var markedById: String? = nil
+    var markedByName: String? = nil
 }
 
 /// `GET /api/forum-posts/:postId`: the post view's header and the deep link.
@@ -378,6 +391,9 @@ struct ForumPostRejection: Decodable, Equatable, Sendable {
     let reason: String?
     let retryAfterMs: Int?
     let automodMessage: String?
+    /// `automod` only: which half AutoMod refused, `title` or `body`. Absent
+    /// on every other reason and on an older API.
+    var field: String? = nil
 }
 
 /// Where a link or a push asks to land inside a server: a forum, and maybe

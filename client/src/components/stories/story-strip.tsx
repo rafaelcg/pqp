@@ -6,6 +6,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { isHintSeen, rememberHint } from "@/lib/hints";
 import { ringLabel } from "@/lib/stories/format";
+import { failedRingLabel } from "@/lib/stories/post";
 import { useSeenStories } from "@/lib/stories/seen-store";
 import { stripView } from "@/lib/stories/strip-state";
 import {
@@ -39,6 +40,11 @@ export interface StoryViewerSelf {
 interface StoryStripProps {
   audience: StoryAudienceKey;
   me: StoryViewerSelf;
+  /**
+   * Keep the "Teu story" bubble when nothing is live. For the Conversas
+   * strip of somebody who has friends (design §3.4); nothing for nobody.
+   */
+  ownSlot?: boolean;
 }
 
 /** Session memory for a dismissed first-run row, where hints do not persist. */
@@ -48,7 +54,7 @@ function firstRunKey(meId: string, audience: StoryAudienceKey): string {
   return `pqp:stories-first-run:${meId}:${ringAudienceKey(audience)}`;
 }
 
-export function StoryStrip({ audience, me }: StoryStripProps) {
+export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { t } = useTranslation();
   const stripAudience = useMemo(
     () =>
@@ -72,7 +78,7 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
     ui.posting && ui.posting.audienceKeys.includes(audienceKey) ? ui.posting : null;
 
   const view = strip
-    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed })
+    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed, ownSlot })
     : ({ kind: "hidden" } as const);
 
   const myNotices =
@@ -148,6 +154,8 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
   }
 
   const ownSeen = own ? own.storyIds.every((id) => seen.has(id)) : false;
+  const failedLabel =
+    posting?.status === "failed" ? failedRingLabel(posting.failure, Boolean(posting.retry)) : null;
   const showOwn = Boolean(own) || strip.canPost || Boolean(posting);
 
   return (
@@ -188,8 +196,8 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
             avatarUrl={me.avatarUrl}
             label={t("stories.strip.yours")}
             ariaLabel={
-              posting?.status === "failed"
-                ? t("stories.upload.failed")
+              failedLabel
+                ? t(failedLabel.key, failedLabel.vars)
                 : posting
                   ? t(posting.status === "processing" ? "stories.upload.processing" : "stories.upload.posting")
                   : own
@@ -202,7 +210,11 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
             onPlus={own ? compose : undefined}
             upload={
               posting
-                ? { status: posting.status, progress: posting.progress }
+                ? {
+                    status: posting.status,
+                    progress: posting.progress,
+                    retryable: Boolean(posting.retry),
+                  }
                 : null
             }
             arrive={Boolean(own)}

@@ -374,8 +374,19 @@ class ForumViewModel(
             // deleted, and its card leaves, from the queue too.
             when (frame["type"]?.jsonPrimitive?.contentOrNull) {
                 "forum-post-upsert", "forum-post-removed" -> ForumFrame.decode(frame)?.let(::onFrame)
+                // Staff saved the forum's tags or settings: the chips and the
+                // rules follow now, not at the next open.
+                "forum-config-update" -> ForumConfigUpdate.decode(frame)?.let(::onConfig)
             }
         }
+    }
+
+    internal fun onConfig(update: ForumConfigUpdate) {
+        if (update.forumId != forumId) return
+        _state.value = _state.value.copy(
+            tags = update.tags?.sortedBy { it.position } ?: _state.value.tags,
+            settings = update.settings ?: _state.value.settings,
+        )
     }
 
     private fun replayHeld() {

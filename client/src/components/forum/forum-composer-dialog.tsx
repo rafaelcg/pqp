@@ -110,34 +110,68 @@ interface ForumComposerDialogProps {
   onPublished: (post: ForumPostSummary, viewer: ForumPostViewer) => void;
   /** A similar post was chosen: the draft stays, the post opens. */
   onOpenPost: (postId: string) => void;
+  /**
+   * The server refused the post for a rule the pane may hold stale (the
+   * forum paused, a tag now required): the pane reads that rule again, so
+   * the screen catches up with the refusal.
+   */
+  onRefused?: (kind: ForumPublishError["kind"]) => void;
+}
+
+/**
+ * `title` cut into runs, the words the query also has marked `hit`. Only the
+ * word itself: the punctuation around it ("Deck:", "(WHEA)") stays plain, or
+ * the underline ran on under the colon (forum QA P7).
+ */
+export function highlightTitleParts(
+  title: string,
+  query: string,
+): { text: string; hit: boolean }[] {
+  const words = foldForSearch(query)
+    .split(/\s+/)
+    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((word) => word.length >= 2);
+  const out: { text: string; hit: boolean }[] = [];
+  const push = (text: string, hit: boolean) => {
+    if (!text) {
+      return;
+    }
+    const last = out[out.length - 1];
+    if (last && last.hit === hit && !hit) {
+      last.text += text;
+    } else {
+      out.push({ text, hit });
+    }
+  };
+  for (const part of title.split(/(\s+)/)) {
+    const match = /^([^\p{L}\p{N}]*)(.*?)([^\p{L}\p{N}]*)$/su.exec(part);
+    const [, before = "", core = "", after = ""] = match ?? [];
+    const folded = foldForSearch(core).replace(/[^\p{L}\p{N}]/gu, "");
+    const hit =
+      folded.length > 0 && words.some((word) => folded === word || folded.startsWith(word));
+    push(before, false);
+    push(core, hit);
+    push(after, false);
+  }
+  return out;
 }
 
 /** Underline the words of `title` that the query also has. */
 function HighlightedTitle({ title, query }: { title: string; query: string }) {
-  const words = new Set(
-    foldForSearch(query)
-      .split(/\s+/)
-      .filter((word) => word.length >= 2),
-  );
-  const parts = title.split(/(\s+)/);
   return (
     <>
-      {parts.map((part, index) => {
-        const folded = foldForSearch(part).replace(/[^\p{L}\p{N}]/gu, "");
-        const hit =
-          folded.length > 0 &&
-          [...words].some((word) => folded === word || folded.startsWith(word));
-        return hit ? (
+      {highlightTitleParts(title, query).map((part, index) =>
+        part.hit ? (
           <span
             key={index}
             className="font-semibold text-text underline decoration-accent decoration-2 underline-offset-[3px]"
           >
-            {part}
+            {part.text}
           </span>
         ) : (
-          <span key={index}>{part}</span>
-        );
-      })}
+          <span key={index}>{part.text}</span>
+        ),
+      )}
     </>
   );
 }
@@ -166,6 +200,7 @@ export function ForumComposerDialog({
   onClose,
   onPublished,
   onOpenPost,
+  onRefused,
 }: ForumComposerDialogProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -174,6 +209,7 @@ export function ForumComposerDialog({
   const tagsErrorId = useId();
   const similarId = useId();
   const titleRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
 
   const restored = useMemo(
     // Read once per opening.
@@ -331,6 +367,15 @@ export function ForumComposerDialog({
   }, [heldUntil]);
   const heldSeconds = Math.max(0, Math.ceil((heldUntil - now) / 1000));
 
+  // Staff deleted a tag while it was picked here (the list is live): it
+  // leaves the pick, or Publicar would send a tag that no longer exists.
+  useEffect(() => {
+    setTagIds((current) => {
+      const kept = current.filter((tagId) => tags.some((tag) => tag.id === tagId));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [tags]);
+
   // ----------------------------------------------------------- validation
   const visibleTags = tags.filter((tag) => isStaff || !tag.moderated);
   const trimmedTitle = title.replace(/\s+/g, " ").trim();
@@ -354,8 +399,14 @@ export function ForumComposerDialog({
       current.uploading ||
       heldSeconds > 0
     ) {
+      // Focus goes where the first reason is, so the next keystroke fixes
+      // it instead of landing on Publicar again (forum QA P4).
       if (titleMissing) {
         titleRef.current?.focus();
+      } else if (current.body.length === 0 && current.attachments.length === 0) {
+        formRef.current?.querySelector<HTMLElement>("[data-forum-composer-body] textarea")?.focus();
+      } else if (tagMissing) {
+        tagRefs.current.find(Boolean)?.focus();
       }
       return;
     }
@@ -378,6 +429,9 @@ export function ForumComposerDialog({
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
+      if (reason.kind === "paused" || reason.kind === "tag-required") {
+        onRefused?.(reason.kind);
+      }
       if (reason.kind === "slow-mode" && reason.retryAfterMs > 0) {
         setHeldUntil(Date.now() + reason.retryAfterMs);
         setNow(Date.now());
@@ -399,6 +453,7 @@ export function ForumComposerDialog({
     trimmedTitle,
     tagIds,
     onPublished,
+    onRefused,
   ]);
   const publishRef = useRef(publish);
   publishRef.current = publish;
@@ -590,7 +645,13 @@ export function ForumComposerDialog({
             : t("forum.composer.draftSaved")}
         </span>
       </span>
-      <Button type="button" variant="ghost" onClick={discard} disabled={busy}>
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={discard}
+        disabled={busy}
+        className="max-sm:h-11"
+      >
         {t("forum.composer.discard")}
       </Button>
       <Button
@@ -662,9 +723,13 @@ export function ForumComposerDialog({
       onClose={close}
       footer={footer}
       headerAction={headerPublish}
+      // A phone writes a post on the whole screen, X on the left and
+      // Publicar on the right, like the apps (UX #30, forum QA P16).
+      phoneFullScreen
     >
       <div
         className="flex flex-col gap-5 px-5 py-4"
+        ref={formRef}
         data-forum-composer=""
         // Mod+Enter publishes from anywhere in the form (a tag chip, the
         // similar list); the title and the body handle it themselves first.
@@ -806,7 +871,7 @@ export function ForumComposerDialog({
           <p className="mb-1.5 text-xs font-semibold text-text-secondary">
             {t("forum.composer.body")}
           </p>
-          <div className="[&_form]:p-0">
+          <div className="[&_form]:p-0" data-forum-composer-body="">
             <MessageComposer
               key={forumId}
               channelId={forumId}

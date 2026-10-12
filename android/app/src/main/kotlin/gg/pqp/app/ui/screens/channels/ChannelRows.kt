@@ -12,6 +12,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -229,7 +230,7 @@ fun ChannelRow(
  * in the corner, instead of a padlock replacing the hash.
  */
 @Composable
-private fun ChannelGlyph(channel: Channel, tint: Color) {
+internal fun ChannelGlyph(channel: Channel, tint: Color) {
     Box(Modifier.size(Sizes.iconInline)) {
         Icon(
             imageVector = when {
@@ -294,6 +295,11 @@ fun CategoryHeader(
     summary: FoldedSummary,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The category's menu (Organizar canais), for whoever may manage channels. */
+    onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String? = null,
+    /** The "+" that creates a channel in this category, managers only. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val turn by animateFloatAsState(
@@ -310,9 +316,9 @@ fun CategoryHeader(
             .fillMaxWidth()
             .padding(top = Spacing.md)
             .height(32.dp)
-            .clickable(onClick = onToggle)
+            .combinedClickable(onClick = onToggle, onLongClick = onLongClick, onLongClickLabel = onLongClickLabel)
             .semantics { contentDescription = action }
-            .padding(start = Spacing.gutter, end = Spacing.railInset + Spacing.md)
+            .padding(start = Spacing.gutter, end = if (trailing != null) Spacing.xs else Spacing.railInset + Spacing.md)
             .testTag("channels.category"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -359,6 +365,7 @@ fun CategoryHeader(
                 }
             }
         }
+        trailing?.invoke()
     }
 }
 

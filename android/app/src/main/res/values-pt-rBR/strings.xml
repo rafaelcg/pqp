@@ -90,6 +90,7 @@
     <string name="chat_pin">Fixar</string>
     <string name="chat_unpin">Desafixar</string>
     <string name="chat_pinned">Fixada</string>
+    <string name="chat_webhook_badge">WEBHOOK</string>
     <string name="chat_pins">Mensagens fixadas</string>
     <string name="chat_pins_empty">Nada fixado aqui ainda.</string>
     <string name="chat_gif">GIF</string>
@@ -460,7 +461,7 @@
     <string name="report_subject_user">Denunciar %1$s</string>
     <string name="report_subject_community">Denunciar a comunidade %1$s</string>
     <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que você escrever abaixo.</string>
-    <string name="report_body_user">Quem modera vai ver quem você denunciou e o que você escrever abaixo. Nenhuma mensagem vai junto.</string>
+    <string name="report_body_user">Quem modera vai ver quem tu denunciou e o que tu escrever abaixo. Nenhuma mensagem vai junto.</string>
     <string name="report_body_community">Isso vai para quem cuida do pqp, não para o dono da comunidade. Conta o que tem de errado.</string>
     <string name="report_reason_prompt">O que aconteceu?</string>
     <string name="report_reason_spam">Spam</string>
@@ -478,7 +479,7 @@
     <string name="report_sending">Enviando\u2026</string>
     <string name="report_failed">Não deu para enviar esta denúncia. Tente de novo daqui a pouco.</string>
     <string name="report_sent_title">Denúncia enviada</string>
-    <string name="report_sent_body">Quem modera vai olhar. Seu nome não é mostrado para quem você denunciou.</string>
+    <string name="report_sent_body">Quem modera vai olhar. Teu nome não aparece pra quem tu denunciou.</string>
     <string name="report_done">Pronto</string>
 
     <string name="chance_heads">Cara</string>
@@ -766,6 +767,8 @@
     <string name="conversas_preview_voice">Mensagem de voz · %1$s</string>
     <string name="conversas_preview_gif">Enviou um GIF</string>
     <string name="conversas_preview_attachment">Enviou um arquivo</string>
+    <string name="conversas_preview_nudge_sent">Tu chamou a atenção 📳</string>
+    <string name="conversas_preview_nudge_received">Chamou tua atenção! 📳</string>
     <string name="conversas_new">Nova conversa</string>
     <string name="conversas_new_description">Escolhe uma pessoa. Marca mais gente e vira grupo (até %1$d).</string>
     <string name="conversas_new_online">Online agora</string>
@@ -843,6 +846,8 @@
     <string name="forum_deleted_author">Conta excluída</string>
     <string name="forum_preview_deleted">A mensagem original foi apagada</string>
     <string name="forum_preview_voice">Mensagem de voz</string>
+    <string name="forum_preview_image">📷 Imagem</string>
+    <string name="forum_preview_video">🎬 Vídeo</string>
     <plurals name="forum_preview_files">
         <item quantity="one">%1$d arquivo</item>
         <item quantity="other">%1$d arquivos</item>
@@ -879,6 +884,8 @@
     <string name="forum_solution_unmark">Tirar a solução</string>
     <string name="forum_solution_title">Solução</string>
     <string name="forum_solution_jump">Ir pra resposta</string>
+    <string name="forum_solution_marked_by">marcada por %1$s</string>
+    <string name="forum_solution_marked_by_you">marcada por ti</string>
     <string name="forum_solution_deleted">A resposta marcada foi apagada.</string>
     <string name="forum_reply_placeholder_short">Responder no post</string>
     <string name="forum_locked">Esse post tá fechado. Só a staff responde aqui.</string>
@@ -931,6 +938,7 @@
     <string name="forum_composer_slow_mode">Slow mode. Espera %1$ds pra postar de novo.</string>
     <string name="forum_composer_rate_limited">Muitos posts em pouco tempo. Tenta de novo em %1$d min.</string>
     <string name="forum_composer_automod_title">O AutoMod bloqueou esse título.</string>
+    <string name="forum_composer_automod_body">O AutoMod bloqueou esse texto.</string>
     <string name="forum_composer_automod_post">O AutoMod bloqueou esse post.</string>
     <string name="forum_composer_cannot_send">Tu não pode postar nesse fórum agora.</string>
     <string name="forum_composer_uploading">Esperando o arquivo terminar de subir.</string>
@@ -963,7 +971,7 @@
     <string name="stories_empty_cta">Postar</string>
     <string name="stories_viewer_reply_to">Responder pra %1$s…</string>
     <string name="stories_viewer_replies_off">%1$s desligou as respostas</string>
-    <string name="stories_viewer_dm_closed">%1$s só recebe mensagem de amigos</string>
+    <string name="stories_viewer_dm_closed">%1$s não recebe mensagem direta</string>
     <string name="stories_viewer_sent">Mandado</string>
     <string name="stories_viewer_reacted">Reagiu %1$s</string>
     <string name="stories_viewer_friends">Amigos</string>
@@ -971,11 +979,20 @@
     <string name="stories_viewer_more">Mais</string>
     <string name="stories_viewer_send">Mandar</string>
     <string name="stories_viewer_paused">Pausado</string>
+    <string name="stories_viewer_next">Próximo story</string>
+    <string name="stories_viewer_previous">Story anterior</string>
+    <string name="stories_viewer_pause">Pausar</string>
+    <string name="stories_viewer_resume">Continuar</string>
+    <string name="stories_viewer_sound_on">Ligar o som</string>
+    <string name="stories_viewer_sound_off">Tirar o som</string>
+    <string name="stories_viewer_react">Reagir com %1$s</string>
+    <string name="stories_compose_background">Fundo %1$d</string>
     <string name="stories_viewers_title">Visto por %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reação · some em %2$s</item>
         <item quantity="other">%1$d reações · some em %2$s</item>
     </plurals>
+    <string name="stories_viewers_meta_none">Sem reações · some em %1$s</string>
     <string name="stories_viewers_none">Ninguém viu ainda</string>
     <string name="stories_viewers_replied">respondeu</string>
     <string name="stories_own_delete">Apagar</string>
@@ -1003,6 +1020,7 @@
     <string name="stories_sticker_call">Chama pra call</string>
     <string name="stories_call_picker_body">Quem tocar entra direto. O card mostra quem tá lá dentro na hora.</string>
     <string name="stories_call_picker_none">Nenhuma sala de voz nos servidores marcados.</string>
+    <string name="stories_call_not_in_room">Tu não tá no %1$s. O card só deixa entrar enquanto tu tá na call.</string>
     <string name="stories_call_picker_empty">vazia</string>
     <string name="stories_call_default_text">bora pra call?</string>
     <string name="stories_audience_title">Quem vê</string>
@@ -1030,7 +1048,7 @@
     <string name="stories_menu_mod_remove">Tirar do %1$s</string>
     <string name="stories_menu_mod_remove_hint">Some daqui na hora. Fica no registro da staff.</string>
     <string name="stories_removed_title">A staff tirou teu story do %1$s</string>
-    <string name="stories_removed_body">Motivo: %1$s. Ele continua pros teus Amigos até expirar.</string>
+    <string name="stories_removed_body">Motivo: %1$s. Se tu postou ele em outro lugar também, lá ele continua até expirar.</string>
     <string name="stories_removed_no_reason">sem motivo informado</string>
     <string name="stories_quote_replied">Respondeu ao teu story</string>
     <string name="stories_quote_replied_to">Respondeu a um story</string>
@@ -1038,4 +1056,31 @@
     <string name="stories_quote_left">some em %1$s</string>
     <string name="report_subject_story">Denunciar um story de %1$s</string>
     <string name="report_body_story">Enquanto alguém olha, o story não some, mesmo depois de 24 h. Só a moderação vê.</string>
+    <!-- Mixed channel list: categories are the only headers, Organizar canais -->
+    <string name="channels_organize">Organizar canais</string>
+    <string name="channels_organize_done">Concluir</string>
+    <string name="channels_organize_cancel">Cancelar</string>
+    <string name="channels_organize_tip">Segura o ≡ e arrasta um canal ou uma categoria. Só salva quando tu toca em Concluir.</string>
+    <string name="channels_empty_category">Vazia. Arrasta um canal pra cá.</string>
+    <string name="channels_create_category">Criar categoria</string>
+    <string name="channels_category_name">Nome da categoria</string>
+    <string name="channels_category_name_hint">Salas de voz</string>
+    <string name="channels_rename_category">Renomear categoria</string>
+    <string name="channels_create_in">Criar canal em %1$s</string>
+    <string name="channels_add_text">Canal de texto</string>
+    <string name="channels_add_voice">Canal de voz</string>
+    <string name="channels_new_channel">Novo canal</string>
+    <string name="channels_channel_name">Nome do canal</string>
+    <string name="channels_create">Criar</string>
+    <string name="channels_rename">Renomear</string>
+    <string name="channels_got_it">Entendi</string>
+    <string name="channels_reorder_stale">Não deu pra mover. A lista mudou, tenta de novo.</string>
+    <string name="channels_reorder_failed">Não deu pra mover. Tenta de novo.</string>
+    <string name="channels_move_up">Mover para cima</string>
+    <string name="channels_move_down">Mover para baixo</string>
+    <string name="channels_moved_to">%1$s foi pra %2$s, posição %3$d de %4$d.</string>
+    <string name="channels_moved_loose">%1$s ficou fora das categorias, posição %2$d de %3$d.</string>
+    <string name="channels_moved_category">%1$s foi pra posição %2$d de %3$d.</string>
+    <string name="channels_more">Mais</string>
+    <string name="channels_drag_handle">Arrastar %1$s</string>
 </resources>

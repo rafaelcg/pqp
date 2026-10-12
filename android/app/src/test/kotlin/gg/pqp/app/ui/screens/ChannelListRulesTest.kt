@@ -4,6 +4,7 @@ import gg.pqp.app.core.Channel
 import gg.pqp.app.core.VoiceParticipant
 import gg.pqp.app.ui.screens.channels.ChannelUnread
 import gg.pqp.app.ui.screens.channels.FoldedSummary
+import gg.pqp.app.ui.screens.channels.LOOSE_SECTION
 import gg.pqp.app.ui.screens.channels.RowEmphasis
 import gg.pqp.app.ui.screens.channels.ServerActivity
 import gg.pqp.app.ui.screens.channels.TEXT_SECTION
@@ -181,12 +182,12 @@ class ChannelListRulesTest {
     }
 
     @Test
-    fun `sections keep the three position groups apart and draw text, forums and voice`() {
+    fun `a category is one section, every type mixed in its own order`() {
         val all = listOf(
             ch("cat", "category", pos = 0.0),
             ch("geral", "text", parent = "cat", pos = 1.0),
             ch("avisos", "text", parent = "cat", pos = 0.0),
-            ch("lobby", "voice", parent = "cat", pos = 0.0),
+            ch("lobby", "voice", parent = "cat", pos = 3.0),
             ch("party", "watch_party", parent = "cat"),
             ch("ajuda", "forum", parent = "cat", pos = 2.0),
             ch("mystery", "something-new", parent = "cat"),
@@ -194,13 +195,12 @@ class ChannelListRulesTest {
             ch("top-forum", "forum", pos = 1.0),
         )
         val sections = sectionsOf(all)
-        assertEquals(listOf("text", "cat-cat-text", "cat-cat-voice"), sections.map { it.key })
+        assertEquals(listOf("text", "cat-cat"), sections.map { it.key })
         assertEquals(listOf("top", "top-forum"), sections[0].channels.map { it.id })
-        // A forum shares the text channels' position sequence (the server
-        // groups the two), so it sorts among them.
-        assertEquals(listOf("avisos", "geral", "ajuda"), sections[1].channels.map { it.id })
-        assertEquals(listOf("lobby"), sections[2].channels.map { it.id })
+        // No text half and voice half: the voice room sits where it was put.
+        assertEquals(listOf("avisos", "geral", "ajuda", "lobby"), sections[1].channels.map { it.id })
         assertEquals(null, sections[0].categoryId)
+        assertEquals("cat", sections[1].category?.id)
         assertEquals(
             listOf("avisos", "geral", "ajuda", "lobby"),
             channelsInCategory(sections, "cat").map { it.id },
@@ -208,18 +208,50 @@ class ChannelListRulesTest {
     }
 
     @Test
-    fun `texto, then the categories, then voz, each with a heading that folds`() {
+    fun `a voice room between two text channels stays between them`() {
+        val all = listOf(
+            ch("cat", "category"),
+            ch("clipes", "text", parent = "cat", pos = 0.0),
+            ch("squad", "voice", parent = "cat", pos = 1.0),
+            ch("lfg", "text", parent = "cat", pos = 2.0),
+        )
+        assertEquals(listOf("clipes", "squad", "lfg"), sectionsOf(all).single().channels.map { it.id })
+        assertEquals(listOf("clipes", "squad", "lfg"), sectionsOf(all, mixed = true).single().channels.map { it.id })
+    }
+
+    @Test
+    fun `old list - texto, then the categories, then voz, each with a heading that folds`() {
         val all = listOf(
             ch("cat", "category", pos = 0.0),
             ch("debug", "text", parent = "cat"),
             ch("geral", "text"),
-            ch("lobby", "voice"),
+            ch("lobby", "voice", pos = 1.0),
         )
         val sections = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz")
-        assertEquals(listOf("text", "cat-cat-text", "voice"), sections.map { it.key })
-        assertEquals(listOf("text", "cat-cat", "voice"), sections.map { it.group })
+        assertEquals(listOf("text", "cat-cat", "voice"), sections.map { it.key })
         assertEquals(listOf(TEXT_SECTION, "cat", VOICE_SECTION), sections.map { it.categoryId })
         assertEquals(listOf("Texto", "cat", "Voz"), sections.map { it.title })
         assertEquals(listOf("lobby"), channelsInCategory(sections, VOICE_SECTION).map { it.id })
+    }
+
+    @Test
+    fun `mixed list - loose channels on top in one order with no heading, then every category`() {
+        val all = listOf(
+            ch("canais", "category", pos = 0.0),
+            ch("cinema", "category", pos = 1.0),
+            ch("general", "text", parent = "canais"),
+            ch("afk", "voice", pos = 0.0),
+            ch("regras", "text", pos = 1.0),
+            ch("filme", "watch_party", pos = 2.0),
+        )
+        val sections = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz", mixed = true)
+        assertEquals(listOf(LOOSE_SECTION, "cat-canais"), sections.map { it.key })
+        assertEquals(listOf("afk", "regras"), sections[0].channels.map { it.id })
+        assertEquals("", sections[0].title)
+        assertEquals(null, sections[0].categoryId)
+        // An empty category only for someone who can put a channel in it.
+        val manager = sectionsOf(all, mixed = true, keepEmptyCategories = true)
+        assertEquals(listOf(LOOSE_SECTION, "cat-canais", "cat-cinema"), manager.map { it.key })
+        assertTrue(manager.last().channels.isEmpty())
     }
 }

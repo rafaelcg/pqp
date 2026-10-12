@@ -335,6 +335,55 @@ describeDb("webhooks into a forum", () => {
     expect(answer.body.post!.title).toBe("Live hoje às 21h");
   });
 
+  it("a payload Postgres cannot store is cleaned, not a 500: U+0000, a cut emoji, Discord's nulls", async () => {
+    const webhook = await makeWebhook();
+    // `title.slice(0, n)` through an emoji leaves its high surrogate half; a
+    // jsonb column refuses that, and a NUL is refused by text and jsonb alike.
+    const cutEmoji = "Review do jogo 🎮".slice(0, "Review do jogo ".length + 1);
+    const answer = await execute(webhook.url, {
+      thread_name: "Notícia\u0000 com NUL",
+      content: "corpo\u0000 com NUL",
+      username: "feed\u0000",
+      avatar_url: "",
+      applied_tags: ["Notícias\u0000"],
+      embeds: [
+        { title: cutEmoji, description: "d\u0000", url: "", color: null, fields: null, footer: null },
+      ],
+    });
+    expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+    expect(answer.body.post!.title).toBe("Notícia com NUL");
+    expect(answer.body.message!.body).toBe("corpo com NUL");
+    const stored = await getPool().query<{ webhook_embeds: Array<{ title: string; description: string }> }>(
+      `SELECT webhook_embeds FROM messages WHERE id = $1`,
+      [answer.body.message!.id],
+    );
+    expect(stored.rows[0]!.webhook_embeds[0]!.title).toBe("Review do jogo \ufffd");
+    expect(stored.rows[0]!.webhook_embeds[0]!.description).toBe("d");
+    expect(await postCount()).toBe(1);
+
+    // The same payload on a text channel's webhook: the same insert.
+    const text = await makeWebhook(generalId, "text");
+    const plain = await execute(text.url, {
+      content: "a\u0000b",
+      embeds: [{ title: cutEmoji }],
+    });
+    expect(plain.status, JSON.stringify(plain.body)).toBe(200);
+  });
+
+  it("Discord's null content with an embed is a post, and a bare null is still refused", async () => {
+    const webhook = await makeWebhook();
+    const ok = await execute(webhook.url, {
+      thread_name: "Só embed",
+      content: null,
+      username: null,
+      avatar_url: null,
+      embeds: [{ title: "Só embed", url: "https://exemplo.com/a" }],
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const bare = await execute(webhook.url, { thread_name: "Nada", content: null, embeds: null });
+    expect(bare.status).toBe(400);
+  });
+
   it("embed-without-title: Discord's 220001, naming thread_name, and nothing written", async () => {
     const webhook = await makeWebhook();
     const answer = await execute(webhook.url, fixture("embed-without-title"));

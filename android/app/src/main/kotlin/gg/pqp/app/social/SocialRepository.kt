@@ -392,6 +392,7 @@ class SocialRepository(
             preview = frame.string("preview"),
             authorId = authorId,
             authorName = frame.string("authorName"),
+            systemKind = frame.string("systemKind"),
         )
 
         val bumped = known.copy(
@@ -534,13 +535,19 @@ class SocialRepository(
          * The row's preview after a live `channel-activity` frame. No preview
          * on the frame means no preview on the row, never the previous one.
          */
-        internal fun livePreview(preview: String?, authorId: String?, authorName: String?): LastMessagePreview? =
+        internal fun livePreview(
+            preview: String?,
+            authorId: String?,
+            authorName: String?,
+            systemKind: String? = null,
+        ): LastMessagePreview? =
             if (preview != null && authorId != null) {
                 LastMessagePreview(
                     authorId = authorId,
                     authorName = authorName.orEmpty(),
                     preview = preview,
                     isAttachment = preview.isBlank(),
+                    systemKind = systemKind?.takeIf { it == ConversationList.NUDGE_KIND },
                 )
             } else {
                 null

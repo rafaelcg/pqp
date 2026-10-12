@@ -96,6 +96,7 @@
     <string name="chat_pin">Pin</string>
     <string name="chat_unpin">Unpin</string>
     <string name="chat_pinned">Pinned</string>
+    <string name="chat_webhook_badge">WEBHOOK</string>
     <string name="chat_pins">Pinned messages</string>
     <string name="chat_pins_empty">Nothing pinned here yet.</string>
     <string name="chat_gif">GIF</string>
@@ -773,6 +774,8 @@
     <string name="conversas_preview_voice">Voice message · %1$s</string>
     <string name="conversas_preview_gif">Sent a GIF</string>
     <string name="conversas_preview_attachment">Sent a file</string>
+    <string name="conversas_preview_nudge_sent">You nudged them 📳</string>
+    <string name="conversas_preview_nudge_received">Nudged you! 📳</string>
     <string name="conversas_new">New chat</string>
     <string name="conversas_new_description">Pick a person. Tick more people and it becomes a group (up to %1$d).</string>
     <string name="conversas_new_online">Online now</string>
@@ -850,6 +853,8 @@
     <string name="forum_deleted_author">Deleted account</string>
     <string name="forum_preview_deleted">The original message was deleted</string>
     <string name="forum_preview_voice">Voice message</string>
+    <string name="forum_preview_image">📷 Image</string>
+    <string name="forum_preview_video">🎬 Video</string>
     <plurals name="forum_preview_files">
         <item quantity="one">%1$d file</item>
         <item quantity="other">%1$d files</item>
@@ -886,6 +891,8 @@
     <string name="forum_solution_unmark">Unmark solution</string>
     <string name="forum_solution_title">Solution</string>
     <string name="forum_solution_jump">Go to answer</string>
+    <string name="forum_solution_marked_by">marked by %1$s</string>
+    <string name="forum_solution_marked_by_you">marked by you</string>
     <string name="forum_solution_deleted">The marked answer was deleted.</string>
     <string name="forum_reply_placeholder_short">Reply to the post</string>
     <string name="forum_locked">This post is closed. Only staff can reply.</string>
@@ -938,6 +945,7 @@
     <string name="forum_composer_slow_mode">Slow mode. Wait %1$ds to post again.</string>
     <string name="forum_composer_rate_limited">Too many posts in a short time. Try again in %1$d min.</string>
     <string name="forum_composer_automod_title">AutoMod blocked this title.</string>
+    <string name="forum_composer_automod_body">AutoMod blocked this text.</string>
     <string name="forum_composer_automod_post">AutoMod blocked this post.</string>
     <string name="forum_composer_cannot_send">You can\'t post in this forum right now.</string>
     <string name="forum_composer_uploading">Waiting for the file to finish uploading.</string>
@@ -970,7 +978,7 @@
     <string name="stories_empty_cta">Post</string>
     <string name="stories_viewer_reply_to">Reply to %1$s…</string>
     <string name="stories_viewer_replies_off">%1$s turned replies off</string>
-    <string name="stories_viewer_dm_closed">%1$s only gets messages from friends</string>
+    <string name="stories_viewer_dm_closed">%1$s doesn\'t take direct messages</string>
     <string name="stories_viewer_sent">Sent</string>
     <string name="stories_viewer_reacted">Reacted %1$s</string>
     <string name="stories_viewer_friends">Friends</string>
@@ -978,11 +986,20 @@
     <string name="stories_viewer_more">More</string>
     <string name="stories_viewer_send">Send</string>
     <string name="stories_viewer_paused">Paused</string>
+    <string name="stories_viewer_next">Next story</string>
+    <string name="stories_viewer_previous">Previous story</string>
+    <string name="stories_viewer_pause">Pause</string>
+    <string name="stories_viewer_resume">Resume</string>
+    <string name="stories_viewer_sound_on">Turn the sound on</string>
+    <string name="stories_viewer_sound_off">Turn the sound off</string>
+    <string name="stories_viewer_react">React %1$s</string>
+    <string name="stories_compose_background">Background %1$d</string>
     <string name="stories_viewers_title">Seen by %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reaction · gone in %2$s</item>
         <item quantity="other">%1$d reactions · gone in %2$s</item>
     </plurals>
+    <string name="stories_viewers_meta_none">No reactions · gone in %1$s</string>
     <string name="stories_viewers_none">Nobody has seen it yet</string>
     <string name="stories_viewers_replied">replied</string>
     <string name="stories_own_delete">Delete</string>
@@ -1010,6 +1027,7 @@
     <string name="stories_sticker_call">Call people in</string>
     <string name="stories_call_picker_body">Whoever taps joins right away. The card shows who\'s in there live.</string>
     <string name="stories_call_picker_none">No voice rooms in the servers you picked.</string>
+    <string name="stories_call_not_in_room">You\'re not in %1$s. The card only lets people in while you\'re in the call.</string>
     <string name="stories_call_picker_empty">empty</string>
     <string name="stories_call_default_text">who\'s up for a call?</string>
     <string name="stories_audience_title">Who sees it</string>
@@ -1037,7 +1055,7 @@
     <string name="stories_menu_mod_remove">Remove from %1$s</string>
     <string name="stories_menu_mod_remove_hint">Gone from here right away. Logged for staff.</string>
     <string name="stories_removed_title">Staff removed your story from %1$s</string>
-    <string name="stories_removed_body">Reason: %1$s. It stays up for your Friends until it expires.</string>
+    <string name="stories_removed_body">Reason: %1$s. If you posted it somewhere else too, it stays there until it expires.</string>
     <string name="stories_removed_no_reason">no reason given</string>
     <string name="stories_quote_replied">Replied to your story</string>
     <string name="stories_quote_replied_to">Replied to a story</string>
@@ -1045,4 +1063,31 @@
     <string name="stories_quote_left">gone in %1$s</string>
     <string name="report_subject_story">Report a story by %1$s</string>
     <string name="report_body_story">While someone reviews it, the story won\'t disappear, even after 24 h. Only moderators see it.</string>
+    <!-- Mixed channel list: categories are the only headers, Organizar canais -->
+    <string name="channels_organize">Organize channels</string>
+    <string name="channels_organize_done">Done</string>
+    <string name="channels_organize_cancel">Cancel</string>
+    <string name="channels_organize_tip">Hold ≡ and drag a channel or a category. Nothing is saved until you tap Done.</string>
+    <string name="channels_empty_category">Empty. Drag a channel here.</string>
+    <string name="channels_create_category">Create category</string>
+    <string name="channels_category_name">Category name</string>
+    <string name="channels_category_name_hint">Voice rooms</string>
+    <string name="channels_rename_category">Rename category</string>
+    <string name="channels_create_in">Create channel in %1$s</string>
+    <string name="channels_add_text">Text channel</string>
+    <string name="channels_add_voice">Voice channel</string>
+    <string name="channels_new_channel">New channel</string>
+    <string name="channels_channel_name">Channel name</string>
+    <string name="channels_create">Create</string>
+    <string name="channels_rename">Rename</string>
+    <string name="channels_got_it">Got it</string>
+    <string name="channels_reorder_stale">Couldn\'t move it. The list changed, try again.</string>
+    <string name="channels_reorder_failed">Couldn\'t move it. Try again.</string>
+    <string name="channels_move_up">Move up</string>
+    <string name="channels_move_down">Move down</string>
+    <string name="channels_moved_to">%1$s moved to %2$s, position %3$d of %4$d.</string>
+    <string name="channels_moved_loose">%1$s is outside the categories, position %2$d of %3$d.</string>
+    <string name="channels_moved_category">%1$s moved to position %2$d of %3$d.</string>
+    <string name="channels_more">More</string>
+    <string name="channels_drag_handle">Drag %1$s</string>
 </resources>

@@ -1,13 +1,25 @@
-import type { ForumPostSummary, ForumTag } from "@pqp/shared";
+import {
+  FORUM_PREVIEW_MAX,
+  type ForumPostSummary,
+  type ForumTag,
+} from "@pqp/shared";
 import {
   CheckCircle2,
   Lock,
   MessageSquare,
   Pin,
+  Play,
   Rss,
   ShieldCheck,
 } from "lucide-react";
-import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { ForumUnreadState } from "@/lib/forum-list";
 import { useTranslation, type Translator } from "@/lib/i18n";
@@ -49,6 +61,12 @@ export interface ForumPostCardProps {
   leaving?: boolean;
   tabIndex: 0 | -1;
   onOpen: (postId: string) => void;
+  /**
+   * Double click: the post takes the whole content area for this visit,
+   * without changing the remembered split/maximized choice. A single click
+   * keeps opening it beside the list.
+   */
+  onOpenFull?: (postId: string) => void;
   onFocus: (postId: string) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLAnchorElement>, postId: string) => void;
   registerLink?: (postId: string, node: HTMLAnchorElement | null) => void;
@@ -56,6 +74,11 @@ export interface ForumPostCardProps {
 
 const MAX_TAGS_FULL = 3;
 const MAX_TAGS_COMPACT = 2;
+/**
+ * The 16px avatar's monogram sits on a disc of its own. Without one it was a
+ * bare letter beside the name, a stray "D" before "Dev User" (forum QA P14).
+ */
+const TINY_AVATAR_FALLBACK = "bg-surface-3 text-[9px] leading-none text-text-secondary";
 
 function TagChip({ tag }: { tag: ForumTag }) {
   return (
@@ -109,15 +132,29 @@ export function ForumTagList({
 }
 
 /** What the second line says when the opening message is not plain text. */
-export function forumPreviewText(t: Translator["t"], post: ForumPostSummary): string {
+export function forumPreviewText(
+  t: Translator["t"],
+  post: ForumPostSummary,
+): string {
   if (post.openingDeleted) {
     return t("thread.originDeleted");
   }
   if (post.preview && post.preview.trim()) {
-    return post.preview;
+    // The server cuts the opening message at FORUM_PREVIEW_MAX characters;
+    // a cut that lands inside the second line must still read as "more".
+    return Array.from(post.preview).length >= FORUM_PREVIEW_MAX
+      ? `${post.preview.trimEnd()}…`
+      : post.preview;
   }
   if (post.openingKind === "voice") {
     return t("forum.preview.voice");
+  }
+  // One picture or one clip says what it is; several files say how many.
+  if (post.attachmentCount === 1 && post.thumbnailUrl) {
+    return t("forum.preview.image");
+  }
+  if (post.attachmentCount === 1 && post.thumbnailVideoUrl) {
+    return t("forum.preview.video");
   }
   if (post.attachmentCount > 0) {
     return t("forum.preview.files", { count: post.attachmentCount });
@@ -125,7 +162,10 @@ export function forumPreviewText(t: Translator["t"], post: ForumPostSummary): st
   return "";
 }
 
-export function forumAuthorName(t: Translator["t"], post: ForumPostSummary): string {
+export function forumAuthorName(
+  t: Translator["t"],
+  post: ForumPostSummary,
+): string {
   return post.authorName ?? t("forum.deletedAuthor");
 }
 
@@ -146,25 +186,84 @@ function Thumbnail({
   className: string;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!post.thumbnailUrl || failed) {
+  const videoUrl = post.thumbnailUrl ? null : (post.thumbnailVideoUrl ?? null);
+  // A clip's first frame costs a metadata fetch, so it is only asked for once
+  // the card is near the screen: a page of 25 video posts must not open 25
+  // requests at once. Without an observer (a test, an old engine) it loads.
+  const boxRef = useRef<HTMLSpanElement>(null);
+  const [near, setNear] = useState(
+    () => typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    const node = boxRef.current;
+    if (
+      !videoUrl ||
+      near ||
+      !node ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [videoUrl, near]);
+  if ((!post.thumbnailUrl && !videoUrl) || failed) {
     return null;
   }
   return (
     <span
+      ref={boxRef}
       className={cn(
         "relative shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2",
         className,
       )}
     >
-      <img
-        src={post.thumbnailUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        draggable={false}
-        onError={() => setFailed(true)}
-        className="h-full w-full object-cover"
-      />
+      {post.thumbnailUrl ? (
+        <img
+          src={post.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <>
+          {/* The first frame is the poster: `#t` asks for it, `metadata`
+              keeps the fetch to the header and that frame. */}
+          {near && (
+            <video
+              src={`${videoUrl}#t=0.1`}
+              preload="metadata"
+              muted
+              playsInline
+              disablePictureInPicture
+              tabIndex={-1}
+              aria-hidden
+              onError={() => setFailed(true)}
+              className="pointer-events-none h-full w-full object-cover"
+            />
+          )}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 grid place-items-center"
+          >
+            <span className="grid h-6 w-6 place-items-center rounded-full bg-black/55 text-white">
+              <Play className="h-3 w-3 translate-x-px fill-current" />
+            </span>
+          </span>
+        </>
+      )}
       {/* The hairline sits ON the image, so a dark screenshot does not melt
           into the card behind it. */}
       <span
@@ -188,6 +287,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   leaving = false,
   tabIndex,
   onOpen,
+  onOpenFull,
   onFocus,
   onKeyDown,
   registerLink,
@@ -217,11 +317,95 @@ export const ForumPostCard = memo(function ForumPostCard({
 
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     // A modified click is the browser's: a new tab, a new window.
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
+    if (
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.button !== 0
+    ) {
       return;
     }
     event.preventDefault();
     onOpen(post.id);
+  }
+
+  // The whole card is the hit target: the title link is stretched over it.
+  const titleLink = (className: string) => (
+    <a
+      ref={(node) => registerLink?.(post.id, node)}
+      href={href}
+      tabIndex={tabIndex}
+      aria-label={srName}
+      aria-current={open ? "true" : undefined}
+      onClick={handleClick}
+      onDoubleClick={(event) => {
+        if (onOpenFull) {
+          event.preventDefault();
+          onOpenFull(post.id);
+        }
+      }}
+      onFocus={() => onFocus(post.id)}
+      onKeyDown={(event) => onKeyDown?.(event, post.id)}
+      className={cn(
+        "min-w-0 truncate rounded-[var(--radius-control)] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus-ring",
+        className,
+        // The title is the line people scan: heavier than everything
+        // else on the card read or not, and unread heavier still.
+        isUnread ? "font-bold text-text" : "font-semibold text-text-secondary",
+      )}
+    >
+      {post.title}
+    </a>
+  );
+
+  const pip = isUnread ? (
+    <span
+      aria-hidden
+      className="absolute left-0 top-1/2 h-[18px] w-1 -translate-y-1/2 rounded-r-full bg-text"
+    />
+  ) : null;
+
+  // A phone's pinned post is one line: the pin, the title, its status as
+  // glyphs. Three full cards used to fill the first screen before the reader
+  // reached anything new (forum QA P15); the apps already draw it this way.
+  if (pinnedRow && narrow) {
+    return (
+      <article
+        data-forum-post={post.id}
+        data-unread={unread.kind}
+        data-forum-pinned-row=""
+        className={cn(
+          "group/card relative flex min-h-12 items-center gap-3 overflow-hidden rounded-[var(--radius-card)] border bg-surface-1 py-2 pl-2.5 pr-3.5 transition-[background-color,border-color,opacity,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] hover:border-border-strong hover:bg-surface-2",
+          open ? "border-border-strong bg-surface-2" : "border-border",
+          entering && "animate-door-reveal",
+          leaving && "pointer-events-none animate-pop-out",
+        )}
+      >
+        {pip}
+        <span
+          aria-hidden
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft"
+        >
+          <Pin className="h-3.5 w-3.5" />
+        </span>
+        {titleLink("flex-1 text-[15px] leading-5")}
+        {unread.kind === "new" && <Badge variant="new">{t("forum.badge.new")}</Badge>}
+        {post.lockedAt && (
+          <Lock
+            className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
+            role="img"
+            aria-label={t("forum.badge.locked")}
+          />
+        )}
+        {post.resolvedAt && (
+          <CheckCircle2
+            className="h-3.5 w-3.5 shrink-0 text-success"
+            role="img"
+            aria-label={t("forum.badge.resolved")}
+          />
+        )}
+      </article>
+    );
   }
 
   const badges = (
@@ -249,10 +433,18 @@ export const ForumPostCard = memo(function ForumPostCard({
       )}
       {/* Compact: status as a glyph, never truncated, still named. */}
       {compact && post.pinnedAt && (
-        <Pin className="h-3.5 w-3.5 shrink-0 text-on-accent-soft" role="img" aria-label={t("forum.badge.pinned")} />
+        <Pin
+          className="h-3.5 w-3.5 shrink-0 text-on-accent-soft"
+          role="img"
+          aria-label={t("forum.badge.pinned")}
+        />
       )}
       {compact && post.lockedAt && (
-        <Lock className="h-3.5 w-3.5 shrink-0 text-text-tertiary" role="img" aria-label={t("forum.badge.locked")} />
+        <Lock
+          className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
+          role="img"
+          aria-label={t("forum.badge.locked")}
+        />
       )}
       {compact && post.resolvedAt && (
         <CheckCircle2
@@ -276,9 +468,9 @@ export const ForumPostCard = memo(function ForumPostCard({
         </span>
       )}
       {post.replyCount === 0 ? (
-        !pinnedRow && !compact && !narrow && (
-          <span>{t("forum.replies", { count: 0 })}</span>
-        )
+        !pinnedRow &&
+        !compact &&
+        !narrow && <span>{t("forum.replies", { count: 0 })}</span>
       ) : (
         <span className="inline-flex items-center gap-1">
           <MessageSquare className="h-3.5 w-3.5" aria-hidden />
@@ -290,7 +482,10 @@ export const ForumPostCard = memo(function ForumPostCard({
           )}
         </span>
       )}
-      <time dateTime={post.lastActivityAt} title={new Date(post.lastActivityAt).toLocaleString(locale)}>
+      <time
+        dateTime={post.lastActivityAt}
+        title={new Date(post.lastActivityAt).toLocaleString(locale)}
+      >
         {time}
       </time>
     </span>
@@ -309,14 +504,12 @@ export const ForumPostCard = memo(function ForumPostCard({
       )}
     >
       {/* The unread pip, the same shape the sidebar uses. */}
-      {isUnread && (
+      {pip}
+      {open && (
         <span
           aria-hidden
-          className="absolute left-0 top-1/2 h-[18px] w-1 -translate-y-1/2 rounded-r-full bg-text"
+          className="absolute inset-y-0 right-0 w-[3px] bg-accent"
         />
-      )}
-      {open && (
-        <span aria-hidden className="absolute inset-y-0 right-0 w-[3px] bg-accent" />
       )}
       <div className="min-w-0 flex-1">
         <div
@@ -326,46 +519,35 @@ export const ForumPostCard = memo(function ForumPostCard({
           )}
         >
           {badges}
-          <a
-            ref={(node) => registerLink?.(post.id, node)}
-            href={href}
-            tabIndex={tabIndex}
-            aria-label={srName}
-            aria-current={open ? "true" : undefined}
-            onClick={handleClick}
-            onFocus={() => onFocus(post.id)}
-            onKeyDown={(event) => onKeyDown?.(event, post.id)}
+          {titleLink(
+            narrow && !compact
+              ? "basis-full whitespace-normal text-base leading-snug line-clamp-2"
+              : compact || pinnedRow
+                ? "text-[15px] leading-5"
+                : "text-base leading-6",
+          )}
+        </div>
+        {!pinnedRow && preview && (
+          <p
             className={cn(
-              "min-w-0 truncate rounded-[var(--radius-control)] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus-ring",
-              narrow && !compact
-                ? cn(
-                    "basis-full whitespace-normal leading-5 line-clamp-2",
-                    pinnedRow ? "text-sm" : "text-[15px]",
-                  )
-                : compact || pinnedRow
-                  ? "text-sm"
-                  : "text-[15px]",
-              isUnread
-                ? "font-[650] text-text"
-                : "font-medium text-text-secondary",
+              "text-[13px] leading-[18px] text-text-tertiary",
+              // Two lines on a full card, one beside an open post.
+              compact ? "mt-0.5 line-clamp-1" : "mt-1 line-clamp-2",
             )}
           >
-            {post.title}
-          </a>
-        </div>
-        {!compact && !pinnedRow && preview && (
-          <p className="mt-0.5 line-clamp-1 text-[13px] text-text-tertiary max-sm:line-clamp-2">
             {post.authorIsWebhook && (
               <UserAvatar
                 name={author}
                 avatarUrl={post.authorAvatarUrl}
                 rounded="full"
-                className="mr-1 inline-block h-4 w-4 align-[-3px]"
-                fallbackClassName="text-[8px]"
+                className="mr-1 inline-flex h-4 w-4 align-middle"
+                fallbackClassName={TINY_AVATAR_FALLBACK}
               />
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
-            {preview}
+            <span className={cn(post.openingDeleted && "italic")}>
+              {preview}
+            </span>
           </p>
         )}
         <div
@@ -377,7 +559,12 @@ export const ForumPostCard = memo(function ForumPostCard({
             compact || pinnedRow ? "mt-1" : "mt-2",
           )}
         >
-          <span className={cn("flex items-center gap-1.5", narrow ? "max-w-full shrink-0" : "min-w-0")}>
+          <span
+            className={cn(
+              "flex items-center gap-1.5",
+              narrow ? "max-w-full shrink-0" : "min-w-0",
+            )}
+          >
             {post.authorIsWebhook && (
               <Badge variant="accent" icon={Rss}>
                 {t("forum.badge.feed")}
@@ -396,9 +583,9 @@ export const ForumPostCard = memo(function ForumPostCard({
                   <UserAvatar
                     name={author}
                     avatarUrl={post.authorAvatarUrl}
-                    rounded="md"
+                    rounded="full"
                     className="h-4 w-4"
-                    fallbackClassName="text-[8px]"
+                    fallbackClassName={TINY_AVATAR_FALLBACK}
                   />
                 )}
                 <span className="truncate">{author}</span>
@@ -411,7 +598,9 @@ export const ForumPostCard = memo(function ForumPostCard({
       <Thumbnail
         post={post}
         className={
-          compact || pinnedRow ? "h-11 w-11" : "h-14 w-14 sm:h-[72px] sm:w-[72px]"
+          compact || pinnedRow
+            ? "h-11 w-11"
+            : "h-14 w-14 sm:h-[72px] sm:w-[72px]"
         }
       />
     </article>

@@ -224,6 +224,7 @@ export function CreateServerDialog({
       const created = await createServer(
         trimmed,
         createAttemptRef.current.keyFor(trimmed),
+        locale,
       );
       // The room now exists on the server. Both branches below already
       // swallow their own errors, so nothing after this point can still

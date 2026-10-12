@@ -1027,7 +1027,7 @@ function useRoomStep({
   onImportDiscord: () => void;
   onSkip: () => void;
 }): StepView {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [open, setOpen] = useState<Door | null>(null);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -1073,7 +1073,7 @@ function useRoomStep({
     try {
       ({
         server: { id: serverId },
-      } = await createServer(trimmed, createAttemptRef.current.keyFor(trimmed)));
+      } = await createServer(trimmed, createAttemptRef.current.keyFor(trimmed), locale));
     } catch {
       setErrorKey("onboarding.room.create.error");
       setBusy(null);

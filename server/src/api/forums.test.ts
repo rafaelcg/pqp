@@ -328,6 +328,8 @@ describeDb("forum posts", () => {
       error: "forum_post_rejected",
       reason: "automod",
       automodMessage: "Sem golpe aqui.",
+      // The composer says "esse título", not "esse post".
+      field: "title",
     });
     expect((await getPool().query(`SELECT 1 FROM forum_posts`)).rowCount).toBe(0);
 
@@ -340,7 +342,7 @@ describeDb("forum posts", () => {
       filename: "x.gif",
       contentType: "image/gif",
     });
-    const bodyHit = await call<{ reason: string }>(
+    const bodyHit = await call<{ reason: string; field?: string }>(
       bob,
       "POST",
       `/api/channels/${forumId}/posts`,
@@ -348,6 +350,7 @@ describeDb("forum posts", () => {
     );
     expect(bodyHit.status).toBe(422);
     expect(bodyHit.body.reason).toBe("automod");
+    expect(bodyHit.body.field).toBe("body");
     expect((await getPool().query(`SELECT 1 FROM forum_posts`)).rowCount).toBe(0);
     expect(
       (await getPool().query(`SELECT 1 FROM channels WHERE type = 'thread'`)).rowCount,
@@ -742,7 +745,28 @@ describeDb("forum posts", () => {
       authorId: carol.id,
       authorName: "Carol",
       excerpt: "Assim: roda o instalador e reinicia",
+      // "Solução · marcada por Bob": the OP picked it.
+      markedById: bob.id,
+      markedByName: "Bob",
     });
+
+    // Staff picking another answer becomes the one who marked it.
+    const second = await postChannelMessage({
+      author: carol as never,
+      channelId: postId,
+      body: "Ou atualiza o driver",
+    });
+    const secondId = second.ok ? second.message.id : "";
+    expect(
+      (await call(alice, "PATCH", `/api/forum-posts/${postId}`, { acceptedAnswerId: secondId }))
+        .status,
+    ).toBe(200);
+    detail = forumPostDetailResponseSchema.parse(
+      (await call(bob, "GET", `/api/forum-posts/${postId}`)).body,
+    );
+    expect(detail.acceptedAnswer).toMatchObject({ messageId: secondId, markedById: alice.id });
+    // Back to Carol's first answer, marked by Bob again, for the rest below.
+    await call(bob, "PATCH", `/api/forum-posts/${postId}`, { acceptedAnswerId: answerId });
 
     // The opening message cannot be the answer, nor can another post's reply.
     const opening = await getPool().query<{ opening_message_id: string }>(
@@ -772,6 +796,11 @@ describeDb("forum posts", () => {
     );
     expect(reopened.body.post.resolvedAt).toBeNull();
     expect(reopened.body.post.acceptedAnswerId).toBeNull();
+    const marker = await getPool().query<{ resolved_by: string | null }>(
+      `SELECT resolved_by FROM forum_posts WHERE channel_id = $1`,
+      [postId],
+    );
+    expect(marker.rows[0]?.resolved_by).toBeNull();
 
     // A deleted opening message: the post stays, the card says so.
     await getPool().query(`DELETE FROM messages WHERE id = $1`, [
@@ -797,6 +826,35 @@ describeDb("forum posts", () => {
     expect((await list(bob)).posts.find((one) => one.id === created.body.post.id)?.preview).toBe(
       "Patch 1.4.2: correções de rede Veja o changelog e roda npm i. https://example.com/p?utm_source=rss&utm_medium=feed",
     );
+  });
+
+  it("a post that is only a clip gives the card its video, never as the image thumbnail", async () => {
+    // A remote row is the only attachment a test can mint without storage;
+    // the remote helper takes image hosts only, so the row is made a video
+    // afterwards, which is all the summary reads.
+    const clip = await createRemoteAttachment({
+      channelId: forumId,
+      uploaderId: bob.id,
+      url: "https://static.klipy.com/gifs/abc/clip.webp",
+      filename: "clip.webp",
+      contentType: "image/webp",
+      width: 640,
+      height: 360,
+    });
+    await getPool().query(
+      `UPDATE message_attachments
+          SET content_type = 'video/mp4', filename = 'clip.mp4'
+        WHERE id = $1`,
+      [clip.id],
+    );
+    const created = await post(bob, "Gravei o bug", { body: "", attachmentIds: [clip.id] });
+    expect(created.status).toBe(201);
+    const summary = forumPostSummarySchema.parse(created.body.post);
+    expect(summary.thumbnailUrl).toBeNull();
+    expect(summary.thumbnailVideoUrl).toBe("https://static.klipy.com/gifs/abc/clip.webp");
+    expect(summary.openingKind).toBe("attachment");
+    const listed = (await list(bob)).posts.find((one) => one.id === summary.id)!;
+    expect(listed.thumbnailVideoUrl).toBe("https://static.klipy.com/gifs/abc/clip.webp");
   });
 
   it("patch permissions field by field, the pin cap, and the audit trail", async () => {
@@ -956,6 +1014,14 @@ describeDb("forum posts", () => {
       ],
     });
     expect(dup.status).toBe(400);
+    // And accent-insensitive: "Dúvida" and "duvida" are one tag.
+    const accented = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [
+        { name: "Dúvida", moderated: false },
+        { name: "duvida", moderated: false },
+      ],
+    });
+    expect(accented.status).toBe(400);
     // An id from another forum is unknown here.
     const other = await createForum("outro");
     const foreign = await call<{ tags: Array<{ id: string }> }>(

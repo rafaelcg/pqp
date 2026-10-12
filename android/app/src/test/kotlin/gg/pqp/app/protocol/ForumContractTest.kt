@@ -19,6 +19,7 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,6 +66,25 @@ class ForumContractTest {
         assertEquals(schemaKeys, ForumPostSummary.serializer().descriptor.elementNames.toSet())
     }
 
+    /**
+     * The three things #1131 added for the phones (forum QA P9, P11, P18): who
+     * marked the answer, the live tags/settings frame, and which half AutoMod
+     * refused. Each is read by name, so a rename fails here.
+     */
+    @Test
+    fun `the 1131 additions are the shared names the phone reads`() {
+        val answer = RepoSources.objectKeys(forums, "forumAcceptedAnswerSchema").toSet()
+        assertTrue(answer.containsAll(setOf("markedById", "markedByName")))
+        assertEquals(setOf("type", "forumId", "tags", "settings"), RepoSources.objectKeys(forums, "forumConfigUpdateSchema").toSet())
+        assertTrue(RepoSources.read(forums).contains("\"forum-config-update\""))
+
+        val chat = "packages/shared/src/chat.ts"
+        val rejected = RepoSources.objectKeys(chat, "forumPostRejectedBodySchema").toSet()
+        assertTrue(rejected.containsAll(setOf("reason", "automodMessage", "field")))
+        assertTrue(RepoSources.stripComments(RepoSources.read(chat)).contains("field: z.enum([\"title\", \"body\"])"))
+        assertTrue(RepoSources.read(chat).contains("\"forum-config-update\""))
+    }
+
     @Test
     fun `the caps match shared`() {
         assertEquals(RepoSources.numberConstant(forums, "FORUM_MAX_TAGS"), ForumLimits.MAX_TAGS)
@@ -94,6 +114,20 @@ class ForumContractTest {
         ).forEach { token ->
             assertTrue("forums.ts no longer names $token", source.contains("\"$token\""))
         }
+    }
+
+    @Test
+    fun `a video post carries its clip in thumbnailVideoUrl, an older API omits it`() {
+        val base = """"id":"p","forumId":"f","title":"clip","createdAt":"2026-10-11T20:00:00.000Z",
+            "lastActivityAt":"2026-10-11T20:00:00.000Z","openingKind":"attachment","attachmentCount":1"""
+        val video = PqpJson.decodeFromString<ForumPostSummary>(
+            """{$base,"thumbnailUrl":null,"thumbnailVideoUrl":"https://x/clip.mp4?sig=1"}""",
+        )
+        assertEquals("https://x/clip.mp4?sig=1", video.thumbnailVideoUrl)
+        assertNull(video.thumbnailUrl)
+
+        assertNull(PqpJson.decodeFromString<ForumPostSummary>("""{$base}""").thumbnailVideoUrl)
+        assertNull(PqpJson.decodeFromString<ForumPostSummary>("""{$base,"thumbnailVideoUrl":null}""").thumbnailVideoUrl)
     }
 
     @Test

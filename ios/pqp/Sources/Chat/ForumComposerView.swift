@@ -81,9 +81,17 @@ struct ForumComposerRefusal: Equatable {
                     retryUntil: wait.map { now.addingTimeInterval($0) }
                 )
             case "automod":
+                // Which half AutoMod refused, so the line says "esse título"
+                // and the title field is the one that lights up.
+                let lead: String
+                switch rejection.field {
+                case "title": lead = String(localized: "AutoMod blocked this title.")
+                case "body": lead = String(localized: "AutoMod blocked this text.")
+                default: lead = String(localized: "AutoMod blocked this post.")
+                }
                 return ForumComposerRefusal(
-                    field: .general,
-                    message: rejection.automodMessage ?? String(localized: "AutoMod blocked this post.")
+                    field: rejection.field == "title" ? .title : .general,
+                    message: [lead, rejection.automodMessage].compactMap { $0 }.joined(separator: " ")
                 )
             case "locked":
                 return ForumComposerRefusal(field: .general, message: ChatModel.rejectionCopy(for: "locked"))
@@ -246,6 +254,20 @@ struct ForumComposerView: View {
             guard hasLoadedDraft else { return }
             drafts.save(next, forumId: forumId)
             if refusal?.field == .tags, !next.tagIds.isEmpty { refusal = nil }
+        }
+        .onChange(of: home.composerTags) { _, usable in
+            // Staff deleted a tag (or made it staff-only) while it was picked
+            // here: it leaves the pick, or Publicar would send a tag that no
+            // longer exists.
+            guard hasLoadedDraft else { return }
+            let ids = Set(usable.map(\.id))
+            let kept = draft.tagIds.filter { ids.contains($0) }
+            if kept.count != draft.tagIds.count { draft.tagIds = kept }
+        }
+        .task {
+            // The flag and the settings can have moved since the forum was
+            // opened (no frame carries the flag): ask again as a post starts.
+            await home.refreshRules()
         }
         .task(id: trimmedTitle) { await searchSimilar() }
         .task {
@@ -719,6 +741,12 @@ struct ForumComposerView: View {
         } catch {
             refusal = ForumComposerRefusal.from(error)
             now = Date()
+            if case .refused(_, let token) = error,
+               token == ForumErrorCode.off || token == ForumErrorCode.tagRequired {
+                // The server knew better than the screen: read the rule again,
+                // so the paused state or "pick a tag" matches the refusal.
+                Task { await home.refreshRules() }
+            }
         }
     }
 }

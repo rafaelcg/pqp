@@ -3,7 +3,7 @@ import {
   type ForumTag,
   type WebhookForumSettings,
 } from "@pqp/shared";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Tag as TagGlyph } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import { useInlineSave } from "@/components/settings/kit/use-inline-save";
@@ -70,10 +70,12 @@ export function WebhookForumSettingsPanel({
   const mode: AllowMode = settings.allowedTagIds === null ? "all" : "chosen";
   const allowed = new Set(settings.allowedTagIds ?? []);
   const defaults = new Set(settings.defaultTagIds);
-  const tagLabel = (tag: ForumTag) => {
-    const name = tag.emoji ? `${tag.emoji} ${tag.name}` : tag.name;
-    return tag.moderated ? `${name} · ${t("webhooks.forum.staffOnly")}` : name;
-  };
+  const tagLabel = (tag: ForumTag) =>
+    tag.moderated ? `${tag.name} · ${t("webhooks.forum.staffOnly")}` : tag.name;
+  // Its own column, a tag glyph where there is no emoji, so every name starts
+  // at the same x (forum QA P13).
+  const tagIcon = (tag: ForumTag) =>
+    tag.emoji ? tag.emoji : <TagGlyph className="h-3.5 w-3.5" />;
 
   const dedupeOptions: RadioOption<number>[] = [
     ...DEDUPE_PRESETS.map((hours) => ({ value: hours, label: dedupeLabel(hours) })),
@@ -146,6 +148,7 @@ export function WebhookForumSettingsPanel({
                       <CheckRow
                         key={tag.id}
                         label={tagLabel(tag)}
+                        icon={tagIcon(tag)}
                         checked={allowed.has(tag.id)}
                         onCheckedChange={(checked) =>
                           save({
@@ -178,6 +181,7 @@ export function WebhookForumSettingsPanel({
                     <CheckRow
                       key={tag.id}
                       label={tagLabel(tag)}
+                      icon={tagIcon(tag)}
                       checked={checked}
                       disabled={!checked && defaults.size >= FORUM_MAX_TAGS_PER_POST}
                       onCheckedChange={(next) =>

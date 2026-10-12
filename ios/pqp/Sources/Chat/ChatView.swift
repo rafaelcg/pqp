@@ -136,6 +136,17 @@ struct ChatView: View {
     @State private var forumTitleDraft = ""
     @State private var confirmingForumDelete = false
 
+    /// The transcript has been put on its latest message once. Until then the
+    /// list is laid out but not drawn: see `TranscriptOpening`.
+    @State private var transcriptPositioned = false
+    /// Safety net for the hold above: drawn anyway after a beat, so no path
+    /// that never positions (an error, an empty page) can leave a blank screen.
+    @State private var transcriptHoldExpired = false
+    /// `ChatModel.open` is still swapping the network page in over the cached
+    /// one. A tail that moves during it is the open settling, not somebody
+    /// talking, so it is followed without animation.
+    @State private var transcriptOpening = true
+
     /**
      `START_WATCH_PARTY` for this room, WITH `voiceChannel.id` as the channel
      id (unlike `ChannelListView`'s own `canHostWatchParty`, which asks with
@@ -559,6 +570,7 @@ struct ChatView: View {
                 serverId: server?.id ?? flagsServerId,
                 joinsAsThread: forumPost != nil
             )
+            transcriptOpening = false
             if let forumPost {
                 let target = await forumPost.land(chat: model)
                 let cursor = forumPost.previousReadAt
@@ -634,6 +646,8 @@ struct ChatView: View {
         // screen: the microphone is not ours in the background.
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { recorder.appBecameInactive() }
+            // Messages that came in behind the lock screen are read now.
+            if phase == .active { model.markReadSoon() }
         }
         // The microphone and the speaker belong to a call the moment one
         // starts: a note stops playing, a recording in progress is paused.
@@ -699,7 +713,7 @@ struct ChatView: View {
                         // opened at its first unread): the answer still sits
                         // right under the title rather than nowhere.
                         if model.hasMore, let answer = forumPost.acceptedAnswer {
-                            ForumSolutionCard(answer: answer) {
+                            ForumSolutionCard(answer: answer, viewerId: session.currentUser?.id) {
                                 jumpToForumAnswer(proxy)
                             }
                         }
@@ -797,7 +811,7 @@ struct ChatView: View {
                         // really the first loaded message.
                         if let forumPost, index == 0, !model.hasMore {
                             if let answer = forumPost.acceptedAnswer {
-                                ForumSolutionCard(answer: answer) {
+                                ForumSolutionCard(answer: answer, viewerId: session.currentUser?.id) {
                                     jumpToForumAnswer(proxy)
                                 }
                             }
@@ -841,13 +855,51 @@ struct ChatView: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: model.messages.count) {
+            .modifier(TranscriptBottomAnchor(enabled: forumPost == nil))
+            // Held invisible until it is on its latest message: see
+            // `TranscriptOpening.isHidden`. Not `.hidden()`, which would also
+            // skip the layout the scroll needs.
+            .opacity(TranscriptOpening.isHidden(
+                isForumPost: forumPost != nil,
+                positioned: transcriptPositioned,
+                hasMessages: !model.messages.isEmpty,
+                isLoading: model.isLoading,
+                holdExpired: transcriptHoldExpired
+            ) ? 0 : 1)
+            .task {
+                try? await Task.sleep(for: TranscriptOpening.maxHold)
+                transcriptHoldExpired = true
+            }
+            .onAppear {
+                // Back from a thread or a profile with the transcript already
+                // there: `onChange` will not fire for a tail that did not move.
+                if !transcriptPositioned, forumPost == nil, !model.messages.isEmpty {
+                    positionTranscript(proxy)
+                }
+            }
+            // The TAIL, not the count. The count also moves when older history
+            // is prepended (which must not scroll anybody) and stays put when
+            // the network page replaces the cached one one-for-one, which is
+            // exactly when the tail moved.
+            .onChange(of: model.messages.last?.id) {
                 // A post lands where `ForumLanding` says, not on the tail.
                 if forumPost != nil && forumLanding == nil { return }
                 guard let last = model.messages.last else { return }
+                if forumPost == nil && !transcriptPositioned {
+                    positionTranscript(proxy)
+                    return
+                }
                 // Only follow the tail. Scrolling someone back to the bottom
                 // while they are reading history is the classic chat-app sin.
-                if model.isNearBottom {
+                guard model.isNearBottom else { return }
+                if transcriptOpening {
+                    // The fresh page landing over the cached one. Animating
+                    // it is what made the transcript visibly race through
+                    // every message it skipped.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { proxy.scrollTo(last.id, anchor: .bottom) }
+                } else {
                     withAnimation(Motion.standard) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
@@ -882,6 +934,35 @@ struct ChatView: View {
                 }
             }
             .animation(Motion.standard, value: showsForumJumpPill)
+        }
+    }
+
+    /// Puts a channel that has just opened on its latest message, with nothing
+    /// in between on screen.
+    ///
+    /// THE BUG THIS REPLACES. The first page arriving was an ordinary "the
+    /// count changed while the tail was in view" (an empty list's tail is
+    /// always in view), so it got the same `withAnimation` scroll as a new
+    /// message, from the TOP of a fresh `LazyVStack` to the bottom of fifty
+    /// messages it had never measured. That animation, run during the push,
+    /// is the scroll through history somebody sees every time they open a
+    /// channel: "Load earlier messages", yesterday, and everything since,
+    /// racing past in half a second.
+    ///
+    /// Now: no animation, a second pass once the rows near the tail have been
+    /// built (a lazy stack only knows its real heights after it has made the
+    /// rows, so the first jump lands on estimates), and the list stays
+    /// invisible until both have run.
+    private func positionTranscript(_ proxy: ScrollViewProxy) {
+        guard let last = model.messages.last else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { proxy.scrollTo(last.id, anchor: .bottom) }
+        DispatchQueue.main.async {
+            if let tail = model.messages.last {
+                withTransaction(transaction) { proxy.scrollTo(tail.id, anchor: .bottom) }
+            }
+            transcriptPositioned = true
         }
     }
 
@@ -1504,6 +1585,13 @@ struct MessageRow: View {
                     EmbedCard(embed: embed)
                 }
 
+                // What a webhook sent beside its text: an RSS item's card
+                // under a feed post. Decoded all along and never drawn, so a
+                // feed post was a bare link here (forum QA P20).
+                ForEach(Array(message.webhookEmbeds.enumerated()), id: \.offset) { _, embed in
+                    WebhookEmbedCard(embed: embed)
+                }
+
                 if message.editedAt != nil {
                     Text("edited")
                         .font(.system(size: 10))
@@ -1660,6 +1748,7 @@ struct AttachmentChip: View {
                 url: refreshedUrl ?? URL(string: attachment.url),
                 onFailure: { Task { await refreshUrlOnce() } }
             )
+            .frame(width: reservedBox?.width, height: reservedBox?.height)
             .frame(maxWidth: 260, maxHeight: 260)
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
         } else if let url = refreshedUrl ?? URL(string: attachment.url) {
@@ -1667,6 +1756,7 @@ struct AttachmentChip: View {
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFit()
+                        .frame(width: reservedBox?.width, height: reservedBox?.height)
                 case .failure:
                     // Presigned URLs expire; ask for a new one exactly once —
                     // the server route exists for precisely this — then admit
@@ -1693,10 +1783,17 @@ struct AttachmentChip: View {
         }
     }
 
+    /// The picture's final size, from the dimensions the upload declared, so
+    /// the row does not change height when the bytes arrive. See `MediaBox`.
+    private var reservedBox: CGSize? {
+        MediaBox.fitted(width: attachment.width, height: attachment.height, maxWidth: 260, maxHeight: 260)
+    }
+
     private var placeholder: some View {
         RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
             .fill(Palette.surface)
-            .frame(height: 140)
+            // The real box when it is known; the old guess when it is not.
+            .frame(width: reservedBox?.width, height: reservedBox?.height ?? 140)
             .overlay(ProgressView().tint(Palette.paperMuted))
     }
 

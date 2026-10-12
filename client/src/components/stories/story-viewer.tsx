@@ -51,6 +51,7 @@ import {
   replyToStory,
   saveStoryToBau,
   setStoryReaction,
+  unmuteStoryAuthor,
 } from "@/lib/stories/api";
 import { emitStoriesRefresh, onStoriesSignal } from "@/lib/stories/events";
 import {
@@ -60,7 +61,7 @@ import {
 } from "@/lib/stories/format";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
-import { ringAudienceKey, type ViewerRequest } from "@/lib/stories/ui-store";
+import { ringAudienceKey, showStoriesNotice, type ViewerRequest } from "@/lib/stories/ui-store";
 import {
   createViewerState,
   currentPerson,
@@ -946,7 +947,20 @@ export function StoryViewer({
   async function runMute(target: StoryAuthor) {
     try {
       await muteStoryAuthor(target.id);
-      showToast(t("stories.menu.muted", { name: target.displayName }));
+      // Muting hides every ring of theirs, so nothing on screen leads back,
+      // and muting the last person closes the viewer: the way back is a
+      // notice over the app, not a toast inside the card.
+      showStoriesNotice(t("stories.menu.muted", { name: target.displayName }), {
+        label: t("stories.menu.undo"),
+        run: () => {
+          void unmuteStoryAuthor(target.id)
+            .then(() => {
+              showStoriesNotice(t("stories.menu.unmuted", { name: target.displayName }));
+              emitStoriesRefresh();
+            })
+            .catch(() => showStoriesNotice(t("stories.own.failed")));
+        },
+      });
       const ids = state.people.find((entry) => entry.authorId === target.id)?.storyIds ?? [];
       dispatch({ type: "remove", storyIds: ids });
       emitStoriesRefresh();
@@ -1404,7 +1418,8 @@ export function StoryViewer({
               {replyState === "sent" && (
                 <span
                   role="status"
-                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-[15px] font-semibold text-accent"
+                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-[15px] font-semibold"
+                  style={{ color: "var(--story-accent)" }}
                 >
                   {t("stories.viewer.sent")}
                   <Check className="h-4 w-4" aria-hidden />
@@ -1452,7 +1467,11 @@ export function StoryViewer({
   );
 
   const keyHints = wide && (
-    <div className="pointer-events-none absolute bottom-4 right-5 hidden items-center gap-3 text-[11px] font-medium text-text-tertiary lg:flex" aria-hidden>
+    <div
+      className="pointer-events-none absolute bottom-4 right-5 hidden items-center gap-3 text-[11px] font-medium lg:flex"
+      style={{ color: "var(--story-on-media-2)" }}
+      aria-hidden
+    >
       <span className="flex items-center gap-1">
         <Kbd>←</Kbd>
         <Kbd>→</Kbd>
@@ -1486,9 +1505,11 @@ export function StoryViewer({
       style={{ background: "var(--story-backdrop)", backdropFilter: "blur(10px)" }}
     >
       {wide && (
-        <p className="absolute left-5 top-4 text-sm font-bold text-text">
+        <p className="absolute left-5 top-4 text-sm font-bold" style={{ color: "var(--story-on-media)" }}>
           {request.audience.kind === "server" ? request.audience.serverName : t("stories.viewer.friends")}
-          <span className="ml-1.5 font-medium text-text-tertiary">· {t("stories.strip.label").toLowerCase()}</span>
+          <span className="ml-1.5 font-medium" style={{ color: "var(--story-on-media-2)" }}>
+            · {t("stories.strip.label").toLowerCase()}
+          </span>
         </p>
       )}
       {wide && (

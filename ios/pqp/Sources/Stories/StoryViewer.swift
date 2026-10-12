@@ -154,6 +154,20 @@ struct StoryViewer: View {
             } onPressingChanged: { pressing in
                 setHolding(pressing)
             }
+            // The tap zones are invisible to VoiceOver, so the same moves are
+            // offered as actions and as swipe up / down (adjustable).
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Story"))
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: next()
+                case .decrement: previous()
+                @unknown default: break
+                }
+            }
+            .accessibilityAction(named: Text("Next story")) { next() }
+            .accessibilityAction(named: Text("Previous story")) { previous() }
+            .accessibilityAction(named: Text(holding ? "Resume" : "Pause")) { setHolding(!holding) }
 
             VStack(spacing: 0) {
                 header
@@ -230,7 +244,7 @@ struct StoryViewer: View {
                         }
                         .padding(.top, 90)
                         .padding(.trailing, 14)
-                        .accessibilityLabel(muted ? "Unmute" : "Mute")
+                        .accessibilityLabel(muted ? "Turn the sound on" : "Turn the sound off")
                     }
             } else if let media = story.media, let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
                 AsyncImage(url: url) { phase in
@@ -373,6 +387,7 @@ struct StoryViewer: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
                 .background(Capsule().strokeBorder(.white.opacity(0.5), lineWidth: 1))
+                .accessibilityLabel(Text("Reply to \(story.author.firstName)…"))
                 .accessibilityIdentifier("story.reply")
             } else if let line = StoryRules.replyBlockedLine(story.viewer.replyBlockedReason, name: story.author.firstName) {
                 Text(verbatim: line)
@@ -596,7 +611,7 @@ struct StoryViewer: View {
     private func dropRemoved(_ ids: Set<String>) {
         gone.formUnion(ids)
         for id in ids { stories[id] = nil }
-        if let current = playback.currentId, ids.contains(current) { next() }
+        if playback.currentIsAmong(ids) { next() }
     }
 
     private func close() {
@@ -710,6 +725,9 @@ struct StoryViewer: View {
             _ = try await session.api.replyToStory(id: story.id, text: text, nonce: nonce)
             replyAttempt = nil
             show(flash: String(localized: "Sent ✓"))
+            // The reply may have opened a conversation the hub has never
+            // listed, and the replier is the one socket that gets no frame.
+            session.storyReplyRevision += 1
         } catch {
             replyText = text
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -748,14 +766,13 @@ struct StoryViewer: View {
             switch action {
             case .delete(let story):
                 try await session.api.deleteStory(id: story.id)
-                gone.insert(story.id)
-                stories[story.id] = nil
-                next()
+                // Not next(): the stories-update frame the server sends our own
+                // sockets for this delete lands here too, and two steps past a
+                // story that was deleted once skip the one after it.
+                dropRemoved([story.id])
             case .remove(let story, let serverId, _):
                 try await session.api.removeStoryFromServer(storyId: story.id, serverId: serverId, reason: nil)
-                gone.insert(story.id)
-                stories[story.id] = nil
-                next()
+                dropRemoved([story.id])
             }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
