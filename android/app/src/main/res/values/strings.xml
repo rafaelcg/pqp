@@ -1047,4 +1047,31 @@
     <string name="stories_quote_left">gone in %1$s</string>
     <string name="report_subject_story">Report a story by %1$s</string>
     <string name="report_body_story">While someone reviews it, the story won\'t disappear, even after 24 h. Only moderators see it.</string>
+    <!-- Mixed channel list: categories are the only headers, Organizar canais -->
+    <string name="channels_organize">Organize channels</string>
+    <string name="channels_organize_done">Done</string>
+    <string name="channels_organize_cancel">Cancel</string>
+    <string name="channels_organize_tip">Hold ≡ and drag a channel or a category. Nothing is saved until you tap Done.</string>
+    <string name="channels_empty_category">Empty. Drag a channel here.</string>
+    <string name="channels_create_category">Create category</string>
+    <string name="channels_category_name">Category name</string>
+    <string name="channels_category_name_hint">Voice rooms</string>
+    <string name="channels_rename_category">Rename category</string>
+    <string name="channels_create_in">Create channel in %1$s</string>
+    <string name="channels_add_text">Text channel</string>
+    <string name="channels_add_voice">Voice channel</string>
+    <string name="channels_new_channel">New channel</string>
+    <string name="channels_channel_name">Channel name</string>
+    <string name="channels_create">Create</string>
+    <string name="channels_rename">Rename</string>
+    <string name="channels_got_it">Got it</string>
+    <string name="channels_reorder_stale">Couldn\'t move it. The list changed, try again.</string>
+    <string name="channels_reorder_failed">Couldn\'t move it. Try again.</string>
+    <string name="channels_move_up">Move up</string>
+    <string name="channels_move_down">Move down</string>
+    <string name="channels_moved_to">%1$s moved to %2$s, position %3$d of %4$d.</string>
+    <string name="channels_moved_loose">%1$s is outside the categories, position %2$d of %3$d.</string>
+    <string name="channels_moved_category">%1$s moved to position %2$d of %3$d.</string>
+    <string name="channels_more">More</string>
+    <string name="channels_drag_handle">Drag %1$s</string>
 </resources>

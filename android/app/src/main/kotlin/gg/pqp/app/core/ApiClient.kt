@@ -69,7 +69,7 @@ class ApiClient(
      * `server/src/services/idempotency-keys.ts`.
      */
     suspend fun createServer(name: String, idempotencyKey: String? = null): CreateServerResponse {
-        val body = json.encodeToString(CreateServerRequest.serializer(), CreateServerRequest(name))
+        val body = json.encodeToString(CreateServerRequest.serializer(), CreateServerRequest(name, serverLocale()))
         val headers = idempotencyKey?.let { mapOf("Idempotency-Key" to it) } ?: emptyMap()
         return post("/api/servers", body, headers)
     }
