@@ -181,6 +181,13 @@ internal object BauPlayback {
     private var callActive = false
 
     /**
+     * A player that is not this ExoPlayer (a YouTube embed, `BauYoutube.kt`)
+     * holding the floor, and how to make it stop.
+     */
+    private var embedKey: String? = null
+    private var embedPause: (() -> Unit)? = null
+
+    /**
      * The call state changed under a clip that is already loaded: a call that
      * starts must not find a player still asking for focus, and a call that
      * ended hands the focus handling back.
@@ -202,7 +209,7 @@ internal object BauPlayback {
 
     fun play(context: Context, key: String, url: String, callActive: Boolean) {
         this.callActive = callActive
-        floor.claim(key)?.let { releasePlayer() }
+        floor.claim(key)?.let { displace(it) }
         if (player != null) return
         failedKey = null
         val exo = ExoPlayer.Builder(context.applicationContext).build().apply {
@@ -224,6 +231,35 @@ internal object BauPlayback {
         }
         player = exo
         activeKey = key
+    }
+
+    /**
+     * An embedded player started. Same floor as an uploaded video: it
+     * releases the ExoPlayer, and an uploaded video starting calls [pause].
+     */
+    fun claimEmbed(key: String, pause: () -> Unit) {
+        floor.claim(key)?.let { displace(it) }
+        embedKey = key
+        embedPause = pause
+    }
+
+    /** An embedded player stopped, or is going away. */
+    fun releaseEmbed(key: String) {
+        if (embedKey != key) return
+        embedKey = null
+        embedPause = null
+        floor.release(key)
+    }
+
+    private fun displace(key: String) {
+        if (key == embedKey) {
+            val pause = embedPause
+            embedKey = null
+            embedPause = null
+            pause?.invoke()
+        } else {
+            releasePlayer()
+        }
     }
 
     /** Pause, keeping the position and the card. */
@@ -519,7 +555,7 @@ private fun BauFullscreen(player: ExoPlayer, onExit: () -> Unit) {
 
 /** Hide the system bars of the dialog's window; a swipe brings them back. */
 @Composable
-private fun ImmersiveWindow() {
+internal fun ImmersiveWindow() {
     val view = LocalView.current
     DisposableEffect(view) {
         val window = (view.parent as? DialogWindowProvider)?.window
@@ -539,7 +575,7 @@ private fun ImmersiveWindow() {
     }
 }
 
-private fun Context.findActivity(): Activity? {
+internal fun Context.findActivity(): Activity? {
     var current: Context? = this
     while (current is ContextWrapper) {
         if (current is Activity) return current
