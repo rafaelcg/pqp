@@ -47,6 +47,7 @@ import type {
   CommunityConfig,
   CommunityJoinVia,
   CommunityPage,
+  CommunityListingNudge,
   CommunitySettings,
   CommunitySummary,
   ConnectionConfig,
@@ -1327,6 +1328,16 @@ export const updateCommunitySettings = (
   patch<{ ok: boolean; community: CommunitySettings }>(
     `/api/servers/${serverId}/community`,
     body,
+  );
+
+/**
+ * The owner's one-time "Aparecer no diretório" card: the room to ask about,
+ * or `null` (nothing to ask, already asked, or the runtime flag
+ * `community_listing_nudge` is off). 404 with communities off.
+ */
+export const fetchListingNudge = () =>
+  apiFetch<{ listingNudge: CommunityListingNudge }>(
+    "/api/communities/listing-nudge",
   );
 
 /** Servers a verified email domain lets this user join without an invite. */

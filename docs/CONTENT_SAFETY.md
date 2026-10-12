@@ -691,6 +691,8 @@ failure mode reproduced with better latency.
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
 | The operator can pull a listing over the owner's head | `servers.is_community_suspended` — see below |
 | The opt-in is audited | `server.community_update`; directory joins are `member.community_join` |
+| An empty room is not browsable | `listCommunities` shows a listed room only while it has 3 people (the house cast, webhooks and bots do not count) and a person wrote in it within 30 days; the instance's default community always passes. A read-time filter: nobody's listing changes, search still finds it. Constants `DIRECTORY_MIN_HUMAN_MEMBERS` / `DIRECTORY_ACTIVE_WINDOW_DAYS` in `@pqp/shared` |
+| The directory stays opt-in when the product asks | the address switch offers the directory right under it, **unticked**; the one-time owner card (`community_listing_nudge`) lists only on its button, and only asks about rooms that pass the bar above |
 | **Listing is the owner's; the public address is Manage Server** | `PATCH /api/servers/:id/community` runs `requirePermission(MANAGE_SERVER)`, and `updateCommunitySettings` refuses a *change* to `is_community_listed` from anyone but the owner, under the row lock — including the sideways one, an admin emptying the address underneath a live listing. An admin can set `pqp.gg/c/<slug>` and write the pitch; only the owner can put the room in the directory |
 
 The routing rule is the one worth restating: **a community owner must never be

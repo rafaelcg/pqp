@@ -648,6 +648,18 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/fun/config (nudge)",
   },
+  community_listing_nudge: {
+    description:
+      "Card único pro dono de comunidade com endereço público e fora do diretório: pergunta se quer aparecer no diretório. Só aparece pra sala que passa no filtro do diretório.",
+    env: "COMMUNITY_LISTING_NUDGE",
+    parseEnv: onUnlessOff,
+    // On: the card asks once and only an owner can answer it. This is the
+    // switch to stop asking, not a rollout.
+    codeDefault: true,
+    // About an owner across all their rooms: the route picks the room.
+    perServer: false,
+    clientVia: "GET /api/communities/listing-nudge (listingNudge)",
+  },
   retro_look: {
     description:
       "Modo 2005 (só cliente): o visual escondido que a pessoa acha com /2005. Ligado por padrão; é o interruptor de emergência: desligado, quem estava nele volta pro visual padrão no próximo refresh da config e o atalho some.",

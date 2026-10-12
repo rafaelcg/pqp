@@ -6,6 +6,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  Globe,
   Image as ImageIcon,
   KeyRound,
   ScrollText,
@@ -197,6 +198,7 @@ export function auditReasonKey(
  */
 type SectionId =
   | "overview"
+  | "community"
   | "access"
   | "roles"
   | "integrations"
@@ -221,6 +223,16 @@ const SECTIONS: SectionDef[] = [
     description: "serverSettings.overview.description",
     icon: ImageIcon,
     ownerOnly: true,
+  },
+  {
+    // The public address and the directory, a door of their own since
+    // October 2026: at the foot of Overview, under the name, the pictures and
+    // Baú, most owners with an address never found the directory switch.
+    id: "community",
+    label: "serverSettings.section.community",
+    description: "serverSettings.community.description",
+    icon: Globe,
+    ownerOnly: false,
   },
   {
     id: "access",
@@ -458,7 +470,7 @@ interface ServerSettingsDialogProps {
   /** Manage Messages: sees AutoMod read-only, with the test box. */
   canManageMessages?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
-  requestedSection?: "roles";
+  requestedSection?: "roles" | "community";
   onClose: () => void;
   onRenamed: (server: Server) => void;
   /** `COMMUNITY_HOME_ENABLED` on this instance, from the config probe. */
@@ -594,8 +606,14 @@ export function ServerSettingsDialog({
           : canSeeModeration
             ? "moderation"
             : "audit";
+  const canSeeCommunity =
+    communitiesEnabled && Boolean(serverId) && (isOwner || canManageServer);
   const openingSection: SectionId =
-    requestedSection === "roles" && canSeeRoles ? "roles" : firstSection;
+    requestedSection === "roles" && canSeeRoles
+      ? "roles"
+      : requestedSection === "community" && canSeeCommunity
+        ? "community"
+        : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,
   // not a frame of Overview. The effect still catches reopen / role changes.
   if (open && !wasOpenRef.current && section !== openingSection) {
@@ -781,6 +799,8 @@ export function ServerSettingsDialog({
     switch (s.id) {
       case "overview":
         return canSeeOverview;
+      case "community":
+        return canSeeCommunity;
       case "access":
         return isOwner;
       case "roles":
@@ -928,20 +948,19 @@ export function ServerSettingsDialog({
                     onUpdated={onRenamed}
                   />
                 )}
-
-              {/* Manage Server opens the panel; only the owner may tick the
-                  directory switch inside it. The address is the half a
-                  community's moderators actually need. */}
-              {serverId && (isOwner || canManageServer) && communitiesEnabled && (
-                <CommunitySettingsSection
-                  serverId={serverId}
-                  canListPublicly={isOwner}
-                  onIdentitySaved={(patch) =>
-                    onRenamed({ ...server, ...patch })
-                  }
-                />
-              )}
             </>
+          )}
+
+          {/* Manage Server opens the panel; only the owner may tick the
+              directory switch inside it. The address is the half a
+              community's moderators actually need. */}
+          {active.id === "community" && serverId && canSeeCommunity && (
+            <CommunitySettingsSection
+              bare
+              serverId={serverId}
+              canListPublicly={isOwner}
+              onIdentitySaved={(patch) => onRenamed({ ...server, ...patch })}
+            />
           )}
 
           {active.id === "access" && (

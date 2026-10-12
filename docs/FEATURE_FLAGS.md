@@ -485,6 +485,29 @@ token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
 
+## `community_listing_nudge` (global, default on)
+
+"Aparecer no diretório", once, to the owner of a community that has a public
+address (`is_community`) and is not in the directory (`is_community_listed`).
+Behind `COMMUNITY_LISTING_NUDGE` (`onUnlessOff`, so on unless `false`, `0` or
+`off`), born as a flag. `GET /api/communities/listing-nudge` answers
+`{ listingNudge: null }` while it is off, so turning it off live is invisible to
+an open tab; with `COMMUNITIES_ENABLED` unset the route is 404 like every
+communities route.
+
+Who is asked (`findListingNudge` in `server/src/services/communities.ts`): the
+owner only (listing is the owner's switch), of a room that is addressed, not
+listed, not suspended, and passes the same quality bar the directory browses
+with (3 people, a message from a person in the last 30 days, see
+`DIRECTORY_MIN_HUMAN_MEMBERS` in `@pqp/shared`), so the card never invites an
+empty shell. The biggest qualifying room when there are several. Asked once per
+account: the client stamps `communityListingNudgeAt` in preferences when the
+card paints, and the route reads it. The card's button lists the room in place;
+nobody's setting changes without that click. Card rules: `docs/ONBOARDING.md`.
+
+Turn it off from controles → interruptores or `PUT /api/admin/flags
+{ key: "community_listing_nudge", enabled: false }`.
+
 ## `newcomer_invite_moment` (global, client presentation only)
 
 "Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,

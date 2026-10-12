@@ -49,6 +49,7 @@ import type {
   ChannelKind,
   ChannelSession,
   ChannelType,
+  CommunityListingNudge,
   DmSummary,
   MemberRole,
   SanctionNotice,
@@ -128,6 +129,12 @@ import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hi
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
+import { ListingNudgeHint } from "@/components/communities/listing-nudge-hint";
+import {
+  listingNudgeSeenPatch,
+  shouldFetchListingNudge,
+  wantsListingNudge,
+} from "@/lib/community-listing-nudge";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
 import {
   VoiceCleanActivatedToast,
@@ -347,6 +354,7 @@ import {
   fetchConversations,
   fetchIceServers,
   fetchMe,
+  fetchListingNudge,
   fetchPublicInvitePreview,
   fetchMembers,
   fetchRoles,
@@ -9317,6 +9325,45 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
     [newcomerInviteUserId],
   );
+  // "Aparecer no diretório" (`community_listing_nudge`, `lib/community-
+  // listing-nudge.ts`): asked once per page for an owner whose room has a
+  // public address and no listing. The server picks the room (or none) and
+  // already knows whether this account was asked before; the preference is
+  // checked here too so a second tab does not even ask.
+  const [listingNudge, setListingNudge] = useState<CommunityListingNudge>(null);
+  const [listingNudgeClosed, setListingNudgeClosed] = useState(false);
+  const fetchListingNudgeNow = shouldFetchListingNudge({
+    communitiesEnabled,
+    ready: Boolean(user) && !ageGate,
+    seen: Boolean(user?.preferences?.communityListingNudgeAt),
+    automated: isAutomatedBrowser(),
+  });
+  const listingNudgeUserId = fetchListingNudgeNow ? (user?.id ?? null) : null;
+  useEffect(() => {
+    if (!listingNudgeUserId) {
+      return;
+    }
+    let cancelled = false;
+    void fetchListingNudge()
+      .then((res) => {
+        if (!cancelled) {
+          setListingNudge(res.listingNudge);
+        }
+      })
+      .catch(() => {
+        // An old server, communities off, a blip: no card is the answer.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listingNudgeUserId]);
+  const markListingNudgeSeen = useCallback(() => {
+    // The server only: patching the local `user` would read as "already
+    // asked" and pull the card off the screen the moment it painted.
+    void updatePreferences(listingNudgeSeenPatch()).catch(() => {
+      // Worst case the card is offered once more on the next load.
+    });
+  }, []);
   // Conversas (`conversations_home`): every signed-in account past the age
   // gate (every `/api` route is 403 before it), same refresh pass.
   const conversationsConfigUserId = ageGate ? null : (user?.id ?? null);
@@ -10311,6 +10358,11 @@ function MainAppContent({
     // A moment, not a campaign, but still a nudge: not over a live film.
     notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
     qg: qgHintWanted && !campaignsYield,
+    listingNudge: wantsListingNudge({
+      hasCandidate: listingNudge !== null,
+      closed: listingNudgeClosed,
+      campaignsYield,
+    }),
     voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
@@ -13412,6 +13464,17 @@ function MainAppContent({
           void refreshAfterJoin(result.serverId);
         }}
         onFailed={() => setAppError(t("qgHint.failed"))}
+      />
+      <ListingNudgeHint
+        enabled={effectiveCornerHint === "listingNudge"}
+        nudge={listingNudge}
+        onSeen={markListingNudgeSeen}
+        onDismiss={() => setListingNudgeClosed(true)}
+        onListed={(_serverId, name) => {
+          setListingNudgeClosed(true);
+          setAppNotice(t("listingNudge.done", { name }));
+        }}
+        onFailed={() => setAppError(t("listingNudge.failed"))}
       />
 
       {/* The dock the watch surface falls back to whenever no channel pane is

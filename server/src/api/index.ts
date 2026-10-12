@@ -506,6 +506,7 @@ import {
   CommunityListingNeedsAddressError,
   CommunitySlugError,
   findCommunityIdBySlug,
+  findListingNudge,
   getCommunity,
   getCommunitySettings,
   getPublicCommunity,
@@ -5629,6 +5630,24 @@ router.get("/api/communities", async ({ url, user }) => {
       : 0;
 
   return listCommunities(user.id, { category, language, search, limit, offset });
+});
+
+/**
+ * The owner's one-time "Aparecer no diretório" card
+ * (`client/src/components/communities/listing-nudge-hint.tsx`).
+ *
+ * Registered above `/api/communities/:serverId`, which would otherwise read
+ * `listing-nudge` as an id. Behind `COMMUNITIES_ENABLED` like every route
+ * here, and behind the runtime flag `community_listing_nudge` (default on),
+ * which answers `null` rather than 404 so turning it off live is invisible to
+ * an open tab. Eligibility is `findListingNudge`.
+ */
+router.get("/api/communities/listing-nudge", async ({ user }) => {
+  requireCommunities();
+  if (!isEnabled("community_listing_nudge")) {
+    return { listingNudge: null };
+  }
+  return { listingNudge: await findListingNudge(user.id) };
 });
 
 /** One listing, for a deep link into the directory. */
