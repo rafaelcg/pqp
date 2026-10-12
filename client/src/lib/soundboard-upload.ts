@@ -134,6 +134,20 @@ export async function inspectSoundboardFile(
   return { contentType };
 }
 
+/**
+ * The clip was added, but the name or emoji typed before a retry could not be
+ * applied to it. The board has the clip, so the caller shows it rather than
+ * treating the save as nothing added.
+ */
+export class SoundboardRenameError extends Error {
+  constructor(
+    readonly sound: SoundboardSoundDto,
+    readonly cause: unknown,
+  ) {
+    super("rename");
+  }
+}
+
 export async function uploadSoundboardFile(input: {
   serverId: string;
   file: File;
@@ -212,12 +226,16 @@ export async function uploadSoundboardFile(input: {
   // name corrected before the retry is applied here. A failure keeps the key:
   // the clip exists, and the next retry renames it rather than adding another.
   if (sound.name !== input.name || sound.emoji !== input.emoji) {
-    sound = (
-      await updateSoundboardSound(input.serverId, sound.id, {
-        name: input.name,
-        emoji: input.emoji,
-      })
-    ).sound;
+    try {
+      sound = (
+        await updateSoundboardSound(input.serverId, sound.id, {
+          name: input.name,
+          emoji: input.emoji,
+        })
+      ).sound;
+    } catch (error) {
+      throw new SoundboardRenameError(sound, error);
+    }
   }
   return sound;
 }

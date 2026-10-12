@@ -13,7 +13,12 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 }));
 
 const { ApiError } = await import("@/lib/api");
-const { soundboardErrorKey, soundboardNameErrorKey, uploadSoundboardFile } = await import(
+const {
+  SoundboardRenameError,
+  soundboardErrorKey,
+  soundboardNameErrorKey,
+  uploadSoundboardFile,
+} = await import(
   "./soundboard-upload"
 );
 
@@ -90,9 +95,14 @@ describe("uploadSoundboardFile claim", () => {
     const onUploaded = vi.fn();
     claim.mockResolvedValueOnce({ sound: { ...stored, name: "Buzna" } });
     update.mockRejectedValueOnce(new ApiError(400, "Invalid request"));
-    await expect(
-      uploadSoundboardFile({ ...input, uploadedKey: "k0", onUploaded }),
-    ).rejects.toMatchObject({ status: 400 });
+    const failure = await uploadSoundboardFile({ ...input, uploadedKey: "k0", onUploaded }).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(SoundboardRenameError);
+    expect((failure as InstanceType<typeof SoundboardRenameError>).sound.id).toBe("x");
+    expect((failure as InstanceType<typeof SoundboardRenameError>).cause).toMatchObject({
+      status: 400,
+    });
     expect(onUploaded).not.toHaveBeenCalled();
 
     claim.mockRejectedValueOnce(new ApiError(409, "slots"));

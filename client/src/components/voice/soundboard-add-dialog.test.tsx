@@ -206,6 +206,37 @@ describe("soundboard add dialog", () => {
     expect(onAdded).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a clip whose corrected name failed, and retries the rename with the same key", async () => {
+    const { SoundboardRenameError } = await import("@/lib/soundboard-upload");
+    const onAddedAfterClose = vi.fn();
+    upload.mockImplementationOnce(async (input: { onUploaded: (key: string) => void }) => {
+      input.onUploaded("k1");
+      throw new SoundboardRenameError(
+        { id: "x" } as never,
+        new ApiError(400, "Invalid request"),
+      );
+    });
+    await mount(
+      <SoundboardAddDialog
+        open
+        serverId="s1"
+        onClose={onClose}
+        onAdded={onAdded}
+        onAddedAfterClose={onAddedAfterClose}
+      />,
+    );
+    await chooseFile();
+    type(nameInput(), "Buzina");
+    await submit();
+    expect(onAddedAfterClose).toHaveBeenCalledTimes(1);
+    expect(alerts()).toEqual(["That name was not accepted. Try another."]);
+    expect(onAdded).not.toHaveBeenCalled();
+    upload.mockResolvedValueOnce({ id: "x" });
+    await submit();
+    expect(upload.mock.calls[1]![0].uploadedKey).toBe("k1");
+    expect(onAdded).toHaveBeenCalledTimes(1);
+  });
+
   it("stores the file afresh after a refusal or a new pick", async () => {
     upload.mockImplementation(async (input: { onUploaded: (key: string | null) => void }) => {
       input.onUploaded("k1");

@@ -16,6 +16,7 @@ import {
   inspectSoundboardFile,
   soundboardErrorKey,
   soundboardNameErrorKey,
+  SoundboardRenameError,
   uploadSoundboardFile,
   type SoundboardFileError,
 } from "@/lib/soundboard-upload";
@@ -39,9 +40,10 @@ export function SoundboardAddDialog({
   onClose: () => void;
   onAdded: () => void;
   /**
-   * The person closed the dialog while a save was in flight and the clip was
-   * added anyway. Refresh the list; do not treat it as this dialog's result,
-   * which could close a later one.
+   * A clip was added without this dialog's save succeeding: the person closed
+   * it while a save was in flight, or the clip was added but a corrected name
+   * could not be applied. Refresh the list; do not treat it as this dialog's
+   * result, which could close a later one.
    */
   onAddedAfterClose?: () => void;
   /**
@@ -215,7 +217,15 @@ export function SoundboardAddDialog({
         }
         return;
       }
-      const key = soundboardErrorKey(err);
+      // The clip was added under its first name: show it on the board now,
+      // so closing here never leads to adding it twice. The stored key stays,
+      // and Save again retries the rename.
+      if (err instanceof SoundboardRenameError) {
+        onAddedAfterClose?.();
+      }
+      const key = soundboardErrorKey(
+        err instanceof SoundboardRenameError ? err.cause : err,
+      );
       if (key === "soundboard.error.nameRejected") {
         setNameError(t(key));
       } else {
