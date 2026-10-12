@@ -299,6 +299,20 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (customCoverEnabled)",
   },
+  bau_latest_preview: {
+    description:
+      "Prévia do Baú na lista de canais: o último post com capa enquanto tem novidade, depois uma linha com miniatura (desligado: a linha de antes, só com o número).",
+    env: "BAU_LATEST_PREVIEW",
+    parseEnv: onUnlessOff,
+    // On: it reads what the feed already shows, adds no fan-out, and replaces
+    // the unread read instead of adding one. The switch is here for a misfire
+    // seen live: off, the route answers 404 and every client goes back to
+    // `…/home/unread` and the old row on its next read.
+    codeDefault: true,
+    // The one reader is a route under `/servers/:id`.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/latest",
+  },
   bau_post_push: {
     description:
       "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",

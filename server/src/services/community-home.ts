@@ -857,6 +857,119 @@ export async function markCommunityHomeRead(
   );
 }
 
+/**
+ * The sidebar preview (runtime flag `bau_latest_preview`): the newest published
+ * posts, which of them are new to this viewer, the unread count and the read
+ * stamp, in ONE statement.
+ *
+ * One statement, not the unread read plus a feed read, so the count and each
+ * post's `isNew` come from the same snapshot of `community_home_reads` and
+ * cannot disagree: a stamp landing between two reads would otherwise draw a
+ * card saying "new" beside a badge saying zero. `isNew` is the unread rule
+ * verbatim (published after the stamp, not the viewer's own post, no stamp
+ * means everything), and the VIP filter is the feed's.
+ *
+ * Deliberately lighter than `hydratePosts`: a card shows no comment teaser,
+ * no author chip and no subtitles, so those reads (one permissions resolve per
+ * author among them) are skipped. Media is signed the feed's way, which is a
+ * local HMAC per post. The pinned post is not moved to the front: what matters
+ * here is what is new. Walks `idx_community_home_posts_feed` with the LIMIT.
+ */
+export async function listLatestCommunityHomePosts(
+  serverId: string,
+  viewerId: string,
+  limit: number,
+  /** The reader's language (`?lang=`), as for the feed. */
+  lang?: string | null,
+): Promise<{
+  unread: number;
+  lastSeenAt: string | null;
+  posts: Array<{ post: CommunityHomePost; isNew: boolean }>;
+}> {
+  const caps = await resolveHomeViewerCaps(serverId, viewerId);
+  // Same catch-up as the feed and the unread read.
+  await flushDueScheduledPosts(serverId);
+  const visibilityFilter = isCommunityHomeVipEnabled()
+    ? ""
+    : " AND p.visibility = 'free'";
+  type LatestRow = PostRow & {
+    seen_at: Date | null;
+    unread_count: string;
+    is_new: boolean | null;
+  };
+  // With no post at all the LEFT JOIN still returns the one `head` row, whose
+  // post columns are NULL: that is how the stamp comes back for an empty Baú.
+  const result = await getPool().query<LatestRow>(
+    `WITH head AS (
+       SELECT r.last_seen_at AS seen_at
+         FROM (SELECT 1) one
+         LEFT JOIN community_home_reads r
+           ON r.server_id = $2 AND r.user_id = $1
+     ),
+     counted AS (
+       SELECT head.seen_at,
+              (SELECT COUNT(*)::text
+                 FROM community_home_posts p
+                WHERE p.server_id = $2
+                  AND p.status = 'published'
+                  AND p.author_id <> $1
+                  AND (head.seen_at IS NULL OR p.published_at > head.seen_at)
+                  ${visibilityFilter}) AS unread_count
+         FROM head
+     )
+     SELECT counted.seen_at, counted.unread_count, latest.*
+       FROM counted
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(
+                  p.author_id <> $1
+                  AND (counted.seen_at IS NULL OR p.published_at > counted.seen_at),
+                  FALSE
+                ) AS is_new,
+                ${postSelectSql("$1")}
+          WHERE p.server_id = $2 AND p.status = 'published'${visibilityFilter}
+          ORDER BY p.published_at DESC, p.id DESC
+          LIMIT $3
+       ) latest ON TRUE
+      ORDER BY latest.published_at DESC, latest.id DESC`,
+    [viewerId, serverId, limit],
+  );
+  const first = result.rows[0];
+  const rows = result.rows.filter((row) => row.id != null);
+  const wantLang =
+    rows.length > 0 && isCommunityHomeTranslationOn(serverId)
+      ? normalizeCommunityHomeLang(lang)
+      : null;
+  const translations = wantLang
+    ? await loadTranslationRows(
+        rows.map((row) => row.id),
+        wantLang,
+      ).catch((error: unknown) => {
+        // A failed read costs the translation, never the preview.
+        console.error(
+          "[community-home] translation read failed:",
+          error instanceof Error ? error.message : error,
+        );
+        return new Map<string, TranslationReadRow>();
+      })
+    : new Map<string, TranslationReadRow>();
+  return {
+    unread: Number(first?.unread_count ?? 0),
+    lastSeenAt: first?.seen_at ? new Date(first.seen_at).toISOString() : null,
+    posts: rows.map((row) => ({
+      post: toPost(
+        row,
+        caps,
+        [],
+        null,
+        translations.get(row.id) ?? null,
+        wantLang,
+        null,
+      ),
+      isNew: row.is_new === true,
+    })),
+  };
+}
+
 export async function listCommunityHomeDrafts(
   serverId: string,
   viewerId: string,

@@ -180,6 +180,15 @@ chat card's `posterUrl`) null so every player paints the first frame again,
 and the composer stops offering it; stored covers are kept and come back when
 it is on again. See `docs/COMMUNITY_HOME.md` §"A cover for a video".
 
+Born as a flag (no old reader): `BAU_LATEST_PREVIEW` (`bau_latest_preview`,
+default **on**, **per server**), the Baú preview in the channel list: `GET
+/api/servers/:id/home/latest` serves the newest posts as cards with `isNew`
+plus the unread count. On by default because it only reads what the feed
+already shows and replaces the unread read rather than adding one. Off (`off`,
+`false` or `0`, or the dashboard), the route is 404 and clients go back to
+`…/home/unread` and the plain row on their next read. See
+`docs/COMMUNITY_HOME.md` §"What is in the pane".
+
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
 share from the Windows desktop app through WASAPI process loopback, Windows 10
