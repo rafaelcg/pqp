@@ -80,7 +80,7 @@ struct FriendsView: View {
                         .padding(.horizontal, Metrics.hPadding)
                         .padding(.bottom, 24)
                     }
-                    .refreshable { await model.refresh() }
+                    .pullToRefresh { await model.refresh() }
                 }
             }
             .padding(.top, 8)
@@ -418,7 +418,7 @@ final class FriendsModel {
             data = try await session.api.friends()
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         if let pending = await queue {
             pendingDepoimentos = pending
@@ -438,7 +438,7 @@ final class FriendsModel {
             pendingDepoimentos.removeAll { $0.id == id }
             notice = String(localized: "It's on your profile.")
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -458,7 +458,7 @@ final class FriendsModel {
             pendingDepoimentos.removeAll { $0.id == id }
             notice = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -495,7 +495,7 @@ final class FriendsModel {
             notice = String(localized: "You're now friends.")
             await refresh()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -511,7 +511,7 @@ final class FriendsModel {
             notice = nil
             await refresh()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -533,7 +533,7 @@ final class FriendsModel {
             }
             await refresh()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -549,7 +549,7 @@ final class FriendsModel {
         do {
             return try await session.api.openConversation(userIds: [userId])
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
             return nil
         }
     }
@@ -790,8 +790,11 @@ struct AddFriendView: View {
                 message = apiError.errorDescription
             }
         } catch {
-            isFailure = true
-            message = error.localizedDescription
+            // A keystroke cancels the search before it; that is not a failure.
+            if let shown = error.userFacingMessage {
+                isFailure = true
+                message = shown
+            }
         }
         searching = false
     }

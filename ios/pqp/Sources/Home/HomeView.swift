@@ -349,7 +349,7 @@ final class HomeModel {
             communitiesEnabled = await session.api.communitiesEnabled()
             await refreshBauUnread()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
         hasLoadedOnce = true
@@ -442,7 +442,7 @@ final class HomeModel {
             )
         } catch {
             servers[index].showOnProfile = previous
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -460,7 +460,7 @@ final class HomeModel {
             createServerAttempt.reset()
             servers.append(server)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -539,7 +539,7 @@ struct HubView: View {
                     .padding(.top, 6)
                     .padding(.bottom, 24)
                 }
-                .refreshable { await model.refresh() }
+                .pullToRefresh { await model.refresh() }
                 .animation(Motion.gentle, value: FirstRun.shouldShow(firstRunInputs))
             }
         }
