@@ -102,7 +102,10 @@ struct FriendsView: View {
             }
         }
         .navigationDestination(item: $opened) { conversation in
-            ChatView(channelId: conversation.channelId, title: conversation.title)
+            // `conversation:` is what puts the call buttons in the header. It
+            // was left out here, so a DM opened from Friends could not ring
+            // the friend it was opened with.
+            ChatView(channelId: conversation.channelId, title: conversation.title, conversation: conversation)
                 // A DM reached from here is as much "where I was" as one
                 // reached from the hub; recording it in only one of the two
                 // places would make the restore look random.

@@ -649,7 +649,7 @@ struct ChannelListView: View {
             // land in.
             session.eventHandlers[handlerKey] = { event in
                 switch event {
-                case .activity(let channelId, let serverId, let mention)
+                case .activity(let channelId, let serverId, let mention, _)
                     where serverId == server.id:
                     let existing = unread[channelId]
                     unread[channelId] = UnreadEntry(

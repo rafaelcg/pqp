@@ -41,6 +41,16 @@
         }
       }
     },
+    "%@ is typing…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tá digitando…"
+          }
+        }
+      }
+    },
     "%@ members" : {
       "localizations" : {
         "pt-BR" : {
@@ -357,6 +367,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "mais %lld pessoas"
+          }
+        }
+      }
+    },
+    "%lld people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pessoas"
           }
         }
       }
@@ -791,6 +811,16 @@
         }
       }
     },
+    "All caught up." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tudo lido por aqui."
+          }
+        }
+      }
+    },
     "ARCHIVED" : {
       "localizations" : {
         "pt-BR" : {
@@ -1211,6 +1241,16 @@
         }
       }
     },
+    "Bring someone to pqp" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chamar alguém pro pqp"
+          }
+        }
+      }
+    },
     "Broadcast quality" : {
       "localizations" : {
         "pt-BR" : {
@@ -1451,6 +1491,16 @@
         }
       }
     },
+    "Chats" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversas"
+          }
+        }
+      }
+    },
     "Check your connection." : {
       "localizations" : {
         "pt-BR" : {
@@ -1557,6 +1607,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fechar"
+          }
+        }
+      }
+    },
+    "Close conversation" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fechar conversa"
           }
         }
       }
@@ -2001,6 +2061,26 @@
         }
       }
     },
+    "Create group" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar grupo"
+          }
+        }
+      }
+    },
+    "Create group (%lld)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar grupo (%lld)"
+          }
+        }
+      }
+    },
     "Create invite" : {
       "localizations" : {
         "pt-BR" : {
@@ -2027,6 +2107,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Crie um para a sua turma, ou entre com um código de convite."
+          }
+        }
+      }
+    },
+    "Create or join a server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar ou entrar num servidor"
           }
         }
       }
@@ -2561,6 +2651,16 @@
         }
       }
     },
+    "Find a conversation or someone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Procura uma conversa ou alguém"
+          }
+        }
+      }
+    },
     "Find communities" : {
       "localizations" : {
         "pt-BR" : {
@@ -2815,6 +2915,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chat em grupo que é seu de verdade. Texto que voa, voz que não falha."
+          }
+        }
+      }
+    },
+    "Groups" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos"
           }
         }
       }
@@ -3309,6 +3419,16 @@
         }
       }
     },
+    "Look for someone else" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Procurar outra pessoa"
+          }
+        }
+      }
+    },
     "Make a community" : {
       "localizations" : {
         "pt-BR" : {
@@ -3649,6 +3769,16 @@
         }
       }
     },
+    "New conversation" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nova conversa"
+          }
+        }
+      }
+    },
     "New deck · %lld left" : {
       "localizations" : {
         "pt-BR" : {
@@ -3749,6 +3879,16 @@
         }
       }
     },
+    "No conversation with “%@”." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma conversa com “%@”."
+          }
+        }
+      }
+    },
     "No conversations" : {
       "localizations" : {
         "pt-BR" : {
@@ -3769,6 +3909,16 @@
         }
       }
     },
+    "No friends here yet. Search for someone by name or name#0000 above." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não tem amigos aqui. Procura alguém pelo nome ou nome#0000 aí em cima."
+          }
+        }
+      }
+    },
     "No friends yet" : {
       "localizations" : {
         "pt-BR" : {
@@ -3785,6 +3935,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nenhum amigo ainda. Busca um @ completo tipo nome#1234, ou adiciona alguém em Amigos primeiro."
+          }
+        }
+      }
+    },
+    "No groups yet. Pick two or more people in New conversation." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum grupo ainda. Marca duas pessoas ou mais em Nova conversa."
           }
         }
       }
@@ -4179,6 +4339,16 @@
         }
       }
     },
+    "On pqp" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No pqp"
+          }
+        }
+      }
+    },
     "One choice for your camera and your screen share. Auto asks the camera for 720p and lets the connection decide from there. A fixed choice asks for that size and sends your screen at that size too. Your screen is captured at 720p on a phone whatever you pick, so 1080p and 720p send the same picture with more bits behind it. The picture still drops below your choice when the link cannot carry it." : {
       "localizations" : {
         "pt-BR" : {
@@ -4195,6 +4365,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Online"
+          }
+        }
+      }
+    },
+    "Online now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Online agora"
           }
         }
       }
@@ -4265,6 +4445,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir o perfil de %@"
+          }
+        }
+      }
+    },
+    "Open conversation" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir conversa"
           }
         }
       }
@@ -4415,6 +4605,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escolhe pelo menos uma tag."
+          }
+        }
+      }
+    },
+    "Pick people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marca as pessoas"
           }
         }
       }
@@ -4675,6 +4875,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Motivo (opcional)"
+          }
+        }
+      }
+    },
+    "Recent" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recentes"
           }
         }
       }
@@ -4969,6 +5179,36 @@
         }
       }
     },
+    "Say hi" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dizer oi"
+          }
+        }
+      }
+    },
+    "Say hi to someone and the conversation stays in this list, always one tap away." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manda um oi pra alguém e a conversa fica nessa lista, sempre a um toque."
+          }
+        }
+      }
+    },
+    "Search by name or name#0000" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Procura pelo nome ou nome#0000"
+          }
+        }
+      }
+    },
     "Search titles" : {
       "localizations" : {
         "pt-BR" : {
@@ -4979,12 +5219,42 @@
         }
       }
     },
+    "Sent a file" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviou um arquivo"
+          }
+        }
+      }
+    },
+    "Sent a GIF" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviou um GIF"
+          }
+        }
+      }
+    },
     "Server default" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Padrão do servidor"
+          }
+        }
+      }
+    },
+    "Servers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidores"
           }
         }
       }
@@ -6409,6 +6679,16 @@
         }
       }
     },
+    "typing…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "digitando…"
+          }
+        }
+      }
+    },
     "Unban" : {
       "localizations" : {
         "pt-BR" : {
@@ -6499,12 +6779,32 @@
         }
       }
     },
+    "Unread chats" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não lidas"
+          }
+        }
+      }
+    },
     "Unusable" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu"
+          }
+        }
+      }
+    },
+    "up to %lld people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "até %lld pessoas"
           }
         }
       }
@@ -6615,6 +6915,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mensagem de voz"
+          }
+        }
+      }
+    },
+    "Voice message · %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagem de voz · %@"
           }
         }
       }
@@ -6789,6 +7099,16 @@
         }
       }
     },
+    "With an invite or from the communities list" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Com convite ou pela lista de comunidades"
+          }
+        }
+      }
+    },
     "Write a comment" : {
       "localizations" : {
         "pt-BR" : {
@@ -6839,12 +7159,22 @@
         }
       }
     },
+    "yesterday" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ontem"
+          }
+        }
+      }
+    },
     "You" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você"
+            "value" : "Tu"
           }
         }
       }
@@ -6865,6 +7195,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você pode trocar de novo a partir de %@."
+          }
+        }
+      }
+    },
+    "You can pin up to 15 conversations. Unpin one first." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dá pra fixar até 15 conversas. Desafixa uma antes."
           }
         }
       }
@@ -6999,6 +7339,16 @@
         }
       }
     },
+    "you: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tu: %@"
+          }
+        }
+      }
+    },
     "Your Baú is empty" : {
       "localizations" : {
         "pt-BR" : {
@@ -7015,6 +7365,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sua transmissão parou, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
+          }
+        }
+      }
+    },
+    "Your conversations live here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tuas conversas moram aqui"
           }
         }
       }

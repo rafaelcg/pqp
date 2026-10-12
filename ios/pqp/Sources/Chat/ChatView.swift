@@ -303,6 +303,11 @@ struct ChatView: View {
             onDelete: { confirmingForumDelete = true }
         ))
         .navigationBarTitleDisplayMode(.inline)
+        // Inside a conversation the screen is the conversation: with the
+        // Conversas tabs on, the bar steps aside the way it does in every
+        // messenger, and comes back with the back chevron. A no-op without
+        // the tabs.
+        .toolbar(.hidden, for: .tabBar)
         .toolbarBackground(watchHero ? .hidden : .automatic, for: .navigationBar)
         // The system chevron would float over the film, exempt from the
         // autohide every other control follows; the overlay draws its own
