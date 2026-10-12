@@ -153,7 +153,7 @@ struct HomeView: View {
             // Not in the list: a forum post (a push for a reply in one names
             // the post's own channel). The post knows its forum; anything
             // else, or a post this account cannot see, lands on the server.
-            if let detail = try? await session.api.forumPost(id: channelId),
+            if let detail = await forumPostOnce(channelId),
                channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
                 restoredChannel = RestoredChannel(
                     server: server, channel: nil,
@@ -186,6 +186,23 @@ struct HomeView: View {
             guard let server = await resolveServer(serverId) else { return }
             restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
         }
+    }
+
+    /// A post a push named, asked twice before giving up: a tap on a
+    /// notification often wakes the app with the network still waking too.
+    /// A 404 is final.
+    private func forumPostOnce(_ id: String) async -> ForumPostDetail? {
+        for delay in [0.0, 1.5] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            do {
+                return try await session.api.forumPost(id: id)
+            } catch APIError.notFound {
+                return nil
+            } catch {
+                continue
+            }
+        }
+        return nil
     }
 
     /// A server by id, refreshing the list once if it is not already known —

@@ -137,18 +137,28 @@ final class ForumHomeModel {
         async let tagsAnswer = try? session.api.forumTags(forumId: forum.id)
         async let settingsAnswer = try? session.api.forumSettings(forumId: forum.id)
         async let permissionsAnswer = try? session.api.fetchMemberPermissions(serverId: server.id)
-        if let settings = await settingsAnswer {
-            self.settings = settings
-            // The forum's own order applies until this person picks one.
-            if !hasSavedFilters { filters.sort = settings.defaultSort }
+        if hasSavedFilters {
+            // This person's own order is known: the list does not wait for
+            // the forum's settings.
+            await load()
+            if let settings = await settingsAnswer { self.settings = settings }
+        } else {
+            if let settings = await settingsAnswer {
+                self.settings = settings
+                // The forum's own order applies until this person picks one.
+                filters.sort = settings.defaultSort
+            }
+            await load()
         }
-        await load()
         if let tags = await tagsAnswer { self.tags = tags }
         config = await configAnswer
         if let permissions = await permissionsAnswer { self.permissions = permissions }
         // Visiting the forum is reading it: the sidebar's pip clears, and the
-        // next visit measures "Novo" from here.
-        try? await session.api.markRead(channelId: forum.id)
+        // next visit measures "Novo" from here. Only once something was
+        // actually shown: a failed read must not swallow what is new.
+        if phase == .ready {
+            try? await session.api.markRead(channelId: forum.id)
+        }
     }
 
     /// Page 1 for the current filters, replacing the list.
@@ -197,7 +207,10 @@ final class ForumHomeModel {
     }
 
     func loadMore() async {
-        guard let session, let cursor = state.nextCursor, !isLoadingMore, phase == .ready else { return }
+        // Not while page 1 is being read again for new filters: the cursor on
+        // screen belongs to the old ones.
+        guard let session, let cursor = state.nextCursor, !isLoadingMore, !isRefreshing,
+              phase == .ready else { return }
         isLoadingMore = true
         loadMoreFailed = false
         let request = generation

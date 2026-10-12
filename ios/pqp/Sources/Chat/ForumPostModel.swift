@@ -29,6 +29,19 @@ final class ForumPostModel {
     private(set) var permissions: PermissionsSnapshot?
     /// What went wrong with the last edit, said once above the composer.
     var notice: String?
+    /// A deep link's first read failed for a reason other than "gone" (a
+    /// timeout, a 5xx): the screen offers a retry instead of calling the post
+    /// deleted.
+    private(set) var loadFailed = false
+    /// A follow toggle is on its way; a second tap waits for it.
+    private(set) var isFollowBusy = false
+
+    /// Bumped by every upsert for this post, so a detail read that was
+    /// already in flight cannot put back an older title or status.
+    @ObservationIgnored private var frameSeq = 0
+    /// Edits run one after another: a slow PATCH that fails must not roll
+    /// back a later one that succeeded.
+    @ObservationIgnored private var saveChain: Task<Void, Never>?
 
     @ObservationIgnored weak var home: ForumHomeModel?
     @ObservationIgnored private weak var session: SessionStore?
@@ -125,47 +138,69 @@ final class ForumPostModel {
         let api = session.api
         let forumId = forumId
         let serverId = serverId
-        async let detailAnswer = try? api.forumPost(id: postId)
         async let tagsAnswer: [ForumTag]? = needsTags ? try? api.forumTags(forumId: forumId) : nil
         async let permissionsAnswer: PermissionsSnapshot? = needsPermissions
             ? try? api.fetchMemberPermissions(serverId: serverId) : nil
-        if let detail = await detailAnswer {
-            if viewer == nil {
-                // First answer for a deep link: this IS the cursor before the visit.
-                previousReadAt = detail.viewer.lastReadAt
-            }
-            apply(detail: detail)
-        } else if viewer == nil {
-            // The post is gone or not ours to see; say so rather than spin.
-            isRemoved = true
-        }
+        await loadDetail()
         if let tags = await tagsAnswer { self.tags = tags }
         if let permissions = await permissionsAnswer { self.permissions = permissions }
+    }
+
+    /// The post's detail. Only a 404 means gone; anything else is retried a
+    /// couple of times and then offered as "Tentar de novo".
+    func loadDetail() async {
+        guard let session else { return }
+        loadFailed = false
+        for delay in [0.0, 1.0, 3.0] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            let seq = frameSeq
+            do {
+                let detail = try await session.api.forumPost(id: postId)
+                if viewer == nil {
+                    // First answer for a deep link: this IS the cursor before the visit.
+                    previousReadAt = detail.viewer.lastReadAt
+                }
+                apply(detail: detail, keepsPost: seq != frameSeq)
+                return
+            } catch APIError.notFound {
+                // Gone, or not ours to see; say so rather than spin.
+                if viewer == nil { isRemoved = true }
+                return
+            } catch {
+                continue
+            }
+        }
+        if viewer == nil { loadFailed = true }
     }
 
     func stop() {
         session?.eventHandlers.removeValue(forKey: handlerKey)
     }
 
-    private func apply(detail: ForumPostDetail) {
-        post = detail.post
+    /// `keepsPost`: a frame arrived while the read was in flight, and it is
+    /// newer than what the read says about the post itself.
+    private func apply(detail: ForumPostDetail, keepsPost: Bool = false) {
+        if !keepsPost { post = detail.post }
         viewer = detail.viewer
         acceptedAnswer = detail.acceptedAnswer
         participantCount = detail.participantCount
     }
 
     private func refreshDetail() async {
-        guard let session, let detail = try? await session.api.forumPost(id: postId) else { return }
+        guard let session else { return }
+        let seq = frameSeq
+        guard let detail = try? await session.api.forumPost(id: postId) else { return }
         // The viewer half of a re-read is after this visit marked the post
         // read; keep the cursor this visit opened with.
         let opened = previousReadAt
-        apply(detail: detail)
+        apply(detail: detail, keepsPost: seq != frameSeq)
         previousReadAt = opened
     }
 
     func apply(_ event: RealtimeEvent) {
         switch event {
         case .forumPostUpsert(_, let fresh) where fresh.id == postId:
+            frameSeq += 1
             let answerMoved = fresh.acceptedAnswerId != post?.acceptedAnswerId
             post = fresh
             if answerMoved {
@@ -179,7 +214,14 @@ final class ForumPostModel {
             isRemoved = true
         case .messageDeleted(let channelId, let messageId)
             where channelId == postId && messageId == post?.acceptedAnswerId:
-            // The answer was deleted: the card says so, the post stays resolved.
+            // The answer was deleted: the card says so at once (even if the
+            // re-read below fails), and the post stays resolved.
+            if let answer = acceptedAnswer {
+                acceptedAnswer = ForumAcceptedAnswer(
+                    messageId: answer.messageId, deleted: true, authorId: answer.authorId,
+                    authorName: answer.authorName, excerpt: nil, createdAt: answer.createdAt
+                )
+            }
             Task { await refreshDetail() }
         default:
             break
@@ -208,16 +250,34 @@ final class ForumPostModel {
 
     // MARK: - Edits
 
+    /// One edit, queued behind any still in flight.
     private func save(
+        answer: ForumAcceptedAnswer? = nil,
+        optimistic: @escaping (inout ForumPostSummary) -> Void,
+        patch: APIClient.ForumPostPatch
+    ) async {
+        let previous = saveChain
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.performSave(answer: answer, optimistic: optimistic, patch: patch)
+        }
+        saveChain = task
+        await task.value
+    }
+
+    private func performSave(
+        answer: ForumAcceptedAnswer?,
         optimistic: (inout ForumPostSummary) -> Void,
-        patch: APIClient.ForumPostPatch,
-        failure: String? = nil
+        patch: APIClient.ForumPostPatch
     ) async {
         guard let session, var draft = post else { return }
+        // Captured before anything optimistic, the answer included, so a
+        // refusal puts back exactly what was there.
         let before = post
         let answerBefore = acceptedAnswer
         optimistic(&draft)
         post = draft
+        if let answer { acceptedAnswer = answer }
         if draft.acceptedAnswerId == nil { acceptedAnswer = nil }
         home?.replaced(draft)
         do {
@@ -228,7 +288,7 @@ final class ForumPostModel {
             post = before
             acceptedAnswer = answerBefore
             if let before { home?.replaced(before) }
-            notice = failure ?? Self.copy(for: error)
+            notice = Self.copy(for: error)
             Haptics.selection()
         }
     }
@@ -261,12 +321,12 @@ final class ForumPostModel {
 
     /// "Marcar como solução": the reply becomes the answer, the post resolved.
     func markAnswer(_ message: Message) async {
-        acceptedAnswer = ForumAcceptedAnswer(
+        let provisional = ForumAcceptedAnswer(
             messageId: message.id, deleted: false, authorId: message.authorId,
             authorName: message.authorName, excerpt: message.body, createdAt: message.createdAt
         )
-        let provisional = acceptedAnswer
         await save(
+            answer: provisional,
             optimistic: { post in
                 post.acceptedAnswerId = message.id
                 if post.resolvedAt == nil { post.resolvedAt = Date() }
@@ -274,7 +334,7 @@ final class ForumPostModel {
             patch: .init(acceptedAnswer: .set(message.id))
         )
         if post?.acceptedAnswerId == message.id {
-            acceptedAnswer = provisional
+            // The server's excerpt, flattened and capped as the web shows it.
             await refreshDetail()
         }
     }
@@ -313,7 +373,9 @@ final class ForumPostModel {
     }
 
     func toggleFollow() async {
-        guard let session, var current = viewer else { return }
+        guard let session, var current = viewer, !isFollowBusy else { return }
+        isFollowBusy = true
+        defer { isFollowBusy = false }
         let next = !current.following
         current.following = next
         viewer = current

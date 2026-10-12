@@ -1451,6 +1451,16 @@
         }
       }
     },
+    "Check your connection." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confere tua conexão."
+          }
+        }
+      }
+    },
     "Checking…" : {
       "localizations" : {
         "pt-BR" : {
@@ -1917,6 +1927,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu pra carregar os posts."
+          }
+        }
+      }
+    },
+    "Couldn't load the post." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar o post."
           }
         }
       }

@@ -93,6 +93,10 @@ struct ForumListState: Equatable, Sendable {
     var forumPreviousReadAt: Date?
     /// Live changes held while the reader is busy, newest last, one per post.
     var queued: [ForumPostSummary] = []
+    /// New posts already counted that the list does not hold (they failed
+    /// the filters), so a second frame for one is not a second arrival and
+    /// its removal is still uncounted.
+    var countedElsewhere: Set<String> = []
 
     var isEmpty: Bool { pinned.isEmpty && posts.isEmpty }
 
@@ -277,9 +281,9 @@ enum ForumList {
         // A post the list never held, with no replies and newer than anything
         // it did hold, is a new post; anything else unknown is an old post
         // bumped or edited beyond the loaded pages.
-        let newestCreated = (state.pinned + state.posts).map(\.createdAt).max()
-        let brandNew = previous == nil && post.replyCount == 0
-            && (newestCreated.map { post.createdAt > $0 } ?? true)
+        let alreadyCounted = state.countedElsewhere.contains(post.id)
+        let brandNew = previous == nil && !alreadyCounted && post.replyCount == 0
+            && isNewerThanEverything(post, in: state)
         let counts = adjustCounts(state.counts, previous: previous, post: post, isNew: brandNew)
 
         // Pins sit above every filter and only vanish under a search.
@@ -326,6 +330,7 @@ enum ForumList {
 
         if !passes {
             base.queued = without(base.queued, post.id)
+            if brandNew { base.countedElsewhere.insert(post.id) }
             return base
         }
         if filters.sort == .created && !brandNew {
@@ -345,11 +350,26 @@ enum ForumList {
         return base
     }
 
+    /// Newer than every post the list holds. A single pass, no copies: this
+    /// runs for every frame of a busy forum.
+    private static func isNewerThanEverything(_ post: ForumPostSummary, in state: ForumListState) -> Bool {
+        for one in state.pinned where one.createdAt >= post.createdAt { return false }
+        for one in state.posts where one.createdAt >= post.createdAt { return false }
+        return true
+    }
+
     /// One `forum-post-removed`: gone from every list, the queue included.
     static func remove(_ state: ForumListState, postId: String) -> ForumListState {
         // A post still in the queue was counted when it arrived, so it is
         // uncounted when it goes too.
         let previous = state.post(id: postId) ?? state.queued.first { $0.id == postId }
+        if previous == nil, state.countedElsewhere.contains(postId), let counts = state.counts {
+            // Counted on arrival but never drawn (it failed the filters).
+            var next = state
+            next.countedElsewhere.remove(postId)
+            next.counts = ForumCounts(posts: max(0, counts.posts - 1), open: counts.open)
+            return next
+        }
         guard previous != nil else { return state }
         var next = state
         if let previous, let counts = state.counts {
@@ -373,7 +393,11 @@ enum ForumList {
         var next = state
         next.queued = []
         next.counts = nil
-        for post in state.queued {
+        // Oldest first: under "Mais novos" a post is placed by comparing it
+        // with the newest one already in, so applying a newer arrival first
+        // would make an older one that arrived after it look stale.
+        let ordered = state.queued.sorted { $0.createdAt < $1.createdAt }
+        for post in ordered {
             let onScreen = next.posts.contains { $0.id == post.id }
             if onScreen && filters.sort == .activity {
                 // Its words were already updated in place when it was queued,

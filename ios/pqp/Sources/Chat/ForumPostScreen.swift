@@ -27,6 +27,18 @@ struct ForumPostScreen: View {
                     flagsServerId: model.serverId,
                     forumPost: model
                 )
+            } else if model.loadFailed {
+                // A timeout is not a deletion: say it did not load, and retry.
+                ZStack {
+                    Palette.ink.ignoresSafeArea()
+                    EmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "Couldn't load the post.",
+                        message: "Check your connection.",
+                        actionTitle: "Try again",
+                        action: { Task { await model.loadDetail() } }
+                    )
+                }
             } else {
                 ZStack {
                     Palette.ink.ignoresSafeArea()

@@ -289,6 +289,31 @@ final class ForumTests: XCTestCase {
         XCTAssertEqual(next.posts.map(\.id), ["b"])
     }
 
+    /// A new post that fails the filters is counted once, however many
+    /// frames name it, and uncounted when it goes.
+    func testAFilteredOutArrivalIsCountedOnce() {
+        var open = ForumFilters()
+        open.status = .open
+        let start = state([post("b", created: 20)])
+        let solved = post("n", created: 30, resolved: true)
+        let once = ForumList.upsert(start, post: solved, ctx: ctx(open))
+        let twice = ForumList.upsert(once, post: solved, ctx: ctx(open))
+        XCTAssertEqual(twice.posts.map(\.id), ["b"])
+        XCTAssertEqual(twice.counts?.posts, 2)
+        XCTAssertEqual(ForumList.remove(twice, postId: "n").counts?.posts, 1)
+    }
+
+    /// Two arrivals queued newest-first still both land under "Mais novos".
+    func testTheQueueAppliesOldestFirst() {
+        var newest = ForumFilters()
+        newest.sort = .created
+        var held = state([post("a", created: 10)])
+        held = ForumList.upsert(held, post: post("c", created: 30), ctx: ctx(newest, hold: true))
+        held = ForumList.upsert(held, post: post("b", created: 20), ctx: ctx(newest, hold: true))
+        let flushed = ForumList.flushQueue(held, filters: newest, viewerId: me)
+        XCTAssertEqual(flushed.posts.map(\.id), ["c", "b", "a"])
+    }
+
     // MARK: - Reducer: pins, removal, pages
 
     func testPinsIgnoreTheFiltersButNotASearch() {
@@ -482,10 +507,14 @@ final class ForumTests: XCTestCase {
 
     func testTheDraftIsKeptPerForumAndAnEmptyOneIsForgotten() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "forum-draft-\(UUID().uuidString)"))
-        let store = ForumDraftStore(defaults: defaults)
+        let store = ForumDraftStore(accountId: me, defaults: defaults)
         store.save(ForumDraft(title: "tela azul", body: "", tagIds: [tagBug]), forumId: "f")
         XCTAssertEqual(store.load(forumId: "f")?.title, "tela azul")
         XCTAssertNil(store.load(forumId: "g"))
+        XCTAssertNil(
+            ForumDraftStore(accountId: them, defaults: defaults).load(forumId: "f"),
+            "another account on this phone never sees the draft"
+        )
         store.save(ForumDraft(), forumId: "f")
         XCTAssertNil(store.load(forumId: "f"))
     }

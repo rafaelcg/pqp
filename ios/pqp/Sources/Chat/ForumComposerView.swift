@@ -18,11 +18,16 @@ struct ForumDraft: Codable, Equatable {
 struct ForumDraftStore {
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(accountId: String, defaults: UserDefaults = .standard) {
+        self.accountId = accountId
         self.defaults = defaults
     }
 
-    private func key(_ forumId: String) -> String { "pqp.forum.draft.\(forumId)" }
+    /// Per account AND forum: a phone signed into a second account must not
+    /// show the first one's unpublished words.
+    let accountId: String
+
+    private func key(_ forumId: String) -> String { "pqp.forum.draft.\(accountId).\(forumId)" }
 
     func load(forumId: String) -> ForumDraft? {
         guard let data = defaults.data(forKey: key(forumId)),
@@ -161,15 +166,18 @@ struct ForumComposerView: View {
     @State private var refusal: ForumComposerRefusal?
     @State private var triedPublish = false
     @State private var now = Date()
-    /// One per attempt, reused on a retry of the same draft, so a lost answer
-    /// never makes two posts.
+    /// One per attempt, reused on a retry of the same draft AND the same
+    /// files, so a lost answer never makes two posts and a changed attempt is
+    /// never answered with the old one.
     @State private var nonce = UUID().uuidString
     @State private var nonceDraft: ForumDraft?
+    @State private var nonceFiles: [UUID] = []
     @FocusState private var focus: Field?
 
     private enum Field: Hashable { case title, body }
 
     private var forumId: String { home.forum.id }
+    private var drafts: ForumDraftStore { ForumDraftStore(accountId: session.currentUser?.id ?? "anon") }
     private var trimmedTitle: String { draft.title.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var needsTag: Bool { home.settings.requireTag && draft.tagIds.isEmpty }
     private var hasBody: Bool {
@@ -236,7 +244,7 @@ struct ForumComposerView: View {
         .onAppear(perform: loadDraft)
         .onChange(of: draft) { _, next in
             guard hasLoadedDraft else { return }
-            ForumDraftStore().save(next, forumId: forumId)
+            drafts.save(next, forumId: forumId)
             if refusal?.field == .tags, !next.tagIds.isEmpty { refusal = nil }
         }
         .task(id: trimmedTitle) { await searchSimilar() }
@@ -317,7 +325,7 @@ struct ForumComposerView: View {
             ForEach(similar) { post in
                 Rectangle().fill(Palette.border).frame(height: 1)
                 Button {
-                    ForumDraftStore().save(draft, forumId: forumId)
+                    drafts.save(draft, forumId: forumId)
                     onOpenSimilar?(post)
                 } label: {
                     HStack(spacing: 10) {
@@ -523,7 +531,7 @@ struct ForumComposerView: View {
             Spacer()
             if !draft.isEmpty || !attachments.isEmpty {
                 Button("Discard") {
-                    ForumDraftStore().clear(forumId: forumId)
+                    drafts.clear(forumId: forumId)
                     hasLoadedDraft = false
                     draft = ForumDraft()
                     attachments = []
@@ -606,7 +614,7 @@ struct ForumComposerView: View {
 
     private func loadDraft() {
         guard !hasLoadedDraft else { return }
-        if let saved = ForumDraftStore().load(forumId: forumId) {
+        if let saved = drafts.load(forumId: forumId) {
             draft = saved
             restored = true
         }
@@ -665,9 +673,11 @@ struct ForumComposerView: View {
         defer { publishing = false }
 
         // A retry of the same draft reuses the nonce; a changed draft is a new attempt.
-        if nonceDraft != draft {
+        let files = attachments.map(\.id)
+        if nonceDraft != draft || nonceFiles != files {
             nonce = UUID().uuidString
             nonceDraft = draft
+            nonceFiles = files
         }
 
         // Minted against the FORUM: the post has no id yet. The create
@@ -703,7 +713,7 @@ struct ForumComposerView: View {
         )
         do {
             let created = try await session.api.createForumPost(forumId: forumId, body: body)
-            ForumDraftStore().clear(forumId: forumId)
+            drafts.clear(forumId: forumId)
             Haptics.selection()
             onPublished(created.post, created.viewer)
         } catch {

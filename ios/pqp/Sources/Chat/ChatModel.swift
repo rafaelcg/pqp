@@ -246,9 +246,9 @@ final class ChatModel {
         if let channelId {
             session?.channelWentAway(channelId)
         }
-        if joinedAsThread, let realtime = session?.realtime {
+        if joinedAsThread, let realtime = session?.realtime, let channelId {
             joinedAsThread = false
-            Task { await realtime.leaveThread() }
+            Task { await realtime.leaveThread(channelId: channelId) }
         }
         typingSweeper?.cancel()
         typingSweeper = nil

@@ -689,6 +689,15 @@ actor RealtimeClient {
         await send(raw: ["type": "thread-leave"])
     }
 
+    /// Leaves the thread slot only if it still holds `channelId`. Closing one
+    /// forum post and opening the next races: the old screen's leave can land
+    /// after the new screen's join, and the frame names no channel, so
+    /// without this it would empty the slot the new post just took.
+    func leaveThread(channelId: String) async {
+        guard joinedThreadChannelId == channelId else { return }
+        await leaveThread()
+    }
+
     /// Returns the nonce so the caller can match the echo back to its optimistic
     /// row. There is no ack frame: the echo on `message-broadcast` is what
     /// confirms a send, and `message-rejected` (same nonce) is what refuses
