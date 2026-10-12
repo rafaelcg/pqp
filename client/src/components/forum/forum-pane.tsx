@@ -307,13 +307,23 @@ export function ForumPane({
 
   // ------------------------------------------------------------ tags etc.
   const [tags, setTags] = useState<ForumTag[]>([]);
+  // Only an answered read may stand for "this forum has no tags": the
+  // starter tags replace the whole list, and building that from a failed
+  // read would delete the forum's real tags.
+  const [tagsLoaded, setTagsLoaded] = useState(false);
   const [settings, setSettings] = useState<ForumSettings | null>(null);
   useEffect(() => {
     let cancelled = false;
     setTags([]);
+    setTagsLoaded(false);
     setSettings(null);
     fetchForumTags(forumId)
-      .then(({ tags: next }) => !cancelled && setTags(next))
+      .then(({ tags: next }) => {
+        if (!cancelled) {
+          setTags(next);
+          setTagsLoaded(true);
+        }
+      })
       .catch(() => {});
     fetchForumSettings(forumId)
       .then(({ settings: next }) => !cancelled && setSettings(next))
@@ -328,6 +338,7 @@ export function ForumPane({
   // only exists where the flag was on, and the server refuses a create anyway.
   const [fetchedEnabled, setFetchedEnabled] = useState<boolean | null>(null);
   useEffect(() => {
+    setFetchedEnabled(null);
     if (creationEnabledProp !== undefined) {
       return;
     }
@@ -428,6 +439,8 @@ export function ForumPane({
   const listRef = useRef(list);
   listRef.current = list;
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  /** Page 1 failed to refresh while older cards are still on screen. */
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [moreState, setMoreState] = useState<"idle" | "loading" | "error">("idle");
   const [reloadToken, setReloadToken] = useState(0);
   const filtersRef = useRef(filters);
@@ -435,23 +448,52 @@ export function ForumPane({
 
   /** The next page-1 read is a reconnect: merge, do not replace. */
   const mergeNextLoadRef = useRef(false);
+  /** Read through a ref: the reducer's "is the reader busy" is defined below. */
+  const isHeldRef = useRef<() => boolean>(() => false);
+  /** Bumped by every page-1 read; a later page from an older read is dropped. */
+  const listGenRef = useRef(0);
+  /** The forum the list on screen was read for. */
+  const listForumRef = useRef<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    const merge = mergeNextLoadRef.current;
+    const merge = mergeNextLoadRef.current && listForumRef.current === forumId;
     mergeNextLoadRef.current = false;
-    setLoadState((state) => (state === "ready" && listRef.current.posts.length > 0 ? state : "loading"));
+    listGenRef.current += 1;
+    if (listForumRef.current !== forumId) {
+      // Another forum: its cards never stand in for this one's, not even
+      // while this one loads.
+      listForumRef.current = forumId;
+      setList(emptyForumList());
+      setLoadState("loading");
+    } else {
+      // Same forum, new filters or a reconnect: the cards stay while the new
+      // page loads, and a failure says so above them (`refreshFailed`).
+      setLoadState((state) => (state === "ready" && listRef.current.posts.length > 0 ? state : "loading"));
+    }
+    setRefreshFailed(false);
     if (!merge) {
       setMoreState("idle");
     }
     fetchForumPosts(forumId, filters, null, controller.signal)
       .then((page) => {
+        if (controller.signal.aborted) {
+          return;
+        }
         setList((current) =>
-          merge ? refreshForumFirstPage(current, page) : forumListFromPage(page),
+          merge
+            ? refreshForumFirstPage(current, page, { hold: isHeldRef.current() })
+            : forumListFromPage(page),
         );
         setLoadState("ready");
       })
       .catch(() => {
-        if (!controller.signal.aborted) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (listRef.current.posts.length > 0 || listRef.current.pinned.length > 0) {
+          setRefreshFailed(true);
+          setLoadState("ready");
+        } else {
           setLoadState("error");
         }
       });
@@ -477,33 +519,48 @@ export function ForumPane({
     }
     setMoreState("loading");
     const requested = filtersRef.current;
+    const generation = listGenRef.current;
+    const current = () => listGenRef.current === generation;
     fetchForumPosts(forumId, requested, cursor)
       .then((page) => {
-        if (filtersRef.current !== requested) {
+        if (!current()) {
           return;
         }
-        setList((current) => appendForumPage(current, page));
+        setList((list) => appendForumPage(list, page));
         setMoreState("idle");
       })
-      .catch(() => setMoreState("error"));
+      .catch(() => {
+        if (current()) {
+          setMoreState("error");
+        }
+      });
   }, [forumId, moreState]);
 
   // --------------------------------------------------------- open post
-  const [localPostId, setLocalPostId] = useState<string | null>(null);
-  const openPostId = routePostId !== undefined ? routePostId : localPostId;
+  // The address bar drives the open post only when the shell both names it
+  // and takes changes; a `routePostId` alone is where the pane starts.
+  const routeControlled = routePostId !== undefined && onRoutePostChange !== undefined;
+  const [localPostId, setLocalPostId] = useState<string | null>(routePostId ?? null);
+  const openPostId = routeControlled ? routePostId : localPostId;
   const setOpenPostId = useCallback(
     (postId: string | null) => {
-      if (onRoutePostChange) {
-        onRoutePostChange(postId);
-      }
-      if (routePostId === undefined || !onRoutePostChange) {
+      if (routeControlled) {
+        onRoutePostChange?.(postId);
+      } else {
         setLocalPostId(postId);
+        onRoutePostChange?.(postId);
       }
     },
-    [onRoutePostChange, routePostId],
+    [onRoutePostChange, routeControlled],
   );
+  // Another forum in the same mount closes the post; the first render keeps
+  // the post it started on.
+  const postForumRef = useRef(forumId);
   useEffect(() => {
-    setLocalPostId(null);
+    if (postForumRef.current !== forumId) {
+      postForumRef.current = forumId;
+      setLocalPostId(null);
+    }
   }, [forumId]);
   const openPostIdRef = useRef(openPostId);
   openPostIdRef.current = openPostId;
@@ -592,6 +649,7 @@ export function ForumPane({
     const scrolled = node ? node.scrollTop > TOP_SLACK_PX : false;
     return scrolled || focusInListRef.current;
   }, []);
+  isHeldRef.current = isHeld;
   const [enteringIds, setEnteringIds] = useState<ReadonlySet<string>>(new Set());
   const [leavingIds, setLeavingIds] = useState<ReadonlySet<string>>(new Set());
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
@@ -1256,7 +1314,7 @@ export function ForumPane({
           </Button>
         )}
         {pausedLine}
-        {canManage && tags.length === 0 && (
+        {canManage && tagsLoaded && tags.length === 0 && (
           <div className="mt-2 flex w-full flex-wrap items-center justify-center gap-1.5 text-xs text-text-tertiary">
             <span>{t("forum.empty.starter")}</span>
             {starterKind.map((key) => (
@@ -1284,6 +1342,19 @@ export function ForumPane({
     const noResults = list.posts.length === 0 && (filters.q || list.pinned.length === 0 || forumFiltersActive(filters));
     listBody = (
       <>
+        {refreshFailed && (
+          <div
+            role="alert"
+            className="mb-3 flex items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-2.5 text-sm text-text-secondary"
+            data-forum-refresh-failed=""
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <span className="flex-1">{t("forum.loadError")}</span>
+            <Button size="sm" variant="ghost" onClick={() => setReloadToken((n) => n + 1)}>
+              {t("forum.retry")}
+            </Button>
+          </div>
+        )}
         {!filters.q && list.pinned.length > 0 && (
           <section aria-label={t("forum.pinned")} className="mb-3">
             <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">

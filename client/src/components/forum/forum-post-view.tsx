@@ -128,6 +128,11 @@ export interface ForumPostViewProps {
   notify: (text: string, action?: { label: string; onClick: () => void }) => void;
 }
 
+/** The detail's people count refreshes at most this often as replies land. */
+const DETAIL_REFRESH_MS = 30_000;
+/** A failed detail read is asked again this many times. */
+const DETAIL_RETRIES = 3;
+
 /** See the transcript effect: the closing read waits a beat for a remount. */
 const leaveTimers = new Map<string, number>();
 
@@ -348,12 +353,21 @@ export function ForumPostView({
       window.clearTimeout(pendingLeave);
       leaveTimers.delete(postId);
     }
-    void Promise.all([fetchMessages(postId), readCursorOnce(postId, markReadRef.current)])
-      .then(async ([page, previous]) => {
+    void fetchMessages(postId)
+      .then(async (page) => {
         if (cancelled) {
           return;
         }
         controller.setMessages(page.messages, page.hasMore);
+        // Read only once the transcript is in: a failed load must not mark
+        // the post read. A failed read is treated as a first visit rather
+        // than throwing away the transcript.
+        const previous = await readCursorOnce(postId, markReadRef.current).catch(
+          () => null,
+        );
+        if (cancelled) {
+          return;
+        }
         // The newest page ends on the newest reply, which is the one place a
         // post must not open on: page back to the question (first visit) or
         // to the first reply this reader has not seen (a revisit).
@@ -401,25 +415,38 @@ export function ForumPostView({
 
   // -------------------------------------------------------------- detail
   const [detail, setDetail] = useState<ForumPostDetailResponse | null>(null);
-  const detailKey = `${postId}:${post.acceptedAnswerId ?? ""}:${post.replyCount}`;
+  // Replies only change the people count, so they refresh it at most every
+  // 30 s; a new answer refreshes at once.
+  const repliesBucket = Math.floor(Date.now() / DETAIL_REFRESH_MS);
+  const detailKey = `${postId}:${post.acceptedAnswerId ?? ""}:${
+    post.replyCount > 0 ? repliesBucket : 0
+  }`;
   useEffect(() => {
-    const controllerAbort = new AbortController();
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const read = (attempt: number) => {
       fetchForumPost(postId)
         .then((next) => {
-          if (!controllerAbort.signal.aborted) {
+          if (!cancelled) {
             setDetail(next);
           }
         })
-        .catch(() => {});
-    }, detail === null ? 0 : 600);
-    return () => {
-      window.clearTimeout(timer);
-      controllerAbort.abort();
+        .catch(() => {
+          // A blip leaves the answer card and Seguir missing for the visit
+          // unless it is asked again.
+          if (!cancelled && attempt < DETAIL_RETRIES) {
+            timer = window.setTimeout(() => read(attempt + 1), 2000 * 2 ** attempt);
+          }
+        });
     };
-    // `detail` only decides the first read's delay.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailKey]);
+    read(0);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [detailKey, postId]);
   const [following, setFollowing] = useState<boolean | null>(null);
   useEffect(() => {
     setFollowing(detail?.viewer.following ?? null);
@@ -437,19 +464,34 @@ export function ForumPostView({
     : null;
 
   // --------------------------------------------------------------- actions
+  // Two quick actions overlap; only the newest one's answer is applied, so an
+  // older response arriving late cannot undo the newer state on screen.
+  const patchSeqRef = useRef(0);
   const patch = useCallback(
     async (update: UpdateForumPostRequest, optimistic: ForumPostSummary) => {
       const before = post;
+      const seq = ++patchSeqRef.current;
+      const latest = () => patchSeqRef.current === seq;
       onPostChange(optimistic);
       try {
         const { post: saved } = await updateForumPost(postId, update);
-        onPostChange(saved);
+        if (latest()) {
+          onPostChange(saved);
+        }
       } catch (error) {
         // The server's copy, not a snapshot: a second action or a live frame
         // that landed meanwhile must not be undone by this one's rollback.
         fetchForumPost(postId)
-          .then(({ post: fresh }) => onPostChange(fresh))
-          .catch(() => onPostChange(before));
+          .then(({ post: fresh }) => {
+            if (latest()) {
+              onPostChange(fresh);
+            }
+          })
+          .catch(() => {
+            if (latest()) {
+              onPostChange(before);
+            }
+          });
         if (
           error instanceof ApiError &&
           (error.message === FORUM_ERRORS.pinLimit ||
@@ -514,9 +556,14 @@ export function ForumPostView({
     }
   }
 
+  const [followBusy, setFollowBusy] = useState(false);
   async function toggleFollow() {
+    if (followBusy) {
+      return;
+    }
     const next = !following;
     setFollowing(next);
+    setFollowBusy(true);
     try {
       const { viewer } = await setForumPostFollow(postId, next);
       setFollowing(viewer.following);
@@ -529,6 +576,8 @@ export function ForumPostView({
         return;
       }
       notify(t("forum.saveFailed"));
+    } finally {
+      setFollowBusy(false);
     }
   }
 
@@ -836,6 +885,7 @@ export function ForumPostView({
               size="sm"
               variant={following ? "secondary" : "ghost"}
               onClick={() => void toggleFollow()}
+              disabled={followBusy}
               aria-pressed={following}
               className="gap-1.5 max-sm:h-11"
             >

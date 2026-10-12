@@ -67,6 +67,26 @@ import { cn } from "@/lib/utils";
  */
 
 const SIMILAR_MIN_CHARS = 4;
+
+/**
+ * The attempt whose outcome is unknown (the request failed without an
+ * answer), per forum, for the rest of the session: its exact payload and the
+ * nonce it went out with. Retrying the SAME payload reuses the nonce, so a
+ * post the server did create comes back instead of being made twice, even
+ * after the dialog was closed and reopened. A changed payload is a different
+ * post and gets a new nonce. Cleared once the server answers either way.
+ */
+const pendingAttempts = new Map<string, { signature: string; nonce: string }>();
+
+function attemptNonce(forumId: string, signature: string): string {
+  const pending = pendingAttempts.get(forumId);
+  if (pending && pending.signature === signature) {
+    return pending.nonce;
+  }
+  const nonce = createSendNonce();
+  pendingAttempts.set(forumId, { signature, nonce });
+  return nonce;
+}
 const SIMILAR_DEBOUNCE_MS = 300;
 const DRAFT_DEBOUNCE_MS = 300;
 
@@ -168,7 +188,6 @@ export function ForumComposerDialog({
   const [publishError, setPublishError] = useState<ForumPublishError | null>(null);
   const [heldUntil, setHeldUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const nonceRef = useRef(createSendNonce());
   const bodyRef = useRef<EmbeddedComposerState>({
     body: "",
     attachments: [],
@@ -190,7 +209,6 @@ export function ForumComposerDialog({
     setShowErrors(false);
     setPublishError(null);
     setBusy(false);
-    nonceRef.current = createSendNonce();
     // Tags arriving later must not reseed what the person already changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, forumId]);
@@ -261,7 +279,13 @@ export function ForumComposerDialog({
     if (heldUntil <= Date.now()) {
       return;
     }
-    const id = window.setInterval(() => setNow(Date.now()), 250);
+    const id = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= heldUntil) {
+        window.clearInterval(id);
+      }
+    }, 250);
     return () => window.clearInterval(id);
   }, [heldUntil]);
   const heldSeconds = Math.max(0, Math.ceil((heldUntil - now) / 1000));
@@ -296,16 +320,21 @@ export function ForumComposerDialog({
     }
     setBusy(true);
     setPublishError(null);
+    const payload = {
+      title: trimmedTitle,
+      body: current.body,
+      tagIds,
+      attachmentIds: current.attachments.map((one) => one.attachmentId),
+    };
+    const nonce = attemptNonce(forumId, JSON.stringify(payload));
     try {
-      const { post, viewer } = await createForumPost(forumId, {
-        title: trimmedTitle,
-        body: current.body,
-        tagIds,
-        attachmentIds: current.attachments.map((one) => one.attachmentId),
-        nonce: nonceRef.current,
-      });
+      const { post, viewer } = await createForumPost(forumId, { ...payload, nonce });
+      pendingAttempts.delete(forumId);
       clearComposerDraft(forumId);
       onPublished(post, viewer);
+      // The body is the composer's own draft, written one last time as the
+      // dialog closes and the composer unmounts: cleared after that.
+      window.setTimeout(() => clearDraft(forumId), 0);
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
@@ -313,10 +342,11 @@ export function ForumComposerDialog({
         setHeldUntil(Date.now() + reason.retryAfterMs);
         setNow(Date.now());
       }
-      // A refusal is final for this body; a retry of the same attempt after a
-      // network failure keeps its nonce so the server answers the same post.
+      // A refusal is an answer: nothing was created, the next attempt is new.
+      // Only an unanswered failure keeps its nonce for a retry of the same
+      // payload (`attemptNonce`).
       if (reason.kind !== "failed") {
-        nonceRef.current = createSendNonce();
+        pendingAttempts.delete(forumId);
       }
       setBusy(false);
     }
@@ -631,6 +661,9 @@ export function ForumComposerDialog({
             id={titleId}
             ref={titleRef}
             autoFocus
+            // Fixed while a publish is in flight: what is retried must be
+            // what was sent.
+            readOnly={busy}
             value={title}
             maxLength={FORUM_TITLE_MAX}
             placeholder={t("forum.composer.titlePlaceholder")}
@@ -790,7 +823,7 @@ export function ForumComposerDialog({
             >
               {visibleTags.map((tag, index) => {
                 const on = tagIds.includes(tag.id);
-                const disabled = !on && atMax;
+                const disabled = busy || (!on && atMax);
                 return (
                   <button
                     key={tag.id}
