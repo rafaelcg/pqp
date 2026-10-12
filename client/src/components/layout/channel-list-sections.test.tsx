@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Channel, Server } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { sectionCollapseKey } from "@/lib/collapsed-categories";
+import { setChannelNotificationLevel } from "@/lib/notifications";
 import { ChannelList } from "./channel-list";
 
 /**
@@ -134,6 +135,7 @@ describe("ChannelList section headers", () => {
   });
 
   afterEach(() => {
+    setChannelNotificationLevel(MEMES, null);
     vi.unstubAllGlobals();
   });
 
@@ -165,6 +167,26 @@ describe("ChannelList section headers", () => {
       <ChannelList {...baseProps} unread={{ [MEMES]: { count: 3, mentions: 0 } }} />,
     );
     expect(headerButton(html, "Text")).toContain("(unread)");
+  });
+
+  it("marks a folded section that hides a mention with no unread count", () => {
+    // A forum row can carry mentions alone: a reply named you inside a post.
+    collapse(sectionCollapseKey(server.id, "text"));
+    const html = renderList(
+      <ChannelList {...baseProps} unread={{ [MEMES]: { count: 0, mentions: 1 } }} />,
+    );
+    expect(headerButton(html, "Text")).toContain("(unread)");
+  });
+
+  it("does not mark a folded section for a muted channel", () => {
+    setChannelNotificationLevel(MEMES, "none");
+    collapse(sectionCollapseKey(server.id, "text"));
+    const html = renderList(
+      <ChannelList {...baseProps} unread={{ [MEMES]: { count: 3, mentions: 1 } }} />,
+    );
+    const button = headerButton(html, "Text");
+    expect(button).toContain("2 channels");
+    expect(button).not.toContain("(unread)");
   });
 
   it("does not fold Texto on another server", () => {

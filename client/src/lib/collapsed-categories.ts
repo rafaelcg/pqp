@@ -49,7 +49,8 @@ export function sectionCollapseKey(
 /**
  * What a section shows and says while folded. Folding never hides where you
  * are: the open channel and the call you are in stay under a folded header.
- * The dot counts every other unread channel in it.
+ * The dot counts every other channel whose row would show something unread,
+ * which `isUnread` answers with the row's own rule.
  */
 export function foldSection<C extends { id: string }>(
   channels: C[],
@@ -57,12 +58,12 @@ export function foldSection<C extends { id: string }>(
     collapsed,
     selectedChannelId,
     activeVoiceChannelId,
-    unreadCount,
+    isUnread,
   }: {
     collapsed: boolean;
     selectedChannelId: string | null;
     activeVoiceChannelId: string | null;
-    unreadCount: (channelId: string) => number;
+    isUnread: (channel: C) => boolean;
   },
 ): { shown: C[]; hasUnread: boolean } {
   const shown = collapsed
@@ -71,7 +72,7 @@ export function foldSection<C extends { id: string }>(
       )
     : channels;
   const hasUnread = channels.some(
-    (c) => c.id !== selectedChannelId && unreadCount(c.id) > 0,
+    (c) => c.id !== selectedChannelId && isUnread(c),
   );
   return { shown, hasUnread };
 }

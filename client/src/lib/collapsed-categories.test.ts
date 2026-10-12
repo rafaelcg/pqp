@@ -8,14 +8,14 @@ import {
 
 describe("foldSection", () => {
   const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
-  const none = () => 0;
+  const none = () => false;
 
   it("shows every row while open", () => {
     const out = foldSection(rows, {
       collapsed: false,
       selectedChannelId: null,
       activeVoiceChannelId: null,
-      unreadCount: none,
+      isUnread: none,
     });
     expect(out.shown).toEqual(rows);
     expect(out.hasUnread).toBe(false);
@@ -26,16 +26,16 @@ describe("foldSection", () => {
       collapsed: true,
       selectedChannelId: "a",
       activeVoiceChannelId: "c",
-      unreadCount: none,
+      isUnread: none,
     });
     expect(out.shown.map((r) => r.id)).toEqual(["a", "c"]);
   });
 
   it("does not count the open channel as unread", () => {
-    const only = (id: string) => (c: string) => (c === id ? 2 : 0);
+    const only = (id: string) => (c: { id: string }) => c.id === id;
     const base = { collapsed: true, selectedChannelId: "a", activeVoiceChannelId: null };
-    expect(foldSection(rows, { ...base, unreadCount: only("a") }).hasUnread).toBe(false);
-    expect(foldSection(rows, { ...base, unreadCount: only("b") }).hasUnread).toBe(true);
+    expect(foldSection(rows, { ...base, isUnread: only("a") }).hasUnread).toBe(false);
+    expect(foldSection(rows, { ...base, isUnread: only("b") }).hasUnread).toBe(true);
   });
 });
 

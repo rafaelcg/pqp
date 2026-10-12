@@ -142,7 +142,9 @@ import {
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
+  useNotificationState,
 } from "@/hooks/use-notifications";
+import { resolveNotificationLevel } from "@/lib/notifications";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
@@ -688,6 +690,9 @@ export const ChannelList = memo(function ChannelList({
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     loadCollapsedCategories(),
   );
+  // Read here, above the icons-only early return, for the folded headers'
+  // dot: a muted row shows no unread, so its section must not either.
+  const notificationState = useNotificationState();
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [draggedOccupant, setDraggedOccupant] =
@@ -921,7 +926,20 @@ export const ChannelList = memo(function ChannelList({
         collapsed: isCollapsed,
         selectedChannelId,
         activeVoiceChannelId,
-        unreadCount: (id) => unread[id]?.count ?? 0,
+        // The row's own rule: a forum can carry mentions with no count, and
+        // a muted channel shows nothing at all.
+        isUnread: (channel) => {
+          const row = unread[channel.id];
+          return (
+            row !== undefined &&
+            (row.count > 0 || row.mentions > 0) &&
+            resolveNotificationLevel(
+              notificationState,
+              channel.serverId,
+              channel.id,
+            ) !== "none"
+          );
+        },
       }),
     };
   }
