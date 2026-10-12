@@ -5,7 +5,6 @@ import {
   Archive,
   CheckCheck,
   ChevronDown,
-  ChevronRight,
   CirclePlus,
   Copy,
   Eraser,
@@ -131,9 +130,15 @@ import {
 } from "@/lib/channel-favorites";
 import { useHasDraft } from "@/lib/composer-drafts";
 import {
+  foldSection,
   loadCollapsedCategories,
+  sectionCollapseKey,
   toggleCollapsedCategory,
 } from "@/lib/collapsed-categories";
+import {
+  ChannelSectionHeader,
+  SECTION_FOCUS_RING,
+} from "@/components/layout/channel-section-header";
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
@@ -905,6 +910,34 @@ export const ChannelList = memo(function ChannelList({
   function toggleCollapsed(categoryId: string) {
     setCollapsed(toggleCollapsedCategory(categoryId));
   }
+
+  function foldFor(channels: Channel[], key: string) {
+    const isCollapsed = collapsed.has(key);
+    return {
+      collapsed: isCollapsed,
+      onToggle: () => toggleCollapsed(key),
+      childCount: channels.length,
+      ...foldSection(channels, {
+        collapsed: isCollapsed,
+        selectedChannelId,
+        activeVoiceChannelId,
+        unreadCount: (id) => unread[id]?.count ?? 0,
+      }),
+    };
+  }
+
+  const textFold = foldFor(
+    topLevelText,
+    sectionCollapseKey(server?.id ?? "", "text"),
+  );
+  const voiceFold = foldFor(
+    topLevelVoice,
+    sectionCollapseKey(server?.id ?? "", "voice"),
+  );
+  const pinnedFold = foldFor(
+    visibleFavs,
+    favoritesCollapseKey(server?.id ?? ""),
+  );
 
   function clearDrag() {
     setDraggedId(null);
@@ -2318,10 +2351,7 @@ export const ChannelList = memo(function ChannelList({
                       draggedChannel()?.type !== "category",
                   ))) && (
               <PinnedChannelsSection
-                collapsed={collapsed.has(favoritesCollapseKey(server.id))}
-                onToggle={() =>
-                  toggleCollapsed(favoritesCollapseKey(server.id))
-                }
+                {...pinnedFold}
                 isDragOver={dragOverId === PINNED_ZONE && !draggedOccupant}
                 onDragOver={() =>
                   !draggedOccupant && draggedId && setDragOverId(PINNED_ZONE)
@@ -2335,7 +2365,7 @@ export const ChannelList = memo(function ChannelList({
                   handleDropOnFavorites();
                 }}
               >
-                {visibleFavs.map((channel) =>
+                {pinnedFold.shown.map((channel) =>
                   renderRow(channel, visibleFavs, true),
                 )}
               </PinnedChannelsSection>
@@ -2449,6 +2479,7 @@ export const ChannelList = memo(function ChannelList({
             <>
             <ChannelSection
               label={t("chrome.text")}
+              fold={textFold}
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
@@ -2486,11 +2517,12 @@ export const ChannelList = memo(function ChannelList({
                 }
               }}
             >
-              {topLevelText.map((channel) => renderRow(channel, topLevelText))}
+              {textFold.shown.map((channel) => renderRow(channel, topLevelText))}
             </ChannelSection>
 
             <ChannelSection
               label={t("chrome.voice")}
+              fold={voiceFold}
               canManage={canManage}
               onAdd={() => onCreateChannel("voice", false)}
               onAddPrivate={() => onCreateChannel("voice", true)}
@@ -2517,15 +2549,17 @@ export const ChannelList = memo(function ChannelList({
                 }
               }}
             >
-              {topLevelVoice.map((channel) =>
+              {voiceFold.shown.map((channel) =>
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
-                <div className="mb-1 flex items-center justify-between px-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                <div className="mb-1 flex min-h-6 items-center justify-between px-2">
+                  {/* Indented past the chevron the folding headers carry, so
+                      every section label starts on one line. */}
+                  <span className="pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
                     {t("chrome.categories")}
                   </span>
                   {canManage && (
@@ -2535,23 +2569,30 @@ export const ChannelList = memo(function ChannelList({
                     <Tooltip label={t("chrome.newCategory")}>
                       <button
                         type="button"
-                        className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                        className={cn(
+                          "rounded-sm p-0.5 text-text-tertiary hover:bg-surface-2 hover:text-text",
+                          SECTION_FOCUS_RING,
+                        )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <FolderPlus className="h-3.5 w-3.5" />
+                        <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
                     </Tooltip>
                   )}
                 </div>
                 {categories.map((category) => {
                   const kids = childrenByCategory.get(category.id) ?? [];
-                  const isCollapsed = collapsed.has(category.id);
+                  const categoryFold = foldFor(kids, category.id);
+                  const bodyId = `category-body-${category.id}`;
                   return (
                     <div key={category.id} className="mb-1">
                       <CategoryHeader
                         category={category}
-                        collapsed={isCollapsed}
-                        onToggle={() => toggleCollapsed(category.id)}
+                        collapsed={categoryFold.collapsed}
+                        onToggle={categoryFold.onToggle}
+                        childCount={categoryFold.childCount}
+                        hasUnread={categoryFold.hasUnread}
+                        controlsId={bodyId}
                         canManage={canManage}
                         onRename={() => onRenameChannel(category)}
                         onDelete={() => onDeleteChannel(category.id)}
@@ -2575,9 +2616,10 @@ export const ChannelList = memo(function ChannelList({
                           handleDrop(category);
                         }}
                       />
-                      {!isCollapsed && (
-                        <div className="ml-2 border-l border-ink-4/70 pl-2">
-                          {kids.length === 0 ? (
+                      <div id={bodyId} className="ml-2 border-l border-border/70 pl-2">
+                          {categoryFold.collapsed ? (
+                            categoryFold.shown.map((channel) => renderRow(channel, kids))
+                          ) : kids.length === 0 ? (
                             // The empty-category placeholder is itself a drop
                             // target. Without these handlers a channel dragged
                             // onto the "drag a channel here" hint fell through
@@ -2619,7 +2661,6 @@ export const ChannelList = memo(function ChannelList({
                             kids.map((channel) => renderRow(channel, kids))
                           )}
                         </div>
-                      )}
                     </div>
                   );
                 })}
@@ -2782,6 +2823,8 @@ const ServerHeaderMenuTrigger = forwardRef<
 function PinnedChannelsSection({
   collapsed,
   onToggle,
+  childCount,
+  hasUnread,
   isDragOver,
   onDragOver,
   onDrop,
@@ -2789,15 +2832,26 @@ function PinnedChannelsSection({
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  childCount: number;
+  hasUnread: boolean;
   isDragOver: boolean;
   onDragOver: () => void;
   onDrop: () => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  const bodyId = useId();
   return (
     <div className="mb-4" data-pinned-channels="">
-      <div
+      <ChannelSectionHeader
+        label={t("chrome.pinnedChannels")}
+        collapsed={collapsed}
+        onToggle={onToggle}
+        controlsId={bodyId}
+        childCount={childCount}
+        hasUnread={hasUnread}
+        isDragOver={isDragOver}
+        className="mb-1"
         onDragOver={(event) => {
           event.preventDefault();
           onDragOver();
@@ -2807,27 +2861,8 @@ function PinnedChannelsSection({
           event.stopPropagation();
           onDrop();
         }}
-        className={cn(
-          "mb-1 flex items-center justify-between px-2",
-          isDragOver && "rounded-md ring-1 ring-inset ring-signal/60",
-        )}
-      >
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted hover:text-paper"
-          aria-expanded={!collapsed}
-        >
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 transition-transform",
-              !collapsed && "rotate-90",
-            )}
-          />
-          <span className="truncate">{t("chrome.pinnedChannels")}</span>
-        </button>
-      </div>
-      {!collapsed && children}
+      />
+      <div id={bodyId}>{children}</div>
     </div>
   );
 }
@@ -2869,8 +2904,16 @@ export function textSectionAddMenu({
   ];
 }
 
+interface SectionFold {
+  collapsed: boolean;
+  onToggle: () => void;
+  childCount: number;
+  hasUnread: boolean;
+}
+
 function ChannelSection({
   label,
+  fold,
   canManage,
   onAdd,
   onAddPrivate,
@@ -2881,6 +2924,7 @@ function ChannelSection({
   onDrop,
 }: {
   label: string;
+  fold: SectionFold;
   canManage: boolean;
   onAdd: () => void;
   onAddPrivate: () => void;
@@ -2896,16 +2940,23 @@ function ChannelSection({
   onDrop?: () => void;
 }) {
   const { t } = useTranslation();
+  const bodyId = useId();
   const typeName = label.toLowerCase();
-  const addButtonClass =
-    "rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper data-[state=open]:bg-ink-3 data-[state=open]:text-paper";
+  const addButtonClass = cn(
+    "rounded-sm p-0.5 text-text-tertiary hover:bg-surface-2 hover:text-text data-[state=open]:bg-surface-2 data-[state=open]:text-text",
+    SECTION_FOCUS_RING,
+  );
   return (
     <div className="mb-4">
-      <div
-        className={cn(
-          "mb-1 flex items-center justify-between px-2",
-          isDragOver && "rounded-md ring-1 ring-inset ring-signal/60",
-        )}
+      <ChannelSectionHeader
+        label={label}
+        collapsed={fold.collapsed}
+        onToggle={fold.onToggle}
+        controlsId={bodyId}
+        childCount={fold.childCount}
+        hasUnread={fold.hasUnread}
+        isDragOver={isDragOver}
+        className="mb-1"
         onDragOver={
           onDragOver
             ? (event) => {
@@ -2922,51 +2973,49 @@ function ChannelSection({
               }
             : undefined
         }
-      >
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-          {label}
-        </span>
-        {canManage && (
-          <div className="flex gap-0.5">
-            {addMenu && addMenu.length > 0 ? (
-              // The tooltip wraps the menu's trigger, not the other way
-              // round: Radix's trigger is `asChild`, and a Tooltip inside it
-              // would swallow the click that opens the menu.
-              <Menu items={addMenu} align="end">
+        actions={
+          canManage && (
+            <div className="flex shrink-0 gap-0.5 tracking-normal">
+              {addMenu && addMenu.length > 0 ? (
+                // The tooltip wraps the menu's trigger, not the other way
+                // round: Radix's trigger is `asChild`, and a Tooltip inside it
+                // would swallow the click that opens the menu.
+                <Menu items={addMenu} align="end">
+                  <button
+                    type="button"
+                    data-channel-section-add=""
+                    aria-label={t("chrome.newInSection", { name: typeName })}
+                    className={addButtonClass}
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </Menu>
+              ) : (
+                <Tooltip label={t("chrome.newChannel", { name: typeName })}>
+                  <button
+                    type="button"
+                    data-channel-section-add=""
+                    className={addButtonClass}
+                    onClick={onAdd}
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
                 <button
                   type="button"
-                  data-channel-section-add=""
-                  aria-label={t("chrome.newInSection", { name: typeName })}
                   className={addButtonClass}
+                  onClick={onAddPrivate}
                 >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              </Menu>
-            ) : (
-              <Tooltip label={t("chrome.newChannel", { name: typeName })}>
-                <button
-                  type="button"
-                  data-channel-section-add=""
-                  className={addButtonClass}
-                  onClick={onAdd}
-                >
-                  <Plus className="h-3.5 w-3.5" />
+                  <Lock className="h-3 w-3" aria-hidden="true" />
                 </button>
               </Tooltip>
-            )}
-            <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
-              <button
-                type="button"
-                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                onClick={onAddPrivate}
-              >
-                <Lock className="h-3 w-3" />
-              </button>
-            </Tooltip>
-          </div>
-        )}
-      </div>
-      {children}
+            </div>
+          )
+        }
+      />
+      <div id={bodyId}>{children}</div>
     </div>
   );
 }
@@ -2983,10 +3032,16 @@ function CategoryHeader({
   onDragEnd,
   onDragOverRow,
   onDrop,
+  childCount,
+  hasUnread,
+  controlsId,
 }: {
   category: Channel;
   collapsed: boolean;
   onToggle: () => void;
+  childCount: number;
+  hasUnread: boolean;
+  controlsId: string;
   canManage: boolean;
   onRename: () => void;
   onDelete: () => void;
@@ -3032,24 +3087,20 @@ function CategoryHeader({
           onDrop();
         }}
         className={cn(
-          "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-paper-muted hover:bg-ink-3/70",
-          isDragOver && "ring-1 ring-inset ring-signal/60",
+          "rounded-[var(--radius-control)] hover:bg-surface-2/70",
+          isDragOver && "ring-1 ring-inset ring-accent/60",
         )}
       >
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1"
-          aria-expanded={!collapsed}
-        >
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 transition-transform",
-              !collapsed && "rotate-90",
-            )}
-          />
-          <span className="truncate">{category.name}</span>
-        </button>
+        <ChannelSectionHeader
+          label={category.name}
+          uppercase={false}
+          collapsed={collapsed}
+          onToggle={onToggle}
+          controlsId={controlsId}
+          childCount={childCount}
+          hasUnread={hasUnread}
+          className="py-1 text-xs"
+        />
       </div>
     </ContextMenu>
   );
