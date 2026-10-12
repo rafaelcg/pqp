@@ -91,7 +91,7 @@ export function AppearanceSection({
           </SettingsNotice>
         </div>
       ) : null}
-      <ThemeGroup />
+      <ThemeAndColorGroups />
       <ChatGroup
         showLinkEmbeds={showLinkEmbeds}
         onShowLinkEmbeds={onShowLinkEmbeds}
@@ -106,16 +106,20 @@ export function AppearanceSection({
 // Tema
 // ---------------------------------------------------------------------------
 
-function ThemeGroup() {
+function ThemeAndColorGroups() {
   const { t } = useTranslation();
   return (
-    <SettingsGroup title={t("settings.appearance.group.theme.title")}>
-      <BrightnessRow />
-      <LookRow />
-      <RetroRows />
-      <AccentRow />
-      <ContrastRow />
-    </SettingsGroup>
+    <>
+      <SettingsGroup title={t("settings.appearance.group.theme.title")}>
+        <BrightnessRow />
+        <ContrastRow />
+      </SettingsGroup>
+      <SettingsGroup title={t("settings.appearance.group.colors.title")}>
+        <LookRow />
+        <RetroRows />
+        <AccentRow />
+      </SettingsGroup>
+    </>
   );
 }
 
@@ -309,11 +313,13 @@ function LockableSegmented<T extends string>({
   );
 }
 
-const LOOK_OPTIONS: {
+type LookOption = {
   value: AppearancePreference;
   label: MessageKey;
   badge?: MessageKey;
-}[] = [
+};
+
+const PQP_LOOKS: LookOption[] = [
   {
     value: "signal",
     label: "settings.appearance.preset.signal",
@@ -336,6 +342,13 @@ const LOOK_OPTIONS: {
     label: "settings.appearance.preset.christmas",
     badge: "settings.appearance.preset.seasonal",
   },
+];
+
+/** Ported open-source palettes, credited in `index.css` and DECISIONS.md. */
+const COMMUNITY_LOOKS: LookOption[] = [
+  { value: "ocean", label: "settings.appearance.preset.ocean" },
+  { value: "catppuccin", label: "settings.appearance.preset.catppuccin" },
+  { value: "everforest", label: "settings.appearance.preset.everforest" },
 ];
 
 function LookRow() {
@@ -364,9 +377,7 @@ function LookRow() {
     chooseLook(next);
   }
 
-  const options: SettingsChoice<Look>[] = LOOK_OPTIONS.filter((option) =>
-    isLookOffered(option.value, appearance, season),
-  ).map((option) => ({
+  const toOption = (option: LookOption): SettingsChoice<Look> => ({
     value: option.value,
     label: t(option.label),
     badge: option.badge ? t(option.badge) : undefined,
@@ -377,17 +388,42 @@ function LookRow() {
         customAccent={customAccent}
       />
     ),
-  }));
+  });
+  const pqpOptions = PQP_LOOKS.filter((option) =>
+    isLookOffered(option.value, appearance, season),
+  ).map(toOption);
   // Modo 2005 only once this browser found it, and never while the operator
   // has it switched off.
   if (isRetroOffered(retro)) {
-    options.push({
+    pqpOptions.push({
       value: "retro",
       label: t("settings.appearance.preset.retro"),
       badge: isRetroNew(retro) ? t("settings.appearance.newBadge") : undefined,
       preview: <span className="appearance-preview-retro" aria-hidden="true" />,
     });
   }
+
+  // Two radiogroups on one value: arrows stay inside a set, Tab moves to the
+  // other, and the unpicked set still has a tab stop on its first card.
+  const grid = (
+    caption: string,
+    hint: string | null,
+    options: SettingsChoice<Look>[],
+  ) => (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+        <span className="text-xs font-medium text-text-secondary">{caption}</span>
+        {hint ? <span className="text-xs text-text-tertiary">{hint}</span> : null}
+      </div>
+      <SettingsChoiceGrid
+        label={t("settings.appearance.preset.groupName", { group: caption })}
+        value={look}
+        onValueChange={choose}
+        columns={options.length > 4 ? 3 : 4}
+        options={options}
+      />
+    </div>
+  );
 
   return (
     <SettingsRow
@@ -400,13 +436,14 @@ function LookRow() {
       }
       stacked
       control={
-        <SettingsChoiceGrid
-          label={t("settings.appearance.preset")}
-          value={look}
-          onValueChange={choose}
-          columns={options.length > 4 ? 3 : 4}
-          options={options}
-        />
+        <div className="space-y-5 pt-1">
+          {grid(t("settings.appearance.preset.group.pqp"), null, pqpOptions)}
+          {grid(
+            t("settings.appearance.preset.group.community"),
+            t("settings.appearance.preset.group.communityHint"),
+            COMMUNITY_LOOKS.map(toOption),
+          )}
+        </div>
       }
     />
   );

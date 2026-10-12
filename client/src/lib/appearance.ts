@@ -24,9 +24,12 @@ export const APPEARANCES = [
   "harmony",
   "hearth",
   "night",
+  "ocean",
+  "catppuccin",
+  "everforest",
   "halloween",
   "christmas",
-] as const;
+] as const satisfies readonly AppearancePreference[];
 
 /**
  * MODO 2005, the hidden fifth look. `data-appearance="retro"` like any other
@@ -91,14 +94,7 @@ export function appearanceForcesDark(
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
-  return (
-    value === "signal" ||
-    value === "harmony" ||
-    value === "hearth" ||
-    value === "night" ||
-    value === "halloween" ||
-    value === "christmas"
-  );
+  return (APPEARANCES as readonly string[]).includes(value ?? "");
 }
 
 /** `guild` and `accord` were earlier ids for harmony. The boot script in
