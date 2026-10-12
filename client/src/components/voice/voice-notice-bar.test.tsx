@@ -64,4 +64,24 @@ describe("VoiceNoticeBar", () => {
     });
     expect(strip()?.textContent).toContain("second");
   });
+
+  it("hands the strip to measureRef while it shows, and lets go when it hides", () => {
+    // The stage moves its title down by the strip's real height, so a notice
+    // that wraps to two lines does not sit on top of it.
+    const seen: (Element | null)[] = [];
+    mount(
+      <VoiceNoticeBar
+        notice="a long notice"
+        autoHideMs={1000}
+        measureRef={(node) => {
+          seen.push(node);
+        }}
+      />,
+    );
+    expect(seen.at(-1)).toBe(strip());
+    act(() => {
+      vi.advanceTimersByTime(1001);
+    });
+    expect(seen.at(-1)).toBeNull();
+  });
 });
