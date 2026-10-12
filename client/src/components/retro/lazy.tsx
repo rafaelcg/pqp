@@ -10,3 +10,12 @@ const load = () => import("./retro-chunk");
 export const RetroLayer = lazy(() =>
   load().then((chunk) => ({ default: chunk.RetroLayer })),
 );
+export const RetroContacts = lazy(() =>
+  load().then((chunk) => ({ default: chunk.RetroContacts })),
+);
+export const RetroWindowChrome = lazy(() =>
+  load().then((chunk) => ({ default: chunk.RetroWindowChrome })),
+);
+export const RetroLogFrame = lazy(() =>
+  load().then((chunk) => ({ default: chunk.RetroLogFrame })),
+);

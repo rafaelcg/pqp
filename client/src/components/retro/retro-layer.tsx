@@ -1,6 +1,16 @@
+import type { DmSummary, UserStatus } from "@pqp/shared";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { OnlineToasts } from "@/components/retro/retro-online-toasts";
 import { StatusDot } from "@/components/user/status-dot";
+import { createConversation } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import {
   dismissRetroFoundCard,
@@ -10,13 +20,37 @@ import {
 import { friendOnlineSynth, messageSynth } from "@/lib/retro-sounds";
 import { playSynthSound, setSynthCueOverride } from "@/lib/sounds";
 
+export interface RetroLayerProps {
+  conversations: readonly DmSummary[];
+  selectedChannelId: string | null;
+  myStatus: UserStatus | null;
+  onSelectConversation: (channelId: string) => void;
+  onOpenConversation: (conversation: DmSummary) => void;
+}
+
 /**
- * Everything Modo 2005 adds that is not a restyle: its sounds and the
- * discovery card, in the bottom-right corner. Its stylesheet arrives with the
- * same lazy chunk. Mounted by the app shell only while the look is on.
+ * Everything Modo 2005 adds that is not a restyle: its sounds, the "diz:"
+ * word the rows read from CSS, and the bottom-right corner (the discovery
+ * card and "acabou de entrar"). Its stylesheet arrives with the same lazy
+ * chunk. Mounted by the app shell only while the look is on.
  */
-export default function RetroLayer() {
+export default function RetroLayer({
+  conversations,
+  selectedChannelId,
+  myStatus,
+  onSelectConversation,
+  onOpenConversation,
+}: RetroLayerProps) {
+  const { t } = useTranslation();
   const retro = useRetroState();
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--retro-says", JSON.stringify(` ${t("retro.saysSuffix")}`));
+    return () => {
+      root.style.removeProperty("--retro-says");
+    };
+  }, [t]);
 
   useEffect(() => {
     if (!retro.sounds) {
@@ -26,9 +60,44 @@ export default function RetroLayer() {
     return () => setSynthCueOverride("message", null);
   }, [retro.sounds]);
 
+  const openFriend = useCallback(
+    async (friendId: string) => {
+      const existing = conversations.find(
+        (one) =>
+          one.kind === "dm" &&
+          one.participants.length === 1 &&
+          one.participants[0]!.id === friendId,
+      );
+      if (existing) {
+        onSelectConversation(existing.channelId);
+        return;
+      }
+      try {
+        const { conversation } = await createConversation([friendId]);
+        onOpenConversation(conversation);
+      } catch {
+        // Nothing to open; the card simply goes.
+      }
+    },
+    [conversations, onOpenConversation, onSelectConversation],
+  );
+
+  const selected = conversations.find((one) => one.channelId === selectedChannelId);
+  const peerOfSelected =
+    selected?.kind === "dm" && selected.participants.length === 1
+      ? selected.participants[0]!.id
+      : null;
+
   return (
     <RetroCorner>
       {retro.foundCardPending && <FoundCard sounds={retro.sounds} />}
+      <OnlineToasts
+        enabled={retro.toasts}
+        sounds={retro.sounds}
+        myStatus={myStatus}
+        focusedPeerId={peerOfSelected}
+        onOpen={(id) => void openFriend(id)}
+      />
     </RetroCorner>
   );
 }

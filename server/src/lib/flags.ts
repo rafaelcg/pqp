@@ -657,9 +657,9 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     // A look belongs to a person, not a server.
     perServer: false,
-    // Served as `retroLook` on `GET /api/fun/config`. No `clientVia` until the
-    // client that reads it (the Modo 2005 PR) lands: the contract test fails
-    // a field no client source names.
+    // Read by `client/src/lib/retro-look.ts`, only in a browser that found the
+    // look; a `false` paints the look underneath and hides tile and command.
+    clientVia: "GET /api/fun/config (retroLook)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

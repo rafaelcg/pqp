@@ -612,7 +612,12 @@ import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
 import { startRetroLookFlag } from "@/lib/retro-look";
-import { RetroLayer } from "@/components/retro/lazy";
+import {
+  RetroContacts,
+  RetroLayer,
+  RetroLogFrame,
+  RetroWindowChrome,
+} from "@/components/retro/lazy";
 import { adoptContrastPreference } from "@/lib/contrast";
 import { adoptChatDisplay } from "@/lib/chat-display";
 import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
@@ -9655,6 +9660,61 @@ function MainAppContent({
       ? (conversations.find((one) => one.channelId === selectedChannelId) ??
         null)
       : null;
+  // Modo 2005 (`components/retro/`): who "you" are on its contact list and
+  // picture frames, and the way a contact with no conversation yet opens one.
+  const retroMe = user
+    ? {
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+        status: status.effective,
+        invisible: status.manual === "invisible",
+        customStatus: customStatus.value,
+      }
+    : null;
+  const openConversationSummary = (conversation: DmSummary) => {
+    setConversations((prev) => upsertConversation(prev, conversation));
+    void selectConversation(conversation.channelId);
+  };
+  // A conversation drawn as a 2005 window: title bar, toolbar, pictures.
+  const retroWindow = retroOn && activeConversation !== null;
+  // The window's toolbar offers what the regular header offers, no more.
+  const retroCallActions = (channelId: string) => {
+    if (voiceState.voiceChannelId === channelId && voiceState.status !== "idle") {
+      return {};
+    }
+    if ((voiceState.occupancy[channelId]?.length ?? 0) > 0) {
+      return { onCall: () => void handleConversationCall(channelId, false) };
+    }
+    return {
+      onCall: () => void handleConversationCall(channelId, true),
+      onVideo: () => void handleConversationCall(channelId, true, true),
+    };
+  };
+  const retroBlockActions = (conversation: DmSummary) => {
+    const peer =
+      conversation.kind === "dm" && conversation.participants.length === 1
+        ? conversation.participants[0]!
+        : null;
+    if (!peer) {
+      return {};
+    }
+    return {
+      blocked: blockedUserIds.has(peer.id),
+      onBlock: () => void handleBlockUser(peer.id),
+      onUnblock: () => void handleUnblockUser(peer.id),
+    };
+  };
+  // The log with the framed pictures beside it, in a 2005 window only.
+  const withRetroPictures = (list: React.ReactNode) =>
+    retroWindow && activeConversation ? (
+      <Suspense fallback={list}>
+        <RetroLogFrame conversation={activeConversation} me={retroMe}>
+          {list}
+        </RetroLogFrame>
+      </Suspense>
+    ) : (
+      list
+    );
   /**
    * The open channel, whichever kind it is. A conversation is dressed as the
    * channel row it actually is so the whole pane below — header, list,
@@ -10355,6 +10415,7 @@ function MainAppContent({
   const chatPane = selectedChannel ? (
     <FileDropZone
       className="flex min-h-0 min-w-0 flex-1 flex-col"
+      data-retro-window={retroWindow ? "" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
@@ -10369,7 +10430,23 @@ function MainAppContent({
           : undefined
       }
     >
-      {!partyOwnsHeader && (
+      {retroWindow && activeConversation && (
+        <Suspense fallback={null}>
+          <RetroWindowChrome
+            conversation={activeConversation}
+            onOpenNav={() => setMobileNavOpen(true)}
+            {...retroCallActions(activeConversation.channelId)}
+            onSendFiles={
+              chatDrop.mode === "accept"
+                ? (files) => setDroppedItems({ files, folders: [] })
+                : undefined
+            }
+            onPins={() => setPinsOpen(true)}
+            {...retroBlockActions(activeConversation)}
+          />
+        </Suspense>
+      )}
+      {!partyOwnsHeader && !retroWindow && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -11335,6 +11412,7 @@ function MainAppContent({
           onStageAction={handleWatchPartyStage}
         />
       ) : (
+      withRetroPictures(
       <MessageList
         onCopyOwnerInvite={
           ownerAloneHere && selectedServerId && selectedChannel.kind === "server"
@@ -11412,7 +11490,8 @@ function MainAppContent({
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
         onLiveEndChange={handleMessageListLiveEnd}
-      />
+      />,
+      )
       )}
       {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
           a Chamar beside them, reaction bursts, as a strip above the
@@ -11692,11 +11771,17 @@ function MainAppContent({
         onActiveChange={setDmToastActive}
       />
 
-      {/* Modo 2005's own layer: its stylesheet, sounds and the discovery
-          card. Loaded only while the look is on. */}
+      {/* Modo 2005's own layer: its stylesheet, sounds, the discovery card
+          and "fulano acabou de entrar". Loaded only while the look is on. */}
       {retroOn && (
         <Suspense fallback={null}>
-          <RetroLayer />
+          <RetroLayer
+            conversations={conversations}
+            selectedChannelId={selectedChannelId}
+            myStatus={status.effective}
+            onSelectConversation={(id) => void selectConversation(id)}
+            onOpenConversation={openConversationSummary}
+          />
         </Suspense>
       )}
 
@@ -11942,7 +12027,29 @@ function MainAppContent({
           whatsNewOpen && "hidden",
         )}
       >
-      {selection.kind === "dm" ? (
+      {selection.kind === "dm" && retroOn ? (
+        // Modo 2005's contact list: the same data, drawn as the old
+        // chat clients drew it. Nothing is drawn for the instant the
+        // look's chunk takes to load.
+        <Suspense fallback={null}>
+          <RetroContacts
+            conversations={conversations}
+            selectedChannelId={selectedChannelId}
+            unread={unread}
+            isLoading={conversationsLoading}
+            onSelectConversation={(id) => void selectConversation(id)}
+            onOpenConversation={openConversationSummary}
+            onStartConversation={() => setNewDmOpen(true)}
+            onOpenFriends={selectHome}
+            friendsSelected={!selectedChannelId}
+            friendRequestCount={friends.data.incoming.length}
+            mobileOpen={mobileNavOpen}
+            onMobileClose={() => setMobileNavOpen(false)}
+            footer={sidebarFooter()}
+            me={retroMe}
+          />
+        </Suspense>
+      ) : selection.kind === "dm" ? (
         <DmList
           home={conversationsHome}
           phoneShell={phoneShell}

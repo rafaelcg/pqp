@@ -27,6 +27,7 @@ import {
   isRetroNew,
   isRetroOffered,
   setRetroSounds,
+  setRetroToasts,
   useRetroState,
 } from "@/lib/retro-look";
 import type { ContrastPreference } from "@/lib/contrast";
@@ -421,7 +422,7 @@ function LookRow() {
   );
 }
 
-/** The look's own switches, only while it is the one painted. */
+/** The look's own two switches, only while it is the one painted. */
 function RetroRows() {
   const { t } = useTranslation();
   const retro = useRetroState();
@@ -436,6 +437,13 @@ function RetroRows() {
         description={t("retro.settings.soundsHint")}
         checked={retro.sounds}
         onCheckedChange={setRetroSounds}
+      />
+      <SettingsSwitchRow
+        id="retro-toasts"
+        label={t("retro.settings.toasts")}
+        description={t("retro.settings.toastsHint")}
+        checked={retro.toasts}
+        onCheckedChange={setRetroToasts}
       />
     </>
   );
