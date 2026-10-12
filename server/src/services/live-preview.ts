@@ -14,6 +14,7 @@ import {
 import { getPool } from "../db.js";
 import { flagServerOverrides, isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { liveHlsStreamFor, liveHlsStreamFromDb } from "../voice/hls-egress.js";
 import { LADDER_RUNGS } from "../voice/hls-ladder.js";
 import { presentHlsViewers } from "../voice/hls-viewer-counts.js";
@@ -191,6 +192,7 @@ export function resetLivePreviewForTests(): void {
   refusalLog.clear();
   seatedCache.clear();
   seatedInFlight.clear();
+  invalidateReadCache(LISTING_CACHE_PREFIX);
 }
 
 /**
@@ -524,6 +526,34 @@ export async function previewServerForInvite(code: string): Promise<string | nul
   );
   const id = result.rows[0]?.id ?? null;
   return id && livePreviewOnFor(id) ? id : null;
+}
+
+/**
+ * THE LISTING IS ONE ANSWER PER COMMUNITY, cached and coalesced. It needs no
+ * credential and is the same for every caller, and a streamer's link going
+ * around means many open pages polling it every 30 s from many addresses. So
+ * the per-server half (live channels with their counts, and the upcoming
+ * sessions, about six queries) is read once per `LISTING_CACHE_MS` per
+ * process, whoever asks (`coalesce`, `lib/read-cache.ts`). The flag and the
+ * community checks stay outside it (`previewServerForSlug`), so switching the
+ * flag off is answered by the very next request. A host turning "Prévia
+ * pública" off can stay listed for up to twice this; the start route reads
+ * fresh and refuses at once.
+ */
+const LISTING_CACHE_MS = 5_000;
+const LISTING_CACHE_PREFIX = "live-preview-listing:";
+
+export async function livePreviewListingFor(serverId: string): Promise<{
+  channels: LivePreviewListedChannel[];
+  upcoming: LivePreviewUpcoming[];
+}> {
+  return coalesce(`${LISTING_CACHE_PREFIX}${serverId}`, LISTING_CACHE_MS, async () => {
+    const [channels, upcoming] = await Promise.all([
+      listLivePreviewChannels(serverId),
+      listLivePreviewUpcoming(serverId),
+    ]);
+    return { channels, upcoming };
+  });
 }
 
 /** How long a session row may claim to be live, the watch party sweep's own bound. */

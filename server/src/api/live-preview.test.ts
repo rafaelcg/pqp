@@ -591,6 +591,9 @@ describeDb("signed-out live preview", () => {
       expect(livePreviewMetrics().refused).toMatchObject({ "not-public": 1 });
 
       await optIn(true);
+      // The listing is cached per community for a few seconds
+      // (`livePreviewListingFor`); drop it, as the test cannot wait it out.
+      resetLivePreviewForTests();
       expect(
         ((await listing()).body as { livePreview: { channels: Array<{ id: string }> } }).livePreview
           .channels.map((row) => row.id),
@@ -731,6 +734,19 @@ describeDb("signed-out live preview", () => {
       expect(livePreviewMetrics().playlistRefused).toMatchObject({ "not-film": 1 });
     });
 
+    it("answers the listing from one read per community for a few seconds", async () => {
+      const listing = () => call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+      const ids = (res: Res) =>
+        (res.body as { livePreview: { channels: Array<{ id: string }> } }).livePreview.channels.map(
+          (row) => row.id,
+        );
+      expect(ids(await listing())).toEqual([liveChannel]);
+      // A second party goes live: the next request inside the cache window
+      // is still the first answer, so a crowd of open pages costs one read.
+      await goLive(idleChannel);
+      expect(ids(await listing())).toEqual([liveChannel]);
+    });
+
     it("refuses new players the moment the flag goes off or the channel goes private", async () => {
       const body = (await start(liveChannel)).body as StartBody;
       const path = pathOf(body.stream.hlsUrl);
@@ -831,6 +847,14 @@ describeDb("signed-out live preview", () => {
       expect((await start(liveChannel)).status).toBe(200);
       expect((await start(otherLiveChannel)).status).toBe(404);
       expect((await call("GET", "/api/public/live-preview/communities/outra-sala")).status).toBe(404);
+    });
+
+    it("the listing cache never outlives the flag: switching a community off is the next answer", async () => {
+      process.env.LIVE_PREVIEW = "true";
+      const listing = () => call("GET", "/api/public/live-preview/communities/sala-do-rafa");
+      expect((await listing()).status).toBe(200);
+      await flags.setServerFlagOverride("live_preview", serverId, false, { kind: "dashboard" });
+      expect((await listing()).status).toBe(404);
     });
 
     it("global on, this community off: refused here, served elsewhere", async () => {

@@ -16,8 +16,7 @@ import {
 } from "../lib/http.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import {
-  listLivePreviewChannels,
-  listLivePreviewUpcoming,
+  livePreviewListingFor,
   livePreviewMaybeOn,
   livePreviewSeconds,
   previewServerForInvite,
@@ -153,14 +152,13 @@ async function serveListing(
       sendError(res, 404, "Not found", req);
       return;
     }
-    const [channels, upcoming] = await Promise.all([
-      listLivePreviewChannels(serverId),
-      listLivePreviewUpcoming(serverId),
-    ]);
-    // The same for every caller holding the link, and needed no credential:
-    // a few seconds at a shared cache is what keeps a streamer's audience
-    // arriving at once from being one query each. Short, because "is anything
-    // live" is the whole question.
+    // Cached and coalesced per community in this process
+    // (`livePreviewListingFor`), so a streamer's audience arriving at once is
+    // a handful of queries, not six each.
+    const { channels, upcoming } = await livePreviewListingFor(serverId);
+    // The same for every caller holding the link, and needed no credential,
+    // so a shared cache in front may keep it a few seconds too. Short,
+    // because "is anything live" is the whole question.
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Cache-Control": "public, max-age=10",
