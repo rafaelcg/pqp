@@ -1,4 +1,6 @@
 import {
+  forumTagIconEmoji,
+  forumTagNameKey,
   type Channel,
   type ForumPostSummary,
 } from "@pqp/shared";
@@ -83,10 +85,13 @@ import {
   writePostMaximized,
   writeRulesHidden,
 } from "@/lib/forum-prefs";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { forumTagLabel } from "@/lib/forum-tag-icons";
+import { starterTagsFor } from "@/lib/forum-tag-draft";
+import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn } from "@/lib/utils";
 import { ForumComposerDialog } from "./forum-composer-dialog";
+import { ForumTagIcon } from "./forum-tag-icon";
 import { ForumFilterBar, describeActiveFilters } from "./forum-filter-bar";
 import { ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
@@ -169,36 +174,6 @@ const NEXT_PAGE_MARGIN_PX = 600;
 const SEARCH_DEBOUNCE_MS = 250;
 /** Scrolled further than this counts as "away from the top". */
 const TOP_SLACK_PX = 8;
-
-type StarterKey =
-  | "question"
-  | "bug"
-  | "suggestion"
-  | "tutorial"
-  | "release"
-  | "wip"
-  | "discussion";
-const STARTER_SUPPORT: readonly StarterKey[] = ["question", "bug", "suggestion", "tutorial"];
-const STARTER_SHOWCASE: readonly StarterKey[] = ["release", "wip", "discussion", "question"];
-const STARTER_EMOJI: Record<StarterKey, string> = {
-  question: "❓",
-  bug: "🐛",
-  suggestion: "💡",
-  tutorial: "📚",
-  release: "🚀",
-  wip: "🛠️",
-  discussion: "💬",
-};
-const STARTER_LABEL: Record<StarterKey, MessageKey> = {
-  question: "forum.starter.question",
-  bug: "forum.starter.bug",
-  suggestion: "forum.starter.suggestion",
-  tutorial: "forum.starter.tutorial",
-  release: "forum.starter.release",
-  wip: "forum.starter.wip",
-  discussion: "forum.starter.discussion",
-};
-const SUPPORT_NAME = /ajuda|suporte|help|d[uú]vida|bug|support/i;
 
 export function forumPostPath(serverId: string, forumId: string, postId: string): string {
   return `/app/server/${serverId}/channel/${forumId}/post/${postId}`;
@@ -1041,7 +1016,7 @@ export function ForumPane({
     list.pinned.length === 0 &&
     list.queued.length === 0;
 
-  const starterKind = SUPPORT_NAME.test(channel.name) ? STARTER_SUPPORT : STARTER_SHOWCASE;
+  const starterKind = starterTagsFor(channel.name);
   const [starterBusy, setStarterBusy] = useState(false);
   async function applyStarterTags() {
     setStarterBusy(true);
@@ -1052,16 +1027,27 @@ export function ForumPane({
             id: tag.id,
             name: tag.name,
             emoji: tag.emoji,
+            icon: tag.icon ?? null,
+            preset: tag.preset ?? null,
             moderated: tag.moderated,
           })),
+          // The name is stored in this staff member's language; `preset` is
+          // what lets every other reader see their own language's word.
           ...starterKind
-            .map((key) => ({
-              name: t(STARTER_LABEL[key]),
-              emoji: STARTER_EMOJI[key],
+            .map((starter) => ({
+              name: t(starter.nameKey),
+              emoji: forumTagIconEmoji(starter.icon),
+              icon: starter.icon,
+              preset: starter.preset,
               moderated: false,
             }))
             .filter(
-              (tag) => !tags.some((one) => one.name.toLowerCase() === tag.name.toLowerCase()),
+              (tag) =>
+                !tags.some(
+                  (one) =>
+                    forumTagNameKey(one.name) === forumTagNameKey(tag.name) ||
+                    forumTagNameKey(forumTagLabel(one, t)) === forumTagNameKey(tag.name),
+                ),
             ),
         ],
       });
@@ -1359,13 +1345,13 @@ export function ForumPane({
         {canManage && tagsLoaded && tags.length === 0 && (
           <div className="mt-2 flex w-full flex-wrap items-center justify-center gap-1.5 text-xs text-text-tertiary">
             <span>{t("forum.empty.starter")}</span>
-            {starterKind.map((key) => (
+            {starterKind.map((starter) => (
               <span
-                key={key}
+                key={starter.preset}
                 className="inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-border-strong px-2.5 text-text-secondary"
               >
-                <span aria-hidden>{STARTER_EMOJI[key]}</span>
-                {t(STARTER_LABEL[key])}
+                <ForumTagIcon tag={{ icon: starter.icon, emoji: null }} className="h-3.5 w-3.5" />
+                {t(starter.nameKey)}
               </span>
             ))}
             <button

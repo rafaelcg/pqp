@@ -56,6 +56,7 @@ import {
   updateForumPost,
   type ForumTagsStatus,
 } from "@/lib/forum-api";
+import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { backfillForLanding } from "@/lib/forum-landing";
@@ -64,6 +65,7 @@ import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ForumTagList } from "./forum-post-card";
+import { ForumTagIcon } from "./forum-tag-icon";
 
 /**
  * One post, read and replied to (UX §2.4). The transcript, the composer and
@@ -203,6 +205,7 @@ export function EditTagsDialog({
   onSave: (tagIds: string[]) => void;
 }) {
   const { t } = useTranslation();
+  const tagLabel = useForumTagLabel();
   const [picked, setPicked] = useState<string[]>([...current]);
   const refreshRef = useRef(onRefresh);
   refreshRef.current = onRefresh;
@@ -298,8 +301,8 @@ export function EditTagsDialog({
                   : "border-border text-text-secondary hover:bg-surface-2",
               )}
             >
-              {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-              {tag.name}
+              <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
+              {tagLabel(tag)}
               {on && <Check className="h-3.5 w-3.5" aria-hidden />}
             </button>
           );
