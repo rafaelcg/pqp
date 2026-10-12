@@ -554,11 +554,22 @@ struct EmbedCard: View {
                         .lineLimit(3)
                 }
                 if let imageUrl = embed.imageUrl, let url = URL(string: imageUrl) {
+                    // Sized from the unfurl's recorded dimensions when it has
+                    // them, so the card does not grow by a picture's height
+                    // after the transcript has already been positioned.
+                    let box = MediaBox.fitted(
+                        width: embed.imageWidth, height: embed.imageHeight, maxWidth: 240, maxHeight: 160
+                    )
                     AsyncImage(url: url) { image in
                         image.resizable().scaledToFit()
                     } placeholder: {
-                        EmptyView()
+                        if box == nil {
+                            EmptyView()
+                        } else {
+                            Palette.ink.opacity(0.4)
+                        }
                     }
+                    .frame(width: box?.width, height: box?.height)
                     .frame(maxWidth: 240, maxHeight: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .padding(.top, 2)
