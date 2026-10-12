@@ -141,6 +141,10 @@ struct ChannelListView: View {
     @State private var layoutConfig: ChannelLayoutConfig
     /// Keeps the quiet refreshes of the list from overlapping.
     @State private var refreshGate = ChannelRefreshGate()
+    /// The order to take back if the next list read fails, set while a save
+    /// whose outcome is unknown is being settled. Any read that completes
+    /// (this one or a queued follow-up) resolves it.
+    @State private var rollbackIfReadFails: [Channel]?
     /// Organizar canais is open.
     @State private var organizing = false
     /// A refused or stale move, said once in an alert.
@@ -1237,6 +1241,10 @@ struct ChannelListView: View {
             let visible = Set(channels.map(\.id))
             unread = unread.filter { visible.contains($0.key) }
         }
+        if let before = rollbackIfReadFails {
+            rollbackIfReadFails = nil
+            if channels == nil { rollbackOrder(before) }
+        }
         return channels != nil
     }
 
@@ -1287,11 +1295,11 @@ struct ChannelListView: View {
     /// the staged order back only when that read fails too.
     private func reconcileAfterUnknownSave(_ before: [Channel]) async {
         // Through the same gate as every other refresh, so an older read in
-        // flight cannot land on top of this one. When the gate was busy, its
-        // follow-up read is the answer and nothing is rolled back here.
-        var read = false
-        let ran = await refreshGate.run { read = await readChannelList() }
-        if ran && !read { rollbackOrder(before) }
+        // flight cannot land on top of this one. Whichever read completes
+        // next, this call's or the queued follow-up, settles it: a list that
+        // was read replaces the staged order, a failed read takes it back.
+        rollbackIfReadFails = before
+        await refreshChannelList()
     }
 
     /// "Move to…" from a row's menu in the mixed list: the end of that
