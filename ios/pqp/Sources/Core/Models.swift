@@ -381,6 +381,11 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// A slash randomizer. Lenient: a shape we cannot read costs the card, not
     /// the message. Older history has no key at all.
     var chance: ChancePayload?
+    /// Set when the server wrote this message for a product action rather
+    /// than somebody typing it: `"nudge"` is chamar a atenção. Nil for an
+    /// ordinary message, and any kind this build does not know renders as its
+    /// plaintext body, which is what the body is for.
+    var systemKind: String? = nil
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -392,7 +397,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind
     }
 
     init(from decoder: Decoder) throws {
@@ -420,6 +425,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         // would drop a whole message over a shape change on an accessory.
         thread = (try? c.decodeIfPresent(ThreadSummary.self, forKey: .thread)) ?? nil
         chance = (try? c.decodeIfPresent(ChancePayload.self, forKey: .chance)) ?? nil
+        // Only the kinds this build draws; anything else is an ordinary
+        // message, the same `.catch(null)` the shared schema applies.
+        let kind = (try? c.decodeIfPresent(String.self, forKey: .systemKind)) ?? nil
+        systemKind = kind == "nudge" ? kind : nil
         isPending = false
         pendingNonce = nil
     }
@@ -791,6 +800,9 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// and the Fixadas section of the Conversas list, one list on every
     /// device. Replaced as a whole on write, at most 15.
     var pinnedConversations: [String]?
+    /// Chamar a atenção. Absent reads as on. Off works in BOTH directions:
+    /// nobody nudges this account and it nudges nobody.
+    var allowNudges: Bool?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

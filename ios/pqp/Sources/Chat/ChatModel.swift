@@ -31,6 +31,24 @@ final class ChatModel {
     private var slowModeTicker: Task<Void, Never>?
     var isHeldBySlowMode: Bool { slowModeRemaining > 0 }
 
+    /// Chamar a atenção. `freshNudges` goes up by one for each fresh nudge
+    /// from somebody else that lands in this conversation: the screen watches
+    /// it to shake (or pulse its border under Reduce Motion) and buzz.
+    private(set) var freshNudges = 0
+    /// The short line a refused nudge leaves above the composer. Clears itself.
+    private(set) var nudgeNotice: String?
+    /// Until when the button rests after a nudge, the server's own cooldown.
+    private(set) var nudgeCooldownUntil: Date?
+    /// Who the button would nudge, for the refusal copy.
+    var nudgeTargetName = ""
+    @ObservationIgnored private var nudgeNoticeTask: Task<Void, Never>?
+    @ObservationIgnored private var nudgeCooldownTask: Task<Void, Never>?
+
+    var nudgeResting: Bool {
+        guard let nudgeCooldownUntil else { return false }
+        return nudgeCooldownUntil > Date()
+    }
+
     /// The message being replied to, shown above the composer until cleared.
     var replyingTo: Message?
     /// A timeout notice addressed to us, shown above the composer for this
@@ -699,6 +717,35 @@ final class ChatModel {
         message.authorId == session?.currentUser?.id
     }
 
+    /// Sends a nudge. The line arrives as an ordinary `message-broadcast`; a
+    /// refusal arrives as `nudge-refused`. The button rests for the cooldown
+    /// either way, so a double tap is one nudge.
+    func sendNudge() async {
+        guard let session, let channelId, !nudgeResting else { return }
+        restNudge(for: NudgeRules.cooldown)
+        await session.realtime.sendNudge(channelId: channelId, nonce: UUID().uuidString)
+    }
+
+    private func restNudge(for seconds: TimeInterval) {
+        nudgeCooldownUntil = Date().addingTimeInterval(seconds)
+        nudgeCooldownTask?.cancel()
+        nudgeCooldownTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(seconds * 1000) + 50))
+            guard !Task.isCancelled else { return }
+            self?.nudgeCooldownUntil = nil
+        }
+    }
+
+    private func showNudgeNotice(_ text: String) {
+        nudgeNotice = text
+        nudgeNoticeTask?.cancel()
+        nudgeNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            self?.nudgeNotice = nil
+        }
+    }
+
     func noteTyping() {
         guard let session, let channelId, !draft.isEmpty else { return }
         // The server rate-limits typing to ~1/s and silently drops the rest, so
@@ -732,6 +779,11 @@ final class ChatModel {
                 }
             } else if !messages.contains(where: { $0.id == message.id }) {
                 messages.append(message)
+                // Only a message seen for the first time can shake: a replay
+                // of one already on screen is not news.
+                if NudgeRules.isFresh(message, viewerId: session?.currentUser?.id) {
+                    freshNudges += 1
+                }
             }
 
         case .messageUpdated(let message):
@@ -813,6 +865,18 @@ final class ChatModel {
                 holdForSlowMode(milliseconds: wait)
             } else if rejection.reason == "slow-mode", slowmodeSeconds > 0 {
                 holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
+            }
+
+        case .nudgeRefused(let refusal):
+            guard refusal.channelId == channelId else { return }
+            showNudgeNotice(NudgeRules.refusalCopy(refusal.reason, name: nudgeTargetName))
+            if refusal.reason == "cooldown", let wait = refusal.retryAfterMs, wait > 0 {
+                restNudge(for: TimeInterval(wait) / 1000)
+            } else {
+                // Nothing was stored: the button is free again for whatever
+                // the line tells them to do instead.
+                nudgeCooldownTask?.cancel()
+                nudgeCooldownUntil = nil
             }
 
         case .sanctionNotice(let notice):

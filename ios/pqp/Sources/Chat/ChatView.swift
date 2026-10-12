@@ -71,6 +71,13 @@ struct ChatView: View {
     var forumPost: ForumPostModel? = nil
 
     @State private var model = ChatModel()
+    /// Chamar a atenção: the flag (`GET /api/fun/config`) and whether the other
+    /// person in this 1:1 is a friend. Both read when the conversation opens.
+    @State private var funConfig = FunConfig.off
+    @State private var otherIsFriend = false
+    /// Under Reduce Motion a fresh nudge pulses the border instead of shaking.
+    @State private var nudgePulse = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The voice-note microphone. Per screen: a recording belongs to the
     /// conversation it was started in.
     @State private var recorder = VoiceRecorder()
@@ -211,6 +218,7 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 messageList
                 typingRow
+                nudgeNoticeRow
                 sanctionRow
                 errorRow
                 composerContext
@@ -309,6 +317,32 @@ struct ChatView: View {
         // the tabs.
         .toolbar(.hidden, for: .tabBar)
         .toolbarBackground(watchHero ? .hidden : .automatic, for: .navigationBar)
+        // A fresh nudge from the other person: the screen shakes on a UIKit
+        // spring and the phone buzzes, the way MSN shook the window. Under
+        // Reduce Motion the border pulses instead; the buzz stays, it is not
+        // motion.
+        .onChange(of: model.freshNudges) { _, _ in
+            NudgeFeedback.buzz()
+            if reduceMotion {
+                nudgePulse += 1
+            } else {
+                NudgeFeedback.shake()
+            }
+        }
+        .overlay {
+            NudgeBorderPulse(trigger: nudgePulse)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
+        .task(id: conversation?.channelId) {
+            guard let conversation, conversation.kind == "dm" else { return }
+            model.nudgeTargetName = conversation.title
+            funConfig = await session.api.funConfig()
+            guard funConfig.nudge, let other = conversation.participants.first else { return }
+            if let friends = try? await session.api.friends() {
+                otherIsFriend = friends.friends.contains { $0.id == other.id }
+            }
+        }
         // The system chevron would float over the film, exempt from the
         // autohide every other control follows; the overlay draws its own
         // in its place and calls `dismiss()` through `onBack`.
@@ -349,6 +383,27 @@ struct ChatView: View {
             }
             if let conversation {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Left of the call buttons, the slot the Conversas header
+                    // keeps for it. 1:1 with a friend, flag on, and only
+                    // while this account has nudges on.
+                    if NudgeRules.offersButton(
+                        flagOn: funConfig.nudge,
+                        conversationKind: conversation.kind,
+                        otherIsFriend: otherIsFriend,
+                        preferences: session.currentUser?.preferences
+                    ) {
+                        Button {
+                            Haptics.selection()
+                            Task { await model.sendNudge() }
+                        } label: {
+                            Image(systemName: "iphone.radiowaves.left.and.right")
+                        }
+                        .tint(Palette.warning)
+                        .disabled(model.nudgeResting)
+                        .accessibilityIdentifier("chat.nudge")
+                        .accessibilityLabel("Nudge")
+                    }
+
                     Button {
                         Task { await call.start(conversation: conversation, withVideo: false) }
                     } label: {
@@ -674,6 +729,21 @@ struct ChatView: View {
                         if model.startsDay(at: index) {
                             DaySeparator(date: message.createdAt)
                         }
+                        if message.isNudge {
+                            NudgeLine(
+                                message: message,
+                                mine: model.isMine(message),
+                                name: model.isMine(message) ? title : message.authorName
+                            )
+                            .id(message.id)
+                            .highPriorityGesture(
+                                LongPressGesture(minimumDuration: 0.35)
+                                    .onEnded { _ in
+                                        Haptics.menuOpened()
+                                        withAnimation(Motion.standard) { actionTarget = message }
+                                    }
+                            )
+                        } else {
                         MessageRow(
                             message: message,
                             // Consecutive messages from one person collapse into
@@ -732,6 +802,7 @@ struct ChatView: View {
                                 }
                             }
                             ForumRepliesLabel(count: forumPost.post?.replyCount ?? max(0, model.messages.count - 1))
+                        }
                         }
                     }
 
@@ -1067,6 +1138,25 @@ struct ChatView: View {
             .padding(.horizontal, Metrics.hPadding)
             .padding(.vertical, 6)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private var nudgeNoticeRow: some View {
+        if let notice = model.nudgeNotice {
+            HStack(spacing: 8) {
+                Image(systemName: "iphone.radiowaves.left.and.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.warning)
+                Text(notice)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperSubtle)
+                    .accessibilityIdentifier("chat.nudgeNotice")
+                Spacer()
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.vertical, 6)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
     }
 

@@ -189,7 +189,9 @@ struct MessageActionsOverlay: View {
                 }
             }
 
-            if isMine {
+            // A nudge is the server's sentence, not the sender's: it can be
+            // deleted, never edited (the API answers 400).
+            if isMine && !message.isNudge {
                 divider
                 row("Edit", icon: "pencil") {
                     onEdit()

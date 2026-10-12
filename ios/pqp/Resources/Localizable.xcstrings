@@ -21,6 +21,26 @@
         }
       }
     },
+    "%@ hasn't answered yet. Send a message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ainda não respondeu. Manda uma mensagem."
+          }
+        }
+      }
+    },
+    "%@ is busy right now. Send a message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tá ocupado agora. Manda uma mensagem."
+          }
+        }
+      }
+    },
     "%@ is presenting" : {
       "localizations" : {
         "pt-BR" : {
@@ -57,6 +77,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ membros"
+          }
+        }
+      }
+    },
+    "%@ nudged you!" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ chamou tua atenção!"
           }
         }
       }
@@ -2001,6 +2031,16 @@
         }
       }
     },
+    "Couldn't nudge right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra chamar a atenção agora."
+          }
+        }
+      }
+    },
     "Couldn't post. The draft is still here, try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -2487,6 +2527,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rascunho salvo"
+          }
+        }
+      }
+    },
+    "Easy! Wait a few seconds to nudge again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma! Espera uns segundinhos pra chamar a atenção de novo."
           }
         }
       }
@@ -3325,6 +3375,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sair da comunidade"
+          }
+        }
+      }
+    },
+    "Let people nudge me" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar me chamarem a atenção"
           }
         }
       }
@@ -4315,6 +4375,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "agora"
+          }
+        }
+      }
+    },
+    "Nudge" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chamar a atenção"
+          }
+        }
+      }
+    },
+    "Off, nobody shakes your phone and you can't nudge anybody either." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desligado, ninguém te chacoalha e tu também não chacoalha ninguém."
           }
         }
       }
@@ -7275,6 +7355,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você saiu da sala, então sua tela não está indo ao ar. Volte pra continuar transmitindo."
+          }
+        }
+      }
+    },
+    "You nudged %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu chamou a atenção de %@."
+          }
+        }
+      }
+    },
+    "You turned nudges off. Turn them back on in Settings." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu desligou o chamar a atenção. Liga de novo em Ajustes."
           }
         }
       }

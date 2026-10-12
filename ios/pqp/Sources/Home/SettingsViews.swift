@@ -19,6 +19,8 @@ struct AccountSettingsView: View {
     /// `Form` section is torn down when that section scrolls away. See the note
     /// on that view.
     @State private var exportFile: URL?
+    /// Chamar a atenção is offered in Settings only while its flag is on.
+    @State private var nudgeAvailable = false
 
     // Resolved through `String(localized:)` rather than left as bare literals:
     // `Text(someString)` is the *verbatim* initialiser, so a picker built from
@@ -79,6 +81,22 @@ struct AccountSettingsView: View {
                         get: { preferences.showLinkEmbeds ?? true },
                         set: { preferences.showLinkEmbeds = $0 }
                     ))
+                    if nudgeAvailable {
+                        // Both directions at once, so "off" cannot be used to
+                        // poke people who cannot poke back.
+                        Toggle(isOn: Binding(
+                            get: { NudgeRules.allowed(preferences) },
+                            set: { preferences.allowNudges = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Let people nudge me")
+                                Text("Off, nobody shakes your phone and you can't nudge anybody either.")
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.paperMuted)
+                            }
+                        }
+                        .accessibilityIdentifier("settings.allowNudges")
+                    }
                 }
 
                 VideoQualitySection()
@@ -119,6 +137,7 @@ struct AccountSettingsView: View {
             .background(Palette.ink)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .task { nudgeAvailable = await session.api.funConfig().nudge }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)
