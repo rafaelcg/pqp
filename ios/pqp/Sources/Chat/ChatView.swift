@@ -646,6 +646,8 @@ struct ChatView: View {
         // screen: the microphone is not ours in the background.
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { recorder.appBecameInactive() }
+            // Messages that came in behind the lock screen are read now.
+            if phase == .active { model.markReadSoon() }
         }
         // The microphone and the speaker belong to a call the moment one
         // starts: a note stops playing, a recording in progress is paused.
