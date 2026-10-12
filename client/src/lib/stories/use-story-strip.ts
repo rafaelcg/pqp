@@ -176,7 +176,7 @@ export function useStoryStrip(audience: StripAudience | null, viewerId: string):
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [key, load]);
+  }, [key, viewerId, load]);
 
   // The frame, coalesced.
   useEffect(() => {
@@ -205,7 +205,7 @@ export function useStoryStrip(audience: StripAudience | null, viewerId: string):
     };
     // `audience` identity changes every render; the key is what matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, load]);
+  }, [key, viewerId, load]);
 
   // Coming back to the tab: frames may have been missed while asleep.
   useEffect(() => {
@@ -229,7 +229,7 @@ export function useStoryStrip(audience: StripAudience | null, viewerId: string):
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [key, load]);
+  }, [key, viewerId, load]);
 
   // Local expiry: repaint when the next ring is due to go.
   useEffect(() => {

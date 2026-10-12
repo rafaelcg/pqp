@@ -28,7 +28,25 @@ import { cn } from "@/lib/utils";
 const CARD_TTL_MS = 60_000;
 const MAX_IN_FLIGHT = 4;
 
+/**
+ * Keyed by reader and story: a card is what THIS account may see of a story
+ * (the server answers per participant), so another account signed in later
+ * in the same tab never reads it.
+ */
 const cards = new Map<string, { at: number; card: Promise<StoryCard | null> }>();
+
+function cardKey(viewerId: string | null, storyId: string): string {
+  return `${viewerId ?? "anon"}:${storyId}`;
+}
+
+/** Drop every entry past its lifetime, so the map holds only what is fresh. */
+function evictStale(now: number): void {
+  for (const [key, entry] of cards) {
+    if (now - entry.at >= CARD_TTL_MS) {
+      cards.delete(key);
+    }
+  }
+}
 const waiting: (() => void)[] = [];
 let inFlight = 0;
 const invalidated = new Set<(storyIds: readonly string[]) => void>();
@@ -38,8 +56,10 @@ onStoriesSignal((signal) => {
   if (ids.length === 0) {
     return;
   }
-  for (const id of ids) {
-    cards.delete(id);
+  for (const key of [...cards.keys()]) {
+    if (ids.some((id) => key.endsWith(`:${id}`))) {
+      cards.delete(key);
+    }
   }
   for (const listener of [...invalidated]) {
     listener(ids);
@@ -59,16 +79,19 @@ async function limited<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-function loadCard(storyId: string): Promise<StoryCard | null> {
-  const cached = cards.get(storyId);
-  if (cached && Date.now() - cached.at < CARD_TTL_MS) {
+function loadCard(viewerId: string | null, storyId: string): Promise<StoryCard | null> {
+  const now = Date.now();
+  evictStale(now);
+  const key = cardKey(viewerId, storyId);
+  const cached = cards.get(key);
+  if (cached) {
     return cached.card;
   }
   const card = limited(() => fetchStoryCard(storyId)).catch(() => {
-    cards.delete(storyId);
+    cards.delete(key);
     return null;
   });
-  cards.set(storyId, { at: Date.now(), card });
+  cards.set(key, { at: now, card });
   return card;
 }
 
@@ -89,6 +112,13 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
   useEffect(() => {
     const listener = (ids: readonly string[]) => {
       if (ids.includes(storyId)) {
+        // The story is gone for at least some audience: stop showing its
+        // picture and caption now, while the card is read again.
+        setCard((current) =>
+          current
+            ? { ...current, state: "removed", posterUrl: null, caption: null, text: null }
+            : current,
+        );
         setVersion((value) => value + 1);
       }
     };
@@ -100,7 +130,7 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
 
   useEffect(() => {
     let alive = true;
-    void loadCard(storyId).then((value) => {
+    void loadCard(currentUserId, storyId).then((value) => {
       if (alive) {
         setCard(value);
       }
@@ -108,7 +138,7 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
     return () => {
       alive = false;
     };
-  }, [storyId, version]);
+  }, [currentUserId, storyId, version]);
 
   // A live quote turns into the plate on its own once the story expires.
   useEffect(() => {

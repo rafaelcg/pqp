@@ -31,7 +31,19 @@ function schedule(delay: number): void {
   }, delay);
 }
 
-export function queueStoryViews(ids: Iterable<string>): void {
+/**
+ * Whose views are waiting. A view is sent with whatever account is signed in
+ * when the batch goes out, so another account's pending views are dropped the
+ * moment a different viewer queues one, never sent under the wrong name.
+ */
+let owner: string | null = null;
+
+export function queueStoryViews(ids: Iterable<string>, viewerId: string): void {
+  if (owner !== viewerId) {
+    pending.clear();
+    failures = 0;
+    owner = viewerId;
+  }
   for (const id of ids) {
     pending.add(id);
   }
@@ -78,6 +90,7 @@ export function resetStoryViewsQueue(sender: Sender = recordStoryViews): void {
   timer = null;
   inFlight = false;
   failures = 0;
+  owner = null;
   send = sender;
 }
 

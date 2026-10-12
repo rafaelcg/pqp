@@ -184,6 +184,7 @@ export function StoryViewer({
     typeof document === "undefined" ? null : document.activeElement,
   );
   const reactionSeq = useRef(new Map<string, number>());
+  const confirmedReaction = useRef(new Map<string, StoryReaction | null>());
   const markedSeen = useRef(new Set<string>());
   const lastDisplay = useRef<StoryDisplay | null>(null);
   const lastGeneration = useRef(state.generation);
@@ -364,7 +365,7 @@ export function StoryViewer({
     if (story.author.id === me.id || story.own) {
       return;
     }
-    queueStoryViews([story.id]);
+    queueStoryViews([story.id], me.id);
   }, [story, state.elapsedMs, me.id]);
 
   // ---------------------------------------------------------------- pauses
@@ -842,16 +843,27 @@ export function StoryViewer({
           : { kind: "fly", key: Date.now(), glyph: STORY_REACTION_GLYPH[next] },
       );
     }
-    // Only the newest tap may roll back: an older request failing after a
-    // newer one was sent must not undo the newer choice.
+    // Only the newest tap decides. A rollback restores what the server last
+    // CONFIRMED, not the value before this tap: that one may itself have
+    // been an optimistic choice whose request failed.
     const id = story.id;
+    if (!confirmedReaction.current.has(id)) {
+      confirmedReaction.current.set(id, previous);
+    }
     const seq = (reactionSeq.current.get(id) ?? 0) + 1;
     reactionSeq.current.set(id, seq);
-    void setStoryReaction(id, next).catch(() => {
-      if (reactionSeq.current.get(id) === seq) {
-        patchStory(id, (item) => ({ ...item, viewer: { ...item.viewer, reaction: previous } }));
-      }
-    });
+    void setStoryReaction(id, next)
+      .then(() => {
+        if (reactionSeq.current.get(id) === seq) {
+          confirmedReaction.current.set(id, next);
+        }
+      })
+      .catch(() => {
+        if (reactionSeq.current.get(id) === seq) {
+          const confirmed = confirmedReaction.current.get(id) ?? null;
+          patchStory(id, (item) => ({ ...item, viewer: { ...item.viewer, reaction: confirmed } }));
+        }
+      });
   }
 
   async function sendReply() {
