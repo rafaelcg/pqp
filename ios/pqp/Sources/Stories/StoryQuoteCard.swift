@@ -17,6 +17,12 @@ struct StoryQuoteCard: View {
 
     private var mine: Bool { card?.authorId == session.currentUser?.id }
 
+    /// Live only until `expiresAt`, whatever the last answer said: the 24 h
+    /// promise holds on this screen without waiting for a refetch.
+    private func isShowable(_ card: StoryCard, now: Date = Date()) -> Bool {
+        card.isLive && (card.expiresAt.map { $0 > now } ?? false)
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             thumbnail
@@ -28,7 +34,7 @@ struct StoryQuoteCard: View {
                     .font(.system(size: 10, weight: .bold))
                     .tracking(0.8)
                     .foregroundStyle(Palette.paperMuted)
-                if let card, card.isLive {
+                if let card, isShowable(card) {
                     if let line = card.caption ?? card.text, !line.isEmpty {
                         Text(verbatim: line)
                             .font(Typography.caption)
@@ -50,7 +56,12 @@ struct StoryQuoteCard: View {
         .frame(maxWidth: 280, alignment: .leading)
         .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
         .task(id: storyId) {
-            card = await StoryCardCache.shared.card(storyId, api: session.api)
+            // Asked again every minute while on screen, so a removal reaches
+            // a quote that is already showing; the expiry is enforced locally.
+            while !Task.isCancelled {
+                card = await StoryCardCache.shared.card(storyId, api: session.api)
+                try? await Task.sleep(for: .seconds(60))
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("story.quote")
@@ -65,7 +76,7 @@ struct StoryQuoteCard: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let card, card.isLive {
+        if let card, isShowable(card) {
             if let poster = card.posterUrl, let url = Avatar.resolve(poster) ?? URL(string: poster) {
                 AsyncImage(url: url) { image in
                     image.resizable().scaledToFill()
@@ -100,7 +111,12 @@ actor StoryCardCache {
 
     func card(_ id: String, api: APIClient) async -> StoryCard? {
         if let hit = cards[id], Date().timeIntervalSince(hit.at) < 60 { return hit.card }
-        guard let fresh = try? await api.storyCard(id: id) else { return cards[id]?.card }
+        guard let fresh = try? await api.storyCard(id: id) else {
+            // A failed refresh falls back only to a card that cannot show
+            // anything it should not: never stale live content.
+            guard let stale = cards[id]?.card else { return nil }
+            return stale.isLive ? nil : stale
+        }
         cards[id] = (fresh, Date())
         return fresh
     }

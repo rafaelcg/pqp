@@ -335,6 +335,8 @@ struct StoryComposer: View {
                 return
             }
             await accept(videoAt: movie.url)
+            // The copy the picker handed over is read; it can go.
+            try? FileManager.default.removeItem(at: movie.url)
         } else if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
             accept(image: image)
         } else {
@@ -481,6 +483,8 @@ enum StoryMediaPrep {
         guard export.status == .completed else {
             throw Failure(message: String(localized: "That format won't work. Use JPG, PNG, WebP or MP4."))
         }
+        // Read into memory and removed: the file is not needed past this.
+        defer { try? FileManager.default.removeItem(at: out) }
         let data = try Data(contentsOf: out)
         if let problem = StoryRules.videoProblem(durationMs: durationMs, byteSize: data.count, maxVideoMs: maxVideoMs) {
             throw Failure(message: problem)
@@ -611,15 +615,21 @@ struct StoryCallPicker: View {
     private func load() async {
         defer { loaded = true }
         guard let options = try? await session.api.storyAudiences() else { return }
-        var found: [StoryCallChoice] = []
-        for server in options.servers where server.canPost {
-            guard let channels = try? await session.api.channels(serverId: server.serverId) else { continue }
-            for channel in channels where channel.isVoice {
-                found.append(StoryCallChoice(
-                    serverId: server.serverId, serverName: server.serverName,
-                    channelId: channel.id, channelName: channel.name
-                ))
+        // Every server's rooms at once, not one round trip after another.
+        let api = session.api
+        let found = await withTaskGroup(of: [StoryCallChoice].self) { group in
+            for server in options.servers where server.canPost {
+                group.addTask {
+                    guard let channels = try? await api.channels(serverId: server.serverId) else { return [] }
+                    return channels.filter(\.isVoice).map {
+                        StoryCallChoice(serverId: server.serverId, serverName: server.serverName,
+                                        channelId: $0.id, channelName: $0.name)
+                    }
+                }
             }
+            var all: [StoryCallChoice] = []
+            for await rooms in group { all += rooms }
+            return all
         }
         // Rooms with people in them first: that is the call worth sharing.
         rooms = found.sorted {
@@ -643,15 +653,21 @@ struct StoryAudienceSheet: View {
     let onPosted: () -> Void
 
     @State private var options: StoryAudienceOptions?
+    @State private var loadFailed = false
     @State private var servers: Set<String> = []
     @State private var friends = false
     @State private var repliesEnabled = true
     @State private var posting = false
     @State private var failed = false
     @State private var error: String?
-    /// One per story this sheet posts, reused by "Tentar de novo", so a retry
-    /// after a lost answer is the same story and not a second one.
+    /// One per story this sheet posts, reused by "Tentar de novo": the server
+    /// answers a repeat create with the same story (and a fresh upload URL),
+    /// so a retry after a lost answer never posts twice.
     @State private var requestId = UUID().uuidString
+    /// Created, not yet live. Deleted if the sheet goes away before it is
+    /// published, so closing mid-post leaves nothing half-made behind.
+    @State private var unpublishedStoryId: String?
+    @State private var posted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -666,13 +682,17 @@ struct StoryAudienceSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let options {
                         ForEach(options.servers) { server in
+                            let lockedByCall = server.serverId == callServerId
                             row(
                                 title: server.serverName,
-                                subtitle: server.canPost
-                                    ? String(localized: "\(server.memberCount) members")
-                                    : (StoryRules.blockedLine(server.blockedReason) ?? ""),
+                                subtitle: lockedByCall
+                                    ? String(localized: "The call is in this server, so the story goes here too")
+                                    : server.canPost
+                                        ? String(localized: "\(server.memberCount) members")
+                                        : (StoryRules.blockedLine(server.blockedReason) ?? ""),
                                 checked: servers.contains(server.serverId),
-                                enabled: server.canPost
+                                enabled: server.canPost && !lockedByCall,
+                                locked: lockedByCall
                             ) {
                                 if servers.contains(server.serverId) {
                                     servers.remove(server.serverId)
@@ -683,10 +703,21 @@ struct StoryAudienceSheet: View {
                             .accessibilityIdentifier("audience.server.\(server.serverId)")
                         }
                         if options.friends.enabled {
-                            row(title: String(localized: "Friends"), subtitle: nil, checked: friends, enabled: options.friends.canPost) {
+                            row(title: String(localized: "Friends"), subtitle: nil, checked: friends,
+                                enabled: options.friends.canPost, locked: false) {
                                 friends.toggle()
                             }
                             .accessibilityIdentifier("audience.friends")
+                        }
+                    } else if loadFailed {
+                        HStack(spacing: 10) {
+                            Text("Couldn't load where you can post.")
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.danger)
+                            Button("Try again") { Task { await load() } }
+                                .font(Typography.callout.weight(.semibold))
+                                .tint(Palette.signal)
+                                .accessibilityIdentifier("audience.retry")
                         }
                     } else {
                         ProgressView().tint(Palette.signal).frame(maxWidth: .infinity)
@@ -731,7 +762,14 @@ struct StoryAudienceSheet: View {
         }
         .padding(Metrics.hPadding)
         .padding(.top, 8)
+        // Not swiped away halfway through an upload.
+        .interactiveDismissDisabled(posting)
         .task { await load() }
+        .onDisappear {
+            guard !posted, let id = unpublishedStoryId else { return }
+            let api = session.api
+            Task { try? await api.deleteStory(id: id) }
+        }
     }
 
     private var canPost: Bool {
@@ -740,16 +778,17 @@ struct StoryAudienceSheet: View {
         return true
     }
 
-    private func row(title: String, subtitle: String?, checked: Bool, enabled: Bool, toggle: @escaping () -> Void) -> some View {
+    private func row(title: String, subtitle: String?, checked: Bool, enabled: Bool, locked: Bool,
+                     toggle: @escaping () -> Void) -> some View {
         Button(action: toggle) {
             HStack(spacing: 12) {
-                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                Image(systemName: locked ? "lock.square.fill" : (checked ? "checkmark.square.fill" : "square"))
                     .font(.system(size: 20))
                     .foregroundStyle(checked ? Palette.signal : Palette.border)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: title)
                         .font(Typography.bodyMedium)
-                        .foregroundStyle(enabled ? Palette.paper : Palette.paperMuted)
+                        .foregroundStyle(enabled || locked ? Palette.paper : Palette.paperMuted)
                     if let subtitle, !subtitle.isEmpty {
                         Text(verbatim: subtitle)
                             .font(Typography.caption)
@@ -766,8 +805,9 @@ struct StoryAudienceSheet: View {
     }
 
     private func load() async {
+        loadFailed = false
         guard let loaded = try? await session.api.storyAudiences() else {
-            error = String(localized: "Couldn't load where you can post.")
+            loadFailed = true
             return
         }
         options = loaded
@@ -775,6 +815,8 @@ struct StoryAudienceSheet: View {
         if let preselectedServerId, postable.contains(preselectedServerId) {
             servers.insert(preselectedServerId)
         }
+        // The call sticker's server is ticked and locked, with the line
+        // saying why: the story has to go where the call is.
         if let callServerId, postable.contains(callServerId) {
             servers.insert(callServerId)
         }
@@ -783,7 +825,9 @@ struct StoryAudienceSheet: View {
         }
     }
 
-    /// Create, PUT the bytes with exactly the signed headers, publish.
+    /// Create, PUT the bytes with exactly the signed headers, publish. A
+    /// retry repeats the create with the same `requestId`, which hands back
+    /// the same story, and skips whatever stage already went through.
     private func post() async {
         posting = true
         failed = false
@@ -805,10 +849,16 @@ struct StoryAudienceSheet: View {
         )
         do {
             let created = try await session.api.createStory(body)
-            if let upload = created.upload, let media {
+            if let media, created.story.own?.status == "pending" {
+                unpublishedStoryId = created.story.id
+                guard let upload = created.upload else {
+                    throw APIError.transport(String(localized: "Didn't upload. Try again"))
+                }
                 try await StoryUploader.put(media.data, to: upload)
                 _ = try await session.api.publishStory(id: created.story.id)
             }
+            posted = true
+            unpublishedStoryId = nil
             onPosted()
         } catch {
             failed = true

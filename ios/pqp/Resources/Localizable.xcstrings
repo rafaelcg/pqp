@@ -2191,6 +2191,16 @@
         }
       }
     },
+    "Couldn't load who saw it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar quem viu."
+          }
+        }
+      }
+    },
     "Couldn't nudge right now." : {
       "localizations" : {
         "pt-BR" : {
@@ -6779,6 +6789,16 @@
         }
       }
     },
+    "The call is in this server, so the story goes here too" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A call é desse servidor, então o story vai pra cá também"
+          }
+        }
+      }
+    },
     "The camera turned on but no picture is getting through. Turn it off and on again." : {
       "localizations" : {
         "pt-BR" : {
@@ -6825,6 +6845,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O post inteiro é pra quem tem o cargo VIP."
+          }
+        }
+      }
+    },
+    "The list is incomplete. Try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A lista não carregou toda. Tentar de novo"
           }
         }
       }

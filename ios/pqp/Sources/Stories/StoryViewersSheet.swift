@@ -13,6 +13,10 @@ struct StoryViewersSheet: View {
     @State private var viewCount = 0
     @State private var reactionCount = 0
     @State private var loaded = false
+    /// A failed read is not "nobody saw it": it says so, with a retry.
+    @State private var failed = false
+    @State private var moreFailed = false
+    @State private var seenIds: Set<String> = []
     @State private var loadingMore = false
     @State private var handlerKey = "story-viewers-" + UUID().uuidString
 
@@ -38,7 +42,17 @@ struct StoryViewersSheet: View {
             }
             SectionLabel(text: String(localized: "Who saw it"))
 
-            if loaded && rows.isEmpty {
+            if failed {
+                HStack(spacing: 10) {
+                    Text("Couldn't load who saw it.")
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.danger)
+                    Button("Try again") { Task { await reload() } }
+                        .font(Typography.callout.weight(.semibold))
+                        .tint(Palette.signal)
+                }
+                .padding(.top, 8)
+            } else if loaded && rows.isEmpty {
                 Text("Nobody has seen it yet")
                     .font(Typography.callout)
                     .foregroundStyle(Palette.paperMuted)
@@ -75,6 +89,12 @@ struct StoryViewersSheet: View {
                             if row.id == rows.last?.id { Task { await loadMore() } }
                         }
                     }
+                    if moreFailed {
+                        Button("The list is incomplete. Try again") { Task { await loadMore() } }
+                            .font(Typography.caption)
+                            .tint(Palette.signal)
+                            .padding(.vertical, 8)
+                    }
                 }
             }
         }
@@ -100,10 +120,13 @@ struct StoryViewersSheet: View {
 
     private func reload() async {
         guard let page = try? await session.api.storyViewers(id: story.id) else {
+            failed = true
             loaded = true
             return
         }
+        failed = false
         rows = page.viewers
+        seenIds = Set(page.viewers.map(\.id))
         cursor = page.nextCursor
         viewCount = page.viewCount
         reactionCount = page.reactionCount
@@ -114,8 +137,14 @@ struct StoryViewersSheet: View {
         guard let cursor, !loadingMore else { return }
         loadingMore = true
         defer { loadingMore = false }
-        guard let page = try? await session.api.storyViewers(id: story.id, cursor: cursor) else { return }
-        rows += page.viewers.filter { row in !rows.contains { $0.id == row.id } }
+        guard let page = try? await session.api.storyViewers(id: story.id, cursor: cursor) else {
+            moreFailed = true
+            return
+        }
+        moreFailed = false
+        let fresh = page.viewers.filter { !seenIds.contains($0.id) }
+        seenIds.formUnion(fresh.map(\.id))
+        rows += fresh
         self.cursor = page.nextCursor
     }
 }

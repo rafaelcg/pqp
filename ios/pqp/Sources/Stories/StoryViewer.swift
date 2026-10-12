@@ -83,6 +83,12 @@ struct StoryViewer: View {
         }
         .statusBarHidden()
         .task(id: playback.currentId) { await storyChanged() }
+        // Replying, a sheet or the menu pauses the story; the video pauses
+        // with it so nothing plays past a frozen bar.
+        .onChange(of: paused) { _, isPaused in
+            guard current?.isVideo == true else { return }
+            if isPaused { player?.pause() } else { player?.play() }
+        }
         .task { await clock() }
         .task { await flushViewsLoop() }
         // A story staff removed (or its author deleted) leaves an open viewer
@@ -250,6 +256,22 @@ struct StoryViewer: View {
             }
         } else if let id = playback.currentId, gone.contains(id) {
             Color.black.onAppear { next() }
+        } else if let error {
+            // The story could not be fetched: say so, and offer to ask again,
+            // instead of a spinner that never ends.
+            VStack(spacing: 14) {
+                Text(verbatim: error)
+                    .font(Typography.callout)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                Button("Try again") { Task { await storyChanged() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.signal)
+                    .foregroundStyle(Palette.inkDeep)
+                    .accessibilityIdentifier("story.retry")
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ProgressView().tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -665,7 +687,13 @@ struct StoryViewer: View {
         guard !pendingViews.isEmpty else { return }
         let batch = Array(pendingViews)
         pendingViews.subtract(batch)
-        try? await session.api.markStoriesViewed(batch)
+        do {
+            try await session.api.markStoriesViewed(batch)
+        } catch {
+            // Kept for the next flush (every 2 s, and on close): a view that
+            // failed to record is retried, never dropped.
+            pendingViews.formUnion(batch)
+        }
     }
 
     // MARK: - Actions

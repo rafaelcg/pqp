@@ -46,11 +46,16 @@ extension APIClient {
         let _: EmptyResponse = try await delete("/api/stories/\(id)")
     }
 
-    /// Batched, idempotent; the author's own views never count.
+    /// Batched, idempotent; the author's own views never count. More ids
+    /// than one request takes go up in as many requests as they need.
     func markStoriesViewed(_ ids: [String]) async throws {
         struct Body: Encodable { let storyIds: [String] }
-        guard !ids.isEmpty else { return }
-        let _: EmptyResponse = try await post("/api/stories/views", body: Body(storyIds: Array(ids.prefix(StoryLimits.viewsBatchMax))))
+        var rest = ids[...]
+        while !rest.isEmpty {
+            let chunk = Array(rest.prefix(StoryLimits.viewsBatchMax))
+            rest = rest.dropFirst(chunk.count)
+            let _: EmptyResponse = try await post("/api/stories/views", body: Body(storyIds: chunk))
+        }
     }
 
     /// One reaction per viewer per story; nil clears it. Never a message.
