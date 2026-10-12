@@ -171,7 +171,7 @@ import {
   useUpdatePromptShowing,
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
-import { isCargosHintSeen } from "@/lib/cargos-hint";
+import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldSuppressHints } from "@/lib/hints";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
