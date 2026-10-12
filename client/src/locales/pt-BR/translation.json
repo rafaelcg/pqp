@@ -1288,7 +1288,7 @@
   "voice.hls.jumpToLive": "Pular pro ao vivo",
   "voice.hls.play": "Continuar",
   "voice.hls.pause": "Pausar",
-  "voice.hls.pip": "Câmera em câmera (PiP)",
+  "voice.hls.pip": "Janela flutuante",
   "voice.hls.cameraCorner": "Mudar a câmera de canto",
   "voice.hls.cameraLayout": "Layout da câmera",
   "voice.hls.cameraLayout.pip": "Padrão",
