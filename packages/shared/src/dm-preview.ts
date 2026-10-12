@@ -52,9 +52,14 @@ const MARKDOWN_PASSES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\[([^\]]+)\]\([^)]*\)/g, "$1"],
   // Bold+italic, bold, italic — longest markers first so `**x**` is not left
   // half-stripped by the single-character pass running first.
-  [/(\*\*\*|___)([^*_]+)\1/g, "$2"],
-  [/(\*\*|__)([^*_]+)\1/g, "$2"],
-  [/(\*|_)([^*_]+)\1/g, "$2"],
+  [/\*\*\*([^*]+)\*\*\*/g, "$1"],
+  [/\*\*([^*]+)\*\*/g, "$1"],
+  [/\*([^*]+)\*/g, "$1"],
+  // Underscores only as markers at word edges: `snake_case` and a link's
+  // `?utm_source=x&utm_medium=y` are words, not italics, and stay intact.
+  [/(?<![\p{L}\p{N}_])___([^_]+)___(?![\p{L}\p{N}_])/gu, "$1"],
+  [/(?<![\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])/gu, "$1"],
+  [/(?<![\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}_])/gu, "$1"],
   // Strikethrough.
   [/~~([^~]+)~~/g, "$1"],
   // Inline code.

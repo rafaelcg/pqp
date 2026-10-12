@@ -784,6 +784,21 @@ describeDb("forum posts", () => {
     expect(card.openingKind).toBeNull();
   });
 
+  it("strips markdown from the card preview", async () => {
+    // A MonitoRSS item opens with `**title**` and a link; the card must read
+    // as words, not syntax. Same rules as the DM list preview.
+    const created = await post(bob, "Patch 1.4.2", {
+      body: "**Patch 1.4.2: correções de rede**\nVeja [o changelog](https://example.com/x) e roda `npm i`.\nhttps://example.com/p?utm_source=rss&utm_medium=feed",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.post.preview).toBe(
+      "Patch 1.4.2: correções de rede Veja o changelog e roda npm i. https://example.com/p?utm_source=rss&utm_medium=feed",
+    );
+    expect((await list(bob)).posts.find((one) => one.id === created.body.post.id)?.preview).toBe(
+      "Patch 1.4.2: correções de rede Veja o changelog e roda npm i. https://example.com/p?utm_source=rss&utm_medium=feed",
+    );
+  });
+
   it("patch permissions field by field, the pin cap, and the audit trail", async () => {
     const [bug, oficial] = await putTags([
       { name: "Bug", moderated: false },
