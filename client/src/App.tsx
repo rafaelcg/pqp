@@ -10450,6 +10450,7 @@ function MainAppContent({
       perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
   const canManageSoundboard = perms.can(Permission.MANAGE_SOUNDBOARD);
+  const canManageEmoji = perms.can(Permission.MANAGE_EMOJI);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
@@ -12684,6 +12685,7 @@ function MainAppContent({
           canManageRoles={canManageRoles}
           canManageMessages={canManageMessages}
           canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
+          canManageEmoji={canManageEmoji}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
@@ -13419,6 +13421,7 @@ function MainAppContent({
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
         canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
+        canManageEmoji={canManageEmoji}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||

@@ -32,6 +32,7 @@ import {
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
+import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -392,6 +393,8 @@ export function startColdJobs(): ColdJobs {
       "community-home",
       sweepCommunityHomeMedia,
     ),
+    // Never touches an illegal-content row at any age.
+    every(ATTACHMENT_SWEEP_INTERVAL_MS, "server-emoji-quarantine", sweepQuarantinedServerEmoji),
     every(
       COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
       "community-home-translation",

@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–27). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–28). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -68,12 +68,20 @@ export const Permission = {
    * `@everyone`. Manager and owner have it. A role can be given it.
    */
   MANAGE_SOUNDBOARD: 1n << 27n,
+  /**
+   * Upload, rename and delete the server's custom emoji (Discord's "Manage
+   * Expressions"). Server level only, like POST_STORIES: an emoji belongs to
+   * the server, so no channel overwrite editor lists it. Using an emoji needs
+   * no bit at all. Bit 28: bits 26 and 27 are the call soundboard
+   * (USE_SOUNDBOARD, MANAGE_SOUNDBOARD).
+   */
+  MANAGE_EMOJI: 1n << 28n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 28n) - 1n;
+export const PERMISSION_ALL = (1n << 29n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -97,8 +105,13 @@ export const PERMISSION_DEFAULT_EVERYONE =
 export const PERMISSION_TIMEOUT_KEEP =
   Permission.VIEW_CHANNEL | Permission.READ_MESSAGE_HISTORY;
 
-/** Manager / Gerente: every bit except Administrator, so overwrites still apply. */
-export const PERMISSION_DEFAULT_MANAGER = PERMISSION_ALL & ~Permission.ADMINISTRATOR;
+/**
+ * Manager / Gerente: every bit except Administrator, so overwrites still
+ * apply, and except Manage Emoji, which only Owner and Administrator hold by
+ * default. An owner can still turn it on for a Manager in the role editor.
+ */
+export const PERMISSION_DEFAULT_MANAGER =
+  PERMISSION_ALL & ~Permission.ADMINISTRATOR & ~Permission.MANAGE_EMOJI;
 
 /**
  * Moderator extras only. `@everyone` is ORed at resolve time, so copying
@@ -263,6 +276,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.POST_STORIES, key: "POST_STORIES" },
   { bit: Permission.USE_SOUNDBOARD, key: "USE_SOUNDBOARD" },
   { bit: Permission.MANAGE_SOUNDBOARD, key: "MANAGE_SOUNDBOARD" },
+  { bit: Permission.MANAGE_EMOJI, key: "MANAGE_EMOJI" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

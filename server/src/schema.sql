@@ -6076,6 +6076,36 @@ BEGIN
   INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
 END $$;
 
+-- MANAGE_EMOJI (bit 28 = 268435456; bits 26 and 27 are the call soundboard's): upload, rename and delete custom server
+-- emoji. ORed onto the seeded Admin cargo, whose stored mask means
+-- "everything", like post_stories_bit_2026_10. Never onto the Manager,
+-- @everyone, the Moderator or a homemade cargo: an owner grants it there from
+-- the role editor. The owner person already resolves to every bit. One-shot
+-- via data_migrations, so a bit an owner turns off never comes back.
+DO $$
+DECLARE
+  manage_emoji CONSTANT BIGINT := 268435456;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10_b28'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | manage_emoji
+     WHERE (permissions & manage_emoji) = 0
+       AND system_key = 'admin'
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
+
+  INSERT INTO data_migrations (name) VALUES ('manage_emoji_bit_2026_10_b28');
+END $$;
+
 -- THE CHANNEL LIST, ONE ORDER PER PARENT (services/channel-layout.ts).
 --
 -- Step 0, once per database: the loose channels of every server (no category,
@@ -6127,3 +6157,50 @@ CREATE TABLE IF NOT EXISTS channel_layout_migrations (
   migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   reverted_at TIMESTAMPTZ
 );
+
+-- Custom server emoji (`packages/shared/src/server-emoji.ts`). A row per emoji
+-- because a message stores `<:name:id>` and must keep resolving across a
+-- rename. The bytes live in the attachment bucket under
+-- `servers/<server_id>/emoji/`, exactly like the icon; the row is only written
+-- after the claim has HEADed the object. The name CHECK mirrors
+-- `SERVER_EMOJI_NAME_PATTERN`; the count limit is enforced by the route.
+CREATE TABLE IF NOT EXISTS server_emoji (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL CHECK (name ~ '^[a-z0-9_]{2,32}$'),
+  storage_key TEXT NOT NULL,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The image scan's verdict, same columns and meaning as on
+  -- `message_attachments` (docs/CONTENT_SAFETY.md). A row only exists for an
+  -- emoji the scan let through, so `rejected` never appears here: a refused
+  -- upload goes to `server_emoji_quarantine` instead.
+  scan_status   TEXT NOT NULL DEFAULT 'unscanned'
+    CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'error')),
+  scan_provider TEXT,
+  scan_score    REAL,
+  scan_labels   JSONB,
+  scanned_at    TIMESTAMPTZ,
+  UNIQUE (server_id, name)
+);
+
+-- Emoji uploads the image scan refused. The object is kept as evidence and is
+-- never served (no `server_emoji` row names it); `sweepQuarantinedServerEmoji`
+-- deletes it after CONTENT_SCAN_QUARANTINE_DAYS, and never one labelled
+-- `illegal` or `csam_suspected`. Same hold as Baú's `quarantined_at`.
+-- `server_id` goes NULL when the server is deleted, so the row (the only thing
+-- that names the object) outlives it and the hold and the sweep still apply.
+CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id      UUID REFERENCES servers(id) ON DELETE SET NULL,
+  uploader_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+  name           TEXT NOT NULL,
+  storage_key    TEXT NOT NULL UNIQUE,
+  scan_provider  TEXT,
+  scan_score     REAL,
+  scan_labels    JSONB,
+  quarantined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
+  ON server_emoji_quarantine (quarantined_at);

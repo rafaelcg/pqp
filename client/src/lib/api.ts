@@ -89,6 +89,10 @@ import type {
   ResolveReportRequest,
   Server,
   ServerImageConfig,
+  ServerEmoji,
+  ServerEmojiList,
+  CreateServerEmojiUploadRequest,
+  CreateServerEmojiUploadResponse,
   ServerImageKind,
   CreateServerImageUploadRequest,
   CreateServerImageUploadResponse,
@@ -597,6 +601,40 @@ export const claimServerImage = (
 /** Back to the monogram; the object is dropped from the bucket. */
 export const deleteServerImage = (serverId: string, kind: ServerImageKind) =>
   apiFetch<{ server: Server }>(`/api/servers/${serverId}/${kind}`, {
+    method: "DELETE",
+  });
+
+// ------------------------------------------------------- custom emoji
+//
+// The server-icon dance again: mint, PUT straight to storage, claim. Reading
+// needs membership; every write needs Manage Server.
+
+export const fetchServerEmoji = (serverId: string) =>
+  apiFetch<ServerEmojiList>(`/api/servers/${serverId}/emoji`);
+
+export const createServerEmojiUpload = (
+  serverId: string,
+  body: CreateServerEmojiUploadRequest,
+) =>
+  apiFetch<CreateServerEmojiUploadResponse>(
+    `/api/servers/${serverId}/emoji/uploads`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+export const claimServerEmoji = (serverId: string, key: string, name: string) =>
+  apiFetch<{ emoji: ServerEmoji }>(`/api/servers/${serverId}/emoji`, {
+    method: "POST",
+    body: JSON.stringify({ key, name }),
+  });
+
+export const renameServerEmoji = (serverId: string, emojiId: string, name: string) =>
+  apiFetch<{ emoji: ServerEmoji }>(`/api/servers/${serverId}/emoji/${emojiId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+
+export const deleteServerEmoji = (serverId: string, emojiId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/emoji/${emojiId}`, {
     method: "DELETE",
   });
 

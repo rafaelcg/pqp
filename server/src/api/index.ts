@@ -38,6 +38,12 @@ import {
   createAttachmentSchema,
   createAvatarUploadSchema,
   createServerImageUploadSchema,
+  createServerEmojiSchema,
+  createServerEmojiUploadSchema,
+  updateServerEmojiSchema,
+  MAX_SERVER_EMOJI_BYTES,
+  SERVER_EMOJI_SIZE,
+  type ServerEmojiList,
   createBlockSchema,
   createChannelMessageSchema,
   createChannelSchema,
@@ -400,6 +406,27 @@ import {
   setServerImage,
   verifyServerImageObject,
 } from "../services/server-images.js";
+import {
+  assertServerEmojiCanBeAdded,
+  createServerEmojiUpload,
+  deleteServerEmoji,
+  insertServerEmoji,
+  isServerEmojiUploadConfigured,
+  isServerEmojiUploadKey,
+  listServerEmoji,
+  pinServerEmojiUpload,
+  presignServerEmojiRead,
+  renameServerEmoji,
+  scheduleDiscardServerEmojiObject,
+  serverEmojiLimit,
+  ServerEmojiError,
+  verifyServerEmojiObject,
+} from "../services/server-emoji.js";
+import {
+  checkServerEmojiUpload,
+  escalateServerEmojiScan,
+} from "../services/server-emoji-scan.js";
+import { isContentScanConfigured } from "../services/content-scan.js";
 import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
@@ -4626,6 +4653,201 @@ router.post("/api/servers/:serverId/featured/claim", async (ctx, { serverId }) =
 );
 router.delete("/api/servers/:serverId/featured", async ({ user }, { serverId }) =>
   clearServerImage("featured", user.id, serverId!),
+);
+
+// ---------------------------------------------------------- custom emoji
+//
+// The server-icon dance with a row per picture: mint (POST .../uploads), PUT
+// straight to storage, claim (POST .../emoji). Reading the list needs only
+// membership, because every member renders these in messages; every write
+// needs Manage Server, the bit the icon and banner already sit on.
+
+function serverEmojiHttpError(error: unknown): never {
+  if (error instanceof ServerEmojiError) {
+    switch (error.code) {
+      case "name_taken":
+        throw new HttpErrorWithDetail(409, error.message, { code: "emoji_name_taken" });
+      case "limit_reached":
+        throw new HttpErrorWithDetail(409, error.message, { code: "emoji_limit_reached" });
+      default:
+        throw new NotFound(error.message);
+    }
+  }
+  throw error;
+}
+
+function requireServerEmojiStorage(): void {
+  if (!isServerEmojiUploadConfigured()) {
+    throw new HttpErrorWithDetail(503, "Image uploads are not configured on this server", {
+      code: "emoji_storage_off",
+    });
+  }
+}
+
+router.get("/api/servers/:serverId/emoji", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return {
+    emoji: await listServerEmoji(serverId!),
+    limit: await serverEmojiLimit(serverId!),
+    uploadEnabled: isServerEmojiUploadConfigured(),
+    maxBytes: MAX_SERVER_EMOJI_BYTES,
+    size: SERVER_EMOJI_SIZE,
+  } satisfies ServerEmojiList;
+});
+
+router.post("/api/servers/:serverId/emoji/uploads", async (ctx, { serverId }) => {
+  requireServerEmojiStorage();
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+
+  const key = `user:${ctx.user.id}`;
+  if (!uploadLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createServerEmojiUploadSchema.parse(await readJsonBody(ctx.req));
+  if (body.byteSize > MAX_SERVER_EMOJI_BYTES) {
+    throw new HttpErrorWithDetail(413, "That image is too large.", { code: "emoji_too_large" });
+  }
+  try {
+    await assertServerEmojiCanBeAdded(serverId!, body.name);
+  } catch (error) {
+    serverEmojiHttpError(error);
+  }
+  return created(
+    createServerEmojiUpload({
+      serverId: serverId!,
+      contentType: body.contentType,
+      byteSize: body.byteSize,
+    }),
+  );
+});
+
+router.post("/api/servers/:serverId/emoji", async (ctx, { serverId }) => {
+  requireServerEmojiStorage();
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+
+  const body = createServerEmojiSchema.parse(await readJsonBody(ctx.req));
+  const unverified = () =>
+    new HttpErrorWithDetail(400, "That upload could not be verified. Try again.", {
+      code: "emoji_upload_unverified",
+    });
+  if (!isServerEmojiUploadKey(serverId!, body.key)) {
+    throw unverified();
+  }
+
+  let key = body.key;
+  if (isContentScanConfigured()) {
+    const pinned = await pinServerEmojiUpload(serverId!, body.key);
+    scheduleDiscardServerEmojiObject(body.key);
+    if (!pinned) {
+      throw unverified();
+    }
+    key = pinned;
+  }
+
+  const verified = await verifyServerEmojiObject(serverId!, key);
+  if (!verified) {
+    if (key !== body.key) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
+  const scanTarget = {
+    serverId: serverId!,
+    uploaderId: ctx.user.id,
+    name: body.name,
+    storageKey: key,
+    contentType: verified.contentType,
+  };
+  const scan = await checkServerEmojiUpload(scanTarget);
+  if (!scan.allowed) {
+    if (!scan.retained) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
+  let emoji;
+  try {
+    emoji = await insertServerEmoji({
+      serverId: serverId!,
+      name: body.name,
+      key,
+      createdBy: ctx.user.id,
+      scan: scan.result,
+    });
+  } catch (error) {
+    scheduleDiscardServerEmojiObject(key);
+    serverEmojiHttpError(error);
+  }
+  await escalateServerEmojiScan(scanTarget, scan.result, emoji.id);
+  await logAudit({
+    serverId: serverId!,
+    actorId: ctx.user.id,
+    action: "emoji.create",
+    targetType: "emoji",
+    targetId: emoji.id,
+    changes: [{ key: "name", old: null, new: emoji.name }],
+  });
+  return created({ emoji });
+});
+
+router.patch(
+  "/api/servers/:serverId/emoji/:emojiId",
+  async (ctx, { serverId, emojiId }) => {
+    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
+    const body = updateServerEmojiSchema.parse(await readJsonBody(ctx.req));
+    let renamed;
+    try {
+      renamed = await renameServerEmoji(serverId!, emojiId!, body.name);
+    } catch (error) {
+      serverEmojiHttpError(error);
+    }
+    if (renamed.previousName !== renamed.emoji.name) {
+      await logAudit({
+        serverId: serverId!,
+        actorId: ctx.user.id,
+        action: "emoji.update",
+        targetType: "emoji",
+        targetId: renamed.emoji.id,
+        changes: [{ key: "name", old: renamed.previousName, new: renamed.emoji.name }],
+      });
+    }
+    return { emoji: renamed.emoji };
+  },
+);
+
+// Not gated on storage, like clearing an icon: a server that lost its bucket
+// must still be able to remove an emoji.
+router.delete(
+  "/api/servers/:serverId/emoji/:emojiId",
+  async ({ user }, { serverId, emojiId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
+    let removed;
+    try {
+      removed = await deleteServerEmoji(serverId!, emojiId!);
+    } catch (error) {
+      serverEmojiHttpError(error);
+    }
+    scheduleDiscardServerEmojiObject(removed.key);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "emoji.delete",
+      targetType: "emoji",
+      targetId: emojiId!,
+      changes: [{ key: "name", old: removed.name, new: null }],
+    });
+    return { ok: true };
+  },
 );
 
 // ---------------------------------------------------------- community home (Baú)
@@ -12317,6 +12539,43 @@ async function serveServerImageObject(
   res.end();
 }
 
+const SERVER_EMOJI_OBJECT_PATH =
+  /^\/api\/emoji\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
+ * A custom emoji's bytes, as a redirect to the object store.
+ *
+ * Unauthenticated for the reason `serveServerImageObject` is: an `<img src>`
+ * cannot carry a Bearer token. What it discloses is one small picture whose
+ * uuid the caller already has, which a member only learns from the server's
+ * own list or from a message. Unknown id and no storage are the same 404.
+ */
+async function serveServerEmojiObject(
+  req: IncomingMessage,
+  res: ServerResponse,
+  emojiId: string,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await presignServerEmojiRead(emojiId);
+  } catch (error) {
+    console.error(`[server-emoji] could not resolve ${emojiId}:`, error);
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!url) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // An emoji's key never changes, and the window stays under the presigned
+  // target's own hour so a cached redirect cannot outlive the URL.
+  res.writeHead(302, {
+    location: url,
+    "cache-control": "public, max-age=300",
+  });
+  res.end();
+}
+
 const PUBLIC_PROFILE_PATH = /^\/api\/public\/profiles\/([^/]{1,64})$/;
 
 /**
@@ -12848,6 +13107,13 @@ export async function handleApi(
       serverImageMatch[1]!,
       serverImageMatch[2] as ServerImageKind,
     );
+    return;
+  }
+
+  const emojiMatch =
+    req.method === "GET" ? SERVER_EMOJI_OBJECT_PATH.exec(pathname) : null;
+  if (emojiMatch) {
+    await serveServerEmojiObject(req, res, emojiMatch[1]!);
     return;
   }
 
