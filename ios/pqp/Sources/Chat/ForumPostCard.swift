@@ -184,12 +184,22 @@ struct ForumPostCard: View {
         post.authorName ?? String(localized: "Deleted account")
     }
 
-    private var previewText: String {
+    private var previewText: String { Self.previewText(for: post) }
+
+    /// The second line when the opening message has no words of its own.
+    static func previewText(for post: ForumPostSummary) -> String {
         if post.openingDeleted { return String(localized: "The original message was deleted") }
         if let preview = post.preview, !preview.isEmpty { return preview }
         switch post.openingKind {
         case "voice": return String(localized: "Voice message")
         case "attachment":
+            // One picture or one clip says what it is; several say how many.
+            if post.attachmentCount == 1, post.thumbnailUrl != nil {
+                return String(localized: "📷 Image")
+            }
+            if post.attachmentCount == 1, post.thumbnailVideoUrl != nil {
+                return String(localized: "🎬 Video")
+            }
             return post.attachmentCount == 1
                 ? String(localized: "1 attachment")
                 : String(localized: "\(post.attachmentCount) attachments")
@@ -219,6 +229,8 @@ struct ForumPostCard: View {
 
             if let url = Avatar.resolve(post.thumbnailUrl) {
                 ForumThumbnail(url: url)
+            } else if let video = Avatar.resolve(post.thumbnailVideoUrl) {
+                ForumThumbnail(url: video, isVideo: true)
             }
         }
         .padding(.horizontal, 14)
@@ -317,18 +329,36 @@ struct ForumPostCard: View {
 }
 
 /// The first image of the question, 56 pt on a phone, with a hairline so a
-/// dark screenshot does not melt into the card.
+/// dark screenshot does not melt into the card. A video post (`isVideo`) draws
+/// the clip's first frame instead, under a small play badge, like the web card.
 struct ForumThumbnail: View {
     let url: URL
     var size: CGFloat = 56
+    var isVideo = false
 
     var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill()
-            default:
-                Palette.surfaceRaised
+        Group {
+            if isVideo {
+                ZStack {
+                    Palette.surfaceRaised
+                    // 3x the side: sharp on a 3x screen without a full-size decode.
+                    BauVideoFrame(url: url, maxSide: size * 3)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .offset(x: 0.5)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.black.opacity(0.55)))
+                }
+            } else {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        Palette.surfaceRaised
+                    }
+                }
             }
         }
         .frame(width: size, height: size)
