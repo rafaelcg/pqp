@@ -949,6 +949,22 @@ describeDb("stories", () => {
       });
       await getPool().query(`DELETE FROM user_blocks`);
 
+      // Bob leaves the server: still in the DM, no longer in the audience, so
+      // the quote carries nothing for him.
+      await getPool().query(`DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`, [
+        serverId,
+        bob.id,
+      ]);
+      invalidateServerMemberRoles(serverId);
+      as(bob);
+      expect((await call("GET", `/api/stories/${storyId}/card`)).body).toMatchObject({
+        state: "removed",
+        text: null,
+      });
+      // The author still sees their own.
+      as(alice);
+      expect((await call("GET", `/api/stories/${storyId}/card`)).body.state).toBe("live");
+
       // After expiry the quote keeps nothing.
       await getPool().query(`UPDATE stories SET expires_at = now() - interval '1 second'`);
       as(alice);

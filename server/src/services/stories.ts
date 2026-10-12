@@ -2160,11 +2160,19 @@ export async function getStoryCard(viewerId: string, storyId: string): Promise<S
   }
   const live =
     row.status === "live" && row.expires_at !== null && row.expires_at.getTime() > Date.now();
-  // A block in either direction shows the quote as gone, like every other read.
-  if (!live || row.all_removed || row.blocked) {
+  // The card shows content only to somebody who may see the story RIGHT NOW,
+  // by the same rule as every other read (audience, flags, blocks); being in
+  // the conversation is not enough. The author always may.
+  const mayView =
+    live &&
+    !row.all_removed &&
+    !row.blocked &&
+    (row.author_id === viewerId || (await loadVisible(viewerId, [storyId])).rows.length > 0);
+  if (!mayView) {
     return {
       storyId,
-      state: row.status === "deleted" || row.all_removed || row.blocked ? "removed" : "expired",
+      state:
+        row.status === "deleted" || row.all_removed || row.blocked || live ? "removed" : "expired",
       authorId: row.author_id,
       kind: null,
       posterUrl: null,
