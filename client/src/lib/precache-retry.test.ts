@@ -82,6 +82,19 @@ describe("checkWithRetry (the precache gate)", () => {
     });
   });
 
+  it("never polls faster than once a second, even with a zero interval", async () => {
+    const c = clock();
+    let calls = 0;
+    await checkWithRetry({
+      paths: ["a.js"],
+      statusOf: async () => (calls++, 404),
+      windowMs: 10_000,
+      intervalMs: 0,
+      ...c,
+    });
+    expect(calls).toBe(11);
+  });
+
   it("does not retry at all with a zero window", async () => {
     const c = clock();
     let calls = 0;

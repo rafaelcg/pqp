@@ -17,6 +17,7 @@
 /** Window and spacing defaults; `PRECACHE_RETRY_WINDOW_S` / `_INTERVAL_S` override. */
 export const DEFAULT_WINDOW_MS = 120_000;
 export const DEFAULT_INTERVAL_MS = 10_000;
+const MIN_INTERVAL_MS = 1_000;
 
 /**
  * @param {object} options
@@ -33,12 +34,15 @@ export async function checkWithRetry({
   paths,
   statusOf,
   windowMs = DEFAULT_WINDOW_MS,
-  intervalMs = DEFAULT_INTERVAL_MS,
+  intervalMs: requestedIntervalMs = DEFAULT_INTERVAL_MS,
   concurrency = 8,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
   log = () => {},
 }) {
+  // A zero or negative interval would poll the origin in a tight loop for the
+  // whole window; a window of 0 is how retrying is turned off.
+  const intervalMs = Math.max(requestedIntervalMs, MIN_INTERVAL_MS);
   const startedAt = now();
 
   /** Every path's status, at most `concurrency` requests at once. */
