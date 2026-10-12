@@ -6,6 +6,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { isHintSeen, rememberHint } from "@/lib/hints";
 import { ringLabel } from "@/lib/stories/format";
+import { failedRingLabel } from "@/lib/stories/post";
 import { useSeenStories } from "@/lib/stories/seen-store";
 import { stripView } from "@/lib/stories/strip-state";
 import {
@@ -148,6 +149,8 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
   }
 
   const ownSeen = own ? own.storyIds.every((id) => seen.has(id)) : false;
+  const failedLabel =
+    posting?.status === "failed" ? failedRingLabel(posting.failure, Boolean(posting.retry)) : null;
   const showOwn = Boolean(own) || strip.canPost || Boolean(posting);
 
   return (
@@ -188,8 +191,8 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
             avatarUrl={me.avatarUrl}
             label={t("stories.strip.yours")}
             ariaLabel={
-              posting?.status === "failed"
-                ? t("stories.upload.failed")
+              failedLabel
+                ? t(failedLabel.key, failedLabel.vars)
                 : posting
                   ? t(posting.status === "processing" ? "stories.upload.processing" : "stories.upload.posting")
                   : own
@@ -202,7 +205,11 @@ export function StoryStrip({ audience, me }: StoryStripProps) {
             onPlus={own ? compose : undefined}
             upload={
               posting
-                ? { status: posting.status, progress: posting.progress }
+                ? {
+                    status: posting.status,
+                    progress: posting.progress,
+                    retryable: Boolean(posting.retry),
+                  }
                 : null
             }
             arrive={Boolean(own)}

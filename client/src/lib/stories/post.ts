@@ -1,5 +1,6 @@
-import type { CreateStoryRequest } from "@pqp/shared";
+import { STORY_POSTS_PER_DAY, type CreateStoryRequest } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
+import type { MessageKey, MessageVars } from "@/lib/i18n";
 import { createStory, fetchStories, publishStory } from "./api";
 import { emitStoriesRefresh, onStoriesSignal } from "./events";
 import { mediaInputFor, putStoryMedia, type PreparedStoryMedia } from "./upload";
@@ -30,6 +31,65 @@ export interface StoryDraft {
 
 export type PostOutcome = "live" | "processing" | "failed" | "busy";
 
+/**
+ * Why a post failed, which decides what a tap on the red ring may do.
+ *
+ * - `failed`: the network or the server let us down. Posting again is worth
+ *   it, with the same `requestId`, so an answer that was lost does not post
+ *   the story twice.
+ * - `busy`: three in a minute. Posting again in a moment works.
+ * - `daily`: the 24 h cap. Nothing will work until tomorrow, so the ring
+ *   only says so and a tap puts it away.
+ * - `refused`: the server said no for good (the scan, a permission, a story
+ *   that is gone). The story that `requestId` made is deleted, so replaying
+ *   it can only answer "gone": the tap puts the ring away instead, and the
+ *   person composes again if they want to.
+ */
+export type PostFailure = "failed" | "busy" | "daily" | "refused";
+
+/** What the red ring is called: a retry, or why it will not go up. */
+export function failedRingLabel(
+  failure: PostFailure | null,
+  retryable: boolean,
+): { key: MessageKey; vars?: MessageVars } {
+  if (failure === "busy") {
+    return { key: "stories.upload.busy" };
+  }
+  if (failure === "daily") {
+    return { key: "stories.upload.daily", vars: { limit: STORY_POSTS_PER_DAY } };
+  }
+  return { key: retryable ? "stories.upload.failed" : "stories.upload.dismiss" };
+}
+
+/** The one line said out loud the moment a post fails, so nobody has to hover the ring. */
+export function failedPostNotice(failure: PostFailure | null): { key: MessageKey; vars?: MessageVars } {
+  switch (failure) {
+    case "busy":
+      return { key: "stories.upload.busy" };
+    case "daily":
+      return { key: "stories.upload.daily", vars: { limit: STORY_POSTS_PER_DAY } };
+    case "refused":
+      return { key: "stories.upload.refused" };
+    default:
+      return { key: "stories.upload.failedNotice" };
+  }
+}
+
+export function classifyPostFailure(error: unknown): PostFailure {
+  if (!(error instanceof ApiError) || error.status === 0) {
+    return "failed";
+  }
+  if (error.status === 429) {
+    // The per-minute limiter answers with `Retry-After`; the daily budget
+    // (a "budget" StoryError) does not, because waiting a minute is no help.
+    return error.retryAfterMs !== null ? "busy" : "daily";
+  }
+  if (error.status === 408 || error.status >= 500) {
+    return "failed";
+  }
+  return "refused";
+}
+
 let counter = 0;
 
 export function audienceKeysFor(request: Pick<CreateStoryRequest, "audiences">): string[] {
@@ -48,6 +108,7 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
     audienceKeys,
     progress: draft.media ? 0 : null,
     status: "uploading",
+    failure: null,
     retry: null,
   });
   try {
@@ -75,15 +136,23 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
     finish(id);
     return "live";
   } catch (error) {
-    const busy = error instanceof ApiError && error.status === 429;
+    const failure = classifyPostFailure(error);
+    const retryable = failure === "failed" || failure === "busy";
+    if (!retryable) {
+      // Whatever this key made is gone or never will be: never replay it.
+      draft.requestId = undefined;
+    }
     patchPosting(id, {
       status: "failed",
       progress: null,
-      retry: () => {
-        void postStory(draft);
-      },
+      failure,
+      retry: retryable
+        ? () => {
+            void postStory(draft);
+          }
+        : null,
     });
-    return busy ? "busy" : "failed";
+    return failure === "busy" || failure === "daily" ? "busy" : "failed";
   }
 }
 
@@ -140,7 +209,7 @@ function waitUntilLive(id: string, storyId: string): void {
         if (!story) {
           // Refused at processing (a frame failed the scan) or deleted.
           stop();
-          patchPosting(id, { status: "failed", progress: null, retry: null });
+          patchPosting(id, { status: "failed", progress: null, failure: "refused", retry: null });
           return;
         }
         if (story.own?.status === "live") {
