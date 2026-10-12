@@ -181,7 +181,12 @@ export function LivePreviewPlayer({
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, play);
       destroy = () => hls.destroy();
-    })();
+    })().catch((error: unknown) => {
+      // The hls.js chunk failed to load (a network blip, a deploy that
+      // removed the old chunk) or the player threw while starting. Without
+      // this the page would stay on a blank player with nothing to retry.
+      fail(`bootstrap:${error instanceof Error ? error.name : "unknown"}`);
+    });
 
     return () => {
       cancelled = true;

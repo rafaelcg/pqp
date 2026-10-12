@@ -14,6 +14,7 @@ const CHANNEL = "2b7c1d1e-7a1f-4f6e-9a55-0c1f2a3b4c5d";
 
 const api = vi.hoisted(() => ({
   starts: [] as Array<(result: LivePreviewStartResult) => void>,
+  failures: [] as Array<(error: Error) => void>,
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -29,8 +30,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     })),
     startLivePreview: vi.fn(
       () =>
-        new Promise<LivePreviewStartResult>((resolve) => {
+        new Promise<LivePreviewStartResult>((resolve, reject) => {
           api.starts.push(resolve);
+          api.failures.push(reject);
         }),
     ),
   };
@@ -80,6 +82,7 @@ let siteRoot: HTMLElement | null = null;
 
 beforeEach(() => {
   api.starts.length = 0;
+  api.failures.length = 0;
   player.unavailable = null;
   player.playing = null;
   window.sessionStorage.setItem(PREVIEW_AGE_OK_KEY, "1");
@@ -178,6 +181,14 @@ describe("LivePreviewPanel", () => {
     await act(async () => player.unavailable!());
     await answerStart(2, okResult());
     await act(async () => player.unavailable!());
+    expect(page()?.dataset.livePreview).toBe("error");
+  });
+
+  it("shows the retry, not an endless skeleton, when a start throws", async () => {
+    await mount();
+    await watchNow();
+    expect(page()?.dataset.livePreview).toBe("starting");
+    await act(async () => api.failures[0]!(new Error("boom")));
     expect(page()?.dataset.livePreview).toBe("error");
   });
 });

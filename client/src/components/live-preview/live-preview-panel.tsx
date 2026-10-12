@@ -23,6 +23,7 @@ import {
   fetchLivePreviewListing,
   startLivePreview,
   type LivePreviewSource,
+  type LivePreviewStartResult,
 } from "@/lib/api";
 import { intentStorage, stashLiveChannelIntent } from "@/lib/handle-intent";
 import { useTranslation } from "@/lib/i18n";
@@ -202,10 +203,17 @@ export function LivePreviewPanel({
       generation.current += 1;
       const run = generation.current;
       setPhase({ kind: "starting" });
-      const result = await startLivePreview({
-        channelId: targetId,
-        ticket: readPreviewTicket(safeLocal(), targetId),
-      });
+      let result: LivePreviewStartResult;
+      try {
+        result = await startLivePreview({
+          channelId: targetId,
+          ticket: readPreviewTicket(safeLocal(), targetId),
+        });
+      } catch {
+        // `startLivePreview` already turns a failed request into "retry";
+        // anything else must not leave the skeleton up for good.
+        result = { kind: "retry" };
+      }
       if (result.kind === "ok") {
         // Kept even when this answer is stale: the server started (or
         // continued) this window, and the ticket is what keeps a later start
