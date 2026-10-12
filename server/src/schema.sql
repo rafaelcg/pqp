@@ -5956,8 +5956,8 @@ BEGIN
 END $$;
 
 -- MANAGE_EMOJI (bit 26 = 67108864): upload, rename and delete custom server
--- emoji. ORed onto the seeded Manager and Admin cargos, whose stored masks
--- mean "everything", the same as post_stories_bit_2026_10. Never onto
+-- emoji. ORed onto the seeded Admin cargo, whose stored mask means
+-- "everything", like post_stories_bit_2026_10. Never onto the Manager,
 -- @everyone, the Moderator or a homemade cargo: an owner grants it there from
 -- the role editor. The owner person already resolves to every bit. One-shot
 -- via data_migrations, so a bit an owner turns off never comes back.
@@ -5975,7 +5975,7 @@ BEGIN
     UPDATE roles
        SET permissions = permissions | manage_emoji
      WHERE (permissions & manage_emoji) = 0
-       AND system_key IN ('manager', 'admin')
+       AND system_key = 'admin'
     RETURNING server_id
   )
   UPDATE servers

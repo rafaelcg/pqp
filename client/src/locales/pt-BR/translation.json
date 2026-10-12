@@ -3533,7 +3533,7 @@
   "roles.perm.ADMINISTRATOR": "Administrador",
   "roles.perm.MANAGE_CHANNELS": "Gerenciar canais",
   "roles.perm.MANAGE_SERVER": "Gerenciar servidor",
-  "roles.perm.MANAGE_EMOJI": "Gerenciar emoji",
+  "roles.perm.MANAGE_EMOJI": "Gerenciar emojis",
   "roles.perm.VIEW_CHANNEL": "Ver canal",
   "roles.perm.SEND_MESSAGES": "Enviar mensagens",
   "roles.perm.MANAGE_MESSAGES": "Gerenciar mensagens",

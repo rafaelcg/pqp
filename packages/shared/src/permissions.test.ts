@@ -37,7 +37,7 @@ describe("permission bitfields", () => {
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
-  it("gives Manage Emoji to owner, Administrator and Manager, never to @everyone or Moderator", () => {
+  it("gives Manage Emoji to owner and Administrator, never to Manager, @everyone or Moderator", () => {
     expect(Permission.MANAGE_EMOJI).toBe(1n << 26n);
     expect(hasPermission(PERMISSION_ALL, Permission.MANAGE_EMOJI)).toBe(true);
     expect(
@@ -45,7 +45,13 @@ describe("permission bitfields", () => {
     ).toBe(true);
     expect(
       hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.MANAGE_EMOJI),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      hasPermission(
+        defaultRolePermissions("manager"),
+        Permission.MANAGE_EMOJI,
+      ),
+    ).toBe(false);
     expect(
       hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.MANAGE_EMOJI),
     ).toBe(false);

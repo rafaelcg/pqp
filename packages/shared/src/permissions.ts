@@ -93,8 +93,13 @@ export const PERMISSION_DEFAULT_EVERYONE =
 export const PERMISSION_TIMEOUT_KEEP =
   Permission.VIEW_CHANNEL | Permission.READ_MESSAGE_HISTORY;
 
-/** Manager / Gerente: every bit except Administrator, so overwrites still apply. */
-export const PERMISSION_DEFAULT_MANAGER = PERMISSION_ALL & ~Permission.ADMINISTRATOR;
+/**
+ * Manager / Gerente: every bit except Administrator, so overwrites still
+ * apply, and except Manage Emoji, which only Owner and Administrator hold by
+ * default. An owner can still turn it on for a Manager in the role editor.
+ */
+export const PERMISSION_DEFAULT_MANAGER =
+  PERMISSION_ALL & ~Permission.ADMINISTRATOR & ~Permission.MANAGE_EMOJI;
 
 /**
  * Moderator extras only. `@everyone` is ORed at resolve time, so copying

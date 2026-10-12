@@ -302,7 +302,7 @@ describeDb("server emoji", () => {
       ).toBe(403);
     });
 
-    it("gives the seeded Admin and Manager cargos Manage Emoji on a new server", async () => {
+    it("gives the seeded Admin cargo Manage Emoji on a new server, and not Manager", async () => {
       const seeded = await getPool().query<{ system_key: string; permissions: string }>(
         `SELECT system_key, permissions::text FROM roles
           WHERE server_id = $1 AND system_key IN ('admin', 'manager', 'moderator', 'everyone')`,
@@ -314,10 +314,10 @@ describeDb("server emoji", () => {
           (BigInt(row.permissions) & Permission.MANAGE_EMOJI) === Permission.MANAGE_EMOJI,
         ]),
       );
-      expect(holds).toEqual({ admin: true, manager: true, moderator: false, everyone: false });
+      expect(holds).toEqual({ admin: true, manager: false, moderator: false, everyone: false });
     });
 
-    it("backfills Manage Emoji onto an existing server's Admin and Manager once, and nowhere else", async () => {
+    it("backfills Manage Emoji onto an existing server's Admin once, and nowhere else (not Manager)", async () => {
       const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
       const start = schema.indexOf("-- MANAGE_EMOJI (bit 26");
       const block = schema.slice(
@@ -346,16 +346,16 @@ describeDb("server emoji", () => {
         ).rows.map((row) => row.label);
 
       await getPool().query(block);
-      expect(await holders()).toEqual(["admin", "manager"]);
+      expect(await holders()).toEqual(["admin"]);
 
       // An owner who turns it off keeps it off on the next boot.
       await getPool().query(
         `UPDATE roles SET permissions = permissions & ~$2::bigint
-          WHERE server_id = $1 AND system_key = 'manager'`,
+          WHERE server_id = $1 AND system_key = 'admin'`,
         [serverId, bit],
       );
       await getPool().query(block);
-      expect(await holders()).toEqual(["admin"]);
+      expect(await holders()).toEqual([]);
     });
 
     it("never signs a URL for an outsider", async () => {
