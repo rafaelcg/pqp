@@ -142,6 +142,9 @@ export function LivePreviewPanel({
   const viewTracked = useRef(false);
   const endTracked = useRef(false);
   const restarts = useRef(0);
+  // Bumped by every start, by leaving the page and by picking a channel: an
+  // answer that comes back after any of those is stale and must not draw.
+  const generation = useRef(0);
   const sourceKey = source.kind === "community" ? `c:${source.slug}` : `i:${source.code}`;
 
   // The listing: on mount and every 30 s, watching or not, so a party that
@@ -195,17 +198,28 @@ export function LivePreviewPanel({
   }, [shown, surface]);
 
   const begin = useCallback(
-    async (targetId: string) => {
+    async (targetId: string, options: { restart?: boolean } = {}) => {
+      generation.current += 1;
+      const run = generation.current;
       setPhase({ kind: "starting" });
       const result = await startLivePreview({
         channelId: targetId,
         ticket: readPreviewTicket(safeLocal(), targetId),
       });
       if (result.kind === "ok") {
+        // Kept even when this answer is stale: the server started (or
+        // continued) this window, and the ticket is what keeps a later start
+        // on the same window instead of a fresh one.
         writePreviewTicket(safeLocal(), targetId, result.body.ticket);
-        if (restarts.current === 0) {
-          track("live_preview_play", { surface });
-        }
+      }
+      if (run !== generation.current) {
+        // The visitor left the page (the back control) or picked another
+        // channel while this was in flight. Drawing it now would bring the
+        // page back over the site, or play one channel under another's title.
+        return;
+      }
+      if (result.kind === "ok" && !options.restart) {
+        track("live_preview_play", { surface });
       }
       setNow(Date.now());
       setPhase(phaseAfterStart(result));
@@ -266,6 +280,7 @@ export function LivePreviewPanel({
   }
 
   const watch = (target: LivePreviewListedChannel) => {
+    generation.current += 1;
     setChannelId(target.id);
     const next = phaseOnWatch(readPreviewAgeMemory(safeSession(), safeLocal()));
     setPhase(next);
@@ -275,6 +290,7 @@ export function LivePreviewPanel({
   };
 
   const exit = () => {
+    generation.current += 1;
     setParts(EMPTY_DATE_PARTS);
     setAgeError(false);
     setPhase({ kind: "idle" });
@@ -307,7 +323,7 @@ export function LivePreviewPanel({
       return;
     }
     restarts.current += 1;
-    void begin(shown.id);
+    void begin(shown.id, { restart: true });
   };
 
   /**
