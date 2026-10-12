@@ -5323,6 +5323,8 @@ router.post("/api/stories/:storyId/reply", async ({ req, res, user }, { storyId 
       channelId: opened.channelId,
       body: body.text,
       storyId: storyId!,
+      // A retry with the same nonce answers the reply that already landed.
+      ...(body.nonce ? { nonce: body.nonce } : {}),
     });
     if (!posted.ok) {
       switch (posted.reason) {

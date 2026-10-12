@@ -459,7 +459,7 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
   }
   if (claimed.processing_attempts > VIDEO_MAX_ATTEMPTS) {
     if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    await refuseStory(claimed.id, { until: "none" }, "processing failed too many times");
+    await refuseStory(claimed.id, { until: "none" }, "processing failed too many times", claimed.claim);
     bumpStoryStat("videoFailures");
     return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
   }
@@ -477,7 +477,7 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
       STORY_MAX_BYTES,
     );
     if (!downloaded) {
-      await refuseStory(claimed.id, { until: "none" }, "object missing");
+      await refuseStory(claimed.id, { until: "none" }, "object missing", claimed.claim);
       bumpStoryStat("videosRefused");
       return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
     }
@@ -485,7 +485,7 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
     try {
       probed = await tools.probe(videoPath);
     } catch (error) {
-      await refuseStory(claimed.id, { until: "none" }, "not a readable video");
+      await refuseStory(claimed.id, { until: "none" }, "not a readable video", claimed.claim);
       bumpStoryStat("videosRefused");
       console.warn(
         `[stories] ${claimed.id} is not a readable video:`,
@@ -498,7 +498,7 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
       probed.durationMs <= 0 ||
       probed.durationMs > STORY_MAX_PROBED_VIDEO_MS
     ) {
-      await refuseStory(claimed.id, { until: "none" }, `duration ${probed.durationMs} ms`);
+      await refuseStory(claimed.id, { until: "none" }, `duration ${probed.durationMs} ms`, claimed.claim);
       bumpStoryStat("videosRefused");
       return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
     }
@@ -511,12 +511,12 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
       height > STORY_MAX_VIDEO_EDGE ||
       width * height > STORY_MAX_VIDEO_PIXELS
     ) {
-      await refuseStory(claimed.id, { until: "none" }, `dimensions ${width}x${height}`);
+      await refuseStory(claimed.id, { until: "none" }, `dimensions ${width}x${height}`, claimed.claim);
       bumpStoryStat("videosRefused");
       return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
     }
     if (probed.videoCodec !== "h264") {
-      await refuseStory(claimed.id, { until: "none" }, `codec ${probed.videoCodec ?? "none"}`);
+      await refuseStory(claimed.id, { until: "none" }, `codec ${probed.videoCodec ?? "none"}`, claimed.claim);
       bumpStoryStat("videosRefused");
       return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };
     }
@@ -547,6 +547,7 @@ export async function processStoryVideos(): Promise<StoryVideoTick> {
         { id: claimed.id, author_id: claimed.author_id },
         scan,
         "video frames",
+        claimed.claim,
       );
       if (!allowed) {
         return { storyId: claimed.id, authorId: claimed.author_id, outcome: "refused" };

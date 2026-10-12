@@ -1250,7 +1250,60 @@ async function assertBudget(client: PoolClient, userId: string): Promise<void> {
   }
 }
 
+function uploadFor(key: string, contentType: string, byteSize: number): StoryUpload {
+  return {
+    url: presignPut(key, contentType, byteSize, STORY_UPLOAD_URL_TTL_SECONDS),
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    expiresAt: new Date(Date.now() + STORY_UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+  };
+}
+
+/**
+ * A retried create (same `requestId`): the story the first attempt made, with
+ * a fresh upload URL while it still waits for its bytes. Nothing is announced
+ * again. Null when this key made nothing yet.
+ */
+async function replayCreate(userId: string, requestId: string): Promise<CreatedStory | null> {
+  const result = await getPool().query<{
+    id: string;
+    status: string;
+    media_storage_key: string | null;
+    media_content_type: string | null;
+    media_byte_size: number | null;
+  }>(
+    `SELECT id, status, media_storage_key, media_content_type, media_byte_size
+       FROM stories WHERE author_id = $1 AND request_id = $2`,
+    [userId, requestId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  if (row.status === "deleted" || row.status === "expired") {
+    throw new StoryError("not_found", "That story is gone");
+  }
+  return {
+    story: await getStoryForViewer(userId, row.id),
+    upload:
+      row.status === "pending" &&
+      row.media_storage_key &&
+      row.media_content_type &&
+      row.media_byte_size
+        ? uploadFor(row.media_storage_key, row.media_content_type, row.media_byte_size)
+        : null,
+    liveServerIds: [],
+    liveFriends: false,
+  };
+}
+
 export async function createStory(user: DbUser, input: CreateStoryRequest): Promise<CreatedStory> {
+  if (input.requestId) {
+    const replay = await replayCreate(user.id, input.requestId);
+    if (replay) {
+      return replay;
+    }
+  }
   await assertCanPost(user, input);
   if (input.kind !== "text") {
     if (!isStorageConfigured()) {
@@ -1278,12 +1331,13 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
          id, author_id, kind, status, caption, text_body, background, sticker,
          replies_enabled, media_storage_key, media_content_type, media_byte_size,
          media_width, media_height, media_duration_ms, scan_status,
-         published_at, expires_at
+         published_at, expires_at, request_id
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15,
          $16,
          CASE WHEN $17 THEN now() END,
-         CASE WHEN $17 THEN now() + make_interval(hours => $18) END
+         CASE WHEN $17 THEN now() + make_interval(hours => $18) END,
+         $19
        ) RETURNING expires_at`,
       [
         storyId,
@@ -1305,6 +1359,7 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         live ? "skipped" : "unscanned",
         live,
         STORY_TTL_HOURS,
+        input.requestId ?? null,
       ],
     );
     const expiresAt = inserted.rows[0]?.expires_at ?? null;
@@ -1312,6 +1367,17 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
+    // Two attempts with one key raced: the other one won, answer its story.
+    if (
+      input.requestId &&
+      (error as { code?: string; constraint?: string } | null)?.code === "23505" &&
+      (error as { constraint?: string }).constraint === "uq_stories_author_request"
+    ) {
+      const replay = await replayCreate(user.id, input.requestId);
+      if (replay) {
+        return replay;
+      }
+    }
     throw error;
   } finally {
     client.release();
@@ -1321,12 +1387,17 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
   try {
     story = await getStoryForViewer(user.id, storyId);
   } catch (error) {
-    // Committed, but the author never got an answer: take it back, so a retry
-    // is a clean second attempt rather than a duplicate (and a pending story
-    // with no upload URL). Nothing was announced yet; the route does that.
-    await getPool()
-      .query(`DELETE FROM stories WHERE id = $1 AND author_id = $2`, [storyId, user.id])
-      .catch(() => undefined);
+    // Committed, but the author never got an answer. With a `requestId` the
+    // retry finds this story and answers it, so it stays. Without one, take it
+    // back, so a retry is a clean second attempt rather than a duplicate.
+    // Nothing was announced yet; the route does that.
+    if (!input.requestId) {
+      await getPool()
+        .query(`DELETE FROM stories WHERE id = $1 AND author_id = $2`, [storyId, user.id])
+        .catch((cleanup: unknown) => {
+          console.error(`[stories] could not take back ${storyId} after a failed answer:`, cleanup);
+        });
+    }
     throw error;
   }
   if (live) {
@@ -1334,17 +1405,7 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
   }
   return {
     story,
-    upload:
-      key && media
-        ? {
-            url: presignPut(key, media.contentType, media.byteSize, STORY_UPLOAD_URL_TTL_SECONDS),
-            method: "PUT",
-            headers: { "Content-Type": media.contentType },
-            expiresAt: new Date(
-              Date.now() + STORY_UPLOAD_URL_TTL_SECONDS * 1000,
-            ).toISOString(),
-          }
-        : null,
+    upload: key && media ? uploadFor(key, media.contentType, media.byteSize) : null,
     liveServerIds: live ? input.audiences.serverIds : [],
     liveFriends: live && input.audiences.friends,
   };
@@ -1437,9 +1498,11 @@ export async function refuseStory(
   storyId: string,
   hold: { until: "quarantine" | "none" | "forever" },
   error: string | null,
+  claim: string | null = null,
 ): Promise<void> {
-  // Not fenced on the video lease on purpose: a refusal (or a hold) is never
-  // wrong to apply, whoever finds the reason first.
+  // Only a story that is still being decided (pending or processing), and in
+  // the video job only by the holder of the current claim: a worker whose
+  // lease lapsed must never take down a story a newer worker already put live.
   await getPool().query(
     `UPDATE stories
         SET status = 'deleted', deleted_at = now(), processing_claimed_at = NULL,
@@ -1447,13 +1510,18 @@ export async function refuseStory(
             hold_until = CASE WHEN $3 = 'quarantine'
                               THEN now() + make_interval(days => $4) ELSE hold_until END,
             hold_forever = hold_forever OR $3 = 'forever'
-      WHERE id = $1`,
-    [storyId, error, hold.until, quarantineDays()],
+      WHERE id = $1 AND status IN ('pending', 'processing')
+        AND ($5::timestamptz IS NULL OR processing_claimed_at = $5::timestamptz)`,
+    [storyId, error, hold.until, quarantineDays(), claim],
   );
 }
 
 /** The scanner's verdict, onto the row. */
-export async function recordStoryScan(storyId: string, result: ScanResult): Promise<void> {
+export async function recordStoryScan(
+  storyId: string,
+  result: ScanResult,
+  claim: string | null = null,
+): Promise<void> {
   if (result.status === "unscanned") {
     return;
   }
@@ -1461,8 +1529,9 @@ export async function recordStoryScan(storyId: string, result: ScanResult): Prom
     `UPDATE stories
         SET scan_status = $2, scan_provider = $3, scan_score = $4,
             scan_labels = $5::jsonb, scanned_at = now()
-      WHERE id = $1`,
-    [storyId, result.status, result.provider, result.score, JSON.stringify(result.labels)],
+      WHERE id = $1 AND status IN ('pending', 'processing')
+        AND ($6::timestamptz IS NULL OR processing_claimed_at = $6::timestamptz)`,
+    [storyId, result.status, result.provider, result.score, JSON.stringify(result.labels), claim],
   );
 }
 
@@ -1482,8 +1551,9 @@ export async function applyStoryScan(
   row: { id: string; author_id: string },
   result: ScanResult,
   subject: string,
+  claim: string | null = null,
 ): Promise<boolean> {
-  await recordStoryScan(row.id, result);
+  await recordStoryScan(row.id, result, claim);
   if (result.status === "rejected" || result.status === "flagged") {
     // Filed first, and allowed to throw: a refused or flagged story must never
     // be finalised without its queue entry. A failure here leaves the story
@@ -1505,6 +1575,7 @@ export async function applyStoryScan(
       row.id,
       { until: result.illegal ? "forever" : result.status === "rejected" ? "quarantine" : "none" },
       `scan ${result.status}`,
+      claim,
     );
     bumpStoryStat(result.status === "rejected" ? "scanRejected" : "scanErrored");
   } else if (result.status === "flagged") {
@@ -1538,7 +1609,7 @@ async function escalateStoryScan(
       // One report, in the first server the story went to (where its staff
       // would have seen it); none means the instance queue. An illegal match
       // goes to the instance queue whatever the audience (`minor_sexual`).
-      serverId: targets.serverIds[0] ?? null,
+      serverId: result.illegal ? null : (targets.serverIds[0] ?? null),
       reason,
       details:
         `Automated image scan (${result.provider}) returned ${result.status} for story ` +

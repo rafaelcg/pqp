@@ -135,7 +135,7 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { sweepStories, processStoryVideos, setStoryVideoToolsForTests } = await import(
   "../services/story-media.js"
 );
-const { resetStoryProcessorCacheForTests } = await import("../services/stories.js");
+const { refuseStory, resetStoryProcessorCacheForTests } = await import("../services/stories.js");
 const { storiesMetrics, resetStoryStatsForTests } = await import("../services/story-metrics.js");
 const { resetStoriesNotifyForTests } = await import("../ws/stories.js");
 const { deleteAccount } = await import("../services/account.js");
@@ -1320,6 +1320,68 @@ describeDb("stories", () => {
         reactionCount: 0,
         viewers: [],
       });
+    });
+  });
+
+  describe("retries and races", () => {
+    beforeEach(async () => {
+      await storiesOn();
+    });
+
+    it("a create retried with its requestId answers the first story", async () => {
+      const requestId = "9b2f0f2e-5d0b-4a43-9a51-6f8d1c2b3a4e";
+      const first = await call("POST", "/api/stories", {
+        kind: "image",
+        audiences: { serverIds: [serverId] },
+        media: { contentType: "image/jpeg", byteSize: 4000, width: 10, height: 10 },
+        requestId,
+      });
+      const again = await call("POST", "/api/stories", {
+        kind: "image",
+        audiences: { serverIds: [serverId] },
+        media: { contentType: "image/jpeg", byteSize: 4000, width: 10, height: 10 },
+        requestId,
+      });
+      expect(first.status).toBe(201);
+      expect(again.status).toBe(201);
+      expect(again.body.story.id).toBe(first.body.story.id);
+      expect(again.body.upload).toMatchObject({ method: "PUT" });
+      expect((await getPool().query(`SELECT 1 FROM stories`)).rowCount).toBe(1);
+    });
+
+    it("a reply retried with its nonce sends one DM", async () => {
+      const id = (await postText()).body.story.id as string;
+      as(bob);
+      const one = await call("POST", `/api/stories/${id}/reply`, { text: "que isso", nonce: "n-1" });
+      const two = await call("POST", `/api/stories/${id}/reply`, { text: "que isso", nonce: "n-1" });
+      expect(one.status).toBe(201);
+      expect(two.body.messageId).toBe(one.body.messageId);
+      expect((await getPool().query(`SELECT 1 FROM messages`)).rowCount).toBe(1);
+    });
+
+    it("a report cannot land on a story whose bytes the sweep already claimed", async () => {
+      const { story } = await mintImage();
+      as(alice);
+      await call("POST", `/api/stories/${story.id}/publish`);
+      await getPool().query(`UPDATE stories SET media_delete_claimed_at = now()`);
+      as(bob);
+      expect(
+        (
+          await call("POST", "/api/reports", {
+            subjectType: "story",
+            storyId: story.id,
+            serverId,
+            reason: "spam",
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("a refusal from a lapsed video claim never takes down a live story", async () => {
+      const id = (await postText()).body.story.id as string;
+      await refuseStory(id, { until: "none" }, "stale worker", "2001-01-01T00:00:00Z");
+      await refuseStory(id, { until: "none" }, "stale worker");
+      expect(await read(bob, [id])).toHaveLength(1);
     });
   });
 

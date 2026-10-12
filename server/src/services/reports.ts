@@ -582,8 +582,26 @@ export async function createReport(
     subject.storySnapshot ?? null,
   ];
 
+  // A story report must HOLD the story's bytes, or it is accepted as though it
+  // did while the sweep deletes them. Lock the row the sweep's claim locks
+  // (it skips locked rows), refuse a story whose bytes are already being
+  // deleted, and commit the report with the lock still held: once it lands,
+  // the open report is what the sweep's hold rule sees.
+  const storyLock = subject.reportedStoryId ? await getPool().connect() : null;
   try {
-    const inserted = await getPool().query<{ id: string }>(
+    if (storyLock) {
+      await storyLock.query("BEGIN");
+      const holdable = await storyLock.query(
+        `SELECT 1 FROM stories
+          WHERE id = $1 AND media_delete_claimed_at IS NULL AND media_deleted_at IS NULL
+          FOR UPDATE`,
+        [subject.reportedStoryId],
+      );
+      if ((holdable.rowCount ?? 0) === 0) {
+        throw new ReportTargetNotVisibleError();
+      }
+    }
+    const inserted = await (storyLock ?? getPool()).query<{ id: string }>(
       `INSERT INTO reports (
          reporter_id, subject_type, context_kind, reported_message_id,
          reported_user_id, server_id, channel_id, content_snapshot,
@@ -593,12 +611,18 @@ export async function createReport(
        RETURNING id::text AS id`,
       params,
     );
+    if (storyLock) {
+      await storyLock.query("COMMIT");
+    }
     const report = await getReport(inserted.rows[0]!.id);
     if (!report) {
       throw new Error("Report vanished after being filed");
     }
     return { report, duplicate: false };
   } catch (error) {
+    if (storyLock) {
+      await storyLock.query("ROLLBACK").catch(() => undefined);
+    }
     if (
       error &&
       typeof error === "object" &&
@@ -611,6 +635,8 @@ export async function createReport(
       }
     }
     throw error;
+  } finally {
+    storyLock?.release();
   }
 }
 
