@@ -116,6 +116,7 @@ fun ConversasScreen(
 ) {
     val conversations by social.conversations.collectAsStateWithLifecycle()
     val loading by social.loadingConversations.collectAsStateWithLifecycle()
+    val loaded by social.conversationsLoaded.collectAsStateWithLifecycle()
     val error by social.error.collectAsStateWithLifecycle()
     val friends by social.friends.collectAsStateWithLifecycle()
     val typing by social.typing.collectAsStateWithLifecycle()
@@ -243,7 +244,17 @@ fun ConversasScreen(
                 .padding(padding),
         ) {
             if (conversations.isEmpty()) {
-                if (!loading) {
+                if (!loading && !loaded) {
+                    // The inbox never answered: say so and offer a retry,
+                    // rather than welcoming the person to an empty list they
+                    // may not have.
+                    gg.pqp.app.ui.components.EmptyState(
+                        text = stringResource(R.string.error_network),
+                        actionLabel = stringResource(R.string.connection_retry),
+                        onAction = social::refreshConversations,
+                        modifier = Modifier.testTag("conversas.loadFailed"),
+                    )
+                } else if (!loading) {
                     EmptyConversas(
                         onAddFriend = onAddFriend,
                         onInvite = {
