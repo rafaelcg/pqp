@@ -85,11 +85,14 @@ vi.mock("@/lib/sounds", () => ({
 // that the controller calls into it at the right moments.
 const silenceSoundboardClipsMock = vi.hoisted(() => vi.fn());
 const playSoundboardClipMock = vi.hoisted(() => vi.fn(async () => {}));
+const noteOwnSoundboardEchoMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/soundboard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/soundboard")>();
   return {
     ...actual,
     silenceSoundboardClips: () => silenceSoundboardClipsMock(),
+    noteOwnSoundboardEcho: (soundId: string) =>
+      noteOwnSoundboardEchoMock(soundId),
     playSoundboardClip: (...args: unknown[]) =>
       (playSoundboardClipMock as (...a: unknown[]) => Promise<void>)(...args),
   };
@@ -4378,6 +4381,31 @@ describe("telling the SFU what this listener wants to hear", () => {
       expect.any(Function),
       "user-2",
     );
+  });
+
+  it("counts this person's own echo only when it comes from the room they sit in", async () => {
+    const voice = await connectedSfu();
+    noteOwnSoundboardEchoMock.mockClear();
+    const self = voice.getState().self!.userId;
+    // A late echo from a room this seat already left spends nothing here.
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: "00000000-0000-4000-8000-0000000000ff",
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).not.toHaveBeenCalled();
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: CHANNEL,
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).toHaveBeenCalledWith("builtin:buzina");
   });
 
   it("takes a moderator mute from the moderation frame even when no roster delta arrives", async () => {

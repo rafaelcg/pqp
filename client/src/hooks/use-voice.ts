@@ -6028,7 +6028,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         break;
       case "soundboard-play":
-        if (message.userId === state.self?.userId) {
+        // A late echo from the room this seat left counts nowhere: the move
+        // already dropped its pending sends, and the new room never saw it.
+        if (
+          message.userId === state.self?.userId &&
+          state.status !== "idle" &&
+          message.channelId === state.voiceChannelId
+        ) {
           noteOwnSoundboardEcho(message.soundId);
         }
         if (

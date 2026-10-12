@@ -1269,8 +1269,15 @@ function ActiveCall({
             onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
           }
         : undefined;
+    // Our own account sharing from another device is still us: no row that
+    // would mute our own clips.
     const soundboardUserId =
-      soundboardOn && serverId && tile.userId ? tile.userId : undefined;
+      soundboardOn &&
+      serverId &&
+      tile.userId &&
+      tile.userId !== voiceState.self?.userId
+        ? tile.userId
+        : undefined;
     return voice || share || soundboardUserId
       ? { voice, share, soundboardUserId }
       : undefined;

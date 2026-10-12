@@ -2929,14 +2929,28 @@ function MainAppContent({
   // The soundboard's catalog follows the call, not the panel: custom clips
   // other people play must keep sounding while this person reads a text
   // channel and the call stage (with the panel) is not mounted. The ref is
-  // set before the join resolves; a DM call has no library.
+  // set before the join resolves, so it is read only when the seat actually
+  // moves: a hop still in flight (or one that failed) must not point the
+  // catalog at a server this person is not in. A DM call has no library.
   const soundboardSeatChannelId = voiceState.voiceChannelId ?? null;
+  const soundboardSeatServerRef = useRef<{
+    channelId: string | null;
+    serverId: string | null;
+  }>({ channelId: null, serverId: null });
   useEffect(() => {
+    if (soundboardSeatServerRef.current.channelId !== soundboardSeatChannelId) {
+      soundboardSeatServerRef.current = {
+        channelId: soundboardSeatChannelId,
+        serverId: voiceServerIdRef.current,
+      };
+    }
     const dm =
       soundboardSeatChannelId !== null &&
       conversations.some((one) => one.channelId === soundboardSeatChannelId);
     setSoundboardCatalogServer(
-      soundboardSeatChannelId && !dm ? voiceServerIdRef.current : null,
+      soundboardSeatChannelId && !dm
+        ? soundboardSeatServerRef.current.serverId
+        : null,
     );
   }, [soundboardSeatChannelId, conversations]);
   // Windows desktop share sound: look up the call's per-server flag (and the
