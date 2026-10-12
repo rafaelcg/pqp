@@ -178,6 +178,24 @@ system picker could hand over a surface without one. `screenPermission` +
 missing. Flipping `useSystemPicker` back to `true` in `main.js` is the one-line
 rollback if that grant turns out to be the bigger problem.
 
+**When the sound fails, the picture still goes out (PQP-31).** On Windows 11
+the loopback device can refuse to open after the picker has closed. Chromium
+then rejects the whole capture with `NotReadableError`, and the handler never
+learns about it. From the shell that publishes `capabilities.silentRetry`:
+
+1. The handler remembers the surface of a request it answered with loopback
+   (`electron/lib/share-silent-retry.js`). Every new request clears it.
+2. The page sees the failure and calls `shareSilentRetryArm()`. The arm
+   succeeds only if the request that just failed carried loopback, in the
+   last 15 seconds.
+3. The page asks again with `audio: false`. The handler returns the same
+   surface, video only, with no second picker.
+4. The share starts and the stage shows `voice.notice.shareAudioFallback`:
+   shared without sound, plus the Chrome tab path for sound.
+
+An older shell, a browser, or a failed retry keeps the old path: the error and
+the "Compartilhar sem som" button. Code: `client/src/lib/share-silent-fallback.ts`.
+
 **Frame rate and size** stay the page's business, not the shell's:
 `screenCaptureOptions` asks for 1080p at 30 (60 when the HLS ladder wants it)
 and the watch party lowers the capture's height with `applyConstraints` while it
