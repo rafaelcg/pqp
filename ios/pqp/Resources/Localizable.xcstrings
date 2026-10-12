@@ -101,12 +101,12 @@
         }
       }
     },
-    "%@ only gets messages from friends" : {
+    "%@ doesn't take direct messages" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ só recebe mensagem de amigos"
+            "value" : "%@ não recebe mensagem direta"
           }
         }
       }
@@ -5359,12 +5359,12 @@
         }
       }
     },
-    "Reason: %@. It stays up for your Friends until it expires." : {
+    "Reason: %@. If you posted it somewhere else too, it stays there until it expires." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Motivo: %@. Ele continua pros teus Amigos até expirar."
+            "value" : "Motivo: %@. Se tu postou ele em outro lugar também, lá ele continua até expirar."
           }
         }
       }
