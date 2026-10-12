@@ -11,7 +11,12 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *    is still rendering frames,
  *  - pressing it again brings it back,
  *  - the presenter stopping closes the window rather than leaving a frozen
- *    last frame floating over the desktop.
+ *    last frame floating over the desktop,
+ *  - while the share is on the viewer's stage the page hands the browser an
+ *    `enterpictureinpicture` media session action, so Chrome can pop it out
+ *    by itself when the viewer switches tabs, and takes it back afterwards.
+ *    Playwright keeps every page `visible`, so the tab switch itself cannot
+ *    be driven from here.
  *
  * The LiveKit half (a share in PiP keeps arriving in a hidden tab) has no SFU
  * here and is pinned in `remote-video-delivery.test.ts`.
@@ -111,8 +116,27 @@ async function openCallee(
   });
   await context.grantPermissions(["microphone", "camera"]);
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    const session = navigator.mediaSession;
+    const original = session.setActionHandler.bind(session);
+    const record: Record<string, boolean> = {};
+    (window as unknown as { __pipActions: typeof record }).__pipActions =
+      record;
+    session.setActionHandler = (action, handler) => {
+      original(action, handler);
+      record[action] = handler !== null;
+    };
+  });
   await openConversation(page, conversationId, suffix);
   return { context, page };
+}
+
+function autoPipRegistered(page: Page) {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __pipActions?: Record<string, boolean> })
+        .__pipActions?.enterpictureinpicture ?? false,
+  );
 }
 
 function pipVideoIsShare(page: Page) {
@@ -169,6 +193,9 @@ test("a viewer pops a peer's screen share into picture-in-picture and back", asy
       )
       .toBe(true);
 
+    await expect.poll(() => autoPipRegistered(callee.page)).toBe(true);
+    expect(await autoPipRegistered(page)).toBe(false);
+
     const pip = callee.page.getByTestId("share-pip");
     await share.hover({ force: true });
     await expect(pip).toHaveCount(1);
@@ -219,6 +246,7 @@ test("a viewer pops a peer's screen share into picture-in-picture and back", asy
       .toBeNull();
     await expect(callee.page.getByTestId("share-pip")).toHaveCount(0);
     await expect(callee.page.getByTestId("stage-pip")).toHaveCount(0);
+    await expect.poll(() => autoPipRegistered(callee.page)).toBe(false);
   } finally {
     await callee.context.close();
   }

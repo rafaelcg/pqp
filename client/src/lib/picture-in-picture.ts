@@ -142,3 +142,50 @@ export async function togglePictureInPicture(
     return "refused";
   }
 }
+
+export interface PipMediaSession {
+  setActionHandler(
+    action: string,
+    handler: ((details?: unknown) => void) | null,
+  ): void;
+}
+
+/**
+ * Lets the browser open PiP on `video` by itself when the viewer leaves the
+ * tab: the Media Session `enterpictureinpicture` action. Chrome 120+ desktop
+ * fires it, with no user gesture needed, for a page that is capturing the mic
+ * or camera, and closes the window again when the tab comes back. The viewer
+ * can turn it off per site (Chrome's "Automatic picture-in-picture" site
+ * setting). Safari, Firefox and older Chromium do not know the action and
+ * `setActionHandler` throws, so this registers nothing there and the manual
+ * control is the way in.
+ *
+ * A window the viewer already opened, on this share or another one, is left
+ * where it is.
+ */
+export function registerAutoPictureInPicture(
+  mediaSession: PipMediaSession | undefined,
+  video: PipVideo,
+  doc: PipDocument | undefined,
+): () => void {
+  if (!mediaSession || pictureInPictureSupport(video, doc) !== "standard") {
+    return () => {};
+  }
+  try {
+    mediaSession.setActionHandler("enterpictureinpicture", () => {
+      if (doc?.pictureInPictureElement) {
+        return;
+      }
+      void togglePictureInPicture(video, doc);
+    });
+  } catch {
+    return () => {};
+  }
+  return () => {
+    try {
+      mediaSession.setActionHandler("enterpictureinpicture", null);
+    } catch {
+      // Unregistering an action the browser accepted cannot fail in practice.
+    }
+  };
+}

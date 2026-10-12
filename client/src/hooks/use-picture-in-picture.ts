@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type RefObject } from "react";
 import {
   isInPictureInPicture,
   pictureInPictureSupport,
+  registerAutoPictureInPicture,
   togglePictureInPicture,
   watchPictureInPicture,
   type PipVideo,
@@ -67,4 +68,22 @@ export function usePictureInPicture(
   }, [videoRef]);
 
   return { available, active, toggle };
+}
+
+/**
+ * Hands `video` to the browser as the share to pop out by itself when the
+ * viewer leaves the tab. Null unregisters, so nothing opens once no remote
+ * share is on the stage.
+ */
+export function useAutoPictureInPicture(video: HTMLVideoElement | null): void {
+  useEffect(() => {
+    if (!video || typeof navigator === "undefined") {
+      return;
+    }
+    return registerAutoPictureInPicture(
+      navigator.mediaSession,
+      video as HTMLVideoElement & PipVideo,
+      document,
+    );
+  }, [video]);
 }

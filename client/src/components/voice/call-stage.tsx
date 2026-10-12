@@ -110,7 +110,10 @@ import {
   useMusicStagePresence,
 } from "@/lib/music-prefs";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
-import { usePictureInPicture } from "@/hooks/use-picture-in-picture";
+import {
+  useAutoPictureInPicture,
+  usePictureInPicture,
+} from "@/hooks/use-picture-in-picture";
 import { stagePipTarget } from "@/components/voice/stage-pip-target";
 import {
   chooseFullscreenStrategy,
@@ -1396,6 +1399,7 @@ function ActiveCall({
   const barPipRef = useRef<HTMLVideoElement | null>(null);
   barPipRef.current = pipTargetVideo;
   const barPip = usePictureInPicture(barPipRef, pipTargetVideo);
+  useAutoPictureInPicture(pipTargetVideo);
   // What the pane around us is looking at. Only an expanded stage has a size
   // worth dragging, and only the stage knows whether it is one: `collapsed`
   // folds in a collapse this person toggled in here. `CallSplit` reads it to

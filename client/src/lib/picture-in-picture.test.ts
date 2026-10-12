@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isInPictureInPicture,
   pictureInPictureSupport,
+  registerAutoPictureInPicture,
   togglePictureInPicture,
   watchPictureInPicture,
   type PipDocument,
+  type PipMediaSession,
   type PipVideo,
 } from "./picture-in-picture";
 
@@ -187,5 +189,87 @@ describe("watchPictureInPicture", () => {
     expect(video.listenerCount()).toBeGreaterThan(0);
     stop();
     expect(video.listenerCount()).toBe(0);
+  });
+});
+
+function fakeMediaSession(known = true) {
+  const handlers = new Map<string, ((details?: unknown) => void) | null>();
+  const session: PipMediaSession & {
+    handlers: typeof handlers;
+    fire: (action: string) => void;
+  } = {
+    handlers,
+    setActionHandler(action, handler) {
+      if (!known) {
+        throw new TypeError(`unknown action ${action}`);
+      }
+      handlers.set(action, handler);
+    },
+    fire(action) {
+      handlers.get(action)?.({ action, reason: "contentoccluded" });
+    },
+  };
+  return session;
+}
+
+describe("registerAutoPictureInPicture", () => {
+  it("opens PiP on the share when the browser asks, and unregisters on cleanup", async () => {
+    const { doc, makeVideo } = standardPlatform();
+    const share = makeVideo();
+    const session = fakeMediaSession();
+    const stop = registerAutoPictureInPicture(session, share, doc);
+    expect(session.handlers.get("enterpictureinpicture")).toBeTypeOf("function");
+
+    session.fire("enterpictureinpicture");
+    await Promise.resolve();
+    expect(share.requestPictureInPicture).toHaveBeenCalledTimes(1);
+    expect(doc.pictureInPictureElement).toBe(share);
+
+    stop();
+    expect(session.handlers.get("enterpictureinpicture")).toBeNull();
+  });
+
+  it("leaves a window the viewer already opened where it is", async () => {
+    const { doc, makeVideo } = standardPlatform();
+    const main = makeVideo();
+    const other = makeVideo();
+    await other.requestPictureInPicture!();
+    const session = fakeMediaSession();
+    registerAutoPictureInPicture(session, main, doc);
+
+    session.fire("enterpictureinpicture");
+    await Promise.resolve();
+    expect(main.requestPictureInPicture).not.toHaveBeenCalled();
+    expect(doc.pictureInPictureElement).toBe(other);
+  });
+
+  it("registers nothing where the browser does not know the action", () => {
+    const { doc, makeVideo } = standardPlatform();
+    const share = makeVideo();
+    const stop = registerAutoPictureInPicture(fakeMediaSession(false), share, doc);
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("registers nothing without the standard API or a media session", () => {
+    const session = fakeMediaSession();
+    registerAutoPictureInPicture(session, safariVideo(), {});
+    const { doc, makeVideo } = standardPlatform();
+    registerAutoPictureInPicture(undefined, makeVideo(), doc);
+    expect(session.handlers.size).toBe(0);
+  });
+
+  it("reports a refused request instead of throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { doc } = standardPlatform();
+    const share = fakeVideo({
+      requestPictureInPicture: vi.fn(async () => {
+        throw new DOMException("not allowed", "NotAllowedError");
+      }),
+    });
+    const session = fakeMediaSession();
+    registerAutoPictureInPicture(session, share, doc);
+    session.fire("enterpictureinpicture");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warn).toHaveBeenCalled();
   });
 });
