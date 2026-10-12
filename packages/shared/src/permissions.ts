@@ -62,15 +62,20 @@ export const Permission = {
    * Upload, rename and delete the server's custom emoji (Discord's "Manage
    * Expressions"). Server level only, like POST_STORIES: an emoji belongs to
    * the server, so no channel overwrite editor lists it. Using an emoji needs
-   * no bit at all.
+   * no bit at all. Bit 28, not 26: bits 26 and 27 belong to the call
+   * soundboard (USE_SOUNDBOARD, MANAGE_SOUNDBOARD) and must stay free.
    */
-  MANAGE_EMOJI: 1n << 26n,
+  MANAGE_EMOJI: 1n << 28n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
-/** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 27n) - 1n;
+/**
+ * Every defined bit. Owner and Administrator resolve to this. Bits 26 and 27
+ * are not defined here yet, so this is the contiguous range below 26 plus
+ * MANAGE_EMOJI, and no stored mask gains an undefined bit.
+ */
+export const PERMISSION_ALL = ((1n << 26n) - 1n) | Permission.MANAGE_EMOJI;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,

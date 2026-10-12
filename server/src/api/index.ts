@@ -4595,6 +4595,9 @@ router.patch(
   "/api/servers/:serverId/emoji/:emojiId",
   async (ctx, { serverId, emojiId }) => {
     await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
     const body = updateServerEmojiSchema.parse(await readJsonBody(ctx.req));
     let renamed;
     try {
@@ -4622,6 +4625,9 @@ router.delete(
   "/api/servers/:serverId/emoji/:emojiId",
   async ({ user }, { serverId, emojiId }) => {
     await requirePermission(serverId!, user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
     let removed;
     try {
       removed = await deleteServerEmoji(serverId!, emojiId!);

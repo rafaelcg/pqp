@@ -319,7 +319,7 @@ describeDb("server emoji", () => {
 
     it("backfills Manage Emoji onto an existing server's Admin once, and nowhere else (not Manager)", async () => {
       const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
-      const start = schema.indexOf("-- MANAGE_EMOJI (bit 26");
+      const start = schema.indexOf("-- MANAGE_EMOJI (bit 28");
       const block = schema.slice(
         schema.indexOf("DO $$", start),
         schema.indexOf("END $$;", start) + "END $$;".length,
@@ -332,7 +332,7 @@ describeDb("server emoji", () => {
         [serverId, bit],
       );
       await getPool().query(
-        `DELETE FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10'`,
+        `DELETE FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10_b28'`,
       );
 
       const holders = async () =>
@@ -585,6 +585,19 @@ describeDb("server emoji", () => {
         `/api/servers/${otherServerId}/emoji/${emoji.id}`,
       );
       expect(result.status).toBe(404);
+    });
+
+    it("answers 404, not 500, for an emoji id that is not a uuid", async () => {
+      expect(
+        (await call(owner, "DELETE", `/api/servers/${serverId}/emoji/not-a-uuid`)).status,
+      ).toBe(404);
+      expect(
+        (
+          await call(owner, "PATCH", `/api/servers/${serverId}/emoji/not-a-uuid`, {
+            name: "pog",
+          })
+        ).status,
+      ).toBe(404);
     });
 
     it("deletes the row and drops the object, even with storage off", async () => {

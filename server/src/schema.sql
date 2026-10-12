@@ -5955,7 +5955,7 @@ BEGIN
   INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
 END $$;
 
--- MANAGE_EMOJI (bit 26 = 67108864): upload, rename and delete custom server
+-- MANAGE_EMOJI (bit 28 = 268435456; bits 26 and 27 are the call soundboard's): upload, rename and delete custom server
 -- emoji. ORed onto the seeded Admin cargo, whose stored mask means
 -- "everything", like post_stories_bit_2026_10. Never onto the Manager,
 -- @everyone, the Moderator or a homemade cargo: an owner grants it there from
@@ -5963,10 +5963,10 @@ END $$;
 -- via data_migrations, so a bit an owner turns off never comes back.
 DO $$
 DECLARE
-  manage_emoji CONSTANT BIGINT := 67108864;
+  manage_emoji CONSTANT BIGINT := 268435456;
 BEGIN
   IF EXISTS (
-    SELECT 1 FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10'
+    SELECT 1 FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10_b28'
   ) THEN
     RETURN;
   END IF;
@@ -5982,7 +5982,7 @@ BEGIN
      SET permissions_version = permissions_version + 1
    WHERE id IN (SELECT DISTINCT server_id FROM changed);
 
-  INSERT INTO data_migrations (name) VALUES ('manage_emoji_bit_2026_10');
+  INSERT INTO data_migrations (name) VALUES ('manage_emoji_bit_2026_10_b28');
 END $$;
 
 -- THE CHANNEL LIST, ONE ORDER PER PARENT (services/channel-layout.ts).

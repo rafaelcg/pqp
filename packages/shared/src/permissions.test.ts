@@ -33,12 +33,14 @@ describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
     expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("36222657");
     expect(parsePermissions("36222657")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("134217727");
+    expect(serializePermissions(PERMISSION_ALL)).toBe("335544319");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
   it("gives Manage Emoji to owner and Administrator, never to Manager, @everyone or Moderator", () => {
-    expect(Permission.MANAGE_EMOJI).toBe(1n << 26n);
+    expect(Permission.MANAGE_EMOJI).toBe(1n << 28n);
+    // Bits 26 and 27 are reserved for the call soundboard.
+    expect(PERMISSION_ALL & (3n << 26n)).toBe(0n);
     expect(hasPermission(PERMISSION_ALL, Permission.MANAGE_EMOJI)).toBe(true);
     expect(
       hasPermission(defaultRolePermissions("admin"), Permission.MANAGE_EMOJI),
