@@ -6,6 +6,8 @@ import type {
   UpdateForumSettingsRequest,
   VoiceAudienceResponse,
   ChannelType,
+  ChannelLayoutConfig,
+  ChannelLayoutInput,
   StreamAlertSetting,
   MusicResolved,
   AcquisitionInput,
@@ -1147,10 +1149,18 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
-export const createServer = (name: string, idempotencyKey?: string) =>
+export const createServer = (
+  name: string,
+  idempotencyKey?: string,
+  /** Names the first category ("Canais", "Channels", "Canales") when the server makes one. */
+  locale?: string,
+) =>
   post<{ server: Server; channels: Channel[] }>(
     "/api/servers",
-    { name },
+    {
+      name,
+      ...(locale === "pt-BR" || locale === "en" || locale === "es" ? { locale } : {}),
+    },
     idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
   );
 
@@ -1412,13 +1422,43 @@ export const createChannel = (
   isPrivate = false,
   /** Optional short description; the watch party dialog asks for one. */
   topic?: string,
+  /**
+   * The category to create it in, or null for no category. Always sent: a
+   * request WITHOUT the key is how the server recognises an older client
+   * and files its channel into the first category (the legacy-create rule).
+   * A category is never given one.
+   */
+  parentId: string | null = null,
 ) =>
   post<{ channel: Channel }>(`/api/servers/${serverId}/channels`, {
     name,
     type,
     isPrivate,
     ...(topic ? { topic } : {}),
+    ...(type === "category" ? {} : { parentId }),
   });
+
+/**
+ * Which channel list to draw for a server: the mixed one (categories are the
+ * only headers) only when `mixed`, which the server says once the
+ * `mixed_channel_list` flag is on for it AND its data has moved. `version`
+ * goes back as `baseVersion` on the full-order PUT. An older API answers
+ * 404, which reads as the old list.
+ */
+export const fetchChannelLayoutConfig = (serverId: string) =>
+  apiFetch<ChannelLayoutConfig>(`/api/servers/${serverId}/channel-layout`);
+
+/**
+ * The whole sidebar order in one write. 409 `channel_layout_stale` carries
+ * the fresh `channels` and `version` in `ApiError.details`; adopt them.
+ * `channels` is null when the order committed but the list could not be read
+ * back: keep the order drawn.
+ */
+export const putChannelLayout = (serverId: string, body: ChannelLayoutInput) =>
+  apiFetch<{ channels: Channel[] | null; version: number }>(
+    `/api/servers/${serverId}/channel-layout`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
 
 export const updateChannel = (
   channelId: string,
