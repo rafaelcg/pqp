@@ -1218,6 +1218,8 @@ async function assertAutomod(userId: string, input: CreateStoryRequest): Promise
     checkAutomod({
       serverId,
       channelId: "",
+      // A story is in no channel, so it is in no thread or post either.
+      parentChannelId: null,
       authorId: userId,
       memberPerms: await computeMemberPermissions(serverId, userId),
       body,
