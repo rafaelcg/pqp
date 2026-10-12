@@ -479,6 +479,35 @@ describeDb("forum posts", () => {
     expect((await post(alice, "Anúncio", { tagIds: [oficial!.id] })).status).toBe(201);
   });
 
+  it("does not make a tag required of somebody who has no tag they could pick", async () => {
+    const on = await call(alice, "PATCH", `/api/channels/${forumId}/forum-settings`, {
+      requireTag: true,
+    });
+    expect(on.status).toBe(200);
+
+    // No tags at all: the composer has nothing to offer, so the rule cannot bind.
+    const none = await post(bob, "Sem tags no fórum");
+    expect(none.status).toBe(201);
+
+    // Only a staff-only tag: binds staff (who can pick it), not a member.
+    const [oficial] = await putTags([{ name: "Oficial", moderated: true }]);
+    const member = await post(bob, "Só tem tag de staff");
+    expect(member.status).toBe(201);
+    const staff = await post(alice, "Staff precisa de tag");
+    expect(staff.status).toBe(422);
+    expect(staff.body.error).toBe("forum_tag_required");
+    expect((await post(alice, "Staff com tag", { tagIds: [oficial!.id] })).status).toBe(201);
+
+    // The moment a tag a member can use exists, the rule binds them again.
+    await putTags([
+      { id: oficial!.id, name: "Oficial", moderated: true },
+      { name: "Bug", moderated: false },
+    ]);
+    const bound = await post(bob, "Agora precisa");
+    expect(bound.status).toBe(422);
+    expect(bound.body.error).toBe("forum_tag_required");
+  });
+
   // --------------------------------------------------------------- list
 
   it("lists both orders, pages stably through equal timestamps, and keeps pins on page 1", async () => {

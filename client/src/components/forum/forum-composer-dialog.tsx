@@ -15,6 +15,7 @@ import {
   Lightbulb,
   ShieldAlert,
   ShieldCheck,
+  Tag,
 } from "lucide-react";
 import {
   useCallback,
@@ -41,6 +42,7 @@ import {
   readForumPublishError,
   type ForumPublishError,
 } from "@/lib/forum-api";
+import type { ForumTagsStatus } from "@/lib/forum-api";
 import { foldForSearch } from "@/lib/forum-list";
 import {
   clearComposerDraft,
@@ -96,6 +98,15 @@ interface ForumComposerDialogProps {
   forumName: string;
   serverId: string | null;
   tags: readonly ForumTag[];
+  /**
+   * Whether `tags` is an answered read. A read that failed is not "no tags":
+   * the composer says so and offers another try. Omitted, it is ready.
+   */
+  tagsStatus?: ForumTagsStatus;
+  onRetryTags?: () => void;
+  /** MANAGE_CHANNELS: the empty-tags notice links to the Tags settings. */
+  canManageTags?: boolean;
+  onOpenTagSettings?: () => void;
   requireTag: boolean;
   /** Staff see and may apply the moderated ("Só staff") tags. */
   isStaff: boolean;
@@ -191,6 +202,10 @@ export function ForumComposerDialog({
   forumName,
   serverId,
   tags,
+  tagsStatus = "ready",
+  onRetryTags,
+  canManageTags = false,
+  onOpenTagSettings,
   requireTag,
   isStaff,
   initialTitle = null,
@@ -380,7 +395,18 @@ export function ForumComposerDialog({
   const visibleTags = tags.filter((tag) => isStaff || !tag.moderated);
   const trimmedTitle = title.replace(/\s+/g, " ").trim();
   const titleMissing = trimmedTitle.length === 0;
-  const tagMissing = requireTag && tagIds.length === 0;
+  // A rule nobody can meet is not a rule: with no tag this person could pick
+  // (none exist, or only staff-only ones, or the read failed) Publicar stays
+  // open and the server, which applies the same rule, decides.
+  const tagMissing = requireTag && visibleTags.length > 0 && tagIds.length === 0;
+  const tagsNotice =
+    visibleTags.length > 0
+      ? null
+      : tagsStatus === "error"
+        ? ("error" as const)
+        : requireTag && tagsStatus === "ready"
+          ? ("none" as const)
+          : null;
   const bodyMissing =
     bodyState.body.length === 0 && bodyState.attachments.length === 0;
   const blocked =
@@ -982,6 +1008,31 @@ export function ForumComposerDialog({
               <p className="mt-1.5 text-xs text-text-tertiary">
                 {t("forum.composer.tagsMax", { max: FORUM_MAX_TAGS_PER_POST })}
               </p>
+            )}
+          </div>
+        )}
+
+        {tagsNotice && (
+          <div
+            data-forum-tags-notice={tagsNotice}
+            role={tagsNotice === "error" ? "alert" : "status"}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[var(--radius-card)] bg-surface-2 px-3 py-2.5 text-sm text-text-secondary"
+          >
+            <Tag className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
+            <span className="min-w-0 flex-1">
+              {tagsNotice === "error"
+                ? t("forum.composer.tagsLoadError")
+                : t("forum.composer.tagsNoneToPick")}
+            </span>
+            {tagsNotice === "error" && onRetryTags && (
+              <Button size="sm" variant="ghost" onClick={onRetryTags}>
+                {t("forum.retry")}
+              </Button>
+            )}
+            {tagsNotice === "none" && canManageTags && onOpenTagSettings && (
+              <Button size="sm" variant="ghost" onClick={onOpenTagSettings}>
+                {t("forum.empty.setupTags")}
+              </Button>
             )}
           </div>
         )}

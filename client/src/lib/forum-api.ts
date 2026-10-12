@@ -24,6 +24,12 @@ function json(method: string, body?: unknown): RequestInit {
   };
 }
 
+/**
+ * Where a forum's tag list stands in the pane: `error` is a read that failed
+ * every try, which is not the same thing as a forum with no tags.
+ */
+export type ForumTagsStatus = "loading" | "ready" | "error";
+
 /** A 204 has no JSON body, which `apiFetch` reports as an error with that status. */
 async function noContent(path: string, init: RequestInit): Promise<void> {
   try {
