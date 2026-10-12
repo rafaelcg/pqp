@@ -226,12 +226,12 @@ function refreshCommunities(context: PagesContext): Promise<boolean | null> {
     if (communitiesInFlight === inFlight) {
       communitiesInFlight = null;
     }
-    // No answer reads as off for a minute, so a down API is not asked on
-    // every page; an answer already remembered is kept instead.
-    communitiesMemo =
-      enabled === null
-        ? (communitiesMemo ?? { at: Date.now(), enabled: false })
-        : { at: Date.now(), enabled };
+    // No answer is remembered for a minute too, so a down API is not asked on
+    // every page. It keeps the answer already remembered, or reads as off.
+    communitiesMemo = {
+      at: Date.now(),
+      enabled: enabled ?? communitiesMemo?.enabled ?? false,
+    };
   });
   return request;
 }

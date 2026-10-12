@@ -128,6 +128,30 @@ describe("the marketing chrome at the edge", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("asks a down API at most once a minute, after the first minute too", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("api down");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onRequest = await freshMiddleware();
+    const config = { apiUrl: "https://api.test", supportPage: false, playStore: false };
+    const realNow = Date.now.bind(Date);
+    let shift = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => realNow() + shift);
+    try {
+      await onRequest(ctx(config));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      shift = 61_000;
+      await onRequest(ctx(config));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      shift = 62_000;
+      expect(await (await onRequest(ctx(config))).text()).not.toContain('href="/#communities"');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("links the iOS beta the build resolved on /vs-discord", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: false })));
     const rotated = "https://testflight.apple.com/join/rotated1";
