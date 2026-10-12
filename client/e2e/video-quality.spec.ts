@@ -840,12 +840,12 @@ test("a camera in a server voice channel reaches the other member", async ({
   const pair = await seedVoiceServer("vq-vc-a", "vq-vc-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 

@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeLimitation,
   pickActiveVideoSenderLayer,
+  registerVoiceConnection,
   registerVoiceStatsSource,
+  resetVoiceStatsSamplingForTests,
+  sampleVoiceStats,
   statRows,
   subscribeVoiceStats,
+  unregisterVoiceConnection,
   summariseStats,
   type RtcStatLike,
   type VideoSenderSample,
@@ -565,10 +569,9 @@ describe("subscribeVoiceStats", () => {
       // Now the in-flight tick resolves.
       expect(resolveSample).not.toBeNull();
       resolveSample!(EMPTY);
-      // Let the microtask queue (the `.then()` inside `subscribeVoiceStats`)
-      // drain before asserting.
-      await Promise.resolve();
-      await Promise.resolve();
+      // Let the microtask queue (the `.then()`s inside `subscribeVoiceStats`
+      // and the coalescing in front of it) drain before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(earlyCalls).toHaveLength(1);
       // The whole point: this sample was scheduled before "late" subscribed,
@@ -579,6 +582,130 @@ describe("subscribeVoiceStats", () => {
       unsubscribeEarly?.();
       unsubscribeLate?.();
       unregisterSource();
+    }
+  });
+});
+
+describe("sampleVoiceStats coalescing", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetVoiceStatsSamplingForTests();
+  });
+
+  it("a poller that samples just before the shared tick cannot hand the audio repair a zero packet delta", async () => {
+    // screen-quality-received.spec.ts, CI 2026-10-12: the presenter's
+    // uplink-strain poller and the shared poll run on their own two-second
+    // timers. Landing a few milliseconds apart, the shared poll read the same
+    // counters the other one had just read, so a voice arriving at 50 packets
+    // a second measured 0. Five of those in a row is "their voice stopped" on
+    // a mesh call, and the repair rebuilt the connection under a live share.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    resetVoiceStatsSamplingForTests();
+    // A remote voice at 50 packets a second, served the way Chrome serves
+    // `getStats()`: a scan within 50 ms of the previous one gets that one.
+    let cachedAt = -Infinity;
+    let cachedPackets = 0;
+    const pc = {
+      getSenders: () => [],
+      getStats: async () => {
+        const now = Date.now();
+        if (now - cachedAt >= 50) {
+          cachedAt = now;
+          cachedPackets = Math.floor(now / 20);
+        }
+        return new Map([
+          [
+            "IA",
+            {
+              id: "IA",
+              type: "inbound-rtp",
+              kind: "audio",
+              trackIdentifier: "bob-mic",
+              packetsReceived: cachedPackets,
+            },
+          ],
+        ]);
+      },
+    } as unknown as RTCPeerConnection;
+    registerVoiceConnection("bob", pc, () => "unknown");
+
+    const deltas: (number | null)[] = [];
+    const unsubscribe = subscribeVoiceStats((snapshot) => {
+      deltas.push(snapshot.audio?.receivers[0]?.packetsDelta ?? null);
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      for (let tick = 0; tick < 5; tick += 1) {
+        // The other poller, 10 ms ahead of the shared one.
+        await vi.advanceTimersByTimeAsync(1_990);
+        void sampleVoiceStats();
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      // The first sample has nothing to difference against; every one after
+      // it covers real time, so real packets.
+      expect(deltas).toHaveLength(6);
+      expect(deltas[0]).toBeNull();
+      for (const delta of deltas.slice(1)) {
+        expect(delta).toBeGreaterThan(0);
+      }
+    } finally {
+      unsubscribe();
+      unregisterVoiceConnection(pc);
+    }
+  });
+
+  it("a caller inside the gap gets the scan just taken, and one past it scans again", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    resetVoiceStatsSamplingForTests();
+    let scans = 0;
+    const unregister = registerVoiceStatsSource(async () => {
+      scans += 1;
+      return { senders: [], receivers: [], paths: [] };
+    });
+    try {
+      const first = await sampleVoiceStats();
+      vi.setSystemTime(10_500);
+      expect(await sampleVoiceStats()).toBe(first);
+      expect(scans).toBe(1);
+      vi.setSystemTime(11_000);
+      expect(await sampleVoiceStats()).not.toBe(first);
+      expect(scans).toBe(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("never hands a subscriber a scan that started before it subscribed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(20_000);
+    resetVoiceStatsSamplingForTests();
+    const unregister = registerVoiceStatsSource(async () => ({
+      senders: [],
+      receivers: [],
+      paths: [],
+    }));
+    const early: VoiceStatsSnapshot[] = [];
+    const late: VoiceStatsSnapshot[] = [];
+    const unsubscribeEarly = subscribeVoiceStats((snap) => early.push(snap));
+    try {
+      await vi.advanceTimersByTimeAsync(1_990);
+      // Somebody else scans, then a new listener arrives, and the shared tick
+      // 10 ms later is answered from that scan: it predates "late".
+      await sampleVoiceStats();
+      const unsubscribeLate = subscribeVoiceStats((snap) => late.push(snap));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(early).toHaveLength(2);
+      expect(late).toHaveLength(0);
+      // The next real scan is for both.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(early).toHaveLength(3);
+      expect(late).toHaveLength(1);
+      unsubscribeLate();
+    } finally {
+      unsubscribeEarly();
+      unregister();
     }
   });
 });

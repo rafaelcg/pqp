@@ -393,12 +393,12 @@ test("a voice channel screen share arrives at the size the menu names", async ({
   const pair = await seedVoiceServer("sq-rx-a", "sq-rx-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 
