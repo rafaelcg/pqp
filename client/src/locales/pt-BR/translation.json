@@ -5120,6 +5120,8 @@
   "forum.composer.tagsRequiredError": "Escolhe pelo menos uma tag.",
   "forum.composer.tagsMax": "Máximo de {max} tags.",
   "forum.composer.tagsCount": "{count}/{max}",
+  "forum.composer.tagModerated": "Uma dessas tags é só da staff. Escolhe outra.",
+  "forum.composer.tagUnknown": "Uma tag que tu escolheu foi apagada. Escolhe de novo.",
   "forum.composer.tagsLoadError": "Não deu pra carregar as tags.",
   "forum.composer.tagsNoneToPick": "Esse fórum pede uma tag, mas ainda não tem nenhuma pra tu escolher. Pode postar sem.",
   "forum.editTags.none": "Esse fórum ainda não tem tags pra escolher.",

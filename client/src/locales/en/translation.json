@@ -5120,6 +5120,8 @@
   "forum.composer.tagsRequiredError": "Pick at least one tag.",
   "forum.composer.tagsMax": "Up to {max} tags.",
   "forum.composer.tagsCount": "{count}/{max}",
+  "forum.composer.tagModerated": "One of those tags is for staff only. Pick a different one.",
+  "forum.composer.tagUnknown": "A tag you picked was deleted. Pick again.",
   "forum.composer.tagsLoadError": "Couldn't load the tags.",
   "forum.composer.tagsNoneToPick": "This forum asks for a tag, but there isn't one you can pick yet. You can post without it.",
   "forum.editTags.none": "This forum has no tags to pick yet.",

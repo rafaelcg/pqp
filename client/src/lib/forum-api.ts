@@ -126,6 +126,10 @@ export { fetchForumPost, fetchForumSettings, fetchForumTags, putForumTags } from
  */
 export type ForumPublishError =
   | { kind: "tag-required" }
+  /** A staff-only tag was picked by somebody who is not staff. */
+  | { kind: "tag-moderated" }
+  /** A picked tag was deleted since this screen read the list. */
+  | { kind: "tag-unknown" }
   | { kind: "paused" }
   | { kind: "slow-mode"; retryAfterMs: number }
   | { kind: "rate-limited"; retryAfterMs: number | null }
@@ -148,6 +152,12 @@ export function readForumPublishError(error: unknown): ForumPublishError {
   const code = details.error ?? error.message;
   if (code === FORUM_ERRORS.tagRequired) {
     return { kind: "tag-required" };
+  }
+  if (code === FORUM_ERRORS.tagModerated) {
+    return { kind: "tag-moderated" };
+  }
+  if (code === FORUM_ERRORS.tagUnknown) {
+    return { kind: "tag-unknown" };
   }
   if (code === FORUM_ERRORS.off) {
     return { kind: "paused" };

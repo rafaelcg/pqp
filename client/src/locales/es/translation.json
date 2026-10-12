@@ -5188,6 +5188,8 @@
   "forum.composer.tagsRequiredError": "Elige al menos una etiqueta.",
   "forum.composer.tagsMax": "Máximo {max} etiquetas.",
   "forum.composer.tagsCount": "{count}/{max}",
+  "forum.composer.tagModerated": "Una de esas etiquetas es solo para el staff. Elige otra.",
+  "forum.composer.tagUnknown": "Una etiqueta que elegiste fue eliminada. Elige de nuevo.",
   "forum.composer.tagsLoadError": "No se pudieron cargar las etiquetas.",
   "forum.composer.tagsNoneToPick": "Este foro pide una etiqueta, pero todavía no hay ninguna que puedas elegir. Puedes publicar sin ella.",
   "forum.editTags.none": "Este foro todavía no tiene etiquetas para elegir.",

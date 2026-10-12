@@ -73,10 +73,24 @@ describe("EditTagsDialog", () => {
     const empty = document.querySelector("[data-forum-edit-tags-empty]");
     expect(empty?.getAttribute("data-forum-edit-tags-empty")).toBe("none");
     expect(empty?.textContent).toContain("no tags to pick");
-    expect(button("Save")?.disabled).toBe(true);
+    // Nothing to save, so no Save at all.
+    expect(button("Save")).toBeUndefined();
     await act(async () => button("Set up tags")!.click());
     expect(onClose).toHaveBeenCalled();
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds Save, and says why, when the forum requires a tag and none is left", async () => {
+    const onSave = vi.fn();
+    await mount({ tags: TAGS, requireTag: true, current: [TAGS[0]!.id], onSave });
+    expect(button("Save")?.disabled).toBe(false);
+    // Untick the only tag.
+    await act(async () => button("Release")!.click());
+    expect(button("Save")?.disabled).toBe(true);
+    expect(document.querySelector("[data-forum-edit-tags-required]")?.textContent).toContain(
+      "Pick at least one tag.",
+    );
+    // A forum that does not require one saves an empty list.
   });
 
   it("offers no settings link to somebody who cannot manage the forum", async () => {
