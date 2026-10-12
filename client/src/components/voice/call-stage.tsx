@@ -2835,7 +2835,7 @@ function ActiveCall({
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
           STAGE_LAYER.chrome,
-          "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
+          "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 on-media-scope bg-gradient-to-b from-black/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           "mt-[var(--stage-banners,0px)]",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
@@ -2975,7 +2975,7 @@ function ActiveCall({
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
-              className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+              className="rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
             />
           )}
           {/* The way back from the landscape takeover, and the way into it
@@ -2990,7 +2990,7 @@ function ActiveCall({
                   ? t("voice.share.hideChat")
                   : t("voice.share.showChat")
               }
-              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full bg-ink/60 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-paper-muted hover:bg-black/80 hover:text-paper"
               onClick={immersive.dismissed ? immersive.restore : immersive.dismiss}
             >
               {immersive.dismissed ? (
@@ -3027,7 +3027,7 @@ function ActiveCall({
           // the notices, which take their own clicks.
           watchPartyChrome
             ? "pointer-events-none [&>*]:pointer-events-auto"
-            : "bg-gradient-to-t from-ink/80 to-transparent",
+            : "bg-gradient-to-t from-black/80 to-transparent",
           // `@container`: the controls fold on the STAGE's width, which on a
           // phone is the screen minus the server rail and on a tablet or a
           // narrow desktop pane is less than the window says. See the pill
@@ -3074,7 +3074,7 @@ function ActiveCall({
             data-testid="call-bar-duration"
             // The time alone from 32rem of bar, where it still clears the
             // pill; the words beside it from 48rem.
-            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-text-tertiary @min-[32rem]:flex"
+            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-on-media-muted @min-[32rem]:flex"
           >
             <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />
             <span className="hidden @min-[48rem]:inline">

@@ -598,6 +598,23 @@
 }
 
 /*
+ * Text drawn on the call stage's dark scrims (the top overlay over a share or
+ * a camera). The picture is dark whatever the theme, so the text roles take the
+ * on-media colours, and in a light theme the accent and the warning step back
+ * to their dark-theme values, which are the ones that read on black. Put it on
+ * the element that carries the `bg-black/NN` gradient, not on the controls
+ * that keep their own themed background.
+ */
+.on-media-scope {
+  --color-paper: var(--color-on-media);
+  --color-paper-muted: var(--color-on-media-muted);
+}
+:root[data-theme="light"] .on-media-scope {
+  --color-signal: oklch(0.88 0.19 125);
+  --color-warning: oklch(0.8 0.14 85);
+}
+
+/*
  * Named skins. Brightness stays on `data-theme`; these only retint the roles.
  * Two-attribute light selectors beat `:root[data-theme="light"]`. Keep
  * unlayered so they outrank `@theme`. Do not copy another product's hex values.
