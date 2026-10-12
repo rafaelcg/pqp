@@ -330,9 +330,11 @@ object ForumList {
 
     /** One `forum-post-removed`: gone from every list, the queue included. */
     fun removed(state: ForumListState, postId: String): ForumListState {
-        val previous = state.find(postId)
-        if (previous == null && state.queued.none { it.id == postId }) return state
-        val counts = if (previous != null && state.counts != null) {
+        // A post still waiting behind the pill counts too: it is in the
+        // header's totals (counted when it was queued) and in the pill, and
+        // both drop now. Same fix as the web's `applyForumRemoved`.
+        val previous = state.find(postId) ?: state.queued.firstOrNull { it.id == postId } ?: return state
+        val counts = if (state.counts != null) {
             ForumCounts(
                 posts = maxOf(0, state.counts.posts - 1),
                 open = if (previous.resolvedAt == null) maxOf(0, state.counts.open - 1) else state.counts.open,

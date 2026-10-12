@@ -55,6 +55,18 @@ class ForumLandingTest {
     }
 
     @Test
+    fun `the question lands on the title, or on the oldest loaded message when the page cap left history unloaded`() {
+        val rows = transcript.asReversed()
+        // History complete: the last item is the post's title block.
+        assertEquals(LandingScroll.ToItem(5), ForumLanding.scrollFor(PostLanding.Question, rows, hasMore = false, totalItems = 6))
+        // Cap reached: the last item is the paging spinner, so the oldest loaded message goes to the top.
+        assertEquals(LandingScroll.NearTop(rows.lastIndex), ForumLanding.scrollFor(PostLanding.Question, rows, hasMore = true, totalItems = 6))
+        assertEquals(LandingScroll.NearTop(1), ForumLanding.scrollFor(PostLanding.FirstUnread("r3"), rows, hasMore = false, totalItems = 6))
+        assertEquals(LandingScroll.ToItem(0), ForumLanding.scrollFor(PostLanding.FirstUnread("gone"), rows, hasMore = false, totalItems = 6))
+        assertEquals(LandingScroll.ToItem(0), ForumLanding.scrollFor(PostLanding.Newest, rows, hasMore = true, totalItems = 6))
+    }
+
+    @Test
     fun `now is written the way the server writes it`() {
         assertEquals("2026-10-11T10:05:00.000Z", ForumLanding.isoNow(Instant.parse("2026-10-11T10:05:00Z")))
     }

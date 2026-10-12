@@ -29,6 +29,13 @@ sealed interface PostLanding {
     data object Newest : PostLanding
 }
 
+/** A landing's scroll: an item at the list's start edge, or a message brought near the top. */
+sealed interface LandingScroll {
+    data class ToItem(val index: Int) : LandingScroll
+
+    data class NearTop(val index: Int) : LandingScroll
+}
+
 object ForumLanding {
 
     /**
@@ -67,6 +74,30 @@ object ForumLanding {
         val first = firstUnread(messages, previousReadAt, viewerId) ?: return PostLanding.Newest
         return PostLanding.FirstUnread(first.id)
     }
+
+    /**
+     * How the reversed transcript (index 0 = newest message) scrolls to land
+     * on [target]. [rows] are the loaded messages newest first; [hasMore] says
+     * older history is still unloaded (the paging cap was reached), in which
+     * case the list's last item is the paging row, not the post's title.
+     */
+    fun scrollFor(target: PostLanding, rows: List<Message>, hasMore: Boolean, totalItems: Int): LandingScroll =
+        when (target) {
+            // The title sits past the oldest message, at the list's end; with
+            // history still to load the end is the paging spinner instead, so
+            // the oldest loaded message goes to the top rather than the spinner.
+            PostLanding.Question ->
+                if (!hasMore || rows.isEmpty()) {
+                    LandingScroll.ToItem(totalItems.coerceAtLeast(1) - 1)
+                } else {
+                    LandingScroll.NearTop(rows.lastIndex)
+                }
+            is PostLanding.FirstUnread -> {
+                val index = rows.indexOfFirst { it.id == target.messageId }
+                if (index >= 0) LandingScroll.NearTop(index) else LandingScroll.ToItem(0)
+            }
+            PostLanding.Newest -> LandingScroll.ToItem(0)
+        }
 
     private fun parse(iso: String): Instant? = runCatching { Instant.parse(iso) }.getOrNull()
 
