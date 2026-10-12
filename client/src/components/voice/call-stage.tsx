@@ -3063,11 +3063,15 @@ export function CallControls({
         flushSync(() => {
           setShareHint(t("voice.control.watchPartyHint"));
         });
-        void Promise.resolve(
-          onStartScreenShare({ preferBrowserTab: true }),
-        ).finally(() => {
-          setShareHint(null);
-        });
+        // A throw before the promise exists must clear the hint too, and a
+        // refused start is the share flow's own error to show, not ours.
+        void new Promise<unknown>((resolve) => {
+          resolve(onStartScreenShare({ preferBrowserTab: true }));
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            setShareHint(null);
+          });
       },
     });
   }

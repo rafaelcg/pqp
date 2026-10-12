@@ -1104,7 +1104,7 @@ export function ServerSettingsDialog({
           )}
 
           {active.id === "soundboard" && serverId && (
-            <SoundboardSettingsSection serverId={serverId} />
+            <SoundboardSettingsSection key={serverId} serverId={serverId} />
           )}
 
           {active.id === "integrations" && serverId && (
