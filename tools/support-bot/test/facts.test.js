@@ -140,6 +140,13 @@ describe("the real facts.md", () => {
     );
   });
 
+  test("does not promise Android share sound, which nobody has heard on a phone", () => {
+    // docs/ANDROID.md: "The sound half is unverified on a device." Until that
+    // changes, the bot may say it should work and must say it is unconfirmed.
+    assert.match(facts.text, /Android 10[^]*ainda não foi confirmado/);
+    assert.doesNotMatch(facts.text, /a tela compartilhada leva o som do celular/);
+  });
+
   test("does not assert end-to-end encryption anywhere", () => {
     assert.equal(assertsE2E(facts.text), false);
   });

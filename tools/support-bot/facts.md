@@ -88,7 +88,8 @@ possível deste sistema.
 - Safari e Firefox saem mudos sempre.
 - Se tu tá no app e no Chrome ao mesmo tempo, compartilha pelo que tá na call.
   O Chrome não consegue tirar o som do app.
-- No Android, o som vai junto a partir do Android 10 (ver Android).
+- No Android, o som do celular junto com a tela ainda não foi confirmado (ver
+  Android).
 
 ## app de desktop
 
@@ -111,9 +112,11 @@ possível deste sistema.
   não cai quando tu troca de app.
 - Dá pra assistir a tela que alguém compartilha, com o som junto, e
   compartilhar a tua própria tela, até numa watch party que tu comanda.
-- A partir do Android 10, a tela compartilhada leva o som do celular (um jogo,
-  um vídeo) junto com a tua voz. Se tu mutar, a tua voz some e o som do jogo
-  continua indo. Jogo que bloqueia a captura de som chega mudo.
+- Som do celular (um jogo, um vídeo) junto com a tela compartilhada: o app tem
+  o código pra isso a partir do Android 10, mas **ninguém confirmou num aparelho
+  de verdade**. Se perguntarem, diga isso: deve funcionar no Android 10 ou mais
+  novo, mas ainda não foi confirmado. Não prometa que funciona e não afirme que
+  não funciona.
 - No Android ainda não dá pra ligar a câmera. Dá pra ver a câmera dos outros.
 
 ## iPhone e app
@@ -203,6 +206,7 @@ mesmo deploy. Localmente, `--facts <caminho>` lê outro arquivo sem build.
 | desktop se atualiza sozinho | `electron/lib/updater.js` (em todo release desde 0.1.0) |
 | Windows sem assinatura, Mac notarizado | `codeSigning.status` e `downloadPage.mac.signed`; `docs/DESKTOP.md` §4 |
 | Android | `https://pqp.gg/android` (`androidPage.*`); `gameAudioSupported`, `android/app/src/main/kotlin/gg/pqp/app/voice/GameAudioCapture.kt`; `docs/ANDROID.md` |
+| som do celular no Android ainda não confirmado | `docs/ANDROID.md`, item 3 da lista de esforço: "The sound half is unverified on a device." Confirmado com o André em 12/10. Quando alguém ouvir num aparelho de verdade, troque a frase e o teste em `test/facts.test.js` |
 | iPhone transmite a tela | Ainda sem confirmação num aparelho. `docs/IOS.md`, "Device-only, and therefore unverified": a build 12 teve o botão consertado, mas ninguém confirmou o envio num iPhone real depois disso. O código existe: `ios/pqp/Broadcast/SampleHandler.swift` e `ios/pqp/ScreenShare/` |
 
 **Por que "não sei" é uma seção e não uma ausência.** Um assunto que
