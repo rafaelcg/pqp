@@ -372,6 +372,9 @@ export const privacyPtBr: LegalDocument = {
 
           <h3>Analytics do site</h3>
           <p>
+            {/* Cloudflare injects this beacon only into responses to requests that
+               send Accept: text/html, as browsers do. A bare curl gets HTML without
+               it. Check with: curl -H "Accept: text/html" https://pqp.gg/privacy */}
             As páginas institucionais e o app usam o{" "}
             <strong>Cloudflare Web Analytics</strong> para a gente saber se
             alguém está chegando e se o site está rápido o suficiente para usar.

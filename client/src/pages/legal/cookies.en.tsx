@@ -483,6 +483,9 @@ export const cookiesEn: LegalDocument = {
               <code>doubleclick.net</code> and <code>google.com</code>.
             </li>
             <li>
+              {/* Cloudflare injects this beacon only into responses to requests that
+                 send Accept: text/html, as browsers do. A bare curl gets HTML without
+                 it. Check with: curl -H "Accept: text/html" https://pqp.gg/privacy */}
               <strong>Cloudflare Web Analytics</strong>: Cloudflare adds its
               script, from <code>static.cloudflareinsights.com</code>, to every
               page as it leaves their network. It counts visits and measures
