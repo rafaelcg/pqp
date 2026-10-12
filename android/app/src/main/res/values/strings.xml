@@ -774,6 +774,8 @@
     <string name="conversas_preview_voice">Voice message · %1$s</string>
     <string name="conversas_preview_gif">Sent a GIF</string>
     <string name="conversas_preview_attachment">Sent a file</string>
+    <string name="conversas_preview_nudge_sent">You nudged them 📳</string>
+    <string name="conversas_preview_nudge_received">Nudged you! 📳</string>
     <string name="conversas_new">New chat</string>
     <string name="conversas_new_description">Pick a person. Tick more people and it becomes a group (up to %1$d).</string>
     <string name="conversas_new_online">Online now</string>

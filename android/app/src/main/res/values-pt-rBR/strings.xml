@@ -767,6 +767,8 @@
     <string name="conversas_preview_voice">Mensagem de voz · %1$s</string>
     <string name="conversas_preview_gif">Enviou um GIF</string>
     <string name="conversas_preview_attachment">Enviou um arquivo</string>
+    <string name="conversas_preview_nudge_sent">Tu chamou a atenção 📳</string>
+    <string name="conversas_preview_nudge_received">Chamou tua atenção! 📳</string>
     <string name="conversas_new">Nova conversa</string>
     <string name="conversas_new_description">Escolhe uma pessoa. Marca mais gente e vira grupo (até %1$d).</string>
     <string name="conversas_new_online">Online agora</string>
