@@ -843,10 +843,12 @@
 /*
  * Ocean is T3 Code's Ocean palette (MIT, github.com/pingdotgg/t3code), mapped
  * onto our roles: their canvas is surface-0 and the rail, their sidebar is
- * surface-1, their row hover/active ladder is surface-2/3. Roles they do not
- * have (rail below the page, text-secondary, accent-hover) are filled in on
- * the same hue. Ocean has no success color, so the success roles stay
- * Signal's.
+ * surface-1, their row hover/active ladder is surface-2/3. The rail is the
+ * canvas colour, as in T3 Code. Roles they do not have (text-secondary,
+ * accent-hover, the soft danger hover) are filled in on the same hue. Ocean
+ * has no success color, so the success roles stay Signal's.
+ * Moved for contrast: light text-tertiary (darker; T3's value is 4.48:1 on
+ * the panel).
  */
 :root[data-appearance="ocean"] {
   --color-surface-0: oklch(0.2426 0.0241 250.57);

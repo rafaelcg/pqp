@@ -198,7 +198,7 @@ inputs. Stage 5 is a hue only. A full token form is stage 6, and it is enough.
 | 2 | Light + System, Clerk bridge, anti-flash | 3–4 days | The actual feature |
 | 3 | `user_preferences`, settings sync | ~2 days | All settings follow the user |
 | 3.5 | High contrast (`default` / `more` / `system`) | ~half a day | Accessibility |
-| 4 | Named presets (`signal` / `harmony` / `hearth` / `night` + six ported) | ~1 day | Extra looks without layout clones |
+| 4 | Named presets (`signal` / `harmony` / `hearth` / `night` + three ported) | ~1 day | Extra looks without layout clones |
 | 5 | Accent hue picker | ~half a day | Colour without a new skin |
 | 6 | Custom themes, server branding | — | Upside |
 | 7 | Free-form CSS | — | Never |
