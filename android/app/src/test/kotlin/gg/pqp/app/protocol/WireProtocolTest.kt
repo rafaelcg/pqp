@@ -254,6 +254,10 @@ class WireProtocolTest {
         // The incremental form of the same list, and opt-in: the server sends
         // it only to a client that negotiated deltas, which Android does not.
         "presence-delta" to "never negotiated, and the same missing roster surface as presence-update",
+        // Staff saved a forum's tags or settings. The phone reads them when a
+        // forum opens and the server still refuses a post that breaks the new
+        // rule with the right reason, so a stale copy costs one retry at most.
+        "forum-config-update" to "the phone reads forum settings on open and the server still enforces them",
         // Threads exist on the web only; the phone has no thread view.
         "thread-update" to "no thread surface on the phone",
         // Permissions are enforced server-side and this client draws no
