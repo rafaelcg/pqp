@@ -4223,7 +4223,7 @@ export function CallControls({
           ) : null}
         </button>
       </Tooltip>
-      {!collapsed && pip && (
+      {(!collapsed || videoOnStage) && pip && (
         <Tooltip label={t("voice.hls.pip")}>
           <button
             type="button"
