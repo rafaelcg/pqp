@@ -534,6 +534,14 @@ struct StoryPlayback: Equatable, Sendable {
 
     var countInPerson: Int { people.indices.contains(person) ? people[person].count : 0 }
 
+    /// Whether the story on screen is one of `ids`, the question a removal asks
+    /// before stepping past it. Idempotent on purpose: an own delete is
+    /// announced twice (the answer to the DELETE and the `stories-update`
+    /// frame), and only the first may move the viewer.
+    func currentIsAmong(_ ids: Set<String>) -> Bool {
+        currentId.map(ids.contains) ?? false
+    }
+
     /// Tap right, or the clock ran out. False at the very end (close).
     mutating func next() -> Bool {
         if index + 1 < countInPerson {
