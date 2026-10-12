@@ -1096,16 +1096,23 @@ export async function publishForumPost(
     [postId, openingMessageId],
   );
   const row = result.rows[0];
-  if (row?.author_id) {
-    await getPool().query(
-      `INSERT INTO forum_post_follows (post_id, user_id)
-       SELECT $1, $2 FROM users WHERE id = $2 AND NOT is_webhook
-       ON CONFLICT (post_id, user_id) DO NOTHING`,
-      [postId, row.author_id],
-    );
-  }
   if (row) {
     invalidateForumList(row.forum_id);
+  }
+  // Best effort, after the post is public: a failed follow write must never
+  // reach the caller, whose only answer to a throw from here is to undo a post
+  // that is already published. The follow only matters to the P2 push.
+  if (row?.author_id) {
+    await getPool()
+      .query(
+        `INSERT INTO forum_post_follows (post_id, user_id)
+         SELECT $1, $2 FROM users WHERE id = $2 AND NOT is_webhook
+         ON CONFLICT (post_id, user_id) DO NOTHING`,
+        [postId, row.author_id],
+      )
+      .catch((error: unknown) => {
+        console.error("[forums] author follow failed:", error);
+      });
   }
 }
 

@@ -8454,8 +8454,11 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
   // rows, run side by side and neither can skip the other: a failed audit
   // insert must not leave every open list on the old state, and a failed
   // summary read must not leave the change out of the audit log.
+  // Sent even when this request changed nothing: the upsert is idempotent, and
+  // a retry of a patch whose first attempt committed and then failed to read
+  // the summary is exactly a request that changes nothing and owes the frame.
   const live = getForumPostSummary(post.channel_id).then((summary) => {
-    if (summary && changed) {
+    if (summary) {
       announceForumPostUpdate(summary);
     }
     return summary;
