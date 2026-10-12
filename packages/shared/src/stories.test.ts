@@ -172,6 +172,15 @@ describe("reactions, views and replies", () => {
     expect(storyViewsBatchSchema.safeParse({ storyIds: [] }).success).toBe(false);
   });
 
+  it("takes an idempotency key on create and on reply", () => {
+    expect(
+      createStorySchema.parse({ ...photo, requestId: STORY }).requestId,
+    ).toBe(STORY);
+    expect(createStorySchema.safeParse({ ...photo, requestId: "nope" }).success).toBe(false);
+    expect(storyReplySchema.parse({ text: "oi", nonce: "abc" }).nonce).toBe("abc");
+    expect(storyReplySchema.safeParse({ text: "oi", nonce: "x".repeat(65) }).success).toBe(false);
+  });
+
   it("refuses an empty reply", () => {
     expect(storyReplySchema.safeParse({ text: "   " }).success).toBe(false);
     expect(storyReplySchema.parse({ text: " que isso " }).text).toBe("que isso");

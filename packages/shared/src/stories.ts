@@ -474,6 +474,13 @@ export const createStorySchema = z
     repliesEnabled: z.boolean().default(true),
     audiences: storyAudienceTargetsSchema,
     media: storyMediaInputSchema.optional(),
+    /**
+     * A uuid the client makes once per story it means to post, and sends
+     * again on a retry. A second create with the same id answers the first
+     * story (with a fresh upload URL while it is still waiting for its bytes)
+     * instead of posting a second one. Optional; strongly recommended.
+     */
+    requestId: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
     const fail = (message: string, path: string) =>
@@ -558,6 +565,12 @@ export type StoryReactionRequest = z.infer<typeof storyReactionSchema>;
  */
 export const storyReplySchema = z.object({
   text: z.string().trim().min(1).max(STORY_REPLY_MAX).pipe(safeTextSchema),
+  /**
+   * The same idempotency nonce a chat send carries (1 to 64 characters): a
+   * retry with it answers the reply that already landed instead of sending
+   * the DM twice. Optional; strongly recommended.
+   */
+  nonce: z.string().min(1).max(64).optional(),
 });
 export type StoryReplyRequest = z.infer<typeof storyReplySchema>;
 

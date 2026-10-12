@@ -5708,6 +5708,12 @@ CREATE INDEX IF NOT EXISTS idx_stories_pending
 CREATE INDEX IF NOT EXISTS idx_stories_media_sweep
   ON stories (expires_at)
   WHERE media_deleted_at IS NULL AND media_storage_key IS NOT NULL;
+-- A create's idempotency key (`createStorySchema.requestId`): a retried
+-- create answers the story it already made instead of posting another.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS request_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stories_author_request
+  ON stories (author_id, request_id) WHERE request_id IS NOT NULL;
+
 -- The posting budget (`STORY_POSTS_PER_DAY`), counted per author.
 CREATE INDEX IF NOT EXISTS idx_stories_author_created
   ON stories (author_id, created_at DESC);
