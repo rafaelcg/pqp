@@ -30,7 +30,6 @@ the row and is not a pass.
 | Baú video cover (custom poster) | **yes** | A cover is an ordinary Baú image upload through the same claim | same |
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
-| Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
@@ -243,7 +242,9 @@ adapters therefore fail when they understand **nothing** in a response, and
 
 A refused emoji has no row in `server_emoji` to stamp, so steps 2 and 3 are one
 row in `server_emoji_quarantine` (server, uploader, name, pinned key, provider,
-score, labels, `quarantined_at`) instead.
+score, labels, `quarantined_at`) instead. The row outlives the server: deleting
+the server sets its `server_id` to NULL, and the retention rules below still
+apply.
 
 ### Flagged
 

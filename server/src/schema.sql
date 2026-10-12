@@ -6067,9 +6067,11 @@ CREATE TABLE IF NOT EXISTS server_emoji (
 -- never served (no `server_emoji` row names it); `sweepQuarantinedServerEmoji`
 -- deletes it after CONTENT_SCAN_QUARANTINE_DAYS, and never one labelled
 -- `illegal` or `csam_suspected`. Same hold as Baú's `quarantined_at`.
+-- `server_id` goes NULL when the server is deleted, so the row (the only thing
+-- that names the object) outlives it and the hold and the sweep still apply.
 CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  server_id      UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  server_id      UUID REFERENCES servers(id) ON DELETE SET NULL,
   uploader_id    UUID REFERENCES users(id) ON DELETE SET NULL,
   name           TEXT NOT NULL,
   storage_key    TEXT NOT NULL UNIQUE,

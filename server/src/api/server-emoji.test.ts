@@ -602,6 +602,14 @@ describeDb("server emoji", () => {
         (await call(owner, "DELETE", `/api/servers/${serverId}/emoji/${second.id}`)).status,
       ).toBe(200);
     });
+
+    it("drops every emoji object when the server itself is deleted", async () => {
+      const pog = await addEmoji("pog");
+      const kek = await addEmoji("kek");
+      expect((await call(owner, "DELETE", `/api/servers/${serverId}`)).status).toBe(200);
+      await flushDiscards();
+      expect(storage.deletedKeys).toEqual(expect.arrayContaining([pog.key, kek.key]));
+    });
   });
 
   describe("the image route", () => {

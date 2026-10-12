@@ -291,6 +291,18 @@ describeDb("server emoji image scan", () => {
     expect(filed[0]!.details).toContain("never added");
   });
 
+  it("keeps a quarantine row and its object when the server is deleted", async () => {
+    configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+    expect((await claim(await mint())).status).toBe(400);
+    const [held] = await quarantineRows();
+
+    await getPool().query(`DELETE FROM servers WHERE id = $1`, [serverId]);
+    const after = await getPool().query<{ server_id: string | null; storage_key: string }>(
+      `SELECT server_id, storage_key FROM server_emoji_quarantine`,
+    );
+    expect(after.rows).toEqual([{ server_id: null, storage_key: held!.storage_key }]);
+  });
+
   it("adds a flagged image and still files a report naming the emoji", async () => {
     configureScanner(scores({ sexual: 0.02, "violence/graphic": 0.95 }));
     const key = await mint();

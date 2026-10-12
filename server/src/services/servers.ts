@@ -199,6 +199,22 @@ async function serverImageKeys(serverId: string): Promise<string[]> {
 }
 
 /**
+ * The server's custom emoji objects. Their rows cascade with the server, and
+ * nothing else names the bytes. Refused uploads are not here: their
+ * quarantine row outlives the server and its own sweep owns them.
+ */
+async function serverEmojiKeys(serverId: string): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await getPool().query<{ storage_key: string }>(
+    `SELECT storage_key FROM server_emoji WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
+/**
  * Drop the objects a completed delete just orphaned, best effort.
  *
  * Neither awaited nor allowed to fail, matching `deleteMessage`: the row that
@@ -998,6 +1014,7 @@ export async function deleteServer(
   // is about to delete, so read afterwards nothing in Postgres names the bytes
   // ever again.
   keys.push(...(await serverImageKeys(serverId)));
+  keys.push(...(await serverEmojiKeys(serverId)));
 
   // channels / members / invites / bans all cascade from servers — and so do
   // the attachment rows, which is why their keys are already in hand.
