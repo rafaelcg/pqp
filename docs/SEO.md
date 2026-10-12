@@ -362,10 +362,19 @@ page (crawl paths need internal links, and the footer already links
   screen (`prerender-hero.ts`). `/streamers`, `/contact`, `/tela`,
   `/vs-discord` and `/download` get their copy, headings and internal links
   written into `#root` by the middleware (`marketing-prerender.ts`, PQP-17).
-  That block is hidden by CSS in any browser that runs the head script, and
-  React replaces it, so people never see it. `marketing-prerender.test.ts`
-  fails when one of those pages loses its block, when its strings drift from
-  the catalogues, or when the React page renders a string the block lacks.
+  Each block sits between a plain copy of the site's nav and footer, so a
+  crawler reaches every page the live chrome links. The footer's three
+  run-time links follow the live rules: Communities when the API's public
+  communities config says so, the support page when the build had a sponsor
+  URL or Pix key, and the Google Play label when the build kept the listing
+  (the last two come from `/edge-config.json`). Each is left out when the edge
+  cannot tell. That block is hidden by CSS in any browser that runs the head
+  script, and React replaces it, so people never see it.
+  `marketing-prerender.test.ts` fails when one of those pages loses its block,
+  when its strings drift from the catalogues, or when the React page renders a
+  string the block lacks. `marketing-prerender-chrome.test.tsx` renders the
+  real nav and footer in every language and switch state and fails when the
+  static copy differs by one link, label or word.
   After changing a catalogue key those pages use, run
   `pnpm --filter @pqp/client prerender:copy`. Every other route still serves
   an empty body to a reader that runs no script.
