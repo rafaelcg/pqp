@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { newlyQueuedTracks, userStats } from "../services/user-stats.js";
 import type { WebSocket } from "ws";
 import { isEnabled } from "../lib/flags.js";
 import {
@@ -2108,6 +2109,30 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
       openedAt: null,
     }))
     .sort((a, b) => b.participants - a.participants);
+}
+
+/**
+ * This process's live seats, one per peer, for the per-person stats sampler
+ * (`services/user-stats.ts`). A seat held for its resume window is left out:
+ * nobody is in it.
+ */
+export function localLiveSeats(): {
+  userId: string;
+  voiceChannelId: string;
+  sharingScreen: boolean;
+}[] {
+  const seats = [];
+  for (const peer of peers.values()) {
+    if (peer.orphanedAt !== undefined) {
+      continue;
+    }
+    seats.push({
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+      sharingScreen: peer.sharingScreen,
+    });
+  }
+  return seats;
 }
 
 /**
@@ -9216,6 +9241,7 @@ export async function handleVoiceMessage(
         console.error("[voice] music permission re-check failed:", error);
       }
     }
+    const heldMusic = getMusicState(peer.voiceChannelId);
     const write = applyMusicWrite(peer.voiceChannelId, incoming, {
       userId: user.id,
       canManage: peer.canManageMusic,
@@ -9272,6 +9298,15 @@ export async function handleVoiceMessage(
         });
       }
       if (persisted?.kind === "stale") {
+        // A write that lost in the row can still have been kept: a later
+        // write on this machine, built on top of it, may have reached the
+        // row first, and that winner does not count these tracks again
+        // (they were in its `heldMusic`). So count the ones the row holds.
+        // A winner from another machine never saw this write and holds none.
+        userStats.noteTracksQueued(
+          user.id,
+          newlyQueuedTracks(heldMusic, write.state, user.id, persisted.held),
+        );
         adoptMusicWithAnchor(
           peer.voiceChannelId,
           persisted.held,
@@ -9294,6 +9329,14 @@ export async function handleVoiceMessage(
         return;
       }
     }
+    // Counted once the write is the room's queue. A write the row refused
+    // is counted above, for the tracks the row kept. The `adopt*` paths take
+    // a queue another machine already counted. A failed persist leaves the
+    // local decision standing, so it counts.
+    userStats.noteTracksQueued(
+      user.id,
+      newlyQueuedTracks(heldMusic, write.state, user.id),
+    );
     broadcastToRoom(peer.voiceChannelId, {
       type: "music",
       channelId: peer.voiceChannelId,
