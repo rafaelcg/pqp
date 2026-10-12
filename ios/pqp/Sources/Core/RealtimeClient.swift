@@ -901,6 +901,8 @@ actor RealtimeClient {
         let preview: String?
         let authorName: String?
         let authorId: String?
+        /// `"nudge"` when the message behind a `channel-activity` is one.
+        let systemKind: String?
         // Voice
         let peerId: String?
         let voiceChannelId: String?
@@ -957,7 +959,7 @@ actor RealtimeClient {
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
-            case preview, authorName, authorId
+            case preview, authorName, authorId, systemKind
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
@@ -1292,7 +1294,8 @@ actor RealtimeClient {
                 ConversationActivityPreview(
                     authorId: authorId,
                     authorName: envelope.authorName ?? "",
-                    preview: envelope.preview
+                    preview: envelope.preview,
+                    systemKind: envelope.systemKind
                 )
             }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
