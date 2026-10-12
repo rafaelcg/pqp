@@ -94,6 +94,10 @@ export function SoundboardAddDialog({
     previewSeq.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    // The save it aborted never reaches its own cleanup, so release the lock
+    // here or a reopened dialog would stay disabled.
+    savingRef.current = false;
+    setSaving(false);
     stopSoundboardPreview();
   }
 
