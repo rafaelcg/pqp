@@ -526,6 +526,9 @@ export function refreshSoundboardCatalog(serverId: string): Promise<void> {
   return refreshCustomCatalog(serverId, false, 2_000);
 }
 
+/** Bumped whenever a server's clip list is recorded: names may have changed. */
+let catalogVersion = 0;
+
 function rememberCatalog(
   serverId: string,
   page: { sounds: readonly SoundboardSound[]; maxSounds: number; slotsUsed?: number },
@@ -536,6 +539,7 @@ function rememberCatalog(
     slotsUsed: page.slotsUsed ?? page.sounds.length,
   });
   rememberCustom(serverId, page.sounds);
+  catalogVersion += 1;
   notify();
 }
 
@@ -593,16 +597,10 @@ export function resetSoundboardMarksForTests(): void {
 }
 
 export async function prefetchSoundboard(serverId: string): Promise<void> {
-  const token = (catalogTokens.get(serverId) ?? 0) + 1;
-  catalogTokens.set(serverId, token);
-  try {
-    const page = await fetchSoundboard(serverId);
-    if (catalogTokens.get(serverId) === token) {
-      rememberCatalog(serverId, page);
-    }
-  } catch {
-    // The board still plays the built-in pack.
-  }
+  // The same request the panel's refresh makes, shared and timestamped, so
+  // opening the panel right after joining does not ask for the list again.
+  // A failure leaves the built-in pack, which still plays.
+  await refreshCustomCatalog(serverId, true);
   await warmSoundboardBuiltins();
 }
 
@@ -965,7 +963,21 @@ export function showSoundboardMark(mark: Omit<SoundboardMark, "until">): void {
 
 export function useSoundboardMark(userId: string | undefined): SoundboardMark | null {
   const [, bump] = useState(0);
-  useEffect(() => subscribe(() => bump((n) => n + 1)), []);
+  // Every play notifies the store, and a call shows a mark per person. Only
+  // this person's mark changing (or the clip list, for a renamed clip) is
+  // worth a render here.
+  useEffect(() => {
+    let lastMark = userId ? marks.get(userId) : undefined;
+    let lastCatalog = catalogVersion;
+    return subscribe(() => {
+      const mark = userId ? marks.get(userId) : undefined;
+      if (mark !== lastMark || catalogVersion !== lastCatalog) {
+        lastMark = mark;
+        lastCatalog = catalogVersion;
+        bump((n) => n + 1);
+      }
+    });
+  }, [userId]);
   if (!userId) {
     return null;
   }

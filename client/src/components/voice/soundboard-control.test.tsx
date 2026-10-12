@@ -322,8 +322,8 @@ describe("the clip list follows the server", () => {
     expect(tiles()).toHaveLength(6);
     press("Escape");
     board.sounds = [customSound("11111111-1111-4111-8111-111111111111", "Buzinão")];
-    act(() => {
-      vi.advanceTimersByTime(2_100);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
     });
     await act(async () => {
       trigger().click();
@@ -1147,5 +1147,16 @@ describe("the call keeps its catalog when the panel unmounts", () => {
       await vi.advanceTimersByTimeAsync(31_000);
     });
     expect(soundboardCustomName(id)).toBe("Corneta");
+  });
+});
+
+describe("joining and opening the panel at once", () => {
+  it("asks the server for the clip list once, not twice", async () => {
+    mount();
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(board.fetches).toBe(1);
   });
 });
