@@ -558,6 +558,10 @@ function rememberCustom(
     customNames.set(sound.id, sound.name);
     customDurations.set(sound.id, sound.durationMs);
     if (!sound.url) {
+      // Listed but not playable right now: forget any older copy of it.
+      customUrls.delete(sound.id);
+      buffers.delete(sound.id);
+      loading.delete(sound.id);
       continue;
     }
     const previous = customUrls.get(sound.id);
@@ -810,9 +814,14 @@ async function refreshCustomCatalog(
     return;
   }
   catalogRefreshAt.set(serverId, now);
+  const token = (catalogTokens.get(serverId) ?? 0) + 1;
+  catalogTokens.set(serverId, token);
   const task = fetchSoundboard(serverId)
     .then((page) => {
-      rememberCatalog(serverId, page);
+      // A newer catalog (a load, or a list the settings page recorded) owns it.
+      if (catalogTokens.get(serverId) === token) {
+        rememberCatalog(serverId, page);
+      }
     })
     .catch(() => undefined)
     .finally(() => {

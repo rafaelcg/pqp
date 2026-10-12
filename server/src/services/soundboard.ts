@@ -185,7 +185,26 @@ function rememberPlayable(serverId: string, sound: PlayableSound): void {
       playableCache.delete(oldest);
     }
   }
+  missCache.delete(sound.id);
   playableCache.set(sound.id, { serverId, sound, at: Date.now() });
+}
+
+/**
+ * Ids that did not resolve, for a few seconds. A seated member can send a
+ * play frame with any id they like; without this each one is a pooled query.
+ * Keyed by server and id, bounded like the hit cache.
+ */
+const missCache = new Map<string, { serverId: string; until: number }>();
+const MISS_TTL_MS = 5_000;
+
+function rememberMiss(serverId: string, soundId: string): void {
+  if (missCache.size >= PLAYABLE_CACHE_MAX) {
+    const oldest = missCache.keys().next().value;
+    if (oldest !== undefined) {
+      missCache.delete(oldest);
+    }
+  }
+  missCache.set(soundId, { serverId, until: Date.now() + MISS_TTL_MS });
 }
 
 const FORGET_TOPIC = "soundboard.forget";
@@ -205,6 +224,7 @@ let playableGeneration = 0;
 function dropPlayable(soundId: string): void {
   playableGeneration += 1;
   playableCache.delete(soundId);
+  missCache.delete(soundId);
 }
 
 function forgetPlayable(soundId: string): void {
@@ -245,6 +265,36 @@ export async function resolvePlayableSound(
   ) {
     return cached.sound;
   }
+  const missed = missCache.get(soundId);
+  if (missed && missed.serverId === serverId && missed.until > Date.now()) {
+    return null;
+  }
+  // Plays that arrive while a lookup is out share its answer. The key holds
+  // the generation, so a play after a delete or an edit never joins a lookup
+  // that started before it.
+  const inFlightKey = `${serverId}:${soundId}:${playableGeneration}`;
+  const pending = lookupsInFlight.get(inFlightKey);
+  if (pending) {
+    return pending;
+  }
+  if (lookupsInFlight.size >= LOOKUPS_IN_FLIGHT_MAX) {
+    return null;
+  }
+  const lookup = lookupPlayable(serverId, soundId).finally(() => {
+    lookupsInFlight.delete(inFlightKey);
+  });
+  lookupsInFlight.set(inFlightKey, lookup);
+  return lookup;
+}
+
+const lookupsInFlight = new Map<string, Promise<PlayableSound | null>>();
+/** Distinct lookups out at once. Past it a play is dropped, not queued. */
+const LOOKUPS_IN_FLIGHT_MAX = 16;
+
+async function lookupPlayable(
+  serverId: string,
+  soundId: string,
+): Promise<PlayableSound | null> {
   const generation = playableGeneration;
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
@@ -254,8 +304,14 @@ export async function resolvePlayableSound(
     [soundId, serverId],
   );
   const row = result.rows[0];
+  // An edit or delete landed while this was out: answer from what was read,
+  // but do not let it back into the caches.
+  const stale = generation !== playableGeneration;
   if (!row) {
     playableCache.delete(soundId);
+    if (!stale) {
+      rememberMiss(serverId, soundId);
+    }
     return null;
   }
   const sound: PlayableSound = {
@@ -264,7 +320,7 @@ export async function resolvePlayableSound(
     durationMs: row.duration_ms,
     volume: Number(row.volume),
   };
-  if (generation === playableGeneration) {
+  if (!stale) {
     rememberPlayable(serverId, sound);
   }
   return sound;
@@ -288,14 +344,23 @@ async function finishCleanup(keys: string[]): Promise<void> {
   for (const key of keys) {
     // A batch can take longer than one lease (each S3 call may run its full
     // timeout), so each key renews its own lease just before its delete.
-    await getPool()
+    // Only a lease still held may be renewed. If it lapsed, a claim may have
+    // taken the ticket (and the file is a saved sound now), so skip the key:
+    // the sweep finds it again if it is still due.
+    const renewed = await getPool()
       .query(
         `UPDATE soundboard_pending_uploads
             SET cleanup_until = NOW() + INTERVAL '120 seconds'
-          WHERE storage_key = $1 AND cleanup_until IS NOT NULL`,
+          WHERE storage_key = $1
+            AND cleanup_until IS NOT NULL
+            AND cleanup_until > NOW()
+        RETURNING storage_key`,
         [key],
       )
-      .catch(() => undefined);
+      .catch(() => null);
+    if (!renewed || renewed.rows.length === 0) {
+      continue;
+    }
     try {
       await deleteObject(key);
     } catch {

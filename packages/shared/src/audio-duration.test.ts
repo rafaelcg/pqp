@@ -71,6 +71,24 @@ describe("audioDurationMs", () => {
     expect(ms).toBeLessThan(1050);
   });
 
+  it("sums an mpeg file whose sample rate changes mid-file", () => {
+    const first = mp3Seconds(3);
+    // 128 kbps at 32 kHz: sample-rate bits 0b10, 1152 samples per frame.
+    const frame = mp3Frame(128000, 32000);
+    frame[2] = 0x98;
+    const count = Math.round(3000 / ((1152 / 32000) * 1000));
+    const second = new Uint8Array(frame.length * count);
+    for (let i = 0; i < count; i += 1) {
+      second.set(frame, i * frame.length);
+    }
+    const bytes = new Uint8Array(first.length + second.length);
+    bytes.set(first, 0);
+    bytes.set(second, first.length);
+    const ms = audioDurationMs(bytes, "audio/mpeg");
+    expect(ms).toBeGreaterThan(5800);
+    expect(ms).toBeLessThan(6200);
+  });
+
   it("times an opus ogg from the last granule", () => {
     const head = new Uint8Array(19);
     head.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 1, 1], 0);
