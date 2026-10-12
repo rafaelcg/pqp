@@ -75,11 +75,18 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
     }
     const { key, vars } = failedPostNotice(failure);
     setFailedNote({ id: failedId, text: t(key, vars) });
-    const timer = window.setTimeout(() => setFailedNote(null), 5000);
-    return () => window.clearTimeout(timer);
     // `t` changes identity with the locale only; the note is said once per failure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [failedId, failure]);
+  // Its own timer: a retry or a dismissal ends the failure, and must not
+  // cancel the timer that takes the note away.
+  useEffect(() => {
+    if (!failedNote) {
+      return;
+    }
+    const timer = window.setTimeout(() => setFailedNote(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [failedNote]);
 
   /**
    * "The composed card shrinks into the Teu story ring (400 ms emphasized)":

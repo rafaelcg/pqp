@@ -41,7 +41,7 @@ export type PostOutcome = "live" | "processing" | "failed" | "busy";
  * - `daily`: the 24 h cap. Nothing will work until tomorrow, so the ring
  *   only says so and a tap puts it away.
  * - `refused`: the server said no for good (the scan, a permission, a story
- *   that is gone). The story that `requestId` made is deleted, so replaying
+ *   that is gone; see `TERMINAL_STATUSES`). The story that `requestId` made is deleted, so replaying
  *   it can only answer "gone": the tap puts the ring away instead, and the
  *   person composes again if they want to.
  */
@@ -84,11 +84,14 @@ export function classifyPostFailure(error: unknown): PostFailure {
     // (a "budget" StoryError) does not, because waiting a minute is no help.
     return error.retryAfterMs !== null ? "busy" : "daily";
   }
-  if (error.status === 408 || error.status >= 500) {
-    return "failed";
-  }
-  return "refused";
+  // Only the answers that say this story will never go up are final: a bad
+  // request, no permission, gone, too big, refused by the scan or AutoMod.
+  // Anything else (an expired session, 409 "upload not verified yet", a
+  // timeout, 5xx) leaves the story where a retry can still finish it.
+  return TERMINAL_STATUSES.has(error.status) ? "refused" : "failed";
 }
+
+const TERMINAL_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 410, 413, 422]);
 
 let counter = 0;
 

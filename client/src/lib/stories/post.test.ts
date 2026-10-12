@@ -59,6 +59,10 @@ describe("classifyPostFailure", () => {
     expect(classifyPostFailure(new ApiError(0, "unreachable"))).toBe("failed");
     expect(classifyPostFailure(new ApiError(503, "down"))).toBe("failed");
     expect(classifyPostFailure(new ApiError(408, "timeout"))).toBe("failed");
+    // An expired session or an upload the server has not seen yet: the story
+    // is still pending and a retry can finish it.
+    expect(classifyPostFailure(new ApiError(401, "unauthorized"))).toBe("failed");
+    expect(classifyPostFailure(new ApiError(409, "not verified"))).toBe("failed");
   });
 
   it("tells the per-minute limiter (Retry-After) from the daily cap (none)", () => {
