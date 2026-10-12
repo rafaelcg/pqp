@@ -100,10 +100,19 @@ export function mapDiscordPermissions(discordBits: bigint): bigint {
   return mapped;
 }
 
+/**
+ * Bits pqp gives `@everyone` that Discord has no bit for, so no template can
+ * carry them: an imported `@everyone` gets them as a new server's would
+ * (`PERMISSION_DEFAULT_EVERYONE`). Without this a server copied from a
+ * template is the one place members cannot post a story.
+ */
+const EVERYONE_IMPORT_PQP_DEFAULTS = Permission.POST_STORIES;
+
 export function mapImportedEveryonePermissions(discordBits: bigint): bigint {
   return (
-    clampEveryonePermissions(mapDiscordPermissions(discordBits)) &
-    ~EVERYONE_IMPORT_DENIED
+    (clampEveryonePermissions(mapDiscordPermissions(discordBits)) &
+      ~EVERYONE_IMPORT_DENIED) |
+    EVERYONE_IMPORT_PQP_DEFAULTS
   );
 }
 

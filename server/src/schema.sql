@@ -5641,7 +5641,11 @@ CREATE INDEX IF NOT EXISTS idx_forum_dedupe_tombstones_age
 -- docs/CONTENT_SAFETY.md before touching one).
 CREATE TABLE IF NOT EXISTS stories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: account deletion removes the author's stories and
+  -- their bytes itself (services/account.ts), and a story something HOLDS (a
+  -- report, a scan flag, an illegal-content match) must outlive the account
+  -- as evidence. A NULL author is never served: every read joins `users`.
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
   kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'text')),
   -- pending: minted, waiting for its bytes. processing: a video whose frames
   -- are being checked. live: visible until expires_at. expired: past it.

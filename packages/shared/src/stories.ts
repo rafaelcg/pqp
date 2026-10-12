@@ -121,6 +121,26 @@ export function isStoryVideoType(value: string): boolean {
 export const STORY_SNIFF_BYTES = 12;
 
 /**
+ * The `ftyp` major brands that are an MP4 a player plays as video. HEIC
+ * (`heic`, `mif1`), AVIF (`avif`) and QuickTime (`qt  `) are ISO BMFF too, and
+ * an iPhone photo renamed `.mp4` must not pass as one.
+ */
+const MP4_BRANDS = new Set([
+  "isom",
+  "iso2",
+  "iso4",
+  "iso5",
+  "iso6",
+  "mp41",
+  "mp42",
+  "avc1",
+  "M4V ",
+  "MSNV",
+  "dash",
+  "mmp4",
+]);
+
+/**
  * Which allowed story type these leading bytes really are, or null. Shared so
  * a composer can refuse a renamed file before uploading, and the publish can
  * refuse it again on the stored object.
@@ -139,9 +159,11 @@ export function sniffStoryMediaType(bytes: Uint8Array): StoryContentType | null 
   if (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8)) {
     return "image/webp";
   }
-  // An ISO BMFF file: a box size, then "ftyp".
-  if (startsWith([0x66, 0x74, 0x79, 0x70], 4)) {
-    return "video/mp4";
+  // An ISO BMFF file: a box size, "ftyp", then the major brand, which is
+  // what tells an MP4 from a HEIC photo or a QuickTime movie.
+  if (startsWith([0x66, 0x74, 0x79, 0x70], 4) && bytes.length >= 12) {
+    const brand = String.fromCharCode(...bytes.subarray(8, 12));
+    return MP4_BRANDS.has(brand) ? "video/mp4" : null;
   }
   return null;
 }
@@ -649,12 +671,27 @@ export type StorySaveToBauResponse = z.infer<typeof storySaveToBauResponseSchema
  *
  * `type` stays the first key: Android's wire test reads the frame types off
  * this file.
+ *
+ * This plain object is the option inside `chatServerMessageSchema` (a
+ * discriminated union takes objects only); `storiesUpdateSchema` below is the
+ * same shape with the scope/serverId pairing enforced, for a client to parse
+ * the frame with once the socket router has picked it out.
  */
-export const storiesUpdateSchema = z.object({
+export const storiesUpdateFrameSchema = z.object({
   type: z.literal("stories-update"),
   scope: z.enum(["server", "friends", "own"]),
   /** Present exactly when `scope` is `server`. */
   serverId: z.string().uuid().optional(),
   removedStoryIds: z.array(z.string().uuid()).max(STORY_VIEWS_BATCH_MAX).optional(),
 });
-export type StoriesUpdate = z.infer<typeof storiesUpdateSchema>;
+
+export const storiesUpdateSchema = storiesUpdateFrameSchema.superRefine((frame, ctx) => {
+  if ((frame.scope === "server") !== (frame.serverId !== undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "serverId is present exactly when scope is server",
+      path: ["serverId"],
+    });
+  }
+});
+export type StoriesUpdate = z.infer<typeof storiesUpdateFrameSchema>;

@@ -21,7 +21,7 @@ import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
-import { storiesUpdateSchema } from "./stories.js";
+import { storiesUpdateFrameSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
@@ -705,7 +705,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   communityHomeUpdateSchema,
   // Per person, never a channel fan-out: a server's members, an author's
   // friends, or the author's own sockets. See `stories.ts`.
-  storiesUpdateSchema,
+  storiesUpdateFrameSchema,
   // Per socket like `permissions-update`: the members who can see the change.
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,

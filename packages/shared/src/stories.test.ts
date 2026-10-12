@@ -229,6 +229,23 @@ describe("the frame", () => {
       false,
     );
   });
+
+  it("carries a serverId exactly when the scope is a server", () => {
+    expect(
+      storiesUpdateSchema.safeParse({ type: "stories-update", scope: "server", serverId: SERVER })
+        .success,
+    ).toBe(true);
+    expect(storiesUpdateSchema.safeParse({ type: "stories-update", scope: "server" }).success).toBe(
+      false,
+    );
+    expect(
+      storiesUpdateSchema.safeParse({ type: "stories-update", scope: "friends", serverId: SERVER })
+        .success,
+    ).toBe(false);
+    expect(storiesUpdateSchema.safeParse({ type: "stories-update", scope: "own" }).success).toBe(
+      true,
+    );
+  });
 });
 
 describe("what the rest of the contract gained", () => {
@@ -280,9 +297,15 @@ describe("sniffing and pacing", () => {
         Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]),
       ),
     ).toBe("image/webp");
-    expect(
-      sniffStoryMediaType(Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73])),
-    ).toBe("video/mp4");
+    const ftyp = (brand: string) =>
+      Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, ...new TextEncoder().encode(brand)]);
+    expect(sniffStoryMediaType(ftyp("isom"))).toBe("video/mp4");
+    expect(sniffStoryMediaType(ftyp("mp42"))).toBe("video/mp4");
+    // An iPhone photo, an AVIF and a QuickTime movie are ISO BMFF too.
+    expect(sniffStoryMediaType(ftyp("heic"))).toBeNull();
+    expect(sniffStoryMediaType(ftyp("mif1"))).toBeNull();
+    expect(sniffStoryMediaType(ftyp("avif"))).toBeNull();
+    expect(sniffStoryMediaType(ftyp("qt  "))).toBeNull();
     expect(sniffStoryMediaType(new TextEncoder().encode("GIF89a......"))).toBeNull();
   });
 
