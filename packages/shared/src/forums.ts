@@ -292,6 +292,21 @@ export type ForumTag = z.infer<typeof forumTagSchema>;
  * creates a tag; a tag missing from the list is deleted (its post links go
  * with it). Position is the array order.
  */
+/**
+ * What makes two tag names "the same tag": case, accents and runs of spaces
+ * folded, so "Dúvida" and "duvida" cannot sit side by side as two filters
+ * that look alike. The settings screen refuses it as it is typed; this is
+ * the server's half of the same rule (forum QA P3).
+ */
+export function forumTagNameKey(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
 export const putForumTagsSchema = z.object({
   tags: z
     .array(
@@ -305,7 +320,7 @@ export const putForumTagsSchema = z.object({
     .max(FORUM_MAX_TAGS)
     .refine(
       (tags) =>
-        new Set(tags.map((tag) => tag.name.toLowerCase())).size === tags.length,
+        new Set(tags.map((tag) => forumTagNameKey(tag.name))).size === tags.length,
       "Duplicate tag name",
     )
     .refine(
@@ -502,6 +517,13 @@ export const forumAcceptedAnswerSchema = z.object({
   /** First `FORUM_ANSWER_EXCERPT_MAX` characters, flattened. Null when deleted. */
   excerpt: z.string().nullable(),
   createdAt: z.string().nullable(),
+  /**
+   * Who marked it ("Solução · marcada por {name}"). Null when nobody is known:
+   * marked before the server kept it, or by an account deleted since.
+   * Optional so an older API's answer still parses.
+   */
+  markedById: uuid.nullable().optional(),
+  markedByName: z.string().nullable().optional(),
 });
 export type ForumAcceptedAnswer = z.infer<typeof forumAcceptedAnswerSchema>;
 
@@ -606,6 +628,21 @@ export const forumPostRemovedSchema = z.object({
   postId: uuid,
 });
 export type ForumPostRemoved = z.infer<typeof forumPostRemovedSchema>;
+
+/**
+ * Staff saved the forum's tags or its settings: the new copy, for everyone
+ * viewing the forum, so an open composer starts asking for a tag (or stops)
+ * without a reload (forum QA P11). Carries only what changed. A client that
+ * does not know the type ignores it and keeps what it read on open; the
+ * server still refuses a post that breaks the new rule, with the right reason.
+ */
+export const forumConfigUpdateSchema = z.object({
+  type: z.literal("forum-config-update"),
+  forumId: uuid,
+  tags: z.array(forumTagSchema).optional(),
+  settings: forumSettingsSchema.optional(),
+});
+export type ForumConfigUpdate = z.infer<typeof forumConfigUpdateSchema>;
 
 // ------------------------------------------------------- webhooks (P1b)
 

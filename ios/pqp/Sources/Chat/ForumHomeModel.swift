@@ -267,6 +267,11 @@ final class ForumHomeModel {
             state = ForumList.upsert(state, post: post, ctx: ctx)
         case .forumPostRemoved(let forumId, let postId) where forumId == forum.id:
             state = ForumList.remove(state, postId: postId)
+        case .forumConfigUpdate(let forumId, let newTags, let newSettings) where forumId == forum.id:
+            // Staff saved tags or settings: an open composer follows now, not
+            // when this screen is next opened.
+            if let newTags { tags = newTags }
+            if let newSettings { settings = newSettings }
         case .ready:
             // The socket came back after a gap; whatever moved meanwhile was
             // never delivered. The client re-asserts the join by itself.
@@ -280,6 +285,19 @@ final class ForumHomeModel {
         default:
             break
         }
+    }
+
+    /// Reads the rules a person is about to post under again: the flag (operator
+    /// data, flipped with no deploy and with no frame) and the forum's settings.
+    /// Called as "Novo post" opens and after the server refused for a rule this
+    /// screen held stale, so the paused line or "pick a tag" shows without
+    /// reopening the forum. Failures keep what is already known.
+    func refreshRules() async {
+        guard let session else { return }
+        async let configAnswer = session.api.forumConfig(serverId: server.id)
+        async let settingsAnswer = try? session.api.forumSettings(forumId: forum.id)
+        config = await configAnswer
+        if let fresh = await settingsAnswer { settings = fresh }
     }
 
     /// The pill was pressed (or the reader is back at the top).

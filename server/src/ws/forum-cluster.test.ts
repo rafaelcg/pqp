@@ -274,6 +274,29 @@ describe("forum frames across two instances", () => {
   it("both forum frame types are accepted by the channel relay", () => {
     expect(isChatServerMessage({ type: "forum-post-upsert" })).toBe(true);
     expect(isChatServerMessage({ type: "forum-post-removed" })).toBe(true);
+    expect(isChatServerMessage({ type: "forum-config-update" })).toBe(true);
+  });
+
+  it("staff saving the forum's settings on A reaches an open composer's forum on B", async () => {
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const viewer = await connect(b, "reader", { channel: FORUM_ID });
+    const elsewhere = await connect(b, "lurker", { channel: randomUUID() });
+
+    a.chat.announceForumConfig(FORUM_ID, {
+      settings: { requireTag: true, defaultSort: "activity" },
+    });
+
+    const update = {
+      type: "forum-config-update",
+      forumId: FORUM_ID,
+      settings: { requireTag: true, defaultSort: "activity" },
+    };
+    await vi.waitFor(() => {
+      expect(framesOfType(viewer.received, "forum-config-update")).toEqual([update]);
+    });
+    // Only the forum's viewers: nobody else is composing in it.
+    expect(framesOfType(elsewhere.received, "forum-config-update")).toEqual([]);
   });
 
   it("a new post on A reaches the forum's viewer on B, and lights the sidebar of a member on B", async () => {

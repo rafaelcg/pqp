@@ -99,7 +99,24 @@ struct HomeView: View {
         // next time it comes forward, with no relaunch.
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await model.refreshDmsConfig() }
+            Task {
+                await model.refreshDmsConfig()
+                // Presence is pull-only (the server pushes no friend status),
+                // so what the rows and Nova conversa show was true when the
+                // app last looked. Look again when it comes forward.
+                await model.refreshFriendBadge()
+            }
+        }
+        // And while Conversas is what is on screen, look every so often, the
+        // way a friend coming online ought to show on the list within a
+        // moment rather than at the next launch.
+        .task(id: "\(tab.rawValue)-\(model.dmsConfig.home)-\(model.dmsConfig.phoneTabs)") {
+            guard model.dmsConfig.home, tab == .conversas || !model.dmsConfig.phoneTabs else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(ConversasPresence.pollSeconds))
+                guard !Task.isCancelled, scenePhase == .active else { continue }
+                await model.refreshFriendBadge()
+            }
         }
         .onChange(of: tab) { _, next in next.store() }
         .onChange(of: session.storyReplyRevision) { _, _ in
@@ -913,6 +930,11 @@ struct HubView: View {
             }
         } message: {
             Text("Paste the invite you were sent, or type the code.")
+        }
+        // Nova conversa lists "Online agora" first: read it fresh on open.
+        .onChange(of: showingNewConversation) { _, open in
+            guard open else { return }
+            Task { await model.refreshFriendBadge() }
         }
         .sheet(isPresented: $showingNewConversation) {
             newConversationSheet { conversation in
