@@ -521,9 +521,11 @@ export const putForumTagsSchema = z.object({
          */
         icon: forumTagIconSchema.nullable().optional(),
         /**
-         * Honoured on a NEW tag only, and only when the name is one of that
-         * preset's names in some language. An existing tag keeps its preset
-         * until its name changes, which clears it on the server.
+         * On a NEW tag: honoured only when the name is one of that preset's
+         * names in some language. On an existing tag a key is ignored; it keeps
+         * its preset until its name changes, or this is an explicit null (the
+         * name typed over a translated one is the same stored name), either of
+         * which clears it.
          */
         preset: forumTagPresetSchema.nullable().optional(),
         moderated: z.boolean(),

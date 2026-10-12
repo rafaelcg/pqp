@@ -201,6 +201,12 @@ describe("icons and presets", () => {
     const renamed = updateTag(base, ID.duvida, { name: "Pergunta" });
     expect(renamed.rows[1]).toMatchObject({ name: "Pergunta", preset: null });
     expect(unsavedChangeCount(base, renamed)).toBe(1);
+    // The stored name typed over the translated one is a change too, though
+    // the name is the same: everybody reads that wording from then on.
+    const sameName = updateTag(base, ID.duvida, { name: "Question" });
+    expect(sameName.rows[1]).toMatchObject({ name: "Question", preset: null });
+    expect(unsavedChangeCount(base, sameName)).toBe(1);
+    expect(toPutBody(sameName).tags[1]).toMatchObject({ name: "Question", preset: null });
   });
 
   it("sends the preset on, so a new starter is created localizable", () => {

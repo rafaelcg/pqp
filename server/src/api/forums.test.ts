@@ -1143,6 +1143,28 @@ describeDb("forum posts", () => {
       [null, null],
     ]);
 
+    // The stored name typed over a translated starter changes no name, so only
+    // an explicit null can end the localization; a key on an existing tag is
+    // never taken from the request.
+    await put([]);
+    const [starter] = await put([
+      { name: "Question", preset: "question", icon: "question", moderated: false },
+    ]);
+    expect(starter).toMatchObject({ preset: "question" });
+    const [stays] = await put([
+      { id: starter!.id, name: "Question", preset: "bug", icon: "question", moderated: false },
+    ]);
+    expect(stays).toMatchObject({ name: "Question", preset: "question" });
+    const [freed] = await put([
+      { id: starter!.id, name: "Question", preset: null, icon: "question", moderated: false },
+    ]);
+    expect(freed).toMatchObject({ name: "Question", preset: null });
+    // A tag id that is not this forum's is refused, never recreated.
+    const stale = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [{ id: "99999999-9999-4999-8999-999999999999", name: "Gone", moderated: false }],
+    });
+    expect(stale.status).toBe(400);
+
     // An unknown icon key is refused; the GET carries the new fields.
     const bad = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
       tags: [{ name: "X", icon: "not-an-icon", moderated: false }],
@@ -1153,7 +1175,7 @@ describeDb("forum posts", () => {
       "GET",
       `/api/channels/${forumId}/forum-tags`,
     );
-    expect(read.body.tags[0]).toMatchObject({ preset: "question", icon: "idea" });
+    expect(read.body.tags[0]).toMatchObject({ preset: null, icon: "question" });
   });
 
   it("two first saves of a forum's settings, queued on its lock, each audit what they changed", async () => {

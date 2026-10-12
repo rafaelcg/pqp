@@ -204,7 +204,7 @@ describe("ChannelSettingsDialog on a forum", () => {
     // Still out: the person renames the second tag.
     await type(nameInputs()[1]!, "Dúvidas");
     await act(async () => {
-      finish({ tags: [{ ...tags[0]!, name: "Bugs" }, tags[1]!] });
+      finish({ tags: [{ ...tags[0]!, name: "Bugs", preset: null }, tags[1]!] });
     });
     expect(nameInputs().map((input) => input.value)).toEqual(["Bugs", "Dúvidas"]);
     expect(document.body.textContent).toContain("1 unsaved change");

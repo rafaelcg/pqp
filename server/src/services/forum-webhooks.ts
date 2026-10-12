@@ -208,7 +208,9 @@ export function resolveWebhookTags(
     if (!tag.preset) {
       continue;
     }
-    for (const name of FORUM_TAG_PRESET_NAMES[tag.preset]) {
+    // The column is free text: a key a newer build wrote, which this one has
+    // no names for, is skipped and the stored name still matches.
+    for (const name of FORUM_TAG_PRESET_NAMES[tag.preset] ?? []) {
       const key = foldTagName(name);
       if (!byName.has(key)) {
         byName.set(key, tag);

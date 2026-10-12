@@ -153,6 +153,14 @@ describe("resolveWebhookTags", () => {
       });
     });
 
+    it("a preset this build has no names for is skipped; the stored name still matches", () => {
+      const future = [
+        { id: question, name: "Question", moderated: false, preset: "brand-new" as never },
+      ];
+      expect(resolveWebhookTags(["Question"], future, open).tagIds).toEqual([question]);
+      expect(resolveWebhookTags(["Dúvida"], future, open).tagIds).toEqual([]);
+    });
+
     it("rows that carry no preset at all keep matching as before", () => {
       expect(resolveWebhookTags(["Bug"], forumTags, open).tagIds).toEqual([bug]);
     });

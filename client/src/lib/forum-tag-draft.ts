@@ -215,6 +215,9 @@ export function unsavedChangeCount(baseline: TagDraft, draft: TagDraft): number 
     } else if (
       old.name.trim() !== row.name.trim() ||
       old.icon !== row.icon ||
+      // Typing the stored name over a translated starter changes nothing
+      // else, and is still a change: everybody now reads that wording.
+      old.preset !== row.preset ||
       old.moderated !== row.moderated
     ) {
       count += 1;

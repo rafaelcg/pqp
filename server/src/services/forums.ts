@@ -978,8 +978,9 @@ export async function replaceForumTags(
     }
     for (const [position, tag] of request.tags.entries()) {
       const emoji = tag.emoji ?? null;
-      const prior = tag.id ? existing.get(tag.id) : undefined;
-      if (tag.id && prior) {
+      if (tag.id) {
+        // Unknown ids were refused above, so the row is there.
+        const prior = existing.get(tag.id)!;
         // The icon follows the request when it names one (null clears it).
         // An older client sends only the emoji: a changed emoji means the
         // icon would now disagree with the glyph beside it, so the icon is
@@ -991,8 +992,13 @@ export async function replaceForumTags(
               ? (prior.icon ?? null)
               : forumTagIconForEmoji(emoji);
         // A rename ends the localization: the staff's own words show from
-        // then on. Renaming back to the same text is not a rename.
-        const preset = prior.name === tag.name ? (prior.preset ?? null) : null;
+        // then on. So does an explicit null: a staff member who types the
+        // stored name over a translated one ("Dúvida" to "Question") is
+        // choosing that wording for everybody, and the name alone cannot say
+        // so. A key is never taken from the request for an existing tag, and
+        // an older client that sends nothing keeps what is there.
+        const preset =
+          prior.name !== tag.name || tag.preset === null ? null : (prior.preset ?? null);
         await client.query(
           `UPDATE forum_tags
               SET name = $3, emoji = $4, icon = $5, preset = $6, moderated = $7, position = $8
