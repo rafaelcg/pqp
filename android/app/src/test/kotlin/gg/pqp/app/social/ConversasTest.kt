@@ -138,6 +138,18 @@ class ConversasTest {
     }
 
     @Test
+    fun `a live frame without a preview clears the row's line instead of keeping the old one`() {
+        // Previews off: the server omits the text, and the stale line must not
+        // stay on screen as if it were the latest message.
+        assertNull(SocialRepository.livePreview(preview = null, authorId = "u1", authorName = "Gabi"))
+        assertNull(SocialRepository.livePreview(preview = "oi", authorId = null, authorName = null))
+        val live = SocialRepository.livePreview(preview = "oi", authorId = "u1", authorName = "Gabi")
+        assertEquals("oi", live?.preview)
+        assertFalse(live!!.isAttachment)
+        assertTrue(SocialRepository.livePreview(preview = "", authorId = "u1", authorName = "Gabi")!!.isAttachment)
+    }
+
+    @Test
     fun `note durations read as minutes and seconds`() {
         assertEquals("0:00", ConversationList.noteDuration(0))
         assertEquals("1:05", ConversationList.noteDuration(65_000))

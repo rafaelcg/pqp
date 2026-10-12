@@ -70,6 +70,14 @@ class SocialRepository(
     private val _loadingConversations = MutableStateFlow(false)
     val loadingConversations: StateFlow<Boolean> = _loadingConversations.asStateFlow()
 
+    /**
+     * Whether `GET /api/dms` has answered at least once this session. An
+     * empty list before that is "not loaded", not "no conversations", and a
+     * screen must not greet a failed load with the empty-inbox welcome.
+     */
+    private val _conversationsLoaded = MutableStateFlow(false)
+    val conversationsLoaded: StateFlow<Boolean> = _conversationsLoaded.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -136,7 +144,10 @@ class SocialRepository(
                 refreshAgain = false
                 val startedAt = SystemClock.elapsedRealtime()
                 runCatching { session.api.conversations() }
-                    .onSuccess { _conversations.value = it.map { row -> row.honouringRead(startedAt) } }
+                    .onSuccess {
+                        _conversations.value = it.map { row -> row.honouringRead(startedAt) }
+                        _conversationsLoaded.value = true
+                    }
                     .onFailure { Log.w(TAG, "conversations failed: ${it.message}") }
             } while (refreshAgain)
             _loadingConversations.value = false
@@ -372,20 +383,16 @@ class SocialRepository(
             return
         }
 
-        // The preview rides the frame (absent when the reader turned in-app
-        // previews off, and from a server that predates it). Patched in place
-        // so the row reads like it will after a reload, with no second read.
-        val preview = frame.string("preview")
-        val lastMessage = if (preview != null && authorId != null) {
-            LastMessagePreview(
-                authorId = authorId,
-                authorName = frame.string("authorName").orEmpty(),
-                preview = preview,
-                isAttachment = preview.isBlank(),
-            )
-        } else {
-            known.lastMessage
-        }
+        // The preview rides the frame, patched in place so the row reads like
+        // it will after a reload, with no second read. A frame WITHOUT one
+        // (previews off, or a server that predates it) clears the line rather
+        // than keeping the old text: the old text is no longer the latest
+        // message, and keeping it would show content the reader turned off.
+        val lastMessage = livePreview(
+            preview = frame.string("preview"),
+            authorId = authorId,
+            authorName = frame.string("authorName"),
+        )
 
         val bumped = known.copy(
             lastMessage = lastMessage,
@@ -458,6 +465,7 @@ class SocialRepository(
             if (!ready && wasReady) {
                 _friends.value = FriendsResponse()
                 _conversations.value = emptyList()
+                _conversationsLoaded.value = false
                 _friendNudge.value = null
                 _error.value = null
                 typingSweep?.cancel()
@@ -522,6 +530,22 @@ class SocialRepository(
          * *started after* the read settled, which is the point from which the
          * server's own cursor is guaranteed to be the one it answers from.
          */
+        /**
+         * The row's preview after a live `channel-activity` frame. No preview
+         * on the frame means no preview on the row, never the previous one.
+         */
+        internal fun livePreview(preview: String?, authorId: String?, authorName: String?): LastMessagePreview? =
+            if (preview != null && authorId != null) {
+                LastMessagePreview(
+                    authorId = authorId,
+                    authorName = authorName.orEmpty(),
+                    preview = preview,
+                    isAttachment = preview.isBlank(),
+                )
+            } else {
+                null
+            }
+
         internal fun readHoldApplies(
             snapshotStartedAt: Long,
             settledAt: Long?,
