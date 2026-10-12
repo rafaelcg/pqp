@@ -34,6 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { clearDraft } from "@/lib/composer-drafts";
 import {
@@ -49,6 +50,7 @@ import {
   readComposerDraft,
   writeComposerDraft,
 } from "@/lib/forum-prefs";
+import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import type { DroppedItems } from "@/lib/file-drop";
@@ -218,6 +220,7 @@ export function ForumComposerDialog({
   onRefused,
 }: ForumComposerDialogProps) {
   const { t } = useTranslation();
+  const tagLabel = useForumTagLabel();
   const titleId = useId();
   const titleErrorId = useId();
   const tagsLabelId = useId();
@@ -991,8 +994,8 @@ export function ForumComposerDialog({
                       disabled && "cursor-not-allowed opacity-40",
                     )}
                   >
-                    {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-                    {tag.name}
+                    <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
+                    {tagLabel(tag)}
                     {tag.moderated && (
                       <ShieldCheck className="h-3.5 w-3.5 opacity-70" aria-label={t("forum.tags.moderatedHint")} />
                     )}

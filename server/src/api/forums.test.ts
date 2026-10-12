@@ -1073,6 +1073,89 @@ describeDb("forum posts", () => {
     expect(audit.rowCount).toBe(2);
   });
 
+  it("tags: icons and presets. A starter keeps its preset until renamed; an older client still works", async () => {
+    const put = async (tags: Array<Record<string, unknown>>) => {
+      const reply = await call<{ tags: unknown[] }>(
+        alice,
+        "PUT",
+        `/api/channels/${forumId}/forum-tags`,
+        { tags },
+      );
+      expect(reply.status).toBe(200);
+      return reply.body.tags.map((tag) => forumTagSchema.parse(tag));
+    };
+
+    // A client that knows presets: the preset counts only when the name fits it.
+    const created = await put([
+      { name: "Question", preset: "question", icon: "question", emoji: "❓", moderated: false },
+      { name: "Whatever", preset: "bug", icon: "bug", emoji: null, moderated: false },
+      { name: "Custom", preset: null, icon: null, emoji: null, moderated: false },
+    ]);
+    expect(created.map((tag) => [tag.name, tag.preset, tag.icon])).toEqual([
+      ["Question", "question", "question"],
+      ["Whatever", null, "bug"],
+      ["Custom", null, null],
+    ]);
+    const [question, whatever, custom] = created;
+
+    // An unchanged name keeps the preset whatever else was edited; the icon
+    // follows the request, and the request cannot move the preset by itself.
+    const kept = await put([
+      { id: question!.id, name: "Question", icon: "help", preset: "bug", moderated: true },
+      { id: whatever!.id, name: "Whatever", moderated: false },
+      { id: custom!.id, name: "Custom", moderated: false },
+    ]);
+    expect(kept[0]).toMatchObject({ preset: "question", icon: "help", moderated: true });
+    // No `icon` in the request: an older client leaves the stored one alone.
+    expect(kept[1]).toMatchObject({ preset: null, icon: "bug" });
+
+    // A rename ends the localization.
+    const renamed = await put([
+      { id: question!.id, name: "Pergunte", icon: "help", moderated: true },
+      { id: whatever!.id, name: "Whatever", moderated: false },
+      { id: custom!.id, name: "Custom", moderated: false },
+    ]);
+    expect(renamed[0]).toMatchObject({ name: "Pergunte", preset: null });
+
+    // An older client (no icon, no preset) creating the starter chips: the
+    // name is recognised and the emoji becomes the nearest icon.
+    await put([]);
+    const legacy = await put([
+      { name: "Dúvida", emoji: "❓", moderated: false },
+      { name: "Lançamento", emoji: "🚀", moderated: false },
+      { name: "Receitas", emoji: "🍲", moderated: false },
+    ]);
+    expect(legacy.map((tag) => [tag.preset, tag.icon, tag.emoji])).toEqual([
+      ["question", "question", "❓"],
+      ["release", "release", "🚀"],
+      [null, null, "🍲"],
+    ]);
+    // ... and a changed emoji from such a client re-derives the icon, never
+    // leaving an icon that disagrees with the glyph beside it.
+    const swapped = await put([
+      { id: legacy[0]!.id, name: "Dúvida", emoji: "💡", moderated: false },
+      { id: legacy[1]!.id, name: "Lançamento", emoji: "🚀", moderated: false },
+      { id: legacy[2]!.id, name: "Receitas", emoji: null, moderated: false },
+    ]);
+    expect(swapped.map((tag) => [tag.preset, tag.icon])).toEqual([
+      ["question", "idea"],
+      ["release", "release"],
+      [null, null],
+    ]);
+
+    // An unknown icon key is refused; the GET carries the new fields.
+    const bad = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [{ name: "X", icon: "not-an-icon", moderated: false }],
+    });
+    expect(bad.status).toBe(400);
+    const read = await call<{ tags: Array<Record<string, unknown>> }>(
+      bob,
+      "GET",
+      `/api/channels/${forumId}/forum-tags`,
+    );
+    expect(read.body.tags[0]).toMatchObject({ preset: "question", icon: "idea" });
+  });
+
   it("two first saves of a forum's settings, queued on its lock, each audit what they changed", async () => {
     // Before a forum's first save there is no settings row for FOR UPDATE to
     // lock, which is why `updateForumSettings` takes a per-forum advisory

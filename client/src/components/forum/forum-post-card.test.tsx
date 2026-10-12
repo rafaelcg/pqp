@@ -1,12 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ForumPostSummary, ForumTag } from "@pqp/shared";
+import { loadLocale, setActiveCatalogue } from "@/lib/i18n";
 import { ForumPostCard } from "./forum-post-card";
 
 const tag = (n: number, name: string, moderated = false): ForumTag => ({
   id: `00000000-0000-4000-8000-00000000000${n}`,
   name,
   emoji: null,
+  icon: null,
+  preset: null,
   moderated,
   position: n,
   postCount: 1,
@@ -153,5 +156,44 @@ describe("ForumPostCard, the three lines", () => {
     const long = "a".repeat(200);
     expect(render({ post: { ...POST, preview: long } })).toContain(`${long}…`);
     expect(render()).not.toContain("fecha.…");
+  });
+});
+
+describe("ForumPostCard, tag chips", () => {
+  afterEach(() => {
+    setActiveCatalogue(undefined);
+  });
+
+  const starter: ForumTag = {
+    ...tag(1, "Question"),
+    icon: "question",
+    emoji: "❓",
+    preset: "question",
+  };
+  const only = (one: ForumTag) =>
+    render({ post: { ...POST, tagIds: [one.id] }, tagsById: new Map([[one.id, one]]) });
+
+  it("draws the tag's icon, not its emoji, and keeps it out of the accessibility tree", () => {
+    const html = only(starter);
+    expect(html).toContain('data-forum-tag-icon="question"');
+    expect(html).toContain("<svg");
+    expect(html).not.toContain("❓");
+  });
+
+  it("falls back to the emoji of a row that has no icon, and to nothing", () => {
+    expect(only({ ...starter, icon: null })).toContain("❓");
+    const bare = only({ ...starter, icon: null, emoji: null });
+    expect(bare).not.toContain("data-forum-tag-icon");
+    expect(bare).not.toContain("<svg viewBox");
+  });
+
+  it("names a starter in the reader's language, and a renamed tag by its own name", async () => {
+    expect(only(starter)).toContain(">Question<");
+    await loadLocale("pt-BR");
+    expect(only(starter)).toContain(">Dúvida<");
+    expect(only(starter)).not.toContain(">Question<");
+    expect(only({ ...starter, name: "Pergunte", preset: null })).toContain(">Pergunte<");
+    await loadLocale("es");
+    expect(only(starter)).toContain(">Duda<");
   });
 });

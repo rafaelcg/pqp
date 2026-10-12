@@ -272,12 +272,211 @@ const tagIdListSchema = z
   .max(FORUM_MAX_TAGS_PER_POST)
   .refine((ids) => new Set(ids).size === ids.length, "Duplicate tag");
 
+// ------------------------------------------------------------ tag icons
+
+/**
+ * The curated icon set a tag can wear instead of an emoji. The KEY is the
+ * contract (stored in `forum_tags.icon`); each client maps it to its own art
+ * (lucide on the web, SF Symbols on iOS, Material icons on Android). `emoji`
+ * is the glyph an older client would have shown for it: the editor writes it
+ * beside the icon so a phone build that predates icons still shows something
+ * close, and the boot migration uses the same table to turn the emoji staff
+ * already picked into the nearest icon. Order is the picker's order.
+ *
+ * Adding a key is safe (an older client falls back to the emoji through the
+ * `.catch(null)` on `forumTagSchema.icon`). Renaming or removing one is not.
+ */
+export const FORUM_TAG_ICONS = [
+  { key: "question", emoji: "❓" },
+  { key: "help", emoji: "🆘" },
+  { key: "bug", emoji: "🐛" },
+  { key: "idea", emoji: "💡" },
+  { key: "feedback", emoji: "📝" },
+  { key: "discussion", emoji: "💬" },
+  { key: "poll", emoji: "🗳️" },
+  { key: "announcement", emoji: "📢" },
+  { key: "news", emoji: "📰" },
+  { key: "release", emoji: "🚀" },
+  { key: "update", emoji: "🔄" },
+  { key: "wip", emoji: "🛠️" },
+  { key: "code", emoji: "💻" },
+  { key: "guide", emoji: "📚" },
+  { key: "rules", emoji: "📜" },
+  { key: "solved", emoji: "✅" },
+  { key: "warning", emoji: "⚠️" },
+  { key: "security", emoji: "🔒" },
+  { key: "pinned", emoji: "📌" },
+  { key: "event", emoji: "📅" },
+  { key: "showcase", emoji: "✨" },
+  { key: "art", emoji: "🎨" },
+  { key: "photo", emoji: "📷" },
+  { key: "video", emoji: "🎬" },
+  { key: "clip", emoji: "🎞️" },
+  { key: "stream", emoji: "📺" },
+  { key: "music", emoji: "🎵" },
+  { key: "game", emoji: "🎮" },
+  { key: "meme", emoji: "😂" },
+  { key: "offtopic", emoji: "☕" },
+  { key: "community", emoji: "👥" },
+  { key: "gift", emoji: "🎁" },
+  { key: "trophy", emoji: "🏆" },
+  { key: "hot", emoji: "🔥" },
+  { key: "star", emoji: "⭐" },
+  { key: "heart", emoji: "❤️" },
+  { key: "link", emoji: "🔗" },
+] as const;
+
+export type ForumTagIconKey = (typeof FORUM_TAG_ICONS)[number]["key"];
+
+export const FORUM_TAG_ICON_KEYS = FORUM_TAG_ICONS.map((icon) => icon.key) as [
+  ForumTagIconKey,
+  ...ForumTagIconKey[],
+];
+
+export const forumTagIconSchema = z.enum(FORUM_TAG_ICON_KEYS);
+
+/** The emoji an older client would show for an icon key. */
+export function forumTagIconEmoji(icon: ForumTagIconKey): string {
+  return FORUM_TAG_ICONS.find((one) => one.key === icon)!.emoji;
+}
+
+/**
+ * Emoji that read as the same idea as an icon but are not its own glyph
+ * ("🛠" without the variation selector, "🔧", "📣"...). Only the boot
+ * migration and the Discord import look at these.
+ */
+export const FORUM_TAG_EMOJI_ALIASES: Readonly<Record<string, ForumTagIconKey>> = {
+  "🛠": "wip",
+  "🔧": "wip",
+  "🔨": "wip",
+  "🚧": "wip",
+  "🗳": "poll",
+  "⚠": "warning",
+  "🚨": "warning",
+  "❤": "heart",
+  "💖": "heart",
+  "🎞": "clip",
+  "✂️": "clip",
+  "📣": "announcement",
+  "📖": "guide",
+  "🎉": "event",
+  "🗓️": "event",
+  "☑️": "solved",
+  "✔️": "solved",
+  "🙋": "help",
+  "🤔": "question",
+  "❔": "question",
+  "🧠": "idea",
+  "🎥": "video",
+  "📹": "video",
+  "🖼️": "art",
+  "🎧": "music",
+  "🎶": "music",
+  "🕹️": "game",
+  "🤣": "meme",
+  "🔐": "security",
+  "🛡️": "security",
+  "📍": "pinned",
+  "🌟": "star",
+  "🎙️": "stream",
+};
+
+/** The icon for a stored emoji, or null when none reads as the same idea. */
+export function forumTagIconForEmoji(emoji: string | null | undefined): ForumTagIconKey | null {
+  if (!emoji) {
+    return null;
+  }
+  const trimmed = emoji.trim();
+  return (
+    FORUM_TAG_ICONS.find((icon) => icon.emoji === trimmed)?.key ??
+    FORUM_TAG_EMOJI_ALIASES[trimmed] ??
+    null
+  );
+}
+
+// ---------------------------------------------------------- tag presets
+
+/**
+ * The starter tags ("Discussion", "Question"...). A starter tag is created
+ * with `preset` set and its name stored in whatever language the staff member
+ * had; every client then shows its OWN language's name for the key, until
+ * staff rename the tag (the server clears `preset` then).
+ */
+export const FORUM_TAG_PRESETS = [
+  "question",
+  "bug",
+  "suggestion",
+  "tutorial",
+  "release",
+  "wip",
+  "discussion",
+] as const;
+export type ForumTagPreset = (typeof FORUM_TAG_PRESETS)[number];
+export const forumTagPresetSchema = z.enum(FORUM_TAG_PRESETS);
+
+/** The icon a starter tag wears when it has no emoji of its own to map. */
+export const FORUM_TAG_PRESET_ICON: Readonly<Record<ForumTagPreset, ForumTagIconKey>> = {
+  question: "question",
+  bug: "bug",
+  suggestion: "idea",
+  tutorial: "guide",
+  release: "release",
+  wip: "wip",
+  discussion: "discussion",
+};
+
+/**
+ * What each preset is called in the languages the product ships (and the one
+ * older English wording that differs, "Tutorial"). The WEB reads its copy
+ * from `translation.json`; this table is for the places with no i18n: the
+ * server matching a webhook's `applied_tags` by name, and the boot migration
+ * that gives existing starter tags their preset. Compare with
+ * `forumTagNameKey`, so case and accents do not matter.
+ */
+export const FORUM_TAG_PRESET_NAMES: Readonly<Record<ForumTagPreset, readonly string[]>> = {
+  question: ["Question", "Dúvida", "Duda"],
+  bug: ["Bug"],
+  suggestion: ["Suggestion", "Sugestão", "Sugerencia"],
+  tutorial: ["Guide", "Tutorial"],
+  release: ["Release", "Lançamento", "Lanzamiento"],
+  wip: ["WIP"],
+  discussion: ["Discussion", "Discussão", "Discusión"],
+};
+
+/** Is this name one of the preset's names, in any language? */
+export function isForumTagPresetName(preset: ForumTagPreset, name: string): boolean {
+  const key = forumTagNameKey(name);
+  return FORUM_TAG_PRESET_NAMES[preset].some((one) => forumTagNameKey(one) === key);
+}
+
 // ------------------------------------------------------------------ tags
 
 export const forumTagSchema = z.object({
   id: uuid,
+  /**
+   * The name as stored. A tag with a `preset` is shown in the viewer's own
+   * language instead (`forum.tags.preset.<preset>`), so this is only what a
+   * client that does not know presets, and a webhook sending `applied_tags`
+   * by name, see.
+   */
   name: z.string(),
+  /**
+   * Legacy: a unicode emoji. Kept readable for rows that predate `icon`,
+   * Discord imports, and phone builds that do not know icons yet. A client
+   * that knows `icon` draws it and ignores this; with no icon it draws this.
+   */
   emoji: z.string().nullable(),
+  /**
+   * One of `FORUM_TAG_ICONS`, or null. Optional so an older server (no such
+   * column) still parses, and `.catch(null)` so a key a newer server invented
+   * degrades to "no icon" (the emoji shows) instead of failing the response.
+   */
+  icon: forumTagIconSchema.nullable().optional().catch(null),
+  /**
+   * Set on a starter tag until staff rename it. While set, every client shows
+   * the localized name for this key; the server clears it on a rename.
+   */
+  preset: forumTagPresetSchema.nullable().optional().catch(null),
   /** Staff-only ("Só staff"): only MANAGE_MESSAGES puts it on or takes it off. */
   moderated: z.boolean(),
   /** Display order, 0 first. The PUT's array order. */
@@ -313,7 +512,20 @@ export const putForumTagsSchema = z.object({
       z.object({
         id: uuid.optional(),
         name: forumTagNameSchema,
+        /** Legacy. New clients send the icon's own emoji beside it, or null. */
         emoji: z.string().min(1).max(FORUM_TAG_EMOJI_MAX).nullable().optional(),
+        /**
+         * Absent keeps the stored icon (unless the emoji changed, which means
+         * an older client picked a new glyph and the icon would now lie);
+         * null clears it.
+         */
+        icon: forumTagIconSchema.nullable().optional(),
+        /**
+         * Honoured on a NEW tag only, and only when the name is one of that
+         * preset's names in some language. An existing tag keeps its preset
+         * until its name changes, which clears it on the server.
+         */
+        preset: forumTagPresetSchema.nullable().optional(),
         moderated: z.boolean(),
       }),
     )

@@ -8,7 +8,10 @@ import {
   FORUM_SHELL_TTL_MS,
   FORUM_SIMILAR_MAX,
   FORUM_UNREAD_CAP,
+  FORUM_TAG_PRESETS,
   FORUM_WEBHOOK_DEDUPE_HOURS_MAX,
+  forumTagIconForEmoji,
+  isForumTagPresetName,
   type ForumAcceptedAnswer,
   type ForumPostListResponse,
   type ForumPostSummary,
@@ -16,6 +19,8 @@ import {
   type ForumSettings,
   type ForumSort,
   type ForumTag,
+  type ForumTagIconKey,
+  type ForumTagPreset,
   type ListForumPostsQuery,
   type PutForumTagsRequest,
   type UpdateForumSettingsRequest,
@@ -809,6 +814,8 @@ interface TagRow {
   id: string;
   name: string;
   emoji: string | null;
+  icon: ForumTagIconKey | null;
+  preset: ForumTagPreset | null;
   moderated: boolean;
   position: number;
   post_count: number;
@@ -819,6 +826,8 @@ function mapTag(row: TagRow): ForumTag {
     id: row.id,
     name: row.name,
     emoji: row.emoji,
+    icon: row.icon,
+    preset: row.preset,
     moderated: row.moderated,
     position: row.position,
     postCount: row.post_count,
@@ -830,7 +839,7 @@ export async function listForumTags(
   runner: Pick<PoolClient, "query"> = getPool(),
 ): Promise<ForumTag[]> {
   const result = await runner.query<TagRow>(
-    `SELECT t.id, t.name, t.emoji, t.moderated, t.position,
+    `SELECT t.id, t.name, t.emoji, t.icon, t.preset, t.moderated, t.position,
             (SELECT count(*) FROM forum_post_tags pt
                JOIN forum_posts p ON p.channel_id = pt.post_id
               WHERE pt.tag_id = t.id AND p.published_at IS NOT NULL)::int AS post_count
@@ -902,6 +911,27 @@ export function tagRequirementBinds(
 }
 
 /**
+ * The preset a NEW tag is stored with. A client that knows presets says so
+ * (a key, or null for a custom tag); the key counts only when the name really
+ * is one of that preset's names, so a request cannot make "Whatever" display
+ * as "Question". A client that does not know presets (an older web bundle)
+ * sends nothing, and its starter chips are recognised by name instead, so a
+ * tab that has not reloaded still creates localizable starters.
+ */
+function presetForNewTag(
+  name: string,
+  requested: ForumTagPreset | null | undefined,
+): ForumTagPreset | null {
+  if (requested === null) {
+    return null;
+  }
+  if (requested !== undefined) {
+    return isForumTagPresetName(requested, name) ? requested : null;
+  }
+  return FORUM_TAG_PRESETS.find((preset) => isForumTagPresetName(preset, name)) ?? null;
+}
+
+/**
  * Replace a forum's tag list (the PUT). An entry with `id` edits that tag, one
  * without creates a tag, a tag missing from the list is deleted along with
  * its post links. One transaction, under a per-forum advisory lock so two
@@ -947,18 +977,41 @@ export async function replaceForumTags(
       );
     }
     for (const [position, tag] of request.tags.entries()) {
-      if (tag.id) {
+      const emoji = tag.emoji ?? null;
+      const prior = tag.id ? existing.get(tag.id) : undefined;
+      if (tag.id && prior) {
+        // The icon follows the request when it names one (null clears it).
+        // An older client sends only the emoji: a changed emoji means the
+        // icon would now disagree with the glyph beside it, so the icon is
+        // re-derived from the new emoji, and an unchanged one is kept.
+        const icon =
+          tag.icon !== undefined
+            ? tag.icon
+            : emoji === prior.emoji
+              ? (prior.icon ?? null)
+              : forumTagIconForEmoji(emoji);
+        // A rename ends the localization: the staff's own words show from
+        // then on. Renaming back to the same text is not a rename.
+        const preset = prior.name === tag.name ? (prior.preset ?? null) : null;
         await client.query(
           `UPDATE forum_tags
-              SET name = $3, emoji = $4, moderated = $5, position = $6
+              SET name = $3, emoji = $4, icon = $5, preset = $6, moderated = $7, position = $8
             WHERE forum_id = $1 AND id = $2`,
-          [forumId, tag.id, tag.name, tag.emoji ?? null, tag.moderated, position],
+          [forumId, tag.id, tag.name, emoji, icon, preset, tag.moderated, position],
         );
       } else {
         await client.query(
-          `INSERT INTO forum_tags (forum_id, name, emoji, moderated, position)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [forumId, tag.name, tag.emoji ?? null, tag.moderated, position],
+          `INSERT INTO forum_tags (forum_id, name, emoji, icon, preset, moderated, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            forumId,
+            tag.name,
+            emoji,
+            tag.icon !== undefined ? tag.icon : forumTagIconForEmoji(emoji),
+            presetForNewTag(tag.name, tag.preset),
+            tag.moderated,
+            position,
+          ],
         );
       }
     }
