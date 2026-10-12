@@ -68,6 +68,12 @@ describe("canRetryShareWithoutSound", () => {
     expect(canRetryShareWithoutSound({ ...base, err: named("NotAllowedError") })).toBe(false);
   });
 
+  it("retries only the failure a source that would not start gives", () => {
+    for (const name of ["AbortError", "TypeError", "NotSupportedError", "InvalidStateError"]) {
+      expect(canRetryShareWithoutSound({ ...base, err: named(name) })).toBe(false);
+    }
+  });
+
   it("never retries a request that asked for no sound", () => {
     expect(
       canRetryShareWithoutSound({ ...base, options: { ...audioOptions, audio: false } }),

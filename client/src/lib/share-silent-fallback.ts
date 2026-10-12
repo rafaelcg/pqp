@@ -44,9 +44,11 @@ export function silentRetryOptions(options: ScreenCaptureOptions): ScreenCapture
 }
 
 /**
- * Whether this failure is one the shell can take back silently. A cancelled
- * picker (`NotAllowedError`) is the person saying no, never a failure to
- * recover from, and a request that asked for no audio cannot have failed on it.
+ * Whether this failure is one the shell can take back silently. Only
+ * `NotReadableError`, the name Chromium gives a source that would not start
+ * after the shell answered. Anything else (a cancelled picker, a refused
+ * shape, a capture aborted) is not a sound failure and keeps its own path,
+ * and a request that asked for no audio cannot have failed on it.
  */
 export function canRetryShareWithoutSound(
   input: Pick<SilentShareRetryInput, "err" | "options" | "env" | "desktop">,
@@ -55,7 +57,7 @@ export function canRetryShareWithoutSound(
     input.env.isDesktopShell &&
     input.options.audio !== false &&
     input.err instanceof Error &&
-    input.err.name !== "NotAllowedError" &&
+    input.err.name === "NotReadableError" &&
     input.desktop?.capabilities?.silentRetry === true &&
     typeof input.desktop.shareSilentRetryArm === "function"
   );
