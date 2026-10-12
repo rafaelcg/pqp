@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { webhookForumSettingsSchema } from "./forums.js";
 
 /**
  * Discord's own limits on an embed, mirrored so a payload built for a real
@@ -80,6 +81,12 @@ export const webhookSchema = z.object({
    */
   url: z.string(),
   createdAt: z.string(),
+  /**
+   * A webhook on a forum: its tag allowlist, default tags and dedupe window
+   * (`PUT /api/webhooks/:webhookId/forum-settings`). Absent on any other
+   * channel, and from an API older than forum PR 4.
+   */
+  forumSettings: webhookForumSettingsSchema.optional(),
 });
 export type Webhook = z.infer<typeof webhookSchema>;
 

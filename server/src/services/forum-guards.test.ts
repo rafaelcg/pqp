@@ -22,8 +22,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
  *   * RETENTION keeps a post's opening message.
  *   * SEARCH says which forum a hit inside a post belongs to.
  *   * THE GENERIC CHANNEL ROUTES refuse a forum post.
- *   * WEBHOOKS. An execute into a forum is Discord's 400 `220001` and writes
- *     nothing; a webhook cannot be created on a category or a voice room.
+ *   * WEBHOOKS. An execute into a forum never writes a message into the
+ *     forum row (with the flag off it is refused; forum PR 4's own tests,
+ *     `api/forum-webhooks.test.ts`, cover the post it makes with the flag
+ *     on); a webhook cannot be created on a category or a voice room.
  *   * MESSAGE DELETE is scoped to the message's channel.
  *   * AUTOMOD's channel exemption covers the channel's posts and threads.
  */
@@ -552,7 +554,7 @@ describeDb("forum guards", () => {
       }
     });
 
-    it("answer an execute into a forum with Discord's 220001 and write nothing", async () => {
+    it("refuse an execute into a forum while forums are off, and write nothing", async () => {
       const created = await call(alice, "POST", `/api/channels/${forumId}/webhooks`, { name: "RSS" });
       const url = (created.body.webhook as { url: string }).url;
       const response = await fetch(`${baseUrl}${url}`, {
@@ -560,10 +562,10 @@ describeDb("forum guards", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: "Notícia nova", thread_name: "Notícia nova" }),
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(403);
       const body = (await response.json()) as Record<string, unknown>;
-      expect(body.code).toBe(WEBHOOK_FORUM_THREAD_NAME_CODE);
-      expect(body.message).toBe(body.error);
+      expect(body.error).toBe("forum_channels_off");
+      expect(body.code).not.toBe(WEBHOOK_FORUM_THREAD_NAME_CODE);
       const rows = await getPool().query(`SELECT 1 FROM messages WHERE channel_id = $1`, [forumId]);
       expect(rows.rowCount).toBe(0);
     });

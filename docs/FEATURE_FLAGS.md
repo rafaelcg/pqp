@@ -570,7 +570,10 @@ Off gates **creating**, never reading: `POST /api/servers/:id/channels` with
 `type: "forum"` answers 403 `forum_channels_off`, and (from the forum server
 PR) so does creating a post. Forums and posts that exist stay readable and
 repliable, and staff actions on them keep working, so turning it off strands
-nobody's writing. Nothing is hidden or deleted.
+nobody's writing. Nothing is hidden or deleted. A webhook on a forum follows
+the same line: off, an execute that would make a post is 403 with nothing
+written, and a `?thread_id=` reply into an existing post still lands
+(`docs/BOT_SEND.md`, "Incoming webhooks into a forum").
 
 The Discord import is the one reader with no server in hand (it creates the
 server), so it asks the global value only: an import keeps flattening forums to

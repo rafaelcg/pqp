@@ -1,0 +1,17 @@
+{
+  "source": "MonitoRSS user-feeds-next, the same feed configured for a TEXT channel webhook and later pointed at a forum: the payload is the plain message (no thread_name, no applied_tags), here with empty content and the item in one embed, which is MonitoRSS's embed-only template.",
+  "query": { "wait": "true" },
+  "body": {
+    "embeds": [
+      {
+        "color": 15105570,
+        "title": "Servidor de São Paulo volta amanhã",
+        "description": "A manutenção termina às 6h.",
+        "url": "https://status.example.com/incidents/sp-1",
+        "footer": { "text": "status.example.com" },
+        "timestamp": "2026-10-10T21:30:00.000Z"
+      }
+    ],
+    "username": "Status"
+  }
+}

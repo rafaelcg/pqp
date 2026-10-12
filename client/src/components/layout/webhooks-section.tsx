@@ -1,5 +1,6 @@
-import type { Webhook } from "@pqp/shared";
+import type { ForumTag, Webhook } from "@pqp/shared";
 import { useEffect, useState } from "react";
+import { WebhookForumSettingsPanel } from "@/components/layout/webhook-forum-settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createWebhook, deleteWebhook, fetchWebhooks } from "@/lib/api";
@@ -19,6 +20,8 @@ export function WebhooksSection({
 }) {
   const { t } = useTranslation();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  // Non-null only on a forum: its tags, for each webhook's feed settings.
+  const [forumTags, setForumTags] = useState<ForumTag[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -33,12 +36,14 @@ export function WebhooksSection({
     let cancelled = false;
     setError(null);
     setWebhooks([]);
+    setForumTags(null);
     setName("");
     setLoading(true);
     fetchWebhooks(channelId)
       .then((res) => {
         if (!cancelled) {
           setWebhooks(res.webhooks);
+          setForumTags(res.forumTags ?? null);
         }
       })
       .catch((err: unknown) => {
@@ -100,7 +105,9 @@ export function WebhooksSection({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-paper-muted">{t("webhooks.description")}</p>
+      <p className="text-sm text-paper-muted">
+        {forumTags !== null ? t("webhooks.forum.description") : t("webhooks.description")}
+      </p>
       {error && (
         <p role="alert" className="text-sm text-danger">
           {error}
@@ -161,6 +168,13 @@ export function WebhooksSection({
                 {copiedId === webhook.id ? t("common.copied") : t("common.copy")}
               </Button>
             </div>
+            {forumTags !== null && webhook.forumSettings && (
+              <WebhookForumSettingsPanel
+                webhookId={webhook.id}
+                initial={webhook.forumSettings}
+                tags={forumTags}
+              />
+            )}
           </li>
         ))}
       </ul>
