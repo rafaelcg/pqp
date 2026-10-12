@@ -1504,6 +1504,13 @@ struct MessageRow: View {
                     EmbedCard(embed: embed)
                 }
 
+                // What a webhook sent beside its text: an RSS item's card
+                // under a feed post. Decoded all along and never drawn, so a
+                // feed post was a bare link here (forum QA P20).
+                ForEach(Array(message.webhookEmbeds.enumerated()), id: \.offset) { _, embed in
+                    WebhookEmbedCard(embed: embed)
+                }
+
                 if message.editedAt != nil {
                     Text("edited")
                         .font(.system(size: 10))
