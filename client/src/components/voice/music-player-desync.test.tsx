@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MusicState } from "@pqp/shared";
 import {
   MusicPlayer,
-  pausedRoomMaySeek,
+  pausedRoomSeekCommand,
   silencePlayerCommand,
 } from "./music-player-embed";
 import { resetMusicEmbedHostForTests } from "./music-embed-host";
@@ -66,6 +66,11 @@ class FakePlayer {
     for (const command of pending) {
       command();
     }
+  }
+
+  /** The iframe loses every queued command, as YouTube can mid-load. */
+  drop(): void {
+    this.queue = [];
   }
 
   private send(command: () => void): void {
@@ -300,6 +305,25 @@ describe("the room is paused while this seat is listening", () => {
     expect(player.time).toBe(60);
   });
 
+  it("waits for a buffering player to pause before moving it", async () => {
+    const player = await listeningTenSecondsIn();
+    await act(async () => player.report(YT_STATE.BUFFERING));
+    await render(snapshot(roomState({ status: "paused", positionMs: 60_000, rev: 3 })));
+    // YouTube drops the pause sent mid-load. A seek sent with it would
+    // have started playback from BUFFERING.
+    player.drop();
+    expect(player.time).toBe(10);
+
+    // The load lands and plays anyway: the level check pauses it, and the
+    // seek goes out only once the player says it is paused.
+    await act(async () => player.report(YT_STATE.PLAYING));
+    await iframeCatchesUp();
+    await iframeCatchesUp();
+
+    expect(player.state).toBe(YT_STATE.PAUSED);
+    expect(player.time).toBe(60);
+  });
+
   it("leaves a playing room alone", async () => {
     const player = await listeningTenSecondsIn();
     await act(async () => {
@@ -310,22 +334,36 @@ describe("the room is paused while this seat is listening", () => {
   });
 });
 
-describe("pausedRoomMaySeek", () => {
+describe("pausedRoomSeekCommand", () => {
   it("never moves a player when the room has nothing on", () => {
     for (const playerState of Object.values(YT_STATE)) {
-      expect(pausedRoomMaySeek({ roomVideoId: null, playerState })).toBe(false);
+      expect(pausedRoomSeekCommand({ roomVideoId: null, playerState })).toBeNull();
     }
   });
 
-  it("does not seek a cued, unstarted or ended player, which seeking would start", () => {
-    for (const playerState of [YT_STATE.CUED, YT_STATE.UNSTARTED, YT_STATE.ENDED]) {
-      expect(pausedRoomMaySeek({ roomVideoId: "dQw4w9WgXcQ", playerState })).toBe(false);
+  it("seeks a paused player in place", () => {
+    expect(
+      pausedRoomSeekCommand({ roomVideoId: "dQw4w9WgXcQ", playerState: YT_STATE.PAUSED }),
+    ).toBe("seek");
+  });
+
+  it("waits for a sounding player to report PAUSED before seeking it", () => {
+    for (const playerState of [YT_STATE.PLAYING, YT_STATE.BUFFERING]) {
+      expect(pausedRoomSeekCommand({ roomVideoId: "dQw4w9WgXcQ", playerState })).toBe(
+        "seek-when-paused",
+      );
     }
   });
 
-  it("seeks a player the pause just before it has stopped", () => {
-    for (const playerState of [YT_STATE.PAUSED, YT_STATE.PLAYING, YT_STATE.BUFFERING]) {
-      expect(pausedRoomMaySeek({ roomVideoId: "dQw4w9WgXcQ", playerState })).toBe(true);
+  it("cues a cued player rather than seeking it, which would start it", () => {
+    expect(
+      pausedRoomSeekCommand({ roomVideoId: "dQw4w9WgXcQ", playerState: YT_STATE.CUED }),
+    ).toBe("cue");
+  });
+
+  it("does not seek an unstarted or ended player, which seeking would start", () => {
+    for (const playerState of [YT_STATE.UNSTARTED, YT_STATE.ENDED]) {
+      expect(pausedRoomSeekCommand({ roomVideoId: "dQw4w9WgXcQ", playerState })).toBeNull();
     }
   });
 });

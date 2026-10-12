@@ -338,28 +338,61 @@ export function shouldReportPositionSample(playerState: number): boolean {
 }
 
 /**
- * WHETHER A ROOM THAT IS NOT PLAYING MAY MOVE THIS PLAYER'S PLAYHEAD.
+ * HOW A ROOM THAT IS NOT PLAYING MOVES THIS PLAYER'S PLAYHEAD.
  *
  * YouTube's `seekTo` keeps a PAUSED player paused and starts playback from
  * every other state. `stopVideo` leaves the player CUED, and the pause path
  * used to seek it to the room's clock straight after; with nothing on, that
  * clock reads zero, so a listener more than `DRIFT_MS` into the song heard
- * it again from the top while the bar said nothing was on (PQP-69). Only a
- * player that is already on the room's track and stoppable by `pauseVideo`
- * may be moved: PLAYING and BUFFERING are paused by the call just before.
+ * it again from the top while the bar said nothing was on (PQP-69).
+ *
+ * Only a PAUSED player is seeked in place. A PLAYING or BUFFERING one was
+ * just sent `pauseVideo`, and YouTube can drop a pause mid-load, so its seek
+ * waits for the player to report PAUSED. A CUED player is cued again at the
+ * room's clock, which moves the start without playing. Anything else, and
+ * any player with nothing on, is left where it is.
  */
-export function pausedRoomMaySeek(args: {
+export function pausedRoomSeekCommand(args: {
   roomVideoId: string | null;
   playerState: number;
-}): boolean {
+}): "seek" | "seek-when-paused" | "cue" | null {
   if (!args.roomVideoId) {
-    return false;
+    return null;
   }
-  return (
-    args.playerState === YT_STATE.PAUSED ||
-    args.playerState === YT_STATE.PLAYING ||
-    args.playerState === YT_STATE.BUFFERING
-  );
+  switch (args.playerState) {
+    case YT_STATE.PAUSED:
+      return "seek";
+    case YT_STATE.PLAYING:
+    case YT_STATE.BUFFERING:
+      return "seek-when-paused";
+    case YT_STATE.CUED:
+      return "cue";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The deferred half of `pausedRoomSeekCommand`: the player has just
+ * reported PAUSED, so `seekTo` keeps it paused. Asked again against the
+ * room as it is now, since the room may have moved while the pause landed.
+ */
+function seekPausedPlayerToRoom(player: YTPlayer, snap: MusicSnapshot): void {
+  const roomVideoId = snap.state?.current?.videoId ?? null;
+  if (!roomVideoId || snap.state?.status === "playing") {
+    return;
+  }
+  try {
+    if (player.getVideoData().video_id !== roomVideoId) {
+      return;
+    }
+    const at = expectedPositionMs(snap);
+    if (playerNeedsRoomSeek(player.getCurrentTime() * 1000, at)) {
+      player.seekTo(at / 1000, true);
+    }
+  } catch {
+    // player not ready to seek
+  }
 }
 
 /**
@@ -473,6 +506,8 @@ export function MusicPlayer({
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";
   const durationReportedFor = useRef<string | null>(null);
+  /** A paused room's seek that waits for this player to report PAUSED. */
+  const seekWhenPausedRef = useRef(false);
 
   // Build the player once.
   useEffect(() => {
@@ -528,6 +563,10 @@ export function MusicPlayer({
                 silencePlayer(event.target, snap)
               ) {
                 return;
+              }
+              if (event.data === YT_STATE.PAUSED && seekWhenPausedRef.current) {
+                seekWhenPausedRef.current = false;
+                seekPausedPlayerToRoom(event.target, snap);
               }
               if (
                 event.data === YT_STATE.BUFFERING ||
@@ -689,6 +728,7 @@ export function MusicPlayer({
     if (!ready || !player) {
       return;
     }
+    seekWhenPausedRef.current = false;
     let loaded: string | undefined;
     let ytState: number = YT_STATE.UNSTARTED;
     try {
@@ -723,11 +763,14 @@ export function MusicPlayer({
       try {
         const at = expectedPositionMs(musicRef.current);
         if (playerNeedsRoomSeek(player.getCurrentTime() * 1000, at)) {
-          if (pausedRoomMaySeek({ roomVideoId: videoId, playerState: ytState })) {
+          const seek = pausedRoomSeekCommand({ roomVideoId: videoId, playerState: ytState });
+          if (seek === "seek") {
             player.seekTo(at / 1000, true);
-          } else if (videoId && ytState === YT_STATE.CUED) {
+          } else if (seek === "seek-when-paused") {
+            seekWhenPausedRef.current = true;
+          } else if (seek === "cue") {
             // Cueing moves the start without playing, which seeking does not.
-            player.cueVideoById(videoId, at / 1000);
+            player.cueVideoById(videoId!, at / 1000);
           }
         }
       } catch {

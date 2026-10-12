@@ -336,7 +336,8 @@ edit never carries a stale one. A room that is not playing never seeks a
 player that is cued, unstarted or ended, and never seeks at all with nothing
 on: YouTube's `seekTo` starts playback from those states, and that is how
 "Parar pra todos" used to restart the song from zero for everyone else with
-no bar on screen (PQP-69). The speaker follows the room as a level, not only
+no bar on screen (PQP-69). A player still sounding is sent its pause first,
+and its seek waits until it reports paused. The speaker follows the room as a level, not only
 on edges: `silencePlayerCommand` is asked on every state change and every two
 seconds while the room is paused or empty, and stops or pauses a player that
 is making sound the room did not ask for. A track ending advances the queue, guarded
