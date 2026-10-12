@@ -304,6 +304,11 @@ struct ForumEditTagsSheet: View {
                             .font(Typography.caption.monospacedDigit())
                             .foregroundStyle(Palette.paperMuted)
                     }
+                    if tags.isEmpty {
+                        Text("This forum has no tags yet.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paperMuted)
+                    }
                     ForumWrap(spacing: 8) {
                         ForEach(tags) { tag in
                             ForumTagToggle(
@@ -341,6 +346,7 @@ struct ForumEditTagsSheet: View {
                         dismiss()
                     }
                     .tint(Palette.signal)
+                    .disabled(tags.isEmpty)
                 }
             }
         }
