@@ -39,8 +39,10 @@ describe("permission bitfields", () => {
 
   it("gives Manage Emoji to owner and Administrator, never to Manager, @everyone or Moderator", () => {
     expect(Permission.MANAGE_EMOJI).toBe(1n << 28n);
-    // Bits 26 and 27 are reserved for the call soundboard.
-    expect(PERMISSION_ALL & (3n << 26n)).toBe(0n);
+    // Bits 26 and 27 are the call soundboard's, and still in ALL.
+    expect(PERMISSION_ALL & (3n << 26n)).toBe(
+      Permission.USE_SOUNDBOARD | Permission.MANAGE_SOUNDBOARD,
+    );
     expect(hasPermission(PERMISSION_ALL, Permission.MANAGE_EMOJI)).toBe(true);
     expect(
       hasPermission(defaultRolePermissions("admin"), Permission.MANAGE_EMOJI),

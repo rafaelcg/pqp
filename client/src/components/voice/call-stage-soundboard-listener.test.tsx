@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cameraTileMoreItems } from "@/components/voice/call-menu-items";
 import { resetSoundboardMarksForTests, setSoundboardUserMuted, showSoundboardMark } from "@/lib/soundboard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -244,11 +245,16 @@ describe("a camera tile's overlay", () => {
         youLabel="(you)"
       />,
     );
-    const open = host!.querySelector<HTMLButtonElement>('[data-testid="peer-audio-open"]')!;
-    expect(open).not.toBeNull();
-    act(() => open.click());
-    const row = document.querySelector('[data-testid="peer-audio-soundboard"]');
-    expect(row).not.toBeNull();
+    // The tile's sound moved to its "⋯" (the call stage redesign), and the
+    // soundboard switch with it: a menu with nothing else in it still shows.
+    expect(host!.querySelector('[data-testid="tile-more"]')).not.toBeNull();
+    const items = cameraTileMoreItems((key) => key, {
+      name: "Ana",
+      soundboard: { muted: false, onToggle: () => {} },
+    });
+    expect(items.map((item) => [item.id, item.checked])).toEqual([
+      ["soundboard", true],
+    ]);
   });
 });
 
