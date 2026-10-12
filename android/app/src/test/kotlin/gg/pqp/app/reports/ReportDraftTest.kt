@@ -65,7 +65,7 @@ class ReportDraftTest {
     @Test
     fun `the subject types are the ones the schema discriminates on`() {
         assertEquals(
-            listOf("message", "user", "server"),
+            listOf("message", "user", "server", "story"),
             RepoSources.enumValues(shared, "reportSubjectTypeSchema"),
         )
     }

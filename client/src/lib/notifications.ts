@@ -602,7 +602,12 @@ export function describeActivity(
   channelId: string,
   counts: { count: number; mentions: number },
   /** The live frame's own redacted preview, when it carried one. */
-  preview?: { preview?: string; authorName?: string; authorId?: string },
+  preview?: {
+    preview?: string;
+    authorName?: string;
+    authorId?: string;
+    systemKind?: "nudge";
+  },
 ): ChannelActivity {
   const known = directory.get(channelId);
   return {
@@ -620,6 +625,7 @@ export function describeActivity(
     preview: preview?.preview,
     authorName: preview?.authorName,
     authorId: preview?.authorId,
+    ...(preview?.systemKind ? { systemKind: preview.systemKind } : {}),
   };
 }
 
@@ -695,6 +701,13 @@ export interface ChannelActivity {
   preview?: string;
   authorName?: string;
   authorId?: string;
+  /**
+   * The message was a system message: `nudge` (chamar a atenção). Its card and
+   * banner say so instead of the bare `📳` preview, and it plays the nudge cue
+   * instead of the message one. Level, mute and Do Not Disturb apply exactly as
+   * for a message.
+   */
+  systemKind?: "nudge";
 }
 
 /**
@@ -909,6 +922,10 @@ function describe(burst: Burst): { title: string; body: string } {
       title,
       body: translateMessage("notify.mentions", { count: burst.mentions }),
     };
+  }
+  // Not content: "this was a nudge" is the whole of it.
+  if (activity.systemKind === "nudge" && burst.count <= 1) {
+    return { title, body: translateMessage("nudge.notifyBody") };
   }
   return {
     title,
@@ -1170,6 +1187,9 @@ function flush(channelId: string): void {
   // no cue; only a mention plays.
   if (burst.mentions > 0) {
     playActivitySound(burst.mentions);
+  } else if (burst.activity.systemKind === "nudge") {
+    // Chamar a atenção has its own sound, and its own switch.
+    playCue("nudge");
   } else if (
     burst.activity.kind === "dm" ||
     burst.activity.kind === "group"
@@ -1285,7 +1305,14 @@ export function notifyChannelActivity(
         kind: activity.kind ?? "server",
         count: activity.count,
         mentions: activity.mentions,
-        preview: state.previewInApp ? activity.preview : undefined,
+        // A nudge's line is not message content, so it shows even with
+        // previews off: the card would otherwise read as an empty message.
+        preview:
+          activity.systemKind === "nudge"
+            ? translateMessage("nudge.toast")
+            : state.previewInApp
+              ? activity.preview
+              : undefined,
         authorName: activity.authorName,
       });
     }

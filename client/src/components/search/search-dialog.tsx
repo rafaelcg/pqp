@@ -28,6 +28,11 @@ interface SearchDialogProps {
   onClose: () => void;
   /** Fired when a result is opened, so a mobile sidebar can get out of the way. */
   onNavigate?: () => void;
+  /**
+   * Words to search for as the dialog opens: the Ctrl/Cmd+K switcher's last
+   * row hands its query over, so nobody types it twice.
+   */
+  initialQuery?: string;
 }
 
 export function SearchDialog({
@@ -36,6 +41,7 @@ export function SearchDialog({
   serverName,
   onClose,
   onNavigate,
+  initialQuery = "",
 }: SearchDialogProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -53,6 +59,12 @@ export function SearchDialog({
 
   // Reopening starts a new search rather than resurrecting the last one: the
   // channel you were looking for is rarely the one you were looking for before.
+  useEffect(() => {
+    if (open && initialQuery) {
+      setQuery(initialQuery);
+    }
+  }, [open, initialQuery]);
+
   useEffect(() => {
     if (!open) {
       setQuery("");

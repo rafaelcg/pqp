@@ -34,6 +34,51 @@ func callStageLayout(remoteCount: Int, hasScreenShare: Bool) -> CallStageLayout 
     return remoteCount == 1 ? .spotlight : .grid
 }
 
+/// Whether the call stage may turn with the phone.
+///
+/// The app is portrait-only (`WatchOrientation`), and until this the call was
+/// too: turning the phone sideways left the whole stage drawn on its side,
+/// cameras included. A call rating said it in so many words ("a tela da
+/// câmera não deita quando deita o celular"). A face fills the screen in the
+/// 1:1 spotlight, which is a stage by the same definition as a fullscreen
+/// share, so it holds the unlock while there is a picture to turn: somebody's
+/// camera, ours or theirs. The screen-share and grid layouts stay upright;
+/// their thumbnails and rail are laid out for a tall screen, and a shared
+/// screen already has its own fullscreen that turns.
+func callStageAllowsLandscape(
+    layout: CallStageLayout,
+    hasRemoteCamera: Bool,
+    isCameraOn: Bool
+) -> Bool {
+    layout == .spotlight && (hasRemoteCamera || isCameraOn)
+}
+
+/// Whether a camera filling a box should crop to fill it, or be drawn whole.
+///
+/// THE QUALITY HALF OF THE SAME RATING. The spotlight drew every camera with
+/// aspect-fill. A laptop webcam is 16:9 landscape and an upright phone is
+/// roughly 9:19.5, so filling the phone kept a strip about a third of the
+/// picture wide and blew it up nearly four times: a 720p camera arrived as a
+/// soft, cropped close-up, which reads as "terrible camera quality" however
+/// many bits the sender spent.
+///
+/// So: crop only when the picture and the box are the same shape (both
+/// upright, or both on their side), which is the FaceTime case of a phone
+/// calling a phone and costs a sliver at the edges. When the shapes disagree,
+/// draw it whole with bars. Turning the phone (above) then lets a landscape
+/// camera fill a landscape screen.
+///
+/// Before the first frame there is no size to judge, and fill is what the
+/// tile has always done, so nothing changes until there is a picture.
+func cameraStageShouldFill(video: CGSize, container: CGSize) -> Bool {
+    guard video.width > 0, video.height > 0,
+          container.width > 0, container.height > 0
+    else { return true }
+    let videoIsLandscape = video.width > video.height
+    let containerIsLandscape = container.width > container.height
+    return videoIsLandscape == containerIsLandscape
+}
+
 /// "0:07", "12:41", "1:05:09" — a call timer, never a timestamp.
 ///
 /// Hand-rolled rather than a `DateComponentsFormatter`: the formatter localises

@@ -265,6 +265,43 @@ final class CommunityHomeMediaDecisionTests: XCTestCase {
         )
     }
 
+    func testTheVideoCoverDecodesAndAnOlderPayloadStillDoes() throws {
+        let withCover = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4",
+             "posterUrl":"https://s.example/cover.jpg?sig=1"}
+            """.utf8)
+        let media = try JSONDecoder().decode(CommunityHomeMedia.self, from: withCover)
+        XCTAssertEqual(media.posterURL?.absoluteString, "https://s.example/cover.jpg?sig=1")
+        // The cover is only a picture to show first: the file still plays.
+        XCTAssertEqual(media.inlineVideoURL?.absoluteString, "https://s.example/a.mp4")
+
+        let older = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4"}
+            """.utf8)
+        XCTAssertNil(try JSONDecoder().decode(CommunityHomeMedia.self, from: older).posterURL)
+
+        let explicitNull = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","posterUrl":null}
+            """.utf8)
+        XCTAssertNil(try JSONDecoder().decode(CommunityHomeMedia.self, from: explicitNull).posterURL)
+
+        // A wrong-typed cover costs the cover, never the card.
+        let garbled = Data("""
+            {"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","posterUrl":42}
+            """.utf8)
+        let survivor = try JSONDecoder().decode(CommunityHomeMedia.self, from: garbled)
+        XCTAssertNil(survivor.posterURL)
+        XCTAssertEqual(survivor.inlineVideoURL?.absoluteString, "https://s.example/a.mp4")
+    }
+
+    func testAVideoCoverIsOnlyUsedWhenReadableAndOnlyOnAVideo() {
+        let cover = "https://s.example/cover.jpg"
+        XCTAssertNotNil(CommunityHomeMedia(kind: "video", url: "https://s.example/a.mp4", posterUrl: cover).posterURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "video", url: "https://s.example/a.mp4", posterUrl: "/relative.jpg").posterURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "video", url: "https://s.example/a.mp4", posterUrl: "file:///etc/hosts").posterURL)
+        XCTAssertNil(CommunityHomeMedia(kind: "image", url: "https://s.example/a.png", posterUrl: cover).posterURL)
+    }
+
     func testACommentThatIsOnlyAKlipyURLIsAGIF() {
         let url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
         XCTAssertEqual(comment(url).gifURL?.absoluteString, url)

@@ -17,6 +17,7 @@ export interface ServiceWorkerControls {
 
 type RegisterSW = (options: {
   onNeedRefresh?: () => void;
+  onNeedReload?: () => void;
   onRegisterError?: (error: unknown) => void;
   onRegisteredSW?: (
     swUrl: string,
@@ -264,6 +265,15 @@ export function registerServiceWorker(
         }
         updateSW = module.registerSW({
           onNeedRefresh,
+          // Without this, vite-plugin-pwa's prompt mode RELOADS THE PAGE when a
+          // worker this page did not register takes control (`installed` with
+          // `isExternal`, then `controlling` with `isUpdate`). With `skipWaiting`
+          // that is every deploy found by another tab, by the worker's own
+          // check or by the browser, and it reloaded pages in a call. When to
+          // reload is `update-policy.ts`'s decision; this only says a build is in.
+          // Bundles from before this line still reload that way, which is what
+          // rescues the 2026-09-23 to 09-29 tabs (`docs/PWA.md`).
+          onNeedReload: onNeedRefresh,
           onRegisterError: (error) => {
             console.warn("[pwa] service worker registration failed", error);
           },

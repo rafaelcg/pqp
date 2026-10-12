@@ -1,10 +1,13 @@
-import type {
-  CallRatingSummary,
-  CallTransport,
-  CreateCallRatingRequest,
-  MediaQualitySummary,
+import {
+  AUDIO_HEALTH_KINDS,
+  type AudioHealthSummary,
+  type CallRatingSummary,
+  type CallTransport,
+  type CreateCallRatingRequest,
+  type MediaQualitySummary,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 
 /**
  * Prompted call quality, written once per call and read only in aggregate.
@@ -15,6 +18,66 @@ import { getPool } from "../db.js";
  * bad wifi. What is useful is the average, the shape of the distribution, and
  * whether one transport is worse than the other; all three survive aggregation.
  */
+
+/**
+ * The audio self-repair's own report, tallied before the storage rule below
+ * throws a good call's `mediaQuality` away.
+ *
+ * WHY HERE AND NOT ONLY IN THE ROW. The row keeps `media_quality` for scores
+ * of 3 or less, which is right for a diagnostic read next to a complaint and
+ * wrong for the question this feature has to answer: did the repair work?
+ * A call that broke, healed itself and was rated 5 is the success case, and
+ * it is exactly the one the row forgets. So the counts are folded in here,
+ * every score, as bounded integers keyed by the five fixed kinds: nothing
+ * about who, nothing that grows. Since boot, in process, on
+ * `GET /api/admin/metrics` as `callRatings.audioHealthSinceBoot`, and one
+ * `voice.audioHealthRated` log line per rated call that saw anything.
+ */
+const audioHealthCounts = new Map<string, number>();
+
+function bump(key: string, by: number): void {
+  if (by > 0) {
+    audioHealthCounts.set(key, (audioHealthCounts.get(key) ?? 0) + by);
+  }
+}
+
+export function noteRatedAudioHealth(
+  rating: number,
+  transport: CallTransport,
+  summary: AudioHealthSummary | undefined,
+): void {
+  if (!summary) {
+    return;
+  }
+  const fields: Record<string, number | string> = { rating, transport };
+  for (const kind of AUDIO_HEALTH_KINDS) {
+    const counts = summary[kind];
+    if (!counts || counts.detected === 0) {
+      continue;
+    }
+    bump(`${kind}.calls`, 1);
+    if (rating <= 2) {
+      bump(`${kind}.lowRated`, 1);
+    }
+    for (const [field, value] of Object.entries(counts)) {
+      bump(`${kind}.${field}`, value);
+      fields[`${kind}.${field}`] = value;
+    }
+  }
+  if (Object.keys(fields).length > 2) {
+    logEvent("voice.audioHealthRated", fields);
+  }
+}
+
+/** Snapshot for metrics: only keys actually seen appear (bounded set). */
+export function callRatingAudioHealthCounts(): Record<string, number> {
+  return Object.fromEntries(audioHealthCounts);
+}
+
+/** Test seam. */
+export function resetCallRatingAudioHealthCounts(): void {
+  audioHealthCounts.clear();
+}
 
 export async function recordCallRating(
   userId: string,
@@ -49,6 +112,9 @@ export async function recordCallRating(
         : null,
     ],
   );
+  // Counted only once the row is stored, so a failed write (and the retry
+  // that follows it) never counts one call twice.
+  noteRatedAudioHealth(input.rating, input.transport, input.mediaQuality?.audioHealth);
 }
 
 interface SummaryRow {

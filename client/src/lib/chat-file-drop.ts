@@ -10,12 +10,19 @@ import type { FileDropMode } from "@/hooks/use-file-drop-zone";
  * is not a place for files at all, and the page-wide guard keeps the browser
  * from opening the file instead). Never "ignore and hope", because ignoring a
  * drop is how a browser ends up navigating away from a call.
+ *
+ * A FORUM has no composer of its own, but a file dropped on its list is
+ * almost always the start of a question ("this error, this screenshot"), so
+ * an accepted drop there opens Novo post with the file already attached. The
+ * forum adds one refusal of its own: new posts paused (the `forum_channels`
+ * flag off for the server), where replying in existing posts still works but
+ * starting one does not.
  */
 export type ChatDropVerdict =
   | { mode: Extract<FileDropMode, "accept"> }
   | {
       mode: Extract<FileDropMode, "refuse">;
-      reason: "attachmentsOff" | "cannotSend";
+      reason: "attachmentsOff" | "cannotSend" | "forumPaused";
     }
   | { mode: Extract<FileDropMode, "off"> };
 
@@ -31,14 +38,29 @@ export function chatDropVerdict(input: {
   streamChat: boolean;
   /** False only when we positively know this person may not post here. */
   canSend: boolean;
+  /**
+   * A forum only: whether new posts may be created here (`useForumConfig`).
+   * `null` while the answer is unknown, which is "off", not "paused".
+   */
+  forumPostingEnabled?: boolean | null;
 }): ChatDropVerdict {
+  const isForum = input.channelType === "forum";
   const isChat =
     input.channelType === "text" || isVoiceRoomChannelType(input.channelType);
-  if (!isChat || input.streamChat || input.attachmentsEnabled === null) {
+  if (!isChat && !isForum) {
+    return { mode: "off" };
+  }
+  if (input.streamChat || input.attachmentsEnabled === null) {
+    return { mode: "off" };
+  }
+  if (isForum && input.forumPostingEnabled == null) {
     return { mode: "off" };
   }
   if (!input.attachmentsEnabled) {
     return { mode: "refuse", reason: "attachmentsOff" };
+  }
+  if (isForum && input.forumPostingEnabled === false) {
+    return { mode: "refuse", reason: "forumPaused" };
   }
   if (!input.canSend) {
     return { mode: "refuse", reason: "cannotSend" };

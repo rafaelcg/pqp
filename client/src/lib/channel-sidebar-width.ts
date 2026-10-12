@@ -35,6 +35,22 @@
 
 const STORAGE_KEY = "pqp:channel-sidebar-width";
 
+/**
+ * Conversas: the conversation list keeps its own width. A WhatsApp-style row
+ * (name, preview, time, count) is cut at 256px, so it starts at 340 and a drag
+ * there does not move the channel column, and the reverse.
+ */
+export const CONVERSATION_SIDEBAR_SLOT: Required<SidebarWidthSlot> = {
+  key: "pqp:conversation-sidebar-width",
+  defaultWidth: 340,
+};
+
+/** Which stored width, and its default when nothing is stored. */
+export interface SidebarWidthSlot {
+  key?: string;
+  defaultWidth?: number;
+}
+
 /** `w-64`, the width the column has always had. Double click resets to it. */
 export const CHANNEL_SIDEBAR_DEFAULT_WIDTH = 256;
 
@@ -97,37 +113,45 @@ export function clampChannelSidebarWidth(
 export function parseStoredChannelSidebarWidth(
   raw: string | null,
   viewportWidth?: number,
+  defaultWidth: number = CHANNEL_SIDEBAR_DEFAULT_WIDTH,
 ): number {
   if (raw === null) {
-    return clampChannelSidebarWidth(CHANNEL_SIDEBAR_DEFAULT_WIDTH, viewportWidth);
+    return clampChannelSidebarWidth(defaultWidth, viewportWidth);
   }
   const trimmed = raw.trim();
   if (trimmed === "") {
-    return clampChannelSidebarWidth(CHANNEL_SIDEBAR_DEFAULT_WIDTH, viewportWidth);
+    return clampChannelSidebarWidth(defaultWidth, viewportWidth);
   }
   const value = Number(trimmed);
   if (!Number.isFinite(value)) {
-    return clampChannelSidebarWidth(CHANNEL_SIDEBAR_DEFAULT_WIDTH, viewportWidth);
+    return clampChannelSidebarWidth(defaultWidth, viewportWidth);
   }
   return clampChannelSidebarWidth(value, viewportWidth);
 }
 
-export function loadChannelSidebarWidth(viewportWidth?: number): number {
+export function loadChannelSidebarWidth(
+  viewportWidth?: number,
+  { key = STORAGE_KEY, defaultWidth = CHANNEL_SIDEBAR_DEFAULT_WIDTH }: SidebarWidthSlot = {},
+): number {
   try {
     return parseStoredChannelSidebarWidth(
-      localStorage.getItem(STORAGE_KEY),
+      localStorage.getItem(key),
       viewportWidth,
+      defaultWidth,
     );
   } catch {
     // Storage denied (privacy mode, an Electron partition with no quota). The
     // width the column has always had is a working app.
-    return clampChannelSidebarWidth(CHANNEL_SIDEBAR_DEFAULT_WIDTH, viewportWidth);
+    return clampChannelSidebarWidth(defaultWidth, viewportWidth);
   }
 }
 
-export function saveChannelSidebarWidth(width: number): void {
+export function saveChannelSidebarWidth(
+  width: number,
+  { key = STORAGE_KEY }: Pick<SidebarWidthSlot, "key"> = {},
+): void {
   try {
-    localStorage.setItem(STORAGE_KEY, String(Math.round(width)));
+    localStorage.setItem(key, String(Math.round(width)));
   } catch {
     // The drag still works for the rest of the session; only the memory of it
     // is lost. Not worth surfacing.

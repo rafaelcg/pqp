@@ -305,3 +305,85 @@ describe("a failed install says why", () => {
     expect(swBuildScript("x", { navigation: false })).not.toContain("PQP_SW_INSTALL_FAILED");
   });
 });
+
+describe("the worker looks for the next build itself", () => {
+  function workerScope(stored: string | null, now: { value: number }) {
+    const listeners: Record<string, Listener[]> = {};
+    const store = new Map<string, string>();
+    if (stored !== null) {
+      store.set("/__pqp_last_update_check", stored);
+    }
+    const updates = { count: 0 };
+    const FakeDate = { now: () => now.value };
+    const scope: Record<string, unknown> = {
+      location: { origin: "https://pqp.gg" },
+      caches: {
+        match: async () => undefined,
+        open: async () => ({
+          match: async (key: string) =>
+            store.has(key) ? { text: async () => store.get(key) } : undefined,
+          put: async (key: string, response: FakeResponse) => {
+            store.set(key, response.body);
+          },
+        }),
+      },
+      registration: {
+        update: async () => {
+          updates.count += 1;
+        },
+      },
+      fetch: async () => new FakeResponse("network"),
+      Response: FakeResponse,
+      URL,
+      RegExp,
+      Promise,
+      Date: FakeDate,
+      setTimeout,
+      clearTimeout,
+      addEventListener: (type: string, listener: Listener) => {
+        (listeners[type] ??= []).push(listener);
+      },
+      clients: { matchAll: async () => [] },
+    };
+    scope.self = scope;
+    vm.runInNewContext(swBuildScript("abc123", { updateEveryMs: 1_000 }), scope);
+    const extended: Promise<unknown>[] = [];
+    const fetchEvent = async () => {
+      for (const listener of listeners.fetch ?? []) {
+        listener({
+          request: { url: "https://pqp.gg/assets/x.js", mode: "cors", method: "GET" },
+          respondWith: () => {},
+          waitUntil: (promise: Promise<unknown>) => extended.push(promise),
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    };
+    return { fetchEvent, updates, store, extended };
+  }
+
+  it("checks on a fetch, then not again until the interval has passed", async () => {
+    const now = { value: 10_000 };
+    const w = workerScope(null, now);
+    await w.fetchEvent();
+    expect(w.updates.count).toBe(1);
+    // The check holds the worker alive (it may be stopped once the fetch is answered).
+    expect(w.extended).toHaveLength(1);
+    expect(w.store.get("/__pqp_last_update_check")).toBe("10000");
+    now.value += 500;
+    await w.fetchEvent();
+    expect(w.updates.count).toBe(1);
+    now.value += 600;
+    await w.fetchEvent();
+    expect(w.updates.count).toBe(2);
+  });
+
+  it("remembers the last check across a worker restart", async () => {
+    const now = { value: 10_000 };
+    const w = workerScope("9500", now);
+    await w.fetchEvent();
+    expect(w.updates.count).toBe(0);
+    now.value = 10_600;
+    await w.fetchEvent();
+    expect(w.updates.count).toBe(1);
+  });
+});

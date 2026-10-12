@@ -4,8 +4,15 @@ import {
   DEFAULT_VIDEO_QUALITY,
   screenBitrateFor,
   screenScaleFactor,
+  SCREEN_60FPS_BITRATE_FACTOR,
+  screenFpsTier,
   type VideoQuality,
 } from "./video-quality";
+import {
+  DEFAULT_SHARE_PRIORITY,
+  sharePriorityDegradation,
+  type SharePriority,
+} from "./share-priority";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
 import type { ShareGuardCeiling } from "./share-high-motion-guard";
 import { emitNetworkHint } from "./network-hints";
@@ -242,6 +249,19 @@ export interface PeerConnectionManager {
    */
   setScreenQuality(quality: VideoQuality): void;
   /**
+   * What the screen senders give up first under pressure, frames or pixels
+   * (`share-priority.ts`). Re-tunes the live senders in place. Optional so a
+   * test double need not know about it.
+   */
+  setScreenPriority?(priority: SharePriority): void;
+  /**
+   * Re-read the capture's delivered frame rate and re-tune every screen sender.
+   * For a frame-rate change made in place with `applyConstraints`: nothing else
+   * here changed, so `setScreenQuality` with the same rung is a no-op and the
+   * senders would keep the old `maxFramerate` and ceiling.
+   */
+  retuneScreenSenders?(): void;
+  /**
    * `share_high_motion_guard`: hold the screen senders under a frame-rate
    * ceiling and a bitrate scale the presenter's guard chose, and re-tune them.
    * Null lifts it. In place on the live senders, like the quality above.
@@ -351,6 +371,22 @@ const SCREEN_UPLOAD_BUDGET_BPS = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS;
 const SCREEN_MAX_BITRATE_BPS = 4_000_000;
 
 /**
+ * The per-sender cap for a capture running at `fps`.
+ *
+ * Scaled with the ladder for the same reason the ladder is
+ * (`SCREEN_60FPS_BITRATE_FACTOR`): 4 Mbps was argued for a 1080p30 picture, and
+ * a 60 fps share under it was half the bits per frame, which is the 720p-to-360p
+ * swing a 1:1 call reported. 6 Mbps at 60 fps still sits under the 5 to 10 Mbps
+ * uplink that argument was about, and from two viewers up the measured budget
+ * binds long before it does.
+ */
+function meshScreenMaxBitrate(fps: 30 | 60): number {
+  return fps === 60
+    ? Math.round(SCREEN_MAX_BITRATE_BPS * SCREEN_60FPS_BITRATE_FACTOR)
+    : SCREEN_MAX_BITRATE_BPS;
+}
+
+/**
  * What one screen sender is allowed, given the room and the chosen quality.
  *
  * Three terms, in the order they matter:
@@ -396,8 +432,33 @@ const SCREEN_MAX_BITRATE_BPS = 4_000_000;
  */
 export function chosenScreenCeilingBps(
   quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+  /** The capture's frame-rate tier; a 60 fps share is allowed more. */
+  fps: 30 | 60 = 30,
 ): number {
-  return Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
+  return Math.min(screenBitrateFor(quality, fps), meshScreenMaxBitrate(fps));
+}
+
+/**
+ * The frame-rate tier a sampled screen sender was CONFIGURED for.
+ *
+ * Not the encoder's output rate alone: a 60 fps capture under pressure, or
+ * under the sharpness priority, can encode at 30 while its ceiling is still the
+ * 60 fps one, and reading 30 there compares the sender against the wrong limit.
+ * So a ceiling above the 30 fps one for this rung also means 60.
+ */
+export function sampledScreenFpsTier(
+  sample: { fps?: number | null; ceilingKbps?: number | null } | undefined,
+  quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+): 30 | 60 {
+  if (!sample) {
+    return 30;
+  }
+  if (screenFpsTier(sample.fps) === 60) {
+    return 60;
+  }
+  const ceilingBps = (sample.ceilingKbps ?? 0) * 1000;
+  // 5 % over, so kbps rounding on the way into the sample is not a tier.
+  return ceilingBps > chosenScreenCeilingBps(quality, 30) * 1.05 ? 60 : 30;
 }
 
 /**
@@ -488,8 +549,10 @@ export function meshScreenBitrate(
   budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
   /** What a camera beside it asked for, in bps. 0 when there is none. */
   cameraChosenBps = 0,
+  /** The capture's frame-rate tier. */
+  fps: 30 | 60 = 30,
 ): number {
-  const chosen = Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
+  const chosen = chosenScreenCeilingBps(quality, fps);
   return splitShare(peerCount, chosen, cameraChosenBps, budgetBps);
 }
 
@@ -587,6 +650,8 @@ async function tuneScreenSender(
   cameraChosenBps = 0,
   /** `share_high_motion_guard`'s current step, null when it has none. */
   guard: ShareGuardCeiling | null = null,
+  /** Frames or pixels first (`share-priority.ts`). */
+  priority: SharePriority = DEFAULT_SHARE_PRIORITY,
 ): Promise<void> {
   if (!sender) {
     return;
@@ -599,20 +664,21 @@ async function tuneScreenSender(
     if (!params.encodings || params.encodings.length === 0) {
       params.encodings = [{}];
     }
-    params.degradationPreference = "maintain-framerate";
+    params.degradationPreference = sharePriorityDegradation(priority);
     // Read per call rather than once per share: a surface switch or a resized
     // window changes the capture under a live sender, and every re-tune (a
     // joiner, a leaver, a new choice) is then a chance to correct the divisor.
     const captureHeight = sender.track?.getSettings?.().height ?? null;
     const scale = screenScaleFactor(quality, captureHeight);
+    const delivered = publishMaxFrameRateFromTrack(sender.track ?? {});
     for (const encoding of params.encodings) {
       const ceiling = meshScreenBitrate(
         peerCount,
         quality,
         budgetBps,
         cameraChosenBps,
+        delivered,
       );
-      const delivered = publishMaxFrameRateFromTrack(sender.track ?? {});
       // The guard only ever lowers: its level is a ceiling on top of what the
       // capture delivers, never a promise of more.
       encoding.maxBitrate = guard
@@ -667,6 +733,7 @@ export function createPeerConnectionManager(
         screenBudgetBps,
         cameraChosenBps(),
         screenGuardCeiling,
+        screenPriority,
       );
     }
   }
@@ -799,7 +866,12 @@ export function createPeerConnectionManager(
   function screenChosenBps(): number {
     return localScreenStream === null
       ? 0
-      : Math.min(screenBitrateFor(screenQuality), SCREEN_MAX_BITRATE_BPS);
+      : chosenScreenCeilingBps(
+          screenQuality,
+          publishMaxFrameRateFromTrack(
+            localScreenStream.getVideoTracks?.()[0] ?? {},
+          ),
+        );
   }
 
   /** What the camera is asking for right now, or 0 when it is off. */
@@ -845,6 +917,7 @@ export function createPeerConnectionManager(
   let screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
   /** `share_high_motion_guard`'s step for this share. Null: the guard is off or at the top. */
   let screenGuardCeiling: ShareGuardCeiling | null = null;
+  let screenPriority: SharePriority = DEFAULT_SHARE_PRIORITY;
   let screenBudgetTimer: ReturnType<typeof setInterval> | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
@@ -1196,6 +1269,7 @@ export function createPeerConnectionManager(
           screenBudgetBps,
           cameraChosenBps(),
           screenGuardCeiling,
+          screenPriority,
         );
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
@@ -1567,6 +1641,7 @@ export function createPeerConnectionManager(
             screenBudgetBps,
             cameraChosenBps(),
             screenGuardCeiling,
+            screenPriority,
           );
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
@@ -1668,6 +1743,20 @@ export function createPeerConnectionManager(
       screenQuality = quality;
       // The camera's slice is derived from what the screen asked for, so a
       // rung change moves both.
+      retuneAllVideoSenders();
+    },
+
+    setScreenPriority(priority: SharePriority) {
+      if (priority === screenPriority) {
+        return;
+      }
+      screenPriority = priority;
+      retuneAllScreenSenders();
+    },
+
+    retuneScreenSenders() {
+      // The frame rate moves the screen's ceiling, and the camera's slice is
+      // derived from it, so both are re-tuned.
       retuneAllVideoSenders();
     },
 

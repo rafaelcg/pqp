@@ -1,11 +1,13 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { desktopShareCapabilities } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import {
   ensureLinuxShellShareAudio,
   linuxShellShareAudioReady,
 } from "@/lib/linux-shell-share-audio";
 import {
+  linuxShareAudioHintContext,
   rememberLinuxShareAudioHint,
   shouldShowLinuxShareAudioHint,
 } from "@/lib/linux-share-audio-hint";
@@ -55,6 +57,7 @@ export function LinuxShareAudioHint({
     };
   }, [isDesktopShell, eligible]);
   const show = eligible && visible && open && !shellCarriesSound;
+  const context = linuxShareAudioHintContext(isDesktopShell, desktopShareCapabilities());
 
   if (!show) {
     return null;
@@ -75,8 +78,9 @@ export function LinuxShareAudioHint({
           // Taken from the prop rather than `desktopContext()`: the shell
           // flag is what makes this branch reachable from a browser test,
           // the same reason `screenCaptureEnvironment` takes its parts as
-          // arguments instead of reading `isDesktopApp()` itself.
-          isDesktopShell ? { context: "desktop" } : undefined,
+          // arguments instead of reading `isDesktopApp()` itself. The
+          // Flatpak build has its own copy (`_flatpak`).
+          context ? { context } : undefined,
         )}
       </span>
       <button

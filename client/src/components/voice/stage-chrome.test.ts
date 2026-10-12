@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDLE_CHROME_DELAY_MS, createIdleChrome } from "@/hooks/use-idle-chrome";
 import {
+  chromeHoverAt,
   isKeyboardFocus,
   stageChromeAttentionKey,
   stageChromeHold,
@@ -126,6 +127,53 @@ describe("isKeyboardFocus", () => {
 
   it("is false for something that is not an element", () => {
     expect(isKeyboardFocus(null)).toBe(false);
+  });
+});
+
+describe("chromeHoverAt", () => {
+  /** An element nested in the given `data-call-chrome` groups, innermost last. */
+  class FakeElement {
+    constructor(private readonly groups: readonly string[]) {}
+    closest(selector: string): FakeElement | null {
+      return this.groups.some((group) =>
+        selector.includes(`[data-call-chrome="${group}"]`),
+      )
+        ? this
+        : null;
+    }
+  }
+  beforeEach(() => {
+    vi.stubGlobal("Element", FakeElement);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const at = (...groups: string[]) =>
+    chromeHoverAt(new FakeElement(groups) as unknown as Element);
+
+  // The bug: the mute icon was removed under the pointer, so no leave ever
+  // came, and the next element the pointer reached (the picture) is what has
+  // to clear the hold.
+  it("clears both holds over the picture", () => {
+    expect(at()).toEqual({ controls: false, tileControls: false });
+  });
+
+  it("holds for the bar, the title overlay and the way back to the grid", () => {
+    expect(at("bar").controls).toBe(true);
+    expect(at("overlay").controls).toBe(true);
+    expect(at("back").controls).toBe(true);
+    expect(at("bar").tileControls).toBe(false);
+  });
+
+  it("holds for a tile's own corner controls, apart from the bar", () => {
+    expect(at("tile")).toEqual({ controls: false, tileControls: true });
+  });
+
+  it("holds nothing for something that is not an element", () => {
+    expect(chromeHoverAt(null)).toEqual({
+      controls: false,
+      tileControls: false,
+    });
   });
 });
 

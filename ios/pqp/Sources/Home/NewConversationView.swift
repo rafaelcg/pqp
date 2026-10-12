@@ -185,7 +185,8 @@ struct NewConversationView: View {
                 error = apiError.errorDescription
             }
         } catch {
-            self.error = error.localizedDescription
+            // A keystroke cancels the search before it; that is not a failure.
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         searching = false
     }
@@ -219,7 +220,7 @@ struct NewConversationView: View {
         } catch {
             // The refusal here is usually a privacy setting or a block, and the
             // server's own wording is better than anything invented locally.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }

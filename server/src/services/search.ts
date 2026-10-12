@@ -107,6 +107,7 @@ interface SearchRow {
   id: string;
   channel_id: string;
   channel_name: string;
+  parent_channel_id: string | null;
   author_id: string;
   author_name: string;
   author_username: string | null;
@@ -159,6 +160,12 @@ export async function searchMessages(
      hits AS (
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at,
               c.name AS channel_name,
+              -- A thread or a forum post: the channel it sits under, so a
+              -- hit can open the forum (or the text channel) with the post on
+              -- top. Null for every other channel, whose parent_id is at most
+              -- a category, which is not where a hit opens.
+              CASE WHEN c.type = 'thread' THEN c.parent_id END
+                AS parent_channel_id,
               u.display_name AS author_name,
               u.username AS author_username,
               u.discriminator AS author_discriminator,
@@ -176,7 +183,8 @@ export async function searchMessages(
        ORDER BY rank DESC, m.created_at DESC, m.id DESC
        LIMIT $4
      )
-     SELECT h.id, h.channel_id, h.channel_name, h.author_id, h.author_name,
+     SELECT h.id, h.channel_id, h.channel_name, h.parent_channel_id,
+            h.author_id, h.author_name,
             h.author_username, h.author_discriminator, h.author_avatar_url,
             h.created_at, h.rank,
             -- Microseconds, explicit UTC, unambiguous to a timestamptz cast
@@ -211,6 +219,7 @@ export async function searchMessages(
       messageId: row.id,
       channelId: row.channel_id,
       channelName: row.channel_name,
+      parentChannelId: row.parent_channel_id,
       authorId: row.author_id,
       authorName: row.author_name,
       authorTag: formatUserTag(row.author_username, row.author_discriminator),

@@ -262,6 +262,12 @@ function PlatformList({ href }: { href: (id: AssetId) => string }) {
             label={t("download.linux.deb")}
             ariaLabel={t("download.linux.deb.full")}
           />
+          <Dot />
+          <RowLink
+            href={href("linux-flatpak")}
+            label={t("download.linux.flatpak")}
+            ariaLabel={t("download.linux.flatpak.full")}
+          />
         </PlatformRow>
         <PlatformRow name={t("downloadPage.ios")}>
           <Link to="/beta" className={QUIET_LINK}>

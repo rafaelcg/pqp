@@ -393,12 +393,12 @@ test("a voice channel screen share arrives at the size the menu names", async ({
   const pair = await seedVoiceServer("sq-rx-a", "sq-rx-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 
@@ -409,6 +409,18 @@ test("a voice channel screen share arrives at the size the menu names", async ({
       watcher.page.getByText(`${pair.hostName} is presenting`),
     ).toBeVisible({ timeout: 30_000 });
     await paintNoise(page);
+    // Wait for the share to be DECODING at the watcher before measuring the
+    // first rung. "Is presenting" is the roster; the first frames come after
+    // the subscription and the decoder start, and on a busy runner that took
+    // longer than SETTLE_MS (CI, 2026-10-12: Auto measured 0 frames, nullxnull,
+    // and every later rung was fine). The measurement below is unchanged; this
+    // only stops it from starting before there is anything to measure.
+    await expect
+      .poll(async () => (await receivedVideo(watcher.page, 1_000)).framesDecoded, {
+        timeout: 30_000,
+        message: "the share's first frames reach the watcher",
+      })
+      .toBeGreaterThan(0);
 
     const table: string[] = [];
     const measured: Record<string, Received> = {};

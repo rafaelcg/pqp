@@ -81,6 +81,7 @@ function stateFor(overrides: Partial<VoiceState>): VoiceState {
     errorKind: null,
     notice: null,
     micFallback: null,
+    audioHealthPrompt: null,
     voiceChannelId: CHANNEL,
     self: null,
     speakingPeerIds: [],

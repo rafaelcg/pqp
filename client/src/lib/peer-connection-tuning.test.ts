@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  chosenScreenCeilingBps,
   createPeerConnectionManager,
+  sampledScreenFpsTier,
   meshScreenBitrate,
 } from "./peer-connection-manager";
 import {
@@ -968,8 +970,9 @@ describe("share_high_motion_guard on the mesh", () => {
     await manager.setLocalScreenStream(sixtyFpsStream("screen"));
     const params = lastParams(screenSenders()[0]!);
     expect(params?.encodings[0]?.maxFramerate).toBe(60);
+    // A 60 fps capture is allowed the 60 fps ceiling.
     expect(params?.encodings[0]?.maxBitrate).toBe(
-      meshScreenBitrate(1, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      meshScreenBitrate(1, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS, 0, 60),
     );
     manager.dispose();
   });
@@ -1031,5 +1034,109 @@ describe("share_high_motion_guard on the mesh", () => {
     // The fake sender has no getStats; a real one does. Either way: no throw.
     expect(await manager.getScreenSenderReports?.()).toEqual([]);
     manager.dispose();
+  });
+});
+
+describe("a 60 fps share on the mesh, and what it gives up first", () => {
+  /** A capture whose delivered frame rate the test can move, like applyConstraints. */
+  function captureAt(fps: number) {
+    const settings = { width: 1920, height: 1080, frameRate: fps };
+    const track = { id: "screen", kind: "video", getSettings: () => settings };
+    const stream = {
+      id: "screen",
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+    return { stream, settings };
+  }
+
+  it("allows a 60 fps share half again what the same rung gets at 30", () => {
+    expect(chosenScreenCeilingBps("auto", 30)).toBe(3_000_000);
+    expect(chosenScreenCeilingBps("auto", 60)).toBe(4_500_000);
+    expect(chosenScreenCeilingBps("720p", 60)).toBe(5_250_000);
+    // The per-sender cap scales too, and still binds a 1080p choice.
+    expect(chosenScreenCeilingBps("1080p", 30)).toBe(4_000_000);
+    expect(chosenScreenCeilingBps("1080p", 60)).toBe(6_000_000);
+  });
+
+  it("still lets a crowded room's budget win over a 60 fps share", () => {
+    expect(meshScreenBitrate(4, "auto", DEFAULT_SCREEN_UPLOAD_BUDGET_BPS, 0, 60)).toBe(
+      Math.round(DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 4),
+    );
+  });
+
+  it("gives a 1:1 call's 60 fps share the 60 fps ceiling, holding frames by default", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(captureAt(60).stream);
+    const params = lastParams(screenSenders()[0]!);
+    expect(params?.encodings[0]?.maxBitrate).toBe(4_500_000);
+    expect(params?.encodings[0]?.maxFramerate).toBe(60);
+    expect(params?.degradationPreference).toBe("maintain-framerate");
+    manager.dispose();
+  });
+
+  it("picks up a frame rate changed in place, which a same-rung re-tune never did", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    const { stream, settings } = captureAt(30);
+    await manager.setLocalScreenStream(stream);
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxFramerate).toBe(30);
+
+    settings.frameRate = 60;
+    manager.retuneScreenSenders?.();
+    await Promise.resolve();
+    const params = lastParams(screenSenders()[0]!);
+    expect(params?.encodings[0]?.maxFramerate).toBe(60);
+    expect(params?.encodings[0]?.maxBitrate).toBe(4_500_000);
+    manager.dispose();
+  });
+
+  it("holds resolution instead when sharpness is chosen, live and both ways", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(captureAt(60).stream);
+
+    manager.setScreenPriority?.("detail");
+    await Promise.resolve();
+    expect(lastParams(screenSenders()[0]!)?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+
+    manager.setScreenPriority?.("motion");
+    await Promise.resolve();
+    expect(lastParams(screenSenders()[0]!)?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
+    manager.dispose();
+  });
+
+  it("carries the priority to a share that starts after it", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setScreenPriority?.("detail");
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(captureAt(30).stream);
+    expect(lastParams(screenSenders()[0]!)?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+    manager.dispose();
+  });
+});
+
+describe("the tier a sampled screen sender was configured for", () => {
+  it("is 60 when the encoder is putting out 60", () => {
+    expect(sampledScreenFpsTier({ fps: 59, ceilingKbps: 3000 }, "auto")).toBe(60);
+  });
+
+  it("stays 60 when a 60 fps share is encoding slower, read off its ceiling", () => {
+    // Sharpness priority, or a squeezed link: 28 fps out, 4.5 Mbps ceiling.
+    expect(sampledScreenFpsTier({ fps: 28, ceilingKbps: 4500 }, "auto")).toBe(60);
+  });
+
+  it("is 30 for a 30 fps share at its own ceiling, or with nothing to read", () => {
+    expect(sampledScreenFpsTier({ fps: 30, ceilingKbps: 3000 }, "auto")).toBe(30);
+    expect(sampledScreenFpsTier({ fps: 30, ceilingKbps: null }, "auto")).toBe(30);
+    expect(sampledScreenFpsTier(undefined, "auto")).toBe(30);
   });
 });

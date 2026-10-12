@@ -80,6 +80,13 @@ function canExcludeOwnAudioFromArg() {
  */
 const canExcludeOwnAudio = canExcludeOwnAudioFromArg();
 
+/**
+ * Main says this shell runs inside a Flatpak (`lib/flatpak.js`), where it
+ * builds no Linux share audio bus. Missing means an older main, which is never
+ * a Flatpak build that knows about this, so "no".
+ */
+const runningInFlatpak = argvValue("--pqp-flatpak=") === "1";
+
 const SHARE_CAPABILITIES = Object.freeze({
   displayMedia: true,
   systemAudio:
@@ -107,7 +114,12 @@ const SHARE_CAPABILITIES = Object.freeze({
    * the new client opens). Whether it is ON is the runtime flag's business,
    * and whether this machine has `pactl` is `linuxShareAudioStatus()`'s.
    */
-  linuxShareAudio: process.platform === "linux",
+  linuxShareAudio: process.platform === "linux" && !runningInFlatpak,
+  /**
+   * This shell is the Flatpak build. The page uses it for copy only: why a
+   * Linux share carries no sound here, and where to get the build that can.
+   */
+  flatpak: runningInFlatpak,
   /**
    * This binary can answer `fullscreenAppState()`: whether Windows says a
    * Direct3D app holds the display in exclusive fullscreen

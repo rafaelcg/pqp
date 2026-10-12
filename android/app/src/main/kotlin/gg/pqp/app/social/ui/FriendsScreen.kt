@@ -105,6 +105,11 @@ fun FriendsScreen(
      */
     api: ApiClient,
     onOpenConversation: (DmSummary) -> Unit,
+    /**
+     * Conversas phone tabs: Friends is a screen opened from the Conversas
+     * header rather than a tab, so it has a way back. Null as a tab.
+     */
+    onBack: (() -> Unit)? = null,
 ) {
     val data by social.friends.collectAsStateWithLifecycle()
     val loading by social.loadingFriends.collectAsStateWithLifecycle()
@@ -183,6 +188,13 @@ fun FriendsScreen(
             ) {
                 LargeTopAppBar(
                     title = { Text(stringResource(R.string.friends_title)) },
+                    navigationIcon = {
+                        if (onBack != null) {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("friends.back")) {
+                                Icon(PqpIcons.Back, contentDescription = stringResource(R.string.chat_back))
+                            }
+                        }
+                    },
                     colors = pqpLargeTopBarColors(),
                     // Same height as the other two tabs. This screen pays for
                     // the default twice over: the bar and the tab strip under

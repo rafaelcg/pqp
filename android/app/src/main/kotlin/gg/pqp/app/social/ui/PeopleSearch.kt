@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import gg.pqp.app.R
+import gg.pqp.app.core.userMessage
 import gg.pqp.app.social.PublicUser
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.USER_SEARCH_MIN_LENGTH
@@ -81,7 +82,7 @@ fun PeopleSearchEffect(state: PeopleSearchState, social: SocialRepository) {
                 state.results = it
                 state.error = null
             }
-            .onFailure { state.error = it.message }
+            .onFailure { state.error = it.userMessage() }
         state.searching = false
     }
 }
@@ -202,6 +203,8 @@ fun PersonRow(
     user: PublicUser,
     modifier: Modifier = Modifier,
     subtitle: String? = user.tag,
+    /** A friend's presence, drawn in the corner of the picture. Null draws none. */
+    status: String? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
@@ -213,12 +216,23 @@ fun PersonRow(
     ) {
         // Seeded by id, not by name: two people called "Ana" are two colours,
         // and one person who renames themselves keeps theirs.
-        Avatar(
-            name = user.displayName,
-            url = user.avatarUrl,
-            size = Sizes.avatarPerson,
-            seed = user.id,
-        )
+        if (status != null) {
+            PersonAvatar(
+                name = user.displayName,
+                avatarUrl = user.avatarUrl,
+                status = status,
+                size = Sizes.avatarPerson,
+                seed = user.id,
+                ringColor = MaterialTheme.colorScheme.surfaceContainer,
+            )
+        } else {
+            Avatar(
+                name = user.displayName,
+                url = user.avatarUrl,
+                size = Sizes.avatarPerson,
+                seed = user.id,
+            )
+        }
         Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(

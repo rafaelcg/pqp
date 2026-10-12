@@ -5,12 +5,13 @@ import {
 import {
   Archive,
   ChevronLeft,
+  Lock,
   LogOut,
   MessageSquareText,
   Plus,
   X,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
@@ -22,6 +23,7 @@ import {
 } from "@/components/chat/message-composer";
 import {
   MessageList,
+  type ForumPostDecor,
   type MessageAuthorInfo,
   type MessageRoleColor,
 } from "@/components/chat/message-list";
@@ -45,8 +47,37 @@ import { cn, formatDayLabel } from "@/lib/utils";
  * while the roster stayed open is what left a long QG thread unreadable.
  */
 
+/**
+ * A forum post in the panel (`variant="forum-post"`). A post is a thread with
+ * no origin message: its opening message is the first message IN it, so there
+ * is no quote above the transcript, no "A mensagem original foi apagada", no
+ * Arquivada (a post never archives) and no join toggle. What it has instead
+ * comes from the forum pane: its own header (title, tags, status, actions),
+ * the transcript decor (OP badge, the answer's edge, the Solução card) and a
+ * composer that turns into a dashed bar when staff closed the post.
+ */
+export interface ThreadPanelForumPost {
+  header: ReactNode;
+  /** Above the transcript: the answer strip when the opening is not loaded. */
+  beforeList?: ReactNode;
+  decor: ForumPostDecor;
+  /** Staff closed the post to replies. */
+  locked: boolean;
+  /** This reader may reply in a closed post anyway (staff). */
+  canReplyLocked: boolean;
+  placeholder: string;
+  /** `side`: the 488 px pane beside the list. `full`: the whole content area. */
+  layout: "side" | "full";
+  /** Scroll to and flash this message ("Ir pra resposta"). */
+  highlightMessageId?: string | null;
+  onHighlightHandled?: () => void;
+}
+
 interface ThreadPanelProps {
   thread: ThreadSummary;
+  /** `thread` (default) or a forum post; see `ThreadPanelForumPost`. */
+  variant?: "thread" | "forum-post";
+  forumPost?: ThreadPanelForumPost | null;
   /** The origin message, when it is on hand — the parent view usually has it. */
   origin: ChatMessage | null;
   /** The thread's own chat controller (THREAD_CHANNEL_FRAMES). */
@@ -96,6 +127,8 @@ interface ThreadPanelProps {
 
 export function ThreadPanel({
   thread,
+  variant = "thread",
+  forumPost = null,
   origin,
   controller,
   currentUser,
@@ -123,6 +156,7 @@ export function ThreadPanel({
   slashContext,
 }: ThreadPanelProps) {
   const { t } = useTranslation();
+  const forum = variant === "forum-post" ? forumPost : null;
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   // A thread has its own composer, and so its own drop zone: a file dropped on
@@ -135,7 +169,9 @@ export function ThreadPanel({
     attachmentsEnabled,
     channelType: "text",
     streamChat: false,
-    canSend,
+    // A closed post shows no composer to a member, so nothing can take the
+    // file: the zone refuses it rather than staging an upload into nowhere.
+    canSend: canSend && !(forum?.locked && !forum.canReplyLocked),
   });
   const drop = useFileDropZone({
     mode: dropVerdict.mode,
@@ -159,7 +195,9 @@ export function ThreadPanel({
    * blank quote: a poll is its question, an upload is its file. The thread's
    * own name is never used here — it is already the header's title.
    */
-  const originText = origin
+  const originText = forum
+    ? null
+    : origin
     ? origin.body.trim().length > 0
       ? origin.body
       : origin.poll
@@ -202,7 +240,14 @@ export function ThreadPanel({
           onClose();
         }
       }}
-      className="relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
+      data-forum-post-panel={forum ? thread.channelId : undefined}
+      className={cn(
+        "relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)]",
+        !forum && "md:w-[26rem] md:border-l",
+        forum?.layout === "side" && "md:w-[488px] md:border-l animate-toast-in",
+        forum?.layout === "full" && "md:min-w-0 md:flex-1 md:shrink animate-fade-in",
+        forum && "max-md:animate-step-in",
+      )}
     >
       {drop.active && (
         <FileDropOverlay
@@ -217,6 +262,10 @@ export function ThreadPanel({
           }
         />
       )}
+      {forum ? (
+        forum.header
+      ) : (
+      <>
       {/* The header's job is orientation: which channel this hangs off, and a
           way back to it. The name is second, not first, because a thread born
           from a message carries that message AS its name — printing it loudest
@@ -325,6 +374,9 @@ export function ThreadPanel({
           </p>
         </div>
       </header>
+      </>
+      )}
+      {forum?.beforeList}
 
       {/* The message the thread grew out of — context, not part of the
           thread's own history, so it is a quote and not a second message.
@@ -400,8 +452,27 @@ export function ThreadPanel({
         onForward={onForward}
         onMarkUnread={onMarkUnread}
         onMarkRead={onMarkRead}
+        forumPost={forum?.decor ?? null}
+        highlightMessageId={forum?.highlightMessageId ?? null}
+        onHighlightHandled={forum?.onHighlightHandled}
+        onJumpToMessage={forum ? (messageId) => controller.jumpTo(messageId) : undefined}
       />
 
+      {forum?.locked && (
+        <div
+          className={cn(
+            "mx-3 mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-dashed border-border-strong px-3 py-2.5 text-sm text-text-secondary sm:mx-4",
+            forum.canReplyLocked && "mb-1 border-none px-1 py-0 text-xs text-text-tertiary",
+          )}
+          role="status"
+          data-forum-locked=""
+        >
+          <Lock className="h-4 w-4 shrink-0" aria-hidden />
+          {forum.canReplyLocked ? t("forum.lockedStaff") : t("forum.locked")}
+        </div>
+      )}
+
+      {(!forum?.locked || forum.canReplyLocked) && (
       <MessageComposer
         // Remount per thread, same reason the main composer keys by channel.
         key={thread.channelId}
@@ -431,7 +502,7 @@ export function ThreadPanel({
         }}
         disabled={isLoading}
         slowModeUntil={controller.getSlowModeHeldUntil() || null}
-        placeholder={t("thread.placeholder")}
+        placeholder={forum?.placeholder ?? t("thread.placeholder")}
         slashContext={
           slashContext
             ? {
@@ -448,6 +519,7 @@ export function ThreadPanel({
             : undefined
         }
       />
+      )}
     </aside>
   );
 }

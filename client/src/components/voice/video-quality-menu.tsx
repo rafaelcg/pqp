@@ -31,6 +31,12 @@ import {
   SCREEN_FRAME_RATES,
   type ScreenFrameRate,
 } from "@/lib/hls-capture-rate";
+import {
+  SHARE_PRIORITIES,
+  setSharePriority,
+  useSharePriority,
+  type SharePriority,
+} from "@/lib/share-priority";
 import { cn } from "@/lib/utils";
 
 /**
@@ -99,6 +105,11 @@ const FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
   auto: "settings.voice.screenFrameRate.auto",
   "30": "settings.voice.screenFrameRate.30",
   "60": "settings.voice.screenFrameRate.60",
+};
+
+const PRIORITY_LABELS: Record<SharePriority, MessageKey> = {
+  motion: "call.quality.send.priority.motion",
+  detail: "call.quality.send.priority.detail",
 };
 
 const RECEIVE_LABELS: Record<ReceiveQuality, MessageKey> = {
@@ -175,9 +186,38 @@ export function VideoQualityMenu({
     null,
   );
   const receiveQuality = useReceiveQuality();
+  // Frames or pixels first. A device preference read straight from its store
+  // (`share-priority.ts`), like the receive half, so it needs no prop thread.
+  const sharePriority = useSharePriority();
   const receiveReason = useReceiveQualityReason();
   const qualities = availableVideoQualities({ participantCount, hlsLive });
   const value = coerceVideoQuality(rawValue, qualities);
+
+  // THE MENU NEVER GROWS PAST THE STAGE. It opens upward from the bar, and a
+  // presenter's menu (sizes, frame rate, priority, both readouts) is taller
+  // than a short stage: its top rows slid under the channel header or off the
+  // window, where nobody could press them. So it is held to the room between
+  // the button and the top of the stage it sits in, and scrolls inside that.
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const measure = () => {
+      const stage = root.closest('[data-testid^="call-stage"]');
+      const ceiling = stage ? Math.max(0, stage.getBoundingClientRect().top) : 0;
+      // 8px for the menu's own `mb-2`, 8 more so it does not touch the edge.
+      const room = root.getBoundingClientRect().top - ceiling - 16;
+      setMaxHeight(Math.max(160, Math.floor(room)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
 
   // Same dismissal contract as the user-panel popover: a press anywhere else,
   // or Escape. Anchored on the wrapper rather than the panel so a press on the
@@ -369,14 +409,15 @@ export function VideoQualityMenu({
           onKeyDown={onPanelKeyDown}
           onBlur={onPanelBlur}
           aria-label={label}
-          className="fixed z-[100] w-64 max-w-[80vw] rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className="fixed z-[100] w-64 max-w-[80vw] overflow-y-auto overscroll-contain rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
           // Hidden for the one frame before it is measured, so it never
           // flashes at the window's corner.
-          style={
-            place
+          style={{
+            ...(place
               ? { left: place.left, top: place.top }
-              : { left: 0, top: 0, visibility: "hidden" }
-          }
+              : { left: 0, top: 0, visibility: "hidden" as const }),
+            ...(maxHeight === null ? null : { maxHeight }),
+          }}
         >
           {isSendingVideo && (
             <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
@@ -453,6 +494,46 @@ export function VideoQualityMenu({
               })}
               <p className="px-2.5 pb-1 pt-0.5 text-xs text-paper-muted">
                 {t("call.quality.send.frameRateHint")}
+              </p>
+            </>
+          )}
+          {/* What the share gives up first when the link tightens. Without it
+              the only answer was "fps", and a presenter showing code watched
+              the picture swing between 720p and 360p with nothing to press. */}
+          {isSharingScreen && (
+            <>
+              <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+                {t("call.quality.send.priority")}
+              </p>
+              {SHARE_PRIORITIES.map((priority) => {
+                const selected = priority === sharePriority;
+                return (
+                  <button
+                    key={priority}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={ITEM_CLASS}
+                    onClick={() => {
+                      setSharePriority(priority);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 text-signal",
+                        !selected && "invisible",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t(PRIORITY_LABELS[priority])}
+                    </span>
+                  </button>
+                );
+              })}
+              <p className="px-2.5 pb-1 pt-0.5 text-xs text-paper-muted">
+                {t("call.quality.send.priorityHint")}
               </p>
             </>
           )}
@@ -563,7 +644,9 @@ export function VideoQualityMenu({
           // anything they can see, and tinting it would be the same claim the
           // old label made.
           isSendingVideo &&
-          (value !== "auto" || screenFrameRate !== "auto")
+          (value !== "auto" ||
+            screenFrameRate !== "auto" ||
+            (isSharingScreen && sharePriority !== "motion"))
             ? "bg-signal/20 text-signal"
             : "bg-ink-3 text-paper hover:bg-ink-4",
         )}

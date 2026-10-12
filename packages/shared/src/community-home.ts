@@ -29,6 +29,21 @@ import {
 export const COMMUNITY_HOME_MAX_BYTES = 100 * 1024 * 1024;
 
 /**
+ * Ceiling for a video's cover (the picture shown before play). A still, not a
+ * clip: a 1080p JPEG is a few hundred KiB, and 10 MiB is the attachments'
+ * own ceiling. Checked when the cover is put on a post, on top of the mint's
+ * `COMMUNITY_HOME_MAX_BYTES`.
+ */
+export const COMMUNITY_HOME_COVER_MAX_BYTES = 10 * 1024 * 1024;
+
+/** What a cover may be. No GIF: a cover is one frame, not an animation. */
+export const COMMUNITY_HOME_COVER_CONTENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+
+/**
  * How many posts one feed read returns. The Baú is a durable archive, so
  * "every post since the server was made" is a page that only grows; the
  * client asks for the newest page and the pinned post always rides along.
@@ -654,6 +669,15 @@ export const communityHomeMediaSchema = z.object({
    * fixture) never has to name it.
    */
   mobile: communityHomeMobileRenditionSchema.nullable().optional(),
+  /**
+   * The cover the author chose for an uploaded `video` (a frame they picked or
+   * an image they uploaded), as a presigned GET, while the `bau_custom_cover`
+   * flag is on for the server. Null or absent means the automatic one: the
+   * player paints the video's first frame. Inside `media`, so a locked
+   * viewer, who gets no media, never gets the cover either: a frame of the
+   * video is the video's pixels.
+   */
+  posterUrl: z.string().nullable().optional(),
 });
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;
@@ -926,6 +950,12 @@ export const createCommunityHomePostSchema = z.object({
    */
   mobileMediaUploadId: z.string().uuid().optional().nullable(),
   /**
+   * The video's cover: a claimed image upload (JPEG, PNG or WebP, at most
+   * `COMMUNITY_HOME_COVER_MAX_BYTES`). Only with a `mediaUploadId` that is a
+   * video. Omit for the automatic cover. Behind the `bau_custom_cover` flag.
+   */
+  posterUploadId: z.string().uuid().optional().nullable(),
+  /**
    * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
    * classifies which; one field so the composer stays one paste box.
    */
@@ -937,6 +967,12 @@ export const createCommunityHomePostSchema = z.object({
   status: communityHomePostStatusSchema.default("draft"),
   scheduledAt: z.string().datetime({ offset: true }).optional().nullable(),
   scheduleTimezone: z.string().min(1).max(64).optional().nullable(),
+  /**
+   * With `status: "published"`: also post the card into this channel of the
+   * same server. Best effort; a channel the author cannot send in is skipped
+   * and the post still publishes.
+   */
+  announceChannelId: z.string().uuid().optional().nullable(),
 });
 
 export type CreateCommunityHomePostRequest = z.infer<
@@ -959,6 +995,12 @@ export const updateCommunityHomePostSchema = z.object({
    * cleared); a claimed upload id replaces it; `null` removes it.
    */
   mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  /**
+   * The video's cover, same rules as the phone cut: omitted keeps it while the
+   * main video stays the same file (a new main video drops it), a claimed
+   * image upload id replaces it, `null` goes back to the automatic one.
+   */
+  posterUploadId: z.string().uuid().optional().nullable(),
 });
 
 export type UpdateCommunityHomePostRequest = z.infer<
@@ -1083,6 +1125,12 @@ export const communityHomePostsResponseSchema = z.object({
    * never sends it.
    */
   mobileRenditionEnabled: z.boolean().default(false),
+  /**
+   * `bau_custom_cover` is on for this server: the staff composer offers a
+   * cover for an uploaded video (a frame of it, or an image). Defaulted: an
+   * older API never sends it, and a composer that cannot know stays as it was.
+   */
+  customCoverEnabled: z.boolean().default(false),
 });
 
 export type CommunityHomePostsResponse = z.infer<
@@ -1157,6 +1205,7 @@ export type ParsedCommunityHomePostFields = {
   commentsEnabled: boolean;
   mediaUploadId: string | null;
   mobileMediaUploadId: string | null;
+  posterUploadId: string | null;
   youtubeUrl: string | null;
   status: CommunityHomePostStatus;
   scheduledAt: string | null;

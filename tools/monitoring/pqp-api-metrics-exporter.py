@@ -607,6 +607,23 @@ def _merge_voice_notes(a: dict | None, b: dict | None) -> dict | None:
     return out
 
 
+def _merge_nudge(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.nudge` (services/nudge.ts): chamar a atencao. `sent` and
+    `refused` are counted in the process that took the frame, since it booted,
+    so they are ADDITIVE. `enabled` is the flag as each process reads it; the
+    flag is global and every process converges on the same answer, so it is
+    taken from one. A replica on an API older than the block reports none, and
+    the other's block is used whole."""
+    if not a and not b:
+        return None
+    body = a if a else b
+    return {
+        "enabled": body.get("enabled"),
+        "sent": deep_sum((a or {}).get("sent"), (b or {}).get("sent")),
+        "refused": deep_sum((a or {}).get("refused"), (b or {}).get("refused")),
+    }
+
+
 # ----- top-level policy table ----------------------------------------------
 
 # SHARED / PER-INSTANCE-HEALTH: DB-derived (every replica queries the same
@@ -638,6 +655,7 @@ _CUSTOM_MERGERS = {
     "watchParty": _merge_watch_party,
     "product": _merge_product,
     "voiceNotes": _merge_voice_notes,
+    "nudge": _merge_nudge,
 }
 
 _warned_unclassified_keys: set[str] = set()
@@ -932,6 +950,33 @@ def render_voice_notes(lines: list[str], voice_notes: dict) -> None:
             "summed across replicas. Since process boot, so it resets on a deploy, which rate()/increase() handle. "
             "reason=mint-flag-off is what tells the feature being off apart from nobody trying.",
             [({"reason": _vn_label(reason)}, _vn_num(count)) for reason, count in sorted(refusals.items())],
+        )
+
+
+def render_nudge(lines: list[str], nudge: dict) -> None:
+    """The `nudge` block (chamar a atencao, services/nudge.ts)."""
+    if "enabled" in nudge:
+        gauge(
+            lines,
+            "pqp_api_nudge_enabled",
+            "1 while the nudge runtime flag is on (nudge.enabled), as the answering replica reads it.",
+            1 if nudge.get("enabled") else 0,
+        )
+    counter(
+        lines,
+        "pqp_api_nudge_sent_total",
+        "Nudges stored and delivered (nudge.sent), summed across replicas. Since process boot.",
+        _vn_num(nudge.get("sent")),
+    )
+    refused = nudge.get("refused") or {}
+    if isinstance(refused, dict) and refused:
+        labeled_counter(
+            lines,
+            "pqp_api_nudge_refused_total",
+            "Nudges refused before anything was stored, by reason (nudge.refused), summed across replicas. "
+            "Since process boot. cooldown or unanswered climbing is somebody hammering a friend; "
+            "unavailable with sent flat is a client offering the button where the server never accepts it.",
+            [({"reason": _vn_label(reason)}, _vn_num(count)) for reason, count in sorted(refused.items())],
         )
 
 
@@ -1497,6 +1542,11 @@ def render(
     voice_notes = payload.get("voiceNotes")
     if isinstance(voice_notes, dict) and voice_notes:
         render_voice_notes(lines, voice_notes)
+
+    # Chamar a atencao. Absent on an API older than the block.
+    nudge = payload.get("nudge")
+    if isinstance(nudge, dict) and nudge:
+        render_nudge(lines, nudge)
 
     gauge(
         lines,

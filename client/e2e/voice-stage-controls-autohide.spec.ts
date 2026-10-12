@@ -284,6 +284,11 @@ test("one focused stream hides its controls when idle, and only then", async ({
     await shot(page, "3-revealed-on-move");
 
     // --- a mouse press on a control does NOT pin the bar (the bug) ----------
+    // Two ways it pinned. Focus: a clicked button keeps it (`isKeyboardFocus`).
+    // Hover: the press swaps the mute icon, so the node under the pointer is
+    // removed, no leave comes for it, and the bar thought the pointer was
+    // still on it. The single-step move below lands on the picture with no
+    // event in between, which is exactly that case (`chromeHoverAt`).
     await page
       .getByRole("button", { name: /^(Mute|Unmute)/ })
       .first()

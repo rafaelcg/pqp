@@ -91,7 +91,7 @@ final class ScreenShareBridgeTests: XCTestCase {
     func testOneWholeFrameArrivesAsOneFrame() {
         let (expected, wire) = frame(width: 32, height: 16, fill: 0xAB)
         var parser = ScreenShareFrameParser()
-        XCTAssertEqual(parser.append(wire), [expected])
+        XCTAssertEqual(parser.append(wire), [.video(expected)])
     }
 
     func testTwoFramesInOneReadBothArrive() {
@@ -100,7 +100,7 @@ final class ScreenShareBridgeTests: XCTestCase {
         let (firstFrame, first) = frame(width: 32, height: 16, fill: 1)
         let (secondFrame, second) = frame(width: 32, height: 16, fill: 2)
         var parser = ScreenShareFrameParser()
-        XCTAssertEqual(parser.append(first + second), [firstFrame, secondFrame])
+        XCTAssertEqual(parser.append(first + second), [.video(firstFrame), .video(secondFrame)])
     }
 
     func testAFrameSplitAcrossReadsIsHeldUntilComplete() {
@@ -108,18 +108,18 @@ final class ScreenShareBridgeTests: XCTestCase {
         // every real frame arrives in pieces.
         let (expected, wire) = frame(width: 64, height: 32, fill: 0x7F)
         var parser = ScreenShareFrameParser()
-        var delivered: [ScreenShareFrame] = []
+        var delivered: [ScreenShareMessage] = []
         for chunk in wire.chunked(into: 7) {
             delivered += parser.append(chunk) ?? []
         }
-        XCTAssertEqual(delivered, [expected])
+        XCTAssertEqual(delivered, [.video(expected)])
     }
 
     func testAHeaderSplitAcrossReadsIsNotMisparsed() {
         let (expected, wire) = frame(width: 32, height: 16, fill: 3)
         var parser = ScreenShareFrameParser()
         XCTAssertEqual(parser.append(wire.prefix(9)), [])
-        XCTAssertEqual(parser.append(wire.dropFirst(9)), [expected])
+        XCTAssertEqual(parser.append(wire.dropFirst(9)), [.video(expected)])
     }
 
     func testGarbageDesynchronisesRatherThanGuessing() {
@@ -127,26 +127,36 @@ final class ScreenShareBridgeTests: XCTestCase {
         XCTAssertNil(parser.append(Data(repeating: 0x5A, count: 40)))
         // And the buffer is clean afterwards, so a reconnect starts fresh.
         let (expected, wire) = frame(width: 32, height: 16, fill: 4)
-        XCTAssertEqual(parser.append(wire), [expected])
+        XCTAssertEqual(parser.append(wire), [.video(expected)])
     }
 
     // MARK: - Downscale math
 
-    func testLandscapeScreenIsCappedOnItsLongSide() {
-        let size = screenShareTargetSize(width: 2560, height: 1600, maxLongSide: 1280)
-        XCTAssertEqual(size.width, 1280)
-        XCTAssertEqual(size.height, 800)
+    func testLandscapeScreenIsHeldAt720OnItsShortSide() {
+        let size = screenShareTargetSize(width: 2560, height: 1600)
+        XCTAssertEqual(size.width, 1152)
+        XCTAssertEqual(size.height, 720)
     }
 
-    func testPortraitScreenIsCappedOnItsLongSide() {
+    func testPortraitPhoneIsHeldAt720OnItsShortSide() {
         // An iPhone 15 Pro's capture, which is what the extension actually sees.
-        let size = screenShareTargetSize(width: 1179, height: 2556, maxLongSide: 1280)
-        XCTAssertEqual(size.height, 1280)
-        XCTAssertEqual(size.width, 590)
+        // It was 590x1280 under the old long-side rule: fewer columns than 480p.
+        let size = screenShareTargetSize(width: 1179, height: 2556)
+        XCTAssertEqual(size.width, 720)
+        XCTAssertEqual(size.height, 1560)
+    }
+
+    func testTheSameRuleAsAndroid() {
+        // `screenCaptureProfileFor` in android/voice/ScreenCapture.kt: 720 on
+        // the short side, aspect kept, never an upscale. A 1080x2400 Android
+        // panel gives 720x1600 there.
+        let size = screenShareTargetSize(width: 1080, height: 2400)
+        XCTAssertEqual(size.width, 720)
+        XCTAssertEqual(size.height, 1600)
     }
 
     func testSmallScreensAreNeverUpscaled() {
-        let size = screenShareTargetSize(width: 640, height: 360, maxLongSide: 1280)
+        let size = screenShareTargetSize(width: 640, height: 360)
         XCTAssertEqual(size.width, 640)
         XCTAssertEqual(size.height, 360)
     }
@@ -266,7 +276,7 @@ final class ScreenShareBridgeTests: XCTestCase {
 
 extension Data {
     /// Splits into fixed-size pieces, to stand in for socket reads.
-    fileprivate func chunked(into size: Int) -> [Data] {
+    func chunked(into size: Int) -> [Data] {
         stride(from: 0, to: count, by: size).map { start in
             subdata(in: start..<Swift.min(start + size, count))
         }

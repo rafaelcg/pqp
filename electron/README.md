@@ -231,12 +231,22 @@ because quitting hangs up. On **Windows and Linux** it also hides **while
 signed in** (the renderer reports that with `pqpDesktop.setSignedIn`; until a
 renderer does, only the in-call rule applies). The tray's "Show pqp" (pt-BR
 "Abrir o pqp") brings the window back and "Quit pqp" ("Sair do pqp") really
-quits. macOS keeps its usual dock behaviour out of a call. Linux skips the
-signed-in hide on stock GNOME, where no tray host exists and the window would
-have no way back (`trayLikelyAvailable` in `lib/tray-menu.js`); if the tray
-cannot be created at all, close simply closes. Whenever the tray checkbox is
-off, close behaves as it always did. The preference (default on) lives in
-`userData/tray.json` and is toggled from the tray menu.
+quits. macOS keeps its usual dock behaviour out of a call.
+
+On Linux the shell asks the session bus whether anything owns
+`org.kde.StatusNotifierWatcher` (`lib/tray-host.js`, through `gdbus` or
+`dbus-send`), which is the name Chromium registers the tray icon with: Plasma,
+GNOME with the AppIndicator extension, a panel with a tray module. It asks at
+startup, before the tray is made, and again when the window takes focus (at
+most every 30 s); a tray made before a host appeared is made again. With no
+host (stock GNOME, sway with no tray module) nothing is hidden: close during a
+call **minimizes**, which keeps the call and a way back, and close otherwise
+quits. Only when neither tool can ask does the shell fall back to guessing from
+`XDG_CURRENT_DESKTOP` (`trayLikelyAvailable`). Each close on Linux logs its
+decision (`[pqp] close: hide (tray host: yes, ...)`) for a run from a
+terminal. The whole decision is `closeAction` in `lib/tray-menu.js`. Whenever
+the tray checkbox is off, close behaves as it always did. The preference
+(default on) lives in `userData/tray.json` and is toggled from the tray menu.
 
 ## Notifications
 

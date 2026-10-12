@@ -1,0 +1,617 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+/**
+ * Baú media goes through the same image scan as chat attachments, on the
+ * media claim, before anything can put it on a post. The router, the
+ * permission check, the reports table and Postgres are real; storage is an
+ * in-memory stand-in and the scanner is the real `openai` adapter talking to a
+ * stubbed `fetch` (every other request, i.e. this test's own HTTP calls to the
+ * API, goes to the real one).
+ */
+
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeDb = DATABASE_URL ? describe : describe.skip;
+
+if (DATABASE_URL) {
+  process.env.DATABASE_URL = DATABASE_URL;
+}
+
+let actor: { id: string; clerk_id: string } | null = null;
+
+vi.mock("../auth/clerk.js", () => ({
+  DEV_AUTH_TOKEN: "dev-local-token",
+  isDevAuthBypassEnabled: () => false,
+  assertAuthConfig: () => {},
+  invalidateUserCache: () => {},
+  clearAuthCaches: () => {},
+  resolveAuthUser: async () => (actor ? { user: actor } : null),
+  resolveAuthSession: async () =>
+    actor ? { user: actor, ageGate: "passed" as const } : null,
+  verifyAuthHeader: async () => null,
+}));
+
+const stored = new Map<string, { bytes: Buffer; contentType: string }>();
+const deletedKeys: string[] = [];
+let copyFails = false;
+let deleteFails = false;
+
+vi.mock("../lib/s3.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/s3.js")>()),
+  isStorageConfigured: () => true,
+  presignPut: (key: string) => `http://storage.test/put/${key}`,
+  presignGet: (key: string) => `http://storage.test/get/${key}`,
+  headObject: async (key: string) => {
+    const object = stored.get(key);
+    return object
+      ? { contentLength: object.bytes.length, contentType: object.contentType }
+      : null;
+  },
+  getObjectPrefix: async (key: string, length: number) =>
+    stored.get(key)?.bytes.subarray(0, length) ?? null,
+  deleteObject: async (key: string) => {
+    if (deleteFails) {
+      throw new Error("storage unreachable");
+    }
+    deletedKeys.push(key);
+    stored.delete(key);
+  },
+  copyObject: async (from: string, to: string) => {
+    const object = stored.get(from);
+    if (copyFails || !object) {
+      throw new Error("copy failed");
+    }
+    stored.set(to, { bytes: Buffer.from(object.bytes), contentType: object.contentType });
+  },
+}));
+
+const { getPool, initDb, closePool } = await import("../db.js");
+const { handleApi, resetApiRateLimits } = await import("../api/index.js");
+const { upsertUser } = await import("./users.js");
+const { createServer: createChatServer } = await import("./servers.js");
+const { sweepOrphanedCommunityHomeMedia } = await import("./community-home.js");
+const { sweepQuarantinedCommunityHomeMedia } = await import(
+  "./community-home-scan.js"
+);
+const { listAllReports } = await import("./reports.js");
+
+const realFetch = globalThis.fetch;
+let httpServer: Server;
+let baseUrl: string;
+
+/** What the stubbed provider answers, and how many times it was asked. */
+let scanner: (() => Response | Promise<Response>) | null = null;
+let scannerCalls = 0;
+
+function scores(body: Record<string, number>): () => Response {
+  return () =>
+    new Response(JSON.stringify({ results: [{ category_scores: body }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+}
+
+function configureScanner(respond: () => Response | Promise<Response>): void {
+  process.env.CONTENT_SCAN_PROVIDER = "openai";
+  process.env.OPENAI_API_KEY = "sk-test";
+  scanner = respond;
+}
+
+async function call<T = Record<string, unknown>>(
+  as: { id: string; clerk_id: string },
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: T }> {
+  actor = as;
+  const response = await realFetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer test",
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await response.text();
+  return { status: response.status, body: (text ? JSON.parse(text) : {}) as T };
+}
+
+const PNG = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48,
+  0x44, 0x52,
+]);
+const MP4 = Buffer.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]);
+
+const SCAN_ENV = [
+  "CONTENT_SCAN_PROVIDER",
+  "CONTENT_SCAN_FAIL_MODE",
+  "CONTENT_SCAN_QUARANTINE_DAYS",
+  "OPENAI_API_KEY",
+] as const;
+
+describeDb("Baú media image scan", () => {
+  let owner: { id: string; clerk_id: string };
+  let serverId: string;
+
+  beforeAll(async () => {
+    await initDb();
+    httpServer = createServer((req, res) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      void handleApi(req, res, pathname);
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await closePool();
+  });
+
+  beforeEach(async () => {
+    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
+    resetApiRateLimits();
+    stored.clear();
+    deletedKeys.length = 0;
+    copyFails = false;
+    deleteFails = false;
+    scanner = null;
+    scannerCalls = 0;
+    for (const key of SCAN_ENV) {
+      delete process.env[key];
+    }
+    process.env.COMMUNITY_HOME_ENABLED = "true";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        if (url.startsWith(baseUrl)) {
+          return realFetch(input, init);
+        }
+        scannerCalls += 1;
+        if (!scanner) {
+          throw new Error(`unexpected outbound request to ${url}`);
+        }
+        return scanner();
+      }),
+    );
+    owner = await upsertUser({
+      clerkId: "clerk_owner",
+      displayName: "owner",
+      avatarUrl: null,
+    });
+    serverId = (await createChatServer("Mesa da Tues", owner.id)).server.id;
+  });
+
+  afterEach(() => {
+    delete process.env.COMMUNITY_HOME_ENABLED;
+    for (const key of SCAN_ENV) {
+      delete process.env[key];
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** The key the mint signed a PUT for, by upload id. */
+  const mintedKeys = new Map<string, string>();
+
+  async function mint(
+    contentType = "image/png",
+    bytes: Buffer = PNG,
+    filename = "foto.png",
+    server = serverId,
+  ): Promise<string> {
+    const minted = await call<{ uploadId: string; key: string }>(
+      owner,
+      "POST",
+      `/api/servers/${server}/home/media`,
+      { contentType, byteSize: bytes.length, filename },
+    );
+    expect(minted.status).toBe(201);
+    stored.set(minted.body.key, { bytes, contentType });
+    mintedKeys.set(minted.body.uploadId, minted.body.key);
+    return minted.body.uploadId;
+  }
+
+  function claim(uploadId: string, server = serverId) {
+    return call<{ error?: string; kind?: string }>(
+      owner,
+      "POST",
+      `/api/servers/${server}/home/media/claim`,
+      { uploadId },
+    );
+  }
+
+  function publish(mediaUploadId: string) {
+    return call<{ error?: string; post?: { id: string } }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/home/posts`,
+      { title: "Lançamento", mediaUploadId, status: "published" },
+    );
+  }
+
+  async function storageKeyOf(uploadId: string): Promise<string> {
+    const result = await getPool().query<{ storage_key: string }>(
+      `SELECT storage_key FROM community_home_media_uploads WHERE id = $1`,
+      [uploadId],
+    );
+    return result.rows[0]!.storage_key;
+  }
+
+  async function uploadRow(uploadId: string) {
+    const result = await getPool().query<{
+      scan_status: string;
+      scan_provider: string | null;
+      scan_labels: string[] | null;
+      scanned_at: Date | null;
+      quarantined_at: Date | null;
+      verified_at: Date | null;
+    }>(
+      `SELECT scan_status, scan_provider, scan_labels, scanned_at,
+              quarantined_at, verified_at
+         FROM community_home_media_uploads WHERE id = $1`,
+      [uploadId],
+    );
+    return result.rows[0]!;
+  }
+
+  async function reports() {
+    const result = await getPool().query<{
+      reporter_id: string | null;
+      reported_user_id: string;
+      context_kind: string;
+      server_id: string | null;
+      channel_label: string | null;
+      reason: string;
+      details: string;
+    }>(
+      `SELECT reporter_id, reported_user_id, context_kind, server_id,
+              channel_label, reason, details
+         FROM reports ORDER BY id`,
+    );
+    return result.rows;
+  }
+
+  async function age(uploadId: string, interval: string): Promise<void> {
+    await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET created_at = NOW() - $2::interval
+        WHERE id = $1`,
+      [uploadId, interval],
+    );
+  }
+
+  it("claims and records nothing when no scanner is configured", async () => {
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+
+    expect(scannerCalls).toBe(0);
+    const row = await uploadRow(uploadId);
+    // Not `pass`: nobody looked, and the row says so.
+    expect(row.scan_status).toBe("unscanned");
+    expect(row.scan_provider).toBeNull();
+    expect(row.verified_at).not.toBeNull();
+    expect(await reports()).toEqual([]);
+  });
+
+  it("claims a clean image and records who said so", async () => {
+    configureScanner(scores({ sexual: 0.01, "violence/graphic": 0.02 }));
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+
+    const row = await uploadRow(uploadId);
+    expect(row.scan_status).toBe("pass");
+    expect(row.scan_provider).toBe("openai");
+    expect(row.scanned_at).not.toBeNull();
+    expect(row.quarantined_at).toBeNull();
+    expect((await publish(uploadId)).status).toBe(201);
+    expect(await reports()).toEqual([]);
+  });
+
+  it("refuses a rejected image, quarantines it, and reports it to the instance queue", async () => {
+    configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+    const uploadId = await mint();
+
+    const claimed = await claim(uploadId);
+    expect(claimed.status).toBe(400);
+    // The same words as a failed HEAD: the uploader is not told why.
+    expect(claimed.body.error).toMatch(/could not be verified/i);
+
+    const row = await uploadRow(uploadId);
+    expect(row.scan_status).toBe("rejected");
+    expect(row.scan_labels).toEqual(["csam_suspected"]);
+    expect(row.quarantined_at).not.toBeNull();
+    expect(row.verified_at).toBeNull();
+
+    // Nothing can carry it onto a post.
+    const post = await publish(uploadId);
+    expect(post.status).toBe(400);
+    const posts = await getPool().query(`SELECT id FROM community_home_posts`);
+    expect(posts.rows).toEqual([]);
+
+    const filed = await reports();
+    expect(filed).toHaveLength(1);
+    expect(filed[0]!.reporter_id).toBeNull();
+    expect(filed[0]!.reported_user_id).toBe(owner.id);
+    // The uploader is staff of this server by construction, so the finding must
+    // not land in the queue they read.
+    expect(filed[0]!.context_kind).toBe("none");
+    expect(filed[0]!.server_id).toBeNull();
+    expect(filed[0]!.channel_label).toBe("Baú · Mesa da Tues");
+    expect(filed[0]!.reason).toBe("illegal_content");
+    expect(filed[0]!.details).toContain(`Baú upload ${uploadId}`);
+    expect(filed[0]!.details).toContain("never posted");
+
+    // And the operator's all-reports page reads the evidence back.
+    const all = await listAllReports({ limit: 10 });
+    expect(all.reports[0]!.scan).toMatchObject({
+      status: "rejected",
+      labels: ["csam_suspected"],
+      provider: "openai",
+      contentType: "image/png",
+      stillAttached: false,
+    });
+  });
+
+  it("refuses a quarantined upload again without asking the scanner", async () => {
+    configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(400);
+    expect(scannerCalls).toBe(1);
+
+    // A provider that would now say yes does not get asked.
+    scanner = scores({ sexual: 0.01 });
+    expect((await claim(uploadId)).status).toBe(400);
+    expect(scannerCalls).toBe(1);
+    expect((await uploadRow(uploadId)).scan_status).toBe("rejected");
+  });
+
+  it("posts a flagged image and still files a report", async () => {
+    configureScanner(scores({ sexual: 0.02, "violence/graphic": 0.95 }));
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+
+    const row = await uploadRow(uploadId);
+    expect(row.scan_status).toBe("flagged");
+    expect(row.quarantined_at).toBeNull();
+    expect((await publish(uploadId)).status).toBe(201);
+
+    const filed = await reports();
+    expect(filed).toHaveLength(1);
+    expect(filed[0]!.reason).toBe("violence");
+    expect(filed[0]!.server_id).toBeNull();
+    expect(filed[0]!.details).toContain("is visible");
+  });
+
+  it("refuses an image the scanner could not judge, and lets a retry scan again", async () => {
+    configureScanner(() => {
+      throw new TypeError("fetch failed");
+    });
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(400);
+
+    const row = await uploadRow(uploadId);
+    expect(row.scan_status).toBe("error");
+    expect(row.scan_labels).toEqual(["scan_error:unreachable"]);
+    // Nothing was found wrong with it: ordinary unclaimed garbage, not evidence.
+    expect(row.quarantined_at).toBeNull();
+    expect(row.verified_at).toBeNull();
+
+    // An error is not a verdict. Once the provider is back, a retry is judged.
+    scanner = scores({ sexual: 0.01 });
+    expect((await claim(uploadId)).status).toBe(200);
+    expect((await uploadRow(uploadId)).scan_status).toBe("pass");
+  });
+
+  it("claims an unjudgeable image only when the operator chose to fail open", async () => {
+    process.env.CONTENT_SCAN_FAIL_MODE = "open";
+    configureScanner(() => {
+      throw new TypeError("fetch failed");
+    });
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+    // The row still says what happened.
+    expect((await uploadRow(uploadId)).scan_status).toBe("error");
+  });
+
+  it("does not ask the scanner again for an upload it already passed", async () => {
+    configureScanner(scores({ sexual: 0.01 }));
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+    expect((await claim(uploadId)).status).toBe(200);
+    expect(scannerCalls).toBe(1);
+  });
+
+  it("records a video as skipped, which is not a pass", async () => {
+    configureScanner(scores({ sexual: 0.01 }));
+    const uploadId = await mint("video/mp4", MP4, "clip.mp4");
+    expect((await claim(uploadId)).status).toBe(200);
+    expect(scannerCalls).toBe(0);
+    const row = await uploadRow(uploadId);
+    expect(row.scan_status).toBe("skipped");
+    expect(row.scan_provider).toBe("openai");
+  });
+
+  it("pins a scanned image to a key the uploader cannot overwrite", async () => {
+    configureScanner(scores({ sexual: 0.01 }));
+    const uploadId = await mint();
+    const signedKey = mintedKeys.get(uploadId)!;
+    expect((await claim(uploadId)).status).toBe(200);
+
+    // The row, and so every post, now names a server-made copy; the key the
+    // uploader still holds a PUT URL for is gone.
+    const pinnedKey = await storageKeyOf(uploadId);
+    expect(pinnedKey).not.toBe(signedKey);
+    expect(pinnedKey).toMatch(new RegExp(`^community-home/${serverId}/pinned/`));
+    expect(deletedKeys).toContain(signedKey);
+
+    // A swap through the old URL after the scan lands on a key nothing serves.
+    stored.set(signedKey, { bytes: Buffer.from("swapped!"), contentType: "image/png" });
+    const post = await publish(uploadId);
+    expect(post.status).toBe(201);
+    const media = await getPool().query<{ media_storage_key: string }>(
+      `SELECT media_storage_key FROM community_home_posts`,
+    );
+    expect(media.rows[0]!.media_storage_key).toBe(pinnedKey);
+    expect(stored.get(pinnedKey)!.bytes.equals(PNG)).toBe(true);
+
+    // And a re-claim does not pin (or scan) again.
+    expect((await claim(uploadId)).status).toBe(200);
+    expect(await storageKeyOf(uploadId)).toBe(pinnedKey);
+    expect(scannerCalls).toBe(1);
+  });
+
+  it("does not pin when nothing will judge the bytes", async () => {
+    const uploadId = await mint();
+    expect((await claim(uploadId)).status).toBe(200);
+    expect(await storageKeyOf(uploadId)).toBe(mintedKeys.get(uploadId));
+  });
+
+  it("refuses the claim when the pinning copy fails", async () => {
+    configureScanner(scores({ sexual: 0.01 }));
+    copyFails = true;
+    const uploadId = await mint();
+    const claimed = await claim(uploadId);
+    expect(claimed.status).toBe(400);
+    expect(scannerCalls).toBe(0);
+    expect((await uploadRow(uploadId)).verified_at).toBeNull();
+  });
+
+  it("files one ticket per uploader per Baú, not one per instance", async () => {
+    configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+    const other = (await createChatServer("Outro QG", owner.id)).server.id;
+
+    expect((await claim(await mint())).status).toBe(400);
+    expect((await claim(await mint())).status).toBe(400);
+    const elsewhere = await mint("image/png", PNG, "foto.png", other);
+    expect((await claim(elsewhere, other)).status).toBe(400);
+
+    const filed = await reports();
+    expect(filed.map((row) => row.channel_label).sort()).toEqual([
+      "Baú · Mesa da Tues",
+      "Baú · Outro QG",
+    ]);
+  });
+
+  it("refuses even a flagged image when its verdict cannot be written", async () => {
+    configureScanner(scores({ sexual: 0.02, "violence/graphic": 0.95 }));
+    const uploadId = await mint();
+    // A real Postgres refusing the verdict write, every time.
+    await getPool().query(`
+      CREATE OR REPLACE FUNCTION refuse_scan_write() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.scan_status IS DISTINCT FROM OLD.scan_status THEN
+          RAISE EXCEPTION 'verdict write refused';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER refuse_scan_write BEFORE UPDATE ON community_home_media_uploads
+        FOR EACH ROW EXECUTE FUNCTION refuse_scan_write();
+    `);
+    try {
+      expect((await claim(uploadId)).status).toBe(400);
+      const row = await uploadRow(uploadId);
+      expect(row.scan_status).toBe("unscanned");
+      expect(row.verified_at).toBeNull();
+    } finally {
+      await getPool().query(`
+        DROP TRIGGER IF EXISTS refuse_scan_write ON community_home_media_uploads;
+        DROP FUNCTION IF EXISTS refuse_scan_write();
+      `);
+    }
+  });
+
+  it("keeps a quarantined row whose object could not be deleted", async () => {
+    const uploadId = await mint();
+    await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET scan_status = 'rejected', scan_labels = '["gore"]'::jsonb,
+              quarantined_at = NOW() - INTERVAL '60 days'
+        WHERE id = $1`,
+      [uploadId],
+    );
+    deleteFails = true;
+    expect(await sweepQuarantinedCommunityHomeMedia()).toBe(0);
+    expect((await uploadRow(uploadId)).scan_status).toBe("rejected");
+
+    deleteFails = false;
+    expect(await sweepQuarantinedCommunityHomeMedia()).toBe(1);
+  });
+
+  it("keeps a quarantined upload out of the orphan sweep's reach", async () => {
+    configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+    const refused = await mint();
+    expect((await claim(refused)).status).toBe(400);
+    const abandoned = await mint();
+    await age(refused, "2 hours");
+    await age(abandoned, "2 hours");
+
+    // Both are unclaimed, unverified and past the grace period. Only the one
+    // nobody scanned is garbage.
+    deletedKeys.length = 0;
+    expect(await sweepOrphanedCommunityHomeMedia()).toBe(1);
+    expect((await uploadRow(refused)).scan_status).toBe("rejected");
+    const left = await getPool().query<{ id: string }>(
+      `SELECT id FROM community_home_media_uploads`,
+    );
+    expect(left.rows.map((entry) => entry.id)).toEqual([refused]);
+  });
+
+  it("expires an ordinary quarantine and never an illegal one", async () => {
+    const gore = await mint();
+    const illegal = await mint();
+    const fresh = await mint();
+    await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET scan_status = 'rejected', scan_labels = '["gore"]'::jsonb,
+              quarantined_at = NOW() - INTERVAL '60 days'
+        WHERE id = $1`,
+      [gore],
+    );
+    await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET scan_status = 'rejected', scan_labels = '["csam_suspected"]'::jsonb,
+              quarantined_at = NOW() - INTERVAL '3650 days'
+        WHERE id = $1`,
+      [illegal],
+    );
+    await getPool().query(
+      `UPDATE community_home_media_uploads
+          SET scan_status = 'rejected', scan_labels = '["gore"]'::jsonb,
+              quarantined_at = NOW() - INTERVAL '10 days'
+        WHERE id = $1`,
+      [fresh],
+    );
+
+    expect(await sweepQuarantinedCommunityHomeMedia()).toBe(1);
+    expect(deletedKeys).toHaveLength(1);
+    const left = await getPool().query<{ id: string }>(
+      `SELECT id FROM community_home_media_uploads ORDER BY created_at`,
+    );
+    expect(left.rows.map((entry) => entry.id).sort()).toEqual(
+      [illegal, fresh].sort(),
+    );
+
+    process.env.CONTENT_SCAN_QUARANTINE_DAYS = "7";
+    expect(await sweepQuarantinedCommunityHomeMedia()).toBe(1);
+  });
+});

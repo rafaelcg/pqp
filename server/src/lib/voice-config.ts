@@ -13,11 +13,21 @@ import { isEnabled } from "./flags.js";
  * is already on is shown (and can be turned off) from the room's own state,
  * which the client gets on `welcome` and `voice-audience`, whatever this says.
  *
+ * `audioSelfHeal`: the client watches its own audio (a microphone that stopped
+ * reaching the room, a call that stopped playing), repairs it quietly, and
+ * offers "Arrumar" when that did not work. Runtime flag
+ * `voice_audio_self_heal`, global, on by default, `VOICE_AUDIO_SELF_HEAL` as
+ * its environment default. Global because half of what it is for is DM calls,
+ * which have no server. It doubles as the client's proof that this API accepts
+ * `mediaQuality.audioHealth` on a call rating: a client that never heard
+ * `true` from here never sends the field.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
 export interface VoiceConfig {
   audienceMode: boolean;
+  audioSelfHeal: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -27,5 +37,6 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   const serverId = parsed.success ? parsed.data : null;
   return {
     audienceMode: isEnabled("audience_mode", { serverId }),
+    audioSelfHeal: isEnabled("voice_audio_self_heal"),
   };
 }

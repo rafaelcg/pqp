@@ -8,6 +8,8 @@ import {
   isCameraSoloId,
   isMusicPictureOnlyStage,
   STAGE_COLUMN_RESERVE_PX,
+  STAGE_HEIGHT_TALL,
+  STAGE_TALL_RESERVE_PX,
   stageHeightClass,
   isStageCollapsed,
   markCallStarted,
@@ -152,16 +154,40 @@ describe("stageHeightClass", () => {
   });
 
   /*
-   * And NOT on the tall one. `68svh` for a camera or a share is a product
-   * rule the e2e suite measures: the stage is exactly that before anybody
-   * drags the divider, and a 1:1 call gives the remote person half the
-   * viewport. A 300px reserve costs 12px of it at 900px tall, which was
-   * enough to fail both.
+   * The tall one carries a smaller reserve that never binds on a window
+   * 720px tall or more. `68svh` for a camera or a share is a product rule
+   * the e2e suite measures at 800 and 900 (the stage is exactly that before
+   * anybody drags the divider, and a 1:1 call gives the remote person half
+   * the viewport), and the 300px reserve cost 12px of it at 900px.
    */
-  it("leaves a published picture at a clean 68svh", () => {
-    const rule = stageHeightClass({ anyVideo: true, musicPictureOnly: false });
-    expect(rule).toContain("h-[68svh]");
-    expect(rule).not.toContain("calc(");
+  const tallRule = () =>
+    stageHeightClass({ anyVideo: true, musicPictureOnly: false });
+  /** What the class resolves to, by hand, for a window `h` px tall. */
+  const tallHeightAt = (h: number) =>
+    Math.max(280, Math.min(0.68 * h, h - STAGE_TALL_RESERVE_PX));
+
+  it("gives a published picture its 68svh on any window 720px or taller", () => {
+    expect(tallRule()).toBe(STAGE_HEIGHT_TALL);
+    expect(tallRule()).toContain(
+      `h-[min(68svh,calc(100svh-${STAGE_TALL_RESERVE_PX}px))]`,
+    );
+    for (const h of [720, 768, 800, 844, 900, 1080]) {
+      expect(tallHeightAt(h)).toBeCloseTo(0.68 * h, 5);
+    }
+  });
+
+  /*
+   * Below 720px the bare `68svh` pushed the message box off the bottom edge
+   * during a screen share (a Linux desktop report: the shell's window goes
+   * down to 600px). There the stage gives way and the column under it keeps
+   * the reserve.
+   */
+  it("keeps the message box on screen on a short window", () => {
+    for (const h of [600, 650, 700]) {
+      expect(h - tallHeightAt(h)).toBeGreaterThanOrEqual(STAGE_TALL_RESERVE_PX);
+    }
+    // The floor still wins on a window too short for anything.
+    expect(tallHeightAt(480)).toBe(280);
   });
 
   /*

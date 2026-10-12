@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   channelRoutePath,
   conversationRoutePath,
+  forumPostRoutePath,
+  homeRoutePath,
   linkFollowedAt,
   messageLinkState,
   messageRoutePath,
@@ -17,6 +19,7 @@ describe("parseAppRoute", () => {
       serverId: "s1",
       channelId: null,
       messageId: null,
+      postId: null,
     });
   });
 
@@ -26,6 +29,7 @@ describe("parseAppRoute", () => {
       serverId: "s1",
       channelId: "c1",
       messageId: null,
+      postId: null,
     });
   });
 
@@ -35,6 +39,7 @@ describe("parseAppRoute", () => {
       serverId: "s1",
       channelId: "c1",
       messageId: "m1",
+      postId: null,
     });
   });
 
@@ -44,6 +49,7 @@ describe("parseAppRoute", () => {
       serverId: "s1",
       channelId: null,
       messageId: null,
+      postId: null,
     });
   });
 
@@ -77,6 +83,7 @@ describe("parseAppRoute", () => {
       serverId: "s1",
       channelId: "c1",
       messageId: "m1",
+      postId: null,
     });
   });
 
@@ -88,6 +95,7 @@ describe("parseAppRoute", () => {
       serverId: "a/b",
       channelId: "c d",
       messageId: null,
+      postId: null,
     });
   });
 });
@@ -236,6 +244,50 @@ describe("signedOutRedirectPath", () => {
   });
 });
 
+describe("parseAppRoute: Baú", () => {
+  it("reads the Baú of a server, with and without a post", () => {
+    expect(parseAppRoute("/app/server/s1/bau")).toEqual({
+      kind: "home",
+      serverId: "s1",
+      postId: null,
+    });
+    expect(parseAppRoute("/app/server/s1/bau/p1")).toEqual({
+      kind: "home",
+      serverId: "s1",
+      postId: "p1",
+    });
+  });
+
+  it("is not a channel, and anything deeper is not a Baú link", () => {
+    expect(parseAppRoute("/app/server/s1/bau/p1/extra")).toEqual({
+      kind: "channel",
+      serverId: "s1",
+      channelId: null,
+      messageId: null,
+      postId: null,
+    });
+    expect(parseAppRoute("/app/server/s1/channel/bau")?.kind).toBe("channel");
+  });
+
+  it("round-trips what homeRoutePath emits, ids that need escaping included", () => {
+    expect(homeRoutePath("s1")).toBe("/app/server/s1/bau");
+    for (const post of ["p1", "p/1 2", null]) {
+      expect(parseAppRoute(homeRoutePath("s 1", post))).toEqual({
+        kind: "home",
+        serverId: "s 1",
+        postId: post,
+      });
+    }
+  });
+
+  it("survives sign-up: a logged-out visitor lands on the post, not the door", () => {
+    expect(signedOutRedirectPath("/app/server/s1/bau/p1")).toBe(
+      "/app/server/s1/bau/p1",
+    );
+    expect(signedOutRedirectPath("/app/server/s1/bau")).toBe("/app/server/s1/bau");
+  });
+});
+
 describe("pickOpenableServer", () => {
   it("keeps a server the viewer is already in", () => {
     expect(pickOpenableServer("lobby", ["lobby", "other"])).toEqual({
@@ -272,5 +324,47 @@ describe("linkFollowedAt", () => {
 
   it("is now for a stamp from the future, such as another clock", () => {
     expect(linkFollowedAt(messageLinkState(9_000), 3_000)).toBe(3_000);
+  });
+});
+
+describe("forum post links", () => {
+  it("reads a post open over its forum", () => {
+    expect(parseAppRoute("/app/server/s1/channel/f1/post/p1")).toEqual({
+      kind: "channel",
+      serverId: "s1",
+      channelId: "f1",
+      messageId: null,
+      postId: "p1",
+    });
+  });
+
+  it("round-trips through the builder, escaping included", () => {
+    const path = forumPostRoutePath("s 1", "f/1", "p 1");
+    expect(path).toBe("/app/server/s%201/channel/f%2F1/post/p%201");
+    expect(parseAppRoute(path)).toMatchObject({
+      serverId: "s 1",
+      channelId: "f/1",
+      postId: "p 1",
+    });
+  });
+
+  it("does not read a post id without a forum, or a message as a post", () => {
+    expect(parseAppRoute("/app/server/s1/post/p1")).toMatchObject({
+      channelId: null,
+      postId: null,
+    });
+    expect(parseAppRoute("/app/server/s1/channel/c1/message/m1")).toMatchObject({
+      messageId: "m1",
+      postId: null,
+    });
+  });
+
+  it("keeps the post through the sign-up round trip", () => {
+    // A link pasted to somebody without an account is the commonest way a
+    // post is shared; landing them on the forum with the post closed would
+    // drop the one thing the link promised.
+    expect(signedOutRedirectPath("/app/server/s1/channel/f1/post/p1")).toBe(
+      "/app/server/s1/channel/f1/post/p1",
+    );
   });
 });

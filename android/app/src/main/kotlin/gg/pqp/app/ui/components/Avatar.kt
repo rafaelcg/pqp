@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,11 +88,17 @@ fun Avatar(
             .background(monogramColor(seed)),
         contentAlignment = Alignment.Center,
     ) {
-        if (resolved != null) {
+        // A picture that fails to load (a feed's avatar on a host that is
+        // gone, an expired link) falls back to the initials, for that URL.
+        // Before, the failed image left an empty coloured disc, which read as
+        // a missing person rather than a missing picture (forum QA P20).
+        var failedUrl by remember { mutableStateOf<String?>(null) }
+        if (resolved != null && resolved != failedUrl) {
             AsyncImage(
                 model = resolved,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                onError = { failedUrl = resolved },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {

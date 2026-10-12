@@ -67,6 +67,7 @@ export function failedSendKey(
   | "chat.reject.slowMode"
   | "chat.reject.automod"
   | "chat.reject.databaseUnavailable"
+  | "chat.reject.locked"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -83,6 +84,8 @@ export function failedSendKey(
       return "chat.reject.automod";
     case "database-unavailable":
       return "chat.reject.databaseUnavailable";
+    case "locked":
+      return "chat.reject.locked";
     default:
       return "chat.failedSend";
   }
@@ -94,6 +97,8 @@ const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
   "undeliverable",
   // Retrying the same body hits the same rule. The author edits instead.
   "automod",
+  // A forum post staff closed. Stays closed until staff reopen it.
+  "locked",
 ]);
 
 export function isPermanentRejectReason(

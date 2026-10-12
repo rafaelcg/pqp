@@ -53,6 +53,47 @@ final class CallStateTests: XCTestCase {
         XCTAssertNil(incomingCallBannerRing(incoming: [], presentedByCallKit: []))
     }
 
+    // MARK: - The camera stage turns, and is not cropped to a strip
+
+    /// Call rating 706: "a tela da câmera não deita quando deita o celular".
+    func testOnlyASpotlightWithACameraMayTurn() {
+        XCTAssertTrue(callStageAllowsLandscape(layout: .spotlight, hasRemoteCamera: true, isCameraOn: false))
+        XCTAssertTrue(callStageAllowsLandscape(layout: .spotlight, hasRemoteCamera: false, isCameraOn: true))
+        XCTAssertFalse(
+            callStageAllowsLandscape(layout: .spotlight, hasRemoteCamera: false, isCameraOn: false),
+            "an avatar on its side is not a stage"
+        )
+        for layout in [CallStageLayout.screen, .grid, .ring] {
+            XCTAssertFalse(
+                callStageAllowsLandscape(layout: layout, hasRemoteCamera: true, isCameraOn: true),
+                "\(layout) is laid out for an upright phone"
+            )
+        }
+    }
+
+    /// The same rating's other half: a 16:9 webcam filled into an upright
+    /// phone kept a third of the picture and blew it up about four times.
+    func testALandscapeCameraOnAnUprightPhoneIsDrawnWhole() {
+        let webcam = CGSize(width: 1280, height: 720)
+        let uprightPhone = CGSize(width: 430, height: 932)
+        XCTAssertFalse(cameraStageShouldFill(video: webcam, container: uprightPhone))
+        XCTAssertTrue(
+            cameraStageShouldFill(video: webcam, container: CGSize(width: 932, height: 430)),
+            "turned sideways, the same webcam fills the screen"
+        )
+    }
+
+    func testAPhoneCallingAPhoneStillFills() {
+        let uprightCamera = CGSize(width: 720, height: 1280)
+        XCTAssertTrue(cameraStageShouldFill(video: uprightCamera, container: CGSize(width: 430, height: 932)))
+        XCTAssertFalse(cameraStageShouldFill(video: uprightCamera, container: CGSize(width: 932, height: 430)))
+    }
+
+    func testNoPictureYetKeepsTheOldFill() {
+        XCTAssertTrue(cameraStageShouldFill(video: .zero, container: CGSize(width: 430, height: 932)))
+        XCTAssertTrue(cameraStageShouldFill(video: CGSize(width: 1280, height: 720), container: .zero))
+    }
+
     // MARK: - Stage layout
 
     func testLayoutIsRingWhenAloneAndSpotlightForOne() {

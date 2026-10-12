@@ -28,6 +28,7 @@ final class ScreenShareLandscapeTests: XCTestCase {
     private func reset() {
         WatchOrientation.leaveTheater()
         WatchOrientation.releaseAllScreenShares()
+        WatchOrientation.setCallStage(false)
     }
 
     private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
@@ -124,6 +125,30 @@ final class ScreenShareLandscapeTests: XCTestCase {
         WatchOrientation.leaveTheater()
         WatchOrientation.leaveTheater()
         assertLocked()
+    }
+
+    // MARK: - The call stage
+
+    func testTheCallStageClaimIsIdempotentAndIndependent() {
+        WatchOrientation.setCallStage(true)
+        WatchOrientation.setCallStage(true)
+        XCTAssertEqual(WatchOrientation.ownerCount, 1, "stated on every change; that is still one claim")
+        assertUnlocked()
+        let share = UUID()
+        WatchOrientation.enterScreenShare(share)
+        WatchOrientation.releaseAllScreenShares()
+        assertUnlocked("releasing shares is not the call's to undo")
+        WatchOrientation.setCallStage(false)
+        assertLocked()
+        WatchOrientation.setCallStage(false)
+        XCTAssertEqual(WatchOrientation.ownerCount, 0)
+    }
+
+    func testTheAppDropsTheCallStageClaimWhenTheCoverGoes() throws {
+        let app = try source("App/PqpApp.swift")
+        XCTAssertTrue(app.contains("WatchOrientation.setCallStage(false)"))
+        let stage = try source("Voice/CallStageView.swift")
+        XCTAssertTrue(stage.contains(".onDisappear { WatchOrientation.setCallStage(false) }"))
     }
 
     // MARK: - The net under it
