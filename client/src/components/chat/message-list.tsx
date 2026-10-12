@@ -112,6 +112,7 @@ import { translateMessage, useTranslation } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
+import { shouldOpenUp } from "@/lib/menu-flip";
 import {
   cn,
   formatDayLabel,
@@ -127,6 +128,8 @@ import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 /** How close to the bottom still counts as "following the conversation". */
 const STICKY_THRESHOLD_PX = 120;
+/** Closer to the end than this, there is nothing below to jump to. */
+const SCROLL_END_SLACK_PX = 4;
 /** Distance from the top that triggers loading older history. */
 const LOAD_MORE_THRESHOLD_PX = 240;
 /** How long a jumped-to message stays lit. */
@@ -593,6 +596,13 @@ export const MessageList = memo(function MessageList({
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
+  /**
+   * Whether anything is below the fold. A transcript that fits on screen
+   * can be unpinned (landing on "Novas" unpins), and "Ir ao presente" over
+   * replies that are all already visible offered a jump to nowhere (forum QA
+   * P8). Read from the geometry on every scroll and every resize.
+   */
+  const [canScrollDown, setCanScrollDown] = useState(false);
   const [missedCount, setMissedCount] = useState(0);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [jumpNotice, setJumpNotice] = useState(false);
@@ -1379,6 +1389,7 @@ export const MessageList = memo(function MessageList({
       return;
     }
     const observer = new ResizeObserver(() => {
+      setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
       if (forumHoldTopRef.current) {
         container.scrollTop = 0;
         return;
@@ -1749,6 +1760,8 @@ export const MessageList = memo(function MessageList({
     if (!container) {
       return;
     }
+    // Plain geometry, true mid-jump as much as any other time.
+    setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
     // A jump's own animation: `settleJump` reads the geometry when it lands.
     // Its first frames are still near the bottom and would re-pin the list.
     if (jumpingRef.current) {
@@ -2191,6 +2204,12 @@ export const MessageList = memo(function MessageList({
               }
               onMarkRead={onMarkRead}
               showUnreadDivider={rowId === firstUnreadId}
+              afterForumOpening={
+                forumOpeningId !== null &&
+                index > 0 &&
+                rows[index - 1]?.message.id === forumOpeningId &&
+                forumPost?.afterOpening != null
+              }
               unreadDividerRef={
                 rowId === firstUnreadId ? unreadDividerRef : undefined
               }
@@ -2291,7 +2310,7 @@ export const MessageList = memo(function MessageList({
         </p>
       )}
 
-      {(!isPinned || hasNewer) && (
+      {((!isPinned && canScrollDown) || hasNewer) && (
         <button
           type="button"
           onClick={jumpToPresentFromPill}
@@ -2792,6 +2811,12 @@ interface MessageRowProps {
   onMarkRead?: () => void;
   showUnreadDivider?: boolean;
   unreadDividerRef?: Ref<HTMLDivElement>;
+  /**
+   * The first reply under a forum post's opening message: something is drawn
+   * between them (the Solução card, "N RESPOSTAS"), so this row opens its own
+   * block even when the author wrote the opening message too.
+   */
+  afterForumOpening?: boolean;
   /** This ping sits against the previous row's wash. */
   mentionJoinTop?: boolean;
   /** This ping sits against the next row's wash. */
@@ -2860,6 +2885,7 @@ const MessageRow = memo(function MessageRow({
   onMarkRead,
   showUnreadDivider = false,
   unreadDividerRef,
+  afterForumOpening = false,
   mentionJoinTop = false,
   mentionJoinBottom = false,
   stream = false,
@@ -2876,7 +2902,7 @@ const MessageRow = memo(function MessageRow({
   // The first unread message opens a block even when the same person also
   // wrote the message above the "Novas" line: the divider is where the reader
   // starts, and a headerless row right under it reads as nobody's.
-  const startsGroup = row.startsGroup || showUnreadDivider;
+  const startsGroup = row.startsGroup || showUnreadDivider || afterForumOpening;
   // A Baú post pasted here is drawn as a card. The server decides whether this
   // reader may see it; until it answers (and if it refuses) the link stays.
   const bauSelection = useMemo(
@@ -2905,7 +2931,21 @@ const MessageRow = memo(function MessageRow({
     currentUserId,
   );
   const moreRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Above the button when the transcript would clip it below (the last
+  // reply, right over the composer). Measured before paint, so it never
+  // flashes in the wrong place.
+  const [moreUp, setMoreUp] = useState(false);
+  useLayoutEffect(() => {
+    const anchor = moreRef.current;
+    const menu = moreMenuRef.current;
+    if (!moreOpen || !anchor || !menu) {
+      setMoreUp(false);
+      return;
+    }
+    setMoreUp(shouldOpenUp(anchor, menu.offsetHeight));
+  }, [moreOpen]);
   useEffect(() => {
     if (!moreOpen) {
       return;
@@ -3819,9 +3859,14 @@ const MessageRow = memo(function MessageRow({
                 </Tooltip>
                 {moreOpen && (
                   <div
+                    ref={moreMenuRef}
                     role="menu"
                     aria-label={t("chat.more")}
-                    className="absolute right-0 top-full z-20 mt-0.5 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                    data-opens={moreUp ? "up" : "down"}
+                    className={cn(
+                      "absolute right-0 z-20 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]",
+                      moreUp ? "bottom-full mb-0.5" : "top-full mt-0.5",
+                    )}
                   >
                     {onToggleAnswer && isReal && (
                       <MoreMenuItem
