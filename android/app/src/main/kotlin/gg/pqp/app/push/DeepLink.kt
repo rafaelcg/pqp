@@ -14,6 +14,14 @@ sealed interface DeepLinkTarget {
     data class Channel(val serverId: String, val channelId: String) : DeepLinkTarget
 
     /**
+     * One post of a forum: `/app/server/<sid>/channel/<forumId>/post/<postId>`,
+     * the link "Copiar link" hands out on every client (`forums.ts`). A push
+     * about a reply in a post names the post as a plain channel instead, and
+     * is resolved to this by the router, which asks the server.
+     */
+    data class ForumPost(val serverId: String, val forumId: String, val postId: String) : DeepLinkTarget
+
+    /**
      * A DM or a group. `channelId` really is a channel id: a conversation is a
      * `channels` row with `kind` of `dm` or `group`, and `/app/dm/<id>` carries
      * that id, not a separate conversation id.
@@ -47,6 +55,8 @@ sealed interface DeepLinkTarget {
 val DeepLinkTarget.channelId: String?
     get() = when (this) {
         is DeepLinkTarget.Channel -> channelId
+        // The post is the channel being read.
+        is DeepLinkTarget.ForumPost -> postId
         is DeepLinkTarget.Conversation -> channelId
         is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite -> null
     }
@@ -93,6 +103,12 @@ object DeepLink {
             // server list and did nothing; only `pqp://invite/<code>` worked.
             segments.size >= 3 && segments[1] == "invite" ->
                 if (isUsableCode(segments[2])) DeepLinkTarget.Invite(segments[2]) else null
+
+            segments.size >= 7 &&
+                segments[1] == "server" &&
+                segments[3] == "channel" &&
+                segments[5] == "post" ->
+                DeepLinkTarget.ForumPost(segments[2], segments[4], segments[6])
 
             segments.size >= 5 &&
                 segments[1] == "server" &&
@@ -163,11 +179,70 @@ object DeepLink {
 /**
  * Whether a tap on a channel push should open a chat on top of the list.
  *
- * `null` is "the list did not have it", which is how a thread arrives (threads
- * are not in the channel list) and how a failed fetch looks, so both open as
- * before. A row that IS in the list but is neither text nor voice is a type
- * this build cannot draw (a forum, a future one): the person stays on the
- * channel list instead of landing in a chat with nothing in it.
+ * `null` is "the list did not have it", which is how a thread or a forum post
+ * arrives (neither is in the channel list) and how a failed fetch looks, so
+ * all three open a chat (a post is first asked about, see [channelPushRoute]).
+ * A forum opens its own screen. A row that IS in the list but is none of
+ * these is a type this build cannot draw (a future one): the person stays on
+ * the channel list instead of landing in a chat with nothing in it.
  */
 fun pushOpensChat(channel: gg.pqp.app.core.Channel?): Boolean =
     channel == null || channel.isText || channel.isVoice
+
+/** Where a tap on `/app/server/<sid>/channel/<cid>` lands. */
+sealed interface ChannelPushRoute {
+    /** A text or voice channel, or a thread: the chat. */
+    data object Chat : ChannelPushRoute
+
+    /** The forum itself (a new post lit its dot): its list. */
+    data object Forum : ChannelPushRoute
+
+    /** A post of a forum (a reply or a mention in it): the forum, with the post on top. */
+    data class Post(val forumId: String, val forumName: String) : ChannelPushRoute
+
+    /** A type this build cannot draw: stay on the channel list. */
+    data object Stay : ChannelPushRoute
+}
+
+/**
+ * The routing decision for a channel push, without a NavController, so it is
+ * tested on the JVM. [channel] is the row from the server's channel list, null
+ * when the id is not in it (a thread, a post, or a failed fetch). [lookup]
+ * answers, for an id that is not in the list, whether it is a forum post (by
+ * asking `GET /api/forum-posts/:id`).
+ */
+suspend fun channelPushRoute(
+    channel: gg.pqp.app.core.Channel?,
+    channels: List<gg.pqp.app.core.Channel>?,
+    lookup: suspend () -> PostLookup,
+): ChannelPushRoute {
+    if (channel != null) {
+        return when {
+            channel.isForum -> ChannelPushRoute.Forum
+            pushOpensChat(channel) -> ChannelPushRoute.Chat
+            else -> ChannelPushRoute.Stay
+        }
+    }
+    return when (val found = lookup()) {
+        is PostLookup.Post -> ChannelPushRoute.Post(
+            found.forumId,
+            channels?.firstOrNull { it.id == found.forumId }?.name.orEmpty(),
+        )
+        // The server said "no such post": an ordinary thread, its chat as before.
+        PostLookup.NotAPost -> ChannelPushRoute.Chat
+        // Nobody knows which it is. A chat opened on a post id would hide the
+        // post behind an untitled transcript, so the tap stays on the list.
+        PostLookup.Failed -> ChannelPushRoute.Stay
+    }
+}
+
+/** What `GET /api/forum-posts/:id` said about an id that is not in the channel list. */
+sealed interface PostLookup {
+    data class Post(val forumId: String) : PostLookup
+
+    /** 404: not a post (a chat thread, or gone). */
+    data object NotAPost : PostLookup
+
+    /** The network or the server failed: unknown. */
+    data object Failed : PostLookup
+}

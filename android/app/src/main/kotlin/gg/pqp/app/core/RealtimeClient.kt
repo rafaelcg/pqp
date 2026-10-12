@@ -99,6 +99,14 @@ class RealtimeClient(
     /** Re-sent after every `ready`, because the server forgets on reconnect. */
     @Volatile private var subscribedChannelId: String? = null
 
+    /**
+     * The second view slot (`thread-join`), re-sent after every `ready` like
+     * the first. A forum post rides here so the forum itself can stay on the
+     * primary slot and keep its list live underneath (`forum-post-upsert` is
+     * fanned out to the forum's viewers, not the post's).
+     */
+    @Volatile private var subscribedThreadId: String? = null
+
     fun connect() {
         wanted = true
         if (connectJob?.isActive == true) return
@@ -268,6 +276,7 @@ class RealtimeClient(
                         // The server has no memory of what this connection was
                         // watching, so re-subscribing is the client's job.
                         subscribedChannelId?.let { joinChannel(it) }
+                        subscribedThreadId?.let { joinThread(it) }
                     }
                     "pong" -> return
                 }
@@ -338,6 +347,28 @@ class RealtimeClient(
                 put("channelId", channelId)
             },
         )
+    }
+
+    /**
+     * Take the secondary slot for a thread channel (a forum post). The server
+     * refuses anything that is not a thread the account can see, in silence,
+     * so the caller keeps the primary slot on something it can live with.
+     */
+    fun joinThread(channelId: String): Boolean {
+        subscribedThreadId = channelId
+        return send(
+            buildJsonObject {
+                put("type", "thread-join")
+                put("channelId", channelId)
+            },
+        )
+    }
+
+    /** Give up the secondary slot, only if it is still [channelId]'s; see [leaveChannel]. */
+    fun leaveThread(channelId: String) {
+        if (subscribedThreadId != channelId) return
+        subscribedThreadId = null
+        send(buildJsonObject { put("type", "thread-leave") })
     }
 
     /**

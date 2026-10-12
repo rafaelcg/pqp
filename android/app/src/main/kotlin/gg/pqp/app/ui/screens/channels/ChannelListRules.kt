@@ -259,7 +259,9 @@ const val VOICE_SECTION = "voice"
  *
  * A `watch_party` channel is never in here (the card above the list and the
  * "Criar watch party" row are where it lives), and neither is any channel type
- * this build does not know how to open: only text and voice rows are drawn.
+ * this build does not know how to open: only text, forum and voice rows are
+ * drawn. A forum sits with the text channels, as on the web: the server
+ * groups the two for positions (`createChannel`), so they share one sequence.
  */
 fun sectionsOf(all: List<Channel>, textTitle: String = "", voiceTitle: String = ""): List<ChannelSection> {
     val categories = all.filter { it.isCategory }.sortedBy { it.position }
@@ -278,11 +280,11 @@ fun sectionsOf(all: List<Channel>, textTitle: String = "", voiceTitle: String = 
     val topLevel = byParent[null].orEmpty()
     // Keys without a '-' so each is its own `group`: the two top-level
     // sections are never one category's two halves.
-    add(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, topLevel.filter { it.isText })
+    add(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, topLevel.filter { it.isText || it.isForum })
 
     categories.forEach { category ->
         val children = byParent[category.id].orEmpty()
-        add("cat-${category.id}-text", category.name, category.id, children.filter { it.isText })
+        add("cat-${category.id}-text", category.name, category.id, children.filter { it.isText || it.isForum })
         add("cat-${category.id}-voice", category.name, category.id, voiceRooms(children))
     }
 

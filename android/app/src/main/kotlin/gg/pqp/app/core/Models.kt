@@ -188,6 +188,13 @@ data class Channel(
     // A watch party is a voice room with a gated stage; this app joins it as audience.
     val isVoice: Boolean get() = type == "voice" || type == "watch_party"
     val isCategory: Boolean get() = type == "category"
+
+    /**
+     * Holds posts instead of messages (`packages/shared/src/forums.ts`). Its
+     * row sits with the text channels and opens the forum screen, never a
+     * chat: a forum carries no message of its own.
+     */
+    val isForum: Boolean get() = type == "forum"
 }
 
 @Serializable

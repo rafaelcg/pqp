@@ -62,6 +62,18 @@ object Permission {
     const val MANAGE_SERVER: Long = 1L shl 5
 
     /**
+     * Forum staff, with [MANAGE_MESSAGES]: either bit on a forum pins, locks,
+     * deletes and edits other people's posts there (`forumPerms` on the
+     * server), and sees the staff-only tags in the composer.
+     */
+    const val MANAGE_CHANNELS: Long = 1L shl 4
+
+    /** Writing in a channel; on a forum, starting a post. */
+    const val SEND_MESSAGES: Long = 1L shl 7
+
+    const val MANAGE_MESSAGES: Long = 1L shl 8
+
+    /**
      * Start the stream in a `watch_party` channel. Everyone else there is
      * the audience -- see the bit's own doc on web for why it is not
      * `STREAM`.
