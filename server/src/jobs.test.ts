@@ -98,6 +98,14 @@ vi.mock("./ws/stories.js", () => ({
   notifyStoriesUpdate: vi.fn(),
   notifyStoryAudiences: vi.fn(),
 }));
+// The mixed channel list's migration job: `channel-layout.test.ts` pins what
+// it does on a real Postgres; here only that it runs once a minute.
+vi.mock("./services/channel-layout.js", () => ({
+  CHANNEL_LAYOUT_JOB_INTERVAL_MS: 60_000,
+  runChannelLayoutMigrations: vi.fn(async () => []),
+  listSidebarChannelIds: vi.fn(async () => []),
+}));
+vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }));
 
 import {
   sweepOrphanedAttachments,
@@ -119,6 +127,7 @@ import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
+import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -202,11 +211,12 @@ describe("cold jobs", () => {
     // job poller (its own test above: adaptive, not a fixed cadence); 21 with
     // the Baú video subtitles sweep (a minute, asserted below); 22 with the
     // forum shell sweep (five minutes, asserted below); 24 with the stories
-    // sweep (a minute) and the stories video job (5 s), both asserted below.
+    // sweep (a minute) and the stories video job (5 s), both asserted below;
+    // 25 with the channel layout migration job (a minute, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(24);
+    expect(jobs.count).toBe(25);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -231,6 +241,9 @@ describe("cold jobs", () => {
     // The stories expiry sweep: a minute, so four. It has no boot run: a
     // minute is the whole grace the 24 h promise allows anyway.
     expect(sweepStories).toHaveBeenCalledTimes(4);
+    // The channel layout migration job: a minute, no boot run (the flag is a
+    // dashboard flip, and a minute is what the dashboard note promises).
+    expect(runChannelLayoutMigrations).toHaveBeenCalledTimes(4);
     // The stories video job: every 5 s, idle here, so once per tick.
     expect(processStoryVideos).toHaveBeenCalledTimes(48);
 

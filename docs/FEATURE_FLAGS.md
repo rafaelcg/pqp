@@ -139,6 +139,20 @@ byte. Turn it on for one server with `PUT /api/admin/flag-overrides
 interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
 `docs/WATCH_PARTY.md` §"How many people watched".
 
+Born as a flag (no old reader): `MIXED_CHANNEL_LIST` (`mixed_channel_list`,
+default off, **per server**), the channel list with categories as the only
+headers and every type mixed in one order per parent
+(`server/src/services/channel-layout.ts`). **It moves data**: the minute job
+migrates every server the flag resolves on for and that has no row in
+`channel_layout_migrations` (loose channels into a new "Canais" category at the
+top, in the order the web drew them, after a snapshot). Clients read
+`GET /api/servers/:id/channel-layout` and draw the new list only when it says
+`mixed`, which needs the flag AND the row, so nobody sees a half state. Off again
+is the instant rollback for rendering; `POST /api/admin/channel-layout`
+`{ serverId, action: "revert" }` restores the data (`"migrate"`, with
+`dryRun`, does one server now). On globally, a new server is born with the
+category. Counted under `channelLayout` on `GET /api/admin/metrics`.
+
 Born as a flag (no old reader): `VOICE_AUDIO_SELF_HEAL`
 (`voice_audio_self_heal`, default **on**, global, client-only), the web call
 watching its own audio and repairing it (`client/src/lib/audio-health.ts`): a

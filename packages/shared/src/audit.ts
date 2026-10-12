@@ -30,6 +30,8 @@ export const AUDIT_ACTIONS = [
   "channel.update",
   "channel.delete",
   "channel.move",
+  /** The whole channel list reordered in one write (`PUT .../channel-layout`). */
+  "channel.reorder",
   "message.delete",
   /**
    * A moderator cleared many messages in one action.

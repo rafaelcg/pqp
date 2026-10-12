@@ -3152,8 +3152,8 @@ function MainAppContent({
       setPurgeChannel({ id: channel.id, name: channel.name }),
   );
   const stableOnMoveChannel = useStableCallback(
-    (id: string, parentId: string | null, index: number) =>
-      void handleMoveChannel(id, parentId, index),
+    (id: string, parentId: string | null, index: number, targetId?: string) =>
+      void handleMoveChannel(id, parentId, index, targetId),
   );
   const stableOnFavoriteChannelIdsChange = useStableCallback(
     (ids: string[]) => handleFavoriteChannelIdsChange(ids),
@@ -6451,9 +6451,10 @@ function MainAppContent({
     channelId: string,
     parentId: string | null,
     index: number,
+    targetId?: string,
   ) {
     try {
-      const { channels: next } = await moveChannel(channelId, parentId, index);
+      const { channels: next } = await moveChannel(channelId, parentId, index, targetId);
       setChannels(next);
     } catch (error) {
       setAppError(

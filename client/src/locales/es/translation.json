@@ -2368,6 +2368,7 @@
   "serverSettings.audit.action.channel.update": "editó un canal",
   "serverSettings.audit.action.channel.delete": "eliminó un canal",
   "serverSettings.audit.action.channel.move": "reordenó un canal",
+  "serverSettings.audit.action.channel.reorder": "reorganizó la lista de canales",
   "serverSettings.audit.action.message.delete": "eliminó el mensaje de alguien",
   "serverSettings.audit.action.message.bulk_delete": "limpió mensajes del canal",
   "serverSettings.audit.action.story.remove": "quitó una historia del servidor",
