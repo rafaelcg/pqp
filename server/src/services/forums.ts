@@ -8,6 +8,7 @@ import {
   FORUM_SHELL_TTL_MS,
   FORUM_SIMILAR_MAX,
   FORUM_UNREAD_CAP,
+  FORUM_WEBHOOK_DEDUPE_HOURS_MAX,
   type ForumAcceptedAnswer,
   type ForumPostListResponse,
   type ForumPostSummary,
@@ -649,6 +650,9 @@ export interface ForumPostRow {
   pinned_at: Date | null;
   locked_at: Date | null;
   resolved_at: Date | null;
+  created_at: Date;
+  /** Webhook posts only: what the feed dedupes on. */
+  dedupe_key: string | null;
 }
 
 /** A published post, or null (a shell, a chat thread, anything else). */
@@ -656,7 +660,7 @@ export async function getForumPostRow(postId: string): Promise<ForumPostRow | nu
   const result = await getPool().query<ForumPostRow>(
     `SELECT p.channel_id, p.forum_id, c.server_id, c.name AS title, p.author_id,
             p.opening_message_id, p.resolved_message_id, p.published_at,
-            p.pinned_at, p.locked_at, p.resolved_at
+            p.pinned_at, p.locked_at, p.resolved_at, p.created_at, p.dedupe_key
        FROM forum_posts p
        JOIN channels c ON c.id = p.channel_id
       WHERE p.channel_id = $1 AND p.published_at IS NOT NULL`,
@@ -848,6 +852,8 @@ export function checkTagChange(
 export async function replaceForumTags(
   forumId: string,
   request: PutForumTagsRequest,
+  /** In the transaction, before COMMIT: the audit row lands with the change. */
+  beforeCommit?: AuditInTransaction<ForumTag[]>,
 ): Promise<{ before: ForumTag[]; after: ForumTag[] }> {
   const client = await getPool().connect();
   try {
@@ -894,6 +900,7 @@ export async function replaceForumTags(
       }
     }
     const after = await listForumTags(forumId, client);
+    await beforeCommit?.(client, before, after);
     await client.query("COMMIT");
     invalidateForumList(forumId);
     return { before, after };
@@ -919,34 +926,73 @@ export async function getForumSettings(forumId: string): Promise<ForumSettings> 
 }
 
 /**
- * Write only the fields the patch names, in one statement, so two editors
- * changing different settings at once cannot overwrite each other with the
- * value they each read. `before` is for the audit row only.
+ * Writes that must commit with the change they describe (an audit row): run
+ * inside the change's transaction, before COMMIT, with the state before and
+ * after. A write after COMMIT is lost to a failure there, because the retry
+ * finds nothing left to change and so never writes it.
+ */
+export type AuditInTransaction<T> = (
+  client: PoolClient,
+  before: T,
+  after: T,
+) => Promise<void>;
+
+/**
+ * Write only the fields the patch names, so two editors changing different
+ * settings at once cannot overwrite each other with the value they each
+ * read. The row is locked while `before` is read, so the audit's "old" is the
+ * value this write actually replaced.
  */
 export async function updateForumSettings(
   forumId: string,
   patch: UpdateForumSettingsRequest,
+  beforeCommit?: AuditInTransaction<ForumSettings>,
 ): Promise<{ before: ForumSettings; after: ForumSettings }> {
-  const before = await getForumSettings(forumId);
-  const result = await getPool().query<{ require_tag: boolean; default_sort: ForumSort }>(
-    `INSERT INTO forum_settings (forum_id, require_tag, default_sort, updated_at)
-     VALUES ($1, COALESCE($2::boolean, $4::boolean), COALESCE($3::text, $5::text), NOW())
-     ON CONFLICT (forum_id) DO UPDATE
-       SET require_tag = COALESCE($2::boolean, forum_settings.require_tag),
-           default_sort = COALESCE($3::text, forum_settings.default_sort),
-           updated_at = NOW()
-     RETURNING require_tag, default_sort`,
-    [
-      forumId,
-      patch.requireTag ?? null,
-      patch.defaultSort ?? null,
-      FORUM_SETTINGS_DEFAULTS.requireTag,
-      FORUM_SETTINGS_DEFAULTS.defaultSort,
-    ],
-  );
-  const row = result.rows[0]!;
-  invalidateForumList(forumId);
-  return { before, after: { requireTag: row.require_tag, defaultSort: row.default_sort } };
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ require_tag: boolean; default_sort: ForumSort }>(
+      `SELECT require_tag, default_sort FROM forum_settings
+        WHERE forum_id = $1 FOR UPDATE`,
+      [forumId],
+    );
+    const before: ForumSettings = current.rows[0]
+      ? {
+          requireTag: current.rows[0].require_tag,
+          defaultSort: current.rows[0].default_sort,
+        }
+      : { ...FORUM_SETTINGS_DEFAULTS };
+    const result = await client.query<{ require_tag: boolean; default_sort: ForumSort }>(
+      `INSERT INTO forum_settings (forum_id, require_tag, default_sort, updated_at)
+       VALUES ($1, COALESCE($2::boolean, $4::boolean), COALESCE($3::text, $5::text), NOW())
+       ON CONFLICT (forum_id) DO UPDATE
+         SET require_tag = COALESCE($2::boolean, forum_settings.require_tag),
+             default_sort = COALESCE($3::text, forum_settings.default_sort),
+             updated_at = NOW()
+       RETURNING require_tag, default_sort`,
+      [
+        forumId,
+        patch.requireTag ?? null,
+        patch.defaultSort ?? null,
+        FORUM_SETTINGS_DEFAULTS.requireTag,
+        FORUM_SETTINGS_DEFAULTS.defaultSort,
+      ],
+    );
+    const row = result.rows[0]!;
+    const after: ForumSettings = {
+      requireTag: row.require_tag,
+      defaultSort: row.default_sort,
+    };
+    await beforeCommit?.(client, before, after);
+    await client.query("COMMIT");
+    invalidateForumList(forumId);
+    return { before, after };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // -------------------------------------------------------------- follows
@@ -998,7 +1044,9 @@ export type CreateShellResult =
   /** The nonce already names a post of this author in this forum. */
   | { kind: "existing"; postId: string; published: boolean }
   /** The dedupe key names a post of this forum inside the window (P1b). */
-  | { kind: "duplicate"; postId: string; published: boolean };
+  | { kind: "duplicate"; postId: string; published: boolean }
+  /** The dedupe key names a post a moderator deleted inside the window. */
+  | { kind: "removed"; postId: string };
 
 /**
  * Step one of a post: the thread channel, the `forum_posts` row with
@@ -1045,6 +1093,16 @@ export async function createForumPostShell(
           postId: row.channel_id,
           published: row.published_at !== null,
         };
+      }
+      const removed = await findDedupeTombstone(
+        input.forumId,
+        input.dedupeKey,
+        input.dedupeWindowHours!,
+        client,
+      );
+      if (removed) {
+        await client.query("ROLLBACK");
+        return { kind: "removed", postId: removed };
       }
     }
     const channel = await client.query<{ id: string }>(
@@ -1189,7 +1247,59 @@ export async function sweepForumPostShells(): Promise<number> {
     await discardForumPostShell(row.channel_id, row.forum_id);
     removed += 1;
   }
+  // Tombstones past the longest dedupe window answer nothing any more.
+  await getPool().query(
+    `DELETE FROM forum_dedupe_tombstones
+      WHERE post_created_at < NOW() - make_interval(hours => $1::int)`,
+    [FORUM_WEBHOOK_DEDUPE_HOURS_MAX],
+  );
   return removed;
+}
+
+// ----------------------------------------------------------- tombstones
+
+/**
+ * Remember a deleted webhook post's dedupe key (schema.sql,
+ * `forum_dedupe_tombstones`), so the feed re-sending the item inside the
+ * window does not recreate what a moderator removed. Run inside the delete's
+ * transaction (`deleteChannel`'s `beforeCommit`), so the tombstone lands with
+ * the delete or not at all. It takes the post row the route read BEFORE the
+ * delete: by `beforeCommit` the cascade has already removed `forum_posts`.
+ * Posts made by people carry no key and write nothing. Idempotent.
+ */
+export async function writeDedupeTombstone(
+  client: Pick<PoolClient, "query">,
+  post: Pick<ForumPostRow, "channel_id" | "forum_id" | "created_at" | "dedupe_key">,
+): Promise<void> {
+  if (!post.dedupe_key) {
+    return;
+  }
+  await client.query(
+    `INSERT INTO forum_dedupe_tombstones (forum_id, dedupe_key, post_id, post_created_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (forum_id, dedupe_key) DO UPDATE
+       SET post_id = EXCLUDED.post_id,
+           post_created_at = GREATEST(
+             forum_dedupe_tombstones.post_created_at, EXCLUDED.post_created_at),
+           deleted_at = NOW()`,
+    [post.forum_id, post.dedupe_key, post.channel_id, post.created_at],
+  );
+}
+
+/** The deleted post this key names inside the window, or null. */
+export async function findDedupeTombstone(
+  forumId: string,
+  dedupeKey: string,
+  windowHours: number,
+  runner: Pick<PoolClient, "query"> = getPool(),
+): Promise<string | null> {
+  const result = await runner.query<{ post_id: string }>(
+    `SELECT post_id FROM forum_dedupe_tombstones
+      WHERE forum_id = $1 AND dedupe_key = $2
+        AND post_created_at > NOW() - make_interval(hours => $3::int)`,
+    [forumId, dedupeKey, windowHours],
+  );
+  return result.rows[0]?.post_id ?? null;
 }
 
 // ----------------------------------------------------------------- bump
@@ -1240,6 +1350,8 @@ export interface ForumPostPatch {
 export async function applyForumPostPatch(
   post: ForumPostRow,
   patch: ForumPostPatch,
+  /** In the transaction, before COMMIT: the audit rows land with the change. */
+  beforeCommit?: (client: PoolClient) => Promise<void>,
 ): Promise<void> {
   const client = await getPool().connect();
   try {
@@ -1304,6 +1416,7 @@ export async function applyForumPostPatch(
         );
       }
     }
+    await beforeCommit?.(client);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});

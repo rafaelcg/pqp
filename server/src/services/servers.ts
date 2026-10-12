@@ -662,7 +662,19 @@ export async function updateChannel(
   return updated;
 }
 
-export async function deleteChannel(channelId: string): Promise<boolean> {
+export async function deleteChannel(
+  channelId: string,
+  options: {
+    /**
+     * Runs inside the delete's transaction, after the row is gone and before
+     * COMMIT, only when something was deleted. For a write that must land
+     * with the delete or not at all (an audit row, a forum dedupe
+     * tombstone): after COMMIT a retry finds nothing to delete and would
+     * never write it.
+     */
+    beforeCommit?: (client: PoolClient) => Promise<void>;
+  } = {},
+): Promise<boolean> {
   // --- threads ---
   // A text channel's threads die with it, explicitly, and so do a forum's
   // posts (a post is a thread). `parent_id` is ON DELETE SET NULL (categories
@@ -769,6 +781,7 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
         channelId,
         ...threadIds,
       ]);
+      await options.beforeCommit?.(client);
     }
 
     await client.query("COMMIT");

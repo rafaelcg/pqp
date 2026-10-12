@@ -110,19 +110,14 @@ export async function createForumPost(
     throw new ForumError(422, FORUM_ERRORS.tagRequired);
   }
 
-  // The per-user send bucket every door shares (socket, bot HTTP, and now
-  // this), so a post is never a way around the chat budget.
-  const budget = takeMessageBudget(author.id);
-  if (!budget.ok) {
-    throw rejected("rate-limited", { retryAfterMs: budget.retryAfterMs });
-  }
-
-  // AutoMod on the title, before anything is charged: a blocked title costs
-  // the author nothing but the attempt, as a blocked message does. The body
-  // is checked by the message path itself, on the post's id.
+  // AutoMod on the title, before anything is charged, the send budget
+  // included: a refused post costs the author nothing but the attempt. The
+  // body is checked by the message path itself, on the post's id.
   const automodInput = {
     serverId,
     channelId: forum.id,
+    // The title is checked on the forum itself, which has no parent.
+    parentChannelId: null,
     authorId: author.id,
     memberPerms,
     body: request.title,
@@ -135,6 +130,13 @@ export async function createForumPost(
         console.error("[automod] forum title hit effects failed:", error);
       });
     throw rejected("automod", { automodMessage: verdict.customMessage ?? undefined });
+  }
+
+  // The per-user send bucket every door shares (socket, bot HTTP, and now
+  // this), so a post is never a way around the chat budget.
+  const budget = takeMessageBudget(author.id);
+  if (!budget.ok) {
+    throw rejected("rate-limited", { retryAfterMs: budget.retryAfterMs });
   }
 
   // A nonce retry is answered before the post bucket and slow mode, which

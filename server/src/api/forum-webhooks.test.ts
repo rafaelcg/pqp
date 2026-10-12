@@ -66,6 +66,7 @@ const { assignRole, createRole, upsertChannelOverwrite } = await import(
   "../services/roles.js"
 );
 const { executeWebhookIntoOpenPost, getWebhook } = await import("../services/webhooks.js");
+const { createForumPostShell, sweepForumPostShells } = await import("../services/forums.js");
 
 type Actor = { id: string; clerk_id: string };
 
@@ -440,6 +441,86 @@ describeDb("webhooks into a forum", () => {
     expect(second.body.message!.id).toBe(first.body.message!.id);
     expect(await postCount()).toBe(1);
     expect(await messageCount(first.body.post!.id)).toBe(1);
+  });
+
+  it("a feed post a moderator deleted stays deleted when the feed re-sends it inside the window", async () => {
+    const webhook = await makeWebhook();
+    const first = await execute(webhook.url, fixture("monitorss-forum"));
+    const postId = first.body.post!.id;
+    expect((await call(alice, "DELETE", `/api/forum-posts/${postId}`)).status).toBe(204);
+    expect(await postCount()).toBe(0);
+
+    // The feed polls again: answered as a repeat, naming the deleted post,
+    // and nothing is written.
+    const resent = await execute(webhook.url, fixture("monitorss-forum"));
+    expect(resent.status).toBe(200);
+    expect(resent.headers.get(WEBHOOK_DEDUPLICATED_HEADER)).toBe("1");
+    expect(resent.body.channel_id).toBe(postId);
+    expect(resent.body.message).toBeNull();
+    expect(resent.body.post).toBeUndefined();
+    expect(await postCount()).toBe(0);
+    const tombstone = await getPool().query<{ post_id: string }>(
+      `SELECT post_id FROM forum_dedupe_tombstones WHERE forum_id = $1`,
+      [forumId],
+    );
+    expect(tombstone.rows.map((row) => row.post_id)).toEqual([postId]);
+
+    // A post made by a person carries no key and leaves no tombstone.
+    const person = await call<{ post: { id: string } }>(
+      bob,
+      "POST",
+      `/api/channels/${forumId}/posts`,
+      { title: "Pergunta", body: "oi", nonce: "person-1" },
+    );
+    expect((await call(alice, "DELETE", `/api/forum-posts/${person.body.post.id}`)).status).toBe(
+      204,
+    );
+    expect(
+      (await getPool().query(`SELECT 1 FROM forum_dedupe_tombstones`)).rowCount,
+    ).toBe(1);
+
+    // Past the window (counted from the deleted post's creation, as for a
+    // live one) the item may post again.
+    await getPool().query(
+      `UPDATE forum_dedupe_tombstones SET post_created_at = post_created_at - INTERVAL '73 hours'`,
+    );
+    const later = await execute(webhook.url, fixture("monitorss-forum"));
+    expect(later.headers.get(WEBHOOK_DEDUPLICATED_HEADER)).toBeNull();
+    expect(await postCount()).toBe(1);
+
+    // The sweep drops a tombstone once no window (720 h at most) can reach it.
+    await getPool().query(
+      `UPDATE forum_dedupe_tombstones SET post_created_at = NOW() - INTERVAL '721 hours'`,
+    );
+    await sweepForumPostShells();
+    expect((await getPool().query(`SELECT 1 FROM forum_dedupe_tombstones`)).rowCount).toBe(0);
+  });
+
+  it("the lock's own check honours a tombstone the pre-check missed", async () => {
+    const webhook = await makeWebhook();
+    const first = await execute(webhook.url, fixture("monitorss-forum"));
+    const postId = first.body.post!.id;
+    const key = (
+      await getPool().query<{ dedupe_key: string }>(
+        `SELECT dedupe_key FROM forum_posts WHERE channel_id = $1`,
+        [postId],
+      )
+    ).rows[0]!.dedupe_key;
+    expect((await call(alice, "DELETE", `/api/forum-posts/${postId}`)).status).toBe(204);
+    // Straight at the shell, the way a copy that raced past the pre-check
+    // arrives at it.
+    const shell = await createForumPostShell({
+      forumId,
+      serverId,
+      authorId: alice.id,
+      title: "Cópia",
+      tagIds: [],
+      nonce: null,
+      dedupeKey: key,
+      dedupeWindowHours: 72,
+    });
+    expect(shell).toEqual({ kind: "removed", postId });
+    expect(await postCount()).toBe(0);
   });
 
   it("the same title with a different link gives two posts", async () => {

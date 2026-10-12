@@ -7913,7 +7913,7 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   if (!existing) {
     throw new NotFound("Message not found");
   }
-  await requireChannelAccess(existing.channel_id, user.id);
+  const editedChannel = await requireChannelAccess(existing.channel_id, user.id);
   if (existing.author_id !== user.id) {
     throw new Forbidden("You can only edit your own messages");
   }
@@ -7958,6 +7958,10 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     const automodInput = {
       serverId: existing.server_id,
       channelId: existing.channel_id,
+      // Known from the access check, so AutoMod never has to look it up: the
+      // parent of a thread or a forum post, null for any other channel.
+      parentChannelId:
+        editedChannel.type === "thread" ? (editedChannel.parent_id ?? null) : null,
       authorId: user.id,
       memberPerms: await computeMemberPermissions(
         existing.server_id,
@@ -8393,6 +8397,7 @@ import {
   setForumPostFollow,
   similarForumPosts,
   updateForumSettings,
+  writeDedupeTombstone,
   type ForumPostPatch,
   type ForumPostRow,
 } from "../services/forums.js";
@@ -8542,6 +8547,8 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
     const automodInput = {
       serverId: post.server_id,
       channelId: post.forum_id,
+      // The title is checked on the forum itself, which has no parent.
+      parentChannelId: null,
       authorId: user.id,
       memberPerms: perms,
       body: body.title,
@@ -8635,71 +8642,78 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
     patch.locked = body.locked;
   }
 
-  const changed = Object.keys(patch).length > 0;
-  if (changed) {
-    await applyForumPostPatch(post, patch);
-  }
-
-  // The change is committed. Its two after-effects, the live row and the audit
-  // rows, run side by side and neither can skip the other: a failed audit
-  // insert must not leave every open list on the old state, and a failed
-  // summary read must not leave the change out of the audit log.
-  // Sent even when this request changed nothing: the upsert is idempotent, and
-  // a retry of a patch whose first attempt committed and then failed to read
-  // the summary is exactly a request that changes nothing and owes the frame.
-  const live = getForumPostSummary(post.channel_id).then((summary) => {
-    if (summary) {
-      announceForumPostUpdate(summary);
-    }
-    return summary;
-  });
-
-  const audit = (
-    action: ForumAuditAction,
-    entries: Array<{ key: string; old: unknown; new: unknown }>,
-  ) =>
-    logAudit({
-      serverId: post.server_id,
-      actorId: user.id,
-      action,
-      targetType: "channel",
-      targetId: post.channel_id,
-      changes: entries,
-    });
-  const audits: Promise<void>[] = [];
+  // The audit rows are written INSIDE the patch's transaction: they land with
+  // the change or not at all. Written after COMMIT, a failure there was lost
+  // for good, because the retry finds nothing left to change.
+  const audits: Array<{
+    action: ForumAuditAction;
+    changes: Array<{ key: string; old: unknown; new: unknown }>;
+  }> = [];
   if (pinChange) {
-    audits.push(
-      audit("forum.post_pin", [
+    audits.push({
+      action: "forum.post_pin",
+      changes: [
         { key: "pinned", old: !body.pinned, new: body.pinned },
         { key: "title", old: post.title, new: post.title },
-      ]),
-    );
+      ],
+    });
   }
   if (lockChange) {
-    audits.push(
-      audit("forum.post_lock", [
+    audits.push({
+      action: "forum.post_lock",
+      changes: [
         { key: "locked", old: !body.locked, new: body.locked },
         { key: "title", old: post.title, new: post.title },
-      ]),
-    );
+      ],
+    });
   }
   // An author editing their own post is not a moderator action.
   if (changes.length > 0 && !isAuthor) {
-    audits.push(audit("forum.post_edit", changes));
+    audits.push({ action: "forum.post_edit", changes });
   }
 
-  const [summary, ...audited] = await Promise.allSettled([live, ...audits]);
-  for (const result of [summary, ...audited]) {
-    if (result!.status === "rejected") {
-      throw result!.reason;
-    }
+  if (Object.keys(patch).length > 0) {
+    await applyForumPostPatch(post, patch, async (client) => {
+      for (const entry of audits) {
+        await logAudit(
+          {
+            serverId: post.server_id,
+            actorId: user.id,
+            action: entry.action,
+            targetType: "channel",
+            targetId: post.channel_id,
+            changes: entry.changes,
+          },
+          client,
+        );
+      }
+    });
   }
-  const updated = (summary as PromiseFulfilledResult<Awaited<typeof live>>).value;
+
+  // A failed read here is safe to answer as a failure: the retry changes
+  // nothing and writes no second audit row. The live row is sent even when
+  // this request changed nothing, so that same retry repairs a frame the
+  // first attempt never sent; it is best effort (logged), never the answer.
+  const updated = await getForumPostSummary(post.channel_id);
   if (!updated) {
     throw new NotFound("Post not found");
   }
+  forumBestEffort("upsert", () => announceForumPostUpdate(updated));
   return { post: updated };
 });
+
+/**
+ * A fan-out after a committed forum write: logged, never the request's
+ * answer. The change and its audit row are already durable, the live frame is
+ * a convenience every list repairs on its next read.
+ */
+function forumBestEffort(label: string, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    console.error(`[forums] ${label} broadcast failed:`, error);
+  }
+}
 
 /**
  * Delete a whole post: staff only. The author removes their opening message
@@ -8713,17 +8727,29 @@ router.delete("/api/forum-posts/:postId", async ({ user }, { postId }) => {
   if (!isStaff) {
     throw new Forbidden("You do not have permission to do that");
   }
-  await deleteChannel(post.channel_id);
+  // The audit row and, for a feed post, the dedupe tombstone commit with the
+  // delete: after COMMIT the post is gone, a retry answers 404, and neither
+  // could be written any more.
+  await deleteChannel(post.channel_id, {
+    beforeCommit: async (client) => {
+      await writeDedupeTombstone(client, post);
+      await logAudit(
+        {
+          serverId: post.server_id,
+          actorId: user.id,
+          action: "forum.post_delete",
+          targetType: "channel",
+          targetId: post.channel_id,
+          changes: [{ key: "title", old: post.title, new: null }],
+        },
+        client,
+      );
+    },
+  });
   invalidateForumList(post.forum_id);
-  announceForumPostRemoved(post.forum_id, post.channel_id);
-  evictChannelViewers(post.channel_id);
-  await logAudit({
-    serverId: post.server_id,
-    actorId: user.id,
-    action: "forum.post_delete",
-    targetType: "channel",
-    targetId: post.channel_id,
-    changes: [{ key: "title", old: post.title, new: null }],
+  forumBestEffort("removed", () => {
+    announceForumPostRemoved(post.forum_id, post.channel_id);
+    evictChannelViewers(post.channel_id);
   });
   return noContent();
 });
@@ -8746,21 +8772,25 @@ router.put("/api/channels/:forumId/forum-tags", async ({ req, user }, { forumId 
   const forum = await requireForum(forumId!, user.id);
   await requirePermission(forum.server_id, user.id, Permission.MANAGE_CHANNELS, forum.id);
   const body = putForumTagsSchema.parse(await readJsonBody(req));
-  const { before, after } = await replaceForumTags(forum.id, body);
-  await logAudit({
-    serverId: forum.server_id,
-    actorId: user.id,
-    action: "forum.tags_update",
-    targetType: "channel",
-    targetId: forum.id,
-    changes: [
+  const { after } = await replaceForumTags(forum.id, body, (client, before, next) =>
+    logAudit(
       {
-        key: "tags",
-        old: before.map((tag) => tag.name).join(", "),
-        new: after.map((tag) => tag.name).join(", "),
+        serverId: forum.server_id,
+        actorId: user.id,
+        action: "forum.tags_update",
+        targetType: "channel",
+        targetId: forum.id,
+        changes: [
+          {
+            key: "tags",
+            old: before.map((tag) => tag.name).join(", "),
+            new: next.map((tag) => tag.name).join(", "),
+          },
+        ],
       },
-    ],
-  });
+      client,
+    ),
+  );
   return { tags: after };
 });
 
@@ -8780,28 +8810,28 @@ router.patch(
       forum.id,
     );
     const body = updateForumSettingsSchema.parse(await readJsonBody(req));
-    const { before, after } = await updateForumSettings(forum.id, body);
-    const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
-    if (before.requireTag !== after.requireTag) {
-      changes.push({ key: "requireTag", old: before.requireTag, new: after.requireTag });
-    }
-    if (before.defaultSort !== after.defaultSort) {
-      changes.push({
-        key: "defaultSort",
-        old: before.defaultSort,
-        new: after.defaultSort,
-      });
-    }
-    if (changes.length > 0) {
-      await logAudit({
-        serverId: forum.server_id,
-        actorId: user.id,
-        action: "forum.settings_update",
-        targetType: "channel",
-        targetId: forum.id,
-        changes: changes,
-      });
-    }
+    const { after } = await updateForumSettings(forum.id, body, async (client, before, next) => {
+      const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
+      if (before.requireTag !== next.requireTag) {
+        changes.push({ key: "requireTag", old: before.requireTag, new: next.requireTag });
+      }
+      if (before.defaultSort !== next.defaultSort) {
+        changes.push({ key: "defaultSort", old: before.defaultSort, new: next.defaultSort });
+      }
+      if (changes.length > 0) {
+        await logAudit(
+          {
+            serverId: forum.server_id,
+            actorId: user.id,
+            action: "forum.settings_update",
+            targetType: "channel",
+            targetId: forum.id,
+            changes,
+          },
+          client,
+        );
+      }
+    });
     return { settings: after };
   },
 );
