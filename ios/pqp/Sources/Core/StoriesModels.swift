@@ -470,7 +470,7 @@ enum StoryRules {
     static func replyBlockedLine(_ reason: String?, name: String) -> String? {
         switch reason {
         case "replies_off": String(localized: "\(name) turned replies off")
-        case "dm_closed": String(localized: "\(name) only gets messages from friends")
+        case "dm_closed": String(localized: "\(name) doesn't take direct messages")
         default: nil
         }
     }

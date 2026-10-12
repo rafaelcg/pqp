@@ -972,7 +972,7 @@
     <string name="stories_empty_cta">Post</string>
     <string name="stories_viewer_reply_to">Reply to %1$s…</string>
     <string name="stories_viewer_replies_off">%1$s turned replies off</string>
-    <string name="stories_viewer_dm_closed">%1$s only gets messages from friends</string>
+    <string name="stories_viewer_dm_closed">%1$s doesn\'t take direct messages</string>
     <string name="stories_viewer_sent">Sent</string>
     <string name="stories_viewer_reacted">Reacted %1$s</string>
     <string name="stories_viewer_friends">Friends</string>
@@ -1039,7 +1039,7 @@
     <string name="stories_menu_mod_remove">Remove from %1$s</string>
     <string name="stories_menu_mod_remove_hint">Gone from here right away. Logged for staff.</string>
     <string name="stories_removed_title">Staff removed your story from %1$s</string>
-    <string name="stories_removed_body">Reason: %1$s. It stays up for your Friends until it expires.</string>
+    <string name="stories_removed_body">Reason: %1$s. If you posted it somewhere else too, it stays there until it expires.</string>
     <string name="stories_removed_no_reason">no reason given</string>
     <string name="stories_quote_replied">Replied to your story</string>
     <string name="stories_quote_replied_to">Replied to a story</string>
