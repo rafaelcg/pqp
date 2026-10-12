@@ -63,7 +63,7 @@ export function normalizeServerEmojiName(input: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/\.[a-z0-9]{2,5}$/, "")
-    .replace(/[\s.\-]+/g, "_")
+    .replace(/[\s.-]+/g, "_")
     .replace(/[^a-z0-9_]/g, "")
     .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "")
