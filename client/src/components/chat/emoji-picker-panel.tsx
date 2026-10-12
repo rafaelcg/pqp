@@ -19,22 +19,16 @@ interface EmojiMartSelection {
   native?: string;
 }
 
+/**
+ * The server's row comes last, where emoji-mart puts a custom category. Its
+ * `categories` prop cannot move it: emoji-mart keeps one module-wide copy of
+ * the category list from the first picker a tab opened, and sorts from that
+ * copy. A reaction picker opened first meant no server row at all, and the
+ * first server's row followed the reader into every other server.
+ */
 const CUSTOM_CATEGORY_ID = "server";
 /** Prefixed so a custom `fire` can never collide with emoji-mart's own `fire`. */
 const CUSTOM_ID_PREFIX = "pqp-custom-";
-/** emoji-mart's default order, with the server's own emoji right after the recent row. */
-const CATEGORIES_WITH_SERVER = [
-  "frequent",
-  CUSTOM_CATEGORY_ID,
-  "people",
-  "nature",
-  "foods",
-  "activity",
-  "places",
-  "objects",
-  "symbols",
-  "flags",
-];
 
 export function EmojiPickerPanel({ onSelect, customEmoji }: EmojiPickerPanelProps) {
   const { resolved } = useTheme();
@@ -74,7 +68,6 @@ export function EmojiPickerPanel({ onSelect, customEmoji }: EmojiPickerPanelProp
       // its shadow DOM from outside.
       autoFocus
       custom={custom}
-      categories={custom.length > 0 ? CATEGORIES_WITH_SERVER : undefined}
       onEmojiSelect={(emoji: EmojiMartSelection) => {
         if (emoji.native) {
           onSelect(emoji.native);
