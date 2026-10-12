@@ -202,6 +202,9 @@ final class StoriesUITests: XCTestCase {
         call.tap()
         let room = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'composer.call.'")).firstMatch
         XCTAssertTrue(room.waitForExistence(timeout: 10), "The voice rooms are listed")
+        // Opens on the room this account is in, if any.
+        sleep(1)
+        snap(app, "stories-composer-call-start")
         room.tap()
         snap(app, "stories-composer-call")
     }
