@@ -1404,7 +1404,8 @@ export function StoryViewer({
               {replyState === "sent" && (
                 <span
                   role="status"
-                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-[15px] font-semibold text-accent"
+                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-[15px] font-semibold"
+                  style={{ color: "var(--story-accent)" }}
                 >
                   {t("stories.viewer.sent")}
                   <Check className="h-4 w-4" aria-hidden />
@@ -1452,7 +1453,11 @@ export function StoryViewer({
   );
 
   const keyHints = wide && (
-    <div className="pointer-events-none absolute bottom-4 right-5 hidden items-center gap-3 text-[11px] font-medium text-text-tertiary lg:flex" aria-hidden>
+    <div
+      className="pointer-events-none absolute bottom-4 right-5 hidden items-center gap-3 text-[11px] font-medium lg:flex"
+      style={{ color: "var(--story-on-media-2)" }}
+      aria-hidden
+    >
       <span className="flex items-center gap-1">
         <Kbd>←</Kbd>
         <Kbd>→</Kbd>
@@ -1486,9 +1491,11 @@ export function StoryViewer({
       style={{ background: "var(--story-backdrop)", backdropFilter: "blur(10px)" }}
     >
       {wide && (
-        <p className="absolute left-5 top-4 text-sm font-bold text-text">
+        <p className="absolute left-5 top-4 text-sm font-bold" style={{ color: "var(--story-on-media)" }}>
           {request.audience.kind === "server" ? request.audience.serverName : t("stories.viewer.friends")}
-          <span className="ml-1.5 font-medium text-text-tertiary">· {t("stories.strip.label").toLowerCase()}</span>
+          <span className="ml-1.5 font-medium" style={{ color: "var(--story-on-media-2)" }}>
+            · {t("stories.strip.label").toLowerCase()}
+          </span>
         </p>
       )}
       {wide && (
