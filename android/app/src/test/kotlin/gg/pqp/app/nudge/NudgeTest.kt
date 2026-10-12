@@ -105,6 +105,30 @@ class NudgeTest {
     }
 
     @Test
+    fun `two quick taps that both fail leave the switch where the server is`() = kotlinx.coroutines.test.runTest {
+        val writer = AllowNudgesWriter()
+        writer.confirmed = true // what /api/me said
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val off = async {
+            writer.set(false) {
+                gate.await()
+                error("network")
+            }
+        }
+        val on = async { writer.set(true) { error("network") } }
+        testScheduler.runCurrent()
+        gate.complete(Unit)
+        assertTrue(off.await())
+        assertFalse(on.await())
+        // Roll back to the server's value, not to "off", the optimistic value
+        // the second tap replaced.
+        assertEquals(true, writer.confirmed)
+        // A success moves the confirmed value.
+        assertTrue(writer.set(false) { })
+        assertEquals(false, writer.confirmed)
+    }
+
+    @Test
     fun `the button rests for the cooldown after a send that left, not after one that did not`() {
         assertEquals(1_000L + Nudge.COOLDOWN_MS, Nudge.holdAfterSend(left = true, nowMs = 1_000L))
         assertEquals(0L, Nudge.holdAfterSend(left = false, nowMs = 1_000L))

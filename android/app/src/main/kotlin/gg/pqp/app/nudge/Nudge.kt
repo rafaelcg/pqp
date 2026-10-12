@@ -129,12 +129,21 @@ class AllowNudgesWriter {
     private val mutex = kotlinx.coroutines.sync.Mutex()
     private val latest = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /**
+     * The last value the server accepted. When the newest write fails, the
+     * switch goes back to THIS, never to the optimistic value just before it:
+     * two quick taps that both fail must leave the switch where the server is.
+     */
+    @Volatile
+    var confirmed: Boolean? = null
+
     suspend fun set(value: Boolean, write: suspend (Boolean) -> Unit): Boolean {
         val ticket = latest.incrementAndGet()
         // kotlinx's Mutex is fair: waiters get the lock first come, first served.
         return mutex.withLock {
             val ok = try {
                 write(value)
+                confirmed = value
                 true
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -159,14 +168,38 @@ object NudgePreference {
     )
     private val writer = AllowNudgesWriter()
 
+    /** The account [writer]'s confirmed value belongs to. */
+    private var owner: String? = null
+
     fun change(session: gg.pqp.app.core.SessionStore, allow: Boolean) {
-        val before = allowed(session)
+        val userId = userId(session) ?: return
+        if (owner != userId) {
+            // First tap for this account: what the session holds came from
+            // `/api/me`, so it is what the server has.
+            writer.confirmed = allowed(session)
+            owner = userId
+        }
         session.applyAllowNudges(allow)
         scope.launch {
-            val saved = writer.set(allow) { session.api.setAllowNudges(it) }
-            if (!saved) session.applyAllowNudges(before)
+            var skipped = false
+            val saved = writer.set(allow) { value ->
+                // Bound to the account that tapped. A write that waited its
+                // turn across a sign-out and a sign-in must not change the
+                // next account's preference.
+                if (userId(session) != userId) {
+                    skipped = true
+                    return@set
+                }
+                session.api.setAllowNudges(value)
+            }
+            if (!saved && !skipped && userId(session) == userId) {
+                writer.confirmed?.let(session::applyAllowNudges)
+            }
         }
     }
+
+    private fun userId(session: gg.pqp.app.core.SessionStore): String? =
+        (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.id
 
     /** `nudgesAllowed`: on unless turned off. */
     fun allowed(session: gg.pqp.app.core.SessionStore): Boolean =
