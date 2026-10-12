@@ -19,9 +19,12 @@ export const VOICE_NOTICE_AUTO_HIDE_MS = 12_000;
 export function VoiceNoticeBar({
   notice,
   autoHideMs = VOICE_NOTICE_AUTO_HIDE_MS,
+  measureRef,
 }: {
   notice: string | null;
   autoHideMs?: number;
+  /** Attached to the strip while it shows, so the stage can make room for it. */
+  measureRef?: (node: HTMLParagraphElement | null) => void | (() => void);
 }) {
   const { t } = useTranslation();
   const [hidden, setHidden] = useState<string | null>(null);
@@ -42,6 +45,7 @@ export function VoiceNoticeBar({
     // stays pointer-events-none and only the close button opts back in --
     // otherwise it captures clicks meant for fullscreen underneath it.
     <p
+      ref={measureRef}
       role="status"
       data-voice-notice
       className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"

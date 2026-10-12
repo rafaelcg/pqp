@@ -1772,6 +1772,22 @@ function ActiveCall({
   // because the strip is stacked above the bar and would otherwise cover the
   // pill's top line, which is where mute and raise hand go; so does the
   // self-preview's bottom corner, for the same reason.
+  // The notice or error strip over the stage wraps to two lines on a narrow
+  // stage, and the overlay below it has to move by its real height or the
+  // second line sits on top of the call's title. Zero while no strip shows,
+  // which includes a notice the person closed or that timed out.
+  const [topStripPx, setTopStripPx] = useState(0);
+  const topStripRef = useCallback((node: HTMLElement | null) => {
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => setTopStripPx(node.offsetHeight));
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      setTopStripPx(0);
+    };
+  }, []);
   const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
   const controlRowRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || typeof ResizeObserver === "undefined") {
@@ -2339,6 +2355,7 @@ function ActiveCall({
       {/* --- overlays -------------------------------------------------------- */}
       {voiceState.error && (
         <div
+          ref={topStripRef}
           role="alert"
           data-voice-error
           className={cn("absolute inset-x-0 top-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger", STAGE_LAYER.state)}
@@ -2382,7 +2399,9 @@ function ActiveCall({
           )}
         </div>
       )}
-      {!voiceState.error && <VoiceNoticeBar notice={voiceState.notice} />}
+      {!voiceState.error && (
+        <VoiceNoticeBar notice={voiceState.notice} measureRef={topStripRef} />
+      )}
 
       {dockComposer ? (
         composerDock
@@ -2395,7 +2414,9 @@ function ActiveCall({
           STAGE_LAYER.chrome,
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
-          (voiceState.error || voiceState.notice) && "mt-7",
+          typeof ResizeObserver === "undefined" &&
+            (voiceState.error || voiceState.notice) &&
+            "mt-7",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,
           // the count and the uptime, and "watch-party · 1 na chamada" over
@@ -2404,6 +2425,7 @@ function ActiveCall({
           // overlay also holds is never wanted here.
           watchPartyChrome && focusedIsLocal && "hidden",
         )}
+        style={topStripPx > 0 ? { marginTop: topStripPx } : undefined}
         // The overlay itself passes the pointer through; its few buttons take
         // it back, and resting on one holds the whole group like the bar.
         onPointerEnter={(event) => {
