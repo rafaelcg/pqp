@@ -519,7 +519,14 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
             )
         }
     }
-    if (state.error == ForumComposerError.TagRequired) {
+    if (state.tagsNoneToPick) {
+        Text(
+            stringResource(R.string.forum_composer_tags_none_to_pick),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp).testTag("forum.composer.tagsNone"),
+        )
+    } else if (state.error == ForumComposerError.TagRequired) {
         FieldError(stringResource(R.string.forum_composer_tags_required_error))
     } else if (state.tagIds.size >= ForumLimits.MAX_TAGS_PER_POST) {
         Text(

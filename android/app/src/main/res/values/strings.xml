@@ -935,6 +935,8 @@
     <string name="forum_composer_tags_required">at least 1</string>
     <string name="forum_composer_tags_required_error">Pick at least one tag.</string>
     <string name="forum_composer_tags_max">Up to %1$d tags.</string>
+    <string name="forum_composer_tags_none_to_pick">This forum asks for a tag, but there isn\'t one you can pick yet. You can post without it.</string>
+    <string name="forum_edit_tags_none">This forum has no tags to pick yet.</string>
     <string name="forum_composer_similar_title_short">Similar questions</string>
     <string name="forum_composer_similar_footer">None of these help? Go ahead and post.</string>
     <string name="forum_composer_draft_saved">Draft saved</string>
