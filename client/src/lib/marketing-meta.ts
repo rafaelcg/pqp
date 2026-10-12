@@ -667,7 +667,7 @@ export const TELA_FAQ: Record<
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
     {
       question:
@@ -705,7 +705,7 @@ export const TELA_FAQ: Record<
     {
       question: "What do you keep about me?",
       answer:
-        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
     },
     {
       question: "Why is Discord screen share suspended in Brazil?",
@@ -742,7 +742,7 @@ export const TELA_FAQ: Record<
     {
       question: "¿Qué guardan sobre mí?",
       answer:
-        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
+        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
     },
     {
       question: "¿Por qué compartir pantalla desde el navegador?",

@@ -393,7 +393,7 @@
   "tela.faq.mobile.q": "Tem no celular?",
   "tela.faq.mobile.a": "O app de Android já está na Google Play, em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois.",
   "tela.faq.data.q": "O que vocês guardam sobre mim?",
-  "tela.faq.data.a": "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
+  "tela.faq.data.a": "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
   "tela.faq.data.link": "Ler a política de privacidade",
   "tela.cta.title": "Quer testar agora?",
   "tela.cta.body": "A sala leva um minuto pra criar e o link é tudo que os seus amigos precisam.",
