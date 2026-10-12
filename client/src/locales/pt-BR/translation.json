@@ -5341,6 +5341,8 @@
   "serverEmoji.name.rename": "Renomear :{name}:",
   "serverEmoji.added": ":{name}: adicionado.",
   "serverEmoji.removed": ":{name}: removido.",
+  "serverEmoji.uploadedBy": "Enviado por {name}",
+  "serverEmoji.uploadedByDeparted": "Enviado por uma conta que saiu",
   "serverEmoji.renamed": "Agora é :{name}:.",
   "serverEmoji.unconfigured": "Esse servidor não tem onde guardar imagens, então não dá pra enviar emoji.",
   "serverEmoji.list.title": "Emoji do servidor",

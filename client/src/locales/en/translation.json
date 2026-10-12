@@ -5341,6 +5341,8 @@
   "serverEmoji.name.rename": "Rename :{name}:",
   "serverEmoji.added": ":{name}: added.",
   "serverEmoji.removed": ":{name}: removed.",
+  "serverEmoji.uploadedBy": "Uploaded by {name}",
+  "serverEmoji.uploadedByDeparted": "Uploaded by a departed account",
   "serverEmoji.renamed": "Renamed to :{name}:.",
   "serverEmoji.unconfigured": "This deployment has no image storage, so emoji cannot be uploaded.",
   "serverEmoji.list.title": "Server emoji",

@@ -98,6 +98,8 @@ export const serverEmojiSchema = z.object({
   /** Root-relative; each client prefixes its own API base. */
   url: z.string(),
   createdBy: z.string().uuid().nullable(),
+  /** The uploader's display name. Null once their account is gone. */
+  createdByName: z.string().nullable(),
   /** ISO 8601. */
   createdAt: z.string(),
 });

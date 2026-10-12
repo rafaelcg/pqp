@@ -16,7 +16,8 @@ import {
  *
  * What has to hold:
  *  - any member may read the list (every member renders them), nobody else;
- *  - only Manage Server may mint, claim, rename or delete;
+ *  - only Manage Emoji may mint, claim, rename or delete;
+ *  - every row says who uploaded it, until that account is gone;
  *  - the mint validates name, type and size before signing, and says up front
  *    when the name is taken or the server is full;
  *  - the claim HEADs the object, re-checks name and limit, and cannot name
@@ -503,6 +504,46 @@ describeDb("server emoji", () => {
       const entry = audit.rows.find((row) => row.action === "emoji.create");
       expect(entry).toMatchObject({ target_type: "emoji", target_id: emoji.id });
       expect(JSON.stringify(entry.changes)).not.toContain(emoji.key);
+    });
+  });
+
+  describe("the uploader", () => {
+    type Uploaded = { createdBy: string | null; createdByName: string | null; name: string };
+
+    it("names who uploaded each emoji, on the claim, the list and a rename", async () => {
+      const minted = await mint(admin, { name: "pog" });
+      storage.objects.set(minted.body.key, { contentLength: 4_000, contentType: "image/png" });
+      const claimed = await call<{ emoji: Uploaded & { id: string } }>(
+        admin,
+        "POST",
+        `/api/servers/${serverId}/emoji`,
+        { key: minted.body.key, name: "pog" },
+      );
+      expect(claimed.body.emoji).toMatchObject({ createdBy: admin.id, createdByName: "Admin" });
+      await addEmoji("owner_made");
+
+      const list = await call<{ emoji: Uploaded[] }>(member, "GET", `/api/servers/${serverId}/emoji`);
+      expect(list.body.emoji).toEqual([
+        expect.objectContaining({ name: "owner_made", createdBy: owner.id, createdByName: "Owner" }),
+        expect.objectContaining({ name: "pog", createdBy: admin.id, createdByName: "Admin" }),
+      ]);
+
+      const renamed = await call<{ emoji: Uploaded }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}/emoji/${claimed.body.emoji.id}`,
+        { name: "poggers" },
+      );
+      expect(renamed.body.emoji).toMatchObject({ createdBy: admin.id, createdByName: "Admin" });
+    });
+
+    it("keeps the emoji and drops the name once the uploader's account is gone", async () => {
+      await addEmoji("pog", admin);
+      await getPool().query("DELETE FROM users WHERE id = $1", [admin.id]);
+      const list = await call<{ emoji: Uploaded[] }>(owner, "GET", `/api/servers/${serverId}/emoji`);
+      expect(list.body.emoji).toEqual([
+        expect.objectContaining({ name: "pog", createdBy: null, createdByName: null }),
+      ]);
     });
   });
 

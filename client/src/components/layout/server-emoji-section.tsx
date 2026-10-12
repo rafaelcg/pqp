@@ -441,7 +441,18 @@ function EmojiRow({
           />
           <span aria-hidden className="text-paper-muted">:</span>
         </div>
-        {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+        {error ? (
+          <p className="mt-1 text-xs text-danger">{error}</p>
+        ) : (
+          <p
+            className="mt-1 truncate text-xs text-paper-muted"
+            data-emoji-uploader
+          >
+            {emoji.createdByName
+              ? t("serverEmoji.uploadedBy", { name: emoji.createdByName })
+              : t("serverEmoji.uploadedByDeparted")}
+          </p>
+        )}
       </div>
       <Button
         size="icon"

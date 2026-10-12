@@ -17,6 +17,7 @@ const LIST: ServerEmojiList = {
       name: "pog",
       url: `/api/emoji/${POG}?v=abcd1234`,
       createdBy: null,
+      createdByName: null,
       createdAt: "2026-10-12T00:00:00.000Z",
     },
   ],

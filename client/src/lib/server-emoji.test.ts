@@ -18,6 +18,7 @@ function emoji(name: string, id: string): ServerEmoji {
     name,
     url: `/api/emoji/${id}?v=abcd1234`,
     createdBy: null,
+    createdByName: null,
     createdAt: "2026-10-12T00:00:00.000Z",
   };
 }

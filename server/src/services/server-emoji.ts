@@ -50,6 +50,7 @@ interface ServerEmojiRow {
   name: string;
   storage_key: string;
   created_by: string | null;
+  created_by_name: string | null;
   created_at: Date;
 }
 
@@ -138,15 +139,22 @@ function mapRow(row: ServerEmojiRow): ServerEmoji {
     name: row.name,
     url: serverEmojiUrlForKey(row.id, row.storage_key),
     createdBy: row.created_by,
+    createdByName: row.created_by_name,
     createdAt: row.created_at.toISOString(),
   };
 }
 
 const COLUMNS = "id, server_id, name, storage_key, created_by, created_at";
 
+/** `COLUMNS` of `e`, plus the uploader's name; needs `LEFT JOIN users u ON u.id = e.created_by`. */
+const COLUMNS_WITH_UPLOADER = `e.id, e.server_id, e.name, e.storage_key, e.created_by,
+  e.created_at, u.display_name AS created_by_name`;
+
 export async function listServerEmoji(serverId: string): Promise<ServerEmoji[]> {
   const result = await getPool().query<ServerEmojiRow>(
-    `SELECT ${COLUMNS} FROM server_emoji WHERE server_id = $1 ORDER BY name`,
+    `SELECT ${COLUMNS_WITH_UPLOADER}
+       FROM server_emoji e LEFT JOIN users u ON u.id = e.created_by
+      WHERE e.server_id = $1 ORDER BY e.name`,
     [serverId],
   );
   return result.rows.map(mapRow);
@@ -255,13 +263,15 @@ export async function insertServerEmoji(input: {
       throw new ServerEmojiError("limit_reached", "This server has no room for more emoji.");
     }
     const inserted = await client.query<ServerEmojiRow>(
-      `INSERT INTO server_emoji
-         (server_id, name, storage_key, created_by,
-          scan_status, scan_provider, scan_score, scan_labels, scanned_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
-               CASE WHEN $5 = 'unscanned' THEN NULL ELSE NOW() END)
-       ON CONFLICT (server_id, name) DO NOTHING
-       RETURNING ${COLUMNS}`,
+      `WITH e AS (
+         INSERT INTO server_emoji
+           (server_id, name, storage_key, created_by,
+            scan_status, scan_provider, scan_score, scan_labels, scanned_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
+                 CASE WHEN $5 = 'unscanned' THEN NULL ELSE NOW() END)
+         ON CONFLICT (server_id, name) DO NOTHING
+         RETURNING ${COLUMNS})
+       SELECT ${COLUMNS_WITH_UPLOADER} FROM e LEFT JOIN users u ON u.id = e.created_by`,
       [
         input.serverId,
         input.name,
@@ -297,12 +307,15 @@ export async function renameServerEmoji(
   let result;
   try {
     result = await getPool().query<ServerEmojiRow & { previous_name: string }>(
-      `UPDATE server_emoji e SET name = $3
-         FROM (SELECT id, name AS previous_name FROM server_emoji
-                WHERE id = $2 AND server_id = $1) before
-        WHERE e.id = before.id
-        RETURNING e.id, e.server_id, e.name, e.storage_key, e.created_by,
-                  e.created_at, before.previous_name`,
+      `WITH e AS (
+         UPDATE server_emoji e SET name = $3
+           FROM (SELECT id, name AS previous_name FROM server_emoji
+                  WHERE id = $2 AND server_id = $1) before
+          WHERE e.id = before.id
+          RETURNING e.id, e.server_id, e.name, e.storage_key, e.created_by,
+                    e.created_at, before.previous_name)
+       SELECT ${COLUMNS_WITH_UPLOADER}, e.previous_name
+         FROM e LEFT JOIN users u ON u.id = e.created_by`,
       [serverId, emojiId, name],
     );
   } catch (error) {
