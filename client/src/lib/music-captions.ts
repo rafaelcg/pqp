@@ -345,17 +345,20 @@ export function musicCaptionsChoices(input: {
   // A translation row for the UI language and, when it differs, for the
   // language the viewer last picked: a saved English on a video with no
   // English track is translated into English, and must show as a ticked row.
-  const wanted = [uiLocale, s.lang].filter(
-    (lang, index, all): lang is string =>
-      lang !== null && all.findIndex((other) => other !== null && primary(other) === primary(lang)) === index,
-  );
-  for (const lang of wanted) {
+  // One row per distinct translation: `pt-BR` and `pt-PT` are two rows when
+  // YouTube offers both targets, one when they resolve to the same code.
+  const offered = new Set<string>();
+  for (const lang of [uiLocale, s.lang]) {
+    if (lang === null) {
+      continue;
+    }
     const translateInto = findTrack(tracks, lang)
       ? undefined
       : findTranslation(s.translations, lang);
-    if (!translateInto) {
+    if (!translateInto || offered.has(translateInto)) {
       continue;
     }
+    offered.add(translateInto);
     choices.push({
       id: `translate:${translateInto}`,
       label: input.autoTranslatedLabel(input.languageName(lang, lang)),

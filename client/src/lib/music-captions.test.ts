@@ -257,6 +257,30 @@ describe("musicCaptionsChoices", () => {
     ]);
   });
 
+  it("keeps two regional translations apart, and merges ones that resolve the same", () => {
+    const apart = musicCaptionsChoices({
+      state: { on: true, lang: "pt-PT", tracks: [track("en")], translations: TRANSLATIONS },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(apart.map((choice) => [choice.label, choice.checked])).toEqual([
+      ["Desligadas", false],
+      ["pt-BR (tradução automática)", false],
+      ["pt-PT (tradução automática)", true],
+      ["en", false],
+    ]);
+    const merged = musicCaptionsChoices({
+      state: { on: true, lang: "pt", tracks: [track("en")], translations: TRANSLATIONS },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(merged.map((choice) => [choice.label, choice.checked])).toEqual([
+      ["Desligadas", false],
+      ["pt-BR (tradução automática)", true],
+      ["en", false],
+    ]);
+  });
+
   it("offers and ticks the translation into a saved language that is not the UI's", () => {
     const choices = musicCaptionsChoices({
       state: { on: true, lang: "es", tracks: [track("en")], translations: TRANSLATIONS },
