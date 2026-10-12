@@ -1038,12 +1038,6 @@
 }
 
 /*
- * High contrast is an accessibility override, not a fourth skin. It only
- * pushes text, muted text, borders and the indicator so they stay readable
- * on whatever appearance is already active. Keep unlayered. Two-attribute
- * light beats this one-attribute dark block.
- */
-/*
  * Seasonal looks. Offered in the picker and by a corner card only in their
  * season (`lib/seasonal-looks.ts`), but a stored pick keeps working all year,
  * so these blocks stay.
@@ -1135,6 +1129,12 @@
   --picker-border: oklch(0.35 0.04 165);
 }
 
+/*
+ * High contrast is an accessibility override, not a fourth skin. It only
+ * pushes text, muted text, borders and the indicator so they stay readable
+ * on whatever appearance is already active. Keep unlayered. Two-attribute
+ * light beats this one-attribute dark block.
+ */
 :root[data-contrast="more"] {
   --color-text: oklch(0.99 0.01 95);
   --color-text-secondary: oklch(0.94 0.012 95);
