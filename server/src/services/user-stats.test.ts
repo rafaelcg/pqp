@@ -313,10 +313,20 @@ describeDb("user stats", () => {
     expect(await r.copyWatchParties()).toBe(1);
     expect(await r.copyWatchParties()).toBe(0);
 
+    // A party last seen hours ago, still inside the viewer table's 24h
+    // retention: a worker that was down that long still copies it.
+    await getPool().query(
+      `INSERT INTO hls_session_viewers
+         (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at)
+       VALUES ($1, $2, $3, now() - interval '6 hours', now() - interval '5 hours')`,
+      [channelId, startedAt - 86_400_000, ana],
+    );
+    expect(await r.copyWatchParties()).toBe(1);
+
     // The viewer table prunes; the copy stays.
     await getPool().query(`TRUNCATE hls_session_viewers`);
     const kept = await getPool().query(`SELECT user_id FROM user_watch_parties`);
-    expect(kept.rows).toEqual([{ user_id: ana }]);
+    expect(kept.rows).toEqual([{ user_id: ana }, { user_id: ana }]);
   });
 
   it("goes with the account", async () => {

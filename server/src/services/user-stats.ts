@@ -4,6 +4,7 @@ import { getPool } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { processRole, servesTraffic } from "../lib/process-role.js";
+import { HLS_VIEWER_ROW_RETENTION_HOURS } from "../voice/hls-viewer-counts.js";
 import { isVoiceRegistryEnabled } from "../voice/registry.js";
 import { activityDay } from "./user-activity.js";
 
@@ -60,8 +61,12 @@ export const USER_STATS_SAMPLE_INTERVAL_MS = 60_000;
 export const USER_STATS_MUSIC_FLUSH_INTERVAL_MS = 60_000;
 /** Viewer rows are pruned a day after the last sighting; copy well inside it. */
 export const USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS = 15 * 60_000;
-/** How far back each copy looks. Two hours covers a missed tick or a deploy. */
-const WATCH_PARTY_COPY_LOOKBACK = "2 hours";
+/**
+ * How far back each copy looks: the viewer table's whole retention, so a
+ * worker that was down for hours still copies every row the prune has not
+ * taken yet.
+ */
+const WATCH_PARTY_COPY_LOOKBACK_HOURS = HLS_VIEWER_ROW_RETENTION_HOURS;
 const MIN_PEOPLE_IN_ROOM = 2;
 const MAX_PENDING_MUSIC = 50_000;
 const BLIND_WARNING_INTERVAL_MS = 60 * 60_000;
@@ -393,7 +398,7 @@ export function createUserStatsRecorder(
          SELECT v.user_id, v.channel_id, v.started_at_ms, v.first_seen_at
            FROM hls_session_viewers v
            JOIN users u ON u.id = v.user_id
-          WHERE v.last_seen_at > now() - interval '${WATCH_PARTY_COPY_LOOKBACK}'
+          WHERE v.last_seen_at > now() - interval '${WATCH_PARTY_COPY_LOOKBACK_HOURS} hours'
             AND NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
          ON CONFLICT DO NOTHING`,
       );
