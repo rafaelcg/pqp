@@ -476,6 +476,7 @@ export function MusicPlayer({
   muted = false,
   playerRef,
   onNeedsTap,
+  onPlaybackFailed,
   duckEnabled = false,
   speakingPeerCount = 0,
   transmitting = false,
@@ -487,6 +488,8 @@ export function MusicPlayer({
   muted?: boolean;
   playerRef: MutableRefObject<YTPlayer | null>;
   onNeedsTap: (needs: boolean) => void;
+  /** Tells the bar this video cannot play here, so it can say so. */
+  onPlaybackFailed?: (failed: boolean) => void;
   duckEnabled?: boolean;
   speakingPeerCount?: number;
   transmitting?: boolean;
@@ -502,6 +505,12 @@ export function MusicPlayer({
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const { t } = useTranslation();
+  const onPlaybackFailedRef = useRef(onPlaybackFailed);
+  onPlaybackFailedRef.current = onPlaybackFailed;
+  useEffect(() => {
+    onPlaybackFailedRef.current?.(failed);
+  }, [failed]);
+  useEffect(() => () => onPlaybackFailedRef.current?.(false), []);
   const videoId = music.state?.current?.videoId ?? null;
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";

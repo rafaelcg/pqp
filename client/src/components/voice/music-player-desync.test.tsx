@@ -38,6 +38,7 @@ class FakePlayer {
   private events: {
     onReady?: (event: { target: YTPlayer }) => void;
     onStateChange?: (event: { data: number; target: YTPlayer }) => void;
+    onError?: (event: { data: number; target: YTPlayer }) => void;
   };
 
   constructor(
@@ -57,6 +58,11 @@ class FakePlayer {
   report(state: number): void {
     this.state = state;
     this.events.onStateChange?.({ data: state, target: this.api() });
+  }
+
+  /** YouTube refuses the video (150: embedding is blocked here). */
+  fail(code: number): void {
+    this.events.onError?.({ data: code, target: this.api() });
   }
 
   /** Deliver every queued command, in the order it was sent. */
@@ -173,6 +179,8 @@ function snapshot(state: MusicState | null): MusicSnapshot {
 
 const playerRef: MutableRefObject<YTPlayer | null> = { current: null };
 
+let onPlaybackFailed: ((failed: boolean) => void) | undefined;
+
 async function render(music: MusicSnapshot): Promise<void> {
   await act(async () => {
     root!.render(
@@ -182,6 +190,7 @@ async function render(music: MusicSnapshot): Promise<void> {
         volume={40}
         playerRef={playerRef}
         onNeedsTap={() => {}}
+        onPlaybackFailed={onPlaybackFailed}
       />,
     );
   });
@@ -213,6 +222,7 @@ async function listeningTenSecondsIn(): Promise<FakePlayer> {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearTimeout", "clearInterval", "Date"] });
   players = [];
+  onPlaybackFailed = undefined;
   playerRef.current = null;
   (window as unknown as { YT: unknown }).YT = { Player: FakePlayer };
   host = document.createElement("div");
@@ -228,6 +238,25 @@ afterEach(() => {
   resetMusicEmbedHostForTests();
   delete (window as unknown as { YT?: unknown }).YT;
   vi.useRealTimers();
+});
+
+describe("a video YouTube will not play here", () => {
+  it("tells the bar, and stops telling it once the room moves on", async () => {
+    const seen: boolean[] = [];
+    onPlaybackFailed = (failed) => seen.push(failed);
+    await render(snapshot(roomState()));
+    await iframeCatchesUp();
+    expect(seen.at(-1)).toBe(false);
+
+    await act(async () => players[0]!.fail(150));
+    expect(seen.at(-1)).toBe(true);
+
+    // The room skips to another track: the error belonged to the old one.
+    const next = { ...TRACK, id: "track-b", videoId: "9bZkp7q19f0" };
+    await render(snapshot(roomState({ current: next, rev: 2 })));
+    await iframeCatchesUp();
+    expect(seen.at(-1)).toBe(false);
+  });
 });
 
 describe("the room stops while this seat is listening (PQP-69)", () => {

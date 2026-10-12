@@ -155,6 +155,7 @@ export function MusicNowPlaying({
   canSetSwitches,
   playing,
   needsTap,
+  playbackFailed = false,
   listening,
   volume,
   muted,
@@ -176,6 +177,8 @@ export function MusicNowPlaying({
   canSetSwitches: boolean;
   playing: boolean;
   needsTap: boolean;
+  /** YouTube refused this video on this machine (error 100, 101, 150). */
+  playbackFailed?: boolean;
   listening: boolean;
   volume: number;
   muted: boolean;
@@ -286,6 +289,15 @@ export function MusicNowPlaying({
             {listenerCount > 0
               ? t("music.stopped.playing", { count: listenerCount })
               : t("music.stopped.alone")}
+          </span>
+        ) : playbackFailed ? (
+          /* This machine cannot play the video, the room is fine. Without
+             this line the bar reads as playing while nothing sounds. */
+          <span
+            data-music-unplayable=""
+            className={cn("mt-0.5 block truncate text-[11px] leading-tight", mutedText)}
+          >
+            {t("music.error.playback")}
           </span>
         ) : current.autoplayed ? (
           <span
