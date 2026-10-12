@@ -5222,6 +5222,7 @@
   "nudge.received": "¡{name} te llamó la atención!",
   "nudge.toast": "¡te llamó la atención! 📳",
   "nudge.notifyBody": "¡Te llamó la atención! 📳",
+  "nudge.previewSent": "Le llamaste la atención 📳",
   "nudge.refused.cooldown": "¡Calma! Espera unos segundos para volver a llamar la atención.",
   "nudge.refused.unanswered": "{name} todavía no respondió. Mándale un mensaje.",
   "nudge.refused.busy": "{name} está ocupado ahora. Mándale un mensaje.",

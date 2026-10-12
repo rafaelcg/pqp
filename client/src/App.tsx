@@ -4988,6 +4988,7 @@ function MainAppContent({
                           preview: activity.preview,
                           isAttachment: false,
                           isGif: false,
+                          systemKind: activity.systemKind ?? null,
                         }
                       : undefined,
                   ),

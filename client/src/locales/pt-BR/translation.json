@@ -5154,6 +5154,7 @@
   "nudge.received": "{name} chamou tua atenção!",
   "nudge.toast": "chamou tua atenção! 📳",
   "nudge.notifyBody": "Chamou tua atenção! 📳",
+  "nudge.previewSent": "Tu chamou a atenção 📳",
   "nudge.refused.cooldown": "Calma! Espera uns segundinhos pra chamar a atenção de novo.",
   "nudge.refused.unanswered": "{name} ainda não respondeu. Manda uma mensagem.",
   "nudge.refused.busy": "{name} tá ocupado agora. Manda uma mensagem.",

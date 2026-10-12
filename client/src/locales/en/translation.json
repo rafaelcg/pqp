@@ -5154,6 +5154,7 @@
   "nudge.received": "{name} nudged you!",
   "nudge.toast": "nudged you! 📳",
   "nudge.notifyBody": "Nudged you! 📳",
+  "nudge.previewSent": "You nudged them 📳",
   "nudge.refused.cooldown": "Easy! Wait a few seconds before nudging again.",
   "nudge.refused.unanswered": "{name} hasn't answered yet. Send a message instead.",
   "nudge.refused.busy": "{name} is busy right now. Send a message instead.",
