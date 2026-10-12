@@ -8129,6 +8129,16 @@
         }
       }
     },
+    "You're not in %@. The card only lets people in while you're in the call." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não tá no %@. O card só deixa entrar enquanto tu tá na call."
+          }
+        }
+      }
+    },
     "You're now friends." : {
       "localizations" : {
         "pt-BR" : {
