@@ -9,6 +9,9 @@ import { Menu } from "./menu";
  * A row that opens a dialog hands focus to that dialog. Radix's own
  * return-to-trigger used to run after it and pull focus back out from under
  * the modal, so Enter reopened the menu behind it (QA, 2026-10-11).
+ *
+ * Focus is polled rather than read after a fixed wait: on a loaded CI runner
+ * the menu can finish closing after the wait (2026-10-12).
  */
 
 let host: HTMLDivElement | null = null;
@@ -76,14 +79,14 @@ describe("Menu focus after a row is chosen", () => {
     });
     await openWithKeyboard(trigger);
     await chooseFirstRow();
-    expect(document.activeElement).toBe(dialogButton);
+    await vi.waitFor(() => expect(document.activeElement).toBe(dialogButton));
   });
 
   it("returns focus to the trigger when the row took none", async () => {
     const trigger = mount(() => undefined);
     await openWithKeyboard(trigger);
     await chooseFirstRow();
-    expect(document.activeElement).toBe(trigger);
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("returns focus to the trigger when the dialog a row opened closes", async () => {
@@ -109,11 +112,11 @@ describe("Menu focus after a row is chosen", () => {
     const trigger = host.querySelector("button")!;
     await openWithKeyboard(trigger);
     await chooseFirstRow();
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
     await act(async () => {
       close();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(document.activeElement).toBe(trigger);
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });
