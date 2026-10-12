@@ -5145,6 +5145,8 @@
   "forum.solution.unmark": "Quitar la solución",
   "forum.solution.title": "Solución",
   "forum.solution.jump": "Ir a la respuesta",
+  "forum.solution.markedBy": "marcada por {name}",
+  "forum.solution.markedByYou": "marcada por ti",
   "forum.solution.deleted": "La respuesta marcada fue eliminada.",
   "forum.reply.placeholder": "Responder en \"{title}\"",
   "forum.locked": "Este post está cerrado. Solo el staff responde aquí.",

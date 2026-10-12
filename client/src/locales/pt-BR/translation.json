@@ -5077,6 +5077,8 @@
   "forum.solution.unmark": "Tirar a solução",
   "forum.solution.title": "Solução",
   "forum.solution.jump": "Ir pra resposta",
+  "forum.solution.markedBy": "marcada por {name}",
+  "forum.solution.markedByYou": "marcada por ti",
   "forum.solution.deleted": "A resposta marcada foi apagada.",
   "forum.reply.placeholder": "Responder em \"{title}\"",
   "forum.locked": "Esse post tá fechado. Só a staff responde aqui.",
