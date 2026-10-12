@@ -57,6 +57,10 @@ import gg.pqp.app.onboarding.shouldRunOnboarding
 import gg.pqp.app.onboarding.ui.ArrivalBanner
 import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
+import gg.pqp.app.push.ChannelPushRoute
+import gg.pqp.app.push.channelPushRoute
+import gg.pqp.app.push.PostLookup
+import gg.pqp.app.forum.forumPost
 import gg.pqp.app.push.PushPrompt
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
@@ -90,6 +94,7 @@ import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
 import gg.pqp.app.watch.ui.WatchPartyHostControls
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
@@ -145,6 +150,63 @@ import kotlinx.serialization.Serializable
 )
 
 @Serializable object YouRoute
+
+/** Conversas phone tabs: Friends is opened from the Conversas header, not a tab. */
+@Serializable object FriendsRoute
+/**
+ * A forum's list. [guidelines] is the channel's topic, which is the forum's
+ * "Regras do fórum"; a notification tap that knows only ids leaves it null and
+ * the row simply is not drawn.
+ */
+@Serializable data class ForumRoute(
+    val serverId: String,
+    val forumId: String,
+    val forumName: String = "",
+    val serverName: String = "",
+    val guidelines: String? = null,
+)
+
+/** One post of a forum, full screen. Its channel is the post's own id. */
+@Serializable data class ForumPostRoute(
+    val serverId: String,
+    val forumId: String,
+    val postId: String,
+    val forumName: String = "",
+)
+
+/** "Novo post". [title] fills the field when it comes from an empty search ("Postar …"). */
+@Serializable data class ForumComposerRoute(
+    val serverId: String,
+    val forumId: String,
+    val title: String? = null,
+    val forumName: String = "",
+)
+
+/**
+ * Where a channel row goes: a forum to its list, anything else to its chat.
+ * One function so the channel list, a `#channel` in a Baú post and the
+ * arrival banner cannot disagree about it.
+ */
+internal fun androidx.navigation.NavHostController.openChannel(
+    channel: gg.pqp.app.core.Channel,
+    serverId: String,
+    serverName: String,
+) {
+    if (channel.isForum) {
+        navigate(ForumRoute(serverId, channel.id, channel.name, serverName, channel.topic))
+        return
+    }
+    navigate(
+        ChatRoute(
+            channel.id,
+            channel.name,
+            channel.slowmodeSeconds,
+            serverId = serverId,
+            isVoiceChannel = channel.isVoice,
+            isWatchParty = channel.type == "watch_party",
+        ),
+    )
+}
 
 @Composable
 fun PqpApp(
@@ -250,6 +312,13 @@ private fun SignedInNav(
             android.widget.Toast.makeText(context, micDenied, android.widget.Toast.LENGTH_LONG).show()
         },
     )
+
+    // A story's "Entrar na call": join the room through the same microphone
+    // gate as every other join, and open its channel so the call has a place.
+    val joinStoryCall: (String, String, String) -> Unit = { serverId, channelId, channelName ->
+        withMicrophone { voice.join(channelId, channelName) }
+        nav.navigate(ChatRoute(channelId, channelName, serverId = serverId, isVoiceChannel = true))
+    }
 
     // The server's answer to a join or a screen share, and a moderator's
     // notice, shown from here rather than from any one screen. A join starts
@@ -425,6 +494,8 @@ private fun SignedInNav(
                         },
                         onOpenConversation = { route -> nav.navigate(route) },
                         onOpenProfile = { nav.navigate(YouRoute) },
+                        onOpenFriends = { nav.navigate(FriendsRoute) },
+                        onJoinStoryCall = joinStoryCall,
                     )
                 }
                 conversationDestination(
@@ -444,20 +515,12 @@ private fun SignedInNav(
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
                         onOpenChannel = { channel ->
-                            nav.navigate(
-                                ChatRoute(
-                                    channel.id,
-                                    channel.name,
-                                    channel.slowmodeSeconds,
-                                    serverId = route.serverId,
-                                    isVoiceChannel = channel.isVoice,
-                                    isWatchParty = channel.type == "watch_party",
-                                ),
-                            )
+                            nav.openChannel(channel, route.serverId, route.serverName)
                         },
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
                         },
+                        onJoinStoryCall = joinStoryCall,
                     )
                 }
                 composable<BauRoute> { entry ->
@@ -472,21 +535,81 @@ private fun SignedInNav(
                         // A `#channel` in a post opens that channel, the same way
                         // the channel list does.
                         onOpenChannel = { channel ->
-                            nav.navigate(
-                                ChatRoute(
-                                    channel.id,
-                                    channel.name,
-                                    channel.slowmodeSeconds,
-                                    serverId = route.serverId,
-                                    isVoiceChannel = channel.isVoice,
-                                    isWatchParty = channel.type == "watch_party",
-                                ),
-                            )
+                            nav.openChannel(channel, route.serverId, route.serverName)
+                        },
+                    )
+                }
+                composable<ForumRoute> { entry ->
+                    val route = entry.toRoute<ForumRoute>()
+                    gg.pqp.app.forum.ui.ForumScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        serverName = route.serverName.ifEmpty {
+                            session.servers.value.firstOrNull { it.id == route.serverId }?.name.orEmpty()
+                        },
+                        forumId = route.forumId,
+                        forumName = route.forumName,
+                        guidelines = route.guidelines,
+                        onBack = nav::popBackStack,
+                        onOpenPost = { post ->
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, route.forumName))
+                        },
+                        onCompose = { title ->
+                            nav.navigate(ForumComposerRoute(route.serverId, route.forumId, title, route.forumName))
+                        },
+                    )
+                }
+                composable<ForumPostRoute> { entry ->
+                    val route = entry.toRoute<ForumPostRoute>()
+                    gg.pqp.app.forum.ui.ForumPostScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        forumId = route.forumId,
+                        forumName = route.forumName,
+                        postId = route.postId,
+                        onBack = nav::popBackStack,
+                    )
+                }
+                composable<ForumComposerRoute> { entry ->
+                    val route = entry.toRoute<ForumComposerRoute>()
+                    val forumName = route.forumName
+                    gg.pqp.app.forum.ui.ForumComposerScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        forumId = route.forumId,
+                        initialTitle = route.title,
+                        onClose = nav::popBackStack,
+                        onOpenPost = { post ->
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, forumName))
+                        },
+                        onPublished = { post ->
+                            // The new post takes the composer's place, so back
+                            // from it lands on the list, not on an empty form.
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, forumName)) {
+                                popUpTo<ForumComposerRoute> { inclusive = true }
+                            }
                         },
                     )
                 }
                 composable<ChatRoute> { entry ->
                     val route = entry.toRoute<ChatRoute>()
+                    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+                    val conversasConfig by gg.pqp.app.social.ConversasHome.of(appContext)
+                        .config.collectAsStateWithLifecycle()
+                    val messageScope = androidx.compose.runtime.rememberCoroutineScope()
+
+                    // The channel list now shows unread per channel, so
+                    // opening one has to move the read cursor, the way a
+                    // conversation already does (`SocialNav`): on the way in,
+                    // and on the way out, because the server sends no
+                    // `channel-activity` to the socket viewing the channel.
+                    if (route.serverId != null) {
+                        val social = gg.pqp.app.social.SocialRepository.of(session)
+                        androidx.compose.runtime.DisposableEffect(route.channelId) {
+                            social.markRead(route.channelId)
+                            onDispose { social.markRead(route.channelId) }
+                        }
+                    }
 
                     // Offered only while this room is not already the call.
                     // Once joining or connected, the call bar above the
@@ -587,6 +710,31 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        onMessageAuthor = if (conversasConfig.home && route.serverId != null) {
+                            { authorId ->
+                                messageScope.launch {
+                                    val social = SocialRepository.of(session)
+                                    social.openConversation(listOf(authorId))
+                                        .onSuccess {
+                                            nav.navigate(ConversationRoute(it.channelId, it.titleOr("")))
+                                        }
+                                        .onFailure {
+                                            // The server's own sentence (a privacy
+                                            // setting or a block read the same).
+                                            social.clearError()
+                                            val text = (it as? gg.pqp.app.core.ApiException)?.serverMessage
+                                                ?: it.message.orEmpty()
+                                            if (text.isNotBlank()) {
+                                                android.widget.Toast
+                                                    .makeText(appContext, text, android.widget.Toast.LENGTH_LONG)
+                                                    .show()
+                                            }
+                                        }
+                                }
+                            }
+                        } else {
+                            null
+                        },
                         // The watch party, above the transcript, for anybody
                         // who may see the channel. A `watch_party` channel
                         // gets the full stage — a card even while nothing is
@@ -696,7 +844,19 @@ private fun SignedInNav(
                     )
                 }
                 composable<YouRoute> {
-                    YouScreen(session = session, onBack = nav::popBackStack)
+                    YouScreen(session = session, onBack = { nav.popBackStack() })
+                }
+                composable<FriendsRoute> {
+                    val social = SocialRepository.of(session)
+                    val emptyTitle = stringResource(R.string.dms_empty_conversation)
+                    gg.pqp.app.social.ui.FriendsScreen(
+                        social = social,
+                        api = session.api,
+                        onOpenConversation = { conversation ->
+                            nav.navigate(ConversationRoute(conversation.channelId, conversation.titleOr(emptyTitle)))
+                        },
+                        onBack = { nav.popBackStack() },
+                    )
                 }
             }
             }
@@ -707,16 +867,7 @@ private fun SignedInNav(
                     landing = landing,
                     onOpenChannel = { channel ->
                         arrival = null
-                        nav.navigate(
-                            ChatRoute(
-                                channel.id,
-                                channel.name,
-                                channel.slowmodeSeconds,
-                                serverId = landing.serverId,
-                                isVoiceChannel = channel.isVoice,
-                                isWatchParty = channel.type == "watch_party",
-                            ),
-                        )
+                        nav.openChannel(channel, landing.serverId, landing.serverName)
                     },
                     onDismiss = { arrival = null },
                 )
@@ -762,18 +913,63 @@ private suspend fun navigateToPush(
             // watch party pane, and a tap on a notification about a live party
             // is exactly the way somebody arrives at one: landing there with no
             // player would be the one route where the feature is missing.
-            val channel = runCatching { session.api.channels(target.serverId) }
-                .getOrNull()
-                ?.firstOrNull { it.id == target.channelId }
-            nav.navigate(
-                ChatRoute(
-                    target.channelId,
-                    channel?.name.orEmpty(),
-                    serverId = target.serverId,
-                    isVoiceChannel = channel?.isVoice == true,
-                    isWatchParty = channel?.type == "watch_party",
-                ),
-            )
+            val channels = runCatching { session.api.channels(target.serverId) }.getOrNull()
+            val channel = channels?.firstOrNull { it.id == target.channelId }
+            // A forum opens its list. An id that is not in the list is a
+            // thread or a forum POST (a reply or a mention in one), and only
+            // the server knows which: a post opens on the forum with the post
+            // on top, so back goes to the list; a thread opens its chat as it
+            // always did. A type this build cannot draw stays on the list.
+            val route = channelPushRoute(channel, channels) {
+                try {
+                    PostLookup.Post(session.api.forumPost(target.channelId).post.forumId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: gg.pqp.app.core.ApiException) {
+                    if (e.status == 404) PostLookup.NotAPost else PostLookup.Failed
+                } catch (e: Exception) {
+                    PostLookup.Failed
+                }
+            }
+            when (route) {
+                ChannelPushRoute.Stay -> return
+                ChannelPushRoute.Forum -> nav.openChannel(channel!!, target.serverId, serverName(target.serverId))
+                is ChannelPushRoute.Post -> {
+                    val forum = channels?.firstOrNull { it.id == route.forumId }
+                    nav.navigate(
+                        ForumRoute(target.serverId, route.forumId, route.forumName, serverName(target.serverId), forum?.topic),
+                    )
+                    nav.navigate(ForumPostRoute(target.serverId, route.forumId, target.channelId, route.forumName))
+                }
+                ChannelPushRoute.Chat -> nav.navigate(
+                    ChatRoute(
+                        target.channelId,
+                        channel?.name.orEmpty(),
+                        serverId = target.serverId,
+                        isVoiceChannel = channel?.isVoice == true,
+                        isWatchParty = channel?.type == "watch_party",
+                    ),
+                )
+            }
+        }
+
+        // A post's own link (`Copiar link` on any client). The forum first,
+        // so back lands on its list; the post screen says so itself when the
+        // post is gone or was never visible.
+        is DeepLinkTarget.ForumPost -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            // Only the names and the guidelines come from this; a failure
+            // still opens the post. A cancellation is not a failure.
+            val forum = try {
+                session.api.channels(target.serverId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }?.firstOrNull { it.id == target.forumId }
+            nav.navigate(ForumRoute(target.serverId, target.forumId, forum?.name.orEmpty(), name, forum?.topic))
+            nav.navigate(ForumPostRoute(target.serverId, target.forumId, target.postId, forum?.name.orEmpty()))
         }
 
         is DeepLinkTarget.Server ->

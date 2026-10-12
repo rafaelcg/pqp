@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUDIO_HEALTH_KINDS,
+  audioHealthSummarySchema,
   createCallRatingSchema,
   inboundStreamQualitySchema,
   mediaQualitySchema,
@@ -179,6 +181,37 @@ describe("createCallRatingSchema with mediaQuality", () => {
       createCallRatingSchema.parse(
         baseRating({ mediaQuality: mediaQuality({ packetLossPercent: 500 }) }),
       ),
+    ).toThrow();
+  });
+});
+
+describe("audioHealthSummarySchema", () => {
+  const counts = { detected: 2, autoFixed: 1, asked: 1, manualFixed: 1, unresolved: 0 };
+
+  it("rides on mediaQuality, and a rating without it still validates", () => {
+    const withHealth = createCallRatingSchema.parse(
+      baseRating({ mediaQuality: mediaQuality({ audioHealth: { micNotSending: counts } }) }),
+    );
+    expect(withHealth.mediaQuality?.audioHealth?.micNotSending).toEqual(counts);
+    expect(createCallRatingSchema.parse(baseRating({ mediaQuality: mediaQuality() })).mediaQuality
+      ?.audioHealth).toBeUndefined();
+  });
+
+  it("accepts every kind, and nothing else", () => {
+    const all = Object.fromEntries(AUDIO_HEALTH_KINDS.map((kind) => [kind, counts]));
+    expect(audioHealthSummarySchema.parse(all)).toEqual(all);
+    expect(() => audioHealthSummarySchema.parse({ somethingElse: counts })).toThrow();
+    expect(() =>
+      audioHealthSummarySchema.parse({ micNotSending: { ...counts, note: "x" } }),
+    ).toThrow();
+  });
+
+  it("refuses an unbounded or fractional count", () => {
+    expect(() =>
+      audioHealthSummarySchema.parse({ inboundStalled: { ...counts, detected: 5_000 } }),
+    ).toThrow();
+    expect(() =>
+      audioHealthSummarySchema.parse({ inboundStalled: { ...counts, detected: 1.5 } }),
     ).toThrow();
   });
 });

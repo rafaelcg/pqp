@@ -238,6 +238,13 @@ actor APIClient {
         try await send(path: path, method: "DELETE", query: [], body: nil)
     }
 
+    /// A verb with a JSON body that the helpers above do not name (PUT, or a
+    /// DELETE that carries a reason), for endpoints declared in other files.
+    @discardableResult
+    func send<T: Decodable>(path: String, method: String, body: some Encodable) async throws -> T {
+        try await send(path: path, method: method, query: [], body: try Coding.encoder.encode(body))
+    }
+
     fileprivate func send<T: Decodable>(
         path: String,
         method: String,
@@ -261,6 +268,16 @@ actor APIClient {
         }
     }
 
+    /// What a URLSession failure becomes. A cancelled request is
+    /// `CancellationError`, never `APIError.transport`: the transport case is
+    /// shown to people ("Could not connect to the server."), and URLSession's
+    /// sentence for a cancelled task is the bare word "cancelled". See
+    /// `Error.isCancellation`.
+    static func transportFailure(_ error: any Error) -> any Error {
+        if error.isCancellation { return CancellationError() }
+        return APIError.transport(error.localizedDescription)
+    }
+
     /// The transport, minus decoding.
     ///
     /// Split out so a conditional GET can see the status code: a `304` is a
@@ -275,6 +292,60 @@ actor APIClient {
         body: Data?,
         ifNoneMatch: String?,
         idempotencyKey: String? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        let (data, http) = try await transport(
+            path: path, method: method, query: query, body: body,
+            ifNoneMatch: ifNoneMatch, idempotencyKey: idempotencyKey
+        )
+
+        if http.statusCode == 304, ifNoneMatch != nil {
+            return (data, http)
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            // Every non-2xx body is `{ "error": "..." }`; fall back to the
+            // status if we somehow got something else (e.g. hit a static host).
+            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
+                ?? "Request failed (\(http.statusCode))"
+            switch http.statusCode {
+            case 401: throw APIError.unauthorized
+            case 404: throw APIError.notFound(message)
+            case 429:
+                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
+                throw APIError.rateLimited(retryAfter: retry)
+            default: throw APIError.server(status: http.statusCode, message: message)
+            }
+        }
+
+        return (data, http)
+    }
+
+    /// A request whose refusal says more than `{ error }`: the body and the
+    /// status come back as they are, for every status. Only the transport
+    /// itself throws. Used by the forum create, whose 422 carries the same
+    /// `reason` / `retryAfterMs` / `automodMessage` a `message-rejected` does,
+    /// which the mapping above would reduce to one sentence.
+    func rawRequest(
+        _ path: String,
+        method: String,
+        body: (some Encodable)? = Optional<Data>.none
+    ) async throws -> (data: Data, status: Int) {
+        let encoded = try body.map { try Coding.encoder.encode($0) }
+        let (data, http) = try await transport(
+            path: path, method: method, query: [], body: encoded,
+            ifNoneMatch: nil, idempotencyKey: nil
+        )
+        return (data, http.statusCode)
+    }
+
+    /// Builds and sends one request. No status mapping: that is the caller's.
+    private func transport(
+        path: String,
+        method: String,
+        query: [URLQueryItem],
+        body: Data?,
+        ifNoneMatch: String?,
+        idempotencyKey: String?
     ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: backend.apiBaseURL.appendingPathComponent(path),
@@ -300,36 +371,22 @@ actor APIClient {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
+        // A caller cancelled while the token was being read. Clerk answers that
+        // with no token at all, and sending the request anyway would come back
+        // 401 and read as "Your session expired" to somebody who only pulled
+        // to refresh.
+        try Task.checkCancellation()
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
-        }
-
-        if http.statusCode == 304, ifNoneMatch != nil {
-            return (data, http)
-        }
-
-        guard (200..<300).contains(http.statusCode) else {
-            // Every non-2xx body is `{ "error": "..." }`; fall back to the
-            // status if we somehow got something else (e.g. hit a static host).
-            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
-                ?? "Request failed (\(http.statusCode))"
-            switch http.statusCode {
-            case 401: throw APIError.unauthorized
-            case 404: throw APIError.notFound(message)
-            case 429:
-                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
-                throw APIError.rateLimited(retryAfter: retry)
-            default: throw APIError.server(status: http.statusCode, message: message)
-            }
         }
 
         return (data, http)
@@ -366,6 +423,29 @@ struct EmptyResponse: Codable, Sendable {}
 
 /// An explicit empty JSON body, for POSTs that take no arguments.
 struct EmptyBody: Encodable, Sendable {}
+
+/// `POST /api/servers/:id/channels`. `parentId` goes out as an explicit null
+/// for a loose channel, and is left out only for a category: the synthesized
+/// encoder would drop a nil, and a missing key is what an OLDER client sends
+/// (the server files that one into the first category).
+struct CreateChannelBody: Encodable, Sendable {
+    let name: String
+    let type: String
+    let isPrivate: Bool
+    let parentId: String?
+
+    private enum CodingKeys: String, CodingKey { case name, type, isPrivate, parentId }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(type, forKey: .type)
+        try container.encode(isPrivate, forKey: .isPrivate)
+        if type != "category" {
+            try container.encode(parentId, forKey: .parentId)
+        }
+    }
+}
 
 // MARK: - Endpoints
 
@@ -485,11 +565,18 @@ extension APIClient {
         return response.members
     }
 
-    func createServer(name: String, idempotencyKey: String? = nil) async throws -> Server {
-        struct Body: Encodable { let name: String }
+    /// `locale` names the one category a new server starts with while the
+    /// mixed channel list is on ("Canais", "Channels", "Canales"). The app's
+    /// own language by default; an older server ignores the key.
+    func createServer(
+        name: String,
+        idempotencyKey: String? = nil,
+        locale: String = BauShare.cardLanguage()
+    ) async throws -> Server {
+        struct Body: Encodable { let name: String; let locale: String }
         struct Response: Decodable { let server: Server }
         let response: Response = try await post(
-            "/api/servers", body: Body(name: name), idempotencyKey: idempotencyKey
+            "/api/servers", body: Body(name: name, locale: locale), idempotencyKey: idempotencyKey
         )
         return response.server
     }
@@ -846,18 +933,80 @@ extension APIClient {
         let _: EmptyResponse = try await post("/api/servers/\(id)/leave", body: EmptyBody())
     }
 
-    func createChannel(serverId: String, name: String, type: String, isPrivate: Bool) async throws -> Channel {
-        struct Body: Encodable {
-            let name: String
-            let type: String
-            let isPrivate: Bool
-        }
+    /// `parentId` is the category to create it in, nil for no category, and
+    /// it is ALWAYS sent for a channel (never for a category): a request
+    /// without the key is how the server recognises an older client and files
+    /// its channel into the first category (the legacy-create rule).
+    func createChannel(
+        serverId: String,
+        name: String,
+        type: String,
+        isPrivate: Bool,
+        parentId: String? = nil
+    ) async throws -> Channel {
         struct Response: Decodable { let channel: Channel }
         let response: Response = try await post(
             "/api/servers/\(serverId)/channels",
-            body: Body(name: name, type: type, isPrivate: isPrivate)
+            body: CreateChannelBody(name: name, type: type, isPrivate: isPrivate, parentId: parentId)
         )
         return response.channel
+    }
+
+    /// Which channel list to draw. Nil on a 404: an older server that has no
+    /// mixed list, so the old one. Other failures throw, and the caller keeps
+    /// whatever it was drawing.
+    func channelLayoutConfig(serverId: String) async throws -> ChannelLayoutConfig? {
+        do {
+            let config: ChannelLayoutConfig = try await get("/api/servers/\(serverId)/channel-layout")
+            return config
+        } catch APIError.notFound {
+            return nil
+        }
+    }
+
+    /// The whole list's order in one write (Organizar canais). Every refusal
+    /// the screen has an answer for comes back as a value; only the transport
+    /// and the statuses it has no answer for throw.
+    func applyChannelLayout(serverId: String, payload: ChannelLayoutPayload) async throws -> ChannelLayoutSaveResult {
+        let (data, status) = try await rawRequest(
+            "/api/servers/\(serverId)/channel-layout", method: "PUT", body: payload
+        )
+        return try Self.channelLayoutSaveResult(data: data, status: status)
+    }
+
+    /// Split out of `applyChannelLayout` so the mapping is tested without a
+    /// server.
+    static func channelLayoutSaveResult(data: Data, status: Int) throws -> ChannelLayoutSaveResult {
+        struct Saved: Decodable { let channels: [Channel]?; let version: Int }
+        struct Refusal: Decodable { let error: String?; let channels: [Channel]?; let version: Int? }
+        if (200..<300).contains(status) {
+            do {
+                let saved = try Coding.decoder.decode(Saved.self, from: data)
+                return .saved(channels: saved.channels, version: saved.version)
+            } catch {
+                throw APIError.decoding(String(describing: error))
+            }
+        }
+        let refusal = try? Coding.decoder.decode(Refusal.self, from: data)
+        switch (status, refusal?.error) {
+        case (409, "channel_layout_stale"):
+            guard let channels = refusal?.channels, let version = refusal?.version else {
+                throw APIError.server(status: status, message: "channel_layout_stale")
+            }
+            return .stale(channels: channels, version: version)
+        case (409, "channel_layout_off"):
+            return .off
+        case (400, let message):
+            return .invalid(message ?? "Request failed (400)")
+        case (401, _):
+            throw APIError.unauthorized
+        case (404, let message):
+            throw APIError.notFound(message ?? "Request failed (404)")
+        case (429, _):
+            throw APIError.rateLimited(retryAfter: nil)
+        default:
+            throw APIError.server(status: status, message: refusal?.error ?? "Request failed (\(status))")
+        }
     }
 
     func renameChannel(id: String, name: String) async throws -> Channel {
@@ -1013,7 +1162,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
@@ -1068,7 +1217,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")

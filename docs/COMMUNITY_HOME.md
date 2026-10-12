@@ -168,6 +168,30 @@ for what would replace it.
   server's own number still comes from `…/home/unread` (`{ count, newestAt }`)
   and drives the row and the corner card
   (`client/src/lib/community-home/rail-unread.ts`).
+- **Latest preview** (`bau_latest_preview`, runtime flag, **per server**,
+  default on): `GET /api/servers/:id/home/latest?limit=3&lang=` answers
+  `{ unread, lastSeenAt, posts }`, where each post is the chat card
+  (`CommunityHomePostCard`, so a locked post has no author and no media) plus
+  `isNew`. Newest published first; the pinned post is NOT moved to the front.
+  `isNew` is the unread rule (published after `lastSeenAt`, not your own post,
+  the feed's VIP filter) computed in the same statement as `unread`, so the
+  card and the badge never disagree. `limit` defaults to 3 and is clamped to
+  1..10. It replaces `…/home/unread` for the open server: one request, and it
+  is re-asked on the same `community-home-update` frame. Off for a server, the
+  route is 404 and clients fall back to `…/home/unread` and the plain row.
+  Schema: `communityHomeLatestResponseSchema` in
+  `packages/shared/src/community-home-share.ts`.
+  **Web** (`client/src/components/community-home/community-home-preview.tsx`,
+  rules in `client/src/lib/community-home/latest.ts`): while anything is new
+  the row is a card (16:9 cover, "Novo" pill, title, author and time, likes and
+  comments, "+N novos" footer); opening the Baú, from the card or anywhere,
+  folds it into a slim row with the last post's thumbnail ("Último: …"). The
+  card opens the Baú on that post. Covers: image, YouTube poster, the chosen
+  video cover; anything else is a plate in the server's hue with a play mark,
+  never a `<video preload>`. Empty: staff get "Teu Baú tá vazio" with "Postar
+  no Baú" (opens the composer), members the quiet "Ainda vazio" row. The
+  expand and fold animate height and opacity, off under reduced motion. The
+  compact rail keeps the plain icon.
 - **iOS and Android** read the aggregate for a lime count on the server tile
   (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
   too. Neither list carries mention counts, so there is no ring there.
@@ -370,7 +394,12 @@ Image, native video (`mp4`/`webm`), PDF, up to 100 MiB each (`COMMUNITY_HOME_MAX
 mint / PUT / claim dance as attachments (`client/src/lib/community-home/media.ts`,
 `POST …/home/media`, `POST …/home/media/claim`). Bytes never pass through the
 Node process. YouTube is URL only (`watch`, `youtu.be`, `shorts`, `embed`,
-`live`), embedded from `youtube-nocookie.com`. TikTok is the same paste box
+`live`), embedded from `youtube-nocookie.com`. The iOS app plays it in the
+card too (`BauYoutubePlayer.swift`): the public poster until a tap, then a
+`WKWebView` with YouTube's IFrame Player on the same host, inline, loaded
+under the `pqp.gg` origin so YouTube sees a referrer (without one it answers
+player error 153). The web view never navigates out; **Abrir no YouTube**
+under the card is the only way to the YouTube app. TikTok is the same paste box
 (`tiktok.com/@user/video/{id}`, `m.tiktok.com/v/{id}`; short `vm.` / `vt.` /
 `/t/` links are refused because they only resolve after a redirect),
 embedded from `tiktok.com/player/v1/{id}` (TikTok's current Embed Player URL;
@@ -388,8 +417,28 @@ viewing hostname and autoplay off. The API returns the stored URL in
 Over-limit video is refused with "upload it to YouTube". Files are signed as
 downloads, never inline.
 
+The Android app plays a YouTube post in the card (`BauYoutube.kt`, rules in
+`BauYoutubeEmbed.kt`): the public poster until a tap, then a `WebView` with
+YouTube's IFrame Player from `youtube-nocookie.com`, loaded under the
+`pqp.gg` origin so YouTube sees a referrer. Main-frame navigations and app
+schemes are refused, so **Abrir no YouTube** under the card is the only way
+to the YouTube app. Full screen is WebView's own video view, shown immersive
+in landscape. WebView asks for media focus itself when the clip plays; the
+app does not ask too, and in a call the voice stack ignores focus changes,
+so the clip mixes in.
+
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
+
+**Images are scanned** with the chat attachment scanner when
+`CONTENT_SCAN_PROVIDER` is set, at the end of `POST …/home/media/claim` and
+before `verified_at`, so a refused picture can never go on a post. That covers
+a video's custom cover too, which is an ordinary image upload. Same policy and
+fail-closed rule as chat; a refusal answers "Upload could not be verified",
+quarantines the row (the orphan sweep skips it) and files an automated report
+into the **instance** queue, never the server's own, since the uploader is its
+staff. Video and PDF are recorded `skipped`. Details:
+`docs/CONTENT_SAFETY.md` §"What is scanned".
 
 ### A phone cut of a video
 
@@ -428,6 +477,56 @@ vertical one, everything else the main one. Runtime flag
   sideways mid-video keeps playing). iOS and Android always prefer it
   (`CommunityHomeMedia.inlineVideoURL`, `BauMedia.videoUrl`). The composers on
   the phones do not offer it yet; staff attach it from the web.
+
+### A cover for a video
+
+An uploaded video shows a picture before play. Without a choice that picture
+is the video's first frame, painted by the player itself (`#t=0.001` on the
+web, the asset's first frame on iOS); nothing on the server ever decodes a
+video. The author can choose another one in the composer, under **Capa**:
+**Frame do vídeo** puts the video under a scrubber that starts on the first
+frame, and **Usar este frame** draws the frame on screen onto a canvas and
+uploads it as a JPEG (at most 1920 px on the long side); **Imagem** takes a
+JPEG, PNG or WebP. **Voltar pro primeiro frame** drops the choice. Runtime flag
+`bau_custom_cover` (**per server**, default **on**, env default
+`BAU_CUSTOM_COVER`), served to the composer as `customCoverEnabled` on
+`GET .../home/posts` and `.../home/drafts`.
+
+- **Storage.** Two nullable columns on the post row (`poster_storage_key`,
+  `poster_content_type`), with a CHECK that refuses one on a post whose
+  `media_kind` is not `video`. Both ways in are an ordinary Baú image upload
+  (same mint / PUT / claim, same type allowlist, byte sniff and HEAD), so the
+  orphan sweep needs nothing new.
+- **Writes.** `posterUploadId` on create and on PATCH, same rules as the phone
+  cut: refused unless the flag is on and the main media is an uploaded video;
+  the cover must be the author's own verified upload on this server, a JPEG,
+  PNG or WebP (no GIF), at most `COMMUNITY_HOME_COVER_MAX_BYTES` (10 MiB), and
+  not one of the post's other files. On PATCH, omitted keeps it while the main
+  file stays the same, a new main video drops it (unless a new cover comes in
+  the same PATCH), `null` goes back to the first frame. A dropped cover is
+  handed to the orphan sweep in the same transaction and deleted right after
+  COMMIT, like the other files.
+- **Reads.** `media.posterUrl`, a signed GET, inside `media`, so a locked
+  viewer (who gets no media) never gets it: a frame of a VIP video is the
+  video's pixels. The chat card carries it as `posterUrl` beside `mediaUrl`
+  (still the video), and draws it with the play badge. Flag off: both are null
+  and every player shows the first frame; stored covers are kept.
+- **Who shows it.** Web: `<video poster>` on the feed card, the composer's
+  **Prévia** and the chat card (`posterImageUrl` in `bau-post-card.tsx`). iOS
+  draws it over the inline player until the first tap
+  (`CommunityHomeMedia.posterURL`) and on the chat card (`.coverImage`);
+  Android under the play badge (`BauMedia.coverUrl`) and on the chat card
+  (`BauCardPoster.Cover`). The phone composers do not offer it yet; a cover
+  is chosen from the web.
+- **A video already on a post.** Picking a frame needs the bucket to answer
+  the GET with CORS headers, since a canvas that drew a cross-origin video
+  without them cannot be read (the bucket policy in `ATTACHMENTS.md` allows
+  GET). If the browser still refuses, the composer says so and offers
+  **Imagem**. A video picked in the same session is a `blob:` URL and always
+  works.
+- **Scanning.** A cover is scanned exactly as much as any other Baú image,
+  which today is not at all: `content-scan.ts` runs on chat attachments, not on
+  Baú media (see `CONTENT_SAFETY.md`).
 
 ## Schedule
 
@@ -691,6 +790,11 @@ the expected shape of a self-host without storage, not a bug.
   off refuses and hides, drafts never reach members, schedule sweep, a due
   scheduled post surfaces in the feed and unread without the sweep while a
   future one stays out, teaser survives an edit, comments and likes.
+- `server/src/services/community-home-latest.test.ts`: the latest preview's
+  `isNew` matches `…/home/unread` and clears on read, own posts never new,
+  limit and clamp, pinned not first, drafts and future posts out, locked cards
+  leak nothing, VIP off hides and uncounts, blocked comments uncounted, flag
+  off / Baú off / stranger refused, the feed index serves it.
 - `packages/shared/src/community-home.test.ts`: YouTube / Twitch / TikTok /
   Instagram URL classifiers (profiles, stories and short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
@@ -712,6 +816,20 @@ the expected shape of a self-host without storage, not a bug.
   delete removes both objects, the lock covers it, the CHECK backstop.
 - `client/src/lib/community-home/rendition.test.ts`: which cut a viewport
   plays.
+- `server/src/services/community-home-cover.test.ts`: the video cover. On by
+  default, flag off refuses and hides, only beside an uploaded video and only a
+  JPEG / PNG / WebP under the cap, only the author's own verified upload, add /
+  keep / replace / remove on edit, a new main video drops it, delete removes
+  it, the lock covers it in the feed and the chat card, the CHECK backstop.
+- `client/src/lib/community-home/cover.test.ts`,
+  `client/src/components/community-home/community-home-compose-cover.test.tsx`:
+  what the composer sends on create and edit, the frame capture (size cap,
+  JPEG, a tainted canvas), the picker (frame, image, GIF refused, reset, a late
+  upload never lands). `community-home-media.test.tsx` and
+  `client/src/components/chat/bau-post-card.test.tsx`: the cover on the
+  player and the chat card. The last test in `client/e2e/community-home.spec.ts`
+  runs the whole thing in a browser when the API has a bucket (skipped in CI,
+  which has none).
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
   visibility helpers, media helpers, live-post toast gating.
 - `client/src/components/layout/channel-list-community-home.test.tsx`: the

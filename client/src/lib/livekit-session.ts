@@ -14,6 +14,7 @@ import {
   shareFastStartQualityActive,
 } from "./share-fast-start";
 import { sfuIceServers } from "./sfu-ice-servers";
+import { audioSelfHealEnabled } from "./audio-self-heal-flag";
 import {
   createRemoteAudioDelivery,
   type RemoteAudioPlan,
@@ -33,6 +34,7 @@ import {
   LARGE_ROOM_SCREEN_BITRATE,
   LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
+  SCREEN_60FPS_BITRATE_FACTOR,
   screenSimulcastPlan,
   screenShareSimulcastEnabled,
   screenShareDegradationPreference,
@@ -44,6 +46,10 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
+import {
+  DEFAULT_SHARE_PRIORITY,
+  type SharePriority,
+} from "./share-priority";
 import type { ShareGuardCeiling } from "./share-high-motion-guard";
 import { guardedLayerFramerates } from "./share-guard-layers";
 import {
@@ -60,10 +66,14 @@ import {
 } from "./voice-link-quality";
 import {
   measureKbps,
+  measurePacketDelta,
   pickActiveVideoSenderLayer,
   registerVoiceStatsSource,
   statRows,
+  summariseAudioStats,
   summariseStats,
+  type AudioReceiverSample,
+  type AudioStatsSample,
   type CandidatePairSample,
   type VideoReceiverSample,
   type VideoSenderRole,
@@ -168,6 +178,31 @@ const VIDEO_MAX_FRAMERATE = 30;
  * sending the bytes at all. The same rule is in the Android and iOS clients.
  */
 export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
+
+/** Remote voices whose receiver stats the audio self-repair reads per tick. */
+const MAX_AUDIO_RECEIVER_READS = 8;
+/**
+ * A stats read that never settles must not hold the shared sample hostage:
+ * the video readouts and the call rating wait on the same tick.
+ */
+const AUDIO_STATS_READ_TIMEOUT_MS = 1_000;
+
+/** The promise's value, or undefined when it rejects or takes longer than `ms`. */
+function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      },
+    );
+  });
+}
 
 /**
  * The unambiguous, opt-in signal for `LIVE_HLS_VOICE_TRACK`'s "separada"
@@ -311,6 +346,19 @@ export interface LiveKitSession {
    */
   setScreenGuardCeiling?(ceiling: ShareGuardCeiling | null): Promise<void>;
   /**
+   * Frames or pixels first under pressure (`share-priority.ts`), in place on
+   * the published share. A watch party's HLS source ignores it and stays on
+   * `maintain-framerate`. Optional so a test double need not know about it.
+   */
+  setScreenPriority?(priority: SharePriority): Promise<void>;
+  /**
+   * Re-read the published capture's frame rate and re-apply the screen's
+   * `maxFramerate` and ceiling, after the frame rate was changed in place with
+   * `applyConstraints`. Without it a share moved from 30 to 60 kept encoding
+   * at 30 under the 30 fps ceiling. Optional for test doubles.
+   */
+  refreshScreenFrameRate?(): Promise<void>;
+  /**
    * The published screen's sender stats, for the guard and `pqpShareHealth`.
    * Empty when nothing is published.
    */
@@ -360,6 +408,18 @@ export interface LiveKitSession {
   disconnect(): Promise<void>;
   /** True while the LiveKit room is actually connected (not merely constructed). */
   isConnected(): boolean;
+  /**
+   * True while a microphone publication exists, muted or not. The audio
+   * self-repair reads it to tell "nothing published" from "published and
+   * silent". Optional so a test double need not know about it.
+   */
+  hasMicPublication?(): boolean;
+  /**
+   * Unsubscribe and resubscribe one participant's microphone, for a voice
+   * the server says is speaking and that never arrives here. Resolves false
+   * when there was nothing to resubscribe. Optional for test doubles.
+   */
+  resubscribeVoice?(peerId: string): Promise<boolean>;
   /**
    * True while THIS participant's own screen share is actually on the wire: the
    * room is connected and a ScreenShare publication exists whose track is live
@@ -502,6 +562,8 @@ export async function connectLiveKit({
   }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** Where the audio self-repair's receiver reads resume next tick. */
+  let audioReadCursor = 0;
   /** The watch-party voice archive publication, kept so it can be withdrawn. */
   let publishedMicArchive: InstanceType<typeof LocalAudioTrack> | null = null;
   /** The "separada" voice-track publication, kept so it can be withdrawn. */
@@ -652,6 +714,14 @@ export async function connectLiveKit({
    * does not put the frame rate back) and over the top layer's bitrate.
    */
   let screenGuardCeiling: ShareGuardCeiling | null = null;
+  /** Frames or pixels first; see `share-priority.ts`. */
+  let screenPriority: SharePriority = DEFAULT_SHARE_PRIORITY;
+  /**
+   * The frame-rate tier of the capture the plan is for, read off the track by
+   * `planForTrack` and `refreshScreenFrameRate`. A 60 fps ordinary share gets
+   * `SCREEN_60FPS_BITRATE_FACTOR` on its top layer's ceiling.
+   */
+  let screenPublishFps: 30 | 60 = 30;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
@@ -1307,14 +1377,106 @@ export async function connectLiveKit({
     return [];
   }
 
+  /**
+   * The audio half, for the self-repair (`audio-health.ts`): our microphone's
+   * sender, and every remote MICROPHONE with the server's own speaking
+   * detector beside what actually arrived. The duplicates (archive, voice
+   * track, stage mix) are never subscribed, so they are skipped here too.
+   */
+  async function sampleAudio(): Promise<AudioStatsSample> {
+    const audio: AudioStatsSample = { senders: [], receivers: [] };
+    const sender = published?.sender;
+    if (sender && typeof sender.getStats === "function") {
+      const report = await settleWithin(sender.getStats(), AUDIO_STATS_READ_TIMEOUT_MS);
+      if (report) {
+        audio.senders.push(...summariseAudioStats(localPeerId, statRows(report)).senders);
+      }
+    }
+    // THREE ANSWERS, NEVER CONFUSED, because the inbound detector acts on
+    // them (`createInboundDetector`):
+    //  - `packetsDelta: 0` is evidence of nothing arriving: the counter did
+    //    not move, or the server hears them and we hold no subscription;
+    //  - `packetsDelta: null` is no evidence: the first read of a counter, or
+    //    a read that failed or timed out;
+    //  - `remoteSpeaking: false` is "not judged": nobody is talking, or this
+    //    speaker was not read this tick.
+    // Receiver stats are one `getStats()` each and a watch party seats two
+    // hundred microphones. Only a speaker is ever judged, so only speakers are
+    // read, at most a handful a tick, starting where the last tick stopped so
+    // a crowd laughing at once is read in turns rather than the same eight.
+    const speakers: { row: AudioReceiverSample; read: () => Promise<void> }[] = [];
+    for (const participant of room.remoteParticipants.values()) {
+      const publications = participant.audioTrackPublications?.values() ?? [];
+      for (const pub of publications) {
+        if (
+          pub.source !== Track.Source.Microphone ||
+          pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
+          pub.trackName === VOICE_TRACK_NAME ||
+          pub.trackName === STAGE_MIX_TRACK_NAME
+        ) {
+          continue;
+        }
+        const row: AudioReceiverSample = {
+          peerId: participant.identity,
+          trackId: null,
+          packetsDelta: null,
+          audioLevel: null,
+          remoteSpeaking: participant.isSpeaking,
+        };
+        audio.receivers.push(row);
+        if (!participant.isSpeaking) {
+          continue;
+        }
+        speakers.push({
+          row,
+          read: async () => {
+            const track = pub.isSubscribed ? pub.audioTrack : undefined;
+            const reader = (
+              track as unknown as
+                | { getReceiverStats?: () => Promise<{ packetsReceived?: number } | undefined> }
+                | undefined
+            )?.getReceiverStats;
+            if (!track || typeof reader !== "function") {
+              row.packetsDelta = 0;
+              return;
+            }
+            const stats = await settleWithin(reader.call(track), AUDIO_STATS_READ_TIMEOUT_MS);
+            row.packetsDelta = measurePacketDelta(
+              `sfu:ain:${participant.identity}:${pub.trackSid}`,
+              stats?.packetsReceived ?? null,
+            );
+          },
+        });
+      }
+    }
+    const reads = Math.min(speakers.length, MAX_AUDIO_RECEIVER_READS);
+    const offset = speakers.length > 0 ? audioReadCursor % speakers.length : 0;
+    audioReadCursor = offset + reads;
+    const chosen = new Set<number>();
+    for (let i = 0; i < reads; i += 1) {
+      chosen.add((offset + i) % speakers.length);
+    }
+    speakers.forEach((speaker, index) => {
+      if (!chosen.has(index)) {
+        speaker.row.remoteSpeaking = false;
+      }
+    });
+    await Promise.all([...chosen].map((index) => speakers[index]!.read().catch(() => {})));
+    return audio;
+  }
+
   async function sampleRoom(): Promise<VoiceStatsSnapshot> {
     if (room.state !== ConnectionState.Connected) {
       return { senders: [], receivers: [], paths: [] };
     }
-    const [senders, receivers, paths] = await Promise.all([
+    const [senders, receivers, paths, audio] = await Promise.all([
       sampleSenders(),
       sampleReceivers(),
       samplePublisherPaths(),
+      // The audio half is the newest reader of this sample and must never be
+      // the reason the video half has nothing to say. Nothing reads it with
+      // `voice_audio_self_heal` off, so nothing is spent on it then.
+      audioSelfHealEnabled() ? sampleAudio().catch(() => undefined) : undefined,
     ]);
     if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
       const screen = senders.find((row) => row.role === "screen");
@@ -1328,7 +1490,7 @@ export async function connectLiveKit({
         availableOutgoingKbps: path?.availableOutgoingKbps ?? null,
       });
     }
-    return { senders, receivers, paths };
+    return { senders, receivers, paths, audio };
   }
 
   const unregisterStats = registerVoiceStatsSource(sampleRoom);
@@ -1381,7 +1543,7 @@ export async function connectLiveKit({
         subLayerAwake ||
         priorityMissing ||
         params.degradationPreference !==
-          screenShareDegradationPreference(hlsSource) ||
+          screenShareDegradationPreference(hlsSource, screenPriority) ||
         top?.scaleResolutionDownBy !==
           screenShareScaleResolutionDownBy(hlsSource)
       );
@@ -1464,7 +1626,7 @@ export async function connectLiveKit({
       const params = sender.getParameters();
       const keep =
         params.degradationPreference ??
-        screenShareDegradationPreference(hlsSource);
+        screenShareDegradationPreference(hlsSource, screenPriority);
       // Into balanced and straight back: libwebrtc clears the adapter's
       // restrictions on either switch, which is the whole point.
       params.degradationPreference = "balanced";
@@ -1563,7 +1725,7 @@ export async function connectLiveKit({
         if (source === Track.Source.ScreenShare) {
           const ingest = feedingHls ? hlsSource : null;
           params.degradationPreference =
-            screenShareDegradationPreference(ingest);
+            screenShareDegradationPreference(ingest, screenPriority);
           const scale = screenShareScaleResolutionDownBy(ingest);
           if (scale === 1) {
             // GCC's maintain-framerate walk invents 180p on the remaining
@@ -1786,9 +1948,14 @@ export async function connectLiveKit({
     }
     return {
       ...plan,
+      // A 60 fps capture is twice the frames under one allowance; see
+      // `SCREEN_60FPS_BITRATE_FACTOR`. Not under the large-room cap, whose
+      // number is about the SFU's downstream bill rather than the picture.
       topBitrate: plan.capped
         ? Math.min(screenMaxBitrate, LARGE_ROOM_SCREEN_BITRATE)
-        : screenMaxBitrate,
+        : screenPublishFps === 60
+          ? Math.round(screenMaxBitrate * SCREEN_60FPS_BITRATE_FACTOR)
+          : screenMaxBitrate,
     };
   }
 
@@ -1814,7 +1981,67 @@ export async function connectLiveKit({
     return nativeScreenCaptureHeight;
   }
 
+  /**
+   * Put the published share's `maxFramerate` and ceiling where the guard and
+   * the capture's current frame rate say. Shared by the guard and by
+   * `refreshScreenFrameRate`. A watch party's ingest is left alone.
+   */
+  async function applyScreenGuardCeiling(
+    ceiling: ShareGuardCeiling | null,
+  ): Promise<void> {
+    await enqueueScreenOp(async () => {
+      const feedingHls =
+        screenPlanPinned ||
+        (hlsSource !== null && hlsSource.ladderTopHeight !== null);
+      if (feedingHls) {
+        // A watch party's ingest is pinned to its own rules; the guard is
+        // never allowed to move it.
+        screenGuardCeiling = null;
+        return;
+      }
+      screenGuardCeiling = ceiling;
+      const epoch = screenShareEpoch;
+      const track = publishedScreenTrack;
+      const sender = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShare,
+      )?.track?.sender;
+      if (!track || !sender) {
+        return;
+      }
+      try {
+        const params = sender.getParameters();
+        // Lifting the guard hands back whatever the capture delivers, which
+        // is what publish used to set.
+        const fps = ceiling
+          ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
+          : publishMaxFrameRateFromTrack(track);
+        // Under a ceiling the smaller copies go to 30 before anything the
+        // full-picture viewer sees does (`share-guard-layers.ts`).
+        const encodings = params.encodings ?? [];
+        const rates = guardedLayerFramerates(encodings, fps, ceiling !== null);
+        encodings.forEach((encoding, index) => {
+          encoding.maxFramerate = rates[index] ?? fps;
+        });
+        await sender.setParameters(params);
+      } catch (err) {
+        console.warn(
+          "[pqp] SFU screen frame-rate ceiling rejected; keeping the published one",
+          err,
+        );
+      }
+      if (screenShareEpoch !== epoch) {
+        return;
+      }
+      await setSourceMaxBitrate(
+        Track.Source.ScreenShare,
+        currentScreenPlan().topBitrate,
+        "screen",
+      );
+    });
+  }
+
   function planForTrack(track: MediaStreamTrack): ScreenSimulcastPlan {
+    screenPublishFps = publishMaxFrameRateFromTrack(track);
     return clampScreenPlanToCapture(
       currentScreenPlan(),
       nativeScreenCaptureHeight ?? trackCaptureHeight(track),
@@ -1929,7 +2156,10 @@ export async function connectLiveKit({
       // become stills). HLS ingest: hold pixels. Egress transcodes whatever
       // size arrives, and Chrome's maintain-framerate walk 1080 → 180 is
       // what every playlist viewer then gets. fps/bitrate can still drop.
-      degradationPreference: screenShareDegradationPreference(hlsSource),
+      degradationPreference: screenShareDegradationPreference(
+        hlsSource,
+        screenPriority,
+      ),
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
         maxFramerate: publishMaxFrameRateFromTrack(track),
@@ -2803,55 +3033,31 @@ export async function connectLiveKit({
     },
 
     async setScreenGuardCeiling(ceiling: ShareGuardCeiling | null) {
+      await applyScreenGuardCeiling(ceiling);
+    },
+
+    async setScreenPriority(priority: SharePriority) {
+      if (priority === screenPriority) {
+        return;
+      }
+      screenPriority = priority;
+      // `setSourceMaxBitrate` writes the degradation preference with the
+      // ceiling, and leaves a watch party's ingest on `maintain-framerate`.
       await enqueueScreenOp(async () => {
-        const feedingHls =
-          screenPlanPinned ||
-          (hlsSource !== null && hlsSource.ladderTopHeight !== null);
-        if (feedingHls) {
-          // A watch party's ingest is pinned to its own rules; the guard is
-          // never allowed to move it.
-          screenGuardCeiling = null;
-          return;
-        }
-        screenGuardCeiling = ceiling;
-        const epoch = screenShareEpoch;
-        const track = publishedScreenTrack;
-        const sender = room.localParticipant.getTrackPublication(
-          Track.Source.ScreenShare,
-        )?.track?.sender;
-        if (!track || !sender) {
-          return;
-        }
-        try {
-          const params = sender.getParameters();
-          // Lifting the guard hands back whatever the capture delivers, which
-          // is what publish used to set.
-          const fps = ceiling
-            ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
-            : publishMaxFrameRateFromTrack(track);
-          // Under a ceiling the smaller copies go to 30 before anything the
-          // full-picture viewer sees does (`share-guard-layers.ts`).
-          const encodings = params.encodings ?? [];
-          const rates = guardedLayerFramerates(encodings, fps, ceiling !== null);
-          encodings.forEach((encoding, index) => {
-            encoding.maxFramerate = rates[index] ?? fps;
-          });
-          await sender.setParameters(params);
-        } catch (err) {
-          console.warn(
-            "[pqp] SFU screen frame-rate ceiling rejected; keeping the published one",
-            err,
-          );
-        }
-        if (screenShareEpoch !== epoch) {
-          return;
-        }
         await setSourceMaxBitrate(
           Track.Source.ScreenShare,
           currentScreenPlan().topBitrate,
           "screen",
         );
       });
+    },
+
+    async refreshScreenFrameRate() {
+      const track = publishedScreenTrack;
+      if (track) {
+        screenPublishFps = publishMaxFrameRateFromTrack(track);
+      }
+      await applyScreenGuardCeiling(screenGuardCeiling);
     },
 
     async getScreenSenderReports() {
@@ -2979,6 +3185,41 @@ export async function connectLiveKit({
 
     isConnected() {
       return room.state === ConnectionState.Connected;
+    },
+
+    hasMicPublication() {
+      return published !== null;
+    },
+
+    async resubscribeVoice(peerId: string) {
+      const participant = room.remoteParticipants.get(peerId);
+      if (!participant) {
+        return false;
+      }
+      let touched = false;
+      for (const pub of participant.audioTrackPublications?.values() ?? []) {
+        if (
+          pub.source !== Track.Source.Microphone ||
+          pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
+          pub.trackName === VOICE_TRACK_NAME ||
+          pub.trackName === STAGE_MIX_TRACK_NAME
+        ) {
+          continue;
+        }
+        try {
+          // Off and on again: the server tears the forwarding down and sets
+          // it up fresh, and `TrackSubscribed` files a new stream, which the
+          // sinks pick up as a new `srcObject`. The audio delivery plan
+          // re-applies on that same event.
+          pub.setSubscribed(false);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          pub.setSubscribed(true);
+          touched = true;
+        } catch {
+          // Gone between the lookup and the call.
+        }
+      }
+      return touched;
     },
 
     screenPublishLive() {

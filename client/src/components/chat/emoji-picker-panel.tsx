@@ -1,6 +1,10 @@
 import data from "@emoji-mart/data";
+import es from "@emoji-mart/data/i18n/es.json";
+import pt from "@emoji-mart/data/i18n/pt.json";
 import Picker from "@emoji-mart/react";
 import { useTheme } from "@/hooks/use-theme";
+import { useTranslation } from "@/lib/i18n";
+import { emojiPickerLocale } from "@/lib/emoji-picker-locale";
 
 interface EmojiPickerPanelProps {
   onSelect: (emoji: string) => void;
@@ -12,11 +16,19 @@ interface EmojiMartSelection {
 
 export function EmojiPickerPanel({ onSelect }: EmojiPickerPanelProps) {
   const { resolved } = useTheme();
+  const { locale } = useTranslation();
+  // The picker's own chrome ("Search", "Frequently used", the category
+  // names) follows the app's language. emoji-mart ships those strings; they
+  // are passed in rather than fetched, because its default for a locale is a
+  // request to a CDN this app does not load scripts or data from.
+  const picker = emojiPickerLocale(locale, { pt, es });
 
   return (
     <Picker
       data={data}
       theme={resolved}
+      locale={picker.locale}
+      i18n={picker.i18n}
       previewPosition="none"
       skinTonePosition="none"
       navPosition="bottom"

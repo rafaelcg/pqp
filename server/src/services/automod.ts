@@ -515,6 +515,19 @@ async function memberRoleIds(serverId: string, userId: string): Promise<string[]
 export interface AutomodCheckInput {
   serverId: string;
   channelId: string;
+  /**
+   * The channel `channelId` sits under when it is a thread or a forum post,
+   * null when it is not. A rule's channel exemption covers that channel's
+   * threads and posts too: exempting `#memes` (or a forum) and then filtering
+   * the threads inside it is not what anybody meant.
+   *
+   * REQUIRED, and never looked up here. Every caller already holds the
+   * channel row (the send path, the edit route's access check, the forum
+   * routes), so a lookup could only ever repeat what it knows, and it used to
+   * run for every ordinary channel on a server with an exempting rule. Pass
+   * null for anything that is not a thread or a post.
+   */
+  parentChannelId: string | null;
   authorId: string;
   /** The author's resolved permissions in this channel. */
   memberPerms: bigint;
@@ -546,8 +559,12 @@ export async function checkAutomod(
   ) {
     return null;
   }
+  const parentChannelId = input.parentChannelId;
   const enabled = rules.filter(
-    (rule) => rule.enabled && !rule.exemptChannelIds.includes(input.channelId),
+    (rule) =>
+      rule.enabled &&
+      !rule.exemptChannelIds.includes(input.channelId) &&
+      !(parentChannelId && rule.exemptChannelIds.includes(parentChannelId)),
   );
   if (enabled.length === 0) {
     return null;

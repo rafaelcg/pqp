@@ -467,17 +467,18 @@ private fun LockedBox() {
 }
 
 /**
- * One post's media. Every kind opens *out*: the image in whatever handles it,
- * the video and the file in the browser or a viewer, YouTube / Twitch / TikTok /
- * Instagram in their apps. A phone has better players for all of those than a
- * chat app does, and a card that plays sound on scroll is the thing the web's
- * `preload="none"` exists to avoid.
+ * One post's media. An uploaded video and a YouTube link play in the card,
+ * nothing before the tap ([BauActiveVideo], [BauYoutubeCard]), the way the
+ * web's `<video>` and iframe do. The rest opens *out*: the image in whatever
+ * handles it, the file in the browser or a viewer, Twitch / TikTok / Instagram
+ * in their apps. Nothing plays on scroll, which is the web's `preload="none"`.
  */
 @Composable
 private fun MediaView(media: BauMedia) {
     val context = LocalContext.current
     val callActive = LocalBauCallActive.current
     val target = media.openUrl
+    val youtubeId = if (media.isYoutube) YoutubeLinks.videoId(media.youtubeUrl) else null
     val open: () -> Unit = {
         if (target != null) {
             runCatching {
@@ -505,6 +506,8 @@ private fun MediaView(media: BauMedia) {
                 .clickable(role = Role.Image, onClick = open)
                 .testTag("bau.media.image"),
         )
+
+        youtubeId != null -> BauYoutubeCard(videoId = youtubeId, watchUrl = target, name = media.name)
 
         media.isYoutube -> Box(
             modifier = Modifier
@@ -585,6 +588,16 @@ private fun MediaView(media: BauMedia) {
                 .testTag("bau.media.video"),
             contentAlignment = Alignment.Center,
         ) {
+            // The author's cover under the badge. A cover that fails to load
+            // leaves the plain surface, which is how this card always looked.
+            media.coverUrl?.let { cover ->
+                AsyncImage(
+                    model = cover,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().testTag("bau.media.video.cover"),
+                )
+            }
             PlayBadge(media.name.ifBlank { stringResource(R.string.bau_media_video) })
         }
 

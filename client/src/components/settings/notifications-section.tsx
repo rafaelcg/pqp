@@ -23,6 +23,7 @@ import { desktopBannersEnabled, dmDefaultLevel, serverDefaultLevel, setArrivalTo
 import { getIncomingRing, getSoundState, playCue, setIncomingRing, setSoundCueEnabled, setSoundEnabled, subscribeSounds, type IncomingRingId, type SoundCue } from "@/lib/sounds";
 import { disablePush, enablePush, getCurrentPushSubscription, getPushAvailability, getPushConfig, setPushDmDetails, type PushAvailability } from "@/lib/push";
 import { usePreferenceSyncFailed } from "@/lib/preferences";
+import { setAllowNudges, useAllowNudges, useNudgeEnabled } from "@/lib/nudge";
 
 /* ----------------------------------------------------------- notifications */
 
@@ -41,10 +42,12 @@ const SOUND_CUE_OPTIONS: { cue: SoundCue; id: string; label: MessageKey }[] = [
   { cue: "voiceLeave", id: "sound-voice-leave", label: "settings.notifications.sounds.voiceLeave" },
   { cue: "incomingCall", id: "sound-incoming-call", label: "settings.notifications.sounds.incomingCall" },
   { cue: "outgoingCall", id: "sound-outgoing-call", label: "settings.notifications.sounds.outgoingCall" },
+  // Only while chamar a atenção is on (`nudge` flag): see `SoundsGroup`.
+  { cue: "nudge", id: "sound-nudge", label: "settings.notifications.sounds.nudge" },
 ];
 
 /** The account preferences this tab writes: the notice below reads their sync. */
-const SYNCED_KEYS = ["notifications", "sounds"] as const;
+const SYNCED_KEYS = ["notifications", "sounds", "allowNudges"] as const;
 
 const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
   { id: "classic", label: "settings.notifications.sounds.ring.classic" },
@@ -574,6 +577,7 @@ function DirectMessagesGroup({
         // in the conversation list, so it stays usable with the notice off.
         onCheckedChange={setPreviewInAppEnabled}
       />
+      <AllowNudgesRow />
       <SettingsSwitchRow
         id="dm-push-details"
         label={t("settings.push.dmDetails")}
@@ -619,6 +623,28 @@ function DirectMessagesGroup({
   );
 }
 
+/**
+ * Chamar a atenção's two-way switch. Only drawn while the feature is on: a
+ * switch for something nobody can do is a question nobody can answer.
+ */
+function AllowNudgesRow() {
+  const { t } = useTranslation();
+  const enabled = useNudgeEnabled();
+  const allow = useAllowNudges();
+  if (!enabled) {
+    return null;
+  }
+  return (
+    <SettingsSwitchRow
+      id="dm-allow-nudges"
+      label={t("settings.nudge.allow")}
+      description={t("settings.nudge.allowHint")}
+      checked={allow}
+      onCheckedChange={setAllowNudges}
+    />
+  );
+}
+
 /* ------------------------------------------------------------------- sounds */
 
 function SoundsGroup() {
@@ -634,6 +660,10 @@ function SoundsGroup() {
     getIncomingRing,
   );
   const ringDisabled = !sounds.enabled || !sounds.incomingCall;
+  const nudgeEnabled = useNudgeEnabled();
+  const cueOptions = SOUND_CUE_OPTIONS.filter(
+    (option) => option.cue !== "nudge" || nudgeEnabled,
+  );
 
   return (
     <SettingsGroup
@@ -646,7 +676,7 @@ function SoundsGroup() {
         checked={sounds.enabled}
         onCheckedChange={setSoundEnabled}
       />
-      {SOUND_CUE_OPTIONS.map((option) => {
+      {cueOptions.map((option) => {
         const label = t(option.label);
         const row = (
           <SettingsSwitchRow

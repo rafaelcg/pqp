@@ -1,0 +1,19 @@
+{
+  "source": "Webhooks by Zapier, Custom Request (POST, JSON) built from an RSS by Zapier trigger, with the fields Discord's own examples show and Zapier users copy: tts, allowed_mentions and an empty components array beside content and embeds.",
+  "body": {
+    "content": "Live hoje às 21h",
+    "tts": false,
+    "allowed_mentions": { "parse": [] },
+    "components": [],
+    "flags": 0,
+    "embeds": [
+      {
+        "title": "Live hoje às 21h",
+        "description": "Vamos jogar a nova fase com a comunidade.",
+        "url": "https://twitch.example.com/canal",
+        "color": 9520895,
+        "fields": [{ "name": "Quando", "value": "21h (Brasília)", "inline": true }]
+      }
+    ]
+  }
+}

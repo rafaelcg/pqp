@@ -112,6 +112,8 @@ fun ReportSheet(
                         stringResource(R.string.report_subject_message, target.authorName)
                     is ReportTarget.Person ->
                         stringResource(R.string.report_subject_user, target.displayName)
+                    is ReportTarget.Story ->
+                        stringResource(R.string.report_subject_story, target.authorName)
                     is ReportTarget.Community ->
                         stringResource(R.string.report_subject_community, target.name)
                 },
@@ -126,6 +128,7 @@ fun ReportSheet(
                         is ReportTarget.Message -> R.string.report_body_message
                         is ReportTarget.Person -> R.string.report_body_user
                         is ReportTarget.Community -> R.string.report_body_community
+                        is ReportTarget.Story -> R.string.report_body_story
                     },
                 ),
                 style = MaterialTheme.typography.bodyMedium,

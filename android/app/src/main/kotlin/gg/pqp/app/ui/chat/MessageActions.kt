@@ -40,7 +40,16 @@ object MessagePermissions {
      */
     fun canEdit(message: Message, meId: String?): Boolean =
         meId != null && message.authorId == meId && !message.isWebhook &&
-            message.attachments.none { it.isVoiceNote }
+            message.attachments.none { it.isVoiceNote } && !isSystemLine(message)
+
+    /**
+     * A nudge is drawn as a centred line, not as words somebody typed, so its
+     * sheet offers delete and report and nothing else, like the web's
+     * `NudgeLine`. Editing one rewrites the stored `📳` behind a line that
+     * never shows it (and the list preview then shows the new text), and a
+     * reaction, a reply or a pin hangs off a row that draws none of them.
+     */
+    fun isSystemLine(message: Message): Boolean = gg.pqp.app.nudge.Nudge.isNudge(message)
 
     fun canDelete(message: Message, meId: String?, role: String?, isServerChannel: Boolean): Boolean =
         (meId != null && message.authorId == meId) || (isServerChannel && canManage(role))

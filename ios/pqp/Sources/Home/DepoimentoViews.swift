@@ -285,7 +285,7 @@ struct DepoimentoComposer: View {
             // Verbatim: the server answers "you can only write depoimentos for
             // your friends" for every refusal on purpose, and the length message
             // is one the author has to read in order to fix it.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }

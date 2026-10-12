@@ -7,6 +7,11 @@ import {
   serializePermissions,
   STAFF_ROLE_NAMES,
 } from "./permissions.js";
+import {
+  FORUM_MAX_TAGS,
+  FORUM_TAG_EMOJI_MAX,
+  FORUM_TAG_NAME_MAX,
+} from "./forums.js";
 
 /** SSRF boundary: only this pattern is interpolated into the Discord URL. */
 export const DISCORD_TEMPLATE_CODE_RE = /^[A-Za-z0-9]{4,32}$/;
@@ -95,10 +100,19 @@ export function mapDiscordPermissions(discordBits: bigint): bigint {
   return mapped;
 }
 
+/**
+ * Bits pqp gives `@everyone` that Discord has no bit for, so no template can
+ * carry them: an imported `@everyone` gets them as a new server's would
+ * (`PERMISSION_DEFAULT_EVERYONE`). Without this a server copied from a
+ * template is the one place members cannot post a story.
+ */
+const EVERYONE_IMPORT_PQP_DEFAULTS = Permission.POST_STORIES;
+
 export function mapImportedEveryonePermissions(discordBits: bigint): bigint {
   return (
-    clampEveryonePermissions(mapDiscordPermissions(discordBits)) &
-    ~EVERYONE_IMPORT_DENIED
+    (clampEveryonePermissions(mapDiscordPermissions(discordBits)) &
+      ~EVERYONE_IMPORT_DENIED) |
+    EVERYONE_IMPORT_PQP_DEFAULTS
   );
 }
 
@@ -158,6 +172,8 @@ export const MAPPED_AWAY_REASONS = [
   "slowmode",
   "bitrate",
   "forumTags",
+  "forumTagsTrimmed",
+  "forumSettings",
   "threads",
   "directory",
   "serverIcon",
@@ -178,7 +194,25 @@ export type FlattenedChannelKind =
   | "media"
   | "stage";
 
-export type MappedImportChannelType = "text" | "voice" | "category";
+export type MappedImportChannelType = "text" | "voice" | "category" | "forum";
+
+/** One imported forum tag, already inside the limits `forum_tags` enforces. */
+export interface MappedImportForumTag {
+  name: string;
+  /** One unicode emoji, or null (a custom Discord emoji cannot come along). */
+  emoji: string | null;
+  moderated: boolean;
+}
+
+/** Options for `mapGuildTemplate`. Everything defaults to today's behaviour. */
+export interface MapGuildTemplateOptions {
+  /**
+   * Keep Discord forums (type 15) as forums, with their tags. The server
+   * passes its global `forum_channels` flag; off flattens a forum to a text
+   * channel exactly as before.
+   */
+  forumChannels?: boolean;
+}
 
 export interface MappedAwayItem {
   reason: MappedAwayReason;
@@ -195,6 +229,8 @@ export interface MappedImportChannel {
   position: number;
   isPrivate: boolean;
   flattenedFrom?: FlattenedChannelKind;
+  /** Only on a `forum`: its tags, in Discord's order, at most 20. */
+  tags?: MappedImportForumTag[];
 }
 
 export interface MappedImportRole {
@@ -275,6 +311,13 @@ const templateChannelSchema = z
     bitrate: z.number().optional(),
     permission_overwrites: z.array(overwriteSchema).optional(),
     available_tags: z.array(z.unknown()).optional(),
+    // Forum options. Read leniently below, so an odd value in one of them
+    // never turns a whole template into "that is not a template".
+    default_reaction_emoji: z.unknown().optional(),
+    default_sort_order: z.unknown().optional(),
+    default_forum_layout: z.unknown().optional(),
+    default_thread_rate_limit_per_user: z.unknown().optional(),
+    flags: z.unknown().optional(),
   })
   .passthrough();
 
@@ -342,7 +385,10 @@ function everyoneDeniedView(
   return (parseBitfield(row.deny) & DISCORD_VIEW_CHANNEL) === DISCORD_VIEW_CHANNEL;
 }
 
-function mapChannelType(type: number): {
+function mapChannelType(
+  type: number,
+  keepForums: boolean,
+): {
   type: MappedImportChannelType;
   flattenedFrom?: FlattenedChannelKind;
 } | null {
@@ -354,7 +400,9 @@ function mapChannelType(type: number): {
     case 5:
       return { type: "text", flattenedFrom: "announcement" };
     case 15:
-      return { type: "text", flattenedFrom: "forum" };
+      return keepForums
+        ? { type: "forum" }
+        : { type: "text", flattenedFrom: "forum" };
     case 16:
       return { type: "text", flattenedFrom: "media" };
     case 2:
@@ -364,6 +412,124 @@ function mapChannelType(type: number): {
     default:
       return null;
   }
+}
+
+const DISCORD_REQUIRE_TAG_FLAG = 1 << 4;
+const DISCORD_SORT_BY_CREATION = 1;
+const DISCORD_LAYOUT_GALLERY = 2;
+// eslint-disable-next-line no-control-regex
+const IMPORT_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+const IMPORT_PLAIN_WORD = /^[A-Za-z0-9_ ]+$/;
+
+function codePoints(value: string): string[] {
+  return Array.from(value);
+}
+
+/**
+ * A Discord tag name as a pqp one: control characters and runs of whitespace
+ * folded to one space, trimmed, cut to the name limit by code point (never
+ * through a surrogate pair). `null` when nothing is left. `clamped` says the
+ * name had to be shortened.
+ */
+function importTagName(raw: string): { name: string; clamped: boolean } | null {
+  const folded = raw
+    .replace(new RegExp(IMPORT_CONTROL_CHARS.source, "g"), " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!folded) {
+    return null;
+  }
+  const points = codePoints(folded);
+  if (points.length <= FORUM_TAG_NAME_MAX) {
+    return { name: folded, clamped: false };
+  }
+  const cut = points.slice(0, FORUM_TAG_NAME_MAX).join("").trim();
+  return cut ? { name: cut, clamped: true } : null;
+}
+
+interface ImportedTags {
+  tags: MappedImportForumTag[];
+  /** True when a tag, a name or a picture did not survive the trip. */
+  lossy: boolean;
+}
+
+/**
+ * Discord `available_tags` as pqp tags. Lenient on purpose: Discord's shape
+ * is `{ id, name, moderated, emoji_id, emoji_name }`, but a template is
+ * outside data, so every field is checked and a bad entry is skipped rather
+ * than failing the import. Names are cut to 20, duplicates (by lower-case
+ * name, which is the unique index) are dropped, the list stops at 20, and a
+ * custom emoji keeps its tag and loses its picture.
+ */
+function parseImportedTags(available: unknown[] | undefined): ImportedTags {
+  const tags: MappedImportForumTag[] = [];
+  let lossy = false;
+  const seen = new Set<string>();
+  for (const entry of available ?? []) {
+    if (typeof entry !== "object" || entry === null) {
+      lossy = true;
+      continue;
+    }
+    const row = entry as Record<string, unknown>;
+    const named = typeof row.name === "string" ? importTagName(row.name) : null;
+    if (!named) {
+      lossy = true;
+      continue;
+    }
+    const key = named.name.toLowerCase();
+    if (seen.has(key) || tags.length >= FORUM_MAX_TAGS) {
+      lossy = true;
+      continue;
+    }
+    seen.add(key);
+    if (named.clamped) {
+      lossy = true;
+    }
+    let emoji: string | null = null;
+    if (row.emoji_id != null) {
+      // A custom emoji: `emoji_name` is its label, not a glyph.
+      lossy = true;
+    } else if (typeof row.emoji_name === "string" && row.emoji_name !== "") {
+      const glyph = row.emoji_name.trim();
+      if (
+        glyph !== "" &&
+        codePoints(glyph).length <= FORUM_TAG_EMOJI_MAX &&
+        !IMPORT_PLAIN_WORD.test(glyph) &&
+        !IMPORT_CONTROL_CHARS.test(glyph)
+      ) {
+        emoji = glyph;
+      } else {
+        lossy = true;
+      }
+    }
+    tags.push({ name: named.name, emoji, moderated: row.moderated === true });
+  }
+  return { tags, lossy };
+}
+
+/**
+ * True when the forum carries an option the import does not copy: a default
+ * reaction, sort by creation date, gallery layout, a post slowmode, or the
+ * require-a-tag switch. A template import writes tags and nothing else.
+ */
+function forumHasLostSettings(
+  channel: z.infer<typeof templateChannelSchema>,
+): boolean {
+  if (channel.default_reaction_emoji != null) {
+    return true;
+  }
+  if (channel.default_sort_order === DISCORD_SORT_BY_CREATION) {
+    return true;
+  }
+  if (channel.default_forum_layout === DISCORD_LAYOUT_GALLERY) {
+    return true;
+  }
+  const slow = channel.default_thread_rate_limit_per_user;
+  if (typeof slow === "number" && slow > 0) {
+    return true;
+  }
+  const flags = channel.flags;
+  return typeof flags === "number" && (flags & DISCORD_REQUIRE_TAG_FLAG) !== 0;
 }
 
 function flattenReason(
@@ -618,7 +784,11 @@ function collectImportedOverwrites(
   return result;
 }
 
-export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
+export function mapGuildTemplate(
+  raw: unknown,
+  options: MapGuildTemplateOptions = {},
+): DiscordImportPlan {
+  const keepForums = options.forumChannels === true;
   const parsed = guildTemplateSchema.safeParse(raw);
   if (!parsed.success) {
     throw new DiscordImportParseError();
@@ -644,7 +814,7 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
     if (templateId == null) {
       continue;
     }
-    const mapped = mapChannelType(channel.type);
+    const mapped = mapChannelType(channel.type, keepForums);
     if (!mapped) {
       if (channel.type === 10 || channel.type === 11 || channel.type === 12) {
         mappedAway.push({ reason: "threads", name: channel.name });
@@ -669,7 +839,17 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
       mappedAway.push({ reason: "bitrate" });
       droppedBitrate = true;
     }
-    if ((channel.available_tags?.length ?? 0) > 0) {
+    let tags: MappedImportForumTag[] | undefined;
+    if (mapped.type === "forum") {
+      const imported = parseImportedTags(channel.available_tags);
+      tags = imported.tags;
+      if (imported.lossy) {
+        mappedAway.push({ reason: "forumTagsTrimmed", name: channel.name });
+      }
+      if (forumHasLostSettings(channel)) {
+        mappedAway.push({ reason: "forumSettings", name: channel.name });
+      }
+    } else if ((channel.available_tags?.length ?? 0) > 0) {
       mappedAway.push({ reason: "forumTags", name: channel.name });
     }
     if (mapped.flattenedFrom) {
@@ -689,6 +869,7 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
       position: channel.position ?? 0,
       isPrivate: false,
       flattenedFrom: mapped.flattenedFrom,
+      ...(tags ? { tags } : {}),
     });
   }
 
@@ -724,7 +905,9 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
   }
 
   const topText = withPrivacy.filter(
-    (row) => row.type === "text" && row.parentTemplateId == null,
+    (row) =>
+      (row.type === "text" || row.type === "forum") &&
+      row.parentTemplateId == null,
   );
   const topVoice = withPrivacy.filter(
     (row) => row.type === "voice" && row.parentTemplateId == null,
@@ -738,10 +921,14 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
     nestedByParent.set(row.parentTemplateId!, list);
   }
 
+  // Loose channels are one sequence in pqp (any type, one order per parent),
+  // in the order Discord draws them: text and forums first, then voice, each
+  // by Discord's own position.
   const channels: MappedImportChannel[] = [
     ...renumberGroup(categories),
-    ...renumberGroup(topText),
-    ...renumberGroup(topVoice),
+    ...[...sortByDiscordPosition(topText), ...sortByDiscordPosition(topVoice)].map(
+      (row, index) => ({ ...row, position: index }),
+    ),
   ];
   for (const group of nestedByParent.values()) {
     channels.push(...renumberGroup(group));

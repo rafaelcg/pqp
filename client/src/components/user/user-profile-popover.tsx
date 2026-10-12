@@ -73,7 +73,7 @@ import {
   canActOnMemberClient,
 } from "@/lib/role-hierarchy";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
+import { cn, formatRecency } from "@/lib/utils";
 import {
   canBlock,
   canCall,
@@ -203,6 +203,12 @@ interface ProfilePopoverProviderProps {
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
+  /**
+   * Conversas (`conversations_home`): when the last line was exchanged with
+   * this person in a 1:1, read from the list the app already holds, so the
+   * card can say "Última conversa · 20:41". Absent with the flag off.
+   */
+  lastConversationAt?: (userId: string) => string | null;
   children: ReactNode;
 }
 
@@ -224,6 +230,7 @@ export function ProfilePopoverProvider({
   onBlockUser,
   onUnblockUser,
   onReportUser,
+  lastConversationAt,
   children,
 }: ProfilePopoverProviderProps) {
   const [state, setState] = useState<OpenState | null>(null);
@@ -264,6 +271,7 @@ export function ProfilePopoverProvider({
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
           onReportUser={onReportUser}
+          lastConversationAt={lastConversationAt?.(state.subject.id) ?? null}
         />
       )}
     </ProfilePopoverContext.Provider>
@@ -342,6 +350,7 @@ interface UserProfileCardProps {
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
+  lastConversationAt?: string | null;
 }
 
 function UserProfileCard({
@@ -360,6 +369,7 @@ function UserProfileCard({
   onBlockUser,
   onUnblockUser,
   onReportUser,
+  lastConversationAt = null,
 }: UserProfileCardProps) {
   const { t } = useTranslation();
   // The friends feature's own state logic, reused whole — the same fetch, the
@@ -1050,6 +1060,15 @@ function UserProfileCard({
   const tileMessage = canMessage(state);
   const tileCall = canCall(state) && Boolean(onStartCall);
   const tileMention = Boolean(onMention && mentionUsername);
+  const lastConversationLine =
+    lastConversationAt && tileMessage ? (
+      <p
+        data-profile-last-conversation=""
+        className="mt-2 text-[11px] text-text-tertiary"
+      >
+        {t("conversations.profileLast", { time: formatRecency(lastConversationAt) })}
+      </p>
+    ) : null;
   const actionStrip =
     tileMessage || tileCall || tileMention || tilePublic || tileMore ? (
       <div className="mt-3 flex items-start gap-2">
@@ -1390,6 +1409,7 @@ function UserProfileCard({
               {t("profile.isYou")}
             </p>
             {actionStrip}
+            {lastConversationLine}
             {cargosSection}
             {manageSection}
           </>
@@ -1446,6 +1466,7 @@ function UserProfileCard({
               )}
             </div>
             {actionStrip}
+            {lastConversationLine}
             {cargosSection}
             {manageSection}
           </>

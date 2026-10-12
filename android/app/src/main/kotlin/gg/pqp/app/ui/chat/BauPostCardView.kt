@@ -159,6 +159,13 @@ fun BauPostCardView(
                     modifier = Modifier.fillMaxSize().then(blurred),
                 )
 
+                BauCardPoster.Cover -> AsyncImage(
+                    model = card.posterUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().then(blurred),
+                )
+
                 BauCardPoster.VideoFrame -> {
                     val frame = rememberVideoFirstFrame(card.mediaUrl)
                     if (frame != null) {
@@ -416,14 +423,21 @@ private val frameCache = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
  * The first frame of a signed video file, decoded off the main thread. Never
  * plays: the card is a poster, and playing is the Baú's job. Null while it
  * loads and when the file will not give one, in which case the surface colour
- * and the play badge still say "video".
+ * and the play badge still say "video". Also drawn by the forum card, at
+ * thumbnail size through [width] and [height].
  */
 @Composable
-private fun rememberVideoFirstFrame(url: String?): androidx.compose.ui.graphics.ImageBitmap? {
+internal fun rememberVideoFirstFrame(
+    url: String?,
+    width: Int = FRAME_WIDTH,
+    height: Int = FRAME_HEIGHT,
+): androidx.compose.ui.graphics.ImageBitmap? {
     if (url == null) return null
+    // The same clip decoded at two sizes is two bitmaps.
+    val cacheKey = "${width}x$height|$url"
     val frame by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
-        initialValue = frameCache.get(url)?.asImageBitmap(),
-        url,
+        initialValue = frameCache.get(cacheKey)?.asImageBitmap(),
+        cacheKey,
     ) {
         if (value != null) return@produceState
         // Below API 27 there is no scaled decode, and a full 1080p frame is
@@ -436,7 +450,7 @@ private fun rememberVideoFirstFrame(url: String?): androidx.compose.ui.graphics.
                 try {
                     retriever.setDataSource(url, HashMap())
                     retriever.getScaledFrameAtTime(
-                        0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, FRAME_WIDTH, FRAME_HEIGHT,
+                        0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, width, height,
                     )
                 } catch (_: Exception) {
                     null
@@ -446,7 +460,7 @@ private fun rememberVideoFirstFrame(url: String?): androidx.compose.ui.graphics.
             }
         }
         if (bitmap != null) {
-            frameCache.put(url, bitmap)
+            frameCache.put(cacheKey, bitmap)
             value = bitmap.asImageBitmap()
         }
     }

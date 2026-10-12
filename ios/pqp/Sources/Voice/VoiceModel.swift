@@ -352,6 +352,11 @@ final class VoiceModel {
     private func applySelf(_ participant: VoiceParticipant) {
         let wasServerMuted = isServerMuted
         isServerMuted = participant.serverMuted
+        // Before the mute below, so the room already knows the mute is a
+        // moderator's when it decides what that mute does to a share's sound.
+        // A no-op on mesh and when nothing changed.
+        let serverMuted = participant.serverMuted
+        Task { await sfu.setSelfServerMuted(serverMuted) }
         guard participant.serverMuted, !wasServerMuted else { return }
         let muted = ServerMute.selfMuted(currentlyMuted: isMuted, serverMuted: true)
         if muted != isMuted { isMuted = muted }
@@ -872,6 +877,10 @@ final class VoiceModel {
 
     private func relay(_ signal: VoiceClient.VoiceSignal) async {
         guard let session, let selfPeerId else { return }
+        // Mesh signaling never leaves a room on the SFU. After a promotion the
+        // server drops it anyway (`voice.meshRelayInSfuRoom`); an answer or a
+        // late candidate from a mesh still being torn down is not sent at all.
+        guard transport != .livekit else { return }
         switch signal {
         case .offer(let to, let sdp):
             await session.realtime.sendOffer(to: to, from: selfPeerId, sdp: sdp)

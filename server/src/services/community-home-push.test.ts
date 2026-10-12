@@ -455,7 +455,16 @@ describeDb("Baú new post push", () => {
     expect(await publishDueCommunityHomePosts()).toEqual([]);
 
     await pushPendingCommunityHomePosts();
-    expect(told()).toEqual([member.id, vip.id, other.id].sort());
+    // Polled, not read once. The create above also kicked a sweep of its own
+    // in the background (`void pushPendingCommunityHomePosts` in the route).
+    // On a busy runner that sweep's claim can land AFTER the catch-up
+    // published the post, so it, not the call above, owns the announcement,
+    // and its sends were still in flight when this read `[]`. Either sweep
+    // announcing is the behaviour under test; exactly once is pinned by the
+    // claim itself (`push_claimed_at`).
+    await vi.waitFor(() => {
+      expect(told()).toEqual([member.id, vip.id, other.id].sort());
+    });
     expect(sent[0]!.payload.body).toContain("Agendado");
   });
 

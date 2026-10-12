@@ -142,6 +142,8 @@ jobs:
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
           VITE_FARO_APP_NAME: ${{ vars.VITE_FARO_APP_NAME }}
           VITE_FARO_APP_VERSION: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Share of sessions Faro reports (src/lib/faro.ts); empty keeps the code default.
+          VITE_FARO_SESSION_SAMPLE_RATE: ${{ vars.VITE_FARO_SESSION_SAMPLE_RATE }}
           # Source-map upload to Faro, for de-obfuscated stack traces. All four
           # are required and the upload is OFF until they are set; the build
           # skips it (never fails) when the API key is absent. FARO_SOURCEMAP_API_KEY

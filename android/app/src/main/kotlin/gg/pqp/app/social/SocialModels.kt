@@ -112,9 +112,45 @@ data class DmSummary(
     val participants: List<PublicUser> = emptyList(),
     val lastMessageAt: String? = null,
     val unread: UnreadCounts = UnreadCounts(),
+    /**
+     * The row's preview line, already redacted and cut to 140 characters by
+     * the server. Null when nobody has spoken yet or when the reader turned
+     * in-app previews off; absent from a server that predates it. Both read as
+     * "no preview", never as an error.
+     */
+    val lastMessage: LastMessagePreview? = null,
 ) {
     val isGroup: Boolean get() = kind == "group"
 }
+
+/**
+ * `dmSummarySchema.lastMessage`. Who wrote it travels with it because the
+ * prefix ("tu:", "Caio:") depends on who is reading, which only the client
+ * knows.
+ */
+@Serializable
+data class LastMessagePreview(
+    val authorId: String,
+    val authorName: String = "",
+    val preview: String = "",
+    val isAttachment: Boolean = false,
+    val isGif: Boolean = false,
+    val isVoice: Boolean? = null,
+    val voiceDurationMs: Long? = null,
+    /** "nudge" when the newest message is one: the row says what happened, not its `📳` body. */
+    val systemKind: String? = null,
+)
+
+/**
+ * `GET /api/dms/config`: the two runtime switches of the Conversas redesign.
+ * `phoneTabs` is only ever true when `home` is. Both default off, so a server
+ * that predates the route (404) or a body missing a key is today's app.
+ */
+@Serializable
+data class DmsConfig(
+    val home: Boolean = false,
+    val phoneTabs: Boolean = false,
+)
 
 @Serializable
 data class DmListResponse(val conversations: List<DmSummary> = emptyList())

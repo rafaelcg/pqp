@@ -41,6 +41,7 @@ describe("selectionRoutePath", () => {
       serverId: "s1",
       channelId: "c1",
       messageId: null,
+      postId: null,
     });
     expect(parseAppRoute(selectionRoutePath(HOME_SELECTION, "c1"))).toEqual({
       kind: "conversation",

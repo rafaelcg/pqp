@@ -8,6 +8,8 @@ import {
   remarkStripNewlineFillers,
 } from "@/lib/chat-markdown";
 import { remarkMentions } from "@/lib/remark-mentions";
+import { remarkRetroEmoticons } from "@/lib/retro-emoticons";
+import { useRetroLook } from "@/hooks/use-appearance";
 
 /**
  * Note the absence of `img`: attachments render from the structured array on
@@ -53,6 +55,8 @@ export function MessageBody({
   currentUsername: string | null;
 }) {
   const prepared = useMemo(() => prepareChatMarkdown(body), [body]);
+  // Modo 2005 reads `(H)` as 😎 at render time, for this reader only.
+  const retro = useRetroLook();
   const plugins = useMemo(
     // remark-breaks turns a single newline into a <br>. prepareChatMarkdown
     // keeps blank lines from collapsing into a paragraph gap first.
@@ -62,8 +66,9 @@ export function MessageBody({
       remarkBreaks,
       remarkStripNewlineFillers,
       remarkMentions(currentUsername),
+      ...(retro ? [remarkRetroEmoticons] : []),
     ],
-    [currentUsername],
+    [currentUsername, retro],
   );
 
   return (

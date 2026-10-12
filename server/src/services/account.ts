@@ -10,6 +10,7 @@
  */
 
 import { formatUserTag, type UserPreferences } from "@pqp/shared";
+import { retireAuthorStories } from "./stories.js";
 import { getPool } from "../db.js";
 import type { PublicUser } from "@pqp/shared";
 import { deleteClerkUser, evictUserAcrossCluster } from "../auth/clerk.js";
@@ -827,6 +828,9 @@ export async function deleteAccount(
     throw new IdentityDeletionFailedError(error);
   }
 
+  // Stories first: the user delete only nulls their author, so the bytes of
+  // the ones nothing holds would otherwise sit in the bucket with no owner.
+  await retireAuthorStories(userId);
   await getPool().query(`DELETE FROM users WHERE id = $1`, [userId]);
   // Closes this account's sockets and drops its auth caches on THIS instance,
   // and — with `CLUSTER_BUS` on — on every other one too. Both `DELETE /api/me`
@@ -901,6 +905,7 @@ export async function sweepPendingAccountDeletions(): Promise<number> {
       continue;
     }
     const keys = await accountAttachmentKeys(row.id);
+    await retireAuthorStories(row.id);
     await getPool().query(`DELETE FROM users WHERE id = $1`, [row.id]);
     // Same reasoning as the primary path above: a deletion that was only
     // interrupted long enough to need the sweeper still has to close this

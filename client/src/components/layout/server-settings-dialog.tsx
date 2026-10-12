@@ -6,6 +6,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  Globe,
   Image as ImageIcon,
   KeyRound,
   ScrollText,
@@ -60,8 +61,10 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "channel.update": "serverSettings.audit.action.channel.update",
   "channel.delete": "serverSettings.audit.action.channel.delete",
   "channel.move": "serverSettings.audit.action.channel.move",
+  "channel.reorder": "serverSettings.audit.action.channel.reorder",
   "message.delete": "serverSettings.audit.action.message.delete",
   "message.bulk_delete": "serverSettings.audit.action.message.bulk_delete",
+  "story.remove": "serverSettings.audit.action.story.remove",
   "server.update": "serverSettings.audit.action.server.update",
   "server.retention_update":
     "serverSettings.audit.action.server.retention_update",
@@ -116,7 +119,14 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
     "serverSettings.audit.action.channel.voice_transport_update",
   "channel.sfu_region_update":
     "serverSettings.audit.action.channel.sfu_region_update",
-  "member.timeout": "serverSettings.audit.action.member.timeout",
+  "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
+  "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
+  "forum.post_delete": "serverSettings.audit.action.forum.post_delete",
+  "forum.post_edit": "serverSettings.audit.action.forum.post_edit",
+  "forum.tags_update": "serverSettings.audit.action.forum.tags_update",
+  "forum.settings_update": "serverSettings.audit.action.forum.settings_update",
+  "webhook.forum_settings": "serverSettings.audit.action.webhook.forum_settings",
+  "member.timeout":"serverSettings.audit.action.member.timeout",
   "member.timeout_lift": "serverSettings.audit.action.member.timeout_lift",
   "member.voice_disconnect":
     "serverSettings.audit.action.member.voice_disconnect",
@@ -189,6 +199,7 @@ export function auditReasonKey(
  */
 type SectionId =
   | "overview"
+  | "community"
   | "access"
   | "roles"
   | "integrations"
@@ -213,6 +224,16 @@ const SECTIONS: SectionDef[] = [
     description: "serverSettings.overview.description",
     icon: ImageIcon,
     ownerOnly: true,
+  },
+  {
+    // The public address and the directory, a door of their own since
+    // October 2026: at the foot of Overview, under the name, the pictures and
+    // Baú, most owners with an address never found the directory switch.
+    id: "community",
+    label: "serverSettings.section.community",
+    description: "serverSettings.community.description",
+    icon: Globe,
+    ownerOnly: false,
   },
   {
     id: "access",
@@ -450,7 +471,7 @@ interface ServerSettingsDialogProps {
   /** Manage Messages: sees AutoMod read-only, with the test box. */
   canManageMessages?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
-  requestedSection?: "roles";
+  requestedSection?: "roles" | "community";
   onClose: () => void;
   onRenamed: (server: Server) => void;
   /** `COMMUNITY_HOME_ENABLED` on this instance, from the config probe. */
@@ -586,8 +607,14 @@ export function ServerSettingsDialog({
           : canSeeModeration
             ? "moderation"
             : "audit";
+  const canSeeCommunity =
+    communitiesEnabled && Boolean(serverId) && (isOwner || canManageServer);
   const openingSection: SectionId =
-    requestedSection === "roles" && canSeeRoles ? "roles" : firstSection;
+    requestedSection === "roles" && canSeeRoles
+      ? "roles"
+      : requestedSection === "community" && canSeeCommunity
+        ? "community"
+        : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,
   // not a frame of Overview. The effect still catches reopen / role changes.
   if (open && !wasOpenRef.current && section !== openingSection) {
@@ -773,6 +800,8 @@ export function ServerSettingsDialog({
     switch (s.id) {
       case "overview":
         return canSeeOverview;
+      case "community":
+        return canSeeCommunity;
       case "access":
         return isOwner;
       case "roles":
@@ -920,20 +949,19 @@ export function ServerSettingsDialog({
                     onUpdated={onRenamed}
                   />
                 )}
-
-              {/* Manage Server opens the panel; only the owner may tick the
-                  directory switch inside it. The address is the half a
-                  community's moderators actually need. */}
-              {serverId && (isOwner || canManageServer) && communitiesEnabled && (
-                <CommunitySettingsSection
-                  serverId={serverId}
-                  canListPublicly={isOwner}
-                  onIdentitySaved={(patch) =>
-                    onRenamed({ ...server, ...patch })
-                  }
-                />
-              )}
             </>
+          )}
+
+          {/* Manage Server opens the panel; only the owner may tick the
+              directory switch inside it. The address is the half a
+              community's moderators actually need. */}
+          {active.id === "community" && serverId && canSeeCommunity && (
+            <CommunitySettingsSection
+              bare
+              serverId={serverId}
+              canListPublicly={isOwner}
+              onIdentitySaved={(patch) => onRenamed({ ...server, ...patch })}
+            />
           )}
 
           {active.id === "access" && (

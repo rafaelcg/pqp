@@ -344,12 +344,12 @@ test("a watcher is shown the size arriving, and cannot change it", async ({
   const { serverId, hostName } = await seedVoiceServer("vq-rx-a", "vq-rx-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${serverId}`,
+    `/app/server/${serverId}`,
     "vq-rx-b",
   );
 
   try {
-    await bootAs(page, `/app/servers/${serverId}`, "vq-rx-a");
+    await bootAs(page, `/app/server/${serverId}`, "vq-rx-a");
     await joinVoice(page);
     await joinVoice(watcher.page);
 
