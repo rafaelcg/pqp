@@ -133,11 +133,16 @@ describe("ForumPostCard, the three lines", () => {
     const filesOnly = { ...POST, preview: null, openingKind: "attachment" as const };
     expect(
       render({ post: { ...filesOnly, attachmentCount: 1, thumbnailUrl: "https://x/y.png" } }),
-    ).toContain("📷 Image");
+    ).toMatch(/data-forum-preview-icon="image"[^>]*>.*<\/svg>Image</);
     expect(
       render({ post: { ...filesOnly, attachmentCount: 1, thumbnailVideoUrl: "https://x/y.mp4" } }),
-    ).toContain("🎬 Video");
+    ).toMatch(/data-forum-preview-icon="video"[^>]*>.*<\/svg>Video</);
     expect(render({ post: { ...filesOnly, attachmentCount: 3 } })).toContain("3 files");
+    // No emoji in the copy: the icon is drawn, and several files have none.
+    expect(render({ post: { ...filesOnly, attachmentCount: 3 } })).not.toContain("data-forum-preview-icon");
+    expect(
+      render({ post: { ...filesOnly, attachmentCount: 1, thumbnailUrl: "https://x/y.png" } }),
+    ).not.toMatch(/📷|🎬/);
   });
 
   it("draws a clip's first frame when there is no picture", () => {

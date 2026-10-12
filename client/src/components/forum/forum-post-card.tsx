@@ -5,12 +5,14 @@ import {
 } from "@pqp/shared";
 import {
   CheckCircle2,
+  ImageIcon,
   Lock,
   MessageSquare,
   Pin,
   Play,
   Rss,
   ShieldCheck,
+  Video,
 } from "lucide-react";
 import {
   memo,
@@ -166,6 +168,24 @@ export function forumPreviewText(
   return "";
 }
 
+/**
+ * The picture before the preview line when the opening message is one image or
+ * one clip and has no words: the line says "Image" or "Video", and this is the
+ * icon beside it (never an emoji in the copy).
+ */
+export function forumPreviewKind(post: ForumPostSummary): "image" | "video" | null {
+  if (post.openingDeleted || (post.preview && post.preview.trim())) {
+    return null;
+  }
+  if (post.openingKind === "voice" || post.attachmentCount !== 1) {
+    return null;
+  }
+  if (post.thumbnailUrl) {
+    return "image";
+  }
+  return post.thumbnailVideoUrl ? "video" : null;
+}
+
 export function forumAuthorName(
   t: Translator["t"],
   post: ForumPostSummary,
@@ -299,6 +319,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   const { t, locale } = useTranslation();
   const author = forumAuthorName(t, post);
   const preview = forumPreviewText(t, post);
+  const previewKind = forumPreviewKind(post);
   const isUnread = unread.kind !== "read";
   const replies = t("forum.replies", { count: post.replyCount });
   const time = formatRelativeShort(post.lastActivityAt, locale);
@@ -550,6 +571,20 @@ export const ForumPostCard = memo(function ForumPostCard({
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
             <span className={cn(post.openingDeleted && "italic")}>
+              {previewKind === "image" && (
+                <ImageIcon
+                  aria-hidden="true"
+                  data-forum-preview-icon="image"
+                  className="mr-1 inline h-3.5 w-3.5 align-[-2px]"
+                />
+              )}
+              {previewKind === "video" && (
+                <Video
+                  aria-hidden="true"
+                  data-forum-preview-icon="video"
+                  className="mr-1 inline h-3.5 w-3.5 align-[-2px]"
+                />
+              )}
               {preview}
             </span>
           </p>
