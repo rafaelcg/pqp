@@ -2871,7 +2871,11 @@ const MessageRow = memo(function MessageRow({
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
   const compact = useChatDisplay().display.density === "compact";
-  const { message, startsGroup, dayLabel } = row;
+  const { message, dayLabel } = row;
+  // The first unread message opens a block even when the same person also
+  // wrote the message above the "Novas" line: the divider is where the reader
+  // starts, and a headerless row right under it reads as nobody's.
+  const startsGroup = row.startsGroup || showUnreadDivider;
   // A Baú post pasted here is drawn as a card. The server decides whether this
   // reader may see it; until it answers (and if it refuses) the link stays.
   const bauSelection = useMemo(
@@ -3812,6 +3816,19 @@ const MessageRow = memo(function MessageRow({
                     aria-label={t("chat.more")}
                     className="absolute right-0 top-full z-20 mt-0.5 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
                   >
+                    {onToggleAnswer && isReal && (
+                      <MoreMenuItem
+                        icon={CircleCheck}
+                        onSelect={() => {
+                          onToggleAnswer();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {forumAnswer
+                          ? t("forum.solution.unmark")
+                          : t("forum.solution.mark")}
+                      </MoreMenuItem>
+                    )}
                     {canPin && (
                       <MoreMenuItem
                         icon={isMessagePinned ? PinOff : Pin}
