@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  lostSoundToFailure,
   canRetryShareWithoutSound,
   retryShareWithoutSound,
   silentRetryOptions,
@@ -144,5 +145,21 @@ describe("retryShareWithoutSound", () => {
     });
     expect(stream).toBeNull();
     warn.mockRestore();
+  });
+
+  it("marks the stream it opened, and only that one", async () => {
+    const opened = { id: "silent" } as unknown as MediaStream;
+    const stream = await retryShareWithoutSound({
+      err: named("NotReadableError"),
+      options: audioOptions,
+      env: { isDesktopShell: true },
+      desktop: shell(),
+      getDisplayMedia: async () => opened,
+    });
+    expect(stream).toBe(opened);
+    expect(lostSoundToFailure(opened)).toBe(true);
+    expect(lostSoundToFailure({ id: "other" } as unknown as MediaStream)).toBe(false);
+    expect(lostSoundToFailure(null)).toBe(false);
+    expect(lostSoundToFailure(undefined)).toBe(false);
   });
 });

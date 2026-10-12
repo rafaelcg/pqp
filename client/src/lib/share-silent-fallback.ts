@@ -26,6 +26,18 @@ export interface SilentShareRetryInput {
   getDisplayMedia: (options: ScreenCaptureOptions) => Promise<MediaStream>;
 }
 
+/**
+ * Streams this module opened after the sound failed. The watch party preview
+ * opens its capture itself and hands it to the call at go-live, so the call
+ * learns from the stream, not from a flag threaded through both surfaces.
+ */
+const lostSound = new WeakSet<MediaStream>();
+
+/** Whether `stream` is a capture that went out silent because its sound failed. */
+export function lostSoundToFailure(stream: MediaStream | null | undefined): boolean {
+  return stream ? lostSound.has(stream) : false;
+}
+
 /** The same request with every way of asking for sound taken out. */
 export function silentRetryOptions(options: ScreenCaptureOptions): ScreenCaptureOptions {
   return { ...options, audio: false, systemAudio: "exclude" };
@@ -70,7 +82,11 @@ export async function retryShareWithoutSound(
     return null;
   }
   try {
-    return await input.getDisplayMedia(silentRetryOptions(input.options));
+    const stream = await input.getDisplayMedia(silentRetryOptions(input.options));
+    if (typeof stream === "object" && stream !== null) {
+      lostSound.add(stream);
+    }
+    return stream;
   } catch (retryErr) {
     console.warn("[share] silent retry failed", retryErr);
     return null;

@@ -8,6 +8,7 @@ import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
 import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
+import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -891,6 +892,55 @@ describe("screen share audio", () => {
       expect(state.screenShareAudioFailed).toBe(false);
       expect(state.notice ?? "").toMatch(/sem som|without sound|sin sonido/);
       expect(state.notice ?? "").toMatch(/Chrome/);
+    });
+
+    it("keeps a watch party's warning up for as long as the party is silent", async () => {
+      installShell(loopbackShell());
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { preferBrowserTab: true, watchParty: true });
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(true);
+      expect(state.watchPartyShareSilent).toBe(true);
+      // The persistent host warning replaces the 12 s notice.
+      expect(state.notice).toBeNull();
+
+      await voice.stopScreenShare();
+      expect(voice.getState().watchPartyShareSilent).toBe(false);
+    });
+
+    it("reads the silent fallback off a stream the watch party preview handed over", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      const failed = new Error("Could not start audio source");
+      failed.name = "NotReadableError";
+      const preview = await retryShareWithoutSound({
+        err: failed,
+        options: { video: true, audio: true } as never,
+        env: { isDesktopShell: true },
+        desktop: shell as never,
+        getDisplayMedia: async () => fakeCapture("cap-preview", false, "monitor") as unknown as MediaStream,
+      });
+      expect(preview).not.toBeNull();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, {
+        preferBrowserTab: true,
+        watchParty: true,
+        stream: preview!,
+      });
+
+      expect(voice.getState().isSharingScreen).toBe(true);
+      expect(voice.getState().watchPartyShareSilent).toBe(true);
+    });
+
+    it("never raises the watch party warning for an ordinary share", async () => {
+      installShell(loopbackShell());
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(voice.getState().watchPartyShareSilent).toBe(false);
     });
 
     it("falls back to the old banner when the shell has nothing to retry", async () => {

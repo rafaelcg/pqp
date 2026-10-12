@@ -76,6 +76,7 @@ import {
 } from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
+import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   ensureOsCanExcludeCallAudio,
@@ -1125,6 +1126,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // (`ended`). The plain "sem som" hint tells the host to tick a box that WAS
   // ticked, which is the wrong answer here.
   const [nativeAudioNotice, setNativeAudioNotice] = useState<"failed" | "ended" | null>(null);
+  // The computer's sound would not open and the desktop app gave the same
+  // surface back without it (PQP-31). Neither "tick the box" nor the native
+  // capture's lines describe that.
+  const [soundFailed, setSoundFailed] = useState(false);
   const captureEnv = liveScreenCaptureEnvironment({ nativeShareAudio: nativeShareAudioOffered });
   const silentPickHint = !isDesktopApp()
     ? undefined
@@ -1189,6 +1194,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const pick = async () => {
     setPickError(null);
     setNativeAudioNotice(null);
+    setSoundFailed(false);
     try {
       // Same builder every ordinary share uses. `preferBrowserTab` is the
       // watch-party product: the player tab and its sound, never the machine
@@ -1216,8 +1222,28 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       );
       setNativeShareAudioOffered(nativeAudio);
       const options = screenCaptureOptions(false, pickEnv, intent);
-      const picked = await navigator.mediaDevices.getDisplayMedia(options);
-      if (nativeAudio) {
+      let picked: MediaStream;
+      let lostSound = false;
+      try {
+        picked = await navigator.mediaDevices.getDisplayMedia(options);
+      } catch (error) {
+        // PQP-31, same as every other desktop share: the computer's sound
+        // would not open, so the party goes out silent rather than not at all.
+        const silent = await retryShareWithoutSound({
+          err: error,
+          options,
+          env: pickEnv,
+          desktop: getDesktop(),
+          getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
+        });
+        if (!silent) {
+          throw error;
+        }
+        picked = silent;
+        lostSound = true;
+      }
+      setSoundFailed(lostSound);
+      if (nativeAudio && !lostSound) {
         const attach = await attachNativeShareAudio(picked, {
           onEnded: () => setNativeAudioNotice("ended"),
         });
@@ -1345,7 +1371,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   data-testid="watch-party-no-audio"
                   className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
                 >
-                  {nativeAudioNotice === "ended"
+                  {soundFailed
+                    ? t("watchParty.setup.soundFailed")
+                    : nativeAudioNotice === "ended"
                     ? t("voice.notice.nativeShareAudioEnded")
                     : nativeAudioNotice === "failed"
                       ? t("voice.notice.nativeShareAudioFailed")
