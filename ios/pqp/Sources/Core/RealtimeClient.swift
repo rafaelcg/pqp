@@ -72,6 +72,11 @@ enum RealtimeEvent: Sendable {
     /// every member, never through a channel relay. Likes deliberately do not
     /// send it. See `packages/shared/src/community-home.ts`.
     case communityHomeUpdate(serverId: String)
+    /// `serverId`'s channel list changed (created, renamed, moved, deleted,
+    /// reordered), so re-read it, and re-read which list to draw (the mixed
+    /// one may have just been switched on for this server). Content-free like
+    /// `permissionsUpdate`, and only sent to people who can see what changed.
+    case channelsUpdate(serverId: String)
     /// Somebody played a voice note. Goes to the author's sockets (in a
     /// conversation, where receipts are shown) and to the listener's OWN other
     /// sockets, so the unplayed dot clears on every device. `userId` says which
@@ -1309,6 +1314,9 @@ actor RealtimeClient {
         case "community-home-update":
             guard let serverId = envelope.serverId else { return }
             event = .communityHomeUpdate(serverId: serverId)
+        case "channels-update":
+            guard let serverId = envelope.serverId else { return }
+            event = .channelsUpdate(serverId: serverId)
 
         case "welcome":
             guard let peerId = envelope.peerId,
