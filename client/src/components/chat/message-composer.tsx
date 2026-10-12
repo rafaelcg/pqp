@@ -580,6 +580,14 @@ export function MessageComposer({
 
   const isUploading = pending.some((item) => item.status === "uploading");
   const readyCount = pending.filter((item) => item.status === "ready").length;
+  // Embedded in a form (the forum's Novo post), the toolbar sits under the
+  // field with room to spare, so on a phone its buttons are a full 44px
+  // finger target rather than 32 (forum QA P17). The chat composer keeps its
+  // 32px row beside the field.
+  const iconButtonClass = cn(
+    COMPOSER_ICON_BUTTON,
+    embedded && "max-sm:h-11 max-sm:w-11",
+  );
   // Embedded: the form reads the text and the files from here, through a ref
   // so a new callback identity per render does not report twice.
   const embeddedRef = useRef(embedded);
@@ -1838,7 +1846,7 @@ export function MessageComposer({
                 }}
                 onMouseDown={keepComposerFocused}
                 className={cn(
-                  COMPOSER_ICON_BUTTON,
+                  iconButtonClass,
                   isInsertMenuOpen && "bg-surface-3 text-text",
                 )}
               >
@@ -1869,7 +1877,7 @@ export function MessageComposer({
               }}
               onMouseDown={(event) => event.preventDefault()}
               className={cn(
-                COMPOSER_ICON_BUTTON,
+                iconButtonClass,
                 isFormatBarOpen && "bg-surface-3 text-text",
               )}
             >
@@ -1891,7 +1899,7 @@ export function MessageComposer({
               }}
               onMouseDown={keepComposerFocused}
               className={cn(
-                COMPOSER_ICON_BUTTON,
+                iconButtonClass,
                 isPickerOpen && "bg-surface-3 text-text",
               )}
             >
@@ -1916,7 +1924,7 @@ export function MessageComposer({
                 }}
                 onMouseDown={keepComposerFocused}
                 className={cn(
-                  COMPOSER_ICON_BUTTON,
+                  iconButtonClass,
                   isGifPickerOpen && "bg-surface-3 text-text",
                 )}
               >

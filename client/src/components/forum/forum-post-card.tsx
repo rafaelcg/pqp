@@ -74,6 +74,11 @@ export interface ForumPostCardProps {
 
 const MAX_TAGS_FULL = 3;
 const MAX_TAGS_COMPACT = 2;
+/**
+ * The 16px avatar's monogram sits on a disc of its own. Without one it was a
+ * bare letter beside the name, a stray "D" before "Dev User" (forum QA P14).
+ */
+const TINY_AVATAR_FALLBACK = "bg-surface-3 text-[9px] leading-none text-text-secondary";
 
 function TagChip({ tag }: { tag: ForumTag }) {
   return (
@@ -324,6 +329,85 @@ export const ForumPostCard = memo(function ForumPostCard({
     onOpen(post.id);
   }
 
+  // The whole card is the hit target: the title link is stretched over it.
+  const titleLink = (className: string) => (
+    <a
+      ref={(node) => registerLink?.(post.id, node)}
+      href={href}
+      tabIndex={tabIndex}
+      aria-label={srName}
+      aria-current={open ? "true" : undefined}
+      onClick={handleClick}
+      onDoubleClick={(event) => {
+        if (onOpenFull) {
+          event.preventDefault();
+          onOpenFull(post.id);
+        }
+      }}
+      onFocus={() => onFocus(post.id)}
+      onKeyDown={(event) => onKeyDown?.(event, post.id)}
+      className={cn(
+        "min-w-0 truncate rounded-[var(--radius-control)] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus-ring",
+        className,
+        // The title is the line people scan: heavier than everything
+        // else on the card read or not, and unread heavier still.
+        isUnread ? "font-bold text-text" : "font-semibold text-text-secondary",
+      )}
+    >
+      {post.title}
+    </a>
+  );
+
+  const pip = isUnread ? (
+    <span
+      aria-hidden
+      className="absolute left-0 top-1/2 h-[18px] w-1 -translate-y-1/2 rounded-r-full bg-text"
+    />
+  ) : null;
+
+  // A phone's pinned post is one line: the pin, the title, its status as
+  // glyphs. Three full cards used to fill the first screen before the reader
+  // reached anything new (forum QA P15); the apps already draw it this way.
+  if (pinnedRow && narrow) {
+    return (
+      <article
+        data-forum-post={post.id}
+        data-unread={unread.kind}
+        data-forum-pinned-row=""
+        className={cn(
+          "group/card relative flex min-h-12 items-center gap-3 overflow-hidden rounded-[var(--radius-card)] border bg-surface-1 py-2 pl-2.5 pr-3.5 transition-[background-color,border-color,opacity,transform] duration-[var(--duration-fast)] ease-[var(--ease-standard)] hover:border-border-strong hover:bg-surface-2",
+          open ? "border-border-strong bg-surface-2" : "border-border",
+          entering && "animate-door-reveal",
+          leaving && "pointer-events-none animate-pop-out",
+        )}
+      >
+        {pip}
+        <span
+          aria-hidden
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft"
+        >
+          <Pin className="h-3.5 w-3.5" />
+        </span>
+        {titleLink("flex-1 text-[15px] leading-5")}
+        {unread.kind === "new" && <Badge variant="new">{t("forum.badge.new")}</Badge>}
+        {post.lockedAt && (
+          <Lock
+            className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
+            role="img"
+            aria-label={t("forum.badge.locked")}
+          />
+        )}
+        {post.resolvedAt && (
+          <CheckCircle2
+            className="h-3.5 w-3.5 shrink-0 text-success"
+            role="img"
+            aria-label={t("forum.badge.resolved")}
+          />
+        )}
+      </article>
+    );
+  }
+
   const badges = (
     <>
       {unread.kind === "new" && !compact && (
@@ -420,12 +504,7 @@ export const ForumPostCard = memo(function ForumPostCard({
       )}
     >
       {/* The unread pip, the same shape the sidebar uses. */}
-      {isUnread && (
-        <span
-          aria-hidden
-          className="absolute left-0 top-1/2 h-[18px] w-1 -translate-y-1/2 rounded-r-full bg-text"
-        />
-      )}
+      {pip}
       {open && (
         <span
           aria-hidden
@@ -440,40 +519,13 @@ export const ForumPostCard = memo(function ForumPostCard({
           )}
         >
           {badges}
-          <a
-            ref={(node) => registerLink?.(post.id, node)}
-            href={href}
-            tabIndex={tabIndex}
-            aria-label={srName}
-            aria-current={open ? "true" : undefined}
-            onClick={handleClick}
-            onDoubleClick={(event) => {
-              if (onOpenFull) {
-                event.preventDefault();
-                onOpenFull(post.id);
-              }
-            }}
-            onFocus={() => onFocus(post.id)}
-            onKeyDown={(event) => onKeyDown?.(event, post.id)}
-            className={cn(
-              "min-w-0 truncate rounded-[var(--radius-control)] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus-ring",
-              narrow && !compact
-                ? cn(
-                    "basis-full whitespace-normal leading-snug line-clamp-2",
-                    pinnedRow ? "text-sm" : "text-base",
-                  )
-                : compact || pinnedRow
-                  ? "text-[15px] leading-5"
-                  : "text-base leading-6",
-              // The title is the line people scan: heavier than everything
-              // else on the card read or not, and unread heavier still.
-              isUnread
-                ? "font-bold text-text"
-                : "font-semibold text-text-secondary",
-            )}
-          >
-            {post.title}
-          </a>
+          {titleLink(
+            narrow && !compact
+              ? "basis-full whitespace-normal text-base leading-snug line-clamp-2"
+              : compact || pinnedRow
+                ? "text-[15px] leading-5"
+                : "text-base leading-6",
+          )}
         </div>
         {!pinnedRow && preview && (
           <p
@@ -488,8 +540,8 @@ export const ForumPostCard = memo(function ForumPostCard({
                 name={author}
                 avatarUrl={post.authorAvatarUrl}
                 rounded="full"
-                className="mr-1 inline-block h-4 w-4 align-[-3px]"
-                fallbackClassName="text-[8px]"
+                className="mr-1 inline-flex h-4 w-4 align-middle"
+                fallbackClassName={TINY_AVATAR_FALLBACK}
               />
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
@@ -531,9 +583,9 @@ export const ForumPostCard = memo(function ForumPostCard({
                   <UserAvatar
                     name={author}
                     avatarUrl={post.authorAvatarUrl}
-                    rounded="md"
+                    rounded="full"
                     className="h-4 w-4"
-                    fallbackClassName="text-[8px]"
+                    fallbackClassName={TINY_AVATAR_FALLBACK}
                   />
                 )}
                 <span className="truncate">{author}</span>

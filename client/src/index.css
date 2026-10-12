@@ -1138,6 +1138,27 @@
 }
 
 /*
+ * A control drawn smaller than a finger still takes a 44px tap: an invisible
+ * box centred on it, at least 44 by 44, catches the touch. Used as
+ * `max-sm:hit-44` where a 44px drawing would crowd a row (a filter chip, the
+ * live pill), the same "28px drawn, 44px to a finger" the dialog's X uses.
+ * Not for controls packed edge to edge: the boxes would overlap and the later
+ * one would win the shared strip.
+ */
+@utility hit-44 {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
+/*
  * The gradient lives on the runnable track, not the input, so WebKit cannot
  * fall back to its native control rendering. `writing-mode` + `direction`
  * pin the control horizontal regardless of ancestor styles.
