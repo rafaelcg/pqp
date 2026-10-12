@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isInPictureInPicture,
+  pictureInPictureOnThisDevice,
   pictureInPictureSupport,
   registerAutoPictureInPicture,
   togglePictureInPicture,
@@ -271,5 +272,42 @@ describe("registerAutoPictureInPicture", () => {
     session.fire("enterpictureinpicture");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("pictureInPictureOnThisDevice", () => {
+  const desktop = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) pqp/1.0.0 Chrome/140.0.0.0 Electron/44.0.0 Safari/537.36",
+  ];
+  const mobile = [
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+  ];
+
+  it.each(desktop)("offers PiP on a desktop browser or the desktop app: %s", (userAgent) => {
+    expect(pictureInPictureOnThisDevice({ userAgent, maxTouchPoints: 0 })).toBe(true);
+  });
+
+  it.each(mobile)("hides PiP on a phone or tablet: %s", (userAgent) => {
+    expect(pictureInPictureOnThisDevice({ userAgent, maxTouchPoints: 5 })).toBe(false);
+  });
+
+  it("hides PiP on an iPad that reports a Mac user agent", () => {
+    expect(
+      pictureInPictureOnThisDevice({ userAgent: desktop[1], maxTouchPoints: 5 }),
+    ).toBe(false);
+  });
+
+  it("trusts the browser's own mobile answer over the user agent", () => {
+    expect(
+      pictureInPictureOnThisDevice({
+        userAgent: desktop[2],
+        userAgentData: { mobile: true, platform: "Android" },
+      }),
+    ).toBe(false);
   });
 });

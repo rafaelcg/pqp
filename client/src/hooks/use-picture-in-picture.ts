@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
+import { readPlatformSignals } from "@/lib/downloads";
 import {
   isInPictureInPicture,
+  pictureInPictureOnThisDevice,
   pictureInPictureSupport,
   registerAutoPictureInPicture,
   togglePictureInPicture,
@@ -12,8 +14,8 @@ import {
  * PiP for one share's `<video>`. `source` is what the element is playing (the
  * tile's stream, or the element itself for the control bar); null means there
  * is nothing to pop out, and a change of it re-reads the element. `available`
- * is false until both exist, and stays false on a platform with no API, so
- * the control simply is not drawn there.
+ * is false until both exist, and stays false on a platform with no API or on
+ * a phone or tablet, so the control simply is not drawn there.
  *
  * Leaving PiP resumes playback: the PiP window's own pause button pauses the
  * element, and a live share has no inline play control to undo that. Losing
@@ -38,7 +40,10 @@ export function usePictureInPicture(
       setActive(false);
       return;
     }
-    setAvailable(pictureInPictureSupport(video, doc) !== "none");
+    setAvailable(
+      pictureInPictureOnThisDevice(readPlatformSignals()) &&
+        pictureInPictureSupport(video, doc) !== "none",
+    );
     setActive(isInPictureInPicture(video, doc));
     const stopWatching = watchPictureInPicture(video, doc, (inPip) => {
       setActive(inPip);
@@ -77,7 +82,11 @@ export function usePictureInPicture(
  */
 export function useAutoPictureInPicture(video: HTMLVideoElement | null): void {
   useEffect(() => {
-    if (!video || typeof navigator === "undefined") {
+    if (
+      !video ||
+      typeof navigator === "undefined" ||
+      !pictureInPictureOnThisDevice(readPlatformSignals())
+    ) {
       return;
     }
     return registerAutoPictureInPicture(

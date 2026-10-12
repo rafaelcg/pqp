@@ -16,9 +16,20 @@
  * Kept free of React and of the DOM globals so the rules pin under vitest's
  * `node` environment with fake elements.
  */
+import { detectPlatform, type PlatformSignals } from "@/lib/downloads";
 import { hasSafariPresentationMode, isPipAvailable } from "@/lib/hls-live-edge";
 
 export type PictureInPictureSupport = "standard" | "webkit" | "none";
+
+/**
+ * Share PiP is a desktop feature: desktop browsers and the desktop app. Phones
+ * and tablets get neither the buttons nor the automatic window, even where
+ * their browser has the API. Same device rule as the download pages, so an
+ * iPad that reports a Mac user agent counts as mobile too.
+ */
+export function pictureInPictureOnThisDevice(signals: PlatformSignals): boolean {
+  return detectPlatform(signals) !== "mobile";
+}
 
 export interface PipVideo {
   disablePictureInPicture?: boolean;

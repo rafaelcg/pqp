@@ -16,7 +16,9 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *    `enterpictureinpicture` media session action, so Chrome can pop it out
  *    by itself when the viewer switches tabs, and takes it back afterwards.
  *    Playwright keeps every page `visible`, so the tab switch itself cannot
- *    be driven from here.
+ *    be driven from here,
+ *  - a viewer on a phone gets neither control nor the automatic window, even
+ *    though the browser underneath has the API.
  *
  * The LiveKit half (a share in PiP keeps arriving in a hidden tab) has no SFU
  * here and is pinned in `remote-video-delivery.test.ts`.
@@ -109,10 +111,12 @@ async function openCallee(
   browser: Browser,
   conversationId: string,
   suffix: string,
+  userAgent?: string,
 ) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     colorScheme: "dark",
+    ...(userAgent ? { userAgent } : {}),
   });
   await context.grantPermissions(["microphone", "camera"]);
   const page = await context.newPage();
@@ -144,9 +148,9 @@ function pipVideoIsShare(page: Page) {
     const el = document.pictureInPictureElement as HTMLVideoElement | null;
     return Boolean(
       el &&
-        el.classList.contains("object-contain") &&
-        el.closest('[data-testid="call-stage"]') &&
-        el.videoWidth > 0,
+      el.classList.contains("object-contain") &&
+      el.closest('[data-testid="call-stage"]') &&
+      el.videoWidth > 0,
     );
   });
 }
@@ -247,6 +251,60 @@ test("a viewer pops a peer's screen share into picture-in-picture and back", asy
     await expect(callee.page.getByTestId("share-pip")).toHaveCount(0);
     await expect(callee.page.getByTestId("stage-pip")).toHaveCount(0);
     await expect.poll(() => autoPipRegistered(callee.page)).toBe(false);
+  } finally {
+    await callee.context.close();
+  }
+});
+
+const ANDROID_UA =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36";
+
+test("a viewer on a phone gets no picture-in-picture for a share", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("pip-c", "pip-d");
+  const callee = await openCallee(
+    browser,
+    pair.conversationId,
+    "pip-d",
+    ANDROID_UA,
+  );
+
+  try {
+    await openConversation(page, pair.conversationId, "pip-c");
+    await page
+      .getByRole("button", { name: "Start video call", exact: true })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+
+    const share = callee.page.locator(
+      '[data-testid="call-stage"] video.object-contain',
+    );
+    await expect
+      .poll(
+        () => share.evaluate((el) => (el as HTMLVideoElement).videoWidth > 0),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    expect(
+      await callee.page.evaluate(
+        () => "requestPictureInPicture" in HTMLVideoElement.prototype,
+      ),
+    ).toBe(true);
+
+    await share.hover({ force: true });
+    await expect(callee.page.getByTestId("share-pip")).toHaveCount(0);
+    await expect(callee.page.getByTestId("stage-pip")).toHaveCount(0);
+    expect(await autoPipRegistered(callee.page)).toBe(false);
   } finally {
     await callee.context.close();
   }
