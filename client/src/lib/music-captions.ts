@@ -266,6 +266,23 @@ export function applyCaptionsPref(
   }
 }
 
+/**
+ * Why the captions button has no menu, or null when it has one.
+ *
+ * The embed reads a video's tracks once it plays here, so a paused room, a
+ * cued track or a player waiting for a tap has nothing to read yet. Saying
+ * "looking" there would be a promise nothing keeps until somebody hits play.
+ */
+export function captionsUnavailableReason(
+  tracks: CaptionTrack[] | null,
+  playingHere: boolean,
+): "none" | "waiting" | "loading" | null {
+  if (tracks === null) {
+    return playingHere ? "loading" : "waiting";
+  }
+  return tracks.length === 0 ? "none" : null;
+}
+
 export const CAPTIONS_READ_ATTEMPTS = 6;
 export const CAPTIONS_READ_INTERVAL_MS = 1_000;
 

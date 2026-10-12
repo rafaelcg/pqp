@@ -1,15 +1,18 @@
 import { Captions, CaptionsOff } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useMusicLocalPlayback } from "@/components/voice/music-local-playback";
 import { useTranslation } from "@/lib/i18n";
 import {
   captionLanguageName,
+  captionsUnavailableReason,
   musicCaptionsChoices,
   setMusicCaptions,
   useMusicCaptions,
 } from "@/lib/music-captions";
+import { getMusicSnapshot, subscribeMusic } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,7 +28,14 @@ export function MusicCaptionsButton({ className }: { className?: string }) {
   const captions = useMusicCaptions();
   const tracks = captions.tracks;
   const none = tracks !== null && tracks.length === 0;
-  const unknown = tracks === null;
+  // A boolean, so a position sample does not re-render the stage's button.
+  const roomPlaying = useSyncExternalStore(
+    subscribeMusic,
+    () => getMusicSnapshot().state?.status === "playing",
+    () => getMusicSnapshot().state?.status === "playing",
+  );
+  const { needsTap } = useMusicLocalPlayback();
+  const reason = captionsUnavailableReason(tracks, roomPlaying && !needsTap);
 
   const items = useMemo<ContextMenuItemDef[]>(() => {
     if (!tracks || tracks.length === 0) {
@@ -56,11 +66,14 @@ export function MusicCaptionsButton({ className }: { className?: string }) {
   }, [captions, locale, t, tracks]);
 
   const label = captions.on ? t("music.captions.on") : t("music.captions.title");
-  const detail = none
-    ? t("music.captions.none")
-    : unknown
-      ? t("music.captions.loading")
-      : undefined;
+  const detail =
+    reason === "none"
+      ? t("music.captions.none")
+      : reason === "waiting"
+        ? t("music.captions.waiting")
+        : reason === "loading"
+          ? t("music.captions.loading")
+          : undefined;
   const Icon = captions.on && !none ? Captions : CaptionsOff;
   const className_ = cn(
     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-0/80 text-text hover:bg-surface-2",

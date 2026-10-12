@@ -394,7 +394,9 @@ The choice is saved per browser (`pqp:music-captions`,
 track, the embed reads the track list once the player reaches PLAYING. It
 retries for about five seconds, because the list arrives late and never
 arrives for a video without captions. Then it applies the choice again,
-because a new video starts with YouTube's default. "Off" is an empty
+because a new video starts with YouTube's default. Before a track first
+plays here (a paused room, a cued track, a player waiting for a tap), the
+dimmed button says captions load once the music plays. "Off" is an empty
 `track` option: it hides captions and keeps the track list readable. While
 captions show, the tile hides its title, because YouTube draws captions in
 the same place and nothing outside the iframe can move them.

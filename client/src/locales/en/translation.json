@@ -1252,6 +1252,7 @@
   "music.captions.generated": "{language} (auto-generated)",
   "music.captions.none": "This video has no captions",
   "music.captions.loading": "Looking for this video's captions",
+  "music.captions.waiting": "Captions load once the music plays",
   "music.duck": "Lower when someone is talking",
   "music.autoplay.next": "Up next: similar",
   "music.openControls": "Everyone controls",

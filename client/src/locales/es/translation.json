@@ -1257,6 +1257,7 @@
   "music.captions.generated": "{language} (generados automáticamente)",
   "music.captions.none": "Este video no tiene subtítulos",
   "music.captions.loading": "Buscando los subtítulos de este video",
+  "music.captions.waiting": "Los subtítulos se cargan cuando suene la música",
   "music.duck": "Bajar cuando alguien habla",
   "music.autoplay.next": "A continuación: parecidas",
   "music.openControls": "Todos controlan",

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   CAPTIONS_READ_ATTEMPTS,
+  captionsUnavailableReason,
   getMusicCaptions,
   musicCaptionsChoices,
   resetMusicCaptionsForTests,
@@ -182,6 +183,23 @@ describe("startMusicCaptionsSync", () => {
 
   it("survives a player without the captions module", () => {
     expect(() => startMusicCaptionsSync({}, () => "pt-BR")).not.toThrow();
+  });
+});
+
+describe("captionsUnavailableReason", () => {
+  // The tracks are read once the video plays here, so a paused room or a
+  // cued track has nothing to read yet, and must not say it is looking.
+  it("says captions wait for playback when nothing plays here", () => {
+    expect(captionsUnavailableReason(null, false)).toBe("waiting");
+  });
+
+  it("says it is looking only while the video plays here", () => {
+    expect(captionsUnavailableReason(null, true)).toBe("loading");
+  });
+
+  it("says a video has none, and has a menu once tracks arrive", () => {
+    expect(captionsUnavailableReason([], false)).toBe("none");
+    expect(captionsUnavailableReason(TED, false)).toBeNull();
   });
 });
 

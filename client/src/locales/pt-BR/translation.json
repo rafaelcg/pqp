@@ -1252,6 +1252,7 @@
   "music.captions.generated": "{language} (gerada automaticamente)",
   "music.captions.none": "Este vídeo não tem legendas",
   "music.captions.loading": "Procurando as legendas deste vídeo",
+  "music.captions.waiting": "As legendas carregam quando a música tocar",
   "music.duck": "Abaixar quando alguém fala",
   "music.autoplay.next": "Em seguida: parecidas",
   "music.openControls": "Todo mundo controla",
