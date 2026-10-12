@@ -14,6 +14,9 @@ struct ConversationActivityPreview: Hashable, Sendable {
     let authorId: String
     let authorName: String
     let preview: String?
+    /// `"nudge"` when the message behind the frame is one, so the row reads as
+    /// what happened and not as its bare `📳` body.
+    var systemKind: String? = nil
 }
 
 // MARK: - The two switches
@@ -199,7 +202,8 @@ enum ConversationList {
                     authorName: preview.authorName,
                     preview: text,
                     isAttachment: false,
-                    isGif: false
+                    isGif: false,
+                    systemKind: preview.systemKind == "nudge" ? "nudge" : nil
                 )
             } else {
                 // Previews are off for this reader: say nothing rather than
@@ -246,6 +250,11 @@ enum MessagePreviewText {
     /// first name in a group, nothing in a 1:1.
     static func line(for conversation: DmSummary, viewerId: String?) -> String? {
         guard let message = conversation.lastMessage else { return nil }
+        // Chamar a atenção: the row says what happened, with no "tu:" in front
+        // (the sentence already says who). Same copy as the web list.
+        if message.systemKind == "nudge" {
+            return nudgeLine(mine: message.authorId == viewerId)
+        }
         let body: String
         if message.isAttachment, message.isVoice == true, let ms = message.voiceDurationMs {
             body = String(localized: "Voice message · \(duration(ms))")
@@ -262,6 +271,12 @@ enum MessagePreviewText {
             return "\(first.isEmpty ? message.authorName : first): \(body)"
         }
         return body
+    }
+
+    /// What a nudge row says, mirroring `nudge.previewSent` and
+    /// `nudge.notifyBody` on web. A nudge exists only in a 1:1.
+    static func nudgeLine(mine: Bool) -> String {
+        mine ? String(localized: "You nudged them 📳") : String(localized: "Nudged you! 📳")
     }
 
     /// `0:12`, `1:05`. Voice notes are short; there is no hour column.
@@ -293,7 +308,8 @@ enum MessagePreviewText {
             authorName: message.authorName,
             preview: truncate(stripped),
             isAttachment: false,
-            isGif: false
+            isGif: false,
+            systemKind: message.isNudge ? "nudge" : nil
         )
     }
 

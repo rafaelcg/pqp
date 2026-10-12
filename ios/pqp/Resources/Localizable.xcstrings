@@ -8159,6 +8159,26 @@
         }
       }
     },
+    "You nudged them 📳" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu chamou a atenção 📳"
+          }
+        }
+      }
+    },
+    "Nudged you! 📳" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chamou tua atenção! 📳"
+          }
+        }
+      }
+    },
     "You turned nudges off. Turn them back on in Settings." : {
       "localizations" : {
         "pt-BR" : {
