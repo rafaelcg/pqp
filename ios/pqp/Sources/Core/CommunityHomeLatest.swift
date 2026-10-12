@@ -45,9 +45,10 @@ struct CommunityHomeLatestPost: Decodable, Sendable, Equatable, Identifiable {
             return .image(url)
         }
         switch card.poster {
+        case .videoFrame: return .plate
         // A locked video's cover (#1039) is not drawn either: the check above
         // already refused it, and the card's own poster must not sneak it back.
-        case .videoFrame, .coverImage: return .plate
+        case .coverImage where card.locked: return .plate
         default: return card.poster
         }
     }
