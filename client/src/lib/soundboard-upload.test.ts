@@ -50,6 +50,25 @@ describe("uploadSoundboardFile claim", () => {
     expect(claim.mock.calls[1]![1].key).toBe("k1");
   });
 
+  it("claims a stored key again without storing the file twice", async () => {
+    claim.mockResolvedValueOnce({ sound: { id: "x" } });
+    const onUploaded = vi.fn();
+    await uploadSoundboardFile({ ...input, uploadedKey: "k0", onUploaded });
+    expect(mint).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(onUploaded).not.toHaveBeenCalled();
+    expect(claim.mock.calls[0]![1].key).toBe("k0");
+  });
+
+  it("reports the stored key before the claim can fail", async () => {
+    claim.mockRejectedValue(new ApiError(0, "Network error reaching API."));
+    const onUploaded = vi.fn();
+    await expect(uploadSoundboardFile({ ...input, onUploaded })).rejects.toBeInstanceOf(
+      ApiError,
+    );
+    expect(onUploaded).toHaveBeenCalledWith("k1");
+  });
+
   it("asks again after a 5xx", async () => {
     claim
       .mockRejectedValueOnce(new ApiError(503, "storage"))

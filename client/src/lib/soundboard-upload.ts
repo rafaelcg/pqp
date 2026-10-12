@@ -145,27 +145,40 @@ export async function uploadSoundboardFile(input: {
    * A claim already on the wire cannot be recalled.
    */
   signal?: AbortSignal;
+  /**
+   * The key of this same file, already stored by an earlier attempt whose
+   * claim never answered. Claimed again instead of storing a second copy:
+   * the claim is idempotent by key, a new upload is not.
+   */
+  uploadedKey?: string;
+  /** Called once the bytes are stored, with the key a retry should reuse. */
+  onUploaded?: (key: string) => void;
 }): Promise<SoundboardSoundDto> {
-  const minted = await createSoundboardUpload(input.serverId, {
-    contentType: input.contentType,
-    byteSize: input.file.size,
-  });
-  input.signal?.throwIfAborted();
-  const response = await fetch(minted.uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": input.contentType },
-    body: input.file,
-    signal: input.signal,
-  });
-  if (!response.ok) {
-    throw new Error("storage");
+  let key = input.uploadedKey;
+  if (!key) {
+    const minted = await createSoundboardUpload(input.serverId, {
+      contentType: input.contentType,
+      byteSize: input.file.size,
+    });
+    input.signal?.throwIfAborted();
+    const response = await fetch(minted.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": input.contentType },
+      body: input.file,
+      signal: input.signal,
+    });
+    if (!response.ok) {
+      throw new Error("storage");
+    }
+    key = minted.key;
+    input.onUploaded?.(key);
   }
   input.signal?.throwIfAborted();
   // A claim is idempotent by key, so a lost response is retried with the SAME
   // key rather than minting a second upload that would claim a duplicate.
   const claim = () =>
     claimSoundboardSound(input.serverId, {
-      key: minted.key,
+      key,
       name: input.name,
       emoji: input.emoji,
       volume: input.volume,

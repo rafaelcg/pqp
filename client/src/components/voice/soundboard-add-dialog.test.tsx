@@ -188,6 +188,45 @@ describe("soundboard add dialog", () => {
     expect(onAdded).toHaveBeenCalledTimes(1);
   });
 
+  it("claims the stored file again after a lost answer instead of storing it twice", async () => {
+    upload.mockImplementationOnce(async (input: { onUploaded: (key: string) => void }) => {
+      input.onUploaded("k1");
+      throw new ApiError(0, "Network error reaching API.");
+    });
+    await mount();
+    await chooseFile();
+    type(nameInput(), "Buzina");
+    await submit();
+    expect(onAdded).not.toHaveBeenCalled();
+    upload.mockResolvedValueOnce({ id: "x" });
+    await submit();
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(upload.mock.calls[0]![0].uploadedKey).toBeUndefined();
+    expect(upload.mock.calls[1]![0].uploadedKey).toBe("k1");
+    expect(onAdded).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores the file afresh after a refusal or a new pick", async () => {
+    upload.mockImplementation(async (input: { onUploaded: (key: string) => void }) => {
+      input.onUploaded("k1");
+      throw new ApiError(400, "Invalid request");
+    });
+    await mount();
+    await chooseFile();
+    type(nameInput(), "Buzina");
+    await submit();
+    await submit();
+    expect(upload.mock.calls[1]![0].uploadedKey).toBeUndefined();
+    upload.mockImplementation(async (input: { onUploaded: (key: string) => void }) => {
+      input.onUploaded("k2");
+      throw new ApiError(0, "Network error reaching API.");
+    });
+    await submit();
+    await chooseFile();
+    await submit();
+    expect(upload.mock.calls[3]![0].uploadedKey).toBeUndefined();
+  });
+
   it("shows a bad-name 400 on the name, not as a storage failure", async () => {
     upload.mockRejectedValue(new ApiError(400, "Invalid request"));
     await mount();

@@ -63,6 +63,10 @@ export function SoundboardAddDialog({
   // One number per file pick: a slower inspection of an earlier pick is ignored.
   const inspectSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // The file a save already stored and the key it was stored under. A claim
+  // whose answer was lost may still have added the clip, so Save again claims
+  // the same key rather than storing the file a second time.
+  const uploadedRef = useRef<{ file: File; key: string } | null>(null);
   const wasOpen = useRef(false);
   const formId = useId();
   const nameErrorId = useId();
@@ -114,6 +118,7 @@ export function SoundboardAddDialog({
   }, [open]);
 
   function reset(): void {
+    uploadedRef.current = null;
     setName("");
     setFile(null);
     setContentType(null);
@@ -135,6 +140,7 @@ export function SoundboardAddDialog({
 
   async function onFile(next: File | null): Promise<void> {
     const seq = (inspectSeq.current += 1);
+    uploadedRef.current = null;
     setFile(null);
     setContentType(null);
     setFileError(null);
@@ -183,6 +189,13 @@ export function SoundboardAddDialog({
         name: name.trim(),
         emoji: emoji.data,
         signal: controller.signal,
+        uploadedKey:
+          uploadedRef.current?.file === file ? uploadedRef.current.key : undefined,
+        onUploaded: (key) => {
+          if (session === sessionRef.current) {
+            uploadedRef.current = { file, key };
+          }
+        },
       });
       if (session !== sessionRef.current) {
         onAddedAfterClose?.();
@@ -199,6 +212,11 @@ export function SoundboardAddDialog({
           onAddedAfterClose?.();
         }
         return;
+      }
+      // A 4xx is the server's final answer, so a retry starts over. A lost
+      // answer or a 5xx keeps the stored key: the clip may exist already.
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+        uploadedRef.current = null;
       }
       const key = soundboardErrorKey(err);
       if (key === "soundboard.error.nameRejected") {
