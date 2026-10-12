@@ -8,9 +8,11 @@ import {
 } from "@/lib/picture-in-picture";
 
 /**
- * PiP for one share tile's `<video>`. `available` is false until the element
- * exists and has a stream, and stays false on a platform with no API, so the
- * control simply is not drawn there.
+ * PiP for one share's `<video>`. `source` is what the element is playing (the
+ * tile's stream, or the element itself for the control bar); null means there
+ * is nothing to pop out, and a change of it re-reads the element. `available`
+ * is false until both exist, and stays false on a platform with no API, so
+ * the control simply is not drawn there.
  *
  * Leaving PiP resumes playback: the PiP window's own pause button pauses the
  * element, and a live share has no inline play control to undo that. Losing
@@ -19,7 +21,7 @@ import {
  */
 export function usePictureInPicture(
   videoRef: RefObject<HTMLVideoElement | null>,
-  stream: MediaStream | null,
+  source: unknown,
 ): { available: boolean; active: boolean; toggle: () => void } {
   const [available, setAvailable] = useState(false);
   const [active, setActive] = useState(false);
@@ -27,7 +29,7 @@ export function usePictureInPicture(
   useEffect(() => {
     const video = videoRef.current as (HTMLVideoElement & PipVideo) | null;
     const doc = typeof document === "undefined" ? undefined : document;
-    if (!video || !stream) {
+    if (!video || source == null) {
       setAvailable(false);
       if (video && doc && isInPictureInPicture(video, doc)) {
         void togglePictureInPicture(video, doc);
@@ -54,7 +56,7 @@ export function usePictureInPicture(
         }
       }, 0);
     };
-  }, [videoRef, stream]);
+  }, [videoRef, source]);
 
   const toggle = useCallback(() => {
     const video = videoRef.current as (HTMLVideoElement & PipVideo) | null;

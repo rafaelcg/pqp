@@ -6,6 +6,7 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * Two real clients in a DM call, the caller shares, and on the callee's side:
  *
  *  - the share tile offers a PiP control, and the caller's own tile does not,
+ *  - the control bar offers one for the main share, only to the viewer,
  *  - pressing it hands the share's <video> to the browser's PiP window, which
  *    is still rendering frames,
  *  - pressing it again brings it back,
@@ -185,6 +186,24 @@ test("a viewer pops a peer's screen share into picture-in-picture and back", asy
       .toBeNull();
     await expect(pip).toHaveAttribute("aria-pressed", "false");
 
+    // The control bar carries the same switch for the main share, and the
+    // two buttons agree about the state.
+    const barPip = callee.page.getByTestId("stage-pip");
+    await share.hover({ force: true });
+    await expect(barPip).toBeVisible();
+    await expect(barPip).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByTestId("stage-pip")).toHaveCount(0);
+    await barPip.click();
+    await expect.poll(() => pipVideoIsShare(callee.page)).toBe(true);
+    await expect(barPip).toHaveAttribute("aria-pressed", "true");
+    await expect(pip).toHaveAttribute("aria-pressed", "true");
+    await share.hover({ force: true });
+    await barPip.click();
+    await expect
+      .poll(() => callee.page.evaluate(() => document.pictureInPictureElement))
+      .toBeNull();
+    await expect(pip).toHaveAttribute("aria-pressed", "false");
+
     // Back in, then the presenter stops: the window closes with the share.
     await share.hover({ force: true });
     await pip.click();
@@ -199,6 +218,7 @@ test("a viewer pops a peer's screen share into picture-in-picture and back", asy
       )
       .toBeNull();
     await expect(callee.page.getByTestId("share-pip")).toHaveCount(0);
+    await expect(callee.page.getByTestId("stage-pip")).toHaveCount(0);
   } finally {
     await callee.context.close();
   }
