@@ -18,7 +18,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -609,6 +609,10 @@ import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
+import { useRetroLook } from "@/hooks/use-appearance";
+import { useKonamiRetro } from "@/hooks/use-konami-retro";
+import { startRetroLookFlag } from "@/lib/retro-look";
+import { RetroLayer } from "@/components/retro/lazy";
 import { adoptContrastPreference } from "@/lib/contrast";
 import { adoptChatDisplay } from "@/lib/chat-display";
 import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
@@ -2692,6 +2696,14 @@ function MainAppContent({
     () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
     [notifyConfigUserId],
   );
+  // Modo 2005's kill switch (`retro_look`), asked only by a browser that found
+  // the look, and its Konami door. See `lib/retro-look.ts`.
+  useEffect(
+    () => (notifyConfigUserId ? startRetroLookFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  useKonamiRetro(notifyConfigUserId !== null);
+  const retroOn = useRetroLook();
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -11679,6 +11691,14 @@ function MainAppContent({
         }}
         onActiveChange={setDmToastActive}
       />
+
+      {/* Modo 2005's own layer: its stylesheet, sounds and the discovery
+          card. Loaded only while the look is on. */}
+      {retroOn && (
+        <Suspense fallback={null}>
+          <RetroLayer />
+        </Suspense>
+      )}
 
       {isChannelSessionScheduleEnabled() && (
         <>

@@ -4,15 +4,25 @@ vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
 }));
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { queuePreferenceSync } from "./preferences";
 import {
   APPEARANCE_STORAGE_KEY,
+  RETRO_KILLED_STORAGE_KEY,
+  RETRO_STORAGE_KEY,
   adoptAppearancePreference,
   appearanceForcesDark,
   getAppearance,
+  getLook,
   isAppearance,
+  isRetroLookOn,
   readStoredAppearance,
+  reloadRetroLookForTests,
   setAppearancePreference,
+  setRetroLook,
+  setRetroLookAvailable,
 } from "./appearance";
 
 describe("isAppearance", () => {
@@ -92,5 +102,77 @@ describe("stored appearance", () => {
       { immediate: true },
     );
     expect(queuePreferenceSync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Modo 2005 over the preference", () => {
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    vi.mocked(queuePreferenceSync).mockClear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    reloadRetroLookForTests();
+    adoptAppearancePreference("harmony");
+  });
+
+  afterEach(() => {
+    setRetroLook(false);
+    setRetroLookAvailable(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("paints retro, keeps the look underneath, and never syncs", () => {
+    setRetroLook(true);
+
+    expect(getLook()).toBe("retro");
+    expect(getAppearance()).toBe("harmony");
+    expect(store.get(RETRO_STORAGE_KEY)).toBe("1");
+    expect(queuePreferenceSync).not.toHaveBeenCalled();
+  });
+
+  it("a value from the server keeps it on", () => {
+    setRetroLook(true);
+    adoptAppearancePreference("hearth");
+
+    expect(getLook()).toBe("retro");
+    expect(getAppearance()).toBe("hearth");
+  });
+
+  it("picking any look turns it off", () => {
+    setRetroLook(true);
+    setAppearancePreference("harmony");
+
+    expect(isRetroLookOn()).toBe(false);
+    expect(getLook()).toBe("harmony");
+    expect(store.has(RETRO_STORAGE_KEY)).toBe(false);
+  });
+
+  it("the kill switch paints the look underneath and keeps the choice", () => {
+    setRetroLook(true);
+    setRetroLookAvailable(false);
+
+    expect(getLook()).toBe("harmony");
+    expect(store.get(RETRO_KILLED_STORAGE_KEY)).toBe("1");
+    expect(store.get(RETRO_STORAGE_KEY)).toBe("1");
+
+    setRetroLookAvailable(true);
+    expect(getLook()).toBe("retro");
+  });
+
+  it("the boot script reads the same two keys", () => {
+    const html = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../../index.html"),
+      "utf8",
+    );
+    expect(html).toContain(`localStorage.getItem("${RETRO_STORAGE_KEY}") === "1"`);
+    expect(html).toContain(
+      `localStorage.getItem("${RETRO_KILLED_STORAGE_KEY}") !== "1"`,
+    );
+    expect(html).toContain('dataset.appearance = "retro"');
   });
 });

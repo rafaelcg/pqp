@@ -21,7 +21,14 @@ import { getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { SUPPORTED_LOCALES, setLocalePreference, type Locale } from "@/lib/locale";
 import { ACCENT_SWATCHES, effectiveAccentHue, type AccentHuePreference } from "@/lib/accent";
-import type { AppearancePreference } from "@/lib/appearance";
+import type { AppearancePreference, Look } from "@/lib/appearance";
+import {
+  chooseRetroLook,
+  isRetroNew,
+  isRetroOffered,
+  setRetroSounds,
+  useRetroState,
+} from "@/lib/retro-look";
 import type { ContrastPreference } from "@/lib/contrast";
 import type { ThemePreference } from "@/lib/theme";
 import { queuePreferenceSync, usePreferenceSyncFailed } from "@/lib/preferences";
@@ -30,6 +37,7 @@ import {
   SETTINGS_FOCUS,
   SETTINGS_TRANSITION,
   SettingsChoiceGrid,
+  type SettingsChoice,
   SettingsGroup,
   SettingsInlineStatus,
   SettingsNotice,
@@ -96,6 +104,7 @@ function ThemeGroup() {
     <SettingsGroup title={t("settings.appearance.group.theme.title")}>
       <BrightnessRow />
       <LookRow />
+      <RetroRows />
       <AccentRow />
       <ContrastRow />
     </SettingsGroup>
@@ -328,17 +337,27 @@ const LOOK_OPTIONS: {
 
 function LookRow() {
   const { t } = useTranslation();
-  const { appearance, setAppearance } = useAppearance();
+  const { appearance, look, setAppearance } = useAppearance();
   const { preference, resolved, setPreference } = useTheme();
   const { preference: accentPreference } = useAccentHue();
+  const retro = useRetroState();
   // The miniatures are drawn the way the app would look after the pick: in the
   // current mode and, when there is one, in the person's own accent. Night is
   // dark whatever the mode is.
   const mode = appearance === "night" ? "dark" : resolved;
   const customAccent = accentPreference !== "default";
 
-  function choose(next: AppearancePreference) {
+  function choose(next: Look) {
+    if (next === look) {
+      return;
+    }
+    if (next === "retro") {
+      void chooseRetroLook();
+      return;
+    }
     if (next === appearance) {
+      // Leaving Modo 2005 for the look that was under it: nothing else moves.
+      setAppearance(next);
       return;
     }
     if (next === "night") {
@@ -356,33 +375,69 @@ function LookRow() {
     }
   }
 
+  const options: SettingsChoice<Look>[] = LOOK_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.label),
+    badge: option.badge ? t(option.badge) : undefined,
+    preview: (
+      <LookMiniature
+        look={option.value}
+        mode={mode}
+        customAccent={customAccent}
+      />
+    ),
+  }));
+  // Modo 2005 only once this browser found it, and never while the operator
+  // has it switched off.
+  if (isRetroOffered(retro)) {
+    options.push({
+      value: "retro",
+      label: t("settings.appearance.preset.retro"),
+      badge: isRetroNew(retro) ? t("settings.appearance.newBadge") : undefined,
+      preview: <span className="appearance-preview-retro" aria-hidden="true" />,
+    });
+  }
+
   return (
     <SettingsRow
       id="look"
       label={t("settings.appearance.preset")}
-      description={t("settings.appearance.presetHint")}
+      description={
+        look === "retro"
+          ? t("settings.appearance.retroDarkHint")
+          : t("settings.appearance.presetHint")
+      }
       stacked
       control={
         <SettingsChoiceGrid
           label={t("settings.appearance.preset")}
-          value={appearance}
+          value={look}
           onValueChange={choose}
           columns={4}
-          options={LOOK_OPTIONS.map((option) => ({
-            value: option.value,
-            label: t(option.label),
-            badge: option.badge ? t(option.badge) : undefined,
-            preview: (
-              <LookMiniature
-                look={option.value}
-                mode={mode}
-                customAccent={customAccent}
-              />
-            ),
-          }))}
+          options={options}
         />
       }
     />
+  );
+}
+
+/** The look's own switches, only while it is the one painted. */
+function RetroRows() {
+  const { t } = useTranslation();
+  const retro = useRetroState();
+  if (!retro.on) {
+    return null;
+  }
+  return (
+    <>
+      <SettingsSwitchRow
+        id="retro-sounds"
+        label={t("retro.settings.sounds")}
+        description={t("retro.settings.soundsHint")}
+        checked={retro.sounds}
+        onCheckedChange={setRetroSounds}
+      />
+    </>
   );
 }
 
