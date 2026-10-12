@@ -170,6 +170,19 @@ interface DialogProps {
 }
 
 /**
+ * Where focus goes back to when the dialog closes. A menu row that opened the
+ * dialog unmounts with its menu, so the menu's trigger stands in for it (Radix
+ * labels the menu with the trigger's id).
+ */
+export function dialogOpener(active: HTMLElement | null): HTMLElement | null {
+  const menu = active?.closest?.('[role="menu"][aria-labelledby]');
+  const trigger = menu
+    ? document.getElementById(menu.getAttribute("aria-labelledby") ?? "")
+    : null;
+  return trigger ?? active;
+}
+
+/**
  * Every modal in the app used to be a bare `<div>` overlay: no dialog role, no
  * Escape handling, no focus trap, and no focus restoration. This is the one
  * place that behaviour lives now.
@@ -202,7 +215,9 @@ export function Dialog({
   if (open && !openedRef.current) {
     openedRef.current = true;
     previouslyFocused.current =
-      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+      typeof document === "undefined"
+        ? null
+        : dialogOpener(document.activeElement as HTMLElement | null);
   } else if (!open) {
     openedRef.current = false;
   }

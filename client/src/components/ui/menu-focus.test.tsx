@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Dialog } from "./dialog";
 import { Menu } from "./menu";
 
 /*
@@ -82,6 +83,37 @@ describe("Menu focus after a row is chosen", () => {
     const trigger = mount(() => undefined);
     await openWithKeyboard(trigger);
     await chooseFirstRow();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("returns focus to the trigger when the dialog a row opened closes", async () => {
+    let close: () => void = () => undefined;
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      close = () => setOpen(false);
+      return (
+        <>
+          <Menu items={[{ id: "open", label: "Abrir", onSelect: () => setOpen(true) }]}>
+            <button type="button">Menu</button>
+          </Menu>
+          <Dialog open={open} title="Ajustes" onClose={() => setOpen(false)}>
+            <button type="button">Dentro</button>
+          </Dialog>
+        </>
+      );
+    }
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root!.render(<Harness />));
+    const trigger = host.querySelector("button")!;
+    await openWithKeyboard(trigger);
+    await chooseFirstRow();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => {
+      close();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(document.activeElement).toBe(trigger);
   });
 });
