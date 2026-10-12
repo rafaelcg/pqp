@@ -331,6 +331,8 @@ const CLEANUP_LEASE_SECONDS = 120;
 /** Past its signature plus this, an upload is abandoned: nothing will claim it. */
 const PENDING_GRACE_SECONDS = 60;
 const SWEEP_BATCH = 50;
+/** Object deletes in flight at once within one cleanup. */
+const CLEANUP_CONCURRENCY = 8;
 
 /**
  * Delete the object behind tickets this process holds a lease on, then the
@@ -341,37 +343,40 @@ const SWEEP_BATCH = 50;
  * and sit outside any transaction.
  */
 async function finishCleanup(keys: string[]): Promise<void> {
-  for (const key of keys) {
-    // A batch can take longer than one lease (each S3 call may run its full
-    // timeout), so each key renews its own lease just before its delete.
-    // Only a lease still held may be renewed. If it lapsed, a claim may have
-    // taken the ticket (and the file is a saved sound now), so skip the key:
-    // the sweep finds it again if it is still due.
-    const renewed = await getPool()
-      .query(
-        `UPDATE soundboard_pending_uploads
-            SET cleanup_until = NOW() + INTERVAL '120 seconds'
-          WHERE storage_key = $1
-            AND cleanup_until IS NOT NULL
-            AND cleanup_until > NOW()
-        RETURNING storage_key`,
-        [key],
-      )
-      .catch(() => null);
-    if (!renewed || renewed.rows.length === 0) {
-      continue;
-    }
-    try {
-      await deleteObject(key);
-    } catch {
-      continue;
-    }
-    await getPool()
-      .query(`DELETE FROM soundboard_pending_uploads WHERE storage_key = $1`, [
-        key,
-      ])
-      .catch(() => undefined);
+  // A batch is up to SWEEP_BATCH keys and each delete is an S3 round trip, so
+  // run them a few at a time. Every key leases, deletes and drops on its own.
+  for (let i = 0; i < keys.length; i += CLEANUP_CONCURRENCY) {
+    await Promise.all(keys.slice(i, i + CLEANUP_CONCURRENCY).map(cleanupOne));
   }
+}
+
+async function cleanupOne(key: string): Promise<void> {
+  // Each key renews its own lease just before its delete, since a batch can
+  // outlast one lease. Only a lease still held may be renewed. If it lapsed, a
+  // claim may have taken the ticket (the file is a saved sound now), so skip
+  // the key: the sweep finds it again if it is still due.
+  const renewed = await getPool()
+    .query(
+      `UPDATE soundboard_pending_uploads
+          SET cleanup_until = NOW() + INTERVAL '120 seconds'
+        WHERE storage_key = $1
+          AND cleanup_until IS NOT NULL
+          AND cleanup_until > NOW()
+      RETURNING storage_key`,
+      [key],
+    )
+    .catch(() => null);
+  if (!renewed || renewed.rows.length === 0) {
+    return;
+  }
+  try {
+    await deleteObject(key);
+  } catch {
+    return;
+  }
+  await getPool()
+    .query(`DELETE FROM soundboard_pending_uploads WHERE storage_key = $1`, [key])
+    .catch(() => undefined);
 }
 
 /**
