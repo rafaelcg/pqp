@@ -5354,6 +5354,8 @@
   "serverEmoji.list.title": "Server emoji",
   "serverEmoji.list.loading": "Loading…",
   "serverEmoji.list.empty": "No emoji yet. Upload the first one.",
+  "serverEmoji.list.failed": "Could not load this server's emoji.",
+  "serverEmoji.list.retry": "Try again",
   "serverEmoji.remove.label": "Remove :{name}:",
   "serverEmoji.remove.title": "Remove :{name}:?",
   "serverEmoji.remove.description": "Messages that already used it will show its name as text.",

@@ -5422,6 +5422,8 @@
   "serverEmoji.list.title": "Emojis del servidor",
   "serverEmoji.list.loading": "Cargando…",
   "serverEmoji.list.empty": "Todavía no hay emojis. Sube el primero.",
+  "serverEmoji.list.failed": "No se pudieron cargar los emojis del servidor.",
+  "serverEmoji.list.retry": "Reintentar",
   "serverEmoji.remove.label": "Quitar :{name}:",
   "serverEmoji.remove.title": "¿Quitar :{name}:?",
   "serverEmoji.remove.description": "En los mensajes que ya lo usaron, se verá su nombre como texto.",

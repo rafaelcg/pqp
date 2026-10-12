@@ -20,7 +20,8 @@ import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   loadServerEmoji,
-  setServerEmojiList,
+  serverEmojiLoadFailed,
+  updateServerEmojiList,
   useServerEmoji,
 } from "@/lib/server-emoji";
 import {
@@ -87,14 +88,18 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
     void loadServerEmoji(serverId, true);
   }, [serverId]);
 
+  // Keyed on the URL, not the draft: typing a name makes a new draft object
+  // around the same preview, and revoking it then broke the picture.
+  const previewUrl = draft?.previewUrl ?? null;
   useEffect(() => {
     return () => {
-      if (draft) {
-        URL.revokeObjectURL(draft.previewUrl);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
       }
     };
-  }, [draft]);
+  }, [previewUrl]);
 
+  const loadFailed = list === null && serverEmojiLoadFailed(serverId);
   const emoji = list?.emoji ?? [];
   const limit = list?.limit ?? 0;
   const full = list !== null && emoji.length >= limit;
@@ -102,13 +107,8 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
   const draftNameTaken =
     draft !== null && emoji.some((entry) => entry.name === draft.name);
 
-  function update(next: ServerEmoji[]) {
-    if (list) {
-      setServerEmojiList(serverId, {
-        ...list,
-        emoji: [...next].sort((a, b) => a.name.localeCompare(b.name)),
-      });
-    }
+  function update(change: (current: ServerEmoji[]) => ServerEmoji[]) {
+    updateServerEmojiList(serverId, change);
   }
 
   async function handleFile(file: File) {
@@ -137,18 +137,20 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
   }
 
   async function addDraft() {
-    if (!draft || draftNameInvalid || draftNameTaken) {
+    if (!draft || busy || draftNameInvalid || draftNameTaken) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const created = await uploadServerEmoji(serverId, draft.name, draft.image);
-      update([...emoji, created]);
+      update((current) => [...current.filter((entry) => entry.id !== created.id), created]);
       setStatus(t("serverEmoji.added", { name: created.name }));
       setDraft(null);
     } catch (failure) {
       setError(t(serverEmojiErrorKey(failure), { name: draft.name, limit }));
+      // The claim may have landed with its answer lost; show what is there.
+      void loadServerEmoji(serverId, true);
     } finally {
       setBusy(false);
     }
@@ -163,7 +165,7 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
     setError(null);
     try {
       await deleteServerEmoji(serverId, target.id);
-      update(emoji.filter((entry) => entry.id !== target.id));
+      update((current) => current.filter((entry) => entry.id !== target.id));
       setStatus(t("serverEmoji.removed", { name: target.name }));
     } catch (failure) {
       setError(t(serverEmojiErrorKey(failure)));
@@ -173,7 +175,9 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
   async function rename(target: ServerEmoji, name: string): Promise<string | null> {
     try {
       const renamed = await renameServerEmoji(serverId, target.id, name);
-      update(emoji.map((entry) => (entry.id === target.id ? renamed.emoji : entry)));
+      update((current) =>
+        current.map((entry) => (entry.id === target.id ? renamed.emoji : entry)),
+      );
       setStatus(t("serverEmoji.renamed", { name }));
       return null;
     } catch (failure) {
@@ -341,7 +345,20 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
         <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
           {t("serverEmoji.list.title")}
         </h4>
-        {list === null ? (
+        {loadFailed ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p role="alert" className="text-sm text-danger">
+              {t("serverEmoji.list.failed")}
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void loadServerEmoji(serverId, true)}
+            >
+              {t("serverEmoji.list.retry")}
+            </Button>
+          </div>
+        ) : list === null ? (
           <p className="text-sm text-paper-muted">{t("serverEmoji.list.loading")}</p>
         ) : emoji.length === 0 ? (
           <p className="text-sm text-paper-muted">{t("serverEmoji.list.empty")}</p>

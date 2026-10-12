@@ -21,6 +21,13 @@ interface Entry {
   list: ServerEmojiList | null;
   inflight: Promise<void> | null;
   lastMissRefreshAt: number;
+  /**
+   * Bumped by every write this tab makes. A read that started before a write
+   * answers with the list from before it, so its answer is dropped.
+   */
+  writes: number;
+  /** The last read failed and nothing is cached. */
+  failed: boolean;
 }
 
 const entries = new Map<string, Entry>();
@@ -39,7 +46,7 @@ function emit() {
 function entryFor(serverId: string): Entry {
   let entry = entries.get(serverId);
   if (!entry) {
-    entry = { list: null, inflight: null, lastMissRefreshAt: 0 };
+    entry = { list: null, inflight: null, lastMissRefreshAt: 0, writes: 0, failed: false };
     entries.set(serverId, entry);
   }
   return entry;
@@ -53,13 +60,22 @@ export function loadServerEmoji(serverId: string, force = false): Promise<void> 
   if (entry.list && !force) {
     return Promise.resolve();
   }
+  const writesAtStart = entry.writes;
   entry.inflight = fetchServerEmoji(serverId)
     .then((list) => {
+      if (entry.writes !== writesAtStart && entry.list) {
+        return;
+      }
       entry.list = list;
+      entry.failed = false;
       emit();
     })
     .catch(() => {
       // A failed read leaves whatever was there; tokens fall back to `:name:`.
+      if (!entry.list) {
+        entry.failed = true;
+        emit();
+      }
     })
     .finally(() => {
       entry.inflight = null;
@@ -67,10 +83,38 @@ export function loadServerEmoji(serverId: string, force = false): Promise<void> 
   return entry.inflight;
 }
 
-/** Replace the cached list after a write this tab made. */
+/** Replace the cached list outright. A write this tab made uses `updateServerEmojiList`. */
 export function setServerEmojiList(serverId: string, list: ServerEmojiList): void {
-  entryFor(serverId).list = list;
+  const entry = entryFor(serverId);
+  entry.list = list;
+  entry.failed = false;
   emit();
+}
+
+/**
+ * Apply a write this tab made to the LATEST cached list, never to a copy a
+ * component held when the request started: two renames in flight must both
+ * land.
+ */
+export function updateServerEmojiList(
+  serverId: string,
+  change: (emoji: ServerEmoji[]) => ServerEmoji[],
+): void {
+  const entry = entryFor(serverId);
+  entry.writes += 1;
+  if (!entry.list) {
+    return;
+  }
+  entry.list = {
+    ...entry.list,
+    emoji: change([...entry.list.emoji]).sort((a, b) => a.name.localeCompare(b.name)),
+  };
+  emit();
+}
+
+/** True when the list could not be read and nothing is cached. */
+export function serverEmojiLoadFailed(serverId: string): boolean {
+  return entries.get(serverId)?.failed ?? false;
 }
 
 /** A message named an emoji id this tab does not know: refetch, at most every 30 s. */
