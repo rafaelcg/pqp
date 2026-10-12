@@ -209,6 +209,8 @@ enum RealtimeEvent: Sendable {
     /// A forum post was deleted. Sent to the forum's viewers and to the
     /// post's own, so an open post can say so.
     case forumPostRemoved(forumId: String, postId: String)
+    /// `nudge-refused`: a chamar a atenção this socket sent did not land.
+    case nudgeRefused(NudgeRefusal)
     case other
 }
 
@@ -845,6 +847,12 @@ actor RealtimeClient {
         await send(raw: ["type": "set-voice-state", "muted": muted, "deafened": deafened])
     }
 
+    /// Chamar a atenção: `{type: "nudge", channelId, nonce}`. No body; the
+    /// server writes the message, or answers `nudge-refused`.
+    func sendNudge(channelId: String, nonce: String) async {
+        await send(raw: ["type": "nudge", "channelId": channelId, "nonce": nonce])
+    }
+
     func sendTyping(channelId: String) async {
         await send(raw: ["type": "typing", "channelId": channelId])
     }
@@ -1229,6 +1237,14 @@ actor RealtimeClient {
             event = .reaction(channelId: channelId, messageId: messageId,
                               emoji: emoji, userId: userId, added: added,
                               displayName: envelope.displayName)
+        case "nudge-refused":
+            guard let channelId = envelope.channelId, let reason = envelope.reason else { return }
+            event = .nudgeRefused(NudgeRefusal(
+                channelId: channelId,
+                nonce: envelope.nonce,
+                reason: reason,
+                retryAfterMs: envelope.retryAfterMs
+            ))
         case "typing-broadcast":
             guard let channelId = envelope.channelId, let userId = envelope.userId,
                   let displayName = envelope.displayName else { return }
