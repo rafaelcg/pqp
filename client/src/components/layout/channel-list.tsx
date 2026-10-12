@@ -5,6 +5,7 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronRight,
+  CirclePlus,
   Copy,
   Eraser,
   ExternalLink,
@@ -362,6 +363,8 @@ interface ChannelListProps {
     channelId: string,
     parentId: string | null,
     index: number,
+    /** A drop on this row: the server takes its slot exactly. */
+    targetId?: string,
   ) => void;
   /**
    * This person's pinned channel ids for the open server, in display order.
@@ -405,6 +408,14 @@ interface ChannelListProps {
    * preview off, or the read has not landed) keeps the plain row.
    */
   communityHomePreview?: CommunityHomePreviewProps | null;
+  /**
+   * The stories strip (`components/stories/story-strip.tsx`), drawn at the
+   * top of the list, above Baú. It draws nothing unless the server has
+   * stories on and something is live. Never in the icons-only rail.
+   */
+  storiesSlot?: ReactNode;
+  /** "Postar story" in the server menu, for someone who may post here. */
+  onPostStory?: () => void;
   /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
@@ -511,6 +522,8 @@ export const ChannelList = memo(function ChannelList({
   communityHomePreview = null,
   communityHomeSelected = false,
   onSelectCommunityHome,
+  storiesSlot = null,
+  onPostStory,
   members = [],
   iconsOnly = false,
   onExpand,
@@ -1120,7 +1133,29 @@ export const ChannelList = memo(function ChannelList({
       onMoveChannel(dragged.id, target.id, kids.length);
       return;
     }
-    onMoveChannel(dragged.id, target.parentId, target.position);
+    onMoveChannel(dragged.id, target.parentId, legacyDropIndex(target), target.id);
+  }
+
+  /**
+   * The index `PATCH /move` reads for a drop on a row. Inside a category it
+   * is the row's position. In the loose area the server keeps one sequence
+   * for every type now and reads the index per type (its legacy-move rule),
+   * so this is the row's slot among the loose channels of its own type group,
+   * which is what `position` used to be when each type was numbered apart.
+   */
+  function legacyDropIndex(target: Channel): number {
+    if (target.parentId) {
+      return target.position;
+    }
+    const sameGroup = (type: string) =>
+      isTextGroupChannelType(target.type)
+        ? isTextGroupChannelType(type as Channel["type"])
+        : type === target.type;
+    const group = sortByPosition(
+      channels.filter((c) => !c.parentId && c.type !== "category" && sameGroup(c.type)),
+    );
+    const index = group.findIndex((c) => c.id === target.id);
+    return index === -1 ? target.position : index;
   }
 
   /** "Move up"/"Move down" swap a channel with its immediate neighbour within
@@ -1368,6 +1403,16 @@ export const ChannelList = memo(function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
+        ...(onPostStory
+          ? [
+              {
+                id: "post-story",
+                label: t("stories.strip.post"),
+                icon: CirclePlus,
+                onSelect: onPostStory,
+              },
+            ]
+          : []),
         ...(showsServerSettingsEntry({
           canManage,
           canManageMessages,
@@ -1571,6 +1616,7 @@ export const ChannelList = memo(function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
+            {server && storiesSlot}
             {server &&
               (visibleFavs.length > 0 ||
                 Boolean(

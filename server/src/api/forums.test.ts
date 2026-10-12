@@ -978,37 +978,71 @@ describeDb("forum posts", () => {
     expect(audit.rowCount).toBe(2);
   });
 
-  it("racing first saves of a forum's settings leave an audit trail that replays to the final value", async () => {
-    // Before a forum's first save there is no settings row to lock. Two first
-    // saves at once (on, then off) must still each audit what they changed:
-    // replaying the audit rows from the defaults has to land on the value
-    // that is stored. Several fresh forums, so the race gets its chances.
-    for (let round = 0; round < 8; round += 1) {
-      const forum = await createForum(`corrida-${round}`);
-      await Promise.all([
-        call(alice, "PATCH", `/api/channels/${forum}/forum-settings`, { requireTag: true }),
-        call(alice, "PATCH", `/api/channels/${forum}/forum-settings`, { requireTag: false }),
-      ]);
-      const stored = await getPool().query<{ require_tag: boolean }>(
-        `SELECT require_tag FROM forum_settings WHERE forum_id = $1`,
-        [forum],
-      );
-      const trail = await getPool().query<{ changes: Array<{ key: string; new: boolean }> }>(
-        `SELECT changes FROM audit_log
-          WHERE action = 'forum.settings_update' AND target_id = $1
-          ORDER BY created_at, id`,
-        [forum],
-      );
-      let replayed = false;
-      for (const row of trail.rows) {
-        for (const change of row.changes) {
-          if (change.key === "requireTag") {
-            replayed = change.new;
-          }
+  it("two first saves of a forum's settings, queued on its lock, each audit what they changed", async () => {
+    // Before a forum's first save there is no settings row for FOR UPDATE to
+    // lock, which is why `updateForumSettings` takes a per-forum advisory
+    // lock. The interleaving is fixed here rather than left to timing: the
+    // test holds that same lock, lets "on" queue behind it, then "off", and
+    // releases. Postgres grants a lock's waiters in queue order, so "on" runs
+    // first against the defaults and "off" runs second against "on". Each
+    // must audit its own change, read inside the lock.
+    const forum = await createForum("corrida");
+    const lockSql = `SELECT pg_advisory_xact_lock(hashtext('forum-settings:' || $1))`;
+    const waiting = async () =>
+      (
+        await getPool().query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted`,
+        )
+      ).rows[0]!.n;
+    const untilWaiting = async (n: number) => {
+      const deadline = Date.now() + 10_000;
+      while ((await waiting()) < n) {
+        if (Date.now() > deadline) {
+          throw new Error(`never saw ${n} waiter(s) on the settings lock`);
         }
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(replayed).toBe(stored.rows[0]!.require_tag);
+    };
+
+    const holder = await getPool().connect();
+    let on: ReturnType<typeof call> | undefined;
+    let off: ReturnType<typeof call> | undefined;
+    try {
+      await holder.query("BEGIN");
+      await holder.query(lockSql, [forum]);
+      on = call(alice, "PATCH", `/api/channels/${forum}/forum-settings`, { requireTag: true });
+      await untilWaiting(1);
+      off = call(alice, "PATCH", `/api/channels/${forum}/forum-settings`, {
+        requireTag: false,
+      });
+      await untilWaiting(2);
+    } finally {
+      await holder.query("COMMIT").catch(() => {});
+      holder.release();
     }
+    expect((await on!).status).toBe(200);
+    expect((await off!).status).toBe(200);
+
+    const stored = await getPool().query<{ require_tag: boolean }>(
+      `SELECT require_tag FROM forum_settings WHERE forum_id = $1`,
+      [forum],
+    );
+    expect(stored.rows[0]?.require_tag).toBe(false);
+    // By `id`, the insert order. NOT `created_at`: that is the transaction's
+    // start time, and the save that waited longest on the lock started first.
+    const trail = await getPool().query<{
+      changes: Array<{ key: string; old: boolean; new: boolean }>;
+    }>(
+      `SELECT changes FROM audit_log
+        WHERE action = 'forum.settings_update' AND target_id = $1
+        ORDER BY id`,
+      [forum],
+    );
+    expect(trail.rows.map((row) => row.changes)).toEqual([
+      [{ key: "requireTag", old: false, new: true }],
+      [{ key: "requireTag", old: true, new: false }],
+    ]);
   });
 
   it("settings: defaults, the default sort is what an unsorted list uses, staff only", async () => {

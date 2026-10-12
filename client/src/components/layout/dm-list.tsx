@@ -26,6 +26,11 @@ const MAX_STACKED_AVATARS = 3;
 
 interface DmListProps {
   conversations: DmSummary[];
+  /**
+   * The friends' stories strip, at the top of the list. Draws nothing while
+   * the friends audience is off or nobody has a story up.
+   */
+  storiesSlot?: ReactNode;
   selectedChannelId: string | null;
   unread: Record<string, UnreadState>;
   isLoading?: boolean;
@@ -121,6 +126,7 @@ function ClassicDmList({
   footer,
   mobileOpen = false,
   onMobileClose,
+  storiesSlot = null,
 }: Omit<DmListProps, "home" | "pinnedIds" | "phoneShell">) {
   const { t } = useTranslation();
   const {
@@ -186,6 +192,7 @@ function ClassicDmList({
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
+        {storiesSlot}
         {/* The home view's one nav entry, above the conversations — the
             Friends view is where "home with nothing selected" lands, and this
             is the way back to it once a conversation is open. */}

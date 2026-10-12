@@ -11,6 +11,7 @@ export function CheckRow({
   onCheckedChange,
   disabled,
   label,
+  description,
   title,
   swatch,
   className,
@@ -19,6 +20,8 @@ export function CheckRow({
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   label: string;
+  /** A quieter second line under the label: a count, or why the row is off. */
+  description?: string;
   title?: string;
   swatch?: string | null;
   className?: string;
@@ -47,7 +50,16 @@ export function CheckRow({
             aria-hidden
           />
         ) : null}
-        <span className="break-words text-sm text-text">{label}</span>
+        {description ? (
+          <span className="min-w-0">
+            <span className="block break-words text-sm text-text">{label}</span>
+            <span className="block break-words text-xs text-text-tertiary">
+              {description}
+            </span>
+          </span>
+        ) : (
+          <span className="break-words text-sm text-text">{label}</span>
+        )}
       </span>
       <span
         aria-hidden
