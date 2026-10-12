@@ -386,6 +386,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// ordinary message, and any kind this build does not know renders as its
     /// plaintext body, which is what the body is for.
     var systemKind: String? = nil
+    /// The story this message replies to (`POST /api/stories/:id/reply`), or
+    /// nil. The quote is drawn from `GET /api/stories/:id/card`, which stops
+    /// carrying the picture and the caption once the story expires.
+    var storyId: String? = nil
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -397,7 +401,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind, storyId
     }
 
     init(from decoder: Decoder) throws {
@@ -429,6 +433,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         // message, the same `.catch(null)` the shared schema applies.
         let kind = (try? c.decodeIfPresent(String.self, forKey: .systemKind)) ?? nil
         systemKind = kind == "nudge" ? kind : nil
+        storyId = (try? c.decodeIfPresent(String.self, forKey: .storyId)) ?? nil
         isPending = false
         pendingNonce = nil
     }
@@ -703,6 +708,9 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
     case sexualContent = "sexual_content"
     case selfHarm = "self_harm"
     case illegalContent = "illegal_content"
+    /// A minor in sexual content. The one reason that decides routing: it
+    /// always goes to the instance queue, never to a server's own staff.
+    case minorSexual = "minor_sexual"
     case other
 
     var id: String { rawValue }
@@ -716,6 +724,7 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
         case .sexualContent: "Sexual content"
         case .selfHarm: "Self-harm"
         case .illegalContent: "Illegal content"
+        case .minorSexual: "A minor in sexual content"
         case .other: "Something else"
         }
     }

@@ -238,6 +238,13 @@ actor APIClient {
         try await send(path: path, method: "DELETE", query: [], body: nil)
     }
 
+    /// A verb with a JSON body that the helpers above do not name (PUT, or a
+    /// DELETE that carries a reason), for endpoints declared in other files.
+    @discardableResult
+    func send<T: Decodable>(path: String, method: String, body: some Encodable) async throws -> T {
+        try await send(path: path, method: method, query: [], body: try Coding.encoder.encode(body))
+    }
+
     fileprivate func send<T: Decodable>(
         path: String,
         method: String,

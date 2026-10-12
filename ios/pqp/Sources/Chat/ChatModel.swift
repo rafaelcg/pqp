@@ -915,7 +915,7 @@ final class ChatModel {
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
         case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
-             .presence, .activity, .other,
+             .presence, .activity, .other, .storiesUpdate,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,
              .voiceTransportChanged, .voiceJoinRefused, .voiceScreenShareDenied,

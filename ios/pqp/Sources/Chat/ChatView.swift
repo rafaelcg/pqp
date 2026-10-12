@@ -1451,6 +1451,10 @@ struct MessageRow: View {
                     ReplyChip(reply: reply)
                 }
 
+                if let storyId = message.storyId {
+                    StoryQuoteCard(storyId: storyId, authorName: message.authorName)
+                }
+
                 if message.blocked {
                     Text("Message hidden. You blocked this person.")
                         .font(Typography.callout)
