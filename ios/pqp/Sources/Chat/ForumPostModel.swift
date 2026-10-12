@@ -219,7 +219,8 @@ final class ForumPostModel {
             if let answer = acceptedAnswer {
                 acceptedAnswer = ForumAcceptedAnswer(
                     messageId: answer.messageId, deleted: true, authorId: answer.authorId,
-                    authorName: answer.authorName, excerpt: nil, createdAt: answer.createdAt
+                    authorName: answer.authorName, excerpt: nil, createdAt: answer.createdAt,
+                    markedById: answer.markedById, markedByName: answer.markedByName
                 )
             }
             Task { await refreshDetail() }
@@ -323,7 +324,9 @@ final class ForumPostModel {
     func markAnswer(_ message: Message) async {
         let provisional = ForumAcceptedAnswer(
             messageId: message.id, deleted: false, authorId: message.authorId,
-            authorName: message.authorName, excerpt: message.body, createdAt: message.createdAt
+            authorName: message.authorName, excerpt: message.body, createdAt: message.createdAt,
+            // Marked by this account: the card says so before the re-read.
+            markedById: session?.currentUser?.id, markedByName: session?.currentUser?.displayName
         )
         await save(
             answer: provisional,

@@ -5458,7 +5458,8 @@ function MainAppContent({
           // typed for voice frames only.
           if (
             message.type === "forum-post-upsert" ||
-            message.type === "forum-post-removed"
+            message.type === "forum-post-removed" ||
+            message.type === "forum-config-update"
           ) {
             dispatchForumFrame(message);
             return;

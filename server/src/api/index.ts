@@ -9222,6 +9222,7 @@ import {
 import { createForumPost } from "../services/forum-posts.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import {
+  announceForumConfig,
   announceForumPostRemoved,
   announceForumPostUpdate,
 } from "../ws/chat.js";
@@ -9381,6 +9382,7 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       throw new ForumError(422, FORUM_ERRORS.postRejected, {
         reason: "automod",
         ...(verdict.customMessage ? { automodMessage: verdict.customMessage } : {}),
+        field: "title",
       });
     }
     patch.title = body.title;
@@ -9412,6 +9414,7 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
     }
     if (body.acceptedAnswerId !== post.resolved_message_id) {
       patch.acceptedAnswerId = body.acceptedAnswerId;
+      patch.answerMarkedBy = user.id;
       changes.push({
         key: "acceptedAnswerId",
         old: post.resolved_message_id,
@@ -9609,6 +9612,7 @@ router.put("/api/channels/:forumId/forum-tags", async ({ req, user }, { forumId 
       client,
     ),
   );
+  forumBestEffort("config", () => announceForumConfig(forum.id, { tags: after }));
   return { tags: after };
 });
 
@@ -9650,6 +9654,7 @@ router.patch(
         );
       }
     });
+    forumBestEffort("config", () => announceForumConfig(forum.id, { settings: after }));
     return { settings: after };
   },
 );

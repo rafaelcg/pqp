@@ -165,6 +165,8 @@ fun ConversasScreen(
         voice = { duration -> resources.getString(R.string.conversas_preview_voice, duration) },
         gif = stringResource(R.string.conversas_preview_gif),
         attachment = stringResource(R.string.conversas_preview_attachment),
+        nudgeSent = stringResource(R.string.conversas_preview_nudge_sent),
+        nudgeReceived = stringResource(R.string.conversas_preview_nudge_received),
     )
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0]

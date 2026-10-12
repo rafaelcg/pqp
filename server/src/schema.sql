@@ -5656,6 +5656,13 @@ CREATE INDEX IF NOT EXISTS idx_forum_posts_shells
 CREATE INDEX IF NOT EXISTS idx_forum_posts_dedupe
   ON forum_posts (forum_id, dedupe_key, created_at DESC)
   WHERE dedupe_key IS NOT NULL;
+-- Who marked the accepted answer: "Solução · marcada por {name}". Written
+-- with resolved_message_id, cleared with it. NULL on answers marked before
+-- this column existed, and the card then names nobody. No foreign key, the
+-- same choice as resolved_message_id: a FK into users would put a probe of
+-- this table on every account deletion, and a deleted marker simply stops
+-- matching the join and reads as nobody.
+ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS resolved_by UUID;
 
 CREATE TABLE IF NOT EXISTS forum_tags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
