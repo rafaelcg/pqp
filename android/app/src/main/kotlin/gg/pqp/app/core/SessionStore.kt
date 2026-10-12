@@ -185,6 +185,18 @@ class SessionStore(
     }
 
     /**
+     * Chamar a atenção's opt-out, reflected into the session the moment it is
+     * chosen, so every screen reads one value and a remount never shows the
+     * one from launch. The write itself is `NudgePreference`'s.
+     */
+    fun applyAllowNudges(allow: Boolean) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(allowNudges = allow)),
+        )
+    }
+
+    /**
      * Close the wizard for good, on every device, and open [landing] behind it.
      *
      * The phase moves first and the write is not awaited: a failed write costs

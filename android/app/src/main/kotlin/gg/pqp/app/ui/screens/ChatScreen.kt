@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +93,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
+import gg.pqp.app.nudge.ui.shake
 import gg.pqp.app.attachments.ATTACHMENT_MIME_ALLOWLIST
 import gg.pqp.app.attachments.AttachmentRefusal
 import gg.pqp.app.attachments.ComposerReadiness
@@ -161,7 +163,7 @@ import kotlinx.coroutines.launch
 /** The list key of [ChatExtras.transcriptTop], so the title can tell when it scrolls off. */
 private const val TRANSCRIPT_TOP_KEY = "transcript-top"
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     session: SessionStore,
@@ -213,6 +215,12 @@ fun ChatScreen(
     onMessageAuthor: ((authorId: String) -> Unit)? = null,
     /** What a forum post adds; see [ChatExtras]. Null for every ordinary chat. */
     extras: ChatExtras? = null,
+    /**
+     * Chamar a atenção is offered here: a 1:1 with a friend while the `nudge`
+     * flag is on. The other person's name, for the lines it draws. Null hides
+     * the button; a nudge somebody else sends still renders and shakes.
+     */
+    nudgeName: String? = null,
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -343,6 +351,16 @@ fun ChatScreen(
     // made on another device arrives here as somebody else's frame.
     LaunchedEffect(me?.id) { model.setCurrentUser(me?.id) }
 
+    // Chamar a atenção received: buzz, and shake the whole screen once. Only a
+    // fresh one from somebody else ever reaches this (`Nudge.isFresh`).
+    val shake = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(model) {
+        model.nudged.collect {
+            gg.pqp.app.nudge.ui.buzz(context)
+            shake.shake(context)
+        }
+    }
+
     // Follow the tail only when the reader is already there. Yanking somebody
     // back down while they are reading history is the single most annoying
     // thing a chat client does.
@@ -447,7 +465,9 @@ fun ChatScreen(
     LaunchedEffect(oldestId, extras?.onOldest) { extras?.onOldest?.invoke(oldestId) }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { translationX = shake.value * this.density },
         topBar = {
             Column {
                 TopAppBar(
@@ -495,6 +515,13 @@ fun ChatScreen(
                         }
                     },
                     actions = {
+                        // Left of pins and call, where the web header keeps it.
+                        if (nudgeName != null) {
+                            gg.pqp.app.nudge.ui.NudgeButton(
+                                holdUntilMs = state.nudgeHoldUntilMs,
+                                onNudge = model::nudge,
+                            )
+                        }
                         if (extras?.showPins != false) IconButton(
                             onClick = {
                                 model.loadPins()
@@ -525,6 +552,11 @@ fun ChatScreen(
                 // between the two halves of it: the typing strip and the
                 // composer are one continuous piece of chrome.
                 ChromeDivider()
+                gg.pqp.app.nudge.ui.NudgeRefusalLine(
+                    refusal = state.nudgeRefusal,
+                    otherName = nudgeName ?: title ?: channelName,
+                    onExpired = model::clearNudgeRefusal,
+                )
                 TypingStrip(state.typing)
                 // A locked post, for somebody who may not reply: the reason in
                 // place of the box, never a box that refuses on send.
@@ -683,7 +715,23 @@ fun ChatScreen(
                                     val underTop = previous == null && !state.hasMore && extras?.transcriptTop != null
                                     if (startsDay && !underTop) DaySeparator(message.createdAt)
                                     if (unreadStart) NewMessagesDivider()
-                                    MessageRow(
+                                    if (gg.pqp.app.nudge.Nudge.isNudge(message)) {
+                                        // Nobody typed it, so it is a line and
+                                        // not a bubble; long-press still reaches
+                                        // delete and report.
+                                        Box(
+                                            Modifier.combinedClickable(
+                                                onClick = {},
+                                                onLongClick = { acting = message },
+                                            ),
+                                        ) {
+                                            gg.pqp.app.nudge.ui.NudgeLine(
+                                                authorName = message.authorName,
+                                                mine = me?.id == message.authorId,
+                                                otherName = nudgeName ?: title ?: channelName,
+                                            )
+                                        }
+                                    } else MessageRow(
                                         message = message,
                                         grouped = !startsDay && !afterBelow && !unreadStart &&
                                             shouldGroup(previous, message),
@@ -917,6 +965,8 @@ private fun TypingStrip(typing: Set<String>) {
  */
 private fun shouldGroup(previous: Message?, message: Message): Boolean {
     if (previous == null || previous.authorId != message.authorId) return false
+    // A nudge line has no author header to hang a grouped row under.
+    if (gg.pqp.app.nudge.Nudge.isNudge(previous) || gg.pqp.app.nudge.Nudge.isNudge(message)) return false
     val a = runCatching { Instant.parse(previous.createdAt) }.getOrNull() ?: return false
     val b = runCatching { Instant.parse(message.createdAt) }.getOrNull() ?: return false
     return b.epochSecond - a.epochSecond in 0..300

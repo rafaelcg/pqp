@@ -71,6 +71,8 @@ data class MePreferences(
      * is read on Android, to dim the channels this person silenced.
      */
     val notifications: MeNotificationPreferences? = null,
+    /** Chamar a atenção, both ways. Absent reads as on (`nudgesAllowed`). */
+    val allowNudges: Boolean? = null,
 )
 
 /** `notificationPreferencesSchema`, the one key this client reads. */
@@ -344,6 +346,12 @@ data class Message(
      */
     val blocked: Boolean = false,
     val chance: ChancePayload? = null,
+    /**
+     * `nudge` when the server wrote this message for chamar a atenção; null for
+     * an ordinary one and for any kind this build does not know, which then
+     * renders as its plaintext body. See `gg.pqp.app.nudge.Nudge`.
+     */
+    val systemKind: String? = null,
 )
 
 @Serializable

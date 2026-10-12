@@ -315,11 +315,6 @@ class WireProtocolTest {
         // send in the lost server is already refused by the API, so nothing
         // leaks; the live drop and its one-line reason are a follow-up.
         "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
-        // Chamar a atenção's refusal, addressed only to the socket that sent a
-        // `nudge` frame. The phone sends none yet, so it can never be refused;
-        // a nudge somebody else sends arrives as an ordinary message whose
-        // body is a 📳. The phone PR that adds the send handles this frame.
-        "nudge-refused" to "the phone sends no nudge yet, so there is nothing to refuse",
     )
 
     /**

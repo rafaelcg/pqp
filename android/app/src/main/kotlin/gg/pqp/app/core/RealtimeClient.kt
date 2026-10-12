@@ -440,6 +440,20 @@ class RealtimeClient(
             },
         )
 
+    /**
+     * Chamar a atenção: one tap, no body. The server writes the `📳` message,
+     * or answers `nudge-refused` to this socket only. The nonce makes a replay
+     * idempotent, the same as `message-create`'s.
+     */
+    fun sendNudge(channelId: String, nonce: String): Boolean =
+        send(
+            buildJsonObject {
+                put("type", "nudge")
+                put("channelId", channelId)
+                put("nonce", nonce)
+            },
+        )
+
     fun sendTyping(channelId: String) {
         send(
             buildJsonObject {
