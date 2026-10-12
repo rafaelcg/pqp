@@ -31,6 +31,8 @@ import {
   PRERENDERED_MARKETING_PAGES,
 } from "./marketing-prerender";
 import {
+  CHROME_PRERENDER_COPY,
+  CHROME_PRERENDER_KEYS,
   DOWNLOAD_PRERENDER_COPY,
   DOWNLOAD_PRERENDER_KEYS,
   TELA_PRERENDER_COPY,
@@ -193,6 +195,7 @@ describe("the /contact no-JS body", () => {
 });
 
 const GENERATED = [
+  ["nav and footer", CHROME_PRERENDER_KEYS, CHROME_PRERENDER_COPY],
   ["/tela", TELA_PRERENDER_KEYS, TELA_PRERENDER_COPY],
   ["/vs-discord", VS_DISCORD_PRERENDER_KEYS, VS_DISCORD_PRERENDER_COPY],
   ["/download", DOWNLOAD_PRERENDER_KEYS, DOWNLOAD_PRERENDER_COPY],
@@ -268,6 +271,8 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       ["../pages/vs-discord-page.tsx", ["vsDiscord."], VS_DISCORD_PRERENDER_KEYS],
       ["../pages/download-page.tsx", ["downloadPage."], DOWNLOAD_PRERENDER_KEYS],
       ["../components/downloads/code-signing-policy.tsx", ["codeSigning."], DOWNLOAD_PRERENDER_KEYS],
+      ["../components/marketing/marketing-nav.tsx", ["nav.", "footer."], CHROME_PRERENDER_KEYS],
+      ["../components/marketing/marketing-footer.tsx", ["nav.", "footer."], CHROME_PRERENDER_KEYS],
     ] as const;
     for (const [file, prefixes, keys] of pages) {
       const used = keysIn(readSource(file), [...prefixes]).filter((key) => !notInBody.has(key));

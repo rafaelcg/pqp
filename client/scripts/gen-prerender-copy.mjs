@@ -18,6 +18,38 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES = ["pt-BR", "en", "es"];
 
 const PAGES = {
+  // The nav and footer every static block carries (`marketing-nav.tsx`,
+  // `marketing-footer.tsx`).
+  CHROME: [
+    "nav.features",
+    "nav.download",
+    "nav.communities",
+    "nav.selfHost",
+    "nav.openApp",
+    "nav.blog",
+    "footer.tagline",
+    "footer.product",
+    "footer.desktop",
+    "footer.vsDiscord",
+    "footer.vem",
+    "footer.tela",
+    "footer.streamers",
+    "footer.iosBeta",
+    "footer.androidBeta",
+    "footer.androidBeta.play",
+    "footer.status",
+    "footer.support",
+    "footer.source",
+    "footer.legal",
+    "footer.privacy",
+    "footer.terms",
+    "footer.cookies",
+    "footer.codeSigning",
+    "footer.contact",
+    "footer.copyright",
+    "footer.madeBy",
+    "footer.independent",
+  ],
   TELA: [
     "tela.hero.title",
     "tela.hero.lede",
