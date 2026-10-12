@@ -169,8 +169,10 @@ export async function sweepStories(): Promise<StorySweepResult> {
     `DELETE FROM stories s
       WHERE s.status IN ('expired', 'deleted')
         AND (s.media_storage_key IS NULL OR s.media_deleted_at IS NOT NULL)
-        AND COALESCE(s.deleted_at, s.expires_at, s.created_at)
-              < now() - interval '${ROW_RETENTION}'
+        -- An account that is gone has no "who viewed" question left to answer.
+        AND (s.author_id IS NULL
+             OR COALESCE(s.deleted_at, s.expires_at, s.created_at)
+                  < now() - interval '${ROW_RETENTION}')
         AND NOT ${STORY_HELD_SQL}`,
   );
   bumpStoryStat("rowsDeleted", rows.rowCount ?? 0);

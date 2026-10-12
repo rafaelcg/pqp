@@ -112,6 +112,8 @@ vi.mock("../auth/clerk.js", () => ({
   resolveAuthUser: async () => (actor ? { user: actor } : null),
   resolveAuthSession: async () => (actor ? { user: actor, ageGate: "passed" as const } : null),
   verifyAuthHeader: async () => null,
+  deleteClerkUser: async () => undefined,
+  evictUserAcrossCluster: () => undefined,
 }));
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -136,6 +138,7 @@ const { sweepStories, processStoryVideos, setStoryVideoToolsForTests } = await i
 const { resetStoryProcessorCacheForTests } = await import("../services/stories.js");
 const { storiesMetrics, resetStoryStatsForTests } = await import("../services/story-metrics.js");
 const { resetStoriesNotifyForTests } = await import("../ws/stories.js");
+const { deleteAccount } = await import("../services/account.js");
 
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
@@ -1189,6 +1192,83 @@ describeDb("stories", () => {
     // Bob is not the author.
     as(bob);
     expect((await call("POST", `/api/stories/${story.id}/save-to-bau`, { serverId })).status).toBe(403);
+  });
+
+  describe("account deletion", () => {
+    beforeEach(async () => {
+      await storiesOn();
+    });
+
+    it("takes the author's stories and bytes, but keeps a held one as evidence", async () => {
+      as(bob);
+      const text = (await postText("do bob")).body.story.id as string;
+      const plain = await (async () => {
+        const created = await call("POST", "/api/stories", {
+          kind: "image",
+          caption: "foto do bob",
+          audiences: { serverIds: [serverId] },
+          media: { contentType: "image/jpeg", byteSize: 4000, width: 10, height: 10 },
+        });
+        const id = created.body.story.id as string;
+        const key = (
+          await getPool().query<{ media_storage_key: string }>(
+            `SELECT media_storage_key FROM stories WHERE id = $1`,
+            [id],
+          )
+        ).rows[0]!.media_storage_key;
+        storage.objects.set(key, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
+        await call("POST", `/api/stories/${id}/publish`);
+        return { id, key };
+      })();
+      const reported = (await postText("denunciado")).body.story.id as string;
+      as(alice);
+      await call("POST", "/api/reports", {
+        subjectType: "story",
+        storyId: reported,
+        serverId,
+        reason: "harassment",
+      });
+
+      await deleteAccount(bob.id, "clerk_bob");
+      const rows = (
+        await getPool().query<{ id: string; status: string; author_id: string | null; caption: string | null }>(
+          `SELECT id, status, author_id, caption FROM stories ORDER BY created_at`,
+        )
+      ).rows;
+      // The plain text card is gone; the reported one survives, authorless.
+      expect(rows.find((row) => row.id === text)).toBeUndefined();
+      expect(rows.find((row) => row.id === reported)).toMatchObject({
+        status: "deleted",
+        author_id: null,
+      });
+      expect(rows.find((row) => row.id === plain.id)).toMatchObject({ caption: null });
+      // The sweep removes the photo's bytes and then its row.
+      await sweepStories();
+      expect(storage.deleted).toEqual([plain.key]);
+      expect(
+        (await getPool().query(`SELECT 1 FROM stories WHERE id = $1`, [plain.id])).rowCount,
+      ).toBe(0);
+      // The report still points at the story it is about.
+      const report = (await getPool().query(`SELECT reported_story_id FROM reports`)).rows[0];
+      expect(report.reported_story_id).toBe(reported);
+    });
+
+    it("a viewer who deletes their account is taken off the counts", async () => {
+      const id = (await postText()).body.story.id as string;
+      as(bob);
+      await call("PUT", `/api/stories/${id}/reaction`, { reaction: "fire" });
+      as(alice);
+      expect((await call("GET", `/api/stories/${id}/viewers`)).body).toMatchObject({
+        viewCount: 1,
+        reactionCount: 1,
+      });
+      await deleteAccount(bob.id, "clerk_bob");
+      expect((await call("GET", `/api/stories/${id}/viewers`)).body).toMatchObject({
+        viewCount: 0,
+        reactionCount: 0,
+        viewers: [],
+      });
+    });
   });
 
   it("reports itself on the metrics", async () => {

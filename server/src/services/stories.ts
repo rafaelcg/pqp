@@ -1889,6 +1889,47 @@ export async function removeStoryFromServer(input: {
   }
 }
 
+/**
+ * An account is being deleted: take its stories with it, except what is held.
+ *
+ * Runs before `DELETE FROM users` (whose `ON DELETE SET NULL` then leaves the
+ * remaining rows authorless). Text cards nothing holds are deleted outright.
+ * Media stories nothing holds are marked deleted with their words cleared, so
+ * the sweep removes their bytes within a minute and the row right after
+ * (`author_id IS NULL` skips the week of retention). A HELD story (an open or
+ * recent report, a scan hold, an illegal-content match) is marked deleted and
+ * kept whole, author or not: it is evidence, and the sweep's hold rule keeps
+ * its bytes exactly as long as it would have with the account alive.
+ */
+export async function retireAuthorStories(authorId: string): Promise<void> {
+  const held = STORY_HELD_FOR_ACCOUNT_SQL;
+  await getPool().query(
+    `DELETE FROM stories s
+      WHERE s.author_id = $1 AND s.kind = 'text' AND NOT ${held}`,
+    [authorId],
+  );
+  await getPool().query(
+    `UPDATE stories s
+        SET status = 'deleted', deleted_at = COALESCE(deleted_at, now()),
+            processing_claimed_at = NULL,
+            caption = CASE WHEN ${held} THEN caption ELSE NULL END,
+            sticker = CASE WHEN ${held} THEN sticker ELSE NULL END
+      WHERE s.author_id = $1`,
+    [authorId],
+  );
+}
+
+/** `STORY_HELD_SQL` in story-media.ts, restated here to keep the import one way. */
+const STORY_HELD_FOR_ACCOUNT_SQL = `(
+  s.hold_forever
+  OR (s.hold_until IS NOT NULL AND s.hold_until > now())
+  OR EXISTS (
+    SELECT 1 FROM reports r
+     WHERE r.reported_story_id = s.id
+       AND (r.status = 'open' OR r.resolved_at > now() - interval '30 days')
+  )
+)`;
+
 // ------------------------------------------------------------------ mutes, notices
 
 export async function muteAuthor(userId: string, mutedUserId: string): Promise<void> {
@@ -1954,26 +1995,19 @@ export async function ackStoryNotice(userId: string, noticeId: string): Promise<
  * read a conversation holding a message that quotes the story; never media or
  * words once it has expired or been taken down.
  */
-export async function getStoryCard(
-  viewerId: string,
-  storyId: string,
-  canAccessChannel: (channelId: string, userId: string) => Promise<boolean>,
-): Promise<StoryCard> {
-  const quoting = await getPool().query<{ channel_id: string }>(
-    `SELECT DISTINCT m.channel_id FROM messages m
-       JOIN channels c ON c.id = m.channel_id
-      WHERE m.story_id = $1 AND c.kind <> 'server'
-      LIMIT 20`,
-    [storyId],
+export async function getStoryCard(viewerId: string, storyId: string): Promise<StoryCard> {
+  // A conversation THIS viewer is in that quotes the story, however many other
+  // conversations quote it too. Conversation access is membership (no role
+  // escape hatch, see `channelVisibleSql`), so the join is the whole check.
+  const quoting = await getPool().query(
+    `SELECT 1 FROM messages m
+       JOIN channels c ON c.id = m.channel_id AND c.kind <> 'server'
+       JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.user_id = $2
+      WHERE m.story_id = $1
+      LIMIT 1`,
+    [storyId, viewerId],
   );
-  let allowed = false;
-  for (const row of quoting.rows) {
-    if (await canAccessChannel(row.channel_id, viewerId)) {
-      allowed = true;
-      break;
-    }
-  }
-  if (!allowed) {
+  if ((quoting.rowCount ?? 0) === 0) {
     throw new StoryError("not_found", "Story not found");
   }
   const result = await getPool().query<StoryRow & { all_removed: boolean; blocked: boolean }>(

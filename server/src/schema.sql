@@ -5764,8 +5764,9 @@ CREATE INDEX IF NOT EXISTS idx_story_views_recent
   ON story_views (story_id, viewed_at DESC, viewer_id DESC);
 
 -- The author's own counts, kept by a trigger so a read never recounts a
--- story's whole audience. Rows only ever leave `story_views` with their story,
--- so inserts and updates are the whole job.
+-- story's whole audience. A view row also leaves when its VIEWER's account is
+-- deleted (`viewer_id` cascades), so a delete counts down too; when the story
+-- itself is being deleted the UPDATE finds no row, which is fine.
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS reaction_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS reply_count INTEGER NOT NULL DEFAULT 0;
@@ -5778,6 +5779,12 @@ BEGIN
            reaction_count = reaction_count + (NEW.reaction IS NOT NULL)::int,
            reply_count = reply_count + (NEW.replied_at IS NOT NULL)::int
      WHERE id = NEW.story_id;
+  ELSIF (TG_OP = 'DELETE') THEN
+    UPDATE stories
+       SET view_count = GREATEST(view_count - 1, 0),
+           reaction_count = GREATEST(reaction_count - (OLD.reaction IS NOT NULL)::int, 0),
+           reply_count = GREATEST(reply_count - (OLD.replied_at IS NOT NULL)::int, 0)
+     WHERE id = OLD.story_id;
   ELSIF (TG_OP = 'UPDATE') THEN
     IF (OLD.reaction IS NULL) <> (NEW.reaction IS NULL)
        OR (OLD.replied_at IS NULL) <> (NEW.replied_at IS NULL) THEN
@@ -5795,7 +5802,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_story_view_counts ON story_views;
 CREATE TRIGGER trg_story_view_counts
-  AFTER INSERT OR UPDATE ON story_views
+  AFTER INSERT OR UPDATE OR DELETE ON story_views
   FOR EACH ROW EXECUTE FUNCTION pqp_sync_story_view_counts();
 
 -- Seed the counters for any views written before the trigger existed. Once.

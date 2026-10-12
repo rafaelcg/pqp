@@ -5351,7 +5351,7 @@ router.get("/api/stories/:storyId/viewers", async ({ url, user }, { storyId }) =
 
 router.get("/api/stories/:storyId/card", async ({ user }, { storyId }) => {
   try {
-    return await getStoryCard(user.id, storyId!, canAccessChannel);
+    return await getStoryCard(user.id, storyId!);
   } catch (error) {
     mapStoryError(error);
   }
