@@ -106,8 +106,20 @@ data class ServerSummary(
 @Serializable
 data class ServersResponse(val servers: List<ServerSummary> = emptyList())
 
+/**
+ * `locale` names the one category a new server starts with while the mixed
+ * channel list is on ("Canais", "Channels", "Canales"). An older server
+ * ignores the key.
+ */
 @Serializable
-data class CreateServerRequest(val name: String)
+data class CreateServerRequest(val name: String, val locale: String? = null)
+
+/** The app's language as the server's `locale` enum spells it: `pt-BR`, `en` or `es`. */
+fun serverLocale(language: String = java.util.Locale.getDefault().language): String = when (language.lowercase()) {
+    "pt" -> "pt-BR"
+    "es" -> "es"
+    else -> "en"
+}
 
 @Serializable
 data class CreateServerResponse(

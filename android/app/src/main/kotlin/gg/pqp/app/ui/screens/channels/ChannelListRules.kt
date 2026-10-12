@@ -220,79 +220,95 @@ fun serverActivity(
 }
 
 /**
- * A section of the list: one category's text channels, or its voice channels,
- * or the top-level ones.
+ * A section of the list: the loose channels, one whole category, or (old list
+ * only) the top-level text or voice channels.
  *
  * [categoryId] is the fold key: a category's id, [TEXT_SECTION] or
- * [VOICE_SECTION] for the top-level groups when they have a heading, and null
- * for a top-level group drawn without one (it never folds).
+ * [VOICE_SECTION] for the old top-level groups when they have a heading, and
+ * null for a group drawn without one (it never folds).
  */
 data class ChannelSection(
     val key: String,
     val title: String,
     val categoryId: String?,
     val channels: List<Channel>,
-) {
-    /**
-     * Which category this section belongs to, with the `-text` / `-voice` half
-     * dropped. Two sections in the same group are one category split by the
-     * ordering rule, and only the first of them draws a heading.
-     */
-    val group: String get() = key.substringBeforeLast('-')
-}
+    /** The category row itself, for its menu and its "+"; null for a top-level group. */
+    val category: Channel? = null,
+)
 
-/** Fold keys of the two top-level sections. Category ids are UUIDs, so these never collide. */
+/** Fold keys of the two old top-level sections. Category ids are UUIDs, so these never collide. */
 const val TEXT_SECTION = "text"
 const val VOICE_SECTION = "voice"
 
+/** Key of the mixed list's loose channels: above the first category, no heading. */
+const val LOOSE_SECTION = "loose"
+
+/** A row this build can draw: text, forum and voice. Never a watch party room, never an unknown type. */
+private fun drawable(channel: Channel): Boolean =
+    channel.isCategory || channel.isText || channel.isForum || channel.type == "voice"
+
 /**
- * Top-level text channels, then the categories, then top-level voice rooms:
- * the order the web sidebar and iOS draw (TEXTO, the categories, VOZ). With
- * [textTitle] / [voiceTitle] set, the two top-level groups get a heading and
- * fold like a category.
+ * The list's sections, from the shared layout rules (`ChannelLayout.kt`).
  *
- * Ordering has one trap in it: `position` is unique only within a sibling
- * group, and top-level text channels, top-level voice channels and categories
- * are three separate groups that all carry `parentId == null`. Sorting them as
- * one list interleaves three sequences of 0, 1, 2. They are separate sections
- * for that reason, not for looks.
+ * A CATEGORY IS ONE SECTION, every type in its own order. This used to split
+ * a category into a text half and a voice half, which no other client did,
+ * and which hid the order a manager chose the moment they put a voice room
+ * between two text channels.
+ *
+ * [mixed] (the server says `mixed`, see `GET …/channel-layout`): the loose
+ * channels first, in one order, with no heading; then every category. An
+ * empty category is kept only with [keepEmptyCategories] (someone who can
+ * put a channel in it).
+ *
+ * Not mixed, the old list: top-level text channels (with forums), then the
+ * categories, then top-level voice rooms. With [textTitle] / [voiceTitle] set
+ * the two top-level groups get a heading and fold like a category.
  *
  * A `watch_party` channel is never in here (the card above the list and the
- * "Criar watch party" row are where it lives), and neither is any channel type
- * this build does not know how to open: only text, forum and voice rows are
- * drawn. A forum sits with the text channels, as on the web: the server
- * groups the two for positions (`createChannel`), so they share one sequence.
+ * "Criar watch party" row are where it lives), and neither is any channel
+ * type this build does not know how to open.
  */
-fun sectionsOf(all: List<Channel>, textTitle: String = "", voiceTitle: String = ""): List<ChannelSection> {
-    val categories = all.filter { it.isCategory }.sortedBy { it.position }
-    val byParent = all.filterNot { it.isCategory }.groupBy { it.parentId }
-
+fun sectionsOf(
+    all: List<Channel>,
+    textTitle: String = "",
+    voiceTitle: String = "",
+    mixed: Boolean = false,
+    keepEmptyCategories: Boolean = false,
+): List<ChannelSection> {
+    val layout = buildSidebarLayout(all.filter(::drawable).map(::LayoutRow), mixed = mixed)
     val sections = mutableListOf<ChannelSection>()
 
-    fun add(key: String, title: String, categoryId: String?, channels: List<Channel>) {
-        if (channels.isNotEmpty()) {
-            sections += ChannelSection(key, title, categoryId, channels.sortedBy { it.position })
+    fun categories() = layout.categories.forEach { entry ->
+        val children = entry.children.map { it.channel }
+        if (children.isNotEmpty() || (mixed && keepEmptyCategories)) {
+            sections += ChannelSection(
+                key = "cat-${entry.category.id}",
+                title = entry.category.channel.name,
+                categoryId = entry.category.id,
+                channels = children,
+                category = entry.category.channel,
+            )
         }
     }
 
-    fun voiceRooms(list: List<Channel>) = list.filter { it.isVoice && it.type != "watch_party" }
-
-    val topLevel = byParent[null].orEmpty()
-    // Keys without a '-' so each is its own `group`: the two top-level
-    // sections are never one category's two halves.
-    add(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, topLevel.filter { it.isText || it.isForum })
-
-    categories.forEach { category ->
-        val children = byParent[category.id].orEmpty()
-        add("cat-${category.id}-text", category.name, category.id, children.filter { it.isText || it.isForum })
-        add("cat-${category.id}-voice", category.name, category.id, voiceRooms(children))
+    val loose = layout.loose.map { it.channel }
+    if (mixed) {
+        if (loose.isNotEmpty()) sections += ChannelSection(LOOSE_SECTION, "", null, loose)
+        categories()
+        return sections
     }
-
-    add(VOICE_SECTION, voiceTitle, VOICE_SECTION.takeIf { voiceTitle.isNotBlank() }, voiceRooms(topLevel))
-
+    val text = loose.filter { it.isText || it.isForum }
+    val voice = loose.filter { it.isVoice }
+    if (text.isNotEmpty()) {
+        sections += ChannelSection(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, text)
+    }
+    categories()
+    if (voice.isNotEmpty()) {
+        sections += ChannelSection(VOICE_SECTION, voiceTitle, VOICE_SECTION.takeIf { voiceTitle.isNotBlank() }, voice)
+    }
     return sections
 }
 
-/** Every channel in [categoryId], text and voice halves together. */
+/** Every channel in [categoryId]. */
 fun channelsInCategory(sections: List<ChannelSection>, categoryId: String): List<Channel> =
     sections.filter { it.categoryId == categoryId }.flatMap { it.channels }

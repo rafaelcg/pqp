@@ -4,14 +4,48 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import gg.pqp.app.core.parsePermissionBits
+import gg.pqp.app.ui.screens.channels.CategoryNameDialog
+import gg.pqp.app.ui.screens.channels.ChannelLayoutConfig
+import gg.pqp.app.ui.screens.channels.ChannelLayoutMemory
+import gg.pqp.app.ui.screens.channels.ChannelLayoutSaveOutcome
+import gg.pqp.app.ui.screens.channels.ChannelLayoutSaveResult
+import gg.pqp.app.ui.screens.channels.ChannelOrganizerDialog
+import gg.pqp.app.ui.screens.channels.LayoutRow
+import gg.pqp.app.ui.screens.channels.SidebarLayout
+import gg.pqp.app.ui.screens.channels.applyChannelLayout
+import gg.pqp.app.ui.screens.channels.applyLayoutToChannels
+import gg.pqp.app.ui.screens.channels.channelLayoutConfig
+import gg.pqp.app.ui.screens.channels.createChannel
+import gg.pqp.app.ui.screens.channels.layoutToPayload
+import gg.pqp.app.ui.screens.channels.mixedLayoutOf
+import gg.pqp.app.ui.screens.channels.renameChannel
+import gg.pqp.app.ui.theme.Sizes
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
@@ -74,7 +108,6 @@ import gg.pqp.app.ui.screens.channels.ServerBanner
 import gg.pqp.app.ui.screens.channels.ServerBannerHeight
 import gg.pqp.app.ui.screens.channels.VoiceOccupantRow
 import gg.pqp.app.ui.screens.channels.VoiceOverflowRow
-import gg.pqp.app.ui.screens.channels.channelsInCategory
 import gg.pqp.app.ui.screens.channels.foldedSummary
 import gg.pqp.app.ui.screens.channels.mutedChannelIds
 import gg.pqp.app.ui.screens.channels.mutedChannels
@@ -279,6 +312,45 @@ fun ChannelsScreen(
         }
     }
 
+    // Which list to draw: the mixed one (categories are the only headings)
+    // only when `GET …/channel-layout` says `mixed`; a 404 is an older server
+    // and the old list. Seeded from the last answer this device saw so a
+    // mixed server does not flash the old list, then asked on open, on every
+    // resume and reconnect ([retryTick]) and on every `channels-update`.
+    val appContext = LocalContext.current.applicationContext
+    val layoutMemory = remember(appContext) { ChannelLayoutMemory(appContext) }
+    var layoutConfig by remember(serverId) { mutableStateOf(ChannelLayoutConfig.Legacy) }
+    var layoutAnswered by remember(serverId) { mutableStateOf(false) }
+    fun adoptLayout(next: ChannelLayoutConfig) {
+        layoutAnswered = true
+        if (next == layoutConfig) return
+        layoutConfig = next
+        scope.launch { layoutMemory.save(serverId, next) }
+    }
+    suspend fun refreshLayoutConfig() {
+        try {
+            adoptLayout(session.api.channelLayoutConfig(serverId) ?: ChannelLayoutConfig.Legacy)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep drawing whatever is drawn; the next resume asks again.
+        }
+    }
+    LaunchedEffect(serverId) {
+        val remembered = layoutMemory.load(serverId)
+        if (!layoutAnswered) layoutConfig = remembered
+    }
+    LaunchedEffect(serverId, retryTick) { refreshLayoutConfig() }
+    val mixed = layoutConfig.mixed
+    // Reorder, create in a category, Criar categoria: MANAGE_CHANNELS
+    // server-wide, the same permission the PUT checks.
+    val canManageChannels = permissionsConfirmed &&
+        hasPermission(parsePermissionBits(permissions.server), Permission.MANAGE_CHANNELS)
+    var organizing by remember(serverId) { mutableStateOf(false) }
+    var layoutNotice by remember(serverId) { mutableStateOf<String?>(null) }
+    var newChannelIn by remember(serverId) { mutableStateOf<Pair<Channel, String>?>(null) }
+    var creatingCategory by remember(serverId) { mutableStateOf(false) }
+
     // Every fetch of the list takes a ticket (see [ChannelListTickets]).
     val channelsTickets = remember { ChannelListTickets() }
     LaunchedEffect(serverId) {
@@ -302,6 +374,9 @@ fun ChannelsScreen(
                     frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
             }
             .collectLatest {
+                // Which list to draw may have changed with it (the mixed list
+                // switched on for this server, or a reorder bumped the version).
+                refreshLayoutConfig()
                 val ticket = channelsTickets.take()
                 for (attempt in 1..CHANNELS_REFETCH_TRIES) {
                     val list = try {
@@ -463,8 +538,92 @@ fun ChannelsScreen(
     // not regroup and sort every channel again.
     val textTitle = stringResource(R.string.channels_section_text)
     val voiceTitle = stringResource(R.string.channels_section_voice)
-    val sections = remember(list, textTitle, voiceTitle) {
-        list?.let { sectionsOf(it, textTitle, voiceTitle) }.orEmpty()
+    val sections = remember(list, textTitle, voiceTitle, mixed, canManageChannels) {
+        list?.let {
+            sectionsOf(it, textTitle, voiceTitle, mixed = mixed, keepEmptyCategories = canManageChannels)
+        }.orEmpty()
+    }
+
+    // --- The mixed list's writes ---
+
+    val failedText = stringResource(R.string.channels_reorder_failed)
+    val organizeLabel = stringResource(R.string.channels_organize)
+    fun writeChannels(next: List<Channel>) {
+        val ticket = channelsTickets.take()
+        if (channelsTickets.tryWrite(ticket)) channels = next
+    }
+    suspend fun freshLayoutVersion(): Int? = try {
+        session.api.channelLayoutConfig(serverId)?.version
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Sends a whole order, drawn at once and put back if refused. A 409
+     * because the list moved adopts the server's list and version.
+     */
+    suspend fun saveLayout(next: SidebarLayout<LayoutRow>, baseVersion: Int): ChannelLayoutSaveOutcome {
+        val before = channels ?: return ChannelLayoutSaveOutcome.Failed(failedText)
+        writeChannels(applyLayoutToChannels(before, next))
+        return try {
+            when (val result = session.api.applyChannelLayout(serverId, layoutToPayload(next, baseVersion))) {
+                is ChannelLayoutSaveResult.Saved -> {
+                    // A null read-back: saved, keep the order drawn above.
+                    result.channels?.let(::writeChannels)
+                    adoptLayout(ChannelLayoutConfig(mixed = true, version = result.version))
+                    ChannelLayoutSaveOutcome.Saved
+                }
+                is ChannelLayoutSaveResult.Stale -> {
+                    writeChannels(result.channels)
+                    adoptLayout(ChannelLayoutConfig(mixed = true, version = result.version))
+                    ChannelLayoutSaveOutcome.Stale(mixedLayoutOf(result.channels), result.version)
+                }
+                ChannelLayoutSaveResult.Off -> {
+                    writeChannels(before)
+                    adoptLayout(ChannelLayoutConfig.Legacy)
+                    ChannelLayoutSaveOutcome.Off
+                }
+                is ChannelLayoutSaveResult.Invalid -> {
+                    writeChannels(before)
+                    ChannelLayoutSaveOutcome.Failed(result.message)
+                }
+            }
+        } catch (e: CancellationException) {
+            writeChannels(before)
+            throw e
+        } catch (_: Exception) {
+            writeChannels(before)
+            ChannelLayoutSaveOutcome.Failed(failedText)
+        }
+    }
+
+    suspend fun createCategory(name: String): Channel {
+        val category = session.api.createChannel(serverId, name, "category")
+        channels?.let { current -> if (current.none { it.id == category.id }) writeChannels(current + category) }
+        return category
+    }
+
+    suspend fun renameCategory(category: Channel, name: String): Channel {
+        val updated = session.api.renameChannel(category.id, name)
+        channels?.let { current -> writeChannels(current.map { if (it.id == updated.id) updated else it }) }
+        return updated
+    }
+
+    /** A channel made from a category's "+": in that category, which unfolds so the new row is seen. */
+    suspend fun createChannelIn(category: Channel, type: String, rawName: String) {
+        val name = rawName.trim().replace(' ', '-')
+        if (name.isEmpty()) return
+        try {
+            val channel = session.api.createChannel(serverId, name, type, isPrivate = false, parentId = category.id)
+            channels?.let { current -> if (current.none { it.id == channel.id }) writeChannels(current + channel) }
+            if (category.id in folded) foldedStore.setFolded(serverId, category.id, false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            layoutNotice = e.message ?: failedText
+        }
     }
     // Every `watch_party` channel this server has, folded into ONE block: a
     // live or pending party sits above everything, and the "Criar watch
@@ -560,6 +719,16 @@ fun ChannelsScreen(
                     onToggleCategory = { categoryId ->
                         scope.launch { foldedStore.setFolded(serverId, categoryId, categoryId !in folded) }
                     },
+                    manage = if (mixed && canManageChannels) {
+                        CategoryManage(
+                            organizeLabel = organizeLabel,
+                            onOrganize = { organizing = true },
+                            onAddChannel = { category, type -> newChannelIn = category to type },
+                            onCreateCategory = { creatingCategory = true },
+                        )
+                    } else {
+                        null
+                    },
                 )
             }
         }
@@ -569,8 +738,183 @@ fun ChannelsScreen(
             collapsed = collapsed,
             onBack = onBack,
             modifier = Modifier.align(Alignment.TopCenter),
+            actions = { shown ->
+                if (mixed && canManageChannels) {
+                    ServerMenu(
+                        shown = shown,
+                        onOrganize = { organizing = true },
+                        onCreateCategory = { creatingCategory = true },
+                    )
+                }
+            },
         )
     }
+
+    if (organizing && list != null) {
+        ChannelOrganizerDialog(
+            layout = mixedLayoutOf(list),
+            baseVersion = layoutConfig.version,
+            onDismiss = { organizing = false },
+            save = ::saveLayout,
+            createCategory = { name -> createCategory(name) to freshLayoutVersion() },
+            renameCategory = { category, name -> renameCategory(category, name) to freshLayoutVersion() },
+        )
+    }
+    if (creatingCategory) {
+        CategoryNameDialog(
+            title = stringResource(R.string.channels_create_category),
+            confirm = stringResource(R.string.channels_create),
+            initial = "",
+            onDismiss = { creatingCategory = false },
+            onConfirm = { name ->
+                creatingCategory = false
+                scope.launch {
+                    try {
+                        createCategory(name)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        layoutNotice = e.message ?: failedText
+                    }
+                }
+            },
+        )
+    }
+    newChannelIn?.let { (category, type) ->
+        ChannelNameDialog(
+            onDismiss = { newChannelIn = null },
+            onConfirm = { name ->
+                newChannelIn = null
+                scope.launch { createChannelIn(category, type, name) }
+            },
+        )
+    }
+    layoutNotice?.let { text ->
+        AlertDialog(
+            onDismissRequest = { layoutNotice = null },
+            confirmButton = {
+                TextButton(onClick = { layoutNotice = null }) { Text(stringResource(R.string.channels_got_it)) }
+            },
+            text = { Text(text) },
+        )
+    }
+}
+
+/** What a manager gets on the mixed list: a "+" on each heading, a long press to organize, Criar categoria. */
+private class CategoryManage(
+    val organizeLabel: String,
+    val onOrganize: () -> Unit,
+    val onAddChannel: (category: Channel, type: String) -> Unit,
+    val onCreateCategory: () -> Unit,
+)
+
+/** The "+" on a category heading: Canal de texto, Canal de voz. */
+@Composable
+private fun AddChannelButton(category: Channel, onAdd: (Channel, String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    Box {
+        IconButton(
+            onClick = { open = true },
+            modifier = Modifier.size(36.dp).testTag("channels.categoryCreate.${category.name}"),
+        ) {
+            Icon(
+                imageVector = PqpIcons.Add,
+                contentDescription = stringResource(R.string.channels_create_in, category.name),
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.channels_add_text)) },
+                leadingIcon = { Icon(PqpIcons.TextChannel, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                onClick = {
+                    open = false
+                    onAdd(category, "text")
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.channels_add_voice)) },
+                leadingIcon = { Icon(PqpIcons.VoiceChannel, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                onClick = {
+                    open = false
+                    onAdd(category, "voice")
+                },
+            )
+        }
+    }
+}
+
+/** ⋯ at the end of the bar, for whoever may manage channels on the mixed list. */
+@Composable
+private fun ServerMenu(shown: Float, onOrganize: () -> Unit, onCreateCategory: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.testTag("channels.menu")) {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.35f * (1f - shown))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = PqpIcons.Menu,
+                    contentDescription = stringResource(R.string.channels_more),
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.channels_organize)) },
+                modifier = Modifier.testTag("channels.organize"),
+                onClick = {
+                    open = false
+                    onOrganize()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.channels_create_category)) },
+                onClick = {
+                    open = false
+                    onCreateCategory()
+                },
+            )
+        }
+    }
+}
+
+/** A text or voice channel's name: the server takes letters, numbers, - and _, so spaces become hyphens. */
+@Composable
+private fun ChannelNameDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.channels_new_channel)) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                label = { Text(stringResource(R.string.channels_channel_name)) },
+                modifier = Modifier.testTag("channels.channelName"),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text) },
+                enabled = text.isNotBlank(),
+                modifier = Modifier.testTag("channels.channelName.confirm"),
+            ) { Text(stringResource(R.string.channels_create)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.channels_organize_cancel)) }
+        },
+    )
 }
 
 /**
@@ -597,6 +941,8 @@ private fun LazyListScope.channelListItems(
     onOpenChannel: (Channel) -> Unit,
     onOpenBau: () -> Unit,
     onToggleCategory: (String) -> Unit,
+    /** Set on the mixed list for whoever may manage channels. */
+    manage: CategoryManage?,
 ) {
     val openById: (String) -> Unit = { id -> list.firstOrNull { it.id == id }?.let(onOpenChannel) }
 
@@ -615,34 +961,38 @@ private fun LazyListScope.channelListItems(
         }
     }
 
-    sections.forEachIndexed { index, section ->
+    sections.forEach { section ->
         val categoryId = section.categoryId
-        val continued = index > 0 && sections[index - 1].group == section.group
         val isFolded = categoryId != null && categoryId in folded
+        val category = section.category
         item(key = "header-${section.key}") {
             Box(Modifier.listMotion(this)) {
                 when {
-                    // One category arrives as two sections, text then voice,
-                    // for the `position` reason in `sectionsOf`. Its heading is
-                    // drawn once; the second half keeps only nothing, so the
-                    // voice rooms sit right under the text channels.
-                    continued -> Unit
                     categoryId == null || section.title.isBlank() -> SectionGap()
                     else -> CategoryHeader(
                         title = section.title,
                         folded = isFolded,
-                        summary = foldedSummary(channelsInCategory(sections, categoryId), unread, muted),
+                        summary = foldedSummary(section.channels, unread, muted),
                         onToggle = { onToggleCategory(categoryId) },
+                        onLongClick = manage?.onOrganize,
+                        onLongClickLabel = manage?.organizeLabel,
+                        trailing = if (manage != null && category != null) {
+                            { AddChannelButton(category, manage.onAddChannel) }
+                        } else {
+                            null
+                        },
                     )
                 }
             }
         }
-        if (isFolded) return@forEachIndexed
+        // Folding never hides where you are: the call this phone is in stays
+        // on screen under its folded category.
+        val shown = if (isFolded) section.channels.filter { it.id == callChannelId } else section.channels
         // One lazy interval per section, not one per channel: a busy server
         // recomposes on every unread frame and roster change, and only the
         // rows on screen should pay for it. Each item is the row plus the
         // people in it, worked out when the item is drawn.
-        items(section.channels, key = { it.id }, contentType = { "channel" }) { channel ->
+        items(shown, key = { it.id }, contentType = { "channel" }) { channel ->
             val inCall = channel.id == callChannelId
             ChannelEntry(
                 channel = channel,
@@ -668,6 +1018,40 @@ private fun LazyListScope.channelListItems(
                 WatchPartyListBlockView(block = watchPartyBlock, onOpen = openById, onHost = openById)
             }
         }
+    }
+    // The last row of the mixed list, managers only. It replaces a heading
+    // over a create button, which read as an empty category.
+    if (manage != null) {
+        item(key = "createCategory") {
+            CreateCategoryRow(
+                onClick = manage.onCreateCategory,
+                modifier = Modifier.listMotion(this).padding(top = Spacing.sm),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CreateCategoryRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .padding(horizontal = Spacing.railInset)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.md)
+            .testTag("channels.createCategory"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(PqpIcons.Add, contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(Sizes.iconInline))
+        Spacer(Modifier.width(Spacing.sm + 2.dp))
+        Text(
+            text = stringResource(R.string.channels_create_category),
+            style = MaterialTheme.typography.bodyLarge,
+            color = colors.onSurfaceVariant,
+        )
     }
 }
 
