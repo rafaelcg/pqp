@@ -83,7 +83,7 @@ struct InviteView: View {
             invites = try await session.api.invites(serverId: server.id)
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         loading = false
     }
@@ -95,7 +95,7 @@ struct InviteView: View {
             invites.insert(invite, at: 0)
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         creating = false
     }
@@ -283,7 +283,7 @@ struct SearchView: View {
         do {
             results = try await session.api.searchMessages(serverId: server.id, query: term).results
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         searched = true
         searching = false

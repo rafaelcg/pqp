@@ -774,9 +774,10 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertFalse(ChannelFixture.make(type: "forum").isWatchParty)
     }
 
-    /// A forum child of a category must not become a dead "#" row: the list
-    /// keeps only the types this build can open.
-    func testAForumChildIsHidden() {
+    /// The list keeps only the types this build can open: a chat, and since
+    /// forum PR 6 a forum (its own screen, never a dead "#" row). A type it
+    /// does not know is still hidden.
+    func testAForumChildIsShownAndAnUnknownOneIsHidden() {
         let category = ChannelFixture.make(type: "category", id: "cat")
         let kids = [
             ChannelFixture.make(type: "text", id: "t", parentId: "cat"),
@@ -785,7 +786,7 @@ final class WatchPartyTests: XCTestCase {
             ChannelFixture.make(type: "something-new", id: "n", parentId: "cat"),
         ]
         let shown = ChannelListView.children(of: category, in: kids + [category])
-        XCTAssertEqual(Set(shown.map(\.id)), ["t", "v"])
+        XCTAssertEqual(Set(shown.map(\.id)), ["t", "v", "f"])
         XCTAssertFalse(ChannelFixture.make(type: "forum").opensAsChat)
         XCTAssertTrue(ChannelFixture.make(type: "text").opensAsChat)
         XCTAssertTrue(ChannelFixture.make(type: "voice").opensAsChat)

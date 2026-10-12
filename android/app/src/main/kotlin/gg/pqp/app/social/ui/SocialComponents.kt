@@ -177,8 +177,31 @@ fun CountBadge(
     loud: Boolean,
     modifier: Modifier = Modifier,
     label: String? = null,
+    /**
+     * Conversas: the red count WhatsApp trained everybody on, for a
+     * conversation waiting on a reply. Wins over [loud]; white digits, centred.
+     */
+    danger: Boolean = false,
 ) {
     if (count <= 0) return
+    if (danger) {
+        Box(
+            modifier = modifier
+                .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
+                .clip(CircleShape)
+                .background(Palette.Danger)
+                .padding(horizontal = 5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label ?: if (count > 99) "99+" else count.toString(),
+                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = TabularFigures),
+                color = Color.White,
+                maxLines = 1,
+            )
+        }
+        return
+    }
     Box(
         modifier = modifier
             .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)

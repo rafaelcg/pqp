@@ -232,7 +232,11 @@ fun ChannelRow(
 private fun ChannelGlyph(channel: Channel, tint: Color) {
     Box(Modifier.size(Sizes.iconInline)) {
         Icon(
-            imageVector = if (channel.isVoice) PqpIcons.VoiceChannel else PqpIcons.TextChannel,
+            imageVector = when {
+                channel.isVoice -> PqpIcons.VoiceChannel
+                channel.isForum -> PqpIcons.ForumChannel
+                else -> PqpIcons.TextChannel
+            },
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(Sizes.iconInline),

@@ -72,7 +72,10 @@ export async function loadConversationsConfig(
       apply(next);
     }
   } catch {
-    // An older API (404) or a blip: keep the last answer.
+    // An older API (404) or a blip: keep the last answer. An older ask still
+    // in flight may yet apply: it is the newest answer anybody has, and
+    // dropping it would leave a first load that raced a failed refresh with
+    // no answer at all.
   }
 }
 

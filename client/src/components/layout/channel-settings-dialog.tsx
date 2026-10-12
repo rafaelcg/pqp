@@ -1,7 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Image as ImageIcon, Shield, Webhook } from "lucide-react";
-import type { Channel } from "@pqp/shared";
-import { isVoiceRoomChannelType } from "@pqp/shared";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Image as ImageIcon, Shield, Tag, Webhook } from "lucide-react";
+import type { Channel, ForumSettings, ForumSort } from "@pqp/shared";
+import { FORUM_SETTINGS_DEFAULTS, isVoiceRoomChannelType } from "@pqp/shared";
+import { ForumTagsSection } from "@/components/layout/forum-tags-section";
+import {
+  draftFromServer,
+  tagsChanged,
+  toPutBody,
+  unsavedChangeCount,
+  draftProblems,
+  type TagDraft,
+} from "@/lib/forum-tag-draft";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { SectionRail, type SectionRailItem } from "@/components/ui/section-rail";
@@ -15,12 +24,17 @@ import {
   readChannelRecipe,
 } from "@/components/layout/channel-permissions-section";
 import { WebhooksSection } from "@/components/layout/webhooks-section";
+import { channelTakesWebhooks } from "@/lib/channel-webhooks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   fetchChannelMembers,
   fetchChannelOverwrites,
+  fetchForumSettings,
+  fetchForumTags,
   fetchMembers,
+  putForumTags,
   updateChannel,
+  updateForumSettings,
   type ChannelOverwrite,
   type ServerMember,
   type ServerRole,
@@ -34,30 +48,57 @@ import {
 
 export type ChannelSettingsSectionId =
   | "overview"
+  | "tags"
   | "permissions"
   | "webhooks";
 
-function draftFromChannel(channel: Channel): ChannelOverviewDraft {
+const EMPTY_TAG_DRAFT: TagDraft = { rows: [], requireTag: false };
+
+/**
+ * What a forum's settings need beside the channel row: its tags and its two
+ * switches (`forum_settings`). Loaded when the sheet opens on a forum. An API
+ * that predates forum PR 1 answers 404 here, which is "error" with a retry:
+ * the rest of the sheet (name, guidelines, permissions) works regardless.
+ */
+interface ForumSettingsState {
+  status: "idle" | "loading" | "ready" | "error";
+  settings: ForumSettings;
+  baseline: TagDraft;
+}
+
+const FORUM_IDLE: ForumSettingsState = {
+  status: "idle",
+  settings: FORUM_SETTINGS_DEFAULTS,
+  baseline: EMPTY_TAG_DRAFT,
+};
+
+function draftFromChannel(
+  channel: Channel,
+  defaultSort: ForumSort = FORUM_SETTINGS_DEFAULTS.defaultSort,
+): ChannelOverviewDraft {
   return {
     name: channel.name,
     topic: channel.topic ?? "",
     imageUrl: channel.imageUrl ?? "",
     slowmodeSeconds: channel.slowmodeSeconds ?? 0,
     voiceRoomSize: toVoiceRoomSizeOption(channel.voiceTransport),
+    defaultSort,
   };
 }
 
 function isOverviewDirty(
   draft: ChannelOverviewDraft,
   channel: Channel,
+  defaultSort: ForumSort,
 ): boolean {
-  const baseline = draftFromChannel(channel);
+  const baseline = draftFromChannel(channel, defaultSort);
   return (
     draft.name.trim() !== baseline.name.trim() ||
     draft.topic.trim() !== baseline.topic.trim() ||
     draft.imageUrl.trim() !== baseline.imageUrl.trim() ||
     draft.slowmodeSeconds !== baseline.slowmodeSeconds ||
-    draft.voiceRoomSize !== baseline.voiceRoomSize
+    draft.voiceRoomSize !== baseline.voiceRoomSize ||
+    (channel.type === "forum" && draft.defaultSort !== baseline.defaultSort)
   );
 }
 
@@ -124,7 +165,12 @@ export function ChannelSettingsDialog({
     imageUrl: "",
     slowmodeSeconds: 0,
     voiceRoomSize: "auto",
+    defaultSort: FORUM_SETTINGS_DEFAULTS.defaultSort,
   });
+  // --- forums ---
+  const [forum, setForum] = useState<ForumSettingsState>(FORUM_IDLE);
+  const [tagDraft, setTagDraft] = useState<TagDraft>(EMPTY_TAG_DRAFT);
+  const [forumLoadNonce, setForumLoadNonce] = useState(0);
   const [iconOpen, setIconOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -137,15 +183,20 @@ export function ChannelSettingsDialog({
   const [loading, setLoading] = useState(false);
   const [privateBusy, setPrivateBusy] = useState(false);
 
+  const isForum = channel?.type === "forum";
   const canSeeOverview = canManageChannels;
+  const canSeeTags = canManageChannels && isForum;
   const canSeePermissions = canManageRoles || canManageChannels;
-  const canSeeWebhooks =
-    canManageChannels && channel?.type === "text";
+  // Text and forum: on a forum each delivery becomes a post (forum PR 4).
+  const canSeeWebhooks = canManageChannels && channelTakesWebhooks(channel?.type);
 
   const visible = useMemo(() => {
     const ids: ChannelSettingsSectionId[] = [];
     if (canSeeOverview) {
       ids.push("overview");
+    }
+    if (canSeeTags) {
+      ids.push("tags");
     }
     if (canSeePermissions) {
       ids.push("permissions");
@@ -154,7 +205,7 @@ export function ChannelSettingsDialog({
       ids.push("webhooks");
     }
     return ids;
-  }, [canSeeOverview, canSeePermissions, canSeeWebhooks]);
+  }, [canSeeOverview, canSeeTags, canSeePermissions, canSeeWebhooks]);
 
   const firstSection = visible[0] ?? "overview";
   const openingSection: ChannelSettingsSectionId =
@@ -173,6 +224,8 @@ export function ChannelSettingsDialog({
     setConfirmLeave(false);
     setSaveError(null);
     setIconOpen(false);
+    setForum(FORUM_IDLE);
+    setTagDraft(EMPTY_TAG_DRAFT);
   }
   if (!open) {
     seededChannelIdRef.current = null;
@@ -236,6 +289,45 @@ export function ChannelSettingsDialog({
     };
   }, [open, channel?.id, serverId, canManageChannels, canManageRoles, t]);
 
+  // --- forums --- tags and the two switches, read once per opening (and on
+  // "Tentar de novo"), and only for someone who can change them: the Tags
+  // section and the default sort are MANAGE_CHANNELS, and a sheet opened
+  // for permissions alone has no use for either.
+  const forumChannelId =
+    open && isForum && canManageChannels ? (channel?.id ?? null) : null;
+  useEffect(() => {
+    if (!forumChannelId) {
+      return;
+    }
+    let cancelled = false;
+    setForum((previous) => ({ ...previous, status: "loading" }));
+    void Promise.all([fetchForumTags(forumChannelId), fetchForumSettings(forumChannelId)])
+      .then(([{ tags }, { settings }]) => {
+        if (cancelled) {
+          return;
+        }
+        const baseline = draftFromServer(tags, settings.requireTag);
+        setForum({ status: "ready", settings, baseline });
+        setTagDraft(baseline);
+        // The overview draft was seeded before this landed; give it the
+        // forum's real default sort unless the person already picked one.
+        setDraft((previous) =>
+          previous.defaultSort === FORUM_SETTINGS_DEFAULTS.defaultSort
+            ? { ...previous, defaultSort: settings.defaultSort }
+            : previous,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setForum((previous) => ({ ...previous, status: "error" }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [forumChannelId, forumLoadNonce]);
+  const retryForumLoad = useCallback(() => setForumLoadNonce((n) => n + 1), []);
+
   useEffect(() => {
     if (section !== "permissions" || !scrollTo) {
       return;
@@ -250,7 +342,17 @@ export function ChannelSettingsDialog({
   }
   const current = channel;
 
-  const dirty = isOverviewDirty(viewDraft, current);
+  const overviewDirty = isOverviewDirty(
+    viewDraft,
+    current,
+    forum.settings.defaultSort,
+  );
+  const tagChangeCount =
+    current.type === "forum" && forum.status === "ready"
+      ? unsavedChangeCount(forum.baseline, tagDraft)
+      : 0;
+  const tagsDirty = tagChangeCount > 0;
+  const dirty = overviewDirty || tagsDirty;
   const everyone = roles.find((role) => role.isEveryone);
   const recipe = readChannelRecipe(overwrites, everyone?.id, current.type);
   const recipeRoleNames = roles
@@ -263,7 +365,15 @@ export function ChannelSettingsDialog({
       id: "overview",
       label: t("channelSettings.section.overview"),
       icon: ImageIcon,
-      dirty,
+      dirty: overviewDirty,
+    });
+  }
+  if (canSeeTags) {
+    sections.push({
+      id: "tags",
+      label: t("forum.settings.tags"),
+      icon: Tag,
+      dirty: tagsDirty,
     });
   }
   if (canSeePermissions) {
@@ -294,10 +404,67 @@ export function ChannelSettingsDialog({
   }
 
   function discardDraft() {
-    setDraft(draftFromChannel(current));
+    setDraft(draftFromChannel(current, forum.settings.defaultSort));
     setSaveError(null);
     setConfirmLeave(false);
     setIconOpen(false);
+  }
+
+  function discardTags() {
+    setTagDraft(forum.baseline);
+    setSaveError(null);
+    setConfirmLeave(false);
+  }
+
+  /**
+   * One PUT for the tag list (only when it changed) and one PATCH for the
+   * switch (only when it changed), in that order: a list the server refuses
+   * must not leave "Exigir pelo menos uma tag" on over a forum with no tags.
+   */
+  async function saveTags() {
+    if (draftProblems(tagDraft).size > 0) {
+      setSaveError(t("forum.settings.fixRows"));
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    // Each write is folded into the sheet as soon as it lands, so a switch
+    // that fails after the list saved leaves only the switch unsaved, and
+    // "Salvar" again sends only the switch.
+    //
+    // An edit made while a write is out is the person's newest word: the
+    // saved state replaces the draft only if the draft is still the one that
+    // was sent, otherwise the edit stays and counts against the new baseline.
+    let baseline = forum.baseline;
+    let sent = tagDraft;
+    const wantsRequireTag = tagDraft.requireTag;
+    try {
+      if (tagsChanged(baseline, tagDraft)) {
+        const { tags } = await putForumTags(current.id, toPutBody(tagDraft));
+        baseline = draftFromServer(tags, baseline.requireTag);
+        const saved = baseline;
+        const next = { ...saved, requireTag: wantsRequireTag };
+        const expected = sent;
+        setForum((previous) => ({ ...previous, status: "ready", baseline: saved }));
+        setTagDraft((draftNow) => (draftNow === expected ? next : draftNow));
+        sent = next;
+      }
+      if (wantsRequireTag !== baseline.requireTag) {
+        const { settings } = await updateForumSettings(current.id, {
+          requireTag: wantsRequireTag,
+        });
+        baseline = { ...baseline, requireTag: settings.requireTag };
+        const saved = baseline;
+        const expected = sent;
+        setForum({ status: "ready", settings, baseline: saved });
+        setTagDraft((draftNow) => (draftNow === expected ? saved : draftNow));
+      }
+      setConfirmLeave(false);
+    } catch {
+      setSaveError(t("forum.saveFailed"));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function saveOverview() {
@@ -313,24 +480,57 @@ export function ChannelSettingsDialog({
     }
     setSaving(true);
     setSaveError(null);
+    // Two writes, each reconciled the moment it lands: the channel row first,
+    // then (a forum only) the default sort. A sort that fails after the row
+    // saved leaves only the sort unsaved, never a saved name the sheet still
+    // calls unsaved, which a "Desfazer" would then appear to undo.
+    const sortChanged =
+      current.type === "forum" &&
+      forum.status === "ready" &&
+      draft.defaultSort !== forum.settings.defaultSort;
+    const channelChanged = isOverviewDirty(
+      { ...draft, defaultSort: forum.settings.defaultSort },
+      current,
+      forum.settings.defaultSort,
+    );
+    let channel = current;
+    let sent = draft;
     try {
-      const { channel: updated } = await updateChannel(current.id, {
-        // Only a changed name is sent. A channel copied from a Discord
-        // template can carry a name the rename rules never allowed, and
-        // resending it would refuse a save that only touched the topic.
-        ...(name !== current.name ? { name } : {}),
-        topic: draft.topic.trim() || null,
-        imageUrl: draft.imageUrl.trim() || null,
-        ...(current.kind === "server" &&
-        (current.type === "text" || isVoiceRoomChannelType(current.type))
-          ? { slowmodeSeconds: draft.slowmodeSeconds }
-          : {}),
-        ...(showsVoiceRoomSize(current)
-          ? { voiceTransport: fromVoiceRoomSizeOption(draft.voiceRoomSize) }
-          : {}),
-      });
-      onChannelUpdated(updated);
-      setDraft(draftFromChannel(updated));
+      if (channelChanged) {
+        ({ channel } = await updateChannel(current.id, {
+          // Only a changed name is sent. A channel copied from a Discord
+          // template can carry a name the rename rules never allowed, and
+          // resending it would refuse a save that only touched the topic.
+          ...(name !== current.name ? { name } : {}),
+          topic: draft.topic.trim() || null,
+          imageUrl: draft.imageUrl.trim() || null,
+          ...(current.kind === "server" &&
+          (current.type === "text" ||
+            current.type === "forum" ||
+            isVoiceRoomChannelType(current.type))
+            ? { slowmodeSeconds: draft.slowmodeSeconds }
+            : {}),
+          ...(showsVoiceRoomSize(current)
+            ? { voiceTransport: fromVoiceRoomSizeOption(draft.voiceRoomSize) }
+            : {}),
+        }));
+        onChannelUpdated(channel);
+        // The sort the person picked stays in the draft until it is saved
+        // too, and an edit typed while this was out is never overwritten.
+        const next = draftFromChannel(channel, draft.defaultSort);
+        const expected = sent;
+        setDraft((draftNow) => (draftNow === expected ? next : draftNow));
+        sent = next;
+      }
+      if (sortChanged) {
+        const { settings } = await updateForumSettings(current.id, {
+          defaultSort: draft.defaultSort,
+        });
+        setForum((previous) => ({ ...previous, settings }));
+        const next = draftFromChannel(channel, settings.defaultSort);
+        const expected = sent;
+        setDraft((draftNow) => (draftNow === expected ? next : draftNow));
+      }
       setConfirmLeave(false);
     } catch (err) {
       setSaveError(
@@ -371,7 +571,15 @@ export function ChannelSettingsDialog({
   const eyebrowKey: MessageKey =
     current.type === "voice"
       ? "channelMeta.kind.voice"
-      : "channelMeta.kind.text";
+      : current.type === "forum"
+        ? "channel.type.forum"
+        : "channelMeta.kind.text";
+
+  // The Tags section saves on its own footer; so does the overview. Whichever
+  // is on screen and has changes owns the bar, and the other one's changes
+  // still hold the sheet open (`dirty` above) so nothing is lost on Escape.
+  const tagsFooter =
+    tagsDirty && (active?.id === "tags" || !overviewDirty);
 
   const footer = confirmLeave ? (
     <>
@@ -387,6 +595,7 @@ export function ChannelSettingsDialog({
           className="min-w-0"
           onClick={() => {
             discardDraft();
+            discardTags();
             onClose();
           }}
         >
@@ -394,7 +603,29 @@ export function ChannelSettingsDialog({
         </Button>
       </div>
     </>
-  ) : dirty ? (
+  ) : tagsFooter ? (
+    <>
+      <p
+        className="mr-auto min-w-0 animate-fade-in text-sm text-text-tertiary"
+        aria-live="polite"
+        data-forum-tags-unsaved=""
+      >
+        {t("forum.settings.unsaved", { count: tagChangeCount })}
+      </p>
+      <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:flex sm:w-auto">
+        <Button variant="ghost" className="min-w-0" onClick={discardTags}>
+          {t("channelSettings.discard")}
+        </Button>
+        <Button
+          className="min-w-0"
+          disabled={saving}
+          onClick={() => void saveTags()}
+        >
+          {saving ? t("common.saving") : t("common.save")}
+        </Button>
+      </div>
+    </>
+  ) : overviewDirty ? (
     <>
       <p className="mr-auto min-w-0 animate-fade-in text-sm text-paper-muted">
         {t("channelSettings.unsaved")}
@@ -476,6 +707,7 @@ export function ChannelSettingsDialog({
               }}
               iconOpen={iconOpen}
               onIconOpenChange={setIconOpen}
+              forumSettingsReady={forum.status === "ready"}
               showPrivateBridge={canSeePermissions}
               showRecipeBridge={canManageRoles}
               isPrivate={channel.isPrivate}
@@ -483,6 +715,25 @@ export function ChannelSettingsDialog({
               recipeRoleNames={recipeRoleNames}
               onJumpPrivate={() => jump("private")}
               onJumpRecipe={() => jump("recipe")}
+            />
+          )}
+          {active?.id === "tags" && (
+            <ForumTagsSection
+              channelName={channel.name}
+              draft={tagDraft}
+              onDraftChange={(next) => {
+                setConfirmLeave(false);
+                setSaveError(null);
+                setTagDraft(next);
+              }}
+              status={
+                forum.status === "ready"
+                  ? "ready"
+                  : forum.status === "error"
+                    ? "error"
+                    : "loading"
+              }
+              onRetry={retryForumLoad}
             />
           )}
           {active?.id === "permissions" && (

@@ -1,0 +1,9 @@
+{
+  "source": "MonitoRSS user-feeds-next, the second payload of a long item: after the thread is created it sends the remaining bodies to getWebhookApiUrl(id, token, { threadId }) = ?wait=true&thread_id=<the first answer's id>, with no thread_name. The test fills thread_id in.",
+  "query": { "wait": "true", "thread_id": "<filled by the test>" },
+  "body": {
+    "content": "Notas completas: o resto do changelog vai aqui.",
+    "embeds": [],
+    "username": "Notícias do Jogo"
+  }
+}

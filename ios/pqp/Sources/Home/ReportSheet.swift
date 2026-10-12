@@ -11,9 +11,14 @@ enum ReportTarget: Identifiable, Hashable {
     /// to the instance queue, because a complaint about a room is not something
     /// its owner should be the judge of.
     case community(serverId: String, name: String)
+    /// A story, reported from the viewer. `serverId` is the audience it was
+    /// seen through (that server's queue); nil is Amigos (the instance
+    /// queue). A minor in sexual content goes to the instance either way.
+    case story(id: String, authorName: String, serverId: String?)
 
     var id: String {
         switch self {
+        case .story(let id, _, _): "story-\(id)"
         case .message(let id, _): "message-\(id)"
         case .user(let id, _, _): "user-\(id)"
         case .community(let serverId, _): "server-\(serverId)"
@@ -43,7 +48,23 @@ struct ReportSheet: View {
             String(localized: "Report \(displayName)")
         case .community(_, let name):
             String(localized: "Report the community \(name)")
+        case .story(_, let authorName, _):
+            String(localized: "Report a story by \(authorName)")
         }
+    }
+
+    /// A story lists the reason that skips the server's staff first, the
+    /// way the design puts it; everything else keeps the shared order.
+    private var reasons: [ReportReason] {
+        if case .story = target {
+            return [.minorSexual, .sexualContent, .harassment, .hateSpeech, .violence, .spam, .other]
+        }
+        return ReportReason.allCases
+    }
+
+    private var isStory: Bool {
+        if case .story = target { return true }
+        return false
     }
 
     var body: some View {
@@ -76,17 +97,30 @@ struct ReportSheet: View {
                                 .font(Typography.bodyMedium)
                                 .foregroundStyle(Palette.paper)
 
+                            if isStory {
+                                Text("While someone reviews it, the story won't disappear, even after 24 h. Only moderators see it.")
+                                    .font(Typography.callout)
+                                    .foregroundStyle(Palette.paperMuted)
+                            }
+
                             SectionLabel(text: String(localized: "Why?"))
 
                             VStack(spacing: 6) {
-                                ForEach(ReportReason.allCases) { choice in
+                                ForEach(reasons) { choice in
                                     Button {
                                         reason = choice
                                     } label: {
                                         HStack {
-                                            Text(choice.label)
-                                                .font(Typography.body)
-                                                .foregroundStyle(Palette.paper)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(choice.label)
+                                                    .font(Typography.body)
+                                                    .foregroundStyle(Palette.paper)
+                                                if choice == .minorSexual {
+                                                    Text("Goes straight to the pqp team, not the server staff")
+                                                        .font(Typography.caption)
+                                                        .foregroundStyle(Palette.paperMuted)
+                                                }
+                                            }
                                             Spacer()
                                             if reason == choice {
                                                 Image(systemName: "checkmark.circle.fill")
@@ -159,10 +193,15 @@ struct ReportSheet: View {
                     serverId: serverId, reason: reason.rawValue,
                     details: trimmed.isEmpty ? nil : trimmed
                 )
+            case .story(let id, _, let serverId):
+                try await session.api.reportStory(
+                    storyId: id, serverId: serverId, reason: reason.rawValue,
+                    details: trimmed.isEmpty ? nil : trimmed
+                )
             }
             sent = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         submitting = false
     }

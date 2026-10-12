@@ -89,6 +89,22 @@ describeDb("friendships", () => {
     expect(theirs.outgoing).toHaveLength(0);
   });
 
+  it("carries each person's recado, so a friend's status line shows in the list", async () => {
+    await getPool().query(`UPDATE users SET custom_status = $2 WHERE id = $1`, [
+      bruno.id,
+      "jogando CS até as 22h",
+    ]);
+    await sendFriendRequest(alice.id, bruno.id);
+    expect((await listFriendships(alice.id)).outgoing[0]!.customStatus).toBe(
+      "jogando CS até as 22h",
+    );
+    await acceptFriendRequest(bruno.id, alice.id);
+    const mine = await listFriendships(alice.id);
+    expect(mine.friends[0]!.customStatus).toBe("jogando CS até as 22h");
+    // Somebody with no recado is null, not undefined.
+    expect((await listFriendships(bruno.id)).friends[0]!.customStatus).toBeNull();
+  });
+
   it("keeps one row per pair, and a resend neither duplicates nor re-freshens it", async () => {
     await sendFriendRequest(alice.id, bruno.id);
     const [before] = await rows();

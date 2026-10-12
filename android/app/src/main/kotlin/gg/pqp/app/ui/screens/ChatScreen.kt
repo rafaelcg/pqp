@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,7 +73,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +93,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
+import gg.pqp.app.nudge.ui.shake
 import gg.pqp.app.attachments.ATTACHMENT_MIME_ALLOWLIST
 import gg.pqp.app.attachments.AttachmentRefusal
 import gg.pqp.app.attachments.ComposerReadiness
@@ -152,8 +158,12 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** The list key of [ChatExtras.transcriptTop], so the title can tell when it scrolls off. */
+private const val TRANSCRIPT_TOP_KEY = "transcript-top"
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     session: SessionStore,
@@ -197,6 +207,20 @@ fun ChatScreen(
      * that does (`PqpApp`) already knows which channels open a voice room.
      */
     header: @Composable () -> Unit = {},
+    /**
+     * Conversas: "Mandar mensagem pra {name}" on a message's sheet, the
+     * Android door that a member row is on the web. Null hides it, which is
+     * what a conversation (already a DM) and the flag-off app pass.
+     */
+    onMessageAuthor: ((authorId: String) -> Unit)? = null,
+    /** What a forum post adds; see [ChatExtras]. Null for every ordinary chat. */
+    extras: ChatExtras? = null,
+    /**
+     * Chamar a atenção is offered here: a 1:1 with a friend while the `nudge`
+     * flag is on. The other person's name, for the lines it draws. Null hides
+     * the button; a nudge somebody else sends still renders and shakes.
+     */
+    nudgeName: String? = null,
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -216,6 +240,7 @@ fun ChatScreen(
             // Read at the moment of use: whether a call is live changes for
             // the whole life of this screen.
             callActive = { app?.callActive?.value == true },
+            primaryChannelId = extras?.primaryChannelId,
         ),
     )
     val voiceNotes = rememberVoiceNotes()
@@ -326,6 +351,16 @@ fun ChatScreen(
     // made on another device arrives here as somebody else's frame.
     LaunchedEffect(me?.id) { model.setCurrentUser(me?.id) }
 
+    // Chamar a atenção received: buzz, and shake the whole screen once. Only a
+    // fresh one from somebody else ever reaches this (`Nudge.isFresh`).
+    val shake = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(model) {
+        model.nudged.collect {
+            gg.pqp.app.nudge.ui.buzz(context)
+            shake.shake(context)
+        }
+    }
+
     // Follow the tail only when the reader is already there. Yanking somebody
     // back down while they are reading history is the single most annoying
     // thing a chat client does.
@@ -334,12 +369,105 @@ fun ChatScreen(
             listState.firstVisibleItemIndex <= 1
         }
     }
-    LaunchedEffect(state.messages.size) {
-        if (atBottom && state.messages.isNotEmpty()) listState.animateScrollToItem(0)
+    // A surface that lands somewhere other than the newest message (a forum
+    // post: its question, or the first reply not seen yet) holds the
+    // transcript back until it has paged to that point and scrolled to it,
+    // so the reader never sees the bottom first and then a jump.
+    val landingAsk = extras?.landing
+    var landed by remember(channelId) { mutableStateOf(landingAsk == null) }
+    var unreadSince by remember(channelId) { mutableStateOf<String?>(null) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val topMarginPx = with(density) { Spacing.xxl.toPx() }
+
+    /**
+     * Bring the message [id] near the top of the screen. The list is reversed,
+     * so `scrollToItem` puts an item at the BOTTOM edge; the second step backs
+     * the list down until it sits a margin under the top. Index 0 is the
+     * newest message, which is where the list already is when nothing newer
+     * exists to scroll past, and the clamp makes that a no-op.
+     */
+    suspend fun bringNearTop(index: Int) {
+        listState.scrollToItem(index)
+        val info = listState.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+        val viewport = info.viewportEndOffset - info.viewportStartOffset
+        val back = viewport - item.size - topMarginPx
+        if (back > 0) listState.scrollBy(-back)
     }
 
+    LaunchedEffect(channelId, landingAsk?.ready, state.loading) {
+        val ask = landingAsk ?: return@LaunchedEffect
+        if (landed || !ask.ready || state.loading) return@LaunchedEffect
+        var pages = 0
+        while (
+            pages < gg.pqp.app.forum.FORUM_LANDING_MAX_PAGES &&
+            gg.pqp.app.forum.ForumLanding.needsOlder(
+                model.state.value.messages,
+                model.state.value.hasMore,
+                ask.previousReadAt,
+            )
+        ) {
+            pages += 1
+            if (model.loadOlderNow() == 0) break
+        }
+        val messages = model.state.value.messages
+        val target = gg.pqp.app.forum.ForumLanding.landing(messages, ask.previousReadAt, me?.id)
+        unreadSince = if (target is gg.pqp.app.forum.PostLanding.FirstUnread) ask.previousReadAt else null
+        landed = true
+        // One frame for the list to lay the loaded pages out before scrolling.
+        androidx.compose.runtime.withFrameNanos { }
+        val scroll = gg.pqp.app.forum.ForumLanding.scrollFor(
+            target = target,
+            rows = messages.asReversed(),
+            hasMore = model.state.value.hasMore,
+            totalItems = listState.layoutInfo.totalItemsCount,
+        )
+        when (scroll) {
+            is gg.pqp.app.forum.LandingScroll.ToItem -> listState.scrollToItem(scroll.index)
+            is gg.pqp.app.forum.LandingScroll.NearTop -> bringNearTop(scroll.index)
+        }
+    }
+
+    // "Ir pra resposta": the message, paging back for it when it is older
+    // than what is loaded.
+    LaunchedEffect(extras?.scrollRequests) {
+        extras?.scrollRequests?.collect { id ->
+            var pages = 0
+            while (
+                model.state.value.messages.none { it.id == id } &&
+                model.state.value.hasMore &&
+                pages < gg.pqp.app.forum.FORUM_LANDING_MAX_PAGES
+            ) {
+                pages += 1
+                if (model.loadOlderNow() == 0) break
+            }
+            androidx.compose.runtime.withFrameNanos { }
+            val index = model.state.value.messages.asReversed().indexOfFirst { it.id == id }
+            if (index >= 0) bringNearTop(index)
+        }
+    }
+
+    LaunchedEffect(state.messages.size) {
+        if (landed && atBottom && state.messages.isNotEmpty()) listState.animateScrollToItem(0)
+    }
+
+    // The first reply this reader had not seen, for the "Novas" divider and
+    // the jump pill. Only a revisit that landed on it has one.
+    val firstUnreadId = remember(state.messages, unreadSince, me?.id) {
+        gg.pqp.app.forum.ForumLanding.firstUnread(state.messages, unreadSince, me?.id)?.id
+    }
+    val unreadCount = remember(state.messages, unreadSince, me?.id) {
+        gg.pqp.app.forum.ForumLanding.unreadCount(state.messages, unreadSince, me?.id)
+    }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    val oldestId = if (!state.loading && !state.hasMore) state.messages.firstOrNull()?.id else null
+    LaunchedEffect(oldestId, extras?.onOldest) { extras?.onOldest?.invoke(oldestId) }
+
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { translationX = shake.value * this.density },
         topBar = {
             Column {
                 TopAppBar(
@@ -349,8 +477,16 @@ fun ChatScreen(
                     // labels: a conversation passes a person's name and gets no
                     // hash, and an unknown channel gets the placeholder alone.
                     title = {
+                        val custom = extras?.title
                         val known = channelName.isNotBlank()
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (custom != null) {
+                            val topVisible by remember {
+                                derivedStateOf {
+                                    listState.layoutInfo.visibleItemsInfo.any { it.key == TRANSCRIPT_TOP_KEY }
+                                }
+                            }
+                            custom(topVisible)
+                        } else Row(verticalAlignment = Alignment.CenterVertically) {
                             if (title == null && known) {
                                 Icon(
                                     imageVector = PqpIcons.TextChannel,
@@ -379,7 +515,14 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        IconButton(
+                        // Left of pins and call, where the web header keeps it.
+                        if (nudgeName != null) {
+                            gg.pqp.app.nudge.ui.NudgeButton(
+                                holdUntilMs = state.nudgeHoldUntilMs,
+                                onNudge = model::nudge,
+                            )
+                        }
+                        if (extras?.showPins != false) IconButton(
                             onClick = {
                                 model.loadPins()
                                 showingPins = true
@@ -409,7 +552,19 @@ fun ChatScreen(
                 // between the two halves of it: the typing strip and the
                 // composer are one continuous piece of chrome.
                 ChromeDivider()
+                gg.pqp.app.nudge.ui.NudgeRefusalLine(
+                    refusal = state.nudgeRefusal,
+                    otherName = nudgeName ?: title ?: channelName,
+                    onExpired = model::clearNudgeRefusal,
+                )
                 TypingStrip(state.typing)
+                // A locked post, for somebody who may not reply: the reason in
+                // place of the box, never a box that refuses on send.
+                val replacement = extras?.composerReplacement
+                if (replacement != null) {
+                    replacement()
+                } else Column {
+                extras?.composerNote?.invoke()
                 MentionMenu(mentionMatches) { candidate ->
                     val username = candidate.username
                     val query = mentionQuery
@@ -470,7 +625,9 @@ fun ChatScreen(
                         if (active?.paused == true) model.resumeRecording() else model.pauseRecording()
                     },
                     onUndoDiscard = model::undoDiscard,
+                    hint = extras?.composerHint,
                 )
+                }
             }
         },
     ) { padding ->
@@ -495,7 +652,7 @@ fun ChatScreen(
                         icon = PqpIcons.Warning,
                     )
 
-                    state.messages.isEmpty() -> EmptyState(
+                    state.messages.isEmpty() && extras?.transcriptTop == null -> EmptyState(
                         text = stringResource(R.string.chat_empty),
                         icon = PqpIcons.Messages,
                     )
@@ -505,11 +662,31 @@ fun ChatScreen(
                         // starts pinned to the bottom without measuring anything.
                         val rows = remember(state.messages) { state.messages.asReversed() }
 
+                        // Drawn but invisible while a landing pages back and
+                        // scrolls: the list has to exist to be scrolled, and
+                        // the reader must not watch it happen.
+                        val landingAlpha by animateFloatAsState(
+                            targetValue = if (landed) 1f else 0f,
+                            animationSpec = tween(Motion.QUICK_MILLIS),
+                            label = "chat-landing",
+                        )
+                        if (!landed) {
+                            Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+                        }
                         LazyColumn(
                             state = listState,
                             reverseLayout = true,
                             contentPadding = PaddingValues(vertical = Spacing.md),
-                            modifier = Modifier.fillMaxSize(),
+                            // A post reads top down from its title: a short
+                            // one sits under the bar, not on the composer.
+                            verticalArrangement = if (extras?.transcriptTop != null) {
+                                Arrangement.Top
+                            } else {
+                                Arrangement.Bottom
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(landingAlpha),
                         ) {
                             items(rows.size, key = { rows[it].id }) { index ->
                                 val message = rows[index]
@@ -527,11 +704,37 @@ fun ChatScreen(
                                 // One item, not two: the separator belongs to the
                                 // message that opens the day, and keying it on the
                                 // message keeps it from being recycled apart from it.
+                                // The message right after the one a post hangs
+                                // its accepted answer under starts a new block,
+                                // so it never groups into the question.
+                                val afterBelow = previous != null && previous.id == extras?.belowMessageId
+                                val unreadStart = message.id == firstUnreadId
                                 Column {
-                                    if (startsDay) DaySeparator(message.createdAt)
-                                    MessageRow(
+                                    // Under a post's title the first day goes
+                                    // unnamed: the title block already opens it.
+                                    val underTop = previous == null && !state.hasMore && extras?.transcriptTop != null
+                                    if (startsDay && !underTop) DaySeparator(message.createdAt)
+                                    if (unreadStart) NewMessagesDivider()
+                                    if (gg.pqp.app.nudge.Nudge.isNudge(message)) {
+                                        // Nobody typed it, so it is a line and
+                                        // not a bubble; long-press still reaches
+                                        // delete and report.
+                                        Box(
+                                            Modifier.combinedClickable(
+                                                onClick = {},
+                                                onLongClick = { acting = message },
+                                            ),
+                                        ) {
+                                            gg.pqp.app.nudge.ui.NudgeLine(
+                                                authorName = message.authorName,
+                                                mine = me?.id == message.authorId,
+                                                otherName = nudgeName ?: title ?: channelName,
+                                            )
+                                        }
+                                    } else MessageRow(
                                         message = message,
-                                        grouped = !startsDay && shouldGroup(previous, message),
+                                        grouped = !startsDay && !afterBelow && !unreadStart &&
+                                            shouldGroup(previous, message),
                                         selfUsername = me?.username,
                                         selfId = me?.id,
                                         onOpenActions = { acting = message },
@@ -543,13 +746,25 @@ fun ChatScreen(
                                         // the client and not a callback: nothing here
                                         // knows the id to re-mint until a player fails.
                                         api = session.api,
+                                        badge = extras?.authorBadge?.invoke(message),
+                                        highlighted = message.id == extras?.highlightedMessageId,
                                     )
+                                    if (message.id == extras?.belowMessageId) {
+                                        extras.belowMessage?.invoke()
+                                    }
                                 }
+                            }
+
+                            val top = extras?.transcriptTop
+                            if (top != null && !state.hasMore) {
+                                item(key = TRANSCRIPT_TOP_KEY) { top() }
                             }
 
                             if (state.hasMore) {
                                 item(key = "older") {
-                                    LaunchedEffect(Unit) { model.loadOlder() }
+                                    // Not while a landing pages back on its own:
+                                    // two readers of the same cursor would race.
+                                    LaunchedEffect(landed) { if (landed) model.loadOlder() }
                                     Box(
                                         Modifier.fillMaxWidth().padding(Spacing.gutter),
                                         contentAlignment = Alignment.Center,
@@ -557,6 +772,22 @@ fun ChatScreen(
                                 }
                             }
                         }
+
+                        // "↓ 5 novas": the first unread reply is below the
+                        // window (the reader scrolled up past it). Tapping
+                        // brings it back under its divider.
+                        val unreadIndex = rows.indexOfFirst { it.id == firstUnreadId }
+                        val unreadBelow by remember(unreadIndex) {
+                            derivedStateOf { unreadIndex >= 0 && unreadIndex < listState.firstVisibleItemIndex }
+                        }
+                        JumpToNewPill(
+                            visible = landed && unreadBelow && unreadCount > 0,
+                            count = unreadCount,
+                            onClick = { scope.launch { bringNearTop(unreadIndex) } },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = Spacing.lg),
+                        )
                     }
                 }
             }
@@ -617,7 +848,26 @@ fun ChatScreen(
                 reporting = message
                 acting = null
             },
+            // Not on yourself, a webhook (nobody to talk to) or a blocked
+            // author (the server would refuse, and the row is hidden anyway).
+            onMessageAuthor = onMessageAuthor
+                ?.takeIf {
+                    state.isServerChannel && me != null && message.authorId != me.id &&
+                        !message.isWebhook && !message.blocked
+                }
+                ?.let { open ->
+                    {
+                        acting = null
+                        open(message.authorId)
+                    }
+                },
             onDismiss = { acting = null },
+            extraActions = extras?.messageActions?.invoke(message).orEmpty().map { action ->
+                action.copy(onClick = {
+                    action.onClick()
+                    acting = null
+                })
+            },
         )
     }
 
@@ -715,6 +965,8 @@ private fun TypingStrip(typing: Set<String>) {
  */
 private fun shouldGroup(previous: Message?, message: Message): Boolean {
     if (previous == null || previous.authorId != message.authorId) return false
+    // A nudge line has no author header to hang a grouped row under.
+    if (gg.pqp.app.nudge.Nudge.isNudge(previous) || gg.pqp.app.nudge.Nudge.isNudge(message)) return false
     val a = runCatching { Instant.parse(previous.createdAt) }.getOrNull() ?: return false
     val b = runCatching { Instant.parse(message.createdAt) }.getOrNull() ?: return false
     return b.epochSecond - a.epochSecond in 0..300
@@ -757,6 +1009,82 @@ private fun DaySeparator(iso: String) {
 }
 
 /**
+ * Where the replies this reader has not seen start: the web transcript's red
+ * rule with its "Novas" label, the one place in a transcript the danger colour
+ * is a signpost rather than a warning.
+ */
+@Composable
+private fun NewMessagesDivider() {
+    val red = MaterialTheme.colorScheme.error
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.gutter, end = Spacing.gutter, top = Spacing.sm, bottom = Spacing.xs)
+            .testTag("chat.newDivider"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .height(Sizes.hairline)
+                .background(red),
+        )
+        Text(
+            text = stringResource(R.string.chat_new_divider),
+            style = MaterialTheme.typography.labelMedium,
+            color = red,
+            modifier = Modifier.padding(start = Spacing.sm),
+        )
+    }
+}
+
+/** The floating "↓ 5 novas" that takes the reader back to the divider. */
+@Composable
+private fun JumpToNewPill(visible: Boolean, count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.fadeIn(tween(Motion.QUICK_MILLIS)) +
+            androidx.compose.animation.slideInVertically { it / 2 },
+        exit = androidx.compose.animation.fadeOut(tween(Motion.QUICK_MILLIS)) +
+            androidx.compose.animation.slideOutVertically { it / 2 },
+        modifier = modifier,
+    ) {
+        JumpPillBody(count, onClick)
+    }
+}
+
+@Composable
+private fun JumpPillBody(count: Int, onClick: () -> Unit) {
+    val label = androidx.compose.ui.res.pluralStringResource(R.plurals.chat_jump_new, count, count)
+    Surface(
+        onClick = onClick,
+        shape = androidx.compose.foundation.shape.CircleShape,
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        shadowElevation = 4.dp,
+        modifier = Modifier
+            .heightIn(min = 40.dp)
+            .testTag("chat.jumpNew"),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = PqpIcons.JumpDown,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(Spacing.xs + 2.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+}
+
+/**
  * How far in from the page gutter a message's text starts: the avatar, then the
  * gutter between it and the words. Derived rather than written as 48 so that a
  * grouped row, which draws nothing where the avatar was, cannot drift off the
@@ -776,15 +1104,32 @@ private fun MessageRow(
     onOpenActions: () -> Unit,
     onToggleReaction: (String) -> Unit,
     api: ApiClient,
+    /** A short tag after the author's name ("OP" in a forum post). */
+    badge: String? = null,
+    /** The success edge: the reply a forum post marked as its answer. */
+    highlighted: Boolean = false,
 ) {
     if (message.blocked) return
 
     // `onLongClickLabel` is what puts the gesture in TalkBack's actions menu,
     // which is the only place it is discoverable without a visible affordance.
     val longPressLabel = stringResource(R.string.chat_message_actions)
+    val success = gg.pqp.app.onboarding.ui.successColor()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (highlighted) {
+                    Modifier
+                        .background(success.copy(alpha = 0.08f))
+                        .drawBehind {
+                            drawRect(success, size = size.copy(width = 3.dp.toPx()))
+                        }
+                        .testTag("message.answer")
+                } else {
+                    Modifier
+                },
+            )
             .combinedClickable(
                 onClick = {},
                 onLongClick = onOpenActions,
@@ -820,6 +1165,22 @@ private fun MessageRow(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
                     )
+                    if (badge != null) {
+                        Spacer(Modifier.width(Spacing.xs + 2.dp))
+                        Text(
+                            text = badge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .border(
+                                    Sizes.hairline,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                    MaterialTheme.shapes.extraSmall,
+                                )
+                                .padding(horizontal = 4.dp)
+                                .testTag("message.badge"),
+                        )
+                    }
                     if (message.pinnedAt != null) {
                         Spacer(Modifier.width(Spacing.sm))
                         Icon(
@@ -846,6 +1207,16 @@ private fun MessageRow(
                     )
                 }
                 Spacer(Modifier.height(2.dp))
+            }
+
+            // A reply to a story: the quote, with the picture only while the
+            // story lives and a hatched plate after.
+            message.storyId?.let { storyId ->
+                gg.pqp.app.stories.ui.StoryQuote(
+                    api = api,
+                    storyId = storyId,
+                    mine = selfId != null && message.authorId == selfId,
+                )
             }
 
             message.replyTo?.let { reply ->
@@ -1044,6 +1415,9 @@ private fun MessageActionsSheet(
     onTogglePin: () -> Unit,
     onReport: () -> Unit,
     onDismiss: () -> Unit,
+    onMessageAuthor: (() -> Unit)? = null,
+    /** What the surface adds ([ChatExtras.messageActions]), right after Reply. */
+    extraActions: List<ChatMessageAction> = emptyList(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -1094,6 +1468,22 @@ private fun MessageActionsSheet(
                 testTag = "message.reply-action",
                 onClick = onReply,
             )
+            extraActions.forEach { action ->
+                SheetAction(
+                    icon = action.icon,
+                    label = action.label,
+                    testTag = action.testTag,
+                    onClick = action.onClick,
+                )
+            }
+            if (onMessageAuthor != null) {
+                SheetAction(
+                    icon = PqpIcons.Messages,
+                    label = stringResource(R.string.conversas_message_author, message.authorName),
+                    testTag = "message.dm-author",
+                    onClick = onMessageAuthor,
+                )
+            }
             if (canEdit) {
                 SheetAction(
                     icon = PqpIcons.Edit,
@@ -1167,6 +1557,8 @@ private fun Composer(
     onFinishRecording: () -> Unit,
     onTogglePauseRecording: () -> Unit,
     onUndoDiscard: () -> Unit,
+    /** The placeholder, when the surface has a better one than "Message". */
+    hint: String? = null,
 ) {
     // The slow mode countdown, ticked here because a number that changes while
     // somebody looks at it has to be redrawn by something, and the view model
@@ -1301,7 +1693,9 @@ private fun Composer(
                 onValueChange = onValueChange,
                 placeholder = {
                     Text(
-                        text = stringResource(R.string.chat_composer_hint),
+                        text = hint ?: stringResource(R.string.chat_composer_hint),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1406,6 +1800,7 @@ private fun SendRefusalLine(refusal: SendRefusal?, waitSeconds: Int) {
             MessageRejectReason.SlowMode -> stringResource(R.string.chat_reject_slow_mode)
             MessageRejectReason.Automod -> refusal.message ?: stringResource(R.string.chat_reject_automod)
             MessageRejectReason.DatabaseUnavailable -> stringResource(R.string.chat_reject_database_unavailable)
+            MessageRejectReason.Locked -> stringResource(R.string.chat_reject_locked)
             null -> stringResource(R.string.chat_reject_generic)
         }
         else -> ""

@@ -310,6 +310,205 @@ describe("mapGuildTemplate", () => {
     ).toBe(true);
   });
 
+  describe("forums kept (forumChannels on)", () => {
+    function forumPlan(
+      forum: Record<string, unknown>,
+      ...rest: [{ forumChannels?: boolean }?]
+    ) {
+      return mapGuildTemplate(
+        template({
+          channels: [
+            { id: 1, type: 15, name: "ideas", position: 0, parent_id: null, ...forum },
+          ],
+        }),
+        ...(rest.length > 0 ? rest : [{ forumChannels: true }]),
+      );
+    }
+
+    it("keeps a forum as a forum with its tags in Discord's order", () => {
+      const plan = forumPlan({
+        topic: "Read the pins first",
+        available_tags: [
+          { id: "1", name: "Bug", moderated: false, emoji_id: null, emoji_name: "🐛" },
+          { id: "2", name: "Official", moderated: true, emoji_id: null, emoji_name: null },
+        ],
+      });
+      expect(plan.channels).toHaveLength(1);
+      expect(plan.channels[0]).toMatchObject({
+        type: "forum",
+        name: "ideas",
+        topic: "Read the pins first",
+        tags: [
+          { name: "Bug", emoji: "🐛", moderated: false },
+          { name: "Official", emoji: null, moderated: true },
+        ],
+      });
+      expect(plan.channels[0]?.flattenedFrom).toBeUndefined();
+      expect(plan.mappedAway.map((item) => item.reason)).toEqual([]);
+    });
+
+    it("keeps a forum inside a category", () => {
+      const plan = mapGuildTemplate(
+        template({
+          channels: [
+            { id: 1, type: 4, name: "Help", position: 0, parent_id: null },
+            { id: 2, type: 15, name: "questions", position: 0, parent_id: 1 },
+          ],
+        }),
+        { forumChannels: true },
+      );
+      const forum = plan.channels.find((channel) => channel.name === "questions");
+      expect(forum).toMatchObject({ type: "forum", parentTemplateId: 1, tags: [] });
+    });
+
+    it("gives a forum with no tags an empty list, and does not complain", () => {
+      const plan = forumPlan({});
+      expect(plan.channels[0]).toMatchObject({ type: "forum", tags: [] });
+      expect(plan.mappedAway).toEqual([]);
+    });
+
+    it("keeps 20 of 25 tags and says so", () => {
+      const plan = forumPlan({
+        available_tags: Array.from({ length: 25 }, (_, index) => ({
+          name: `tag ${index}`,
+        })),
+      });
+      expect(plan.channels[0]?.tags).toHaveLength(20);
+      expect(plan.channels[0]?.tags?.[19]?.name).toBe("tag 19");
+      expect(plan.mappedAway).toContainEqual({
+        reason: "forumTagsTrimmed",
+        name: "ideas",
+      });
+    });
+
+    it("clamps tag names to 20 characters without cutting an emoji in half", () => {
+      const plan = forumPlan({
+        available_tags: [
+          { name: "a very long tag name that goes on" },
+          { name: `${"x".repeat(19)}😀😀` },
+        ],
+      });
+      const names = plan.channels[0]?.tags?.map((tag) => tag.name) ?? [];
+      expect(names[0]).toBe("a very long tag name");
+      expect(names[1]).toBe(`${"x".repeat(19)}😀`);
+      for (const name of names) {
+        expect(Array.from(name).length).toBeLessThanOrEqual(20);
+      }
+      expect(plan.mappedAway.some((item) => item.reason === "forumTagsTrimmed")).toBe(true);
+    });
+
+    it("drops duplicates by lower-case name, after clamping", () => {
+      const plan = forumPlan({
+        available_tags: [
+          { name: "Bug" },
+          { name: "  bug  " },
+          { name: "BUG" },
+          { name: "Idea" },
+        ],
+      });
+      expect(plan.channels[0]?.tags?.map((tag) => tag.name)).toEqual(["Bug", "Idea"]);
+      expect(plan.mappedAway.some((item) => item.reason === "forumTagsTrimmed")).toBe(true);
+    });
+
+    it("keeps a custom-emoji tag by name and reports the lost picture", () => {
+      const plan = forumPlan({
+        available_tags: [
+          { name: "Pog", emoji_id: "123456789012345678", emoji_name: "pogchamp" },
+        ],
+      });
+      expect(plan.channels[0]?.tags).toEqual([
+        { name: "Pog", emoji: null, moderated: false },
+      ]);
+      expect(plan.mappedAway).toContainEqual({
+        reason: "forumTagsTrimmed",
+        name: "ideas",
+      });
+    });
+
+    it("skips junk entries instead of failing the template", () => {
+      const plan = forumPlan({
+        available_tags: [
+          null,
+          "text",
+          42,
+          { name: 7 },
+          { name: "   " },
+          { name: "ok", emoji_name: "x".repeat(40) },
+          { name: "fine", emoji_name: "plainword" },
+          { name: "both", emoji_name: "👍", moderated: "yes" },
+        ],
+      });
+      expect(plan.channels[0]?.tags).toEqual([
+        { name: "ok", emoji: null, moderated: false },
+        { name: "fine", emoji: null, moderated: false },
+        { name: "both", emoji: "👍", moderated: false },
+      ]);
+    });
+
+    it("reports the forum options that do not come along", () => {
+      for (const options of [
+        { default_reaction_emoji: { emoji_name: "👍", emoji_id: null } },
+        { default_sort_order: 1 },
+        { default_forum_layout: 2 },
+        { default_thread_rate_limit_per_user: 30 },
+        { flags: 16 },
+      ]) {
+        const plan = forumPlan(options);
+        expect(plan.mappedAway).toContainEqual({
+          reason: "forumSettings",
+          name: "ideas",
+        });
+      }
+      const quiet = forumPlan({
+        default_reaction_emoji: null,
+        default_sort_order: 0,
+        default_forum_layout: 1,
+        default_thread_rate_limit_per_user: 0,
+        flags: 0,
+      });
+      expect(quiet.mappedAway).toEqual([]);
+    });
+
+    it("flattens exactly as before when the option is off or absent", () => {
+      const forum = {
+        available_tags: [{ name: "shipped", emoji_name: "🚀" }],
+        default_sort_order: 1,
+      };
+      for (const plan of [
+        forumPlan(forum, { forumChannels: false }),
+        forumPlan(forum, {}),
+        mapGuildTemplate(
+          template({
+            channels: [
+              { id: 1, type: 15, name: "ideas", position: 0, parent_id: null, ...forum },
+            ],
+          }),
+        ),
+      ]) {
+        expect(plan.channels[0]).toMatchObject({
+          type: "text",
+          name: "ideas",
+          flattenedFrom: "forum",
+        });
+        expect(plan.channels[0]).not.toHaveProperty("tags");
+        expect(plan.mappedAway.map((item) => item.reason).sort()).toEqual([
+          "flattenForum",
+          "forumTags",
+        ]);
+      }
+    });
+
+    it("still flattens a media channel while forums are kept", () => {
+      const plan = mapGuildTemplate(
+        template({
+          channels: [{ id: 1, type: 16, name: "clips", position: 0, parent_id: null }],
+        }),
+        { forumChannels: true },
+      );
+      expect(plan.channels[0]).toMatchObject({ type: "text", flattenedFrom: "media" });
+    });
+  });
+
   it("keeps mixed text and voice positions inside a category", () => {
     const plan = mapGuildTemplate(
       template({
@@ -402,14 +601,15 @@ describe("mapDiscordPermissions", () => {
     expect(
       mapImportedRolePermissions(DiscordPermission.ADMINISTRATOR),
     ).toBe(0n);
+    // POST_STORIES has no Discord bit, so @everyone always gets pqp's default.
     expect(
       mapImportedEveryonePermissions(
         DiscordPermission.ADMINISTRATOR | DiscordPermission.SEND_MESSAGES,
       ),
-    ).toBe(Permission.SEND_MESSAGES);
+    ).toBe(Permission.SEND_MESSAGES | Permission.POST_STORIES);
     expect(
       mapImportedEveryonePermissions(DiscordPermission.MANAGE_GUILD),
-    ).toBe(0n);
+    ).toBe(Permission.POST_STORIES);
     expect(
       mapImportedOverwriteBits(
         DiscordPermission.VIEW_CHANNEL |

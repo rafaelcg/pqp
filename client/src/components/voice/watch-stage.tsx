@@ -16,6 +16,7 @@ import { STAGE_LAYER } from "@/lib/stage-layers";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { isSeatedOnAnotherDevice } from "@/lib/dual-device-watch";
 import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
+import { STAGE_HEIGHT_TALL } from "@/components/dm/call-stage-state";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
@@ -610,7 +611,7 @@ export function WatchChannelStage({
               // ordinary split.
               fill || fullscreen.active
                 ? "h-full min-h-0"
-                : "h-[68svh] min-h-[280px]",
+                : STAGE_HEIGHT_TALL,
             ),
       )}
       data-docked={docked ? "" : undefined}

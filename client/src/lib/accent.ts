@@ -22,6 +22,9 @@ export const APPEARANCE_ACCENT_HUE: Record<AppearancePreference, number> = {
   ocean: 242,
   catppuccin: 305,
   everforest: 126,
+  // Modo 2005. Accepted by the API before this client can pick it; its own
+  // tokens arrive with the look itself.
+  retro: 255,
 };
 
 export const ACCENT_SWATCHES = [15, 80, 125, 180, 210, 255, 300, 340] as const;

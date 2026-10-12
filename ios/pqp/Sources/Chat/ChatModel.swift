@@ -31,6 +31,24 @@ final class ChatModel {
     private var slowModeTicker: Task<Void, Never>?
     var isHeldBySlowMode: Bool { slowModeRemaining > 0 }
 
+    /// Chamar a atenção. `freshNudges` goes up by one for each fresh nudge
+    /// from somebody else that lands in this conversation: the screen watches
+    /// it to shake (or pulse its border under Reduce Motion) and buzz.
+    private(set) var freshNudges = 0
+    /// The short line a refused nudge leaves above the composer. Clears itself.
+    private(set) var nudgeNotice: String?
+    /// Until when the button rests after a nudge, the server's own cooldown.
+    private(set) var nudgeCooldownUntil: Date?
+    /// Who the button would nudge, for the refusal copy.
+    var nudgeTargetName = ""
+    @ObservationIgnored private var nudgeNoticeTask: Task<Void, Never>?
+    @ObservationIgnored private var nudgeCooldownTask: Task<Void, Never>?
+
+    var nudgeResting: Bool {
+        guard let nudgeCooldownUntil else { return false }
+        return nudgeCooldownUntil > Date()
+    }
+
     /// The message being replied to, shown above the composer until cleared.
     var replyingTo: Message?
     /// A timeout notice addressed to us, shown above the composer for this
@@ -76,6 +94,8 @@ final class ChatModel {
 
     private var session: SessionStore?
     private var channelId: String?
+    /// Opened in the thread slot (a forum post); `close` gives it back.
+    private var joinedAsThread = false
     private var handlerKey = UUID().uuidString
     private var lastTypingSentAt: Date?
     private var typingSweeper: Task<Void, Never>?
@@ -128,10 +148,12 @@ final class ChatModel {
         session: SessionStore,
         slowmodeSeconds: Int = 0,
         bypassesSlowMode: Bool = false,
-        serverId: String? = nil
+        serverId: String? = nil,
+        joinsAsThread: Bool = false
     ) async {
         self.session = session
         self.channelId = channelId
+        self.joinedAsThread = joinsAsThread
         self.slowmodeSeconds = slowmodeSeconds
         self.bypassesSlowMode = bypassesSlowMode
         // "This conversation is on screen", for the one consumer that needs it:
@@ -156,7 +178,12 @@ final class ChatModel {
         isLoading = messages.isEmpty
         startTypingSweeper()
 
-        async let joined: Void = session.realtime.join(channelId: channelId)
+        // A forum post takes the connection's THREAD slot, so the forum it
+        // belongs to keeps the primary one and its list stays live behind it
+        // (see `ForumHomeModel`). Everything else is the primary slot.
+        async let joined: Void = joinsAsThread
+            ? session.realtime.joinThread(channelId: channelId)
+            : session.realtime.join(channelId: channelId)
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
@@ -173,7 +200,7 @@ final class ChatModel {
         } catch {
             // With a cached page already on screen this is a note, not a blank
             // screen — but it is still said out loud rather than swallowed.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         attachmentsEnabled = await attachments
         voiceNotesEnabled = (await voiceConfig)?.offersVoiceNotes ?? false
@@ -237,6 +264,10 @@ final class ChatModel {
         if let channelId {
             session?.channelWentAway(channelId)
         }
+        if joinedAsThread, let realtime = session?.realtime, let channelId {
+            joinedAsThread = false
+            Task { await realtime.leaveThread(channelId: channelId) }
+        }
         typingSweeper?.cancel()
         typingSweeper = nil
         // Leaving the screen is leaving the retry: no file is kept behind it,
@@ -257,7 +288,7 @@ final class ChatModel {
             messages.insert(contentsOf: page.messages, at: 0)
             hasMore = page.hasMore
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -281,7 +312,7 @@ final class ChatModel {
             messages.append(pending)
             isNearBottom = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isSending = false
     }
@@ -387,7 +418,7 @@ final class ChatModel {
             messages.removeAll { $0.id == rowId }
             inFlightVoice[rowId] = nil
             keepAsFailed(held, epoch: epoch)
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -458,7 +489,7 @@ final class ChatModel {
                     attachmentIds.append(try await uploader.upload(item, channelId: channelId))
                 }
             } catch {
-                self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                if let shown = error.userFacingMessage { self.error = shown }
                 // Put the text back so the message is not silently lost.
                 draft = body
                 isSending = false
@@ -533,6 +564,8 @@ final class ChatModel {
         case "slow-mode": String(localized: "Slow mode is on.")
         case "automod": String(localized: "AutoMod blocked this message.")
         case "database-unavailable": String(localized: "Service is temporarily unavailable. Try again in a moment.")
+        // A forum post staff closed to replies.
+        case "locked": String(localized: "This post is closed. Only staff can reply.")
         default: String(localized: "This message wasn't sent.")
         }
     }
@@ -584,7 +617,7 @@ final class ChatModel {
                 messages[index] = updated
             }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isSending = false
     }
@@ -599,7 +632,7 @@ final class ChatModel {
         } catch {
             // Put it back rather than leaving a gap that looks like it worked.
             messages = previous
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -652,7 +685,7 @@ final class ChatModel {
         } catch {
             // Includes the per-channel pin limit, which the server answers with
             // a 409 and its own wording.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -675,13 +708,42 @@ final class ChatModel {
             // 400 here is the server refusing the *target*: a DM (already the
             // scoped side-conversation threads exist to create) or a message
             // inside a thread (they do not nest). Its wording says which.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
             return nil
         }
     }
 
     func isMine(_ message: Message) -> Bool {
         message.authorId == session?.currentUser?.id
+    }
+
+    /// Sends a nudge. The line arrives as an ordinary `message-broadcast`; a
+    /// refusal arrives as `nudge-refused`. The button rests for the cooldown
+    /// either way, so a double tap is one nudge.
+    func sendNudge() async {
+        guard let session, let channelId, !nudgeResting else { return }
+        restNudge(for: NudgeRules.cooldown)
+        await session.realtime.sendNudge(channelId: channelId, nonce: UUID().uuidString)
+    }
+
+    private func restNudge(for seconds: TimeInterval) {
+        nudgeCooldownUntil = Date().addingTimeInterval(seconds)
+        nudgeCooldownTask?.cancel()
+        nudgeCooldownTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(seconds * 1000) + 50))
+            guard !Task.isCancelled else { return }
+            self?.nudgeCooldownUntil = nil
+        }
+    }
+
+    private func showNudgeNotice(_ text: String) {
+        nudgeNotice = text
+        nudgeNoticeTask?.cancel()
+        nudgeNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            self?.nudgeNotice = nil
+        }
     }
 
     func noteTyping() {
@@ -717,6 +779,11 @@ final class ChatModel {
                 }
             } else if !messages.contains(where: { $0.id == message.id }) {
                 messages.append(message)
+                // Only a message seen for the first time can shake: a replay
+                // of one already on screen is not news.
+                if NudgeRules.isFresh(message, viewerId: session?.currentUser?.id) {
+                    freshNudges += 1
+                }
             }
 
         case .messageUpdated(let message):
@@ -800,6 +867,18 @@ final class ChatModel {
                 holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
             }
 
+        case .nudgeRefused(let refusal):
+            guard refusal.channelId == channelId else { return }
+            showNudgeNotice(NudgeRules.refusalCopy(refusal.reason, name: nudgeTargetName))
+            if refusal.reason == "cooldown", let wait = refusal.retryAfterMs, wait > 0 {
+                restNudge(for: TimeInterval(wait) / 1000)
+            } else {
+                // Nothing was stored: the button is free again for whatever
+                // the line tells them to do instead.
+                nudgeCooldownTask?.cancel()
+                nudgeCooldownUntil = nil
+            }
+
         case .sanctionNotice(let notice):
             // Attached to the composer the person is actually looking at; a
             // notice for some other channel would read as a non sequitur.
@@ -836,7 +915,7 @@ final class ChatModel {
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
         case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
-             .presence, .activity, .other,
+             .presence, .activity, .other, .storiesUpdate,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,
              .voiceTransportChanged, .voiceJoinRefused, .voiceScreenShareDenied,
@@ -849,7 +928,10 @@ final class ChatModel {
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a
              // call outlives the thread it was placed from.
-             .callIncoming, .callRingCancelled, .callDeclined:
+             .callIncoming, .callRingCancelled, .callDeclined,
+             // A forum's list frames are the forum screen's. An open post
+             // reads its own state from them in `ForumPostModel`.
+             .forumPostUpsert, .forumPostRemoved:
             break
         }
     }

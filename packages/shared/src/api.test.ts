@@ -266,7 +266,7 @@ describe("userPreferencesSchema", () => {
     }
   });
 
-  it("accepts the four appearance skins and rejects a brand name", () => {
+  it("accepts the five appearance skins and rejects anything else", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
       true,
     );
@@ -285,11 +285,33 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "night" }).success).toBe(
       true,
     );
+    expect(userPreferencesSchema.parse({ appearance: "retro" })).toEqual({
+      appearance: "retro",
+    });
     expect(
       userPreferencesSchema.safeParse({ appearance: "discord" }).success,
     ).toBe(false);
     expect(
       userPreferencesSchema.safeParse({ appearance: "onyx" }).success,
+    ).toBe(false);
+    // Absent stays absent: a patch that does not mention a look keeps it.
+    expect(userPreferencesSchema.parse({ theme: "dark" })).toEqual({ theme: "dark" });
+  });
+
+  it("keeps the nudge opt-out, the easter-egg finds and the new sound cues", () => {
+    expect(
+      userPreferencesSchema.parse({
+        allowNudges: false,
+        easterEggs: { retro: "2026-10-11T12:00:00.000Z" },
+        sounds: { nudge: false, friendOnline: true },
+      }),
+    ).toEqual({
+      allowNudges: false,
+      easterEggs: { retro: "2026-10-11T12:00:00.000Z" },
+      sounds: { nudge: false, friendOnline: true },
+    });
+    expect(
+      userPreferencesSchema.safeParse({ easterEggs: { retro: "yesterday" } }).success,
     ).toBe(false);
   });
 

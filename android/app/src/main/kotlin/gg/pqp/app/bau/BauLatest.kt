@@ -148,6 +148,10 @@ enum class BauThumb { Image, Plate, Text }
  * https only, and plain http only for this app's own API (a debug build
  * against the local stack). Never a LAN or loopback address somebody typed.
  */
+/** The picture a thumbnail shows: the chosen cover for a video, else the media itself. */
+fun bauThumbSource(card: BauPostCard): String? =
+    if (card.poster == BauCardPoster.Cover) card.posterUrl else card.mediaUrl
+
 fun bauThumbUrl(raw: String?, apiUrl: String): String? {
     if (raw.isNullOrBlank()) return null
     val api = apiUrl.trimEnd('/')
@@ -160,7 +164,7 @@ fun bauThumbUrl(raw: String?, apiUrl: String): String? {
 }
 
 fun bauThumb(card: BauPostCard): BauThumb = when (card.poster) {
-    BauCardPoster.Image -> if (card.locked) BauThumb.Plate else BauThumb.Image
+    BauCardPoster.Image, BauCardPoster.Cover -> if (card.locked) BauThumb.Plate else BauThumb.Image
     BauCardPoster.VideoFrame, BauCardPoster.Plate -> BauThumb.Plate
     BauCardPoster.None -> BauThumb.Text
 }

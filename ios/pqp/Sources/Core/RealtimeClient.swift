@@ -13,7 +13,10 @@ enum RealtimeEvent: Sendable {
     case reaction(channelId: String, messageId: String, emoji: String, userId: String, added: Bool, displayName: String?)
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
-    case activity(channelId: String, serverId: String?, mention: Bool)
+    /// `channel-activity`. `preview` is set only for a conversation, and only
+    /// when the reader has in-app previews on: the server leaves the text out
+    /// otherwise. See `ConversationActivityPreview`.
+    case activity(channelId: String, serverId: String?, mention: Bool, preview: ConversationActivityPreview?)
     /// A thread on `messageId` was created, or gained a message. Fanned out to
     /// viewers of the PARENT channel — `channelId` is the parent, not the
     /// thread — and deliberately content-free: the thread's own messages travel
@@ -198,6 +201,19 @@ enum RealtimeEvent: Sendable {
     case callRingCancelled(conversationId: String, reason: String)
     /// Somebody we were waiting for said no; the call itself continues.
     case callDeclined(conversationId: String, userId: String)
+
+    /// A forum post appeared or changed: published, bumped by a reply,
+    /// retitled, retagged, pinned, closed, resolved. Sent to whoever joined
+    /// the FORUM (`join-channel` on the forum id); see `ForumList.upsert`.
+    case forumPostUpsert(forumId: String, post: ForumPostSummary)
+    /// A forum post was deleted. Sent to the forum's viewers and to the
+    /// post's own, so an open post can say so.
+    case forumPostRemoved(forumId: String, postId: String)
+    /// `nudge-refused`: a chamar a atenção this socket sent did not land.
+    case nudgeRefused(NudgeRefusal)
+    /// `stories-update`: content-free, refetch the strip it names. Never sent
+    /// on a view, a reaction or an expiry.
+    case storiesUpdate(StoriesUpdate)
     case other
 }
 
@@ -681,6 +697,15 @@ actor RealtimeClient {
         await send(raw: ["type": "thread-leave"])
     }
 
+    /// Leaves the thread slot only if it still holds `channelId`. Closing one
+    /// forum post and opening the next races: the old screen's leave can land
+    /// after the new screen's join, and the frame names no channel, so
+    /// without this it would empty the slot the new post just took.
+    func leaveThread(channelId: String) async {
+        guard joinedThreadChannelId == channelId else { return }
+        await leaveThread()
+    }
+
     /// Returns the nonce so the caller can match the echo back to its optimistic
     /// row. There is no ack frame: the echo on `message-broadcast` is what
     /// confirms a send, and `message-rejected` (same nonce) is what refuses
@@ -825,6 +850,12 @@ actor RealtimeClient {
         await send(raw: ["type": "set-voice-state", "muted": muted, "deafened": deafened])
     }
 
+    /// Chamar a atenção: `{type: "nudge", channelId, nonce}`. No body; the
+    /// server writes the message, or answers `nudge-refused`.
+    func sendNudge(channelId: String, nonce: String) async {
+        await send(raw: ["type": "nudge", "channelId": channelId, "nonce": nonce])
+    }
+
     func sendTyping(channelId: String) async {
         await send(raw: ["type": "typing", "channelId": channelId])
     }
@@ -859,6 +890,12 @@ actor RealtimeClient {
         let users: [PresenceUser]?
         let serverId: String?
         let mention: Bool?
+        /// `channel-activity` for a conversation: the redacted preview line
+        /// and who wrote it. All three absent for a server channel, and for a
+        /// reader with in-app previews off.
+        let preview: String?
+        let authorName: String?
+        let authorId: String?
         // Voice
         let peerId: String?
         let voiceChannelId: String?
@@ -915,6 +952,7 @@ actor RealtimeClient {
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
+            case preview, authorName, authorId
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
@@ -959,6 +997,13 @@ actor RealtimeClient {
             userId = try c.decode(String.self, forKey: .userId)
             listenedAt = (try? c.decodeIfPresent(Date.self, forKey: .listenedAt)) ?? nil
         }
+    }
+
+    /// `stories-update`: `{scope, serverId?, removedStoryIds?}`.
+    private struct StoriesUpdateFrame: Decodable {
+        let scope: String
+        let serverId: String?
+        let removedStoryIds: [String]?
     }
 
     /// `voice-note-updated`: `{channelId, messageId, attachmentId,
@@ -1042,6 +1087,20 @@ actor RealtimeClient {
      which is the whole reason `LiveStreamFrame` and this type exist rather
      than one more key added to `Envelope`.
      */
+    /// `forum-post-upsert`: `{forumId, post}`. Its own type because `post` is
+    /// a key no other frame uses, and a summary this build cannot read must
+    /// drop the frame rather than the socket.
+    private struct ForumPostUpsertFrame: Decodable {
+        let forumId: String
+        let post: ForumPostSummary
+    }
+
+    /// `forum-post-removed`: `{forumId, postId}`.
+    private struct ForumPostRemovedFrame: Decodable {
+        let forumId: String
+        let postId: String
+    }
+
     private struct WatchPartyUpdateFrame: Decodable {
         let channelId: String
         let party: WatchPartyPayload?
@@ -1126,6 +1185,20 @@ actor RealtimeClient {
             return
         }
 
+        if probe.type == "stories-update" {
+            // Decoded on its own: `removedStoryIds` is in no other frame, and
+            // the scope/serverId pairing is the contract's to enforce.
+            guard let frame = try? Coding.decoder.decode(StoriesUpdateFrame.self, from: data),
+                  ["server", "friends", "own"].contains(frame.scope),
+                  (frame.scope == "server") == (frame.serverId != nil)
+            else { return }
+            continuation?.yield(.storiesUpdate(StoriesUpdate(
+                scope: frame.scope, serverId: frame.serverId,
+                removedStoryIds: frame.removedStoryIds ?? []
+            )))
+            return
+        }
+
         if probe.type == "voice-note-updated" {
             guard let frame = try? Coding.decoder.decode(VoiceNoteUpdatedFrame.self, from: data)
             else { return }
@@ -1188,6 +1261,14 @@ actor RealtimeClient {
             event = .reaction(channelId: channelId, messageId: messageId,
                               emoji: emoji, userId: userId, added: added,
                               displayName: envelope.displayName)
+        case "nudge-refused":
+            guard let channelId = envelope.channelId, let reason = envelope.reason else { return }
+            event = .nudgeRefused(NudgeRefusal(
+                channelId: channelId,
+                nonce: envelope.nonce,
+                reason: reason,
+                retryAfterMs: envelope.retryAfterMs
+            ))
         case "typing-broadcast":
             guard let channelId = envelope.channelId, let userId = envelope.userId,
                   let displayName = envelope.displayName else { return }
@@ -1202,8 +1283,15 @@ actor RealtimeClient {
             event = .presence(channelId: channelId, users: users)
         case "channel-activity":
             guard let channelId = envelope.channelId else { return }
+            let preview = envelope.authorId.map { authorId in
+                ConversationActivityPreview(
+                    authorId: authorId,
+                    authorName: envelope.authorName ?? "",
+                    preview: envelope.preview
+                )
+            }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
-                              mention: envelope.mention ?? false)
+                              mention: envelope.mention ?? false, preview: preview)
         case "thread-update":
             guard let channelId = envelope.channelId, let messageId = envelope.messageId,
                   let thread = envelope.thread else { return }
@@ -1351,6 +1439,14 @@ actor RealtimeClient {
             guard let frame = try? Coding.decoder.decode(WatchPartyUpdateFrame.self, from: data)
             else { return }
             event = .watchPartyUpdate(channelId: frame.channelId, party: frame.party)
+        case "forum-post-upsert":
+            guard let frame = try? Coding.decoder.decode(ForumPostUpsertFrame.self, from: data)
+            else { return }
+            event = .forumPostUpsert(forumId: frame.forumId, post: frame.post)
+        case "forum-post-removed":
+            guard let frame = try? Coding.decoder.decode(ForumPostRemovedFrame.self, from: data)
+            else { return }
+            event = .forumPostRemoved(forumId: frame.forumId, postId: frame.postId)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)

@@ -19,6 +19,8 @@ import {
  *   /app/server/<sid>/channel/<cid>     → { kind: "channel", serverId, channelId }
  *   /app/server/<sid>/channel/<cid>/message/<mid>
  *                                       → …and highlight that message
+ *   /app/server/<sid>/channel/<forumId>/post/<postId>
+ *                                       → …the forum, with that post open
  *   /app/server/<sid>/bau               → { kind: "home", serverId, postId: null }
  *   /app/server/<sid>/bau/<postId>      → { kind: "home", serverId, postId }
  *   /app/dm                             → { kind: "conversation", channelId: null }
@@ -39,6 +41,12 @@ export type AppRouteTarget =
       serverId: string;
       channelId: string | null;
       messageId: string | null;
+      /**
+       * A forum post open over its forum (`channelId` is the forum). A post
+       * is a thread channel of its own, but it is addressed through the
+       * forum because the forum is what the sidebar and the back button know.
+       */
+      postId: string | null;
     }
   | {
       kind: "conversation";
@@ -110,6 +118,10 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
         channelId && deeper === "message" && third
           ? decodeURIComponent(third)
           : null,
+      postId:
+        channelId && deeper === "post" && third
+          ? decodeURIComponent(third)
+          : null,
     };
   }
 
@@ -143,6 +155,19 @@ export function channelRoutePath(
 ): string {
   const base = `/app/server/${encodeURIComponent(serverId)}`;
   return channelId ? `${base}/channel/${encodeURIComponent(channelId)}` : base;
+}
+
+/**
+ * A forum post's shareable address: the forum, with the post open on top.
+ * What "Copiar link" copies and what the address bar shows while a post is
+ * open, so a refresh or a pasted link lands on the same post.
+ */
+export function forumPostRoutePath(
+  serverId: string,
+  forumId: string,
+  postId: string,
+): string {
+  return `${channelRoutePath(serverId, forumId)}/post/${encodeURIComponent(postId)}`;
 }
 
 /** Inverse of {@link parseAppRoute} for the Baú case. */
@@ -260,6 +285,9 @@ export function signedOutRedirectPath(pathname: string): string {
     return target.channelId && target.messageId
       ? messageRoutePath(null, target.channelId, target.messageId)
       : conversationRoutePath(target.channelId);
+  }
+  if (target.channelId && target.postId) {
+    return forumPostRoutePath(target.serverId, target.channelId, target.postId);
   }
   return target.channelId && target.messageId
     ? messageRoutePath(target.serverId, target.channelId, target.messageId)

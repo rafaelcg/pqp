@@ -288,6 +288,11 @@ describe("optimistic sending", () => {
     ).toEqual({ key: "chat.reject.automod", text: "Aqui não." });
   });
 
+  it("names a closed forum post and does not offer retry on it", () => {
+    expect(failedSendKey("locked")).toBe("chat.reject.locked");
+    expect(messageCanRetry({ failed: true, rejectReason: "locked" })).toBe(false);
+  });
+
   it("does not offer retry on an AutoMod refusal", () => {
     expect(messageCanRetry({ failed: true, rejectReason: "automod" })).toBe(false);
   });

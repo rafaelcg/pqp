@@ -840,12 +840,12 @@ test("a camera in a server voice channel reaches the other member", async ({
   const pair = await seedVoiceServer("vq-vc-a", "vq-vc-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 
@@ -894,7 +894,16 @@ test("a camera in a server voice channel reaches the other member", async ({
     );
     expect(camera.maxBitrate, "360p: channel camera ceiling").toBe(400_000);
     expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(screenLow);
-    expect(camera.width, "360p: channel camera capture shrank").toBe(640);
+    // Polled, not read off `camera`: the same race `expectCapturePixels`
+    // documents for the DM call. `senderFor` waited for the CEILING above;
+    // the capture size is a separate `applyConstraints` and lands later on a
+    // busy runner (CI, 2026-10-11: "Expected: 640, Received: 1280").
+    await expect
+      .poll(async () => (await senderFor(page, "camera")).width, {
+        timeout: 20_000,
+        message: "360p: channel camera capture shrank",
+      })
+      .toBe(640);
 
     // Still a picture at the other end after the change: the whole promise of
     // re-shaping the live track rather than re-capturing it.

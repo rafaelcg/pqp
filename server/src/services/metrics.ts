@@ -11,6 +11,8 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
+import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
@@ -19,6 +21,7 @@ import {
   communityHomeCaptionsMetrics,
   type CommunityHomeCaptionsMetrics,
 } from "./community-home-captions.js";
+import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
   communityColumns,
   communityTag,
@@ -342,6 +345,15 @@ export interface AdminMetrics {
    */
   communityHomeCaptions: CommunityHomeCaptionsMetrics;
   /**
+   * Stories (`services/story-metrics.ts`): this process's counters (posts,
+   * views, scans, video jobs, sweep deletes and failures) and, deployment
+   * wide and cached 30 s, the numbers the feature is judged by: posters and
+   * their concentration, viewers per story, openers, reactions, replies and
+   * whether replies got answers, repeat posters, reports, removals, holds,
+   * live bytes and the sweep lag. Live like `communityHomeCaptions`.
+   */
+  stories: StoriesMetrics;
+  /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
    * 20 s debounce or the cooldown, notices claimed, people told, why people
@@ -350,6 +362,23 @@ export interface AdminMetrics {
    * Live, never from the 30 s cache.
    */
   streamAlerts: StreamAlertMetrics;
+  /**
+   * Chamar a atenção (`services/nudge.ts`), since this process started:
+   * whether the `nudge` flag is on here, nudges sent, and refusals by reason
+   * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
+   * like the push counters: with two instances read each. Live, never from
+   * the 30 s cache.
+   */
+  nudge: NudgeMetrics;
+  /**
+   * The mixed channel list (`services/channel-layout.ts`): the flag's global
+   * answer, servers migrated and reverted (from the table), and since this
+   * process started: migrations, no-ops, reverts, full-order PUTs, stale PUTs
+   * refused, and the two legacy rules for older clients (a per-type move index
+   * translated, a create with no parentId sent to the first category). Live,
+   * never from the 30 s cache.
+   */
+  channelLayout: ChannelLayoutReport;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1209,7 +1238,10 @@ type CachedMetrics = Omit<
   | "flags"
   | "communityHomeTranslation"
   | "communityHomeCaptions"
+  | "stories"
   | "streamAlerts"
+  | "nudge"
+  | "channelLayout"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1399,7 +1431,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM (
            SELECT server_id, COUNT(*) AS n
              FROM channels
-            WHERE kind = 'server'
+            -- Sidebar channels only: a thread is a channel row too, and a
+            -- forum holds one per post, so counting them would make this
+            -- card jump the day a forum fills up.
+            WHERE kind = 'server' AND type <> 'thread'
             GROUP BY server_id
          ) t`,
     ),
@@ -1992,6 +2027,8 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
+    channelLayout,
   ] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
@@ -2000,6 +2037,8 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
+    storiesMetrics(),
+    channelLayoutReport(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -2015,7 +2054,10 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
     streamAlerts: streamAlertMetrics(),
+    nudge: nudgeMetrics(),
+    channelLayout,
   };
 }
 

@@ -105,6 +105,16 @@
         if (appearance === "night") {
           document.documentElement.dataset.theme = "dark";
         }
+        // Modo 2005 paints over the look above (which it keeps, to go back
+        // to). Lockstep with `applyAppearance`: on, and not switched off by
+        // the operator's kill switch.
+        if (
+          (localStorage.getItem("pqp-appearance-retro") === "1" ||
+            storedAppearance === "retro") &&
+          localStorage.getItem("pqp-retro-killed") !== "1"
+        ) {
+          document.documentElement.dataset.appearance = "retro";
+        }
         const storedHue = localStorage.getItem("pqp-accent-hue");
         if (storedHue && storedHue !== "default") {
           const hue = Number(storedHue);

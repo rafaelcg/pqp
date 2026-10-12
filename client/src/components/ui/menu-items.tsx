@@ -85,6 +85,11 @@ export function MenuItemRows({
               </span>
             )}
             <span className="min-w-0 flex-1">{item.label}</span>
+            {item.trailing ? (
+              <span className="ml-3 flex shrink-0 items-center">
+                {item.trailing}
+              </span>
+            ) : null}
             {item.checked ? (
               <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             ) : null}

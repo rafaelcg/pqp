@@ -17,9 +17,14 @@ import {
   type ChanceRequest,
   type ChannelFanoutFrame,
   type ChatServerMessage,
+  type ForumPostSummary,
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
+  type MessageSystemKind,
+  NUDGE_BODY,
+  type NudgeFrame,
+  type NudgeRefusalReason,
   type PollRequest,
   type ProfileUpdate,
   type ServerRemoved,
@@ -70,6 +75,13 @@ import {
 import { isEnabled } from "../lib/flags.js";
 import { pushChannelActivity } from "../services/push.js";
 import {
+  decideNudge,
+  recordNudgeRefused,
+  recordNudgeSent,
+  refundNudgeBudget,
+  takeNudgeAttempt,
+} from "../services/nudge.js";
+import {
   getChannel,
   getChannelAudience,
   invalidateServerChannelList,
@@ -87,8 +99,14 @@ import {
   type AutomodHitEffects,
 } from "../services/automod.js";
 import { listServerChannelIds } from "../services/servers.js";
+import { forumPostLockState } from "../services/forum-guards.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
+// --- forums ---
+import {
+  bumpForumPostActivity,
+  getForumPostSummary,
+} from "../services/forums.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
@@ -1752,6 +1770,12 @@ async function notifyChannelActivity(
      * below, on their own `notifications.previewInApp`.
      */
     preview?: { authorId: string; authorName: string } & MessagePreview;
+    /**
+     * The message is a system message (`nudge`). Rides the frame so a client
+     * not looking at the conversation can say who called for its attention,
+     * and the push so the lock screen says so too.
+     */
+    systemKind?: MessageSystemKind | null;
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -1843,6 +1867,10 @@ async function notifyChannelActivity(
               authorId: options!.preview!.authorId,
             }
           : {}),
+        // Not content: "this was a nudge" is the whole of it, and a person who
+        // hid previews still gets the shake. Left out for an ordinary message,
+        // so that frame is byte for byte what it was.
+        ...(options?.systemKind ? { systemKind: options.systemKind } : {}),
       }),
     );
   });
@@ -1869,8 +1897,118 @@ async function notifyChannelActivity(
       voiceDurationMs: options?.preview?.isVoice
         ? options.preview.voiceDurationMs
         : null,
+      systemKind: options?.systemKind ?? null,
     });
   }
+}
+
+// --- forums ---
+//
+// The forum list's live rows. Every frame goes to the FORUM through
+// `broadcastToChannel`, so it crosses to the sibling instance on the channel
+// relay like any channel frame (both types are in `CHAT_SERVER_MESSAGE_TYPES`,
+// which is what lets the receiving side accept them).
+
+/** A post appeared or changed: retitled, retagged, pinned, bumped, resolved. */
+export function announceForumPostUpdate(post: ForumPostSummary): void {
+  broadcastToChannel(post.forumId, {
+    type: "forum-post-upsert",
+    forumId: post.forumId,
+    post,
+  });
+}
+
+/**
+ * A post was just published: its row for the forum's viewers, and the
+ * forum's unread dot for everyone else who can see it. The activity frame is
+ * the same content-free `channel-activity` a message sends (a server
+ * channel's frame never carries a preview), and it pings nobody: a new post
+ * records no mentions on the forum, and the opening message's own mentions
+ * already went out on the post's id.
+ */
+export async function announceForumPost(
+  post: ForumPostSummary,
+  authorId: string,
+): Promise<void> {
+  announceForumPostUpdate(post);
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: post.forumId,
+      authorId,
+      mentions: [],
+      repliedToUserId: null,
+      preview: null,
+    });
+  }
+  await notifyChannelActivity(post.forumId, authorId, [], null, {
+    webPush: false,
+  });
+}
+
+/** A post was deleted: the forum's list drops the row, an open panel closes. */
+export function announceForumPostRemoved(forumId: string, postId: string): void {
+  const frame = { type: "forum-post-removed" as const, forumId, postId };
+  broadcastToChannel(forumId, frame);
+  broadcastToChannel(postId, frame);
+}
+
+/**
+ * Posts with a bump in flight on this process, and the newest message time
+ * that arrived while it ran. A burst of replies to one post costs one refresh
+ * in flight plus one trailing refresh, not one summary read per reply.
+ */
+const forumBumps = new Map<string, { latest: Date | null; done?: Promise<void> }>();
+
+/** Test seam: wait for every bump in flight on this process to land. */
+export async function settleForumBumps(): Promise<void> {
+  while (forumBumps.size > 0) {
+    await Promise.all([...forumBumps.values()].map((state) => state.done));
+  }
+}
+
+/**
+ * The bump, after a message landed in a thread channel. Fire and forget: the
+ * send never waits on the post's summary (its reply count and thumbnail are
+ * reads over the post), and never fails because of it. The message is already
+ * stored and fanned out; a list one reply behind until the next bump is the
+ * cost of a database hiccup here.
+ */
+function bumpForumPost(postId: string, at: Date): void {
+  const running = forumBumps.get(postId);
+  if (running) {
+    if (!running.latest || at > running.latest) {
+      running.latest = at;
+    }
+    return;
+  }
+  const state: { latest: Date | null; done?: Promise<void> } = { latest: null };
+  forumBumps.set(postId, state);
+  state.done = (async () => {
+    let next: Date | null = at;
+    try {
+      while (next) {
+        // Each round on its own: a failed summary read must not drop a reply
+        // that arrived meanwhile, whose time is the next round's bump.
+        try {
+          const forumId = await bumpForumPostActivity(postId, next);
+          if (!forumId) {
+            // A chat thread, or a shell: nothing listed moved, nor will.
+            return;
+          }
+          const summary = await getForumPostSummary(postId);
+          if (summary) {
+            announceForumPostUpdate(summary);
+          }
+        } catch (error) {
+          console.error("[forums] bump failed:", error);
+        }
+        next = state.latest;
+        state.latest = null;
+      }
+    } finally {
+      forumBumps.delete(postId);
+    }
+  })();
 }
 
 /**
@@ -1963,6 +2101,139 @@ function sendMessageRejected(
 }
 
 /**
+ * Tell the sender their nudge did not land, and count why. This socket only,
+ * like `sendMessageRejected`: never the channel, never the bus.
+ */
+function sendNudgeRefused(
+  socket: WebSocket,
+  channelId: string,
+  nonce: string | undefined,
+  reason: NudgeRefusalReason,
+  retryAfterMs?: number,
+): void {
+  recordNudgeRefused(reason);
+  if (socket.readyState !== 1) {
+    return;
+  }
+  socket.send(
+    encode({
+      type: "nudge-refused",
+      channelId,
+      reason,
+      ...(nonce ? { nonce } : {}),
+      ...(retryAfterMs && retryAfterMs > 0
+        ? { retryAfterMs: Math.ceil(retryAfterMs) }
+        : {}),
+    }),
+  );
+}
+
+/**
+ * Chamar a atenção. The rules are `decideNudge`'s; once they pass, the nudge
+ * is an ordinary send with a fixed body and `systemKind: "nudge"`, so it goes
+ * through every check `postChannelMessage` makes (access, the block guard
+ * again, the closed-1:1 restore) and out through the same broadcast, cluster
+ * relay, `channel-activity` and push as a typed message. Success is therefore
+ * not a frame of its own: the sender learns it landed from the echo of the
+ * stored message, exactly like a text.
+ */
+async function handleNudge(
+  conn: ChatConnection,
+  frame: NudgeFrame,
+): Promise<void> {
+  // Every frame spends an attempt before anything reads the database, and
+  // nothing reads it while the feature is off.
+  const attempt = takeNudgeAttempt(conn.user.id);
+  if (!attempt.ok) {
+    sendNudgeRefused(
+      conn.socket,
+      frame.channelId,
+      frame.nonce,
+      "cooldown",
+      attempt.retryAfterMs,
+    );
+    return;
+  }
+  if (!isEnabled("nudge")) {
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+    return;
+  }
+  try {
+    await nudgeOnce(conn, frame);
+  } catch (error) {
+    // A read that failed (the database) still gets an answer, so the button
+    // lets go at once instead of after its own timeout. If the throw came
+    // after the row committed, the sender already has the echo, and the web
+    // client ignores a refusal for a nudge it is no longer waiting on.
+    console.error("[chat] nudge failed:", error);
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+  }
+}
+
+async function nudgeOnce(conn: ChatConnection, frame: NudgeFrame): Promise<void> {
+  // A replay of a nudge that already landed is answered with the stored
+  // message, before the rules: the cooldown it would now hit was spent by the
+  // original. Only to somebody who can still see the conversation.
+  if (frame.nonce) {
+    if (!(await canAccessChannel(frame.channelId, conn.user.id))) {
+      sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+      return;
+    }
+    const existing = await findMessageByNonce(
+      frame.channelId,
+      conn.user.id,
+      frame.nonce,
+    );
+    if (existing) {
+      if (conn.socket.readyState === 1) {
+        conn.socket.send(
+          encode({
+            type: "message-broadcast",
+            message: mapMessage(existing),
+            nonce: frame.nonce,
+          }),
+        );
+      }
+      return;
+    }
+  }
+
+  const decision = await decideNudge(conn.user.id, frame.channelId);
+  if (!decision.ok) {
+    sendNudgeRefused(
+      conn.socket,
+      frame.channelId,
+      frame.nonce,
+      decision.reason,
+      decision.retryAfterMs,
+    );
+    return;
+  }
+
+  const posted = await postChannelMessage({
+    author: conn.user,
+    channelId: frame.channelId,
+    body: NUDGE_BODY,
+    nonce: frame.nonce,
+    senderSocket: conn.socket,
+    systemKind: "nudge",
+  });
+  // A throw is NOT refunded: it may come after the row committed (a fan-out
+  // step), and a refund then would allow a second nudge inside the cooldown.
+  if (!posted.ok) {
+    // No access, a block that landed between the two reads, the database:
+    // all of them are the one neutral token, for the same reason as above.
+    // A not-ok answer is always decided before the insert, so nothing was
+    // stored and the cooldown is handed back; the attempt limiter above still
+    // bounds how often this can be tried.
+    await refundNudgeBudget(conn.user.id, frame.channelId);
+    sendNudgeRefused(conn.socket, frame.channelId, frame.nonce, "unavailable");
+    return;
+  }
+  recordNudgeSent();
+}
+
+/**
  * The shared create + fan-out path. The WebSocket `message-create` handler
  * and `POST /api/channels/:channelId/messages` both land here so a bot HTTP
  * send is the same message a person would have typed: history, mentions,
@@ -1986,6 +2257,13 @@ export type PostChannelMessageInput = {
   nonce?: string;
   senderSocket?: WebSocket;
   beforeCreate?: () => void | Promise<void>;
+  /**
+   * A message the server writes on the sender's behalf (`nudge`). Only the
+   * nudge handler sets it, after its own rules; every check below still runs.
+   */
+  systemKind?: MessageSystemKind;
+  /** A story reply: the story the message quotes. Conversations only. */
+  storyId?: string;
 };
 
 export type PostChannelMessageResult =
@@ -2075,6 +2353,13 @@ async function postChannelMessageAttempt(
   }
 
   const channel = await getChannel(input.channelId);
+  // --- forums --- a forum never holds a message of its own: what is said in
+  // it is said in a post, and a message stored on the forum row is one no
+  // surface ever shows. Refused as `no-access`, the answer an older client
+  // already has copy for, before any permission is computed.
+  if (channel?.kind === "server" && channel.type === "forum") {
+    return { ok: false, reason: "no-access" };
+  }
   let canMentionEveryone = false;
   let memberPerms = 0n;
   if (channel?.kind === "server" && channel.server_id) {
@@ -2087,6 +2372,20 @@ async function postChannelMessageAttempt(
       return { ok: false, reason: "cannot-send" };
     }
     canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
+  }
+  // --- forums --- a post staff locked takes no more replies, except from
+  // staff: MANAGE_MESSAGES or MANAGE_CHANNELS, resolved on the post (which
+  // `applyChannelOverwrites` reads as the forum), the same pair that walks
+  // through slow mode below. Staff skip the read entirely; for everyone else
+  // it is one primary-key probe, and a chat thread answers "not a post".
+  if (
+    channel?.kind === "server" &&
+    channel.type === "thread" &&
+    !hasPermission(memberPerms, Permission.MANAGE_MESSAGES) &&
+    !hasPermission(memberPerms, Permission.MANAGE_CHANNELS) &&
+    (await forumPostLockState(input.channelId))?.locked
+  ) {
+    return { ok: false, reason: "locked" };
   }
   if (input.author.is_character && channel?.kind !== "server") {
     return { ok: false, reason: "cannot-send" };
@@ -2142,6 +2441,9 @@ async function postChannelMessageAttempt(
     const automodInput = {
       serverId: channel.server_id,
       channelId: input.channelId,
+      // A rule that exempts a channel exempts its threads and forum posts.
+      parentChannelId:
+        channel.type === "thread" ? (channel.parent_id ?? null) : null,
       authorId: input.author.id,
       memberPerms,
       body: input.body,
@@ -2218,10 +2520,11 @@ async function postChannelMessageAttempt(
       extraUserIds: hereUserIds,
       canMentionEveryone,
     },
-    input.chance || input.poll
-      ? { chance: input.chance, poll: input.poll }
+    input.chance || input.poll || input.systemKind
+      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind }
       : undefined,
     input.nonce,
+    channel?.kind !== "server" ? (input.storyId ?? null) : null,
   );
   if (dbMessage?.duplicate) {
     // The first copy was stored, fanned out and charged. Answer only the
@@ -2332,6 +2635,10 @@ async function postChannelMessageAttempt(
       // the old one.
       ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
       preview: preview ?? null,
+      // Same rule: absent for an ordinary message. A sibling that predates
+      // the field ignores it and fans out a plain activity, which is the
+      // `📳` preview every old client already shows.
+      ...(message.systemKind ? { systemKind: message.systemKind } : {}),
     });
   }
   await notifyChannelActivity(
@@ -2344,6 +2651,7 @@ async function postChannelMessageAttempt(
       mentionHereUserIds: hereUserIds,
       mentionedUserIds,
       preview,
+      systemKind: message.systemKind,
     },
   );
 
@@ -2355,6 +2663,10 @@ async function postChannelMessageAttempt(
       messageId: threadInfo.rootMessageId,
       thread: threadInfo,
     });
+  } else if (threadInfo) {
+    // --- forums --- a thread with no origin message is a forum post (or a
+    // shell still waiting for this very message, which the bump skips).
+    bumpForumPost(input.channelId, dbMessage.created_at);
   }
 
   if (url && !cacheFresh) {
@@ -2640,6 +2952,11 @@ export async function handleChatMessage(
         posted.automodMessage,
       );
     }
+    return;
+  }
+
+  if (payload.type === "nudge") {
+    await handleNudge(conn, payload);
     return;
   }
 
@@ -2961,6 +3278,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       mentionHereUserIds,
       mentionedUserIds: asStringArray(frame?.mentionedUserIds) ?? [],
       preview: asMessagePreview(frame?.preview),
+      systemKind: frame?.systemKind === "nudge" ? "nudge" : null,
     },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);

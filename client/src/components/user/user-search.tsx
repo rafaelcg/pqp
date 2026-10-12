@@ -24,6 +24,11 @@ interface UserSearchProps {
   excludeIds?: readonly string[];
   autoFocus?: boolean;
   onSelect: (user: PublicUser) => void;
+  /**
+   * Every change of the typed text, for a caller that filters a list of its
+   * own with the same words (Nova conversa narrows its friends as you type).
+   */
+  onQueryChange?: (query: string) => void;
 }
 
 /**
@@ -41,6 +46,7 @@ export function UserSearch({
   excludeIds = [],
   autoFocus = false,
   onSelect,
+  onQueryChange,
 }: UserSearchProps) {
   const { t } = useTranslation();
   const resolvedPlaceholder = placeholder ?? t("userSearch.placeholder");
@@ -123,6 +129,7 @@ export function UserSearch({
     // A picked name is an answered question: leaving the text behind would
     // re-run the same search and re-offer somebody already added.
     setQuery("");
+    onQueryChange?.("");
     setResults([]);
     setSelected(0);
   }
@@ -153,7 +160,10 @@ export function UserSearch({
         <input
           value={query}
           autoFocus={autoFocus}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            onQueryChange?.(event.target.value);
+          }}
           onKeyDown={handleKeyDown}
           placeholder={resolvedPlaceholder}
           aria-label={label}

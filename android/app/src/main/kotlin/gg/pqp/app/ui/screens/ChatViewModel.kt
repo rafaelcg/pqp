@@ -21,6 +21,7 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.VoiceNote
+import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.ui.chat.ChatMarkdown
 import gg.pqp.app.ui.chat.ComposerTarget
 import gg.pqp.app.ui.chat.MentionCandidate
@@ -50,6 +51,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -87,6 +89,12 @@ enum class MessageRejectReason(val wire: String) {
      * wait-shaped in `hold()`.
      */
     DatabaseUnavailable("database-unavailable"),
+    /**
+     * A reply in a forum post that staff closed. The post screen already
+     * swaps the composer for the closed bar when it knows, so this is the
+     * race: a post locked between the last frame and the send.
+     */
+    Locked("locked"),
     ;
 
     companion object {
@@ -191,6 +199,10 @@ data class ChatState(
     val gifsLoading: Boolean = false,
     /** A refused edit, delete or pin, in the server's own words. Cleared when read. */
     val actionError: String? = null,
+    /** Why the last nudge did not land, or null. Said in one short line. */
+    val nudgeRefusal: gg.pqp.app.nudge.NudgeRefusal? = null,
+    /** `SystemClock.elapsedRealtime()` before which the nudge button rests, or 0. */
+    val nudgeHoldUntilMs: Long = 0L,
 )
 
 /**
@@ -235,6 +247,13 @@ class ChatViewModel(
      * captured, because it changes for the whole life of this object.
      */
     private val callActive: () -> Boolean = { false },
+    /**
+     * Set for a forum post: the forum, which keeps the socket's primary slot
+     * so its list stays live, while this channel (the post) rides the
+     * secondary `thread-join` slot. Null for every other chat, which takes the
+     * primary slot exactly as before.
+     */
+    private val primaryChannelId: String? = null,
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
@@ -876,7 +895,7 @@ class ChatViewModel(
     }
 
     private suspend fun loadInitial() {
-        runCatching { session.api.messages(channelId) }
+        runSuspendCatching { session.api.messages(channelId) }
             .onSuccess { page ->
                 _state.value = _state.value.copy(
                     messages = page.messages,
@@ -897,7 +916,50 @@ class ChatViewModel(
                         ?: failure::class.java.simpleName,
                 )
             }
-        session.realtime.joinChannel(channelId)
+        subscribe()
+    }
+
+    /** Take this chat's slot on the socket: the primary one, or the thread slot under [primaryChannelId]. */
+    private fun subscribe() {
+        val primary = primaryChannelId
+        if (primary == null) {
+            session.realtime.joinChannel(channelId)
+        } else {
+            session.realtime.joinChannel(primary)
+            session.realtime.joinThread(channelId)
+        }
+    }
+
+    /**
+     * One older page, awaited, for a caller that has to land somewhere above
+     * the newest page (a forum post opens on its question). Answers how many
+     * messages it added; 0 at the start of history or on a failure.
+     */
+    suspend fun loadOlderNow(): Int {
+        if (_state.value.loadingOlder) {
+            // The list's own pager has a page out: wait for it and let the
+            // caller look again, rather than reading "busy" as "no more".
+            val before = _state.value.messages.size
+            val settled = _state.first { !it.loadingOlder }
+            return (settled.messages.size - before).coerceAtLeast(if (settled.hasMore) 1 else 0)
+        }
+        val current = _state.value
+        if (!current.hasMore) return 0
+        val oldest = current.messages.firstOrNull()?.id ?: return 0
+        _state.value = current.copy(loadingOlder = true)
+        val page = runCatching { session.api.messages(channelId, before = oldest) }.getOrNull()
+        if (page == null) {
+            _state.value = _state.value.copy(loadingOlder = false)
+            return 0
+        }
+        val known = _state.value.messages.map { it.id }.toSet()
+        val fresh = page.messages.filterNot { it.id in known }
+        _state.value = _state.value.copy(
+            messages = fresh + _state.value.messages,
+            hasMore = page.hasMore,
+            loadingOlder = false,
+        )
+        return fresh.size
     }
 
     fun loadOlder() {
@@ -930,7 +992,7 @@ class ChatViewModel(
     private suspend fun followConnection() {
         session.realtime.state.collect { state ->
             if (state == RealtimeState.Ready) {
-                session.realtime.joinChannel(channelId)
+                subscribe()
                 catchUp()
             }
         }
@@ -969,8 +1031,51 @@ class ChatViewModel(
                 "typing-broadcast" -> onTyping(frame)
                 "message-rejected" -> onRejected(frame)
                 "sanction-notice" -> onSanctioned(frame)
+                "nudge-refused" -> onNudgeRefused(frame)
             }
         }
+    }
+
+    /**
+     * One event per fresh nudge from somebody else, for the screen to shake
+     * and buzz. A flow of events rather than state: a shake is something that
+     * happens once, and replaying it on rotation would be a second poke nobody
+     * sent.
+     */
+    private val _nudged = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val nudged: kotlinx.coroutines.flow.SharedFlow<String> = _nudged
+
+    /**
+     * Chamar a atenção. The button rests for the cooldown at once rather than
+     * on the server's word: a second tap inside it would only be refused.
+     */
+    fun nudge() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < _state.value.nudgeHoldUntilMs) return
+        val nonce = java.util.UUID.randomUUID().toString()
+        val left = session.realtime.sendNudge(channelId, nonce)
+        _state.value = _state.value.copy(
+            nudgeRefusal = null,
+            nudgeHoldUntilMs = gg.pqp.app.nudge.Nudge.holdAfterSend(left, now),
+        )
+    }
+
+    fun clearNudgeRefusal() {
+        _state.value = _state.value.copy(nudgeRefusal = null)
+    }
+
+    /** `nudge-refused`, addressed to this socket only. Nothing was stored. */
+    private fun onNudgeRefused(frame: JsonObject) {
+        if (frame.string("channelId") != channelId) return
+        val reason = gg.pqp.app.nudge.NudgeRefusalReason.fromWire(frame.string("reason"))
+        val retryAfterMs = (frame["retryAfterMs"] as? JsonPrimitive)?.longOrNull ?: 0L
+        val now = android.os.SystemClock.elapsedRealtime()
+        _state.value = _state.value.copy(
+            nudgeRefusal = gg.pqp.app.nudge.NudgeRefusal(reason, retryAfterMs),
+            // Only a cooldown says when to try again; any other refusal frees
+            // the button, since waiting would not change the answer.
+            nudgeHoldUntilMs = gg.pqp.app.nudge.Nudge.holdAfterRefusal(retryAfterMs, now),
+        )
     }
 
     private fun onBroadcast(frame: JsonObject) {
@@ -986,6 +1091,13 @@ class ChatViewModel(
         }
         if (withoutOptimistic.any { it.id == message.id }) return
         _state.value = _state.value.copy(messages = withoutOptimistic + message)
+        if (gg.pqp.app.nudge.Nudge.isFresh(message, currentUserId, System.currentTimeMillis())) {
+            _nudged.tryEmit(message.authorName)
+        }
+        // They answered, so the "no reply yet" refusal no longer holds.
+        if (message.authorId != currentUserId && _state.value.nudgeRefusal != null) {
+            clearNudgeRefusal()
+        }
     }
 
     /**
@@ -1399,7 +1511,13 @@ class ChatViewModel(
         dropDiscarded()
         // Named, because there is more than one chat surface now and the
         // subscription is one per connection. See RealtimeClient.leaveChannel.
-        session.realtime.leaveChannel(channelId)
+        // A forum post leaves only its thread slot: the forum's list, still
+        // on the back stack, owns the primary one.
+        if (primaryChannelId == null) {
+            session.realtime.leaveChannel(channelId)
+        } else {
+            session.realtime.leaveThread(channelId)
+        }
     }
 
     /**
@@ -1412,7 +1530,7 @@ class ChatViewModel(
      * connected and receives nothing.
      */
     fun resubscribe() {
-        session.realtime.joinChannel(channelId)
+        subscribe()
     }
 
     private fun JsonObject.string(key: String): String? =
@@ -1471,10 +1589,20 @@ class ChatViewModel(
             serverId: String? = null,
             recorder: NoteRecorder? = null,
             callActive: () -> Boolean = { false },
+            primaryChannelId: String? = null,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId, files, slowmodeSeconds, serverId, recorder, callActive) as T
+                ChatViewModel(
+                    session,
+                    channelId,
+                    files,
+                    slowmodeSeconds,
+                    serverId,
+                    recorder,
+                    callActive,
+                    primaryChannelId,
+                ) as T
         }
     }
 }

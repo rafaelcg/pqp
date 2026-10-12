@@ -742,16 +742,29 @@ export function pushRefusal(
  * The same most-specific-wins resolution the client's
  * `resolveNotificationLevel` performs, over the same stored object — kept in
  * lockstep so the phone and the desktop cannot disagree about a mute.
+ *
+ * `parentChannelId` is the channel a thread or forum post sits under. Nobody
+ * sets a level on a thread (there is no surface for it), so without this step
+ * muting `#geral` or a forum muted nothing inside its threads and posts: a
+ * mention there skipped straight to the server's level. Thread, then parent,
+ * then server.
  */
 export function resolvePushLevel(
   settings: UserPreferences | null,
   serverId: string | null,
   channelId: string,
+  parentChannelId: string | null = null,
 ): "all" | "mentions" | "none" {
   const notifications = settings?.notifications;
   const channelLevel = notifications?.channels?.[channelId];
   if (channelLevel) {
     return channelLevel;
+  }
+  if (parentChannelId) {
+    const parentLevel = notifications?.channels?.[parentChannelId];
+    if (parentLevel) {
+      return parentLevel;
+    }
   }
   if (serverId) {
     const serverLevel = notifications?.servers?.[serverId];
@@ -800,6 +813,8 @@ export interface PushPayloadInput {
   locale: PushLocale;
   /** A conversation voice note's length; conversation copy only. */
   voiceDurationMs?: number | null;
+  /** A system message (`nudge`); conversation copy only. */
+  systemKind?: "nudge" | null;
 }
 
 export interface PushPayload {
@@ -854,6 +869,7 @@ export function buildPushPayload(input: PushPayloadInput): PushPayload {
     mentionOrReply: input.mention || input.reply,
     authorName: input.authorName ? truncateLabel(input.authorName) : null,
     voiceDurationMs: input.voiceDurationMs ?? null,
+    systemKind: input.systemKind ?? null,
   });
   return { title: copy.title, body: copy.body, path, tag };
 }
@@ -895,6 +911,56 @@ export interface ChannelPushEvent {
    * audio or a transcript.
    */
   voiceDurationMs?: number | null;
+  /**
+   * Set when the message is a system message: a nudge says "chamou tua
+   * atenção! 📳" instead of the plain copy. It is a plain message for every
+   * other rule here: a muted conversation, DND and the level still refuse it.
+   */
+  systemKind?: "nudge" | null;
+}
+
+/**
+ * The parent of a thread or forum post, for `resolvePushLevel`'s parent step,
+ * so a muted channel or forum mutes what is said inside its threads.
+ *
+ * Read only when it can change an answer: a server channel, and at least one
+ * recipient with a per-channel level stored at all. Nobody with a channel
+ * level means the parent step is a no-op, which is the common batch, and it
+ * then costs no query. A failed read falls back to no parent (the levels as
+ * they were before this step existed) and never drops the batch.
+ */
+async function pushParentChannelId(
+  kind: ChannelAudienceView["kind"],
+  channelId: string,
+  settings: Iterable<UserPreferences>,
+): Promise<string | null> {
+  if (kind !== "server") {
+    return null;
+  }
+  let anyChannelLevel = false;
+  for (const entry of settings) {
+    const channels = entry.notifications?.channels;
+    if (channels && Object.keys(channels).length > 0) {
+      anyChannelLevel = true;
+      break;
+    }
+  }
+  if (!anyChannelLevel) {
+    return null;
+  }
+  try {
+    const result = await getPool().query<{ parent_id: string | null }>(
+      `SELECT parent_id FROM channels WHERE id = $1 AND type = 'thread'`,
+      [channelId],
+    );
+    return result.rows[0]?.parent_id ?? null;
+  } catch (error) {
+    console.error(
+      `[push] parent lookup failed for channel ${channelId}, using no parent:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
 }
 
 /**
@@ -1008,6 +1074,11 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
   const preferences = new Map<string, UserPreferences>(
     preferenceRows.rows.map((row) => [row.user_id, row.settings]),
   );
+  const parentChannelId = await pushParentChannelId(
+    audience.kind,
+    event.channelId,
+    preferences.values(),
+  );
 
   const recipients = offline.filter((userId) => {
     const settings = preferences.get(userId) ?? null;
@@ -1015,7 +1086,12 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       mention: mentioned.has(userId) || userId === replied,
       channelKind: audience.kind,
       manualStatus: settings?.status,
-      level: resolvePushLevel(settings, audience.serverId, event.channelId),
+      level: resolvePushLevel(
+        settings,
+        audience.serverId,
+        event.channelId,
+        parentChannelId,
+      ),
     });
     if (refusal) {
       notePushSkipped("message", refusal, userId, skipContext);
@@ -1067,6 +1143,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
         authorName: names.author_name,
         locale: resolvePushLocale((settings as { locale?: unknown } | null)?.locale),
         voiceDurationMs: event.voiceDurationMs ?? null,
+        systemKind: event.systemKind ?? null,
       }),
     );
   }

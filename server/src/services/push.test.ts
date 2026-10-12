@@ -290,6 +290,27 @@ describe("resolvePushLevel", () => {
     );
   });
 
+  it("a thread or forum post falls back to its parent before the server", () => {
+    const threadId = "55555555-5555-5555-5555-555555555555";
+    const settings = {
+      notifications: {
+        servers: { [serverId]: "all" as const },
+        channels: { [channelId]: "none" as const },
+      },
+    };
+    // Muting the channel (or the forum) mutes what is said in its threads.
+    expect(resolvePushLevel(settings, serverId, threadId, channelId)).toBe("none");
+    // A level on the thread itself still wins over the parent's.
+    const own = {
+      notifications: {
+        channels: { [channelId]: "none" as const, [threadId]: "all" as const },
+      },
+    };
+    expect(resolvePushLevel(own, serverId, threadId, channelId)).toBe("all");
+    // No parent level: the server's, as before.
+    expect(resolvePushLevel(settings, serverId, threadId, null)).toBe("all");
+  });
+
   describe("the split account defaults", () => {
     const dm = "44444444-4444-4444-4444-444444444444";
 
@@ -943,6 +964,27 @@ describeDb("web push fan-out", () => {
     );
 
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent).toEqual([]);
+    expect(pushSkippedSnapshot().message.muted).toBe(1);
+  });
+
+  it("a muted channel mutes a mention inside one of its threads (or a forum's posts)", async () => {
+    await subscribe(bea.id);
+    const thread = await getPool().query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type, position, kind, parent_id)
+       VALUES ($1, 'fio', 'thread', 0, 'server', $2) RETURNING id`,
+      [serverId, channelId],
+    );
+    await getPool().query(
+      `INSERT INTO user_preferences (user_id, settings)
+       VALUES ($1, $2::jsonb)`,
+      [bea.id, JSON.stringify({ notifications: { channels: { [channelId]: "none" } } })],
+    );
+
+    await sendChannelPush(
+      serverEvent({ channelId: thread.rows[0]!.id, mentionedUsernames: [beaUsername] }),
+    );
 
     expect(sent).toEqual([]);
     expect(pushSkippedSnapshot().message.muted).toBe(1);

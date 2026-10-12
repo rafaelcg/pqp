@@ -79,6 +79,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   community_home_video_captions: (raw) => raw === "true",
   bau_post_push: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  bau_latest_preview: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
@@ -116,6 +118,20 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   conversations_home: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   conversations_home_phone_tabs: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  forum_channels: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  nudge: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  // New with the flag, so there was no old reader: this is its definition.
+  community_listing_nudge: offWords,
+  retro_look: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  stories: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  stories_friends: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  mixed_channel_list: (raw) => raw === "true",
 };
 
 const SAMPLES = [

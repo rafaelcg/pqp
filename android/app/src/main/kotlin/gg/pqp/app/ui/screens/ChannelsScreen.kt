@@ -69,6 +69,7 @@ import gg.pqp.app.ui.screens.channels.CompactBarHeight
 import gg.pqp.app.ui.screens.channels.CompactServerBar
 import gg.pqp.app.ui.screens.channels.FoldedCategoriesStore
 import gg.pqp.app.ui.screens.channels.SectionGap
+import gg.pqp.app.stories.ui.StoriesSection
 import gg.pqp.app.ui.screens.channels.ServerBanner
 import gg.pqp.app.ui.screens.channels.ServerBannerHeight
 import gg.pqp.app.ui.screens.channels.VoiceOccupantRow
@@ -199,6 +200,8 @@ fun ChannelsScreen(
     onBack: () -> Unit,
     onOpenChannel: (Channel) -> Unit,
     onOpenBau: () -> Unit = {},
+    /** A story's call sticker: join that room (maybe in another server) and open it. */
+    onJoinStoryCall: (serverId: String, channelId: String, channelName: String) -> Unit = { _, _, _ -> },
 ) {
     var channels by remember { mutableStateOf<List<Channel>?>(null) }
 
@@ -512,6 +515,17 @@ fun ChannelsScreen(
                             0f
                         }
                     },
+                )
+            }
+            // Stories: below the banner, above the watch party and the Baú.
+            // Scrolls away with the list and draws nothing while the server's
+            // `stories` flag is off or nobody has a story up.
+            item(key = "stories") {
+                StoriesSection(
+                    session = session,
+                    serverId = serverId,
+                    contextLabel = serverName,
+                    onJoinCall = onJoinStoryCall,
                 )
             }
             when {

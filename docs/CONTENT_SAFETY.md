@@ -691,6 +691,8 @@ failure mode reproduced with better latency.
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
 | The operator can pull a listing over the owner's head | `servers.is_community_suspended` — see below |
 | The opt-in is audited | `server.community_update`; directory joins are `member.community_join` |
+| An empty room is not browsable | `listCommunities` shows a listed room only while it has 3 people (the house cast, webhooks and bots do not count) and a person wrote in it within 30 days; the instance's default community always passes. A read-time filter: nobody's listing changes, search still finds it. Constants `DIRECTORY_MIN_HUMAN_MEMBERS` / `DIRECTORY_ACTIVE_WINDOW_DAYS` in `@pqp/shared` |
+| The directory stays opt-in when the product asks | the address switch offers the directory right under it, **unticked**; the one-time owner card (`community_listing_nudge`) lists only on its button, and only asks about rooms that pass the bar above |
 | **Listing is the owner's; the public address is Manage Server** | `PATCH /api/servers/:id/community` runs `requirePermission(MANAGE_SERVER)`, and `updateCommunitySettings` refuses a *change* to `is_community_listed` from anyone but the owner, under the row lock — including the sideways one, an admin emptying the address underneath a live listing. An admin can set `pqp.gg/c/<slug>` and write the pitch; only the owner can put the room in the directory |
 
 The routing rule is the one worth restating: **a community owner must never be
@@ -774,6 +776,80 @@ reports — leaving every server exactly as it was.
 
 ---
 
+## Stories: 24 hours, and what can make one last longer
+
+> **Status as shipped: the `stories` flag is off for every server and
+> `stories_friends` is off globally.** Nothing below happens until a server's
+> override turns it on.
+
+A story is a photo, a video of up to 30 s or a text card, visible to the
+members of the servers it was posted to and/or to the author's friends, for
+24 hours (`packages/shared/src/stories.ts`, `server/src/services/stories.ts`).
+Its safety rules are the attachment rules above, plus three of its own.
+
+**Images are scanned before they are visible**, the same way an attachment is:
+`POST /api/stories/:id/publish` HEADs the object, reads its first bytes (a file
+that is not the image type it claims is refused), and calls `scanImage` with a
+two-minute presigned GET, all before the story goes `live`. The verdict follows
+`scanAllowsAttachment`: rejected never shows, `error` never shows while the
+scanner fails closed, flagged shows. Nothing is in a transaction while the
+network is waited on. A text card is not an image: it goes through AutoMod's
+text rules for every target server instead, the same matcher messages use.
+
+**Video is sampled, which is more than chat and Baú get.** A published video
+stays `processing` until the stories job (`services/story-media.ts`, a cold
+path, so on the worker) has probed it (at most 31 s, H.264, or it is refused),
+cut a poster at 0.5 s and three frames at 25, 50 and 75 %, and scanned all
+four. The worst verdict of the four decides. The three frames are deleted the
+moment the scanner has fetched them. With a scanner configured and no process
+that has ffmpeg, video is refused at `POST /api/stories` (`videoEnabled: false`
+in `GET /api/stories/config`) rather than posted unscanned or left waiting.
+Three frames is a sample, not a scan of every frame: something shown for one
+second between two samples is not seen. That gap is stated, not closed.
+
+**What is held, and for how long.** The 24 h promise has exactly these
+exceptions, all checked by the sweep in one SQL fragment (`STORY_HELD_SQL`):
+
+| What | Held until |
+|---|---|
+| A refused scan (`rejected`) | `CONTENT_SCAN_QUARANTINE_DAYS` (default 30) |
+| A flagged scan (visible) | the same |
+| An open report about the story | the report is resolved |
+| A resolved report | 30 days after it was resolved |
+| An illegal-content match (`hold_forever`) | **never deleted by anything automatic**. The runbook above applies, word for word |
+
+A refused or flagged story files an automated report (`subject_type = 'story'`,
+`reporter_id` NULL), deduplicated per uploader per place, into the first
+server the story went to, or the instance queue for a friends-only story. An
+illegal match always goes to the instance queue and logs
+`[content-safety] ILLEGAL-CONTENT MATCH` with the story id.
+
+**Reports.** `POST /api/reports` takes `subjectType: "story"` with the audience
+it was seen through: a server's story goes to that server's queue, a friends
+story to the instance queue. The reason `minor_sexual` ("Menor de idade em
+conteúdo sexual") goes to the instance queue whatever the subject, a message
+included, so a server's own staff never hold that accusation. A story report
+copies the caption or text (`story_snapshot`), never the picture: the picture
+is held instead. `GET /api/reports/all` shows a story's scan evidence the way it
+shows an attachment's.
+
+**Taking one down.** Staff with Manage Messages take a story out of their own
+server only (`DELETE /api/servers/:serverId/stories/:storyId`, audited as
+`story.remove`, the author gets a one-time in-app notice with the reason); it
+may still be up for the author's friends or in another server. The operator
+removes it everywhere from the report (`POST /api/reports/:id/remove-story`,
+logged as `[moderation] operator removed story`). Neither deletes the bytes of
+a reported story: the report holds them.
+
+**Listed communities** add a rule: an account must be 72 hours old to post a
+story there, on top of `POST_STORIES`. Stories inside a listed community are
+content in a public directory and inherit the Communities section above; they
+add no new regime.
+
+**Screenshots** are not blocked and not detected. The help text says so.
+
+---
+
 ## Residual risk, stated plainly
 
 Everything below is true with the recommended configuration (`openai`) turned
@@ -795,7 +871,8 @@ on. This is the honest list.
    attachment is entirely unexamined, and so is a Baú video (up to 100 MiB,
    and its phone cut). A Baú video's custom cover is scanned, because it is an
    image upload; the first frame a player paints when there is no cover is
-   not.
+   not. A story's video is the exception, and a partial one: its poster and
+   three sampled frames are scanned (see Stories).
 5. **Nothing uploaded before scanning was enabled has been checked.** Those rows
    read `unscanned` and there is no backfill. Writing one is possible — iterate
    the rows, presign, scan — but it is not implemented, and on a free tier it is

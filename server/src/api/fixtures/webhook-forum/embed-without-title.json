@@ -1,0 +1,11 @@
+{
+  "source": "A monitoring tool's alert sent to a forum webhook: one embed with only a description and a color, no content and no thread_name. On Discord this is the 'normal message posted to a forum' case and answers 220001.",
+  "body": {
+    "embeds": [
+      {
+        "description": "CPU acima de 90% há 5 minutos em web-2.",
+        "color": 15548997
+      }
+    ]
+  }
+}

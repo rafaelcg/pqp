@@ -261,7 +261,7 @@ final class SessionStore {
                 // keychain would block the next sign-in sheet the same way.
                 await purgeClerkSession()
             }
-            lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { lastError = shown }
         }
     }
 

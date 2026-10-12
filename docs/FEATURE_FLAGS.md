@@ -139,6 +139,20 @@ byte. Turn it on for one server with `PUT /api/admin/flag-overrides
 interruptores; open tabs pick it up on the next keyframe (30 s), no reload. See
 `docs/WATCH_PARTY.md` §"How many people watched".
 
+Born as a flag (no old reader): `MIXED_CHANNEL_LIST` (`mixed_channel_list`,
+default off, **per server**), the channel list with categories as the only
+headers and every type mixed in one order per parent
+(`server/src/services/channel-layout.ts`). **It moves data**: the minute job
+migrates every server the flag resolves on for and that has no row in
+`channel_layout_migrations` (loose channels into a new "Canais" category at the
+top, in the order the web drew them, after a snapshot). Clients read
+`GET /api/servers/:id/channel-layout` and draw the new list only when it says
+`mixed`, which needs the flag AND the row, so nobody sees a half state. Off again
+is the instant rollback for rendering; `POST /api/admin/channel-layout`
+`{ serverId, action: "revert" }` restores the data (`"migrate"`, with
+`dryRun`, does one server now). On globally, a new server is born with the
+category. Counted under `channelLayout` on `GET /api/admin/metrics`.
+
 Born as a flag (no old reader): `VOICE_AUDIO_SELF_HEAL`
 (`voice_audio_self_heal`, default **on**, global, client-only), the web call
 watching its own audio and repairing it (`client/src/lib/audio-health.ts`): a
@@ -180,6 +194,15 @@ chat card's `posterUrl`) null so every player paints the first frame again,
 and the composer stops offering it; stored covers are kept and come back when
 it is on again. See `docs/COMMUNITY_HOME.md` §"A cover for a video".
 
+Born as a flag (no old reader): `BAU_LATEST_PREVIEW` (`bau_latest_preview`,
+default **on**, **per server**), the Baú preview in the channel list: `GET
+/api/servers/:id/home/latest` serves the newest posts as cards with `isNew`
+plus the unread count. On by default because it only reads what the feed
+already shows and replaces the unread read rather than adding one. Off (`off`,
+`false` or `0`, or the dashboard), the route is 404 and clients go back to
+`…/home/unread` and the plain row on their next read. See
+`docs/COMMUNITY_HOME.md` §"What is in the pane".
+
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
 (`desktop_share_audio_native`, default off, **per server**), sound on a screen
 share from the Windows desktop app through WASAPI process loopback, Windows 10
@@ -188,6 +211,20 @@ does anything in a desktop build whose preload publishes
 `capabilities.nativeShareAudio` and whose self-test opened a process loopback
 stream on that machine; see `electron/lib/win-share-audio.js`. With the flag off
 the client never asks the shell anything.
+
+`NUDGE` (`nudge`, default off, global), born as a flag: chamar a atenção, a
+one-tap shake between two friends in a 1:1 conversation, stored as a message with
+`system_kind = 'nudge'` and body `📳` (`packages/shared/src/nudge.ts`). Off, the
+server refuses every `nudge` frame as `unavailable` whatever a stale client
+thinks; served to clients as `nudge` on `GET /api/fun/config`. Counted under
+`nudge` on `GET /api/admin/metrics` (sent, refused by reason). Turn it on only
+after the web build that draws the line and the shake is live; until a phone
+build renders it, phones show a bare `📳` bubble.
+
+`RETRO_LOOK` (`retro_look`, default **on**, global), born as a flag: the kill
+switch for Modo 2005, the hidden look found with `/2005`. Served as `retroLook`
+on `GET /api/fun/config`; a client reads anything but `false` as on. Off, the
+look falls back to the default on the next config refresh.
 
 `CLIENT_FORCE_UPDATE` (`client_force_update`, default off, global), born as a flag:
 every web or desktop client that is not on the latest build puts up the blocking
@@ -462,6 +499,29 @@ token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
 
+## `community_listing_nudge` (global, default on)
+
+"Aparecer no diretório", once, to the owner of a community that has a public
+address (`is_community`) and is not in the directory (`is_community_listed`).
+Behind `COMMUNITY_LISTING_NUDGE` (`onUnlessOff`, so on unless `false`, `0` or
+`off`), born as a flag. `GET /api/communities/listing-nudge` answers
+`{ listingNudge: null }` while it is off, so turning it off live is invisible to
+an open tab; with `COMMUNITIES_ENABLED` unset the route is 404 like every
+communities route.
+
+Who is asked (`findListingNudge` in `server/src/services/communities.ts`): the
+owner only (listing is the owner's switch), of a room that is addressed, not
+listed, not suspended, and passes the same quality bar the directory browses
+with (3 people, a message from a person in the last 30 days, see
+`DIRECTORY_MIN_HUMAN_MEMBERS` in `@pqp/shared`), so the card never invites an
+empty shell. The biggest qualifying room when there are several. Asked once per
+account: the client stamps `communityListingNudgeAt` in preferences when the
+card paints, and the route reads it. The card's button lists the room in place;
+nobody's setting changes without that click. Card rules: `docs/ONBOARDING.md`.
+
+Turn it off from controles → interruptores or `PUT /api/admin/flags
+{ key: "community_listing_nudge", enabled: false }`.
+
 ## `newcomer_invite_moment` (global, client presentation only)
 
 "Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,
@@ -534,3 +594,58 @@ phone tabs go on, turn `conversations_home_phone_tabs` off first; desktop stays.
 Turn them on from controles → interruptores, or `PUT /api/admin/flags
 { key: "conversations_home", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
+
+## `forum_channels` (per server)
+
+Forum channels: a channel type, `forum`, whose posts are thread channels with a
+title, tags, pin, lock and resolved state (`docs/plans/FORUM_CHANNELS.md`, the
+wire contract in `packages/shared/src/forums.ts`). Behind `FORUM_CHANNELS`
+(default off, **per server**, born as a flag). Served as `enabled` on
+`GET /api/forum/config?serverId=` (`server/src/lib/forum-config.ts`).
+
+Off gates **creating**, never reading: `POST /api/servers/:id/channels` with
+`type: "forum"` answers 403 `forum_channels_off`, and (from the forum server
+PR) so does creating a post. Forums and posts that exist stay readable and
+repliable, and staff actions on them keep working, so turning it off strands
+nobody's writing. Nothing is hidden or deleted. A webhook on a forum follows
+the same line: off, an execute that would make a post is 403 with nothing
+written, and a `?thread_id=` reply into an existing post still lands
+(`docs/BOT_SEND.md`, "Incoming webhooks into a forum").
+
+The Discord import is the one reader with no server in hand (it creates the
+server), so it asks the global value only: an import keeps flattening forums to
+text channels until the flag is on globally.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "forum_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Before it goes on anywhere real, the iOS
+build that hides unknown channel types must be out, or a forum inside a
+category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
+pins the route, the field and the create guard.
+
+## `stories` (per server) and `stories_friends` (global)
+
+Stories: a photo, a video of up to 30 s or a text card that lives for 24 h
+(`packages/shared/src/stories.ts` is the contract). Two flags, both born as
+flags and both default **off**:
+
+- **`stories`** (`STORIES`, per server) is every server audience: the strip at
+  the top of a server's channel list, posting to that server, and every route
+  under `/api/servers/:serverId/stories`. Off for a server, its routes answer
+  404 and its strip `{ "enabled": false }`, so clients hide it without a 404
+  storm. QG goes first, by its override.
+- **`stories_friends`** (`STORIES_FRIENDS`, global) is the friends audience: the
+  strip at the top of Conversas and posting to Amigos. It stays off until the
+  Conversas redesign lands and the per-server run has been judged, because the
+  friends audience crosses servers.
+
+Turning either off **deletes nothing** and does not stop the expiry sweep: the
+media of a story posted while it was on is still deleted a minute after the
+story's 24 h, because that promise does not depend on a flag. Turning it back
+on brings back whatever has not expired yet.
+
+Turn the QG on from controles → interruptores (the server's override) or
+`PUT /api/admin/flag-overrides { key: "stories", serverId, enabled: true }`;
+friends with `PUT /api/admin/flags { key: "stories_friends", enabled: true }`.
+Clients read `GET /api/stories/config[?serverId=]` and the strips themselves.

@@ -2810,6 +2810,14 @@ describeDb("voice across two instances", () => {
         () => b.voice.voiceUserHandRaisedAt(channel, target) === null,
         "B to lower it",
       );
+      // And the sidebar to have SEEN it lowered. B's cache drops the hand
+      // before its roster reaches the watcher; asserting the sidebar empty
+      // below without this raced that send on a busy runner (CI, 2026-10-12:
+      // the target still listed), and proved nothing about the late hint.
+      await waitFor(
+        () => handsOn(sidebarOnB, channel).length === 0,
+        "the sidebar on B to drop the hand",
+      );
 
       // The raise's cluster frame, arriving after the lower deleted the row.
       a.bus.publishToCluster(a.voice.VOICE_RAISED_HAND_TOPIC, {

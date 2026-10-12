@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.runSuspendCatching
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -80,7 +81,7 @@ class BauViewModel(
      * The marker is best effort: a failure here is not a failure to read.
      */
     private suspend fun load() {
-        runCatching { session.api.bauPosts(serverId) }
+        runSuspendCatching { session.api.bauPosts(serverId) }
             .onSuccess { posts ->
                 _state.value = _state.value.copy(posts = posts, loading = false, error = null)
                 runCatching { session.api.markBauRead(serverId) }

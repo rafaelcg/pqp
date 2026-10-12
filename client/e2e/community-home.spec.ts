@@ -366,6 +366,71 @@ test.describe("Baú", () => {
     await expect(toast).toHaveCount(0);
   });
 
+  test("sidebar preview: one person posts, the other gets the card, opening it folds the card", async ({
+    browser,
+  }) => {
+    const serverId = await seedHall(`Mesa Preview ${Date.now()}`);
+    const ownerContext = await browser.newContext();
+    const memberContext = await browser.newContext();
+    try {
+      const owner = await ownerContext.newPage();
+      const member = await memberContext.newPage();
+
+      // The member lands on the (empty) Baú, then steps off it.
+      await openAs(member, MEMBER, serverId, { communityHome: "1" });
+      await expect(member.locator("[data-community-home-feed]")).toBeVisible({
+        timeout: 20_000,
+      });
+      await member.getByRole("button", { name: "general" }).first().click();
+      await expect(member.locator("[data-community-home-feed]")).toHaveCount(0);
+      // Nothing posted, and a member cannot post: the quiet row, no invite.
+      await expect(member.locator('[data-bau-preview="empty"]')).toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(member.locator("[data-bau-preview-compose]")).toHaveCount(0);
+
+      // The owner, on another account, publishes through the composer.
+      await openAs(owner, OWNER, serverId, { communityHome: "1" });
+      const ownerFeed = owner.locator("[data-community-home-feed]");
+      await expect(ownerFeed).toBeVisible({ timeout: 20_000 });
+      await ownerFeed.locator("[data-home-guide-compose]").click();
+      await ownerFeed.locator("[data-home-compose-title]").fill("Clutch da Bia");
+      await ownerFeed.locator("[data-home-compose-body]").fill("1v4 na Ancient");
+      await ownerFeed.locator("[data-home-compose-submit]").click();
+      await expect(ownerFeed.locator("[data-home-notice]")).toBeVisible();
+
+      // The member, still in #general, gets the card without a reload.
+      const card = member.locator('[data-bau-preview="card"]');
+      await expect(card).toBeVisible({ timeout: 20_000 });
+      await expect(card.locator("[data-bau-preview-card]")).toContainText("Clutch da Bia");
+      await expect(card.locator("[data-community-home-unread]")).toHaveText("1");
+      // The author's own post is never new to them: their sidebar is the row.
+      await expect(owner.locator('[data-bau-preview="row"]')).toBeAttached({
+        timeout: 20_000,
+      });
+
+      // Open it from the card: the Baú opens on that post, the card folds.
+      await card.locator("[data-bau-preview-post]").click();
+      await expect(member.locator("[data-community-home-feed]")).toBeVisible();
+      const row = member.locator('[data-bau-preview="row"]');
+      await expect(row).toBeVisible();
+      await expect(row.locator("[data-bau-preview-row-wrap]")).toContainText(
+        "Latest: Clutch da Bia",
+      );
+      await expect(member.locator("[data-community-home-unread]")).toHaveCount(0);
+      await expect
+        .poll(
+          async () =>
+            (await row.locator("[data-bau-preview-card-wrap]").boundingBox())?.height ?? 0,
+          { timeout: 5_000 },
+        )
+        .toBeLessThan(1);
+    } finally {
+      await ownerContext.close();
+      await memberContext.close();
+    }
+  });
+
   test("private hall with Baú on lands on the feed every time", async ({
     page,
   }) => {

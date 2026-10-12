@@ -168,6 +168,30 @@ for what would replace it.
   server's own number still comes from `…/home/unread` (`{ count, newestAt }`)
   and drives the row and the corner card
   (`client/src/lib/community-home/rail-unread.ts`).
+- **Latest preview** (`bau_latest_preview`, runtime flag, **per server**,
+  default on): `GET /api/servers/:id/home/latest?limit=3&lang=` answers
+  `{ unread, lastSeenAt, posts }`, where each post is the chat card
+  (`CommunityHomePostCard`, so a locked post has no author and no media) plus
+  `isNew`. Newest published first; the pinned post is NOT moved to the front.
+  `isNew` is the unread rule (published after `lastSeenAt`, not your own post,
+  the feed's VIP filter) computed in the same statement as `unread`, so the
+  card and the badge never disagree. `limit` defaults to 3 and is clamped to
+  1..10. It replaces `…/home/unread` for the open server: one request, and it
+  is re-asked on the same `community-home-update` frame. Off for a server, the
+  route is 404 and clients fall back to `…/home/unread` and the plain row.
+  Schema: `communityHomeLatestResponseSchema` in
+  `packages/shared/src/community-home-share.ts`.
+  **Web** (`client/src/components/community-home/community-home-preview.tsx`,
+  rules in `client/src/lib/community-home/latest.ts`): while anything is new
+  the row is a card (16:9 cover, "Novo" pill, title, author and time, likes and
+  comments, "+N novos" footer); opening the Baú, from the card or anywhere,
+  folds it into a slim row with the last post's thumbnail ("Último: …"). The
+  card opens the Baú on that post. Covers: image, YouTube poster, the chosen
+  video cover; anything else is a plate in the server's hue with a play mark,
+  never a `<video preload>`. Empty: staff get "Teu Baú tá vazio" with "Postar
+  no Baú" (opens the composer), members the quiet "Ainda vazio" row. The
+  expand and fold animate height and opacity, off under reduced motion. The
+  compact rail keeps the plain icon.
 - **iOS and Android** read the aggregate for a lime count on the server tile
   (hub) / server row (list), "9+" capped, and the Baú row's own count is lime
   too. Neither list carries mention counts, so there is no ring there.
@@ -370,7 +394,12 @@ Image, native video (`mp4`/`webm`), PDF, up to 100 MiB each (`COMMUNITY_HOME_MAX
 mint / PUT / claim dance as attachments (`client/src/lib/community-home/media.ts`,
 `POST …/home/media`, `POST …/home/media/claim`). Bytes never pass through the
 Node process. YouTube is URL only (`watch`, `youtu.be`, `shorts`, `embed`,
-`live`), embedded from `youtube-nocookie.com`. TikTok is the same paste box
+`live`), embedded from `youtube-nocookie.com`. The iOS app plays it in the
+card too (`BauYoutubePlayer.swift`): the public poster until a tap, then a
+`WKWebView` with YouTube's IFrame Player on the same host, inline, loaded
+under the `pqp.gg` origin so YouTube sees a referrer (without one it answers
+player error 153). The web view never navigates out; **Abrir no YouTube**
+under the card is the only way to the YouTube app. TikTok is the same paste box
 (`tiktok.com/@user/video/{id}`, `m.tiktok.com/v/{id}`; short `vm.` / `vt.` /
 `/t/` links are refused because they only resolve after a redirect),
 embedded from `tiktok.com/player/v1/{id}` (TikTok's current Embed Player URL;
@@ -387,6 +416,16 @@ viewing hostname and autoplay off. The API returns the stored URL in
 `youtubeUrl` for YouTube, TikTok and Instagram, and in `twitchUrl` for Twitch.
 Over-limit video is refused with "upload it to YouTube". Files are signed as
 downloads, never inline.
+
+The Android app plays a YouTube post in the card (`BauYoutube.kt`, rules in
+`BauYoutubeEmbed.kt`): the public poster until a tap, then a `WebView` with
+YouTube's IFrame Player from `youtube-nocookie.com`, loaded under the
+`pqp.gg` origin so YouTube sees a referrer. Main-frame navigations and app
+schemes are refused, so **Abrir no YouTube** under the card is the only way
+to the YouTube app. Full screen is WebView's own video view, shown immersive
+in landscape. WebView asks for media focus itself when the clip plays; the
+app does not ask too, and in a call the voice stack ignores focus changes,
+so the clip mixes in.
 
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
 or replacing a post's media deletes the object and the upload row.
@@ -751,6 +790,11 @@ the expected shape of a self-host without storage, not a bug.
   off refuses and hides, drafts never reach members, schedule sweep, a due
   scheduled post surfaces in the feed and unread without the sweep while a
   future one stays out, teaser survives an edit, comments and likes.
+- `server/src/services/community-home-latest.test.ts`: the latest preview's
+  `isNew` matches `…/home/unread` and clears on read, own posts never new,
+  limit and clamp, pinned not first, drafts and future posts out, locked cards
+  leak nothing, VIP off hides and uncounts, blocked comments uncounted, flag
+  off / Baú off / stranger refused, the feed index serves it.
 - `packages/shared/src/community-home.test.ts`: YouTube / Twitch / TikTok /
   Instagram URL classifiers (profiles, stories and short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the

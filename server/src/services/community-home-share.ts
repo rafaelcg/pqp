@@ -1,6 +1,7 @@
 import {
   BAU_CARD_TEASER_MAX,
   bauPostPath,
+  type CommunityHomeLatestResponse,
   type CommunityHomePost,
   type CommunityHomePostCard,
 } from "@pqp/shared";
@@ -10,6 +11,7 @@ import { postChannelMessage } from "../ws/chat.js";
 import {
   CommunityHomeError,
   getCommunityHomePost,
+  listLatestCommunityHomePosts,
 } from "./community-home.js";
 import { getChannel } from "./servers.js";
 
@@ -123,6 +125,45 @@ export async function getCommunityHomePostCard(
     throw new CommunityHomeError("not_found", "Post not found");
   }
   return toPostCard(post, row.name);
+}
+
+/**
+ * `GET …/home/latest`: the newest published posts as cards, each with `isNew`,
+ * plus the unread count and the read stamp. Same gate as the single card (a
+ * server whose owner switched the Baú off is a 404), and every card is built
+ * by `toPostCard`, so a locked post comes back without author or media exactly
+ * as it does in chat.
+ */
+export async function listLatestCommunityHomeCards(
+  serverId: string,
+  viewerId: string,
+  limit: number,
+  lang?: string | null,
+): Promise<CommunityHomeLatestResponse> {
+  const server = await getPool().query<{
+    name: string;
+    community_home_enabled: boolean | null;
+  }>(`SELECT name, community_home_enabled FROM servers WHERE id = $1`, [
+    serverId,
+  ]);
+  const row = server.rows[0];
+  if (!row || row.community_home_enabled !== true) {
+    throw new CommunityHomeError("not_found", "Not found");
+  }
+  const latest = await listLatestCommunityHomePosts(
+    serverId,
+    viewerId,
+    limit,
+    lang,
+  );
+  return {
+    unread: latest.unread,
+    lastSeenAt: latest.lastSeenAt,
+    posts: latest.posts.map(({ post, isNew }) => ({
+      ...toPostCard(post, row.name),
+      isNew,
+    })),
+  };
 }
 
 export type ShareFailure =

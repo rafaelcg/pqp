@@ -183,6 +183,7 @@ import {
 import { createPortal } from "react-dom";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import {
+  chromeHoverAt,
   isKeyboardFocus,
   stageChromeAttentionKey,
   stageChromeHold,
@@ -238,6 +239,7 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  STAGE_HEIGHT_TALL,
   stageHeightClass,
   isStageCollapsed,
   markCallStarted,
@@ -1559,6 +1561,30 @@ function ActiveCall({
   // A touch tap is a down and an up that did not travel. Anything that moved
   // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
+  // The hover holds, settled from the element under the pointer on every move
+  // and every `pointerover` across the stage. The enter and leave handlers on
+  // the bar, the overlay and the way back still set them as the pointer
+  // crosses, but they cannot clear a hover whose node was removed under the
+  // pointer (the mute button swaps its icon on the click that pressed it),
+  // which pinned the bar for the rest of the stream (`chromeHoverAt`). A
+  // target outside the stage's own DOM is a portal (a menu, a tooltip) that
+  // React bubbles here; it says nothing about the stage, so it is left alone.
+  const syncChromeHover = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (
+      event.pointerType === "touch" ||
+      !(event.target instanceof Node) ||
+      !event.currentTarget.contains(event.target)
+    ) {
+      return;
+    }
+    const hover = chromeHoverAt(event.target);
+    if (hover.controls !== barHovered) {
+      setBarHovered(hover.controls);
+    }
+    if (hover.tileControls !== tileControlsHovered) {
+      setTileControlsHovered(hover.tileControls);
+    }
+  };
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") {
       touchDownRef.current = { x: event.clientX, y: event.clientY };
@@ -1813,7 +1839,7 @@ function ActiveCall({
           "relative shrink-0 overflow-hidden bg-black",
           fill || watchFullscreen.active
             ? "h-full min-h-0"
-            : "h-[68svh] min-h-[280px]",
+            : STAGE_HEIGHT_TALL,
         )}
       >
         <CinemaStage
@@ -1925,15 +1951,9 @@ function ActiveCall({
         if (event.pointerType !== "touch") {
           chrome.wake();
         }
+        syncChromeHover(event);
       }}
-      onPointerOver={(event) => {
-        if (
-          event.pointerType !== "touch" &&
-          isInsideTileControls(event.target)
-        ) {
-          setTileControlsHovered(true);
-        }
-      }}
+      onPointerOver={syncChromeHover}
       onPointerOut={(event) => {
         if (
           isInsideTileControls(event.target) &&

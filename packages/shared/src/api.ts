@@ -11,18 +11,26 @@ import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
+import { messageSystemKindSchema } from "./nudge.js";
 
 /**
  * `watch_party` is a voice room with one stage: only holders of
  * START_WATCH_PARTY may put a stream on it, everyone else joins as audience.
  * Clients that predate it should treat it as `voice` (see
  * `isVoiceRoomChannelType` in watch-party-channel.ts).
+ *
+ * `forum` holds posts instead of messages: each post is a thread channel
+ * under it (see `forums.ts`). Creating one is refused 403
+ * `forum_channels_off` unless the runtime flag `forum_channels` is on for the
+ * server. A forum never carries a message of its own; its topic is the
+ * forum's guidelines.
  */
 export const channelTypeSchema = z.enum([
   "text",
   "voice",
   "category",
   "watch_party",
+  "forum",
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
@@ -80,23 +88,35 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * without using those apps' names or brand colours. `night` is a near-black
  * skin for dark, not a clone of another product's AMOLED theme. `ocean`,
  * `catppuccin` and `everforest` are the deliberate exception: credited ports
- * of MIT palettes (see DECISIONS.md).
+ * of MIT palettes (see DECISIONS.md). `retro` is Modo 2005, the hidden look a
+ * person finds with `/2005`; it is accepted here before any client can pick
+ * it, so the API that stores it ships first.
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
+ *
+ * An id outside this list is still refused (the patch answers 400 and nothing
+ * is stored; `e2e/theme-preferences.spec.ts` pins it). No `.catch` to the
+ * default: on the write path that would silently overwrite somebody's stored
+ * look with `signal`. Web tabs that predate `retro` never zod-parse the
+ * preferences they read: they adopt the stored string, find no stylesheet for
+ * it and draw the default look (`signal` is `:root`), and the boot script
+ * ignores ids it does not list. So accepting `retro` here is all an older tab
+ * needs to survive one.
  */
+export const APPEARANCE_PREFERENCES = [
+  "signal",
+  "harmony",
+  "hearth",
+  "night",
+  "ocean",
+  "catppuccin",
+  "everforest",
+  "retro",
+] as const;
 export const appearancePreferenceSchema = z.preprocess(
-  (value) =>
-    value === "guild" || value === "accord" ? "harmony" : value,
-  z.enum([
-    "signal",
-    "harmony",
-    "hearth",
-    "night",
-    "ocean",
-    "catppuccin",
-    "everforest",
-  ]),
+  (value) => (value === "guild" || value === "accord" ? "harmony" : value),
+  z.enum(APPEARANCE_PREFERENCES),
 );
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
@@ -224,6 +244,10 @@ export const soundPreferencesSchema = z.object({
   voiceLeave: z.boolean().optional(),
   incomingCall: z.boolean().optional(),
   outgoingCall: z.boolean().optional(),
+  /** The chamar a atenção cue. Absent reads as on. */
+  nudge: z.boolean().optional(),
+  /** Modo 2005's "acabou de entrar" chime. Absent reads as on. */
+  friendOnline: z.boolean().optional(),
 });
 
 export type SoundPreferences = z.infer<typeof soundPreferencesSchema>;
@@ -411,6 +435,15 @@ export const userPreferencesSchema = z.object({
    */
   voiceCleanNudgeDismissedAt: z.string().optional(),
   /**
+   * When the "Aparecer no diretório" card (the one-time question to an owner
+   * whose community has a public address but is not listed) was shown or
+   * answered, as an ISO instant. Stamped when it paints, so it is asked once
+   * per account and never again, on any device. `GET
+   * /api/communities/listing-nudge` reads it too, so a second browser does not
+   * even fetch a candidate. Absent means "never asked".
+   */
+  communityListingNudgeAt: z.string().optional(),
+  /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
    *
@@ -458,6 +491,24 @@ export const userPreferencesSchema = z.object({
       mine: z.boolean().optional(),
       show: z.boolean().optional(),
     })
+    .optional(),
+  /**
+   * Chamar a atenção (`nudge.ts`). Absent reads as true. False turns it off in
+   * BOTH directions: nobody can nudge this person and they cannot nudge
+   * anybody, which is what makes "off" impossible to abuse ("I can poke you,
+   * you can't poke me"). Read server side on every nudge, for both people.
+   */
+  allowNudges: z.boolean().optional(),
+  /**
+   * Hidden things this person has found, as ISO instants, so a find on the
+   * desktop shows up on the phone's web too. `retro` is Modo 2005: once set,
+   * its tile stays in Aparência. Replaced as a whole on write, like `sounds`.
+   */
+  easterEggs: z
+    .object({
+      retro: z.string().datetime({ offset: true }).optional(),
+    })
+    .partial()
     .optional(),
 });
 
@@ -931,6 +982,20 @@ export const messageSchema = z.object({
    * counts only and the client merges.
    */
   poll: pollSchema.nullable().default(null),
+  /**
+   * Set when the server wrote this message for a product action rather than
+   * somebody typing it: `nudge` is chamar a atenção (`nudge.ts`). Null for an
+   * ordinary message, and for any kind this build does not know, which then
+   * renders as its plaintext `body`. Defaulted so an older API still parses.
+   */
+  systemKind: messageSystemKindSchema,
+  /**
+   * The story this message replies to (`POST /api/stories/:storyId/reply`),
+   * or null. The quote is drawn from `GET /api/stories/:storyId/card`, which
+   * stops carrying the picture and the caption once the story expires.
+   * Absent on the wire for every other message: read it as `storyId ?? null`.
+   */
+  storyId: z.string().uuid().nullable().optional(),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;
@@ -1076,19 +1141,79 @@ export type PublicInvitePreview = z.infer<typeof publicInvitePreviewSchema>;
 
 export const createServerSchema = z.object({
   name: z.string().min(1).max(100),
+  /**
+   * The creator's UI language, which names the one category a new server
+   * starts with while `mixed_channel_list` is on ("Canais", "Channels",
+   * "Canales"). Optional: an older client sends nothing and the server falls
+   * back to the owner's saved locale, then to Portuguese.
+   */
+  locale: z.enum(["pt-BR", "en", "es"]).optional(),
 });
+
+/** Longest category name `categoryNameSchema` accepts. */
+export const CATEGORY_NAME_MAX_LENGTH = 32;
+
+/**
+ * A category is a label, not a slug: "Salas de voz" and "Jogos & Música" are
+ * fine, while a text channel still follows the `^[a-z0-9-_]+$` rule. Trimmed,
+ * 1 to 32 characters, no control characters or line breaks.
+ */
+export const categoryNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(CATEGORY_NAME_MAX_LENGTH)
+  .regex(/^[^\p{Cc}\u2028\u2029]+$/u, "No control characters");
+
+const CHANNEL_NAME_RE = /^[a-z0-9-_]+$/i;
+
+/**
+ * Why `name` is not a valid name for a row of `type`, or null when it is.
+ * Create and rename both ask, so a category can be renamed to the same words
+ * it could have been created with.
+ */
+export function channelNameIssue(type: string, name: string): string | null {
+  if (type === "category") {
+    const parsed = categoryNameSchema.safeParse(name);
+    return parsed.success
+      ? null
+      : `Category names are 1 to ${CATEGORY_NAME_MAX_LENGTH} characters`;
+  }
+  return CHANNEL_NAME_RE.test(name) ? null : "Use letters, numbers, - or _";
+}
 
 export const createChannelSchema = z
   .object({
-    name: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(/^[a-z0-9-_]+$/i, "Use letters, numbers, - or _"),
+    /** Per type: see `channelNameIssue` (a category may have spaces). */
+    name: z.string().min(1).max(100),
     type: channelTypeSchema,
     isPrivate: z.boolean().optional().default(false),
     /** Optional short description, stored as the channel topic. */
     topic: z.string().trim().max(200).optional(),
+    /**
+     * The category to create it in, or `null` for no category. ABSENT is not
+     * null: an older client never sends the key, and on a server in the mixed
+     * layout its channel goes to the end of the first category instead of a
+     * loose area that client cannot draw (the legacy-create rule). Every
+     * current client sends the key. Never set for a category.
+     */
+    parentId: z.string().uuid().nullable().optional(),
+  })
+  .transform((value) =>
+    value.type === "category" ? { ...value, name: value.name.trim() } : value,
+  )
+  .superRefine((value, ctx) => {
+    const issue = channelNameIssue(value.type, value.name);
+    if (issue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["name"] });
+    }
+    if (value.type === "category" && value.parentId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A category cannot be nested under another category",
+        path: ["parentId"],
+      });
+    }
   })
   // Permission-overwrite inheritance from a category to its children does
   // not exist yet (gap #22), so a "private category" would restrict nothing
@@ -1100,12 +1225,11 @@ export const createChannelSchema = z
   });
 
 export const updateChannelSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[a-z0-9-_]+$/i)
-    .optional(),
+  /**
+   * Checked against the channel's own type by the route
+   * (`channelNameIssue`): a category takes spaces, a channel does not.
+   */
+  name: z.string().min(1).max(100).optional(),
   isPrivate: z.boolean().optional(),
   topic: z.string().max(200).nullable().optional(),
   imageUrl: z
@@ -1144,7 +1268,60 @@ export const updateChannelSchema = z.object({
 export const moveChannelSchema = z.object({
   parentId: z.string().uuid().nullable(),
   index: z.number().int().min(0),
+  /**
+   * A drop ON a row: take that row's slot (after it when the moved channel
+   * was above it in the same group, before it otherwise). Exact where an
+   * index cannot be: the client does not see private siblings, the server
+   * does. `index` stays for an older server and an older client.
+   */
+  targetId: z.string().uuid().optional(),
 });
+
+/**
+ * `PUT /api/servers/:serverId/channel-layout`: the whole sidebar order in one
+ * write. `baseVersion` is the `version` the client last read; a server whose
+ * layout moved since answers 409 `channel_layout_stale` with its fresh list,
+ * so two managers dragging at once never silently overwrite each other.
+ *
+ * `categoryIds` is every category, in order (categories are never private,
+ * so a manager always sees them all). `groups` is each parent's channels in
+ * order, `parentId: null` for the loose ones above the first category. A
+ * channel the caller cannot see (a private room, a watch party room the web
+ * does not list) is simply left out and keeps its place.
+ */
+export const channelLayoutSchema = z.object({
+  baseVersion: z.number().int().min(0),
+  categoryIds: z.array(z.string().uuid()).max(100),
+  groups: z
+    .array(
+      z.object({
+        parentId: z.string().uuid().nullable(),
+        channelIds: z.array(z.string().uuid()).max(500),
+      }),
+    )
+    .max(101),
+});
+
+export type ChannelLayoutInput = z.infer<typeof channelLayoutSchema>;
+
+/**
+ * `GET /api/servers/:serverId/channel-layout`. `mixed` is true only when the
+ * `mixed_channel_list` flag is on for the server AND its data has been
+ * migrated, so a client never draws a half state. `version` is what a
+ * `PUT` sends back as `baseVersion`. A client that gets a 404 (an older
+ * server) draws the old layout.
+ */
+export const channelLayoutConfigSchema = z.object({
+  mixed: z.boolean(),
+  version: z.number().int().min(0),
+});
+
+export type ChannelLayoutConfig = z.infer<typeof channelLayoutConfigSchema>;
+
+/** The 409 body of a stale `PUT .../channel-layout`. */
+export const CHANNEL_LAYOUT_STALE = "channel_layout_stale";
+/** The 409 body of a `PUT .../channel-layout` on a server not in the mixed layout. */
+export const CHANNEL_LAYOUT_OFF = "channel_layout_off";
 
 /**
  * WS nudge: a server's channel list changed (a channel was created, renamed,
