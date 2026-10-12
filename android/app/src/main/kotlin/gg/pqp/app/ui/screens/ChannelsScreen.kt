@@ -126,6 +126,7 @@ import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.watchPartyListBlock
 import gg.pqp.app.watch.watchPartyListEntry
 import gg.pqp.app.watch.ui.WatchPartyListBlockView
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -327,9 +328,15 @@ fun ChannelsScreen(
         layoutConfig = next
         scope.launch { layoutMemory.save(serverId, next) }
     }
+    // Refreshes overlap (open, resume, every channels-update). The answer of a
+    // request that a later one has superseded is dropped, so an older mode
+    // that finishes last never lands on top of a newer one.
+    val layoutRequests = remember(serverId) { AtomicInteger(0) }
     suspend fun refreshLayoutConfig() {
+        val request = layoutRequests.incrementAndGet()
         try {
-            adoptLayout(session.api.channelLayoutConfig(serverId) ?: ChannelLayoutConfig.Legacy)
+            val answer = session.api.channelLayoutConfig(serverId) ?: ChannelLayoutConfig.Legacy
+            if (request == layoutRequests.get()) adoptLayout(answer)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -376,7 +383,8 @@ fun ChannelsScreen(
             .collectLatest {
                 // Which list to draw may have changed with it (the mixed list
                 // switched on for this server, or a reorder bumped the version).
-                refreshLayoutConfig()
+                // Its own coroutine: the list refetch below never waits on it.
+                launch { refreshLayoutConfig() }
                 val ticket = channelsTickets.take()
                 for (attempt in 1..CHANNELS_REFETCH_TRIES) {
                     val list = try {
@@ -552,6 +560,38 @@ fun ChannelsScreen(
         val ticket = channelsTickets.take()
         if (channelsTickets.tryWrite(ticket)) channels = next
     }
+    /**
+     * Puts back only the order that was staged, on top of whatever list is
+     * drawn now: a channel a refetch added meanwhile stays, and no ticket is
+     * taken, so a fetch still in flight may land.
+     */
+    fun rollbackOrder(before: List<Channel>) {
+        val order = mixedLayoutOf(before)
+        channels = channels?.let { applyLayoutToChannels(it, order) } ?: before
+    }
+
+    /**
+     * The PUT neither said yes nor no (the connection dropped): the server may
+     * have kept the order. Reads the truth instead of guessing; only when that
+     * read fails too is the staged order taken back.
+     */
+    suspend fun reconcileAfterUnknownSave(before: List<Channel>) {
+        val ticket = channelsTickets.take()
+        val fresh = try {
+            session.api.channels(serverId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (fresh == null) {
+            rollbackOrder(before)
+            return
+        }
+        if (channelsTickets.tryWrite(ticket)) channels = fresh
+        refreshLayoutConfig()
+    }
+
     suspend fun freshLayoutVersion(): Int? = try {
         session.api.channelLayoutConfig(serverId)?.version
     } catch (e: CancellationException) {
@@ -581,20 +621,20 @@ fun ChannelsScreen(
                     ChannelLayoutSaveOutcome.Stale(mixedLayoutOf(result.channels), result.version)
                 }
                 ChannelLayoutSaveResult.Off -> {
-                    writeChannels(before)
+                    rollbackOrder(before)
                     adoptLayout(ChannelLayoutConfig.Legacy)
                     ChannelLayoutSaveOutcome.Off
                 }
                 is ChannelLayoutSaveResult.Invalid -> {
-                    writeChannels(before)
+                    rollbackOrder(before)
                     ChannelLayoutSaveOutcome.Failed(result.message)
                 }
             }
         } catch (e: CancellationException) {
-            writeChannels(before)
+            rollbackOrder(before)
             throw e
         } catch (_: Exception) {
-            writeChannels(before)
+            reconcileAfterUnknownSave(before)
             ChannelLayoutSaveOutcome.Failed(failedText)
         }
     }

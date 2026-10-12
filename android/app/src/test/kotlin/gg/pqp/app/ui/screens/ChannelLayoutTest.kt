@@ -265,6 +265,24 @@ class ChannelLayoutTest {
         assertEquals(moved.ids, mixedLayoutOf(applied.values.toList()).ids)
     }
 
+    /** The rollback after a refused save: the staged order goes back, a channel that arrived meanwhile stays. */
+    @Test
+    fun `rolling back puts the old order on the latest list and keeps new channels`() {
+        val before = listOf(
+            Channel(id = "cat", name = "cat", type = "category", position = 0.0),
+            Channel(id = "a", name = "a", type = "text", parentId = "cat", position = 0.0),
+            Channel(id = "b", name = "b", type = "text", parentId = "cat", position = 1.0),
+        )
+        val staged = applyLayoutToChannels(before, moveInLayout(mixedLayoutOf(before), "b", LayoutTarget(null, 0))!!)
+        val latest = staged + Channel(id = "n", name = "n", type = "text", parentId = "cat", position = 2.0)
+        val rolledBack = applyLayoutToChannels(latest, mixedLayoutOf(before)).associateBy { it.id }
+        assertEquals("cat", rolledBack.getValue("b").parentId)
+        assertEquals(1.0, rolledBack.getValue("b").position, 0.0)
+        assertEquals("cat", rolledBack.getValue("n").parentId)
+        assertEquals(2.0, rolledBack.getValue("n").position, 0.0)
+        assertEquals(4, rolledBack.size)
+    }
+
     // --- Wire shapes ---
 
     @Test
