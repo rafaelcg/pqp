@@ -46,6 +46,9 @@
   --color-on-accent: oklch(0.16 0.012 250);
 
   --color-danger: oklch(0.65 0.2 25);
+  /* A count ON the danger fill (an unread badge): white in every theme,
+     because the red is mid-luminance in both. Measured by the bench. */
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.8 0.14 85);
   --color-success: oklch(0.72 0.14 150);
 
@@ -501,6 +504,7 @@
   --color-on-accent: oklch(0.99 0 0);
 
   --color-danger: oklch(0.52 0.2 25);
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.52 0.13 75);
   --color-success: oklch(0.48 0.13 150);
 
@@ -2266,6 +2270,29 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .cta-lift:active {
     transition: none;
     transform: none;
+  }
+}
+
+/*
+ * CONVERSAS ON A PHONE (`conversations_home_phone_tabs`, `data-phone-tabs` on
+ * the app shell). The rail is gone, so the two list drawers (conversations and
+ * channels) open full width from the left edge instead of beside a 72px rail,
+ * and stop above the bottom bar while it is up. The member list is not a
+ * drawer of this kind and keeps its own placement. Corner cards (onboarding,
+ * campaigns) rise above the bar so neither covers the other.
+ */
+@media (max-width: 47.999rem) {
+  [data-phone-tabs] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    left: 0;
+    width: 100%;
+  }
+
+  [data-phone-tabs][data-phone-bar] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+
+  [data-phone-tabs][data-phone-bar] [data-corner-card].fixed {
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
   }
 }
 
