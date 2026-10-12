@@ -357,6 +357,7 @@ import {
   livePreviewChannelAvailable,
   livePreviewOnFor,
   livePreviewPlaylistAllowed,
+  livePreviewRungAllowed,
   livePreviewSeconds,
   noteLivePreviewPlaylistServed,
 } from "../services/live-preview.js";
@@ -3050,6 +3051,15 @@ async function tryHlsCapabilityDoor(
       sendError(res, 404, "Channel not found", req);
       return true;
     }
+  }
+  if (viewer.preview && match[3] !== undefined && !livePreviewRungAllowed(channelId, match[3])) {
+    // The film's ladder only: never the presenter's camera, which is a
+    // rendition of the same session. Unlike the checks above this one is
+    // the same answer for every preview token and never changes while a
+    // party runs, and the edge Worker refuses the same request before its
+    // shared cache, so a member polling the camera never shares it.
+    sendError(res, 404, "Not found", req);
+    return true;
   }
   await serveHlsPlaylistWithToken(
     req,

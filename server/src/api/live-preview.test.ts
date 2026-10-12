@@ -720,6 +720,17 @@ describeDb("signed-out live preview", () => {
       expect((await call("GET", pathOf(body.stream.hlsUrl))).status).toBe(404);
     });
 
+    it("plays the film's ladder only: the presenter's camera is refused to a preview token", async () => {
+      await goLive(liveChannel, "720p30");
+      await goLive(liveChannel, "cam360p30");
+      const body = (await start(liveChannel)).body as StartBody;
+      const token = tokenOf(body.stream.hlsUrl);
+      const base = `/api/voice/hls-playlist/${liveChannel}/${STARTED_AT}`;
+      expect((await call("GET", `${base}/720p30?t=${token}`)).status).toBe(200);
+      expect((await call("GET", `${base}/cam360p30?t=${token}`)).status).toBe(404);
+      expect(livePreviewMetrics().playlistRefused).toMatchObject({ "not-film": 1 });
+    });
+
     it("refuses new players the moment the flag goes off or the channel goes private", async () => {
       const body = (await start(liveChannel)).body as StartBody;
       const path = pathOf(body.stream.hlsUrl);

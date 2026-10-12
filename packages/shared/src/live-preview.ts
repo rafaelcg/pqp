@@ -92,7 +92,8 @@ export type LivePreviewStartInput = z.infer<typeof livePreviewStartSchema>;
 
 /**
  * The film only: no presenter identity, no camera, no viewer count. `hlsUrl`
- * carries a short-lived anonymous capability that expires with the window.
+ * carries a short-lived anonymous capability that expires with the window,
+ * and the server refuses it on any rung outside the film's ladder.
  */
 export const livePreviewStreamSchema = z.object({
   hlsUrl: z.string(),

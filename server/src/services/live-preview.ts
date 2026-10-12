@@ -15,6 +15,7 @@ import { getPool } from "../db.js";
 import { flagServerOverrides, isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { liveHlsStreamFor, liveHlsStreamFromDb } from "../voice/hls-egress.js";
+import { LADDER_RUNGS } from "../voice/hls-ladder.js";
 import { presentHlsViewers } from "../voice/hls-viewer-counts.js";
 import { stampPreviewStream } from "../voice/hls-viewer-token.js";
 import { isCommunitiesEnabled } from "./communities.js";
@@ -138,6 +139,7 @@ export type LivePreviewRefusal =
   | "private-channel"
   | "not-public"
   | "not-live"
+  | "not-film"
   | "unsigned"
   | "window-used"
   | "rate-limited"
@@ -231,6 +233,27 @@ function noteRefusal(
 
 export function noteLivePreviewPlaylistServed(): void {
   counters.playlistServed += 1;
+}
+
+/**
+ * Whether a preview token may fetch this rendition of a session: the film's
+ * ladder only. The presenter's camera (`cam360p30`) is a rendition of the
+ * same session, so the token's channel and session claims alone would open
+ * it. A host who turned "Prévia pública" on agreed to show the film to people
+ * with no account, not their face.
+ *
+ * Safe to refuse at the origin because the edge Worker refuses a preview
+ * token on the camera rung itself, before its shared cache and its coalesced
+ * fetch (`tools/hls-edge/src/index.ts`), so a refusal here never reaches a
+ * member through a shared edge answer. Every film rung stays served without a
+ * preview-only check (see the preview branch of `tryHlsCapabilityDoor`).
+ */
+export function livePreviewRungAllowed(channelId: string, rung: string): boolean {
+  if (Object.hasOwn(LADDER_RUNGS, rung)) {
+    return true;
+  }
+  noteRefusal("playlist", channelId, "not-film");
+  return false;
 }
 
 // ------------------------------------------------------------- eligibility

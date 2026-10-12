@@ -881,23 +881,34 @@ appears on a stream URL, and this Worker's gate is exactly what it was before
 this feature existed — the production refusal above never triggers because
 there is never a party pass to refuse.
 
-## Signed-out live preview tokens: nothing to deploy here
+## Signed-out live preview tokens
 
 The API's signed-out live preview (`docs/WATCH_PARTY.md` §"Watching without an
 account") hands a visitor with no account a viewer token of purpose `preview`:
 the same shape and the same key as any `?t=`, with a random visitor id in `u`
-and an expiry at the end of that visitor's few minutes. This Worker already
-verifies `?t=` without looking at the purpose on the live routes, so it plays
-those URLs as they are and refuses them the moment they expire, with no new
-secret and no deploy. Two things keep the window meaning what it says:
+(`preview:<id>`) and an expiry at the end of that visitor's few minutes. This
+Worker already verifies `?t=` without looking at the purpose on the live
+routes, so it plays those URLs as they are and refuses them the moment they
+expire, with no new secret.
+
+One rule is this Worker's own, and it needs a deploy before `live_preview` goes
+on anywhere: a preview token never gets the presenter's camera
+(`previewRungRefused` in `src/playlist-route.ts`, a 404 with reason
+`preview-rung`). It runs before the shared cache and the coalesced fetch. The
+origin refuses the same request, and that refusal must never ride a fetch a
+member shares. Until this Worker is deployed, the edge can still hand the
+camera to a preview token from its cache.
+
+Two things keep the window meaning what it says:
 
 - The API never mints a party pass for a preview viewer (`stampPreviewStream`,
   and the master playlist's `allowPartyPass: false`), so there is no `?pp=` for
   this Worker to fall back to once the `?t=` is gone.
 - The conventional session URL is still forwarded to the API, which re-checks
-  the flag and the channel on every master request. Rendition requests carrying
-  a preview token get no preview-only refusal at the origin, so a coalesced
-  fetch that happens to carry one can never hand a member a 404 or a 429.
+  the flag and the channel on every master request. A film rendition request
+  carrying a preview token gets no preview-only refusal at the origin, so a
+  coalesced fetch that happens to carry one can never hand a member a 404 or
+  a 429. The camera rung is refused here first, for the same reason.
 
 A revocation does not reach a preview token through `HLS_REVOKED_USERS` (it
 names no account); its own expiry, at most `LIVE_PREVIEW_SECONDS`, is the bound.

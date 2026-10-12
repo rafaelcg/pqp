@@ -3655,8 +3655,9 @@ window. So:
 ### What the token can open
 
 The preview token shares the viewer token's key so the edge Worker
-(`tools/hls-edge/`) plays it with no new secret and no Worker deploy, and
-enforces its expiry on every request it answers. On this origin it opens one
+(`tools/hls-edge/`) plays it with no new secret, and enforces its expiry on
+every request it answers. The Worker does need one deploy before the flag goes
+on anywhere: it refuses a preview token on the camera rung (below). On this origin it opens one
 door: the playlist proxy's header-less capability door, which asks for it by
 name. On the session URL (the master playlist, fetched once per player) it then
 re-checks the flag, the community and @everyone's VIEW (facts cached 15 s per
@@ -3677,10 +3678,14 @@ A preview viewer also gets:
   once `?t=` expires, so a pass would turn five minutes into six hours.
 - **No camera, no presenter id, no seat, no socket, no chat.** The stream is
   `{ hlsUrl, startedAt, mode, partTargetMs }` and nothing else. The page never
-  draws the presenter's camera. Known limit: the token is bound to the
-  channel and the session, not to a rung, so a visitor who builds the camera
-  rendition's URL (`.../cam360p30`) by hand can fetch it on the origin. It is
-  not refused there on purpose, for the edge coalescing reason above.
+  draws the presenter's camera, and the token cannot fetch it either. The
+  token names the channel and the session, not a rung, so the rung is checked
+  on its own. The origin answers a preview token only on the film's ladder
+  (`livePreviewRungAllowed`, refusal `not-film`). The edge Worker refuses a
+  preview token on the camera rung before its shared cache and its coalesced
+  fetch (`previewRungRefused`), so the origin's refusal never rides a fetch a
+  member shares. Deploy the Worker before turning the flag on: until then the
+  edge can still answer the camera from its cache.
 - **A valid Bearer always wins** (pitfall 16): a signed-in page that still holds
   a preview token is served on its own account.
 
