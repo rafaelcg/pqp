@@ -198,6 +198,15 @@ the "Compartilhar sem som" button. With nothing on stage, both show in the
 docked call bar (`components/voice/docked-share-error.tsx`). Before, the
 picker closed and nothing was shown. Code: `client/src/lib/share-silent-fallback.ts`.
 
+A watch party goes silent the same way, from the setup preview's pick
+(`watchParty.setup.soundFailed` under the preview) and from a share started
+during the party. Live, the host gets a warning instead of the 12-second
+notice: it sits above the transmission readout and stays until the share
+ends or the host closes it (`VoiceState.watchPartyShareSilent`,
+`components/voice/watch-party-silent-share-warning.tsx`). The preview marks
+its stream, so the call learns at go-live that the sound failed
+(`lostSoundToFailure`).
+
 **Frame rate and size** stay the page's business, not the shell's:
 `screenCaptureOptions` asks for 1080p at 30 (60 when the HLS ladder wants it)
 and the watch party lowers the capture's height with `applyConstraints` while it

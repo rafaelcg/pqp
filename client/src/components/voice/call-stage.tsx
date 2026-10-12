@@ -232,10 +232,6 @@ import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
 import {
-  useWatchPartySilentShareWarning,
-  WatchPartySilentShareWarning,
-} from "@/components/voice/watch-party-silent-share-warning";
-import {
   DockedShareError,
   showsDockedShareError,
 } from "@/components/voice/docked-share-error";
@@ -1796,9 +1792,6 @@ function ActiveCall({
       setTopStripPx(0);
     };
   }, []);
-  const silentShareWarning = useWatchPartySilentShareWarning(
-    voiceState.watchPartyShareSilent,
-  );
   const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
   const controlRowRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || typeof ResizeObserver === "undefined") {
@@ -2417,13 +2410,7 @@ function ActiveCall({
           )}
         </div>
       )}
-      {!voiceState.error && silentShareWarning.shown && (
-        <WatchPartySilentShareWarning
-          onDismiss={silentShareWarning.dismiss}
-          measureRef={topStripRef}
-        />
-      )}
-      {!voiceState.error && !silentShareWarning.shown && (
+      {!voiceState.error && (
         <VoiceNoticeBar notice={voiceState.notice} measureRef={topStripRef} />
       )}
 
@@ -2439,7 +2426,7 @@ function ActiveCall({
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           typeof ResizeObserver === "undefined" &&
-            (voiceState.error || voiceState.notice || silentShareWarning.shown) &&
+            (voiceState.error || voiceState.notice) &&
             "mt-7",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,

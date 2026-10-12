@@ -77,6 +77,10 @@ import {
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import {
+  useWatchPartySilentShareWarning,
+  WatchPartySilentShareWarning,
+} from "@/components/voice/watch-party-silent-share-warning";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   ensureOsCanExcludeCallAudio,
@@ -181,6 +185,12 @@ export interface WatchPartyPanelProps {
    * it never changes what the audience sees.
    */
   sharePublishRecovering?: boolean;
+  /**
+   * This presenter's own share is live without the film's sound because the
+   * computer's sound would not open (`use-voice`'s `watchPartyShareSilent`).
+   * The host's warning sits beside the transmission readout while it is true.
+   */
+  shareSilent?: boolean;
   /**
    * Anybody in the room has a screen up, this person or not.
    *
@@ -1891,6 +1901,7 @@ function LiveSurface(
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mixerOpen, setMixerOpen] = useState(false);
+  const silentShareWarning = useWatchPartySilentShareWarning(props.shareSilent === true);
   // Host and co-hosts only, client-side, REGARDLESS of what the shared role
   // table still allows a manager to do. An admin/manager watching a live
   // party is not running it and must never be shown a button that ends
@@ -2650,6 +2661,10 @@ function LiveSurface(
      MANAGE_CHANNELS is not transmitting anything. A viewer has no use for the
      presenter's encoder. */
   const transmission = runsTheShow && (
+    <>
+    {silentShareWarning.shown && (
+      <WatchPartySilentShareWarning onDismiss={silentShareWarning.dismiss} />
+    )}
     <WatchPartyTransmission
       micInStream={props.micState === "everyone"}
       stream={props.liveStream ?? null}
@@ -2672,6 +2687,7 @@ function LiveSurface(
       detailsInDialog
       overlay={Boolean(props.statusSlot)}
     />
+    </>
   );
   const transmissionMounted =
     transmission && props.statusSlot
