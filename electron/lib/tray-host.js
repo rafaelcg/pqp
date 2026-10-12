@@ -82,7 +82,8 @@ function probeEnv(env) {
   if (!env.APPIMAGE && !env.APPDIR) {
     return env;
   }
-  const { LD_LIBRARY_PATH: _dropped, ...rest } = env;
+  const rest = { ...env };
+  delete rest.LD_LIBRARY_PATH;
   return rest;
 }
 
@@ -128,15 +129,18 @@ function linuxTrayHostAvailable(watcher, env = process.env) {
 }
 
 /**
- * The tray needs creating again: it was made while no tray host was there
- * (Chromium then falls back to an icon nobody draws) and one has appeared
- * since, for instance when pqp starts with the session, before the panel.
+ * The tray needs creating again: it was made before a tray host was known to
+ * be there (Chromium then falls back to an icon nobody draws) and the bus now
+ * says one is, for instance when pqp starts with the session, before the
+ * panel. "Before a host was known" includes not knowing: a probe that had not
+ * answered yet, or could not ask, when the tray was made. Making it again
+ * once is cheap; hiding the window into an icon nobody draws is not.
  *
  * @param {boolean | null} atCreation the probe's answer when the tray was made
  * @param {boolean | null} now
  */
 function trayNeedsRecreate(atCreation, now) {
-  return atCreation === false && now === true;
+  return atCreation !== true && now === true;
 }
 
 module.exports = {

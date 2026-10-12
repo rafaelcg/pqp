@@ -1684,7 +1684,7 @@ function createWindow(appUrl, allowedOrigin) {
       trayAvailable: trayCanHoldWindow(),
     });
     if (process.platform === "linux") {
-      console.log(
+      console.warn(
         `[pqp] close: ${action} (tray host: ${describeTrayHost()}, signed in: ${signedIn}, in call: ${voiceState.inCall})`,
       );
     }
@@ -1846,7 +1846,7 @@ function refreshTrayHost({ force = false } = {}) {
     .then((watcher) => {
       trayHostWatcher = watcher;
       if (trayNeedsRecreate(trayHostAtCreation, watcher) && tray && !tray.isDestroyed()) {
-        console.log("[pqp] a tray host appeared, creating the tray again");
+        console.warn("[pqp] a tray host appeared, creating the tray again");
         tray.destroy();
         tray = null;
         createTray();

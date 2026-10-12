@@ -107,12 +107,15 @@ describe("linuxTrayHostAvailable", () => {
 });
 
 describe("trayNeedsRecreate", () => {
-  it("only when the tray was made with no host and a host is there now", () => {
+  it("when the tray was made before a host was confirmed and one is there now", () => {
     assert.equal(trayNeedsRecreate(false, true), true);
+    // The startup probe had not answered, or could not ask, when the tray
+    // was made: it may be the invisible fallback icon.
+    assert.equal(trayNeedsRecreate(null, true), true);
     assert.equal(trayNeedsRecreate(true, true), false);
-    assert.equal(trayNeedsRecreate(null, true), false);
     assert.equal(trayNeedsRecreate(false, false), false);
     assert.equal(trayNeedsRecreate(false, null), false);
+    assert.equal(trayNeedsRecreate(null, null), false);
   });
 });
 
