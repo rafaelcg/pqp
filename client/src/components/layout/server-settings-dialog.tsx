@@ -116,7 +116,14 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
     "serverSettings.audit.action.channel.voice_transport_update",
   "channel.sfu_region_update":
     "serverSettings.audit.action.channel.sfu_region_update",
-  "member.timeout": "serverSettings.audit.action.member.timeout",
+  "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
+  "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
+  "forum.post_delete": "serverSettings.audit.action.forum.post_delete",
+  "forum.post_edit": "serverSettings.audit.action.forum.post_edit",
+  "forum.tags_update": "serverSettings.audit.action.forum.tags_update",
+  "forum.settings_update": "serverSettings.audit.action.forum.settings_update",
+  "webhook.forum_settings": "serverSettings.audit.action.webhook.forum_settings",
+  "member.timeout":"serverSettings.audit.action.member.timeout",
   "member.timeout_lift": "serverSettings.audit.action.member.timeout_lift",
   "member.voice_disconnect":
     "serverSettings.audit.action.member.voice_disconnect",

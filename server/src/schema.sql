@@ -5352,3 +5352,232 @@ CREATE TABLE IF NOT EXISTS stream_alert_channels (
   -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
   start_key        TEXT
 );
+
+-- forum channels
+--
+-- A FORUM IS A CHANNEL THAT HOLDS POSTS, AND A POST IS A THREAD. The forum row
+-- is `type = 'forum'` and never carries a message. Each post is a `channels`
+-- row with `type = 'thread'`, `parent_id` = the forum, and
+-- `thread_root_message_id` NULL (it grew out of no message; the CHECK
+-- `channels_thread_root_check` already allows that). Visibility, overwrites,
+-- slow mode, read cursors, mentions, search, retention and reports therefore
+-- cover posts by construction. The side tables below carry only what a chat
+-- thread does not need. The wire contract and every rule these tables serve
+-- are in packages/shared/src/forums.ts; the plan is docs/plans/FORUM_CHANNELS.md.
+--
+-- Pitfall 22: nothing here adds a column to an existing table. The only
+-- statement that touches one is the type CHECK below, and every table is new,
+-- so CREATE TABLE takes its FK locks on the first run only. Every forum table
+-- is here, including the ones only later work reads (follows, settings,
+-- webhook settings), so the feature costs exactly one hash-changing deploy.
+
+-- The type CHECK, for the fourth time in this file, and the first time it is
+-- written so it cannot be silently skipped.
+--
+-- The three older blocks above end in `EXCEPTION WHEN others THEN NULL`. That
+-- is how they survive rows of a type they predate (their ADD fails and rolls
+-- back, the newer constraint stays), but it also swallows a `lock_timeout`
+-- (55P03) or a deadlock (40P01): the boot run under `initDb`'s 2 s lock bound
+-- would then record the hash with a constraint that still lacks the newest
+-- type, and no retry would ever come, because nothing failed. For 'forum'
+-- that is "every forum create is a CHECK violation until the next schema
+-- change". So this block:
+--
+--  - does nothing (and takes no lock) when the constraint already allows
+--    'forum';
+--  - otherwise DROPs and ADDs, and lets every error out, so a lock timeout or
+--    a deadlock fails the whole run, `initDb` rolls back and retries;
+--  - catches exactly one error, `check_violation`: rows of a type this list
+--    does not know, which only happens when a NEWER schema added one and this
+--    image is a rollback. The newer constraint stays, as before;
+--  - skips the validation scan (`NOT VALID`) when it can prove the scan would
+--    find nothing: the constraint it replaces was VALIDATED and allows no
+--    type outside this list, so every row already passes this one. That is
+--    the normal case (the watch party block above has just validated a
+--    subset), and it keeps a full pass over `channels` out of the ACCESS
+--    EXCLUSIVE window. New rows and updates are checked either way. Any
+--    other starting point (no constraint, an unvalidated one, one with a
+--    type this list lacks) validates, which is what makes a rollback image
+--    keep a newer constraint instead of replacing it.
+--
+-- `db-boot-schema.test.ts` runs this block under a held lock and asserts the
+-- 55P03 reaches the caller, that a contended boot ends with 'forum' in the
+-- constraint, and which of the two ADDs each starting point takes.
+DO $$
+DECLARE
+  covered BOOLEAN;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid = 'channels'::regclass
+       AND conname = 'channels_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%''forum''%'
+  ) THEN
+    -- Proof needs the canonical shape every block in this file writes
+    -- (`type IN ('a', 'b')`, printed as `type = ANY (ARRAY['a'::text, ...])`)
+    -- with nothing but plain literals in the array. A differently written
+    -- constraint (`type <> 'x'`, an OR) or a NULL element (a CHECK that
+    -- evaluates to NULL passes) could be valid and still let other types in,
+    -- so either one validates instead.
+    SELECT c.convalidated
+           AND pg_get_constraintdef(c.oid)
+               ~ '^CHECK \(\(type = ANY \(ARRAY\[''[a-z_]+''::text(, ''[a-z_]+''::text)*\]\)\)\)$'
+           AND NOT EXISTS (
+             SELECT 1
+               FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
+              WHERE m.v[1] NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')
+           )
+      INTO covered
+      FROM pg_constraint c
+     WHERE c.conrelid = 'channels'::regclass
+       AND c.conname = 'channels_type_check';
+    BEGIN
+      ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+      IF covered THEN
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'))
+          NOT VALID;
+      ELSE
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'));
+      END IF;
+    EXCEPTION WHEN check_violation THEN
+      RAISE WARNING 'channels_type_check left as it was: a row has a channel type this schema does not know (a rollback?)';
+    END;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS forum_posts (
+  -- The post's own thread channel. Deleting the channel deletes the post.
+  channel_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  -- Denormalised copy of channels.parent_id, so the list indexes live here.
+  -- Posts never move between forums in v1, so the two cannot disagree.
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  -- SET NULL: the post and its answers outlive the account ("Conta excluída").
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  -- NO FOREIGN KEY, on purpose. A FK into `messages` would add a lookup on
+  -- this table to every message delete in the product. A deleted opening
+  -- message reads as NULL through the LEFT JOIN in the list query, the same
+  -- answer SET NULL would give.
+  opening_message_id UUID,
+  -- The accepted answer ("Marcar como solução"): a reply in this post. NO
+  -- FOREIGN KEY either, for the reason above and one more: a deleted answer
+  -- must keep its id, so the post can say "A resposta marcada foi apagada"
+  -- instead of silently forgetting it ever had one. SET NULL would erase
+  -- exactly that fact.
+  resolved_message_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- NULL while the post is a shell waiting for its opening message. Every
+  -- read path filters on it; a shell is never listed, and a sweep deletes
+  -- shells older than 10 minutes.
+  published_at TIMESTAMPTZ,
+  -- BUMP semantics, written by the send path with GREATEST (order-free).
+  -- Deleting a reply does not un-bump.
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  pinned_at TIMESTAMPTZ,
+  locked_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  -- Idempotent create: a retried POST with the same nonce returns the post.
+  client_nonce TEXT,
+  -- Webhook dedupe: the caller's Idempotency-Key, or a hash of the
+  -- normalised title and first link. NULL for posts made by people.
+  dedupe_key TEXT
+);
+
+-- Created order, and the one index that LEADS with forum_id with no
+-- predicate, which is what the ON DELETE CASCADE from a deleted channel uses
+-- (every channel delete in the product probes `forum_id = $1`; a partial
+-- index cannot answer that). Keyset on (sort key, channel_id) so two posts in
+-- the same millisecond page stably.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_created
+  ON forum_posts (forum_id, created_at DESC, channel_id DESC);
+-- Activity order. Partial: shells are never listed.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_activity
+  ON forum_posts (forum_id, last_activity_at DESC, channel_id DESC)
+  WHERE published_at IS NOT NULL;
+-- Pinned posts are a handful per forum; read apart from the page.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_pinned
+  ON forum_posts (forum_id) WHERE pinned_at IS NOT NULL;
+-- "Meus posts", and the SET NULL when an account is deleted.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_author
+  ON forum_posts (author_id, forum_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_posts_nonce
+  ON forum_posts (forum_id, author_id, client_nonce)
+  WHERE client_nonce IS NOT NULL;
+-- The shell sweep.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_shells
+  ON forum_posts (created_at) WHERE published_at IS NULL;
+-- Webhook dedupe lookup inside the window. Not UNIQUE: the rule is "no
+-- repeat within N hours", and a unique index would make it "never".
+CREATE INDEX IF NOT EXISTS idx_forum_posts_dedupe
+  ON forum_posts (forum_id, dedupe_key, created_at DESC)
+  WHERE dedupe_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS forum_tags (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 20),
+  -- One unicode emoji or NULL. No custom emoji in v1.
+  emoji TEXT CHECK (emoji IS NULL OR char_length(emoji) <= 16),
+  -- "Só staff": only MANAGE_MESSAGES puts it on or takes it off a post.
+  moderated BOOLEAN NOT NULL DEFAULT FALSE,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Leads with forum_id, so it also serves the cascade from channels.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_tags_name
+  ON forum_tags (forum_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS forum_post_tags (
+  post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
+  tag_id UUID NOT NULL REFERENCES forum_tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (post_id, tag_id)
+);
+-- Tag filters (AND: one probe per selected tag), the tag's post count, and
+-- the cascade when a tag is deleted.
+CREATE INDEX IF NOT EXISTS idx_forum_post_tags_tag
+  ON forum_post_tags (tag_id, post_id);
+
+-- Who follows a post. Unused until the P2 reply push; created now so the
+-- feature costs one schema deploy. `muted = TRUE` is an explicit "stop
+-- following", kept so an automatic follow (the author's) never re-adds it.
+CREATE TABLE IF NOT EXISTS forum_post_follows (
+  post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  muted BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (post_id, user_id)
+);
+-- The account-delete cascade, and "what do I follow".
+CREATE INDEX IF NOT EXISTS idx_forum_post_follows_user
+  ON forum_post_follows (user_id, post_id);
+
+-- Per-forum settings. A side table, not columns on `channels` (pitfall 22).
+-- No row means the defaults below, which are `FORUM_SETTINGS_DEFAULTS` in
+-- forums.ts. The guidelines are NOT here: they are the channel's topic.
+CREATE TABLE IF NOT EXISTS forum_settings (
+  forum_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  -- A post needs at least one tag.
+  require_tag BOOLEAN NOT NULL DEFAULT FALSE,
+  -- The list's order when the request names none.
+  default_sort TEXT NOT NULL DEFAULT 'activity'
+    CHECK (default_sort IN ('activity', 'created')),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- A webhook that targets a forum (P1b). A side table, not columns on
+-- `webhooks`, for the same pitfall 22 reason. No row means the defaults:
+-- every non-moderated tag allowed, no default tags, a 72 h dedupe window.
+CREATE TABLE IF NOT EXISTS webhook_forum_settings (
+  webhook_id UUID PRIMARY KEY REFERENCES webhooks(id) ON DELETE CASCADE,
+  -- The tags this feed may apply. NULL = every non-moderated tag of the
+  -- forum; a moderated tag is applied only when it is listed here.
+  allowed_tag_ids UUID[],
+  -- Applied when the payload names no tag that resolves ("Notícias").
+  default_tag_ids UUID[] NOT NULL DEFAULT '{}',
+  dedupe_window_hours INTEGER NOT NULL DEFAULT 72
+    CHECK (dedupe_window_hours BETWEEN 0 AND 720)
+);

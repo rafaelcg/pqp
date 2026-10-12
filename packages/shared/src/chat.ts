@@ -38,6 +38,8 @@ import {
   threadUpdateBroadcastSchema,
 } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
+// --- forums ---
+import { forumPostRemovedSchema, forumPostUpsertSchema } from "./forums.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
@@ -254,6 +256,13 @@ export const messageRejectReasonSchema = z.enum([
    * moment the database is back.
    */
   "database-unavailable",
+  /**
+   * A reply in a forum post that staff closed (`forums.ts`). Only staff
+   * (MANAGE_MESSAGES or MANAGE_CHANNELS on the forum) still get through. Only a
+   * forum-aware client can reach a post, so an older client never sees it;
+   * Android and iOS fall back to their generic copy anyway.
+   */
+  "locked",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
@@ -623,6 +632,20 @@ export const watchPartyUpdateSchema = z.object({
 
 export type WatchPartyUpdateBroadcast = z.infer<typeof watchPartyUpdateSchema>;
 
+/**
+ * The 422 body of `POST /api/channels/:forumId/posts` when the opening message
+ * (or the title, under AutoMod) was refused: the house `{ error }` plus the
+ * same fields a `message-rejected` frame carries, so the forum composer reuses
+ * the chat composer's copy. `error` is `forum_post_rejected` (`FORUM_ERRORS`).
+ */
+export const forumPostRejectedBodySchema = z.object({
+  error: z.string(),
+  reason: messageRejectReasonSchema,
+  retryAfterMs: messageRejectedSchema.shape.retryAfterMs,
+  automodMessage: messageRejectedSchema.shape.automodMessage,
+});
+export type ForumPostRejectedBody = z.infer<typeof forumPostRejectedBodySchema>;
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -637,6 +660,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   profileUpdateSchema,
   // --- threads ---
   threadUpdateBroadcastSchema,
+  // --- forums --- the forum list's live rows, fanned out to the forum.
+  forumPostUpsertSchema,
+  forumPostRemovedSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,
@@ -804,6 +830,12 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // --- threads --- the chip refresh for parent-channel viewers; content-free,
   // so fanning it out to everyone in the parent channel is correct.
   "thread-update",
+  // --- forums --- a post's summary, or its removal, for everyone viewing the
+  // forum (and, for a removal, the post). Every forum viewer may read every
+  // summary, so the channel relay is exactly the right audience; without
+  // these two lines a post made on the sibling instance never reaches them.
+  "forum-post-upsert",
+  "forum-post-removed",
   "poll-update",
   // A voice note's transcript and playback copy. Addressed to the note's
   // channel on purpose: whoever can hear the audio may read the text. They

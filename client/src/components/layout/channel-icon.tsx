@@ -1,4 +1,4 @@
-import { Clapperboard, Hash, Lock, Mic } from "lucide-react";
+import { Clapperboard, Hash, Lock, MessagesSquare, Mic } from "lucide-react";
 import { useState } from "react";
 import { isWatchPartyChannelType, type Channel } from "@pqp/shared";
 import { cn } from "@/lib/utils";
@@ -38,9 +38,9 @@ export function channelIconIsPrivateLock(channel: Channel): boolean {
 
 /**
  * The glyph next to a channel's name — its image, its emoji icon, or one of
- * the defaults (lock / clapperboard / mic / hash) when it has neither. Most channels
- * hit the default path, so that path is drawn deliberately rather than left
- * blank.
+ * the defaults (lock / clapperboard / mic / speech bubbles / hash) when it has
+ * neither. Most channels hit the default path, so that path is drawn
+ * deliberately rather than left blank.
  *
  * A channel image is set by whoever renamed the channel, not reviewed by
  * anyone else, and rendered to the whole server — so a broken or slow-to-fail
@@ -91,6 +91,10 @@ export function ChannelIcon({
   }
   if (channel.type === "voice") {
     return <Mic className={cn("shrink-0", className)} />;
+  }
+  // A forum: conversations, not one chat. Distinct from `#` at 16 px.
+  if (channel.type === "forum") {
+    return <MessagesSquare className={cn("shrink-0", className)} />;
   }
   return <Hash className={cn("shrink-0", className)} />;
 }

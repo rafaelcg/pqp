@@ -252,6 +252,11 @@ import {
 } from "../ws/voice.js";
 import { audienceModeEnabledFor } from "../voice/audience.js";
 import { voiceConfigForServer } from "../lib/voice-config.js";
+import {
+  FORUM_CHANNELS_OFF,
+  forumChannelsEnabled,
+  forumConfigForServer,
+} from "../lib/forum-config.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -2757,6 +2762,12 @@ router.get("/api/share/config", async ({ url }) =>
 // whether a host in this server is offered audience mode.
 router.get("/api/voice/config", async ({ url }) =>
   voiceConfigForServer(url.searchParams.get("serverId")),
+);
+
+// Forum channels (`forum_channels`, per server, default off). Asked with the
+// server the client is in; see lib/forum-config.ts. Read per request.
+router.get("/api/forum/config", async ({ url }) =>
+  forumConfigForServer(url.searchParams.get("serverId")),
 );
 
 // Whether the operator has forced every stale client to update
@@ -5625,6 +5636,11 @@ router.post(
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId!, user.id, Permission.MANAGE_CHANNELS);
     const body = createChannelSchema.parse(await readJsonBody(req));
+    // The enum accepts `forum` so the contract is one shape everywhere; this
+    // is what keeps it inert until the runtime flag is on for this server.
+    if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
+      throw new Forbidden(FORUM_CHANNELS_OFF);
+    }
     const channel = await createChannel(
       serverId!,
       body.name,
@@ -7635,6 +7651,10 @@ router.post(
           );
         case "database-unavailable":
           throw new DatabaseUnavailableError();
+        case "locked":
+          // A forum post staff closed to replies (forums.ts). Sent from the
+          // forum send-path guard; a character is not staff by default.
+          throw new Forbidden("This post is closed to replies");
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":

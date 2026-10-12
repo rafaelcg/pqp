@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
 import { voiceConfigForServer } from "./voice-config.js";
+import { forumConfigForServer } from "./forum-config.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 
 /**
@@ -376,5 +377,60 @@ describe("conversations_home against GET /api/dms/config", () => {
     expect(lib).toContain('"/api/dms/config"');
     expect(lib).toMatch(/answer\.home === true/);
     expect(lib).toMatch(/answer\.phoneTabs === true/);
+  });
+});
+
+/**
+ * `forum_channels`, born with forum PR 0. Per server, off by default, and the
+ * one flag here whose field (`enabled`) is too common a word for the generic
+ * "both sides mention it" check above to mean anything, so each half is
+ * pinned by name: the route, the per-server read, the create guard the flag
+ * exists for, and the client's type and fetcher.
+ */
+describe("forum_channels against the forum config the client reads", () => {
+  it("is per server, off by default, and served as `enabled`", () => {
+    const def = FEATURE_FLAGS.forum_channels;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/forum/config?serverId= (enabled)");
+    expect(Object.keys(forumConfigForServer(null))).toEqual(["enabled"]);
+  });
+
+  it("the route is mounted, asked per server, and answers from the flag", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/forum\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/forum/config is not mounted").toBeTruthy();
+    expect(route).toContain("forumConfigForServer(");
+    expect(route).toContain('searchParams.get("serverId")');
+    const lib = readFileSync(path.join(serverSrc, "lib/forum-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("forum_channels",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("creating a forum channel is refused unless the flag is on for that server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.post\(\s*"\/api\/servers\/:serverId\/channels"[\s\S]*?\n\);/.exec(
+      api,
+    )?.[0];
+    expect(route, "POST /api/servers/:serverId/channels not found").toBeTruthy();
+    expect(route).toMatch(
+      /body\.type === "forum" && !forumChannelsEnabled\(serverId!\)[\s\S]*?FORUM_CHANNELS_OFF/,
+    );
+  });
+
+  it("the client's ForumConfig names exactly the field the server sends, asked per server", () => {
+    const api = readFileSync(path.join(clientSrc, "lib/api.ts"), "utf8");
+    const body = /export interface ForumConfig \{([\s\S]*?)\n\}/.exec(api)?.[1];
+    expect(body, "client ForumConfig interface not found in lib/api.ts").toBeTruthy();
+    const declared = [...body!.matchAll(/^\s{2}([A-Za-z]\w*)\??:/gm)].map((match) => match[1]!);
+    expect(declared).toEqual(Object.keys(forumConfigForServer(null)));
+    expect(api).toMatch(/\/api\/forum\/config\?serverId=/);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bforum_channels:\s*"/);
   });
 });

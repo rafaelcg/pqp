@@ -534,3 +534,29 @@ phone tabs go on, turn `conversations_home_phone_tabs` off first; desktop stays.
 Turn them on from controles → interruptores, or `PUT /api/admin/flags
 { key: "conversations_home", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
+
+## `forum_channels` (per server)
+
+Forum channels: a channel type, `forum`, whose posts are thread channels with a
+title, tags, pin, lock and resolved state (`docs/plans/FORUM_CHANNELS.md`, the
+wire contract in `packages/shared/src/forums.ts`). Behind `FORUM_CHANNELS`
+(default off, **per server**, born as a flag). Served as `enabled` on
+`GET /api/forum/config?serverId=` (`server/src/lib/forum-config.ts`).
+
+Off gates **creating**, never reading: `POST /api/servers/:id/channels` with
+`type: "forum"` answers 403 `forum_channels_off`, and (from the forum server
+PR) so does creating a post. Forums and posts that exist stay readable and
+repliable, and staff actions on them keep working, so turning it off strands
+nobody's writing. Nothing is hidden or deleted.
+
+The Discord import is the one reader with no server in hand (it creates the
+server), so it asks the global value only: an import keeps flattening forums to
+text channels until the flag is on globally.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "forum_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Before it goes on anywhere real, the iOS
+build that hides unknown channel types must be out, or a forum inside a
+category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
+pins the route, the field and the create guard.

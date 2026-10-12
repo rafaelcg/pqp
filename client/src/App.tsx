@@ -84,6 +84,7 @@ import {
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { ForumPlaceholderPane } from "@/components/layout/forum-placeholder-pane";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -5140,6 +5141,17 @@ function MainAppContent({
                 ? withProfileUpdate(prev, message)
                 : prev,
             );
+            return;
+          }
+
+          // --- forums --- the forum list's live rows. Nothing draws a forum
+          // list yet (the pane lands with forum PR 3b, which dispatches these
+          // to it), so they stop here instead of falling through to the voice
+          // signaling handler, which is typed for voice frames only.
+          if (
+            message.type === "forum-post-upsert" ||
+            message.type === "forum-post-removed"
+          ) {
             return;
           }
 
@@ -11809,6 +11821,15 @@ function MainAppContent({
         )}
 
         {selectedChannel?.type === "text" && chatPane}
+
+        {/* A forum holds posts, not messages, so it never mounts the chat.
+            Placeholder until the forum pane (PR 3b) takes this slot. */}
+        {selectedChannel?.type === "forum" && (
+          <ForumPlaceholderPane
+            channel={selectedChannel}
+            onOpenNav={() => setMobileNavOpen(true)}
+          />
+        )}
 
         {selectedChannel &&
           isVoiceRoomChannelType(selectedChannel.type) &&

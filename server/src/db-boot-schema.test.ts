@@ -52,6 +52,36 @@ const SCHEMA = readFileSync(join(HERE, "schema.sql"), "utf8");
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
+// --- forum channels --- the two newest `channels_type_check` blocks: the
+// watch party one, which swallows every error, and the forum one, which must
+// not (see the comment above it in schema.sql).
+const DO_BLOCKS = SCHEMA.match(/^DO \$\$[\s\S]*?^END \$\$;/gm) ?? [];
+const FORUM_TYPE_BLOCK = DO_BLOCKS.find(
+  (block) => block.includes("channels_type_check") && block.includes("'forum'"),
+);
+const WATCH_PARTY_TYPE_BLOCK = DO_BLOCKS.find(
+  (block) =>
+    block.includes("channels_type_check") &&
+    block.includes("'watch_party'") &&
+    !block.includes("'forum'"),
+);
+const FORUM_TABLES = [
+  "forum_posts",
+  "forum_tags",
+  "forum_post_tags",
+  "forum_post_follows",
+  "forum_settings",
+  "webhook_forum_settings",
+];
+/**
+ * A database that last ran the schema before forums: the type CHECK without
+ * 'forum'. NOT VALID so it holds whatever rows other suites left behind.
+ */
+const PRE_FORUM_TYPE_CHECK = `
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+  ALTER TABLE channels ADD CONSTRAINT channels_type_check
+    CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party')) NOT VALID;`;
+
 describe("boot schema settings", () => {
   it("skips an unchanged schema by default; `always` is the rollback", () => {
     expect(resolveBootSchemaMode(undefined)).toBe("changed");
@@ -268,5 +298,206 @@ describeDb("initDb on a real Postgres", () => {
   it("`always` re-runs the file on every boot (the rollback)", async () => {
     const result = await initDb({ mode: "always" });
     expect(result.outcome).toBe("applied");
+  });
+
+  // --- forum channels ---
+
+  const typeCheckDef = async (): Promise<string> =>
+    (
+      await getPool().query<{ def: string }>(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+          WHERE conrelid = 'channels'::regclass AND conname = 'channels_type_check'`,
+      )
+    ).rows[0]?.def ?? "";
+
+  /** Everything the forum DDL defines, as text, to compare two runs. */
+  const forumCatalog = async (): Promise<string> => {
+    const columns = await getPool().query(
+      `SELECT table_name, column_name, data_type, is_nullable, column_default
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ANY($1)
+        ORDER BY table_name, ordinal_position`,
+      [FORUM_TABLES],
+    );
+    const indexes = await getPool().query(
+      `SELECT tablename, indexname, indexdef FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = ANY($1)
+        ORDER BY tablename, indexname`,
+      [FORUM_TABLES],
+    );
+    const constraints = await getPool().query(
+      `SELECT conrelid::regclass::text AS tbl, conname, pg_get_constraintdef(oid) AS def
+         FROM pg_constraint
+        WHERE conrelid::regclass::text = ANY($1) OR conname = 'channels_type_check'
+        ORDER BY 1, 2`,
+      [FORUM_TABLES],
+    );
+    return JSON.stringify([columns.rows, indexes.rows, constraints.rows]);
+  };
+
+  it("the forum DDL runs twice with no change, and the type CHECK carries 'forum'", async () => {
+    await initDb({ mode: "always" });
+    const first = await forumCatalog();
+    for (const table of FORUM_TABLES) {
+      expect(first, `${table} was not created`).toContain(`"table_name":"${table}"`);
+    }
+    expect(await typeCheckDef()).toContain("'forum'");
+    await initDb({ mode: "always" });
+    expect(await forumCatalog()).toBe(first);
+  });
+
+  it("the forum type block takes no lock when 'forum' is already allowed", async () => {
+    expect(FORUM_TYPE_BLOCK, "forum channels_type_check block not found").toBeTruthy();
+    expect(await typeCheckDef()).toContain("'forum'");
+    // A reader holds `channels`. A block that DROPped and ADDed anyway would
+    // queue behind it; this one checks the catalog and returns.
+    await other.query("BEGIN");
+    await other.query("SELECT 1 FROM channels LIMIT 1");
+    const client = await getPool().connect();
+    try {
+      await client.query("SET lock_timeout = '150ms'");
+      await expect(client.query(FORUM_TYPE_BLOCK!)).resolves.toBeDefined();
+    } finally {
+      await client.query("SET lock_timeout = 0").catch(() => {});
+      client.release();
+      await other.query("ROLLBACK");
+    }
+  });
+
+  it("the forum type block lets a lock timeout out, where the older blocks swallow it", async () => {
+    // RECONCILE §1.2(c): `EXCEPTION WHEN others THEN NULL` turns a 55P03
+    // under the boot's lock bound into "success", so `initDb` would record the
+    // hash with a constraint still missing 'forum' and never retry.
+    expect(FORUM_TYPE_BLOCK).toBeTruthy();
+    expect(WATCH_PARTY_TYPE_BLOCK).toBeTruthy();
+    await getPool().query(PRE_FORUM_TYPE_CHECK);
+    expect(await typeCheckDef()).not.toContain("'forum'");
+
+    await other.query("BEGIN");
+    await other.query("SELECT 1 FROM channels LIMIT 1");
+    const client = await getPool().connect();
+    try {
+      await client.query("SET lock_timeout = '150ms'");
+      // The failure shape, so this test is known to test something: the old
+      // block times out on the lock and reports nothing.
+      await expect(client.query(WATCH_PARTY_TYPE_BLOCK!)).resolves.toBeDefined();
+      // The forum block surfaces it, which is what makes `initDb` retry.
+      await expect(client.query(FORUM_TYPE_BLOCK!)).rejects.toMatchObject({
+        code: "55P03",
+      });
+      await other.query("ROLLBACK");
+      await client.query("SET lock_timeout = 0");
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await typeCheckDef()).toContain("'forum'");
+    } finally {
+      await other.query("ROLLBACK").catch(() => {});
+      await client.query("SET lock_timeout = 0").catch(() => {});
+      client.release();
+    }
+  });
+
+  it("skips the validation scan only when the constraint it replaces already proves it", async () => {
+    const client = await getPool().connect();
+    const validated = async () =>
+      (
+        await client.query<{ convalidated: boolean; def: string }>(
+          `SELECT convalidated, pg_get_constraintdef(oid) AS def FROM pg_constraint
+            WHERE conrelid = 'channels'::regclass AND conname = 'channels_type_check'`,
+        )
+      ).rows[0]!;
+    try {
+      // From a VALIDATED subset (what the watch party block leaves): every row
+      // already passes, so the forum list goes on NOT VALID, with no scan.
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM channels WHERE type NOT IN ('text', 'voice', 'category', 'thread', 'watch_party')`,
+      );
+      await client.query(PRE_FORUM_TYPE_CHECK.replace(" NOT VALID", ""));
+      expect((await validated()).convalidated).toBe(true);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: false });
+      expect((await validated()).def).toContain("'forum'");
+      await client.query("ROLLBACK");
+
+      // From an unvalidated constraint, nothing is proven: it validates.
+      await client.query("BEGIN");
+      await client.query(PRE_FORUM_TYPE_CHECK);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
+      // From a validated constraint written in another shape: its literals
+      // are all on the list, but it allows anything else, so nothing is
+      // proven and it validates.
+      await client.query("BEGIN");
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type <> 'voice' OR type = 'voice');`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
+      // A NULL in the list makes the old CHECK pass any type (NULL is not
+      // false), so its literals prove nothing either.
+      await client.query("BEGIN");
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', NULL));`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+
+      // From a constraint that allows a type this list lacks (a rollback
+      // image meeting a newer schema): it validates, so rows of that type
+      // would keep the newer constraint in place.
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM channels WHERE type NOT IN ('text', 'voice', 'category', 'thread', 'watch_party')`,
+      );
+      await client.query(`
+        ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+        ALTER TABLE channels ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'gallery'));`);
+      await client.query(FORUM_TYPE_BLOCK!);
+      expect(await validated()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+  });
+
+  it("a boot that hits lock timeouts on `channels` still ends with 'forum' in the type CHECK", async () => {
+    // The whole file this time, from a database that predates forums, with a
+    // reader holding `channels` through the first attempts. (Inside the file
+    // the earlier ALTERs on `channels` meet the lock first, which is why the
+    // test above runs the forum block on its own.)
+    await getPool().query(PRE_FORUM_TYPE_CHECK);
+    await getPool().query("UPDATE schema_boot_state SET schema_hash = 'stale' WHERE id = 1");
+    await other.query("BEGIN");
+    await other.query("SELECT 1 FROM channels LIMIT 1");
+    const sleeps: number[] = [];
+    try {
+      const result = await initDb({
+        lockTimeoutMs: 150,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+          if (sleeps.length === 2) {
+            await other.query("ROLLBACK");
+          }
+        },
+      });
+      expect(result.outcome).toBe("applied");
+      expect(result.attempts).toBeGreaterThanOrEqual(3);
+      expect(await typeCheckDef()).toContain("'forum'");
+      const row = await getPool().query<{ schema_hash: string }>(
+        "SELECT schema_hash FROM schema_boot_state WHERE id = 1",
+      );
+      expect(row.rows[0]?.schema_hash).toBe(schemaHash(SCHEMA));
+    } finally {
+      await other.query("ROLLBACK").catch(() => {});
+    }
   });
 });
