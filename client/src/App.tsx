@@ -342,7 +342,6 @@ import {
   fetchForumPost,
   fetchServerThreads,
   setThreadMembership,
-  fetchCommunityHomeUnread,
   fetchCommunityHomeUnreadAll,
   fetchServerCommunityHomeConfig,
   fetchConversations,
@@ -507,6 +506,11 @@ import {
   type MessageKey,
 } from "@/lib/i18n";
 import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
+import {
+  markLatestSeen,
+  readBauRow,
+  type LatestPreview,
+} from "@/lib/community-home/latest";
 import {
   applyConversationMessage,
   conversationChannel,
@@ -1886,6 +1890,17 @@ function MainAppContent({
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
   /**
+   * The open server's Baú preview (`GET …/home/latest`), from the same read as
+   * the count above. Null while the server has the preview off or before the
+   * first read lands: the row stays the plain one.
+   */
+  const [communityHomeLatest, setCommunityHomeLatest] =
+    useState<LatestPreview | null>(null);
+  const communityHomeLatestRef = useRef<LatestPreview | null>(null);
+  communityHomeLatestRef.current = communityHomeLatest;
+  /** Bumped by "Postar no Baú" on the empty preview: the feed opens its composer. */
+  const [communityHomeComposeNonce, setCommunityHomeComposeNonce] = useState(0);
+  /**
    * Unread Baú posts for EVERY server, for the rail's icons. The open server's
    * own count above drives the sidebar row and the corner card; this is the
    * same number for the servers whose channel list is not on screen.
@@ -3125,6 +3140,50 @@ function MainAppContent({
       void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
     }
   });
+  /** The preview's card: open the Baú scrolled to that post. */
+  const stableOnOpenCommunityHomePost = useStableCallback((postId: string) => {
+    const serverId = selectedServerId;
+    if (!serverId) {
+      return;
+    }
+    setWhatsNewOpen(false);
+    markCommunityHomeRowSeen(serverId);
+    setCommunityHomeRowNew(false);
+    void selectChannel(COMMUNITY_HOME_CHANNEL_ID, serverId).then(() => {
+      setCommunityHomeFocus((previous) => ({
+        serverId,
+        postId,
+        nonce: (previous?.nonce ?? 0) + 1,
+      }));
+    });
+  });
+  /** The empty preview's "Postar no Baú": the Baú with its composer up. */
+  const stableOnComposeCommunityHome = useStableCallback(() => {
+    if (!selectedServerId) {
+      return;
+    }
+    setCommunityHomeComposeNonce((n) => n + 1);
+    stableOnSelectCommunityHome();
+  });
+  const canPostInBau = perms.can(Permission.MANAGE_SERVER);
+  // One object per change, not per render: `ChannelList` is memoized.
+  const communityHomePreviewProps = useMemo(
+    () =>
+      communityHomeLatest
+        ? {
+            latest: communityHomeLatest,
+            canPost: canPostInBau,
+            onOpenPost: stableOnOpenCommunityHomePost,
+            onCompose: stableOnComposeCommunityHome,
+          }
+        : null,
+    [
+      communityHomeLatest,
+      canPostInBau,
+      stableOnOpenCommunityHomePost,
+      stableOnComposeCommunityHome,
+    ],
+  );
   // `favoriteChannelIds` is memoized by hand rather than with `useMemo`: it
   // depends on `selectedServer`, declared further down this function (after
   // the `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
@@ -8096,6 +8155,8 @@ function MainAppContent({
     // Leaving the Baú spends the focus: coming back later is not a follow.
     if (!communityHomeOpen) {
       setCommunityHomeFocus((current) => (current ? null : current));
+      // Same for "Postar no Baú": the next visit opens the feed, not the composer.
+      setCommunityHomeComposeNonce(0);
     }
   }, [communityHomeOpen]);
   useEffect(() => {
@@ -8141,6 +8202,7 @@ function MainAppContent({
 
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeUnread(0);
+      setCommunityHomeLatest(null);
       communityHomeUnreadRef.current = 0;
       communityHomeUnreadServerRef.current = null;
       communityHomeUnreadBaselineRef.current = false;
@@ -8149,6 +8211,9 @@ function MainAppContent({
     }
     if (communityHomeUnreadServerRef.current !== selectedServerId) {
       communityHomeUnreadServerRef.current = selectedServerId;
+      // Another server's posts must never sit in this server's sidebar.
+      setCommunityHomeLatest(null);
+      communityHomeLatestRef.current = null;
       communityHomeUnreadRef.current = 0;
       communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast((current) =>
@@ -8170,6 +8235,11 @@ function MainAppContent({
       setCommunityHomeNewestByServer((current) =>
         withServerBauNewest(current, serverId, null),
       );
+      // Opening the Baú folds the preview's card back into the slim row.
+      setCommunityHomeLatest((current) => markLatestSeen(current));
+      // Landed straight on the Baú (a community does), or a post arrived while
+      // reading it: the row has no last post, or a stale one, to show.
+      const refreshPreview = fromNudge || communityHomeLatestRef.current === null;
       let cancelled = false;
       void markCommunityHomeRead(serverId)
         .then(() => {
@@ -8178,6 +8248,17 @@ function MainAppContent({
           }
           communityHomeUnreadBaselineRef.current = true;
           communityHomeUnreadRef.current = 0;
+          if (refreshPreview) {
+            void readBauRow(serverId, locale)
+              .then(({ latest }) => {
+                if (!cancelled && communityHomeUnreadServerRef.current === serverId) {
+                  setCommunityHomeLatest(markLatestSeen(latest));
+                }
+              })
+              .catch(() => {
+                // The plain row is still right; nothing to undo.
+              });
+          }
         })
         .catch(() => {
           // Leave the baseline unset so a later nudge cannot toast against 0.
@@ -8189,10 +8270,11 @@ function MainAppContent({
     const previous = communityHomeUnreadRef.current;
     const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
-    void fetchCommunityHomeUnread(selectedServerId)
-      .then(({ count, newestAt }) => {
+    void readBauRow(selectedServerId, locale)
+      .then(({ count, newestAt, latest }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          setCommunityHomeLatest(latest);
           setCommunityHomeUnreadByServer((current) =>
             withServerBauUnread(current, selectedServerId, count),
           );
@@ -8232,6 +8314,7 @@ function MainAppContent({
     communityHomeOpen,
     selectedServerId,
     communityHomeUpdateNudge,
+    locale,
   ]);
 
   /**
@@ -12211,6 +12294,7 @@ function MainAppContent({
             )
           }
           communityHomeSelected={communityHomeOpen}
+          communityHomePreview={communityHomePreviewProps}
           members={serverMembers}
           onSelectCommunityHome={stableOnSelectCommunityHome}
         />
@@ -12459,6 +12543,7 @@ function MainAppContent({
                 : null
             }
             focusNonce={communityHomeFocus?.nonce ?? 0}
+            composeNonce={communityHomeComposeNonce}
           />
         )}
 

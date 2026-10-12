@@ -26,6 +26,7 @@ import type {
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
   CommunityHomeUnreadAllResponse,
+  CommunityHomeLatestResponse,
   CommunityHomeUnreadResponse,
   PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
@@ -2171,6 +2172,16 @@ export const deleteCommunityHomePost = (serverId: string, postId: string) =>
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
   apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/**
+ * The sidebar preview: the newest posts as cards with `isNew`, plus the same
+ * unread count. 404 while the server has `bau_latest_preview` off; callers go
+ * through `readBauRow` (`lib/community-home/latest.ts`), which falls back.
+ */
+export const fetchCommunityHomeLatest = (serverId: string, lang?: string) =>
+  apiFetch<CommunityHomeLatestResponse>(
+    `/api/servers/${serverId}/home/latest${lang ? `?lang=${encodeURIComponent(lang)}` : ""}`,
+  );
 
 /**
  * Unread Baú posts for every server this account is in, in one read: what the

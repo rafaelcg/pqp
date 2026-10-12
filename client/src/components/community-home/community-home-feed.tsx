@@ -205,6 +205,11 @@ type Props = {
    */
   focusPostId?: string | null;
   focusNonce?: number;
+  /**
+   * Bumped by the sidebar's "Postar no Baú" (empty Baú, staff): open the
+   * composer. Zero, the initial value, opens nothing.
+   */
+  composeNonce?: number;
 };
 
 type StaffTab = "feed" | "compose" | "drafts";
@@ -2381,6 +2386,7 @@ export function CommunityHomeFeed({
   canSendInChannel,
   focusPostId = null,
   focusNonce = 0,
+  composeNonce = 0,
 }: Props) {
   const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
@@ -2882,6 +2888,12 @@ export function CommunityHomeFeed({
   function openCompose() {
     setStaffTab("compose");
   }
+
+  useEffect(() => {
+    if (composeNonce > 0 && canManageServer) {
+      setStaffTab("compose");
+    }
+  }, [composeNonce, canManageServer]);
 
   function openDrafts() {
     setStaffTab("drafts");
