@@ -194,7 +194,9 @@ learns about it. From the shell that publishes `capabilities.silentRetry`:
    shared without sound, plus the Chrome tab path for sound.
 
 An older shell, a browser, or a failed retry keeps the old path: the error and
-the "Compartilhar sem som" button. Code: `client/src/lib/share-silent-fallback.ts`.
+the "Compartilhar sem som" button. With nothing on stage, both show in the
+docked call bar (`components/voice/docked-share-error.tsx`). Before, the
+picker closed and nothing was shown. Code: `client/src/lib/share-silent-fallback.ts`.
 
 **Frame rate and size** stay the page's business, not the shell's:
 `screenCaptureOptions` asks for 1080p at 30 (60 when the HLS ladder wants it)
