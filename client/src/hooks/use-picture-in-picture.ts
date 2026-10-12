@@ -14,8 +14,8 @@ import {
  *
  * Leaving PiP resumes playback: the PiP window's own pause button pauses the
  * element, and a live share has no inline play control to undo that. Losing
- * the stream while in PiP closes the window, so it never outlives the share
- * as a frozen last frame.
+ * the stream or the tile while in PiP closes the window, so it never outlives
+ * the share as a frozen last frame.
  */
 export function usePictureInPicture(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -37,12 +37,23 @@ export function usePictureInPicture(
     }
     setAvailable(pictureInPictureSupport(video, doc) !== "none");
     setActive(isInPictureInPicture(video, doc));
-    return watchPictureInPicture(video, doc, (inPip) => {
+    const stopWatching = watchPictureInPicture(video, doc, (inPip) => {
       setActive(inPip);
       if (!inPip && video.paused) {
         void video.play().catch(() => {});
       }
     });
+    return () => {
+      stopWatching();
+      // Chromium keeps the window open for an element that left the page,
+      // showing its last frame. A stream swap keeps the element connected and
+      // the window with it; only a tile that unmounted gets it closed.
+      setTimeout(() => {
+        if (!video.isConnected && isInPictureInPicture(video, doc)) {
+          void togglePictureInPicture(video, doc);
+        }
+      }, 0);
+    };
   }, [videoRef, stream]);
 
   const toggle = useCallback(() => {
