@@ -7843,6 +7843,9 @@ function MainAppContent({
       const targetMessageId = usedFallback ? null : messageId;
       const targetPostId = usedFallback ? null : postId;
       const routeApply = ++routeApplySeqRef.current;
+      // Taken before the first wait (the channel list), so a click made while
+      // any of this is out wins over the link.
+      const navigationBefore = navigationSeqRef.current;
 
       setChannelsLoading(true);
       beginChannelLoad(targetServerId);
@@ -7865,7 +7868,6 @@ function MainAppContent({
         // a forum post or a chat thread (the list never carries threads), so
         // a permalink, a search hit or a push into one opens it over its
         // parent instead of stopping at "no longer exists".
-        const navigationBefore = navigationSeqRef.current;
         const routedThread =
           targetChannelId && !requested
             ? await resolveRoutedThread(targetChannelId, {
@@ -7891,12 +7893,22 @@ function MainAppContent({
         if (targetChannelId && !requested && !routedThread) {
           setAppError("That channel no longer exists or is private.");
         }
+        // After opening the parent, the post or thread goes on top only if
+        // the reader is still there: a click while it loaded wins.
+        const stillOn = (channelId: string) =>
+          selectedChannelIdRef.current === channelId &&
+          routeApplySeqRef.current === routeApply;
         if (routedThread?.kind === "forum-post") {
           await selectChannel(routedThread.forumId, targetServerId);
-          setForumPostRoute(routedThread.forumId, routedThread.post.id);
+          if (stillOn(routedThread.forumId)) {
+            setForumPostRoute(routedThread.forumId, routedThread.post.id);
+          }
         } else if (routedThread?.kind === "thread") {
-          await selectChannel(routedThread.thread.parentChannelId, targetServerId);
-          await openThreadFromSidebar(routedThread.thread);
+          const parentId = routedThread.thread.parentChannelId;
+          await selectChannel(parentId, targetServerId);
+          if (stillOn(parentId)) {
+            await openThreadFromSidebar(routedThread.thread);
+          }
         } else if (requested) {
           await selectChannel(requested.id, targetServerId);
           if (targetMessageId && !sentSince(requested.id, linkedAt)) {
@@ -7904,7 +7916,7 @@ function MainAppContent({
           }
           // `/channel/<forumId>/post/<postId>`: the forum, with the post on
           // top. The pane reads the post itself and says so when it is gone.
-          if (targetPostId && requested.type === "forum") {
+          if (targetPostId && requested.type === "forum" && stillOn(requested.id)) {
             setForumPostRoute(requested.id, targetPostId);
           }
         } else {

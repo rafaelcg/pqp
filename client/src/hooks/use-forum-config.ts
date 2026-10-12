@@ -69,11 +69,12 @@ export function loadForumConfig(serverId: string): Promise<ForumConfig> {
         return answer;
       })
       .catch((error: unknown) => {
-        // A 404 is an API that predates forums: a real answer, and it is off.
-        // Anything else (a blip) keeps what was there and stays unknown when
-        // nothing was.
+        // A 404 is an API that does not serve forums (an older or rolled-back
+        // build): a real answer, and it is off, even over an "on" held from
+        // before. Anything else (a blip) keeps what was there and stays
+        // unknown when nothing was.
         const status = (error as { status?: unknown } | null)?.status;
-        if (status === 404 && !settled.has(serverId)) {
+        if (status === 404 && settled.get(serverId)?.enabled !== false) {
           settled.set(serverId, { enabled: false });
           notify(serverId);
         }
@@ -138,10 +139,15 @@ export function useForumConfig(
     set.add(update);
     update();
     let retry: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
     if (!settled.has(serverId)) {
       void loadForumConfig(serverId).catch(() => {
         // A blip, not an answer: ask once more shortly rather than leave
-        // "Fórum" missing from the "+" until the next refresh pass.
+        // "Fórum" missing from the "+" until the next refresh pass. Not if
+        // the surface asking has already gone.
+        if (disposed) {
+          return;
+        }
         retry = setTimeout(() => {
           retry = null;
           if (!settled.has(serverId)) {
@@ -153,6 +159,7 @@ export function useForumConfig(
       });
     }
     return () => {
+      disposed = true;
       if (retry !== null) {
         clearTimeout(retry);
       }

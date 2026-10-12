@@ -98,16 +98,16 @@ async function api<T>(suffix: string, path: string, init: RequestInit = {}): Pro
 
 async function materialise(suffix: string): Promise<void> {
   const me = await api<{ ageGate?: string }>(suffix, "/api/me");
+  // Through `api`, which throws on a refusal: a seed that half worked would
+  // fail later, in whatever the spec was actually about.
   if (me.ageGate && me.ageGate !== "passed") {
-    await fetch(`${API}/api/me/age-check`, {
+    await api(suffix, "/api/me/age-check", {
       method: "POST",
-      headers: headersFor(suffix),
       body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
     });
   }
-  await fetch(`${API}/api/me/preferences`, {
+  await api(suffix, "/api/me/preferences", {
     method: "PATCH",
-    headers: headersFor(suffix),
     body: JSON.stringify({
       onboardedAt: new Date().toISOString(),
       firstRunDismissedAt: new Date().toISOString(),

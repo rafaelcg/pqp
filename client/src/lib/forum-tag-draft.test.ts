@@ -87,6 +87,9 @@ describe("tag names", () => {
     expect(acceptTagEmoji(":pepe:")).toBeNull();
     expect(acceptTagEmoji("abc")).toBeNull();
     expect(acceptTagEmoji("?!")).toBeNull();
+    expect(acceptTagEmoji("a🐛")).toBeNull();
+    expect(acceptTagEmoji("🐛 bug")).toBeNull();
+    expect(acceptTagEmoji("👨‍💻")).toBe("👨‍💻");
     expect(acceptTagEmoji("")).toBeNull();
   });
 });

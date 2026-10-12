@@ -87,11 +87,11 @@ export function acceptTagEmoji(value: string): string | null {
     return null;
   }
   // A pictograph, a flag (regional indicators) or a keycap ("1️⃣"), and
-  // nothing a keyboard types on its own: no `:name:`, no letters, no "?!".
+  // nothing typed around it: no letters, no spaces, no punctuation, so
+  // neither `:name:` nor "a🐛" nor "?!" gets in.
   const isEmoji =
     /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u.test(trimmed) &&
-    !/^[\p{L}\p{P}\s]+$/u.test(trimmed) &&
-    !trimmed.startsWith(":");
+    !/[\p{L}\p{P}\s]/u.test(trimmed);
   return isEmoji ? trimmed : null;
 }
 
@@ -118,7 +118,7 @@ export function addTag(
   draft: TagDraft,
   input: { name: string; emoji?: string | null; moderated?: boolean },
 ): AddTagResult {
-  const name = input.name.replace(/\s+/g, " ").trim();
+  const name = clampTagName(input.name.replace(/\s+/g, " ").trim()).trim();
   if (!name) {
     return { ok: false, error: "forum.settings.nameRequired" };
   }
