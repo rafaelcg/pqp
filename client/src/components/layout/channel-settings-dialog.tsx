@@ -24,6 +24,7 @@ import {
   readChannelRecipe,
 } from "@/components/layout/channel-permissions-section";
 import { WebhooksSection } from "@/components/layout/webhooks-section";
+import { channelTakesWebhooks } from "@/lib/channel-webhooks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   fetchChannelMembers,
@@ -186,11 +187,8 @@ export function ChannelSettingsDialog({
   const canSeeOverview = canManageChannels;
   const canSeeTags = canManageChannels && isForum;
   const canSeePermissions = canManageRoles || canManageChannels;
-  // Text channels only, for now. A feed posting one post per item is half of
-  // what a forum is for, but until forum PR 4 teaches the execute path to
-  // make posts, a webhook on a forum would write chat messages nobody can see
-  // (and light an unread pip nobody can clear). PR 4 widens this to `forum`.
-  const canSeeWebhooks = canManageChannels && channel?.type === "text";
+  // Text and forum: on a forum each delivery becomes a post (forum PR 4).
+  const canSeeWebhooks = canManageChannels && channelTakesWebhooks(channel?.type);
 
   const visible = useMemo(() => {
     const ids: ChannelSettingsSectionId[] = [];
