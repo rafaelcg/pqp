@@ -1,4 +1,8 @@
-import { FORUM_PREVIEW_MAX, type ForumPostSummary, type ForumTag } from "@pqp/shared";
+import {
+  FORUM_PREVIEW_MAX,
+  type ForumPostSummary,
+  type ForumTag,
+} from "@pqp/shared";
 import {
   CheckCircle2,
   Lock,
@@ -8,7 +12,14 @@ import {
   Rss,
   ShieldCheck,
 } from "lucide-react";
-import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { ForumUnreadState } from "@/lib/forum-list";
 import { useTranslation, type Translator } from "@/lib/i18n";
@@ -116,7 +127,10 @@ export function ForumTagList({
 }
 
 /** What the second line says when the opening message is not plain text. */
-export function forumPreviewText(t: Translator["t"], post: ForumPostSummary): string {
+export function forumPreviewText(
+  t: Translator["t"],
+  post: ForumPostSummary,
+): string {
   if (post.openingDeleted) {
     return t("thread.originDeleted");
   }
@@ -143,7 +157,10 @@ export function forumPreviewText(t: Translator["t"], post: ForumPostSummary): st
   return "";
 }
 
-export function forumAuthorName(t: Translator["t"], post: ForumPostSummary): string {
+export function forumAuthorName(
+  t: Translator["t"],
+  post: ForumPostSummary,
+): string {
   return post.authorName ?? t("forum.deletedAuthor");
 }
 
@@ -165,11 +182,41 @@ function Thumbnail({
 }) {
   const [failed, setFailed] = useState(false);
   const videoUrl = post.thumbnailUrl ? null : (post.thumbnailVideoUrl ?? null);
+  // A clip's first frame costs a metadata fetch, so it is only asked for once
+  // the card is near the screen: a page of 25 video posts must not open 25
+  // requests at once. Without an observer (a test, an old engine) it loads.
+  const boxRef = useRef<HTMLSpanElement>(null);
+  const [near, setNear] = useState(
+    () => typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    const node = boxRef.current;
+    if (
+      !videoUrl ||
+      near ||
+      !node ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [videoUrl, near]);
   if ((!post.thumbnailUrl && !videoUrl) || failed) {
     return null;
   }
   return (
     <span
+      ref={boxRef}
       className={cn(
         "relative shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2",
         className,
@@ -189,17 +236,19 @@ function Thumbnail({
         <>
           {/* The first frame is the poster: `#t` asks for it, `metadata`
               keeps the fetch to the header and that frame. */}
-          <video
-            src={`${videoUrl}#t=0.1`}
-            preload="metadata"
-            muted
-            playsInline
-            disablePictureInPicture
-            tabIndex={-1}
-            aria-hidden
-            onError={() => setFailed(true)}
-            className="pointer-events-none h-full w-full object-cover"
-          />
+          {near && (
+            <video
+              src={`${videoUrl}#t=0.1`}
+              preload="metadata"
+              muted
+              playsInline
+              disablePictureInPicture
+              tabIndex={-1}
+              aria-hidden
+              onError={() => setFailed(true)}
+              className="pointer-events-none h-full w-full object-cover"
+            />
+          )}
           <span
             aria-hidden
             className="pointer-events-none absolute inset-0 grid place-items-center"
@@ -263,7 +312,12 @@ export const ForumPostCard = memo(function ForumPostCard({
 
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     // A modified click is the browser's: a new tab, a new window.
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) {
+    if (
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.button !== 0
+    ) {
       return;
     }
     event.preventDefault();
@@ -295,10 +349,18 @@ export const ForumPostCard = memo(function ForumPostCard({
       )}
       {/* Compact: status as a glyph, never truncated, still named. */}
       {compact && post.pinnedAt && (
-        <Pin className="h-3.5 w-3.5 shrink-0 text-on-accent-soft" role="img" aria-label={t("forum.badge.pinned")} />
+        <Pin
+          className="h-3.5 w-3.5 shrink-0 text-on-accent-soft"
+          role="img"
+          aria-label={t("forum.badge.pinned")}
+        />
       )}
       {compact && post.lockedAt && (
-        <Lock className="h-3.5 w-3.5 shrink-0 text-text-tertiary" role="img" aria-label={t("forum.badge.locked")} />
+        <Lock
+          className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
+          role="img"
+          aria-label={t("forum.badge.locked")}
+        />
       )}
       {compact && post.resolvedAt && (
         <CheckCircle2
@@ -322,9 +384,9 @@ export const ForumPostCard = memo(function ForumPostCard({
         </span>
       )}
       {post.replyCount === 0 ? (
-        !pinnedRow && !compact && !narrow && (
-          <span>{t("forum.replies", { count: 0 })}</span>
-        )
+        !pinnedRow &&
+        !compact &&
+        !narrow && <span>{t("forum.replies", { count: 0 })}</span>
       ) : (
         <span className="inline-flex items-center gap-1">
           <MessageSquare className="h-3.5 w-3.5" aria-hidden />
@@ -336,7 +398,10 @@ export const ForumPostCard = memo(function ForumPostCard({
           )}
         </span>
       )}
-      <time dateTime={post.lastActivityAt} title={new Date(post.lastActivityAt).toLocaleString(locale)}>
+      <time
+        dateTime={post.lastActivityAt}
+        title={new Date(post.lastActivityAt).toLocaleString(locale)}
+      >
         {time}
       </time>
     </span>
@@ -362,7 +427,10 @@ export const ForumPostCard = memo(function ForumPostCard({
         />
       )}
       {open && (
-        <span aria-hidden className="absolute inset-y-0 right-0 w-[3px] bg-accent" />
+        <span
+          aria-hidden
+          className="absolute inset-y-0 right-0 w-[3px] bg-accent"
+        />
       )}
       <div className="min-w-0 flex-1">
         <div
@@ -425,7 +493,9 @@ export const ForumPostCard = memo(function ForumPostCard({
               />
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
-            <span className={cn(post.openingDeleted && "italic")}>{preview}</span>
+            <span className={cn(post.openingDeleted && "italic")}>
+              {preview}
+            </span>
           </p>
         )}
         <div
@@ -437,7 +507,12 @@ export const ForumPostCard = memo(function ForumPostCard({
             compact || pinnedRow ? "mt-1" : "mt-2",
           )}
         >
-          <span className={cn("flex items-center gap-1.5", narrow ? "max-w-full shrink-0" : "min-w-0")}>
+          <span
+            className={cn(
+              "flex items-center gap-1.5",
+              narrow ? "max-w-full shrink-0" : "min-w-0",
+            )}
+          >
             {post.authorIsWebhook && (
               <Badge variant="accent" icon={Rss}>
                 {t("forum.badge.feed")}
@@ -471,7 +546,9 @@ export const ForumPostCard = memo(function ForumPostCard({
       <Thumbnail
         post={post}
         className={
-          compact || pinnedRow ? "h-11 w-11" : "h-14 w-14 sm:h-[72px] sm:w-[72px]"
+          compact || pinnedRow
+            ? "h-11 w-11"
+            : "h-14 w-14 sm:h-[72px] sm:w-[72px]"
         }
       />
     </article>
