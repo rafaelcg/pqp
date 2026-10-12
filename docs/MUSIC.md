@@ -332,7 +332,14 @@ status change plays or pauses; every two seconds a non-actor compares the
 player's clock with the room's and seeks when more than 2.5 s off; the actor
 samples their position every 10 s so a joiner lands close, and nobody else
 writes unprompted. Every write samples the live player position, so a queue
-edit never carries a stale one. A track ending advances the queue, guarded
+edit never carries a stale one. A room that is not playing never seeks a
+player that is cued, unstarted or ended, and never seeks at all with nothing
+on: YouTube's `seekTo` starts playback from those states, and that is how
+"Parar pra todos" used to restart the song from zero for everyone else with
+no bar on screen (PQP-69). The speaker follows the room as a level, not only
+on edges: `silencePlayerCommand` is asked on every state change and every two
+seconds while the room is paused or empty, and stops or pauses a player that
+is making sound the room did not ask for. A track ending advances the queue, guarded
 on the id so a straggler cannot skip the track the room already moved to.
 When `autoplay` is on and repeat is off, the actor keeps about three
 related tracks on the queue so ENDED can advance without waiting on
