@@ -55,6 +55,8 @@ data class ForumPostUiState(
     val removed: Boolean = false,
     val isStaff: Boolean = false,
     val tags: List<ForumTag> = emptyList(),
+    /** The signed-in account, so the Solução card can say "marcada por você". */
+    val viewerId: String? = null,
 ) {
     val tagsById: Map<String, ForumTag> get() = tags.associateBy { it.id }
 }
@@ -111,6 +113,7 @@ class ForumPostViewModel(
             post = _state.value.post ?: loaded.post,
             viewer = loaded.viewer,
             acceptedAnswer = loaded.acceptedAnswer,
+            viewerId = viewerId,
             participantCount = loaded.participantCount,
             previousReadAt = loaded.viewer.lastReadAt,
             landingReady = true,
@@ -314,6 +317,9 @@ class ForumPostViewModel(
                 authorName = message.authorName,
                 excerpt = message.body.replace(Regex("\\s+"), " ").trim().take(EXCERPT_MAX).ifEmpty { null },
                 createdAt = message.createdAt,
+                // Marked by this account: the card says so before the re-read.
+                markedById = viewerId,
+                markedByName = (session.phase.value as? SessionPhase.Ready)?.me?.displayName,
             ),
         )
         change(

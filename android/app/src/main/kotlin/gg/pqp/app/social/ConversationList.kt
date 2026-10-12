@@ -21,6 +21,9 @@ enum class ConversationFilter { All, Unread, Groups }
 enum class PhoneTab { Conversas, Servidores, Tu }
 
 object ConversationList {
+    /** `systemKind` of a nudge on the wire, the only kind this client names. */
+    const val NUDGE_KIND = "nudge"
+
 
     /**
      * Where the app opens. The last tab used, and Servidores for somebody who
@@ -87,6 +90,9 @@ object ConversationList {
         val voice: (duration: String) -> String,
         val gif: String,
         val attachment: String,
+        /** A nudge I sent / one I received: the same two lines the web list says. */
+        val nudgeSent: String,
+        val nudgeReceived: String,
     )
 
     /**
@@ -101,6 +107,11 @@ object ConversationList {
         isGroup: Boolean,
         words: PreviewWords,
     ): String {
+        // Chamar a atenção: the row says what happened, with no "tu:" in front
+        // (the sentence already says who). A nudge only exists in a 1:1.
+        if (message.systemKind == NUDGE_KIND) {
+            return if (viewerId != null && message.authorId == viewerId) words.nudgeSent else words.nudgeReceived
+        }
         val duration = message.voiceDurationMs
         val body = when {
             message.isAttachment && message.isVoice == true && duration != null ->

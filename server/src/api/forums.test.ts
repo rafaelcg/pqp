@@ -328,6 +328,8 @@ describeDb("forum posts", () => {
       error: "forum_post_rejected",
       reason: "automod",
       automodMessage: "Sem golpe aqui.",
+      // The composer says "esse título", not "esse post".
+      field: "title",
     });
     expect((await getPool().query(`SELECT 1 FROM forum_posts`)).rowCount).toBe(0);
 
@@ -340,7 +342,7 @@ describeDb("forum posts", () => {
       filename: "x.gif",
       contentType: "image/gif",
     });
-    const bodyHit = await call<{ reason: string }>(
+    const bodyHit = await call<{ reason: string; field?: string }>(
       bob,
       "POST",
       `/api/channels/${forumId}/posts`,
@@ -348,6 +350,7 @@ describeDb("forum posts", () => {
     );
     expect(bodyHit.status).toBe(422);
     expect(bodyHit.body.reason).toBe("automod");
+    expect(bodyHit.body.field).toBe("body");
     expect((await getPool().query(`SELECT 1 FROM forum_posts`)).rowCount).toBe(0);
     expect(
       (await getPool().query(`SELECT 1 FROM channels WHERE type = 'thread'`)).rowCount,
@@ -742,7 +745,28 @@ describeDb("forum posts", () => {
       authorId: carol.id,
       authorName: "Carol",
       excerpt: "Assim: roda o instalador e reinicia",
+      // "Solução · marcada por Bob": the OP picked it.
+      markedById: bob.id,
+      markedByName: "Bob",
     });
+
+    // Staff picking another answer becomes the one who marked it.
+    const second = await postChannelMessage({
+      author: carol as never,
+      channelId: postId,
+      body: "Ou atualiza o driver",
+    });
+    const secondId = second.ok ? second.message.id : "";
+    expect(
+      (await call(alice, "PATCH", `/api/forum-posts/${postId}`, { acceptedAnswerId: secondId }))
+        .status,
+    ).toBe(200);
+    detail = forumPostDetailResponseSchema.parse(
+      (await call(bob, "GET", `/api/forum-posts/${postId}`)).body,
+    );
+    expect(detail.acceptedAnswer).toMatchObject({ messageId: secondId, markedById: alice.id });
+    // Back to Carol's first answer, marked by Bob again, for the rest below.
+    await call(bob, "PATCH", `/api/forum-posts/${postId}`, { acceptedAnswerId: answerId });
 
     // The opening message cannot be the answer, nor can another post's reply.
     const opening = await getPool().query<{ opening_message_id: string }>(
@@ -772,6 +796,11 @@ describeDb("forum posts", () => {
     );
     expect(reopened.body.post.resolvedAt).toBeNull();
     expect(reopened.body.post.acceptedAnswerId).toBeNull();
+    const marker = await getPool().query<{ resolved_by: string | null }>(
+      `SELECT resolved_by FROM forum_posts WHERE channel_id = $1`,
+      [postId],
+    );
+    expect(marker.rows[0]?.resolved_by).toBeNull();
 
     // A deleted opening message: the post stays, the card says so.
     await getPool().query(`DELETE FROM messages WHERE id = $1`, [
@@ -985,6 +1014,14 @@ describeDb("forum posts", () => {
       ],
     });
     expect(dup.status).toBe(400);
+    // And accent-insensitive: "Dúvida" and "duvida" are one tag.
+    const accented = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [
+        { name: "Dúvida", moderated: false },
+        { name: "duvida", moderated: false },
+      ],
+    });
+    expect(accented.status).toBe(400);
     // An id from another forum is unknown here.
     const other = await createForum("outro");
     const foreign = await call<{ tags: Array<{ id: string }> }>(
