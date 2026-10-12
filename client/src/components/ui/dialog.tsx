@@ -167,6 +167,13 @@ interface DialogProps {
    * viewport, so the band stays on screen above the keyboard).
    */
   headerAction?: ReactNode;
+  /**
+   * On a phone, the whole screen instead of a bottom sheet, with the title
+   * band of a native editor: close on the left, the title in the middle,
+   * `headerAction` on the right. For a form someone writes in (the forum's
+   * Novo post): a sheet left the list peeking above a keyboard-sized form.
+   */
+  phoneFullScreen?: boolean;
 }
 
 /**
@@ -190,6 +197,7 @@ export function Dialog({
   headerKey,
   headerClassName,
   headerAction,
+  phoneFullScreen = false,
 }: DialogProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -405,29 +413,57 @@ export function Dialog({
             // Heights are a percentage of the layer, which is the visible
             // rectangle — never `vh`, which no browser shrinks for a keyboard.
             entrance && "animate-rise",
-            "elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-[var(--radius-panel)] outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
+            "elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
+            // A sheet rounds its top corners; a full-screen phone dialog has
+            // no corners to round.
+            !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
+            phoneFullScreen && "max-sm:h-full max-sm:max-h-full max-sm:border-0",
             width,
           )}
         >
           <div
             className={cn(
               "flex items-start justify-between gap-3 border-b border-border px-5 py-4",
+              phoneFullScreen &&
+                "max-sm:items-center max-sm:gap-2 max-sm:px-3 max-sm:pb-2 max-sm:pt-[max(0.5rem,env(safe-area-inset-top))]",
               headerClassName,
             )}
           >
+            {phoneFullScreen && dismissible && (
+              <button
+                type="button"
+                aria-label={t("a11y.closeDialog")}
+                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden"
+                onClick={onClose}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            )}
             <div
               key={headerKey}
-              className={cn("min-w-0", headerKey !== undefined && "animate-step-in")}
+              className={cn(
+                "min-w-0",
+                phoneFullScreen && "max-sm:flex-1 max-sm:text-center",
+                headerKey !== undefined && "animate-step-in",
+              )}
             >
               {eyebrow && (
-                <p className="text-xs uppercase tracking-[0.18em] text-accent">
+                <p
+                  className={cn(
+                    "text-xs uppercase tracking-[0.18em] text-accent",
+                    phoneFullScreen && "max-sm:hidden",
+                  )}
+                >
                   {eyebrow}
                 </p>
               )}
               <h2
                 id={titleId}
-                className="min-w-0 font-display text-2xl font-bold"
+                className={cn(
+                  "min-w-0 font-display text-2xl font-bold",
+                  phoneFullScreen && "max-sm:text-[17px] max-sm:leading-6",
+                )}
               >
                 {/* Two lines and then an ellipsis, never one. A phone used to
                     cut the age gate's own title mid-word, and a rule the
@@ -447,9 +483,18 @@ export function Dialog({
               )}
             </div>
             {headerAction && (
-              <div className="ml-auto flex shrink-0 items-center self-center">
+              <div
+                className={cn(
+                  "ml-auto flex shrink-0 items-center self-center",
+                  phoneFullScreen && "max-sm:ml-0",
+                )}
+              >
                 {headerAction}
               </div>
+            )}
+            {phoneFullScreen && !headerAction && (
+              // Keeps the title centred against the close button.
+              <span aria-hidden className="w-11 shrink-0 sm:hidden" />
             )}
             {dismissible && (
               <button
@@ -457,7 +502,11 @@ export function Dialog({
                 aria-label={t("a11y.closeDialog")}
                 // 28px drawn, 44px to a finger on a phone: the hit area grows,
                 // the icon does not.
-                className="relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']"
+                className={cn(
+                  "relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']",
+                  // A full-screen phone dialog closes from the left.
+                  phoneFullScreen && "max-sm:hidden",
+                )}
                 onClick={onClose}
               >
                 <X className="h-4 w-4" />
