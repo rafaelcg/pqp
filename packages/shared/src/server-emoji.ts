@@ -86,6 +86,11 @@ export function customEmojiToken(name: string, id: string): string {
   return `<:${name}:${id}>`;
 }
 
+/** Every `<:name:id>` as the `:name:` a person typed, for plain-text surfaces. */
+export function customEmojiTokensAsText(body: string): string {
+  return body.replace(CUSTOM_EMOJI_TOKEN_PATTERN, ":$1:");
+}
+
 /** Where an emoji's bytes are served from, relative to the API origin. */
 export function serverEmojiPath(emojiId: string, version: string): string {
   return `/api/emoji/${emojiId}?v=${version}`;

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { buildReplyExcerpt } from "./api.js";
+import { deriveThreadName } from "./threads.js";
 import {
   CUSTOM_EMOJI_TOKEN_PATTERN,
   createServerEmojiUploadSchema,
   customEmojiToken,
+  customEmojiTokensAsText,
   isValidServerEmojiName,
   MAX_SERVER_EMOJI_BYTES,
   normalizeServerEmojiName,
@@ -60,5 +63,18 @@ describe("the message token", () => {
     expect([..."so :pog: and <:pog:not-a-uuid>".matchAll(CUSTOM_EMOJI_TOKEN_PATTERN)]).toEqual(
       [],
     );
+  });
+});
+
+describe("plain-text surfaces", () => {
+  const body = `gg ${customEmojiToken("pog", ID)}${customEmojiToken("kek", ID)} wp`;
+
+  it("read a token as the :name: that was typed", () => {
+    expect(customEmojiTokensAsText(body)).toBe("gg :pog::kek: wp");
+  });
+
+  it("apply to a reply excerpt and a thread name", () => {
+    expect(buildReplyExcerpt(body)).toBe("gg :pog::kek: wp");
+    expect(deriveThreadName(body)).toBe("gg :pog::kek: wp");
   });
 });
